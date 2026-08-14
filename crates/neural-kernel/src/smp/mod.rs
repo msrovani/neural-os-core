@@ -235,6 +235,7 @@ pub unsafe fn init_smp() {
         tramp_vector,
         &ap_ids[..n_aps],
         apic::send_init_ipi_to,
+        apic::send_init_deassert_ipi_to,
         apic::send_sipi_to,
         apic::wait_for_ipi_delivery,
     );

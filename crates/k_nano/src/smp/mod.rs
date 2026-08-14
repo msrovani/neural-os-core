@@ -178,6 +178,7 @@ pub unsafe fn wake_aps_sequential(
     tramp_vector: u8,
     ap_lapic_ids: &[u8],
     send_init_to: unsafe fn(u8),
+    send_init_deassert_to: unsafe fn(u8),
     send_sipi_to: unsafe fn(u8, u8),
     wait_delivery: unsafe fn(),
 ) -> u64 {
@@ -198,8 +199,14 @@ pub unsafe fn wake_aps_sequential(
         // repete; robustez contra jitter de agendamento (ex.: TCG) onde o AP
         // pode demorar a receber ciclos e estourar um timeout curto.
         let mut ok = false;
-        'attempts: for _attempt in 0..3 {
+        'attempts: for attempt in 0..3 {
+            // SESSÃO_262: sequência canônica Linux — INIT assert → ~10ms →
+            // INIT deassert → ~10ms → SIPI → 200µs → SIPI. Sem o deassert,
+            // CPUs reais (Kaby Lake) mantêm o AP em wait-for-SIPI travado.
             send_init_to(dest);
+            wait_delivery();
+            busy_wait_us(10000);
+            send_init_deassert_to(dest);
             wait_delivery();
             busy_wait_us(10000);
             send_sipi_to(dest, tramp_vector);
@@ -216,6 +223,12 @@ pub unsafe fn wake_aps_sequential(
                 }
                 busy_wait_us(50);
             }
+            if !ok {
+                crate::boot_logger::log(&alloc::format!(
+                    "SMP: AP {:#04x} tentativa {} timeout (counter={})",
+                    dest, attempt, AP_ENTRY_COUNTER.load(Ordering::Acquire)
+                ));
+            }
         }
         if ok {
             woke += 1;
@@ -227,6 +240,10 @@ pub unsafe fn wake_aps_sequential(
                 woke,
                 ap_lapic_ids.len()
             );
+            crate::boot_logger::log(&alloc::format!(
+                "SMP: AP {:#04x} online ({}/{})",
+                dest, woke, ap_lapic_ids.len()
+            ));
         } else {
             crate::slog_nano!("SMP", "warn", "AP LAPIC {} timeout (nao subiu)", dest);
         }
@@ -431,6 +448,7 @@ pub unsafe fn init_smp() {
         tramp_vector,
         &ap_ids[..n_aps],
         apic::send_init_ipi_to,
+        apic::send_init_deassert_ipi_to,
         apic::send_sipi_to,
         apic::wait_for_ipi_delivery,
     );

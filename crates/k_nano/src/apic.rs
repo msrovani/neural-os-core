@@ -652,6 +652,25 @@ pub unsafe fn send_init_ipi_to(dest_apic: u8) {
     }
 }
 
+/// ADR-0057 WS-A: INIT deassert dirigido a UM LAPIC ID.
+/// Sequência canônica do Linux (arch/x86/kernel/apic/ipi.c): INIT assert →
+/// ~10ms → INIT deassert → ~10ms → SIPI → 200µs → SIPI. Sem o deassert,
+/// alguns firmwares/CPUs reais (Kaby Lake) mantêm o AP em wait-for-SIPI
+/// travado. QEMU tolera a ausência; HW real não.
+pub unsafe fn send_init_deassert_ipi_to(dest_apic: u8) {
+    icr_wait_idle();
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        let icr_val: u64 = ((dest_apic as u64) << 32) | (5u64 << 8) | (1 << 14); // level=0 → deassert
+        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
+        msr.write(icr_val);
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, (dest_apic as u32) << 24);
+        let icr_val = (5u32 << 8) | (1 << 14); // level=0, assert=0 → deassert
+        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+    }
+}
+
 /// ADR-0057 WS-A: SIPI direcionado a UM LAPIC ID (sem shorthand).
 pub unsafe fn send_sipi_to(dest_apic: u8, trampoline_vector: u8) {
     icr_wait_idle();
