@@ -513,11 +513,21 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
 
     let lapic = Lapic::new(if x2apic_supported { 0 } else { lapic_virt_base });
     if x2apic_supported {
-        // Enable x2APIC: set IA32_APIC_BASE[10]
+        // Enable x2APIC: set IA32_APIC_BASE[11] (EXTD) + [10] (EN).
+        // SESSÃO_262: antes só setava bit 10 (EN) — se o firmware deixou o BSP
+        // em xAPIC, o hardware continuava em xAPIC mas USING_X2APIC=true → os
+        // IPIs iam para o MSR 0x830 (no-op em xAPIC) → INIT/SIPI nunca saíam
+        // (0 APs acordavam no metal). Bit 11 = EXTD habilita x2APIC de verdade.
         let apic_base = x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR).read();
-        x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR).write(apic_base | (1 << 10));
+        let was_x2 = (apic_base & (1 << 11)) != 0;
+        x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR)
+            .write(apic_base | (1 << 10) | (1 << 11));
         USING_X2APIC.store(true, Ordering::Release);
-        crate::slog_nano!("APIC", "info", "x2APIC ativado via MSR.");
+        crate::boot_logger::log(&alloc::format!(
+            "APIC: x2APIC ativado (era_x2={} base_msr={:#x})",
+            was_x2, apic_base
+        ));
+        crate::slog_nano!("APIC", "info", "x2APIC ativado via MSR (era_x2={}).", was_x2);
     }
     lapic.init();
 

@@ -118,6 +118,13 @@ pub unsafe fn init_smp() {
         }
     };
     k_nano::slog_nano!("SMP", "info", "Trampoline page em 0x{:x}", tramp_phys);
+    // SESSÃO_262: log no ramlog (FB) — o serial não é visível no notebook.
+    k_nano::boot_logger::log(&alloc::format!(
+        "SMP: tramp=0x{:x} vetor={:#04x} cr3={:#x}",
+        tramp_phys,
+        (tramp_phys >> 12) as u8,
+        cr3_val
+    ));
 
     // ADR-0057 WS-A: stack por-AP (não mais um único `stack_64_top`).
     let heap_top = crate::allocator::HEAP_START as u64 + crate::allocator::HEAP_SIZE as u64;

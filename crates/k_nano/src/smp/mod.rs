@@ -246,6 +246,16 @@ pub unsafe fn wake_aps_sequential(
             ));
         } else {
             crate::slog_nano!("SMP", "warn", "AP LAPIC {} timeout (nao subiu)", dest);
+            // SESSÃO_262: distingue "trampoline não executa" (AP_ONLINE=0) de
+            // "ap_entry trava no meio" (AP_ONLINE>0 mas counter=0). O AP_ONLINE
+            // é incrementado na 1ª linha do ap_entry, antes de qualquer passo
+            // que possa travar (TSS/IDT/EOI).
+            crate::boot_logger::log(&alloc::format!(
+                "SMP: AP {:#04x} timeout — AP_ONLINE={} counter={}",
+                dest,
+                percpu::AP_ONLINE.load(Ordering::Acquire),
+                AP_ENTRY_COUNTER.load(Ordering::Acquire)
+            ));
         }
     }
     woke
