@@ -417,21 +417,26 @@ impl AgentRegistry {
     pub fn run<H: Fn(), C: FnMut() -> Vec<String>, S: Fn(&str) -> Option<Box<dyn Agent>>>(
         &mut self, halt: H, mut check_respawns: C, spawn_agent: S,
     ) -> ! {
+        if let Some(trace) = self.init_trace { trace(">> ENTER run", 0); }
         for i in 0..self.agents.len() {
             if self.agents[i].state == AgentState::Done || self.agents[i].state == AgentState::Crashed {
                 continue;
             }
+            let a_name = self.agents[i].agent.manifest().name;
+            if let Some(trace) = self.init_trace { trace(a_name, i as u64); }
             if self.agents[i].agent.manifest().auto_start {
                 self.agents[i].state = AgentState::Active;
                 self.agents[i].agent.on_activate();
             }
         }
+        if let Some(trace) = self.init_trace { trace(">> ACT_DONE", 0); }
         // Expose BudgetManager for Hermes monitoring via agent_budget_stats()
         set_budget_stats_ref(&mut self.budget_manager);
 
         let mut tick_id: u64 = 0;
         loop {
             tick_id += 1;
+            if let Some(trace) = self.init_trace { trace(">> TICK", tick_id); }
             // Budget por ciclo: reset a cada tick do scheduler. ANTES nunca era
             // chamado (reset_all sem callers) — ticks_used acumulava para sempre
             // e apos ~103 polls todos os agentes Continuous viravam Paused →
