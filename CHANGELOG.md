@@ -1,6 +1,41 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### SESSION_264: Early BOOT.LOG no pendrive live USB — feature wire + safe overwrite (2026-08-14)
+
+**PR #7 `063d741` integrado ao HEAD local (s263), 0 erros, cargo check --release.**
+
+- **fix(boot_logger):** bug raiz — `fat-boot-log` existia só no bin; `k_nano::persist_now`
+  real estava atrás de `#[cfg(feature = "fat-boot-log")]` mas **k_nano não tinha a
+  feature** → o stub `persist_now → false` era o que sempre compilava e o stick nunca
+  recebia BOOT.LOG (QEMU mascarava via COM1). Wire: feature `fat-boot-log` no k_nano +
+  bin `fat-boot-log = ["k-nano/fat-boot-log"]`.
+- **feat(boot):** early path pós-`init_platform_sync` (xHCI + MSC + flush, ckpt K18)
+  antes de NIC/ATA — hang nesses caminhos = zero log no stick. `init_xhci` idempotente
+  (early-return se já up); DriverInit reusa MSC (sem re-Address Device que quebra BOT).
+- **fix(fat32):** `overwrite_boot_log` data-only — reescrever o dir cluster a cada flush
+  rasgava o FAT em crash (SESSION_260). Dirent só se size < 512 (1 WRITE de setor);
+  demais flushes = só clusters de dados + padding zero. Logs de diagnóstico SESSION_260
+  mantidos na fusão.
+- **feat(retry):** `try_ensure_usb_msc` + `ensure_persisted` (re-probe MSC quando
+  USB_MSC=None); SysInfoAgent usa `ensure_persisted` em vez de `flush()` em vão.
+- **fix(serial):** `write_to_disk_journal` → `boot_logger::append_raw` (path ATA-only
+  antigo nunca gravava em live USB).
+- **test(k-nano):** 3 testes host boot_logger (encode_83, cap=mkfat32, feature compila
+  path real). Docs renomeadas 262→264 (SESSION_262=SMP local).
+
+### SESSION_263: OTA assinado Ed25519 + Onda CPU loop + compress_boot_evidence (2026-08-14)
+
+**1 commit `c795883`, 0 erros, cargo check --release.**
+
+- **fix(ota):** assinatura Ed25519 **obrigatória** no update — `verify_update_signature`
+  em k_nano (pubkey pinada corrigida: 5 bytes de transcrição errados), `self_update.rs`
+  rejeita payload sem sig válida, `tools/ota_sign.py` (selftest OK) + `serve_update.py
+  --sign-key`. 3 testes host (RFC8032 vector, garbage reject, pinned key accept).
+- **feat(sgdb):** `hw_get(key)` em k_ai (prefixo `ns::HW`) + releitura do perfil de HW
+  no boot (Onda CPU loop: `cpu/isa` vs `isa_name()`, fallback live).
+- **feat(tools):** `compress_boot_evidence.py` (evidência de boot comprimida).
+
 ### SESSION_262: Regressao pos-rebuild - scans #PF + SMP wake MADT + freeze self_heal (2026-08-14)
 
 **4 commits, 0 erros, cargo check --release.**

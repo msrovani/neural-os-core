@@ -1555,6 +1555,39 @@ pub(crate) fn kernel_boot(
     publish_boot_phase(BootPhase::HardwareDiscovery, "PCI+ACPI+APIC+SMP sync");
     unsafe { agents::init_platform_sync(); }
 
+    // ── Early BOOT.LOG (live USB / HW sem COM) ──────────────────────────
+    // Quanto mais cedo o stick receber o log, mais útil em hang posterior.
+    // Depende só de PCI (já em init_platform_sync) + heap. NICs/ATA/AHCI
+    // ficam depois — se crasharem, E:\BOOT.LOG já tem K14+.
+    crate::display::fb::boot_ckpt(18, "early USB BOOT.LOG");
+    {
+        unsafe { crate::xhci::init_xhci(); }
+        if crate::USB_MSC.lock().is_none() {
+            let msc = unsafe { k_nano::usb_msc::UsbMassStorage::probe() };
+            if msc.is_some() {
+                crate::display::fb::boot_ckpt(18, "early MSC OK");
+                k_nano::slog_nano!("USB", "msc", "EARLY bringup OK — BOOT.LOG path");
+            } else {
+                crate::display::fb::boot_ckpt(18, "early MSC skip");
+                k_nano::slog_nano!(
+                    "USB",
+                    "msc",
+                    "EARLY AUSENTE — retry no DriverInit/SysInfo (CCS atrasado?)"
+                );
+            }
+            *crate::USB_MSC.lock() = msc;
+        }
+        crate::boot_logger::log("BOOT: early USB path (pre-NIC)");
+        // Só flush se já há MSC — NÃO chamar init_after_usb completo aqui:
+        // ATA/AHCI ainda não foram sondados; mark_skip prematuro mentiria.
+        if crate::USB_MSC.lock().is_some() {
+            let ok = crate::boot_logger::flush();
+            if ok {
+                crate::display::fb::console_print("LOG: BOOT.LOG early OK (USB)");
+            }
+        }
+    }
+
     // ponytail: hardware/ probe moved to LEGACY — StandardUma is always the detected profile.
     let simd_width = match k_nano::platform_probe::isa_path() {
         k_nano::platform_probe::IsaPath::Avx512F => 512,
@@ -1730,24 +1763,30 @@ pub(crate) fn kernel_boot(
         }
     }
 
-    unsafe { crate::xhci::init_xhci(); }
+    unsafe { crate::xhci::init_xhci(); } // idempotente se early path já subiu
     crate::display::fb::boot_ckpt(15, "xhci init done");
 
     crate::display::fb::boot_ckpt(24, "antes USB-MSC probe");
     {
-        let msc = unsafe { k_nano::usb_msc::UsbMassStorage::probe() };
-        if msc.is_some() {
-            k_nano::slog_nano!("USB", "msc", "stored for FAT model load (unified USB)");
-            crate::display::fb::boot_ckpt(16, "USB-MSC OK");
+        // Se early path já tem MSC, não re-probe (Address Device de novo quebra BOT).
+        if crate::USB_MSC.lock().is_none() {
+            let msc = unsafe { k_nano::usb_msc::UsbMassStorage::probe() };
+            if msc.is_some() {
+                k_nano::slog_nano!("USB", "msc", "stored for FAT model load (unified USB)");
+                crate::display::fb::boot_ckpt(16, "USB-MSC OK");
+            } else {
+                crate::display::fb::boot_ckpt(16, "USB-MSC AUSENTE");
+                k_nano::slog_nano!(
+                    "USB",
+                    "msc",
+                    "AUSENTE — bringup/enum/BOT falhou; BOOT.LOG so ramlog (ADR-0062 P11 residual)"
+                );
+            }
+            *crate::USB_MSC.lock() = msc;
         } else {
-            crate::display::fb::boot_ckpt(16, "USB-MSC AUSENTE");
-            k_nano::slog_nano!(
-                "USB",
-                "msc",
-                "AUSENTE — bringup/enum/BOT falhou; BOOT.LOG so ramlog (ADR-0062 P11 residual)"
-            );
+            crate::display::fb::boot_ckpt(16, "USB-MSC OK (early)");
+            k_nano::slog_nano!("USB", "msc", "reuse early MSC — skip re-probe");
         }
-        *crate::USB_MSC.lock() = msc;
         crate::display::fb::boot_ckpt(25, "antes BOOT.LOG flush");
         crate::boot_logger::init_after_usb();
         crate::display::fb::boot_ckpt(17, "BOOT.LOG flush tentado");

@@ -1,4 +1,14 @@
 ﻿# ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s264 — Early BOOT.LOG no pendrive live USB
+#   SESSION_264 (PR #7 063d741 integrado): bug raiz — `fat-boot-log` só no bin;
+#     `k_nano::persist_now` era stub permanente (feature inexistente na crate).
+#     Wire `fat-boot-log = ["k-nano/fat-boot-log"]`. Early path pós-platform_sync
+#     (xHCI+MSC+flush, K18) antes de NIC/ATA. overwrite data-only (SESSION_260).
+#     SysInfo `ensure_persisted` re-probe MSC. serial journal → append_raw.
+#     Logs de diagnóstico SESSION_260 mantidos na fusão. 3 testes host PASS;
+#     cargo check fat-boot-log 0 erros.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s262 — Regressão pós-rebuild: scans #PF + SMP wake MADT + self_heal
 #   SESSION_262: após `cargo clean` + rebuild from scratch, HW real regrediu (K45→K51).
 #     3 bugs: (1) scans QEMU-loader liam páginas não-mapeadas → #PF storm (fix is_page_present
