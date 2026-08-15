@@ -31,7 +31,7 @@ use crate::Result;
 use ruvix_region::backing::MemoryBacking;
 use ruvix_region::slab::{SlabAllocator, SlotHandle};
 use ruvix_types::{
-    CapRights, Capability, GraphHandle, GraphMutation, GraphMutationKind, KernelError,
+    Capability, GraphHandle, GraphMutation, GraphMutationKind, KernelError,
     ProofAttestation, ProofToken, RegionHandle,
 };
 
@@ -310,6 +310,7 @@ impl GraphStoreBuilder {
 /// Kernel-resident graph store.
 ///
 /// Implements the `graph_apply_proved` syscall interface.
+#[allow(dead_code)] // node_handle/edge_handle/store_id: reservados p/ capability check
 pub struct KernelGraphStore<B: MemoryBacking> {
     /// Slab region for graph nodes.
     node_slab: SlabAllocator<B>,

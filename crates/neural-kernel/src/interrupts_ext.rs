@@ -296,10 +296,10 @@ pub fn patch_idt() {
         return;
     }
     unsafe {
-        write_gate(base, 0x0D, general_protection_fault_handler as u64, GENERAL_PROTECTION_IST_INDEX as u8, 0);
-        write_gate(base, 0x0E, page_fault_handler as u64, PAGE_FAULT_IST_INDEX as u8, 0);
+        write_gate(base, 0x0D, general_protection_fault_handler as *const () as u64, GENERAL_PROTECTION_IST_INDEX as u8, 0);
+        write_gate(base, 0x0E, page_fault_handler as *const () as u64, PAGE_FAULT_IST_INDEX as u8, 0);
         // MVP C / P6: soft-syscall (0x90) — Cap gate; DPL=3 para int de Ring3
-        write_gate(base, 0x90, crate::syscall::syscall_int_handler as u64, 0, 3);
+        write_gate(base, 0x90, crate::syscall::syscall_int_handler as *const () as u64, 0, 3);
     }
     k_nano::slog_bin!("IDT", "info", "patch_idt: overlays bin instalados (0x90 syscall DPL3, #GP/#PF hooks P6+demand).");
 }

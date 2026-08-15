@@ -1210,7 +1210,7 @@ impl TransformerTrainer {
             grads.layer_grads[li].rms_inner_attn_grad = Some(rms_inner_grad);
 
             // attention backward
-            let (mut dq, mut dk, mut dv) = gqa_attn_backward(
+            let (mut dq, mut dk, dv) = gqa_attn_backward(
                 &act.q, &act.k, &act.v, &act.attn_w, &d_attn_out,
                 seq, model.num_heads, model.num_kv_heads, head_dim,
             );

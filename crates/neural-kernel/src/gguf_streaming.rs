@@ -87,7 +87,6 @@ pub fn log_airllm_residuals() {
 use alloc::vec;
 use alloc::vec::Vec;
 use cortex_crate::gguf::{self, GgufFile, GgufTensorInfo};
-use cortex_crate::tensor::Tensor;
 
 /// Contexto de streaming — header GGUF + config derivado dos metadados.
 /// Mantém apenas o necessário para reconstruir LayerWeights camada-a-camada.

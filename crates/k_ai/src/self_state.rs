@@ -5,7 +5,6 @@
 
 use alloc::string::String;
 use alloc::format;
-use alloc::vec::Vec;
 
 pub const SELF_STATE_KEY: &str = "sys/self_state";
 

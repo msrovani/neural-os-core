@@ -194,6 +194,7 @@ impl KeyMap {
         Ok(())
     }
 
+    #[allow(dead_code)] // API pública do KeyMap — remove reservado p/ eviction
     fn remove(&mut self, key: VectorKey) -> Option<SlotHandle> {
         for i in 0..self.count {
             if self.entries[i].0 == key {
@@ -216,6 +217,7 @@ impl KeyMap {
 /// Kernel-resident vector store.
 ///
 /// Implements the `vector_get` and `vector_put_proved` syscall interfaces.
+#[allow(dead_code)] // data_handle/hnsw_handle/store_id: reservados p/ capability check
 pub struct KernelVectorStore<B: MemoryBacking> {
     /// Slab region for vector data.
     data_slab: SlabAllocator<B>,

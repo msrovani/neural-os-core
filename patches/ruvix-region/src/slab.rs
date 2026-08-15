@@ -87,6 +87,7 @@ impl Default for SlotHandle {
 ///
 /// Provides O(1) allocation and deallocation with generation-based
 /// use-after-free detection.
+#[allow(dead_code)] // backing: reservado p/ futura introspectão
 pub struct SlabAllocator<B: MemoryBacking> {
     /// Memory backing store.
     backing: B,

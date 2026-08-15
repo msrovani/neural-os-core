@@ -1324,14 +1324,13 @@ pub(crate) fn kernel_boot(
             let virt_end = unsafe { &KERNEL_END as *const u8 as u64 };
             let image_len = virt_end.saturating_sub(0xffff_ffff_8000_0000);
             frame_allocator.reserve_range(kp, image_len);
-        } else if let (kb, kl) = handoff.kernel_region() {
+        } else {
             // SESSION_252: KernelAddressRequest não processado por esta build
             // do Limine (response null) — usa a região KernelAndModules (tipo 1)
             // do memmap, que SEMPRE existe. Marca a imagem do kernel como OCUPADA.
+            let (kb, kl) = handoff.kernel_region();
             frame_allocator.reserve_range(kb, kl);
             k_nano::slog_bin!("MEM", "info", "kernel_region fallback: reserva {:#x} len={:#x}", kb, kl);
-        } else {
-            k_nano::slog_bin!("MEM", "info", "kernel_phys ausente — não reserva imagem (risco DMA)");
         }
 
         // SESSION_254/258: o frame allocator não conhece a stack de 2MB que o
@@ -1965,6 +1964,7 @@ pub(crate) fn kernel_boot(
             crate::display::fb::boot_ckpt(33, $tag);
             crate::boot_logger::log(alloc::format!("BOOT: K33[{}] {}", k33, $tag).as_str());
             k33 += 1;
+            let _ = k33; // ponytail: contador só p/ log; valor final não é usado
         }};
     }
     crate::apps::init_apps();

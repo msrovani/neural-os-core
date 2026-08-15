@@ -163,8 +163,8 @@ pub fn init_syscall_fast_path() {
         core::arch::asm!(
             "wrmsr",
             in("ecx") 0xC0000082u32,
-            in("eax") (syscall_entry as u64 & 0xFFFFFFFF) as u32,
-            in("edx") ((syscall_entry as u64) >> 32) as u32,
+            in("eax") ((syscall_entry as *const () as u64) & 0xFFFFFFFF) as u32,
+            in("edx") ((syscall_entry as *const () as u64) >> 32) as u32,
             options(nostack, preserves_flags)
         );
         
@@ -179,7 +179,7 @@ pub fn init_syscall_fast_path() {
     }
     
     k_nano::slog_bin!("SYSCALL", "info", "SYSCALL/SYSRET MSRs initialized (LSTAR={:#x}, STAR={:#x}, FMASK={:#x})", 
-        syscall_entry as u64, star, fmask);
+        syscall_entry as *const () as u64, star, fmask);
 }
 
 /// SYSCALL entry point (naked assembly).

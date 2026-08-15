@@ -19,6 +19,7 @@ use ruvix_types::KernelError;
 ///
 /// Data can only be appended, never modified or truncated. The write cursor
 /// monotonically increases until max_size is reached.
+#[allow(dead_code)] // backing/allocated_size: reservados p/ futura introspectão
 pub struct AppendOnlyRegion<B: MemoryBacking> {
     /// Memory backing store.
     backing: B,

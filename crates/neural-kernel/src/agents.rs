@@ -1844,7 +1844,7 @@ impl Agent for BootSelfHealAgent {
                     k_nano::slog_kai!("Gate", "n2", "trust OK mas sem ATA (boot USB) — skip PCI scan pesado (honest noop)");
                     let mut heal = crate::SELF_HEAL.lock();
                     let report = heal.run_vid_gated_scan(&[]);
-                    let inv = crate::inventory::HardwareInventory {
+                    let _inv = crate::inventory::HardwareInventory {
                         cpu_count: 1,
                         total_ram_bytes: 0,
                         pci_devices: alloc::vec::Vec::new(),

@@ -101,7 +101,7 @@ impl NeuralVolume {
         }
         // F6: zera o journal no format — evita replay de transação velha de um
         // formato anterior sobre a árvore nova (CRC/tx_id antigos sobreviviam).
-        let mut zero_journal = [0u8; 4096];
+        let zero_journal = [0u8; 4096];
         for i in 0..journal_blocks {
             if !Self::write_block_static(dev, start_lba, sb.journal_start + i, &zero_journal) {
                 return false;

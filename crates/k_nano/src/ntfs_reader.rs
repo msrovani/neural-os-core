@@ -91,10 +91,8 @@ impl NtfsReader {
         let idx_root = self.find_attribute(&root, 0x90)?; // $INDEX_ROOT
         // $INDEX_ROOT header: flags@16, total_size@20, alloc_size@24
         if idx_root.len() < 32 { return None; }
-        let mut off = 16; // após o header do $INDEX_ROOT (attr header = 16 bytes + 8 de header index)
-        // Na prática: o primeiro index entry começa após o header completo
         // Header do $INDEX_ROOT: type(4)+len(4)+non_res(1)+name_len(1)+name_off(2)+flags(4)+total_size(4)+alloc_size(4) = ~24
-        off = 24; // simplificado: pula header
+        let mut off = 24; // simplificado: pula header
         while off + 80 < idx_root.len() {
             let magic = &idx_root[off..off+4];
             if magic != b"INDX" && magic[0] != 0 {
@@ -168,7 +166,7 @@ impl FilesystemDriver for NtfsReader {
             return Err("NTFS read: apenas arquivos no diretorio raiz (sem subdirs)");
         }
         let mut dev = crate::ATA_DRIVER.lock();
-        let Some(mut ata) = dev.as_mut() else { return Err("NTFS: sem ATA driver"); };
+        let Some(ata) = dev.as_mut() else { return Err("NTFS: sem ATA driver"); };
         let ata_ptr = &mut *ata as *mut dyn BlockDevice;
         // SAFETY: ata é único (lock held), e não usamos ata diretamente durante o read
         let ata_ref = unsafe { &mut *ata_ptr };
@@ -200,7 +198,7 @@ impl FilesystemDriver for NtfsReader {
             return Err("NTFS list: apenas diretorio raiz");
         }
         let mut dev = crate::ATA_DRIVER.lock();
-        let Some(mut ata) = dev.as_mut() else { return Err("NTFS: sem ATA driver"); };
+        let Some(ata) = dev.as_mut() else { return Err("NTFS: sem ATA driver"); };
         let ata_ptr = &mut *ata as *mut dyn BlockDevice;
         let ata_ref = unsafe { &mut *ata_ptr };
 

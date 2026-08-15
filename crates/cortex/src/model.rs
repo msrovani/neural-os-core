@@ -3,9 +3,6 @@
 //! LLM / HWExpert. Router é formato posicional próprio (trinity) — separado.
 //! ModelHub usa `register_bytes` como ponto único.
 
-use alloc::string::String;
-use alloc::vec::Vec;
-
 use crate::cortex::{HwExpertV4Model, TransformerModel};
 
 /// Tipos de modelo reconhecidos (ADR-0085 §2: model_type).

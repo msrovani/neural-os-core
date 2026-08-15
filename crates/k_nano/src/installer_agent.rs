@@ -224,7 +224,7 @@ impl AutoInstallerAgent {
         for idx in start..=3 {
             // Valida target ≠ source: fonte é sempre índice 0 (boot ATA)
             if idx == 0 { continue; }
-            let mut target = SysInstaller::device_for_index(idx);
+            let target = SysInstaller::device_for_index(idx);
             let Some(tgt) = target else { continue; };
             let mut inst = SysInstaller::new();
             // SAFETY: source (ATA) e target (AHCI/NVMe/USB) são dispositivos distintos
