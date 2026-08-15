@@ -1397,67 +1397,20 @@ pub(crate) fn kernel_boot(
     publish_boot_phase(BootPhase::MemoryCore, "Frame allocator + page tables + heap");
     crate::display::fb::boot_ckpt(13, "SafeHarbor+MemoryCore");
 
-    // Labor 8: smoke = MemoryCore → BootSmokeOk; HW-GATE early (Limine pode #PF antes WifiAgent)
+    // SESSION_265: NÃO rodar o gauntlet de labor smokes aqui.
+    // Em HW real (sem COM) o último K visível era K13 enquanto async_io/git_thin
+    // (HTTP/HTTPS), theme apply, fw_cfg I/O e dezenas de slog travavam/atrasavam
+    // antes de K14. Smokes honesty vão para `run_deferred_labor_smokes` pós-drivers.
+    // Aqui só o mínimo: BootSmokeOk + FeatureGate + SIMD + SYSCALL → K14.
     k_hal::hw_gate::mark_boot_smoke(boot_tag);
-    k_hal::hw_gate::emit_all();
-
-    // Labor 9: MessageBus A→B smoke (ADR-0068) — pós-heap
-    let _ = hermes_crate::ipc_bus::boot_smoke();
-
-    // Labor 11: async I/O híbrido smoke (ADR-0070) — pós-heap
-    let _ = hermes_crate::async_io::boot_smoke();
-
-    // Labor 16: Git thin parse smoke (ADR-0074) — net opcional
-    let _ = hermes_crate::git_thin::boot_smoke();
-
-    // Labor 22 SoftMAC
-    crate::wifi_softmac::boot_smoke();
-    // Labor 30 WPA2 + Labor 31 wifi net path
-    hermes_crate::wpa2_hs::boot_smoke();
-    crate::wifi_softmac::dhcp_http_path_smoke();
-
-    // ADR-0062 L28–L62 smokes (honesty; Note labs SKIP)
-    labor_smokes::limine_esp_evidence_smoke(boot_tag);
-    labor_smokes::ath10k_note_smoke();
-    let _ = crate::tls_trust::ca_chain_boot_smoke();
-    let _ = hermes_crate::self_update::boot_smoke();
-    hermes_crate::ntp::residual_boot_smoke();
-    hermes_crate::theme_bridge::register(
-        || jarbas_crate::display::theme::list_names(),
-        |n| jarbas_crate::display::theme::apply(n),
-    );
-    let _ = hermes_crate::theme_bridge::boot_smoke();
-    let _ = jarbas_crate::clipboard_notify::boot_smoke();
-    k_nano::boot_chime::boot_smoke();
-    let _ = jarbas_crate::vconsole::boot_smoke();
-    let _ = jarbas_crate::screensaver::boot_smoke();
-    let _ = hermes_crate::manpages::boot_smoke();
-    let _ = jarbas_crate::image_viewer::boot_smoke();
-    let _ = k_nano::fts_search::boot_smoke();
-    let _ = k_nano::user_accounts::boot_smoke();
-    let _ = k_nano::fw_cfg::boot_smoke();
-    // Initialize async runtime (P16)
-    k_nano::async_rt::init_async_rt();
-    hermes_crate::cf_challenge::boot_smoke();
-    k_nano::xhci::hub_address_boot_smoke();
-    k_nano::btrfs_reader::boot_smoke();
-    k_nano::luks_open::boot_smoke();
-    labor_smokes::ext4_multiblock_smoke();
-    labor_smokes::vfs_storage_bridge_smoke();
-    k_nano::smp::try_enable_ap_workers_from_feature();
-    labor_smokes::note_gpu_or_i225_smoke();
-    labor_smokes::hda_multistream_smoke();
-    labor_smokes::acpi_s3_smoke();
-    let _ = k_nano::firewall::boot_smoke();
-    let _ = hermes_crate::ipc_bus::capgate_boot_smoke();
-    labor_smokes::bt_hci_smoke();
-    let _ = hermes_crate::elf_loader::elf_thin_boot_smoke();
-    labor_smokes::gsp_conditional_smoke();
+    crate::display::fb::boot_ckpt(130, "pos BootSmokeOk");
 
     // ADR-0055: probe HV/ISA/cache → FeatureGate antes de SIMD/SMP
     k_nano::platform_probe::detect();
+    crate::display::fb::boot_ckpt(131, "platform_probe");
     k_nano::platform_probe::log_itd_probe();
     simd::enable_simd();
+    crate::display::fb::boot_ckpt(132, "simd");
 
     // ADR-0082 F1.4: SYSCALL/SYSRET MSRs — após o probe (hypervisor real
     // conhecido; gate por probe_done() evita wrmsr em WHPX/TCG → #GP).
@@ -1465,6 +1418,13 @@ pub(crate) fn kernel_boot(
 
     crate::boot_logger::log("BOOT: PlatformProbe+SIMD enabled");
     crate::display::fb::boot_ckpt(14, "SIMD ok");
+
+    // Bridges leves necessários antes dos drivers (sem I/O de rede/disco).
+    hermes_crate::theme_bridge::register(
+        || jarbas_crate::display::theme::list_names(),
+        |n| jarbas_crate::display::theme::apply(n),
+    );
+    k_nano::async_rt::init_async_rt();
 
     #[cfg(target_arch = "x86_64")]
     {
@@ -1555,13 +1515,14 @@ pub(crate) fn kernel_boot(
     unsafe { agents::init_platform_sync(); }
 
     // ── Early BOOT.LOG (live USB / HW sem COM) ──────────────────────────
-    // Quanto mais cedo o stick receber o log, mais útil em hang posterior.
-    // Depende só de PCI (já em init_platform_sync) + heap. NICs/ATA/AHCI
-    // ficam depois — se crasharem, E:\BOOT.LOG já tem K14+.
+    // Pós platform_sync (PCI). Micro-ckpts: se xHCI hangar, FB mostra K181/K182.
     crate::display::fb::boot_ckpt(18, "early USB BOOT.LOG");
     {
+        crate::display::fb::boot_ckpt(181, "early xhci init");
         unsafe { crate::xhci::init_xhci(); }
+        crate::display::fb::boot_ckpt(182, "early xhci done");
         if crate::USB_MSC.lock().is_none() {
+            crate::display::fb::boot_ckpt(183, "early MSC probe");
             let msc = unsafe { k_nano::usb_msc::UsbMassStorage::probe() };
             if msc.is_some() {
                 crate::display::fb::boot_ckpt(18, "early MSC OK");
@@ -1577,14 +1538,13 @@ pub(crate) fn kernel_boot(
             *crate::USB_MSC.lock() = msc;
         }
         crate::boot_logger::log("BOOT: early USB path (pre-NIC)");
-        // Só flush se já há MSC — NÃO chamar init_after_usb completo aqui:
-        // ATA/AHCI ainda não foram sondados; mark_skip prematuro mentiria.
         if crate::USB_MSC.lock().is_some() {
             let ok = crate::boot_logger::flush();
             if ok {
                 crate::display::fb::console_print("LOG: BOOT.LOG early OK (USB)");
             }
         }
+        crate::display::fb::boot_ckpt(184, "early USB done");
     }
 
     // ponytail: hardware/ probe moved to LEGACY — StandardUma is always the detected profile.
@@ -1825,6 +1785,11 @@ pub(crate) fn kernel_boot(
         crate::boot_logger::init(None, &[]);
         crate::boot_logger::log("BOOT: ATA+FAT init OK");
     }
+
+    // Honesty smokes adiados (SESSION_265) — agora com net/storage bridges vivos.
+    crate::display::fb::boot_ckpt(71, "labor smokes");
+    labor_smokes::run_deferred(boot_tag);
+    crate::display::fb::boot_ckpt(72, "labor smokes ok");
 
     crate::display::fb::boot_ckpt(28, "VFS init");
     {

@@ -1,4 +1,8 @@
-//! Labor 55/56/54/59/61 — honesty stubs for HW residuals (ADR-0062).
+//! Labor honesty stubs (ADR-0062) + runner adiado (SESSION_265).
+//!
+//! Os smokes NÃO rodam entre K13→K14: em HW real sem COM o último checkpoint
+//! visível ficava em K13 enquanto async_io/git_thin (HTTP/HTTPS), theme apply
+//! e dezenas de slog atrasavam/travavam o boot. Runner = pós DriverInit.
 
 /// HDA multi-stream fatia (L55).
 pub fn hda_multistream_smoke() {
@@ -89,5 +93,55 @@ pub fn vfs_storage_bridge_smoke() {
         "info",
         "step=storage_bridge status=OK devices={} VERDICT=PARTIAL reason=fd_plus_bus",
         n
+    );
+}
+
+/// Catálogo honesty pós-DriverInit (SESSION_265). Sem rede live no smoke.
+pub fn run_deferred(boot_tag: &str) {
+    k_hal::hw_gate::emit_all();
+
+    let _ = hermes_crate::ipc_bus::boot_smoke();
+    let _ = hermes_crate::async_io::boot_smoke();
+    let _ = hermes_crate::git_thin::boot_smoke();
+
+    crate::wifi_softmac::boot_smoke();
+    hermes_crate::wpa2_hs::boot_smoke();
+    crate::wifi_softmac::dhcp_http_path_smoke();
+
+    limine_esp_evidence_smoke(boot_tag);
+    ath10k_note_smoke();
+    let _ = crate::tls_trust::ca_chain_boot_smoke();
+    let _ = hermes_crate::self_update::boot_smoke();
+    hermes_crate::ntp::residual_boot_smoke();
+    let _ = hermes_crate::theme_bridge::boot_smoke();
+    let _ = jarbas_crate::clipboard_notify::boot_smoke();
+    k_nano::boot_chime::boot_smoke();
+    let _ = jarbas_crate::vconsole::boot_smoke();
+    let _ = jarbas_crate::screensaver::boot_smoke();
+    let _ = hermes_crate::manpages::boot_smoke();
+    let _ = jarbas_crate::image_viewer::boot_smoke();
+    let _ = k_nano::fts_search::boot_smoke();
+    let _ = k_nano::user_accounts::boot_smoke();
+    let _ = k_nano::fw_cfg::boot_smoke();
+    hermes_crate::cf_challenge::boot_smoke();
+    k_nano::xhci::hub_address_boot_smoke();
+    k_nano::btrfs_reader::boot_smoke();
+    k_nano::luks_open::boot_smoke();
+    ext4_multiblock_smoke();
+    vfs_storage_bridge_smoke();
+    k_nano::smp::try_enable_ap_workers_from_feature();
+    note_gpu_or_i225_smoke();
+    hda_multistream_smoke();
+    acpi_s3_smoke();
+    let _ = k_nano::firewall::boot_smoke();
+    let _ = hermes_crate::ipc_bus::capgate_boot_smoke();
+    bt_hci_smoke();
+    let _ = hermes_crate::elf_loader::elf_thin_boot_smoke();
+    gsp_conditional_smoke();
+
+    k_nano::slog_bin!(
+        "BOOT",
+        "info",
+        "step=deferred_labor_smokes status=OK VERDICT=PARTIAL reason=post_driverinit"
     );
 }
