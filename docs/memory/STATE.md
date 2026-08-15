@@ -1,3 +1,7 @@
+# STATE — neural-os-core v1.9.99-s266 — Jarbas UI limpa + suit-boot welcome
+#   SESSION_266: orb=brand, HUD mínimo JARBAS, sem demo card/partículas;
+#   saudação LLM/template estilo suit-online MCU (texto original) + banner HUD.
+#
 ﻿# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s264 — Early BOOT.LOG no pendrive live USB
 #   SESSION_264 (PR #7 063d741 integrado): bug raiz — `fat-boot-log` só no bin;

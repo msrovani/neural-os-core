@@ -1,4 +1,8 @@
-//! JarbasAgent — persona JARVIS. Saudacao: LLM se fluente; senao template honesto (soft-float 2B).
+//! JarbasAgent — persona JARBAS.
+//!
+//! Saudação de boot no espírito do suit-online (MCU Iron Man / JARVIS):
+//! confirma upload, HUD/fleet prontos, "à sua disposição" — texto original do
+//! Neural OS (não cita filme). LLM se fluente; senão template honesto (soft-float).
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use alloc::string::String;
@@ -45,31 +49,46 @@ fn is_fluent_boot_text(text: &str) -> bool {
     true
 }
 
+/// Template suit-boot (fallback honesto quando LLM mash / soft-float).
+/// Tom: upload confirmado + HUD + fleet + serviço — original Neural OS.
 fn compose_boot_greeting(mem_mb: u64, cpu_count: u8, agent_count: usize) -> String {
-    let vibe = if mem_mb > 4096 {
-        "I could run a small country with this much RAM"
-    } else if mem_mb > 1024 {
-        "systems are online and feeling powerful"
-    } else if mem_mb >= 256 {
-        "modest hardware, fully capable"
-    } else {
-        "small but mighty"
-    };
-    let army = if agent_count > 200 {
-        ", managing a small army of agents"
+    let fleet = if agent_count > 200 {
+        "full agent fleet online"
     } else if agent_count > 20 {
-        ", fleet standing by"
+        "agent fleet standing by"
     } else {
-        ""
+        "core agents standing by"
+    };
+    let power = if mem_mb > 4096 {
+        "ample headroom"
+    } else if mem_mb > 1024 {
+        "power reserves strong"
+    } else if mem_mb >= 256 {
+        "control surfaces nominal"
+    } else {
+        "compact but fully armed"
     };
     alloc::format!(
-        "Good day. JARBAS online — {}MB RAM, {} CPU core{}, {} agents{}. {}.",
+        "Upload complete. JARBAS online and ready — {}MB RAM, {} CPU core{}, {} ({} agents), {}. HUD engaged. At your service.",
         mem_mb,
         cpu_count,
         if cpu_count == 1 { "" } else { "s" },
+        fleet,
         agent_count,
-        army,
-        vibe
+        power
+    )
+}
+
+fn compose_boot_llm_prompt(mem_mb: u64, cpu_count: u8, agent_count: usize) -> String {
+    alloc::format!(
+        "You are JARBAS, the Neural OS companion AI coming online after boot — \
+         like a calm suit AI confirming upload into the armor HUD. \
+         Speak one or two short sentences: confirm you are online and ready, \
+         mention that the HUD is engaged and the agent fleet is standing by, \
+         include the live specs ({}MB RAM, {} CPU cores, {} agents), \
+         and end that you are at the user's service. \
+         Be witty and confident, not verbose. No movie quotes, no emojis, no markdown.",
+        mem_mb, cpu_count, agent_count
     )
 }
 
@@ -121,6 +140,8 @@ impl JarbasAgent {
     fn publish_greeting(&self, body: &str) {
         let greeting = alloc::format!("[JARBAS] {}: {}", self.engine.soul.name, body);
         k_nano::slog_bin!("Log", "msg", "{}", greeting);
+        crate::display::compositor::announce_welcome(body);
+        crate::display::console::set_llm_busy(false);
         let _ = k_nano::EVENT_BUS.publish(Event {
             id: 0,
             topic: String::from("HERMES_RESPONSE"),
@@ -164,14 +185,15 @@ pub fn emit_hw_greeting_at_register() {
         tr.agent_count()
     };
     let body = compose_boot_greeting(mem_mb, cpu, agents);
-    let line = alloc::format!("[JARBAS] JARVIS: {}", body);
+    let line = alloc::format!("[JARBAS] JARBAS: {}", body);
     k_nano::slog_jarbas!(
         "Jarbas",
         "info",
-        "saudacao @register K44 (bare={} no_fat={})",
+        "saudacao suit-boot @register K44 (bare={} no_fat={})",
         bare,
         no_fat
     );
+    crate::display::compositor::announce_welcome(&body);
     crate::display::fb::console_print(&line);
     crate::display::fb::boot_ckpt(50, "jarvis greet OK");
     let _ = k_nano::EVENT_BUS.publish(Event {
@@ -180,8 +202,6 @@ pub fn emit_hw_greeting_at_register() {
         payload: line.into_bytes(),
         token: CapabilityToken::Legacy(1),
     });
-    // boot_logger skipped (jarbas crate — bin-only)
-    let _ = true;
 }
 
 impl Agent for JarbasAgent {
@@ -244,22 +264,17 @@ impl Agent for JarbasAgent {
                 return AgentTickResult::Pending;
             }
 
-            let tts_mode = "formant";
-            let prompt = alloc::format!(
-                "You are JARVIS, an AI operating system. Generate a single short sentence \
-                 greeting the user. Include that the system has {}MB RAM, {} CPU cores, \
-                 {} agents, running in {} TTS mode. Be creative and match the personality \
-                 based on these specs:\n\
-                 - If memory < 256MB: humble, 'small but mighty'\n\
-                 - If 256-1024MB: modest, capable\n\
-                 - If > 1024MB: confident, powerful\n\
-                 - If > 4096MB: cocky, 'I could run a small country'\n\
-                 - If agents > 200: 'managing a small army'\n\
-                 Speak as JARVIS. One sentence only, no emojis, no markdown.",
-                self.greet_mem_mb, self.greet_cpu, self.greet_agents, tts_mode
+            let prompt = compose_boot_llm_prompt(
+                self.greet_mem_mb,
+                self.greet_cpu,
+                self.greet_agents,
             );
 
-            k_nano::slog_jarbas!("Jarbas", "info", "Solicitando saudacao a LLM...");
+            k_nano::slog_jarbas!("Jarbas", "info", "Solicitando saudacao suit-boot a LLM...");
+            crate::display::console::set_llm_busy(true);
+            crate::display::compositor::announce_welcome(
+                "Engaging HUD — calibrating virtual environment...",
+            );
             let _ = k_nano::EVENT_BUS.publish(Event {
                 id: 0,
                 topic: String::from("LLM_REQUEST"),

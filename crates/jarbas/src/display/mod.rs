@@ -1,12 +1,7 @@
-//! Display subsystem — framebuffer + embedded-graphics + Hermes Chat Console.
+//! Display subsystem — framebuffer, Soul Mirror, cards, ChatWindow.
 //!
-//! ## Architecture
-//! - `Framebuffer` — raw BGRA32 pixel writer
-//! - `NeuralConsole` — Hermes Chat Console com histórico + input
-//! - `DisplayAgent` — agent que subscreve HERMES_RESPONSE e renderiza o console
-//!
-//! O framebuffer é obtido via BootInfo::framebuffer (já mapeado pelo bootloader).
-//! Interface simplificada (NousResearch-style, sem multi-window compositor).
+//! Composição: orb (brand) + grafo mesh opcional + HUD mínimo + cards on-demand.
+//! O painel Hermes Console foi removido (SESSION_261); SysInfo card idem.
 
 pub mod fb;
 pub mod eg;

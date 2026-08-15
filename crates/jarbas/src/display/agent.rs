@@ -1,5 +1,4 @@
-//! DisplayAgent — JARVIS Desktop com compositor multi-app + WM cosmic-like.
-//! Hermes Chat + Settings + Power + JARVIS avatar overlay.
+//! DisplayAgent — desktop JARBAS: orb (brand) + mesh + HUD + cards on-demand.
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use hermes;
@@ -240,7 +239,6 @@ power_armed_until: 0,
         while let Some(ev) = rx.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             if let Some(ref mut desktop) = *COMPOSITOR.lock() {
-                desktop.ensure_hermes_overlay();
                 if let Some(chat) = desktop.windows.iter_mut().find(|w| w.app_id == Some(AppId::HermesChat)) {
                     chat.visible = true;
                     match mode {
@@ -488,8 +486,7 @@ impl Agent for DisplayAgent {
             if let Some((fb, av, fw, fh)) = built {
                 let mut desktop = JarbasDesktop::new(fb);
                 desktop.register_app(AppId::HermesChat, "Jarbas Chat", Layer::AppWindows);
-                desktop.ensure_hermes_overlay();
-                k_nano::slog_jarbas!("UI", "info", "Jarbas Chat — desktop 3 painéis");
+                k_nano::slog_jarbas!("UI", "info", "Desktop limpo — orb + HUD");
                 *COMPOSITOR.lock() = Some(desktop);
                 self.avatar = Some(av);
                 // Limites + centro para IRQ mouse
@@ -556,14 +553,10 @@ impl Agent for DisplayAgent {
             k_nano::interrupts::mouse_log_status("display_tick");
         }
 
-        // ADR-0047-H1: publish demo UI_SPEC once
+        // Demo UI_SPEC removido do boot — viewport limpo (orb + HUD).
+        // Cards sob demanda via EventBus UI_SPEC / instalador / atalhos.
         if !self.demo_ui_sent {
-            let _ = EVENT_BUS.publish(event_bus::Event {
-                id: 0,
-                topic: alloc::string::String::from(TOPIC_UI_SPEC),
-                payload: ui_spec::demo_ui_json().as_bytes().to_vec(),
-                token: event_bus::CapabilityToken::Legacy(1),
-            });
+            ui_spec::mark_ui_ok();
             self.demo_ui_sent = true;
         }
 

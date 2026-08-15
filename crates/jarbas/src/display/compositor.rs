@@ -42,6 +42,21 @@ pub enum PowerState {
 }
 pub static POWER_STATE: IrqSafeLock<PowerState> = IrqSafeLock::new(PowerState::None);
 
+/// Banner de boas-vindas (suit-boot) — texto + tick até quando exibir.
+pub static WELCOME_BANNER: IrqSafeLock<Option<String>> = IrqSafeLock::new(None);
+static WELCOME_UNTIL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Publica a fala de boas-vindas no HUD (~8s a 60Hz ≈ 480 ticks).
+pub fn announce_welcome(body: &str) {
+    let clean = body.trim();
+    if clean.is_empty() {
+        return;
+    }
+    let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    WELCOME_UNTIL.store(now.saturating_add(480), core::sync::atomic::Ordering::Relaxed);
+    *WELCOME_BANNER.lock() = Some(String::from(clean));
+}
+
 pub const POWER_BTN_W: usize = 48;
 pub const POWER_BTN_H: usize = 28;
 
@@ -173,13 +188,9 @@ impl JarbasDesktop {
     pub fn new(fb: DoubleBuffer) -> Self {
         let w = fb.info.width; let h = fb.info.height;
         let mut dock = Dock::new(w as u32, h as u32);
-        // Launchers fixos
+        // Launchers essenciais (stubs Ide/Camera/Audio removidos do dock)
         dock.add_launcher(AppId::HermesChat, "Chat");
-        dock.add_launcher(AppId::Settings, "Settings");
         dock.add_launcher(AppId::Power, "Power");
-        dock.add_launcher(AppId::Ide, "IDE");
-        dock.add_launcher(AppId::Camera, "Camera");
-        dock.add_launcher(AppId::AudioViz, "Audio");
 
         JarbasDesktop { 
             fb, 
@@ -361,42 +372,128 @@ impl JarbasDesktop {
         }
         self.draw_ambient_particles(tick, w, h);
 
+        // Herói visual: Soul Mirror (brand). Avatar8 só alimenta cor via
+        // avatar_state — partículas legado não competem com o orb.
+        let _ = avatar;
         if self.avatar_visible {
             self.draw_orb_layer(tick, w, h, avatar_state);
-            if let Some(av) = avatar { av.render(&mut self.fb); }
         }
 
-        // Mesh P2P graph — centro da tela (hub = Jarbas, satélites = peers)
+        // Mesh P2P — satélites só com peers; hub duplicado evitado (orb = brand).
         self.draw_mesh_graph(tick);
 
         // ═════════════════════════════════════════════════════════════
-        // CAMADA 1: Barra de status (topo) — COSMIC-style panel
+        // CAMADA 1: HUD mínimo — marca JARBAS + status compacto
         // ═════════════════════════════════════════════════════════════
         let sb_h = 28usize;
-        // Fundo escuro com borda inferior sutil (COSMIC top bar)
         self.fb.fill_rect(0, 0, w, sb_h, 8, 10, 16);
         self.fb.fill_rect(0, sb_h - 1, w, 1, theme.accent.0, theme.accent.1, theme.accent.2);
 
-        // Métricas — alinhado à esquerda
-        let mem_ctx = k_nano::memory::global_hardware_context();
-        let mem_pct = mem_ctx.get(0).copied().unwrap_or(0.0);
-        let agent_count = self.windows.len();
-        let llm_busy = crate::display::console::OVERLAY_TEXT.lock().contains("[CORTEX]");
+        // Brand first (hero signal na barra)
+        draw_text(
+            &mut self.fb,
+            12,
+            6,
+            "JARBAS",
+            self.w,
+            theme.accent.0,
+            theme.accent.1,
+            theme.accent.2,
+        );
 
-        let status = alloc::format!(
-            "t:{}  ag:{}  mem:{:.0}%  {}  {}",
-            tick, agent_count, mem_pct * 100.0,
-            if llm_busy { "LLM:gen" } else { "LLM:idle" },
-            if k_nano::env::is_online() { "NET:on" } else { "NET:off" });
-        draw_text(&mut self.fb, 10, 6, &status, self.w, theme.fg.0, theme.fg.1, theme.fg.2);
+        let mem_mb = {
+            let real = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
+            if real > 0 {
+                real
+            } else {
+                0
+            }
+        };
+        let llm = if crate::display::console::llm_busy() {
+            "LLM"
+        } else {
+            "idle"
+        };
+        let net = if k_nano::env::is_online() { "NET" } else { "off" };
+        let right = alloc::format!("{}MB  {}  {}", mem_mb, llm, net);
+        let right_x = w.saturating_sub(right.len() * 8 + POWER_BTN_W + 24);
+        draw_text(
+            &mut self.fb,
+            right_x,
+            6,
+            &right,
+            self.w,
+            theme.fg_muted.0,
+            theme.fg_muted.1,
+            theme.fg_muted.2,
+        );
 
-        // Botão OFF — canto SD, COSMIC-style rounded
+        // Botão OFF — canto SD
         {
             let (_bxp, by, bw, bh) = power_btn_rect(w);
             let off_x = w.saturating_sub(bw + 10);
-            decorations::draw_rounded_rect(&mut self.fb, off_x, by, bw, bh, 4,
-                                           theme.error.0, theme.error.1, theme.error.2);
-            draw_text(&mut self.fb, off_x + 10, by + 6, "OFF", self.w, theme.fg.0, theme.fg.1, theme.fg.2);
+            decorations::draw_rounded_rect(
+                &mut self.fb,
+                off_x,
+                by,
+                bw,
+                bh,
+                4,
+                theme.error.0,
+                theme.error.1,
+                theme.error.2,
+            );
+            draw_text(
+                &mut self.fb,
+                off_x + 10,
+                by + 6,
+                "OFF",
+                self.w,
+                theme.fg.0,
+                theme.fg.1,
+                theme.fg.2,
+            );
+        }
+
+        // Suit-boot welcome — linha centrada sob a barra (some após WELCOME_UNTIL)
+        {
+            let until = WELCOME_UNTIL.load(core::sync::atomic::Ordering::Relaxed);
+            let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            if now < until {
+                if let Some(ref line) = *WELCOME_BANNER.lock() {
+                    let max_chars = (w / 8).saturating_sub(4).max(16);
+                    let shown = if line.len() > max_chars {
+                        &line[..max_chars]
+                    } else {
+                        line.as_str()
+                    };
+                    let tw = shown.len() * 8;
+                    let tx = w.saturating_sub(tw) / 2;
+                    let ty = sb_h + 10;
+                    self.fb.fill_rect(
+                        tx.saturating_sub(8),
+                        ty.saturating_sub(4),
+                        tw + 16,
+                        20,
+                        12,
+                        14,
+                        22,
+                    );
+                    draw_text(
+                        &mut self.fb,
+                        tx,
+                        ty,
+                        shown,
+                        self.w,
+                        220,
+                        230,
+                        255,
+                    );
+                }
+            } else if until != 0 {
+                WELCOME_UNTIL.store(0, core::sync::atomic::Ordering::Relaxed);
+                *WELCOME_BANNER.lock() = None;
+            }
         }
 
         // ═════════════════════════════════════════════════════════════
@@ -437,13 +534,19 @@ impl JarbasDesktop {
         // ═════════════════════════════════════════════════════════════
         self.notifications.render(&mut self.fb, theme, Rect { x: 0, y: 0, width: w as u32, height: h as u32 }, self.tick);
 
-        // Indicador de foco no centro (sobre o orb)
-        let mode_str = match mode {
-            FocusMode::Chat => "[Focado no Chat]",
-            FocusMode::Ambient => "[Modo Ambiente - wake word]",
-        };
-        draw_text(&mut self.fb, w/2 - 90, h - 18, mode_str, self.w,
-                  theme.accent.0, theme.accent.1, theme.accent.2);
+        // Modo Chat: hint discreto (Ambient = silêncio — orb é o sinal)
+        if mode == FocusMode::Chat {
+            draw_text(
+                &mut self.fb,
+                12,
+                h.saturating_sub(16),
+                "CHAT",
+                self.w,
+                theme.fg_muted.0,
+                theme.fg_muted.1,
+                theme.fg_muted.2,
+            );
+        }
 
         // Diálogo de energia (modal central) — 3 opções
         if self.power_dialog {
@@ -504,30 +607,28 @@ impl JarbasDesktop {
         self.fb.swap();
     }
 
-    /// Mesh P2P graph — hub = Jarbas, satellites = peers, edge color = RTT.
-    /// Chamado dentro de render() (após o bg wipe, antes do swap) para que o
-    /// desenho sobreviva — fora daqui o próximo render() apagaria.
+    /// Mesh P2P — arestas + satélites em torno do orb (brand = Soul Mirror).
+    /// Sem peers: no-op (orb sozinho = composição limpa).
     fn draw_mesh_graph(&mut self, tick: u64) {
         use core::f32::consts::PI;
         use libm::{sinf, cosf};
-        let (w, h) = (self.w, self.h);
-        let cx = (w / 2) as isize;
-        let cy = ((h + 28) / 2) as isize; // ligeiramente abaixo da barra de status
-        let orbit = (core::cmp::min(w, h) as f32 * 0.32) as isize;
-        // Hub: Jarbas (deep purple identity)
-        self.fb.fill_circle_glow(cx, cy, 26, 106, 13, 173, 45);
-        self.fb.fill_circle_glow(cx, cy, 12, 106, 13, 173, 80);
-        self.fb.fill_circle_glow(cx, cy, 5, 255, 255, 255, 90);
         let peers = crate::display::agent::MESH_GRAPH.lock();
         let n = peers.len().min(12);
+        if n == 0 {
+            return;
+        }
+        let (w, h) = (self.w, self.h);
+        let cx = (w / 2) as isize;
+        let cy = (h / 2) as isize;
+        let orbit = (core::cmp::min(w, h) as f32 * 0.32) as isize;
         for (i, p) in peers.iter().take(n).enumerate() {
-            let ang = (i as f32) * 2.0 * PI / (n.max(1) as f32);
+            let ang = (i as f32) * 2.0 * PI / (n as f32);
             let px = cx + (cosf(ang) * orbit as f32) as isize;
             let py = cy + (sinf(ang) * orbit as f32) as isize;
             let pulse = (sinf(tick as f32 * 0.05 + i as f32) * 1.0) as isize;
             let (er, eg, eb) = if p.reachable {
                 let t = (p.p99_rtt.min(1500) as f32 / 1500.0).clamp(0.0, 1.0);
-                let rr = (60.0 + t * 180.0) as u8;   // green -> red
+                let rr = (60.0 + t * 180.0) as u8;
                 let gg = (220.0 - t * 160.0) as u8;
                 (rr, gg, 60u8)
             } else {
@@ -562,10 +663,6 @@ impl JarbasDesktop {
             data: alloc::string::String::new(),
             z: layer,
         });
-    }
-
-    pub fn ensure_hermes_overlay(&mut self) {
-        // ponytail: Hermes chat window removed from the UI (mesh-graph view).
     }
 
     pub fn render_window(&mut self, win: &Window, theme: &Theme) {
@@ -681,9 +778,6 @@ impl JarbasDesktop {
                 self.windows[idx].rect.x = (40 + (cnt % 5) * 20) as i32;
                 self.windows[idx].rect.y = (60 + (cnt % 4) * 20) as i32;
             }
-        }
-        if app_id != AppId::HermesChat {
-            self.ensure_hermes_overlay();
         }
     }
 

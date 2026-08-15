@@ -849,13 +849,25 @@ pub fn text_is_greetingish(text: &str) -> bool {
     if spaces < 1 || text.trim().len() < 10 {
         return false;
     }
-    let open = has(b"good") || has(b"hello") || has(b"all systems") || has(b"JARBAS");
+    // Suit-boot + saudacoes classicas (texto original JARBAS / Neural OS).
+    let open = has(b"good")
+        || has(b"hello")
+        || has(b"all systems")
+        || has(b"JARBAS")
+        || has(b"upload")
+        || has(b"at your")
+        || has(b"hud");
     let body = has(b"online")
         || has(b"ready")
         || has(b"operational")
         || has(b"systems")
         || has(b"day")
-        || has(b"morning");
+        || has(b"morning")
+        || has(b"service")
+        || has(b"fleet")
+        || has(b"standing by")
+        || has(b"nominal")
+        || has(b"engaged");
     open && body
 }
 
