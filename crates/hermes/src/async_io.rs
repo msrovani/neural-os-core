@@ -234,10 +234,9 @@ pub fn boot_smoke() -> bool {
         return false;
     };
     let _ = spawn_delay(2);
-    // Labor 20: jobs reais (podem Failed sem rede — ainda exercitam state machine)
-    let _ = spawn_http_get("http://example.com/");
-    let _ = spawn_tcp_xfer("example.com", 80, b"GET / HTTP/1.0\r\nHost: example.com\r\n\r\n");
-    let _ = spawn_fat_read("BOOT.LOG");
+    // SESSION_265: NÃO spawnar HttpGet/TcpXfer/FatRead no boot —
+    // com net_bridge registrado isso faz DNS/TCP real e trava HW/QEMU.
+    // State machine já é exercitada por Smoke + DelayTicks.
     let n = poll_budget(8);
     let _ = id;
     let ok = n >= 1;
@@ -245,7 +244,7 @@ pub fn boot_smoke() -> bool {
         k_nano::slog_bin!(
             "ASYNC-IO",
             "info",
-            "step=smoke status=OK VERDICT=PASS reason=poll_budget completed={} hybrid=ticks+io jobs=http+tcp",
+            "step=smoke status=OK VERDICT=PASS reason=poll_budget completed={} hybrid=ticks+io (no_live_net)",
             n
         );
     } else {

@@ -187,7 +187,8 @@ pub fn fetch_pack_want(host: [u8; 4], host_hdr: &str, path_upload: &str, want_sh
     crate::net_bridge::tcp_xfer(host, 80, &payload).ok_or("tcp_xfer_fail")
 }
 
-/// Smoke boot — non-fatal.
+/// Smoke boot — non-fatal. SESSION_265: só parse/API local — sem fetch_refs live
+/// (HTTPS no boot travava HW quando o bridge já estava registrado).
 pub fn boot_smoke() -> bool {
     let sample = b"001e# service=git-upload-pack\n003f0123456789abcdef0123456789abcdef01234567 HEAD\n0000";
     let parsed = parse_info_refs(sample);
@@ -206,26 +207,12 @@ pub fn boot_smoke() -> bool {
     syn.extend_from_slice(&1u32.to_be_bytes());
     let _ = apply_thin_pack(&syn);
 
-    match fetch_refs("https://github.com/git/git.git") {
-        Ok(refs) => {
-            k_nano::slog_bin!(
-                "GIT",
-                "info",
-                "step=refs status=OK n={} VERDICT=PASS reason=info_refs",
-                refs.len()
-            );
-            true
-        }
-        Err(e) => {
-            k_nano::slog_bin!(
-                "GIT",
-                "info",
-                "step=refs status=SKIP VERDICT=SKIP reason={} (parse_ok=1 pack_api=1)",
-                e
-            );
-            true
-        }
-    }
+    k_nano::slog_bin!(
+        "GIT",
+        "info",
+        "step=refs status=OK VERDICT=PARTIAL reason=parse_ok pack_api=1 (no_live_fetch)"
+    );
+    true
 }
 
 

@@ -382,7 +382,35 @@ pub fn init(ata: Option<&crate::ata::AtaDriver>, _parts: &[crate::fat32::Partiti
     }
 }
 
-/// Registra mensagem. Com fat-boot-log: buffer + flush a cada FLUSH_EVERY msgs.
+fn storage_available() -> bool {
+    if crate::globals::USB_MSC
+        .try_lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    if crate::globals::ATA_DRIVER
+        .try_lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    if crate::globals::AHCI_DRIVER
+        .try_lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    crate::disk_agent::nvme::NVME_DRIVER
+        .try_lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false)
+}
+
+/// Registra mensagem. Com fat-boot-log: buffer; flush só com BlockDevice pronto.
 pub fn log(msg: &str) {
     crate::slog_nano!("LOG", "info", "{}", msg);
     log_quiet(msg);
@@ -394,21 +422,13 @@ pub fn log_quiet(msg: &str) {
         return;
     }
 
-    if !FAT_READY.load(Ordering::Relaxed) {
-        buffer_log(msg);
-        #[cfg(feature = "fat-boot-log")]
-        {
-            let n = SINCE_FLUSH.fetch_add(1, Ordering::Relaxed) + 1;
-            if n >= FLUSH_EVERY {
-                let _ = persist_now(None);
-            }
-        }
-        return;
-    }
-
+    buffer_log(msg);
     #[cfg(feature = "fat-boot-log")]
     {
-        buffer_log(msg);
+        // SESSION_265: sem MSC/ATA não chama persist_now (no-op caro + risco cedo).
+        if !storage_available() && !FAT_READY.load(Ordering::Relaxed) {
+            return;
+        }
         let n = SINCE_FLUSH.fetch_add(1, Ordering::Relaxed) + 1;
         if n >= FLUSH_EVERY {
             let _ = persist_now(None);
@@ -465,27 +485,12 @@ pub fn append_raw(msg: &str) {
         crate::boot_ramlog::append(msg);
         return;
     }
-    if !FAT_READY.load(Ordering::Relaxed) {
-        buffer_log(msg);
-        #[cfg(feature = "fat-boot-log")]
-        {
-            let n = SINCE_FLUSH.fetch_add(1, Ordering::Relaxed) + 1;
-            if n >= FLUSH_EVERY {
-                let _ = persist_now(None);
-            }
-        }
-        return;
-    }
-    let tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
-    let line = alloc::format!("[T+{}] {}\n", tick, msg);
+    buffer_log(msg);
+    #[cfg(feature = "fat-boot-log")]
     {
-        let mut body = SESSION_BODY.lock();
-        if body.len() + line.len() < BOOT_LOG_CAP - 64 {
-            body.extend_from_slice(line.as_bytes());
+        if !storage_available() && !FAT_READY.load(Ordering::Relaxed) {
+            return;
         }
-    }
-#[cfg(feature = "fat-boot-log")]
-    {
         let n = SINCE_FLUSH.fetch_add(1, Ordering::Relaxed) + 1;
         if n >= FLUSH_EVERY {
             let _ = persist_now(None);
