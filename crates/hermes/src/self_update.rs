@@ -34,6 +34,16 @@ fn hex_eq(a: &str, b: &str) -> bool {
             .all(|(x, y)| x.eq_ignore_ascii_case(&y))
 }
 
+/// Nibble hex → 0..15, ou 0xFF se inválido.
+fn hex_nibble(c: u8) -> u8 {
+    match c {
+        b'0'..=b'9' => c - b'0',
+        b'a'..=b'f' => c - b'a' + 10,
+        b'A'..=b'F' => c - b'A' + 10,
+        _ => 0xFF,
+    }
+}
+
 /// Sanity check mínimo de ELF64 antes de promover (S6): magic + e_type + e_machine.
 /// Kernel promovido que não é ELF válido nunca chega ao Limine.
 fn is_valid_elf(data: &[u8]) -> bool {
@@ -46,10 +56,15 @@ fn is_valid_elf(data: &[u8]) -> bool {
 }
 
 impl SelfUpdate {
-    /// HTTP(S) GET `url` → verifica hash (se manifest forneceu) + sanity ELF →
-    /// grava slot inativo via `apply_update`. Retorna (bytes, sha256_hex).
+    /// HTTP(S) GET `url` → verifica sha256 (manifest) + assinatura Ed25519 do
+    /// digest (auditoria #7 — obrigatória) + sanity ELF → grava slot inativo
+    /// via `apply_update`. Retorna (bytes, sha256_hex).
     /// S1: blob NÃO verificado nunca entra no slot.
-    pub fn fetch_update(url: &str, expected_sha256: Option<&str>) -> Result<(usize, String), &'static str> {
+    pub fn fetch_update(
+        url: &str,
+        expected_sha256: Option<&str>,
+        expected_sig: Option<&str>,
+    ) -> Result<(usize, String), &'static str> {
         let data = crate::tls::fetch_url(url).map_err(|e| {
             k_nano::slog_hermes!("UPDATE", "info", "fetch=FAIL err={}", e);
             e
@@ -59,6 +74,7 @@ impl SelfUpdate {
             return Err("update_empty");
         }
         let n = data.len();
+        let digest = k_nano::tpm::sha256(&data);
         let hash = sha256_hex(&data);
         // S1: se o manifest anunciou sha256, exige igual — senão rejeita.
         if let Some(expected) = expected_sha256 {
@@ -74,7 +90,44 @@ impl SelfUpdate {
                 return Err("hash_mismatch");
             }
         }
-        // S6: sanity de ELF mesmo sem hash (protege contra blob truncado).
+        // Auditoria #7: update SEM assinatura valida da release key é rejeitado.
+        // Um MITM que controle o servidor pode forjar sha256 (self-consistent) —
+        // a assinatura sobre o digest é o que impede instalar kernel arbitrário.
+        let sig_hex = expected_sig.unwrap_or("");
+        if sig_hex.len() != 128 {
+            k_nano::slog_hermes!(
+                "UPDATE",
+                "error",
+                "fetch=REJECT unsigned_update (manifest sem sig valido) bytes={}",
+                n
+            );
+            return Err("unsigned_update");
+        }
+        let mut sig = [0u8; 64];
+        let mut ok_hex = true;
+        for (i, b) in sig_hex.as_bytes().chunks(2).enumerate() {
+            let hi = hex_nibble(b[0]);
+            let lo = hex_nibble(b.get(1).copied().unwrap_or(0));
+            if hi == 0xFF || lo == 0xFF {
+                ok_hex = false;
+                break;
+            }
+            sig[i] = (hi << 4) | lo;
+        }
+        if ok_hex && !k_nano::identity::verify_update_signature(&digest, &sig) {
+            ok_hex = false;
+        }
+        if !ok_hex {
+            k_nano::slog_hermes!(
+                "UPDATE",
+                "error",
+                "fetch=REJECT bad_signature bytes={} sha256={}",
+                n,
+                hash
+            );
+            return Err("bad_signature");
+        }
+        // S6: sanity de ELF mesmo com hash (protege contra blob truncado).
         if !is_valid_elf(&data) {
             k_nano::slog_hermes!(
                 "UPDATE",
@@ -494,9 +547,11 @@ pub fn check_for_update() -> String {
     let Some(kurl) = json_field(text, "url") else {
         return alloc::format!("[UPDATE] newer={} manifest=no_url", remote);
     };
-    // S1: hash esperado do manifest (se presente) — verificação antes de gravar o slot.
+    // S1 + auditoria #7: hash esperado + assinatura (sig) do manifest —
+    // verificação antes de gravar o slot. Update sem sig é rejeitado.
     let expected = json_field(text, "sha256");
-    match SelfUpdate::fetch_update(&kurl, expected.as_deref()) {
+    let sig = json_field(text, "sig");
+    match SelfUpdate::fetch_update(&kurl, expected.as_deref(), sig.as_deref()) {
         Ok((n, _hash)) => {
             // U1: promove o slot inativo → kernel.elf (o Limine carrega) + BOOTCFG
             let switched = SelfUpdate::switch_slot();

@@ -34,6 +34,13 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+# Auditoria #7: assinatura Ed25519 do digest sha256 (tools/ota_sign.py, RFC 8032
+# puro — zero dependencias). O kernel rejeita manifest sem `sig` valida.
+try:
+    from ota_sign import public_key, sign as ed25519_sign, verify as ed25519_verify
+except ImportError:  # roda de outro cwd: python tools/serve_update.py funciona via sys.path[0]
+    from tools.ota_sign import public_key, sign as ed25519_sign, verify as ed25519_verify
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KERNEL = ROOT / "target" / "limine-esp-tree" / "kernel.elf"
 LOGS_DIR = ROOT / "target" / "logs"
@@ -162,6 +169,9 @@ def main() -> int:
                     help="URL base para o KERNEL.BIN no manifest (obrigatorio com --bind 0.0.0.0)")
     ap.add_argument("--token", default=None,
                     help="token de sessao (Authorization: Bearer). Default: aleatorio")
+    ap.add_argument("--sign-key", default=None,
+                    help="seed hex da release key Ed25519 (tools/ota_sign.py --gen). "
+                         "Assina o sha256 no manifest; SEM isso o kernel rejeita o update.")
     args = ap.parse_args()
 
     if not args.kernel.exists():
@@ -177,14 +187,33 @@ def main() -> int:
 
     base = args.base_url or f"http://{args.bind}:{args.port}"
     Handler.kernel = args.kernel.read_bytes()
-    # S1: sha256 do kernel no manifest — o kernel verifica ANTES de gravar o slot.
+    # S1 + auditoria #7: sha256 do kernel + assinatura Ed25519 do digest no
+    # manifest — o kernel verifica AMBOS antes de gravar o slot. Sem --sign-key
+    # o manifest sai SEM sig e o kernel rejeita (unsigned_update).
     sha = hashlib.sha256(Handler.kernel).hexdigest()
-    Handler.manifest = json.dumps({
+    manifest = {
         "channel": args.channel,
         "version": args.version,
         "url": f"{base}/KERNEL.BIN",
         "sha256": sha,
-    }).encode() + b"\n"
+    }
+    if args.sign_key:
+        seed = bytes.fromhex(args.sign_key)
+        if len(seed) != 32:
+            print("[OTA] ERRO: --sign-key deve ser 32 bytes hex (tools/ota_sign.py --gen)",
+                  file=sys.stderr)
+            return 1
+        sig = ed25519_sign(seed, bytes.fromhex(sha))
+        manifest["sig"] = sig.hex()
+        print(f"[OTA] sig={sig.hex()}")
+        print(f"[OTA] pubkey={public_key(seed).hex()}")
+        if not ed25519_verify(public_key(seed), bytes.fromhex(sha), sig):
+            print("[OTA] ERRO: selftest de assinatura falhou", file=sys.stderr)
+            return 1
+    else:
+        print("[OTA] AVISO: sem --sign-key — manifest SEM assinatura; o kernel rejeitara o update")
+        print("[OTA]   (auditoria #7: use tools/ota_sign.py --gen e pina a PUBKEY no kernel)")
+    Handler.manifest = (json.dumps(manifest) + "\n").encode()
     # S2: token de sessão — `--token ""` desliga auth explicitamente (dev localhost,
     # o kernel no_std não envia Authorization: Bearer). `--token` ausente = aleatório.
     Handler.token = args.token if args.token is not None else secrets.token_hex(8)

@@ -3903,7 +3903,26 @@ pub(crate) fn kernel_boot(
             k_nano::boot_mode::BootMode::Unknown => LifePhase::Unknown,
         };
         let prev = current_phase();
-        write_self_state(phase, None, prev != phase, None, None);
+        // ADR-0082 Onda CPU — fechar o loop (#4 auditoria): o boot relê /hw/*
+        // da SGDB em vez de redescobrir (ADR-0086: boot é releitura). O perfil
+        // resolvido alimenta o hw_profile do SELF.STATE. Fallback = valor live
+        // (SGDB off / key ausente → degrada, nunca quebra o boot).
+        let live_isa = k_nano::platform_probe::hw_info().isa_name();
+        let hw_profile = match k_ai::sgdb::hw_get("cpu/isa") {
+            Some(p) if p == live_isa => {
+                k_nano::slog_bin!("HW", "onda", "Onda CPU loop OK: /hw/cpu/isa={} (releitura)", p);
+                Some(p)
+            }
+            Some(p) => {
+                k_nano::slog_bin!("HW", "onda", "Onda CPU divergencia: sgdb={} live={} (usa live)", p, live_isa);
+                Some(String::from(live_isa))
+            }
+            None => {
+                k_nano::slog_bin!("HW", "onda", "Onda CPU: /hw/cpu/isa indisponivel (fallback live={})", live_isa);
+                Some(String::from(live_isa))
+            }
+        };
+        write_self_state(phase, None, prev != phase, hw_profile.as_deref(), None);
         record_life_event(&alloc::format!("boot phase={} (prev={})", phase.as_str(), prev.as_str()));
         k_nano::slog_bin!("SELF", "info", "SELF.STATE: fase={} (SGDB best-effort)", phase.as_str());
 
