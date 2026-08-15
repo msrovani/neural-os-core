@@ -1,4 +1,4 @@
-﻿//! Boot Logger â€” buffer RAM â†’ flush FAT32 (`BOOT.LOG` 8.3) via BlockDevice.
+//! Boot Logger â€” buffer RAM â†’ flush FAT32 (`BOOT.LOG` 8.3) via BlockDevice.
 //!
 //! Notebooks modernos sem COM: este Ã© o canal de diagnÃ³stico.
 //! Feature `fat-boot-log` (ativa no crate `boot` para imagem HW).
@@ -147,7 +147,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
     let want = encode_83(BOOT_LOG_NAME);
     let parts = fat32_parts(dev);
     if parts.is_empty() {
-        crate::boot_logger::log(&alloc::format!("bootlog: 0 particoes FAT32 encontradas (MBR/GPT parse?)"));
+        log_no_flush(&alloc::format!("bootlog: 0 particoes FAT32 encontradas (MBR/GPT parse?)"));
         return false;
     }
     for part in &parts {
@@ -155,7 +155,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
         let lba_start = part.lba_start as u64;
         let mut bpb = [0u8; 512];
         if !dev.read_sectors(lba_start, &mut bpb) {
-            crate::boot_logger::log(&alloc::format!("bootlog: read BPB LBA {} falhou", lba_start));
+            log_no_flush(&alloc::format!("bootlog: read BPB LBA {} falhou", lba_start));
             continue;
         }
         if &bpb[3..11] == b"EXFAT   " { continue; }
@@ -165,7 +165,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
         let fat_count = bpb[0x10] as u32;
         let root_entries = u16::from_le_bytes([bpb[0x11], bpb[0x12]]);
         if root_entries > 0 || bps < 512 || bps > 4096 || bps % 32 != 0 || spc == 0 {
-            crate::boot_logger::log(&alloc::format!("bootlog: LBA {} BPB nao-FAT32 (re={} bps={} spc={})", lba_start, root_entries, bps, spc));
+            log_no_flush(&alloc::format!("bootlog: LBA {} BPB nao-FAT32 (re={} bps={} spc={})", lba_start, root_entries, bps, spc));
             continue;
         }
         let spf = u32::from_le_bytes([bpb[0x24], bpb[0x25], bpb[0x26], bpb[0x27]]);
@@ -183,7 +183,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
             for s in 0..spc {
                 let off = (s * bps) as usize;
                 if !dev.read_sectors((clba + s) as u64, &mut dir[off..off + bps as usize]) {
-                    crate::boot_logger::log(&alloc::format!("bootlog: read dir LBA {} falhou", u64::from(clba) + u64::from(s)));
+                    log_no_flush(&alloc::format!("bootlog: read dir LBA {} falhou", u64::from(clba) + u64::from(s)));
                     return false;
                 }
             }
@@ -218,7 +218,7 @@ if &dir[entry..entry + 11] != &want { continue; }
                         sector[..take].copy_from_slice(&data[written..written + take]);
                         // Padding zero no resto do setor → leitor vê EOF limpo.
                         if !dev.write_sectors((fc_lba + s) as u64, &sector) {
-                            crate::boot_logger::log(&alloc::format!("bootlog: WRITE LBA {} falhou (tick={})", u64::from(fc_lba) + u64::from(s), crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed)));
+                            log_no_flush(&alloc::format!("bootlog: WRITE LBA {} falhou (tick={})", u64::from(fc_lba) + u64::from(s), crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed)));
                             return false;
                         }
                         written += take;
@@ -227,7 +227,7 @@ if &dir[entry..entry + 11] != &want { continue; }
                     let fat_sec = fat_lba + (fat_off as u32 / bps);
                     let mut fsec = [0u8; 512];
                     if !dev.read_sectors(fat_sec as u64, &mut fsec) {
-                        crate::boot_logger::log(&alloc::format!("bootlog: read FAT LBA {} falhou", fat_sec));
+                        log_no_flush(&alloc::format!("bootlog: read FAT LBA {} falhou", fat_sec));
                         return false;
                     }
                     let boff = fat_off % bps as usize;
@@ -242,11 +242,11 @@ if &dir[entry..entry + 11] != &want { continue; }
                     let sector_idx = (entry as u32) / bps;
                     let off = (sector_idx * bps) as usize;
                     if !dev.write_sectors((clba + sector_idx) as u64, &dir[off..off + bps as usize]) {
-                        crate::boot_logger::log(&alloc::format!("bootlog: write dir LBA {} falhou", u64::from(clba) + u64::from(sector_idx)));
+                        log_no_flush(&alloc::format!("bootlog: write dir LBA {} falhou", u64::from(clba) + u64::from(sector_idx)));
                         return false;
                     }
                 }
-                crate::boot_logger::log(&alloc::format!("bootlog: OK {} bytes em {} (LBA {})", written, BOOT_LOG_NAME, lba_start));
+                log_no_flush(&alloc::format!("bootlog: OK {} bytes em {} (LBA {})", written, BOOT_LOG_NAME, lba_start));
                 return written > 0 || write_len == 0;
             }
             let fat_off = cluster as usize * 4;
@@ -256,7 +256,7 @@ if &dir[entry..entry + 11] != &want { continue; }
             let boff = fat_off % bps as usize;
             cluster = u32::from_le_bytes([fsec[boff], fsec[boff + 1], fsec[boff + 2], fsec[boff + 3]]) & 0x0FFF_FFFF;
         }
-        crate::boot_logger::log(&alloc::format!("bootlog: BOOT.LOG NAO encontrado no root dir (walked={})", walked));
+        log_no_flush(&alloc::format!("bootlog: BOOT.LOG NAO encontrado no root dir (walked={})", walked));
     }
     false
 }
@@ -338,7 +338,7 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
             }
         }
         if !ok {
-            crate::boot_logger::log(&alloc::format!("BOOT.LOG flush FALHOU - {}", reason));
+            log_no_flush(&alloc::format!("BOOT.LOG flush FALHOU - {}", reason));
         }
         ok
     };
@@ -414,6 +414,15 @@ fn storage_available() -> bool {
 pub fn log(msg: &str) {
     crate::slog_nano!("LOG", "info", "{}", msg);
     log_quiet(msg);
+}
+
+/// Diagnóstico do path de persistência: serial + ramlog, SEM re-entrar no flush.
+/// `log()` aqui causaria recursão infinita (persist_now → log → log_quiet →
+/// SINCE_FLUSH≥16 → persist_now → ...) até stack overflow (#PF) quando o flush
+/// falha (ex: QEMU sem USB-MSC/ATA). SESSION_265.
+fn log_no_flush(msg: &str) {
+    crate::slog_nano!("LOG", "info", "{}", msg);
+    buffer_log(msg);
 }
 
 /// Buffer/persist sem eco no serial/FB (evita triplicar linhas de BOOT_PHASE).
