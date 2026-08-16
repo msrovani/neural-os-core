@@ -1,4 +1,18 @@
-﻿# STATE — neural-os-core v1.9.99-s267 — Gate interop TickvLite ↔ neural-sgdb
+﻿# STATE — neural-os-core v1.9.99-s268 — K130 freeze Alienware Meteor Lake: granular checkpoints
+#   SESSION_268: freeze no K130 (pre-smokes) em Alienware Intel Core 7 240h (Meteor Lake).
+#   Adicionados checkpoints por smoke test (K130: hw_gate/ipc_bus/async_io/git_thin;
+#   K131: wifi_softmac/wpa2_hs/dhcp; K132: limine_esp/ath10k/tls_trust/self_update/ntp;
+#   K133: theme_bridge/clipboard/boot_chime/vconsole/screensaver/manpages/image_viewer/
+#   fts_search/user_accounts/fw_cfg; K134: async_rt/cf_challenge/xhci/btrfs/luks/ext4/vfs/
+#   smp/gpu_i225/hda/acpi/firewall/capgate/bt_hci/elf_loader/gsp; K135: platform_probe/simd).
+#   Hipótese: `async_io::boot_smoke()` spawna HTTP/TCP/FAT jobs ANTES de drivers init
+#   (linha 1706+) — falha rápida mas edge cases de alocação/locking em topologia híbrida
+#   Meteor Lake. Fix estrutural em `agent-core/lib.rs`: métodos fora de impl blocks
+#   (merged register/activate/set_budget/get/set_urgency/active_count/
+#   agents_by_affinity_ring/poll_order_by_affinity + Default impl).
+#   Build 0 erros; usb_hw.img 3199MB gerado. Próximo: boot HW real, ler último K-checkpoint.
+#
+# STATE — neural-os-core v1.9.99-s267 — Gate interop TickvLite ↔ neural-sgdb
 #   SESSION_267: codec TKLV público + RamFlash host + goldens OS = neural-sgdb
 #   (encode_record/scan_volume + NMD1). Checklist publish em docs/specs/.
 #   Mode 1 intacto — sem dep crates.io ainda.
