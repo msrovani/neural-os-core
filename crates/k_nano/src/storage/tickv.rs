@@ -1,6 +1,9 @@
 //! ADR-0063 Q1 — TickvLite: append-log + CRC + GC/compaction + recover robusto.
 //! Record: magic TKLV | u32 key_len | u32 val_len | u32 crc | key | val | pad16 → pad512.
 //! Honesty: não é crate tickv upstream; erase NVMe = TRIM residual.
+//!
+//! Interop com `neural-sgdb` (ADR-0004 lá): `encode_record` / `scan_volume` são
+//! o contrato byte-exato TKLV/TKCK. Gate host em `#[cfg(test)]` (SESSION_267).
 
 use alloc::collections::BTreeMap;
 use alloc::format;
@@ -9,12 +12,18 @@ use alloc::vec;
 use alloc::vec::Vec;
 use spin::Mutex;
 
-use super::flash::{init_flash, ActiveFlash, FlashController, FLASH};
+use super::flash::{init_flash, ActiveFlash, FlashController, FLASH, RamFlash};
 
-const MAGIC: &[u8; 4] = b"TKLV";
-const HEADER: usize = 16;
+/// Magic TKLV — 4º byte 'V' (valid); tombstone in-place troca por 0x00.
+pub const MAGIC: &[u8; 4] = b"TKLV";
+pub const HEADER: usize = 16;
 /// Byte 3 do magic: 'V' = válido (legado); 0 = invalidado in-place (herança TicKV).
-const MAGIC_PREFIX: &[u8; 3] = b"TKL";
+pub const MAGIC_PREFIX: &[u8; 3] = b"TKL";
+/// Canonical checkpoint key (paridade neural-sgdb).
+pub const CKPT_KEY: &str = "sys/tickv_ckpt";
+/// Limites do leitor (paridade recover / neural-sgdb).
+pub const MAX_KLEN: usize = 4096;
+pub const MAX_VLEN: usize = 2 * 1024 * 1024;
 
 fn hdr_valid(hdr: &[u8]) -> bool {
     hdr.len() >= 4 && &hdr[0..3] == MAGIC_PREFIX && (hdr[3] == b'V' || hdr[3] == 1)
@@ -32,7 +41,8 @@ const HIGH_WATER: u64 = 256 * 1024;
 const DEAD_RATIO_NUM: u64 = 1; // dead > live * ratio → GC
 const DEAD_RATIO_DEN: u64 = 1;
 
-fn crc32(data: &[u8]) -> u32 {
+/// CRC32 IEEE (poly 0xEDB88320) — cobre **somente key‖val**.
+pub fn crc32(data: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
     for &b in data {
         crc ^= b as u32;
@@ -44,11 +54,136 @@ fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
-fn rec_total(klen: usize, vlen: usize) -> usize {
+/// Tamanho total de um record no volume (múltiplo de 512).
+pub fn record_size(klen: usize, vlen: usize) -> usize {
     let body_len = klen + vlen;
     let padded = (body_len + 15) & !15;
     let rec_body = HEADER + padded;
     (rec_body + 511) & !511
+}
+
+fn rec_total(klen: usize, vlen: usize) -> usize {
+    record_size(klen, vlen)
+}
+
+/// Serializa um record TKLV completo (512-alinhado) — byte-exato vs neural-sgdb.
+pub fn encode_record(key: &[u8], val: &[u8]) -> Vec<u8> {
+    let body_len = key.len() + val.len();
+    let padded = (body_len + 15) & !15;
+    let mut body = vec![0u8; padded];
+    body[..key.len()].copy_from_slice(key);
+    body[key.len()..body_len].copy_from_slice(val);
+    let crc = crc32(&body[..body_len]);
+    let total = record_size(key.len(), val.len());
+    let mut rec = vec![0u8; total];
+    rec[0..4].copy_from_slice(MAGIC);
+    rec[4..8].copy_from_slice(&(key.len() as u32).to_le_bytes());
+    rec[8..12].copy_from_slice(&(val.len() as u32).to_le_bytes());
+    rec[12..16].copy_from_slice(&crc.to_le_bytes());
+    rec[HEADER..HEADER + padded].copy_from_slice(&body);
+    rec
+}
+
+/// Resultado de `scan_volume` — índice last-wins + métricas (interop neural-sgdb).
+#[derive(Clone, Debug, Default)]
+pub struct ScanResult {
+    pub map: BTreeMap<String, Vec<u8>>,
+    pub offsets: BTreeMap<String, u64>,
+    pub append_off: u64,
+    pub corrupt: u64,
+    pub truncated: bool,
+}
+
+/// Varre um volume TKLV em memória — port do `recover()` / neural-sgdb `scan_volume`.
+pub fn scan_volume(data: &[u8]) -> ScanResult {
+    let mut out = ScanResult::default();
+    let size = data.len() as u64;
+    let mut off = 0u64;
+    let mut eof = false;
+    while off + HEADER as u64 <= size {
+        let hdr = &data[off as usize..off as usize + HEADER];
+        if !hdr_tickv_shaped(hdr) {
+            if hdr.iter().all(|&b| b == 0 || b == 0xFF) {
+                eof = true;
+                break;
+            }
+            out.corrupt += 1;
+            off = (off + 512) & !511;
+            continue;
+        }
+        let klen = u32::from_le_bytes(hdr[4..8].try_into().unwrap()) as usize;
+        let vlen = u32::from_le_bytes(hdr[8..12].try_into().unwrap()) as usize;
+        if klen > MAX_KLEN || vlen > MAX_VLEN {
+            out.corrupt += 1;
+            off = (off + 512) & !511;
+            continue;
+        }
+        let total = record_size(klen, vlen) as u64;
+        if off + total > size {
+            out.truncated = true;
+            break;
+        }
+        if hdr[3] == 0 {
+            out.append_off = out.append_off.max(off + total);
+            off += total;
+            continue;
+        }
+        let body = &data[off as usize + HEADER..off as usize + HEADER + klen + vlen];
+        let want = u32::from_le_bytes(hdr[12..16].try_into().unwrap());
+        if crc32(body) != want {
+            out.corrupt += 1;
+            off = (off + 512) & !511;
+            continue;
+        }
+        out.append_off = out.append_off.max(off + total);
+        if let Ok(key) = core::str::from_utf8(&body[..klen]) {
+            if key != CKPT_KEY {
+                if vlen == 0 {
+                    out.map.remove(key);
+                    out.offsets.remove(key);
+                } else {
+                    out.map.insert(String::from(key), body[klen..].to_vec());
+                    out.offsets.insert(String::from(key), off);
+                }
+            }
+        } else {
+            out.corrupt += 1;
+        }
+        off += total;
+    }
+    if !eof && off < size {
+        out.truncated = true;
+    }
+    out
+}
+
+/// Instala `RamFlash` no static FLASH (host / testes interop). Não chama NVMe.
+pub fn install_ram_flash(size: usize) {
+    let mut g = FLASH.lock();
+    *g = Some(ActiveFlash::Ram(RamFlash::new(size)));
+}
+
+/// Dump dos primeiros `len` bytes do FLASH (gate OS→bytes).
+/// Prefer `RamFlash` (host); NVMe exige alinhamento 512 — arredonda `len` para cima.
+pub fn dump_flash(len: usize) -> Result<Vec<u8>, &'static str> {
+    let mut g = FLASH.lock();
+    let flash = g.as_mut().ok_or("no flash")?;
+    let size = flash.size_bytes() as usize;
+    let n = len.min(size);
+    let mut buf = vec![0u8; n];
+    // RamFlash aceita qualquer tamanho; NVMe exige 512 — pad local e trim.
+    let need = (n + 511) & !511;
+    if need == n {
+        flash.read(0, &mut buf)?;
+    } else if need <= size {
+        let mut full = vec![0u8; need];
+        flash.read(0, &mut full)?;
+        buf.copy_from_slice(&full[..n]);
+    } else {
+        // só RAM/pequeno: lê n se o backend permitir (Ram)
+        flash.read(0, &mut buf)?;
+    }
+    Ok(buf)
 }
 
 #[derive(Clone, Copy, Default)]
@@ -94,7 +229,20 @@ impl TickvLite {
     }
 
     pub fn mount(&mut self) -> Result<(), &'static str> {
-        self.backend = init_flash();
+        // Host/tests: se FLASH já foi instalado (`install_ram_flash`), não reinicia.
+        {
+            let g = FLASH.lock();
+            if g.is_some() {
+                self.backend = match g.as_ref() {
+                    Some(ActiveFlash::Ram(_)) => "ram",
+                    Some(ActiveFlash::Nvme(_)) => "nvme",
+                    None => "none",
+                };
+            } else {
+                drop(g);
+                self.backend = init_flash();
+            }
+        }
         // D3: tenta ckpt rápido; fallback full scan
         if self.try_mount_from_ckpt().is_err() {
             self.recover()?;
@@ -416,21 +564,8 @@ impl TickvLite {
     }
 
     fn put_raw(&mut self, key: &str, val: &[u8]) -> Result<(), &'static str> {
-        let k = key.as_bytes();
-        let body_len = k.len() + val.len();
-        let padded = (body_len + 15) & !15;
-        let mut body = vec![0u8; padded];
-        body[..k.len()].copy_from_slice(k);
-        body[k.len()..k.len() + val.len()].copy_from_slice(val);
-        let crc = crc32(&body[..body_len]);
-        let mut rec = vec![0u8; HEADER + padded];
-        rec[0..4].copy_from_slice(MAGIC);
-        rec[4..8].copy_from_slice(&(k.len() as u32).to_le_bytes());
-        rec[8..12].copy_from_slice(&(val.len() as u32).to_le_bytes());
-        rec[12..16].copy_from_slice(&crc.to_le_bytes());
-        rec[HEADER..HEADER + padded].copy_from_slice(&body);
-        let total = (rec.len() + 511) & !511;
-        rec.resize(total, 0);
+        let rec = encode_record(key.as_bytes(), val);
+        let total = rec.len();
         let off = self.append_off;
         self.with_flash(|fl| fl.write(off, &rec))??;
         if let Some(_old) = self.index.insert(String::from(key), off) {
@@ -688,4 +823,119 @@ pub fn corrupt_smoke() -> bool {
         return false;
     }
     matches!(kv.get("corrupt/t"), Err("corrupt"))
+}
+
+#[cfg(test)]
+mod interop_tests {
+    use super::*;
+    use crate::storage::flash::FLASH;
+    use spin::Mutex as SpinMutex;
+
+    /// Statics FLASH/TICKV são globais — serializa interop tests.
+    static TEST_LOCK: SpinMutex<()> = SpinMutex::new(());
+
+    fn reset() {
+        *TICKV.lock() = None;
+        *FLASH.lock() = None;
+    }
+
+    /// Mesmo vetor que `neural_sgdb::tickv::tests::golden_record_bytes` (v1.1.0).
+    #[test]
+    fn golden_record_bytes_match_neural_sgdb() {
+        let _g = TEST_LOCK.lock();
+        let rec = encode_record(b"k", b"v");
+        assert_eq!(rec.len(), 512);
+        assert_eq!(&rec[0..4], b"TKLV");
+        assert_eq!(&rec[4..8], &1u32.to_le_bytes());
+        assert_eq!(&rec[8..12], &1u32.to_le_bytes());
+        let want_crc = crc32(b"kv");
+        assert_eq!(&rec[12..16], &want_crc.to_le_bytes());
+        assert_eq!(&rec[16..18], b"kv");
+        assert!(rec[18..512].iter().all(|&b| b == 0));
+        assert_eq!(record_size(1, 1), 512);
+        assert_eq!(record_size(1000, 0), 1024);
+        assert_eq!(record_size(1000, 1000), 2048);
+    }
+
+    #[test]
+    fn scan_volume_tombstone_and_last_wins() {
+        let _g = TEST_LOCK.lock();
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_record(b"md/L2/a", b"1"));
+        data.extend_from_slice(&encode_record(b"md/L2/b", b"2"));
+        data.extend_from_slice(&encode_record(b"md/L2/a", b"")); // tombstone
+        let scan = scan_volume(&data);
+        assert_eq!(scan.corrupt, 0);
+        assert!(!scan.truncated);
+        assert_eq!(scan.map.get("md/L2/a"), None);
+        assert_eq!(
+            scan.map.get("md/L2/b").map(|v| v.as_slice()),
+            Some(&b"2"[..])
+        );
+    }
+
+    #[test]
+    fn put_get_roundtrip_ram_flash() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        install_ram_flash(64 * 1024);
+        let mut kv = TickvLite::new();
+        kv.mount().expect("mount");
+        kv.put("hello", b"world").expect("put");
+        assert_eq!(kv.get("hello").unwrap(), b"world");
+        let dump = dump_flash(512).expect("dump");
+        assert_eq!(&dump[0..4], MAGIC);
+        let scanned = scan_volume(&dump);
+        assert_eq!(
+            scanned.map.get("hello").map(|v| v.as_slice()),
+            Some(&b"world"[..])
+        );
+        reset();
+    }
+
+    #[test]
+    fn remount_preserves_volume_via_dump_scan() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        install_ram_flash(64 * 1024);
+        {
+            let mut kv = TickvLite::new();
+            kv.mount().expect("mount");
+            kv.put("persist", b"across").expect("put");
+        }
+        // Simula reopen: novo TickvLite, mesmos bytes no FLASH.
+        let mut kv2 = TickvLite::new();
+        kv2.mount().expect("remount");
+        assert_eq!(kv2.get("persist").unwrap(), b"across");
+        let dump = dump_flash(1024).unwrap();
+        let scanned = scan_volume(&dump);
+        assert_eq!(
+            scanned.map.get("persist").map(|v| v.as_slice()),
+            Some(&b"across"[..])
+        );
+        reset();
+    }
+
+    #[test]
+    fn checkpoint_key_visible_in_raw_scan_skipped_in_map() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        install_ram_flash(64 * 1024);
+        let mut kv = TickvLite::new();
+        kv.mount().expect("mount");
+        kv.put("user/k", b"v").expect("put");
+        kv.write_ckpt().expect("ckpt");
+        let dump = dump_flash(4096).unwrap();
+        // scan_volume omite CKPT_KEY do map (paridade neural-sgdb).
+        let scanned = scan_volume(&dump);
+        assert!(scanned.map.get(CKPT_KEY).is_none());
+        assert_eq!(
+            scanned.map.get("user/k").map(|v| v.as_slice()),
+            Some(&b"v"[..])
+        );
+        // Bytes brutos contêm a key do ckpt.
+        let ckpt_bytes = CKPT_KEY.as_bytes();
+        assert!(dump.windows(ckpt_bytes.len()).any(|w| w == ckpt_bytes));
+        reset();
+    }
 }

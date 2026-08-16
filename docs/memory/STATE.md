@@ -1,3 +1,8 @@
+﻿# STATE — neural-os-core v1.9.99-s267 — Gate interop TickvLite ↔ neural-sgdb
+#   SESSION_267: codec TKLV público + RamFlash host + goldens OS = neural-sgdb
+#   (encode_record/scan_volume + NMD1). Checklist publish em docs/specs/.
+#   Mode 1 intacto — sem dep crates.io ainda.
+#
 # STATE — neural-os-core v1.9.99-s266 — Jarbas UI limpa + suit-boot welcome
 #   SESSION_266: orb=brand, HUD mínimo JARBAS, sem demo card/partículas;
 #   saudação LLM/template estilo suit-online MCU (texto original) + banner HUD.
