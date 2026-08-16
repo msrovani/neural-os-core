@@ -1391,26 +1391,136 @@ pub(crate) fn kernel_boot(
         crate::display::fb::boot_ckpt(12, "arena+boot_logger");
     }
 
-    // Consumer BOOT_PHASE antes de qualquer publish (EventBus → serial)
+// Consumer BOOT_PHASE antes de qualquer publish (EventBus → serial)
     ensure_boot_phase_consumer();
     publish_boot_phase(BootPhase::SafeHarbor, "Serial+Display+IDT prontos");
     publish_boot_phase(BootPhase::MemoryCore, "Frame allocator + page tables + heap");
     crate::display::fb::boot_ckpt(13, "SafeHarbor+MemoryCore");
+    crate::display::fb::boot_ckpt(130, "pre-smokes");
 
-    // SESSION_265: NÃO rodar o gauntlet de labor smokes aqui.
-    // Em HW real (sem COM) o último K visível era K13 enquanto async_io/git_thin
-    // (HTTP/HTTPS), theme apply, fw_cfg I/O e dezenas de slog travavam/atrasavam
-    // antes de K14. Smokes honesty vão para `run_deferred_labor_smokes` pós-drivers.
-    // Aqui só o mínimo: BootSmokeOk + FeatureGate + SIMD + SYSCALL → K14.
+    // Labor 8: smoke = MemoryCore → BootSmokeOk; HW-GATE early (Limine pode #PF antes WifiAgent)
+    crate::display::fb::boot_ckpt(130, "hw_gate:mark_boot_smoke");
     k_hal::hw_gate::mark_boot_smoke(boot_tag);
-    crate::display::fb::boot_ckpt(130, "pos BootSmokeOk");
+    crate::display::fb::boot_ckpt(130, "hw_gate:emit_all");
+    k_hal::hw_gate::emit_all();
+
+    // Labor 9: MessageBus A→B smoke (ADR-0068) — pós-heap
+    crate::display::fb::boot_ckpt(130, "ipc_bus:boot_smoke");
+    let _ = hermes_crate::ipc_bus::boot_smoke();
+
+    // Labor 11: async I/O híbrido smoke (ADR-0070) — pós-heap
+    crate::display::fb::boot_ckpt(130, "async_io:boot_smoke");
+    let _ = hermes_crate::async_io::boot_smoke();
+
+    // Labor 16: Git thin parse smoke (ADR-0074) — net opcional
+    crate::display::fb::boot_ckpt(130, "git_thin:boot_smoke");
+    let _ = hermes_crate::git_thin::boot_smoke();
+    crate::display::fb::boot_ckpt(131, "smokes1 ok");
+
+    // Labor 22 SoftMAC
+    crate::display::fb::boot_ckpt(131, "wifi_softmac:boot_smoke");
+    crate::wifi_softmac::boot_smoke();
+    // Labor 30 WPA2 + Labor 31 wifi net path
+    crate::display::fb::boot_ckpt(131, "wpa2_hs:boot_smoke");
+    hermes_crate::wpa2_hs::boot_smoke();
+    crate::display::fb::boot_ckpt(131, "wifi_softmac:dhcp_http_path_smoke");
+    crate::wifi_softmac::dhcp_http_path_smoke();
+    crate::display::fb::boot_ckpt(132, "smokes2 ok");
+
+    // ADR-0062 L28–L62 smokes (honesty; Note labs SKIP)
+    crate::display::fb::boot_ckpt(132, "limine_esp_evidence_smoke");
+    labor_smokes::limine_esp_evidence_smoke(boot_tag);
+    crate::display::fb::boot_ckpt(132, "ath10k_note_smoke");
+    labor_smokes::ath10k_note_smoke();
+    crate::display::fb::boot_ckpt(132, "tls_trust:ca_chain_boot_smoke");
+    let _ = crate::tls_trust::ca_chain_boot_smoke();
+    crate::display::fb::boot_ckpt(132, "self_update:boot_smoke");
+    let _ = hermes_crate::self_update::boot_smoke();
+    crate::display::fb::boot_ckpt(132, "ntp:residual_boot_smoke");
+    hermes_crate::ntp::residual_boot_smoke();
+    crate::display::fb::boot_ckpt(133, "smokes3 ok");
+    crate::display::fb::boot_ckpt(133, "theme_bridge:register");
+    hermes_crate::theme_bridge::register(
+        || jarbas_crate::display::theme::list_names(),
+        |n| jarbas_crate::display::theme::apply(n),
+    );
+    crate::display::fb::boot_ckpt(133, "theme_bridge:boot_smoke");
+    let _ = hermes_crate::theme_bridge::boot_smoke();
+    crate::display::fb::boot_ckpt(133, "clipboard_notify:boot_smoke");
+    let _ = jarbas_crate::clipboard_notify::boot_smoke();
+    crate::display::fb::boot_ckpt(133, "boot_chime:boot_smoke");
+    k_nano::boot_chime::boot_smoke();
+    crate::display::fb::boot_ckpt(133, "vconsole:boot_smoke");
+    let _ = jarbas_crate::vconsole::boot_smoke();
+    crate::display::fb::boot_ckpt(133, "screensaver:boot_smoke");
+    let _ = jarbas_crate::screensaver::boot_smoke();
+    crate::display::fb::boot_ckpt(133, "manpages:boot_smoke");
+    let _ = hermes_crate::manpages::boot_smoke();
+    crate::display::fb::boot_ckpt(133, "image_viewer:boot_smoke");
+    let _ = jarbas_crate::image_viewer::boot_smoke();
+    crate::display::fb::boot_ckpt(133, "fts_search:boot_smoke");
+    let _ = k_nano::fts_search::boot_smoke();
+    crate::display::fb::boot_ckpt(133, "user_accounts:boot_smoke");
+    let _ = k_nano::user_accounts::boot_smoke();
+    crate::display::fb::boot_ckpt(133, "fw_cfg:boot_smoke");
+    let _ = k_nano::fw_cfg::boot_smoke();
+    crate::display::fb::boot_ckpt(134, "smokes4 ok");
+    // Initialize async runtime (P16)
+    crate::display::fb::boot_ckpt(134, "async_rt:init_async_rt");
+    k_nano::async_rt::init_async_rt();
+    crate::display::fb::boot_ckpt(134, "cf_challenge:boot_smoke");
+    hermes_crate::cf_challenge::boot_smoke();
+    crate::display::fb::boot_ckpt(134, "xhci:hub_address_boot_smoke");
+    k_nano::xhci::hub_address_boot_smoke();
+    crate::display::fb::boot_ckpt(134, "btrfs_reader:boot_smoke");
+    k_nano::btrfs_reader::boot_smoke();
+    crate::display::fb::boot_ckpt(134, "luks_open:boot_smoke");
+    k_nano::luks_open::boot_smoke();
+    crate::display::fb::boot_ckpt(134, "ext4_multiblock_smoke");
+    labor_smokes::ext4_multiblock_smoke();
+    crate::display::fb::boot_ckpt(134, "vfs_storage_bridge_smoke");
+    labor_smokes::vfs_storage_bridge_smoke();
+    crate::display::fb::boot_ckpt(134, "smp:try_enable_ap_workers_from_feature");
+    k_nano::smp::try_enable_ap_workers_from_feature();
+    crate::display::fb::boot_ckpt(134, "note_gpu_or_i225_smoke");
+    labor_smokes::note_gpu_or_i225_smoke();
+    crate::display::fb::boot_ckpt(134, "hda_multistream_smoke");
+    labor_smokes::hda_multistream_smoke();
+    crate::display::fb::boot_ckpt(134, "acpi_s3_smoke");
+    labor_smokes::acpi_s3_smoke();
+    crate::display::fb::boot_ckpt(134, "firewall:boot_smoke");
+    let _ = k_nano::firewall::boot_smoke();
+    crate::display::fb::boot_ckpt(134, "ipc_bus:capgate_boot_smoke");
+    let _ = hermes_crate::ipc_bus::capgate_boot_smoke();
+    crate::display::fb::boot_ckpt(134, "bt_hci_smoke");
+    labor_smokes::bt_hci_smoke();
+    crate::display::fb::boot_ckpt(134, "elf_loader:elf_thin_boot_smoke");
+    let _ = hermes_crate::elf_loader::elf_thin_boot_smoke();
+    crate::display::fb::boot_ckpt(134, "gsp_conditional_smoke");
+    labor_smokes::gsp_conditional_smoke();
+    crate::display::fb::boot_ckpt(135, "smokes5 ok");
+
+    // ADR-0055: probe HV/ISA/cache → FeatureGate antes de SIMD/SMP
+    crate::display::fb::boot_ckpt(135, "platform_probe:detect");
+    k_nano::platform_probe::detect();
+    crate::display::fb::boot_ckpt(135, "platform_probe:log_itd_probe");
+    k_nano::platform_probe::log_itd_probe();
+    crate::display::fb::boot_ckpt(136, "probe ok");
+    crate::display::fb::boot_ckpt(136, "simd:enable_simd");
+    simd::enable_simd();
+    crate::display::fb::boot_ckpt(137, "SIMD ok2");
 
     // ADR-0055: probe HV/ISA/cache → FeatureGate antes de SIMD/SMP
     k_nano::platform_probe::detect();
     crate::display::fb::boot_ckpt(131, "platform_probe");
     k_nano::platform_probe::log_itd_probe();
+    crate::display::fb::boot_ckpt(136, "probe ok");
     simd::enable_simd();
+<<<<<<< HEAD
     crate::display::fb::boot_ckpt(132, "simd");
+=======
+    crate::display::fb::boot_ckpt(137, "SIMD ok2");
+>>>>>>> 070fe31 (debug(boot): 8 checkpoints K130-K137 entre K13 e K14 (bughunt s265))
 
     // ADR-0082 F1.4: SYSCALL/SYSRET MSRs — após o probe (hypervisor real
     // conhecido; gate por probe_done() evita wrmsr em WHPX/TCG → #GP).
