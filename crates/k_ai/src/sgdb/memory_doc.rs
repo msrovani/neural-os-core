@@ -287,3 +287,32 @@ impl<'a> MemoryDocView<'a> {
         MemoryDoc::decode(self.data)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    /// Mesmo vetor que `neural_sgdb::memory_doc::tests::golden_nmd1_bytes` (v1.1.0).
+    #[test]
+    fn golden_nmd1_bytes_match_neural_sgdb() {
+        let doc = MemoryDoc::new(MemoryLayer::L1Working, "k", vec![0xAA]);
+        let enc = doc.encode();
+        let mut want: Vec<u8> = Vec::new();
+        want.extend_from_slice(b"NMD1");
+        want.push(0x01); // L1
+        want.extend_from_slice(&1u32.to_le_bytes());
+        want.push(b'k');
+        want.extend_from_slice(&[0xFFu8; 8]); // nodes
+        want.extend_from_slice(&[0u8; 64]); // counts
+        want.extend_from_slice(&1u32.to_le_bytes());
+        want.push(0xAA);
+        want.push(0x00); // bitflag: sem bitvec
+        assert_eq!(enc, want);
+        let decoded = MemoryDoc::decode(&enc).expect("decode");
+        assert_eq!(decoded.layer, MemoryLayer::L1Working);
+        assert_eq!(decoded.key, "k");
+        assert_eq!(decoded.payload, vec![0xAA]);
+        assert!(decoded.bitvec.is_none());
+    }
+}
