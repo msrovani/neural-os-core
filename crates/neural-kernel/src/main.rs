@@ -1502,25 +1502,12 @@ pub(crate) fn kernel_boot(
 
     // ADR-0055: probe HV/ISA/cache → FeatureGate antes de SIMD/SMP
     crate::display::fb::boot_ckpt(135, "platform_probe:detect");
-    k_nano::platform_probe::detect();
-    crate::display::fb::boot_ckpt(135, "platform_probe:log_itd_probe");
-    k_nano::platform_probe::log_itd_probe();
-    crate::display::fb::boot_ckpt(136, "probe ok");
-    crate::display::fb::boot_ckpt(136, "simd:enable_simd");
-    simd::enable_simd();
-    crate::display::fb::boot_ckpt(137, "SIMD ok2");
-
     // ADR-0055: probe HV/ISA/cache → FeatureGate antes de SIMD/SMP
     k_nano::platform_probe::detect();
-    crate::display::fb::boot_ckpt(131, "platform_probe");
     k_nano::platform_probe::log_itd_probe();
     crate::display::fb::boot_ckpt(136, "probe ok");
     simd::enable_simd();
-<<<<<<< HEAD
-    crate::display::fb::boot_ckpt(132, "simd");
-=======
     crate::display::fb::boot_ckpt(137, "SIMD ok2");
->>>>>>> 070fe31 (debug(boot): 8 checkpoints K130-K137 entre K13 e K14 (bughunt s265))
 
     // ADR-0082 F1.4: SYSCALL/SYSRET MSRs — após o probe (hypervisor real
     // conhecido; gate por probe_done() evita wrmsr em WHPX/TCG → #GP).
