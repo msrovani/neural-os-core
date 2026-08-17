@@ -464,7 +464,8 @@ pub unsafe fn ce_copy(src_phys: u64, dst_phys: u64, bytes: usize) -> bool {
 }
 
 /// Seam MHI tier1→tier0 (DRAM→VRAM): usa o CE se pronto; senão false + AWAITING.
-/// Ponteiro de chamada para `mhi_tick` (Fase 5) — aqui só expomos o caminho.
+/// Registrado em `k_nano::mhi::register_tier0_copier` quando o canário passa
+/// (SESSION_274) — o `mhi_tick` promove Dram→Vram com dados reais por aqui.
 pub fn mhi_tier0_copy(src_phys: u64, dst_phys: u64, bytes: usize) -> bool {
     if !ce_ready() {
         k_nano::slog_bin!(
@@ -474,7 +475,12 @@ pub fn mhi_tier0_copy(src_phys: u64, dst_phys: u64, bytes: usize) -> bool {
         );
         return false;
     }
-    unsafe { ce_copy(src_phys, dst_phys, bytes) }
+    let ok = unsafe { ce_copy(src_phys, dst_phys, bytes) };
+    if ok {
+        // ADR-0087 §2.0.1: transfers do CE também registram acesso no MHI.
+        k_nano::mhi::record_access(dst_phys, 0);
+    }
+    ok
 }
 
 /// Probe global (boot): channel CE + canário. Chamado no branch NVIDIA do backend.
@@ -496,6 +502,11 @@ pub unsafe fn probe_global(gpu: &GpuInfo) {
         gpu.name
     );
     *CE.lock() = Some(ce);
+    // SESSION_274: fecha o seam morto — o mhi_tick agora tem o copier real
+    // (Dram→Vram via CE) registrado. Só com canário golden (honesto).
+    if canary_ok {
+        k_nano::mhi::register_tier0_copier(mhi_tier0_copy, crate::gpu::vram::vram_free);
+    }
 }
 
 #[cfg(test)]

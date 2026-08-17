@@ -5,7 +5,7 @@ use alloc::string::String;
 
 // Re-export k_hal GPU backend functions
 pub use k_hal::gpu::backend::{
-    gpu_matmul, gpu_status, gpu_forward, job_ring_info,
+    gpu_matmul, gpu_status, job_ring_info,
     adr0047_compute_gate, compute_state,
 };
 pub use k_hal::gpu::compute_abi::BackendState;
@@ -32,8 +32,9 @@ pub fn init_gpu_backend() -> Result<(), &'static str> {
     }
 }
 
-/// Safe wrapper for gpu_matmul with CPU fallback.
-/// Returns Some(result) if GPU accelerated, None if CPU fallback used.
+/// Safe wrapper for gpu_matmul. NOTA (SESSION_274): enquanto o kernel W2A8
+/// no device é Layer S, o resultado vem do CPU fallback interno do backend —
+/// a telemetria (work_queue) já registra isso honestamente.
 pub fn try_gpu_matmul(a: &cortex::tensor::Tensor, b: &cortex::tensor::Tensor) -> Option<cortex::tensor::Tensor> {
     // Check compute state before attempting GPU path
     if compute_state() != BackendState::Ready {

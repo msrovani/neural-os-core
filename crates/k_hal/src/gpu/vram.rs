@@ -167,6 +167,10 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
     *VRAM_BUDDY.lock() = Some(buddy);
     VRAM_READY.store(true, Ordering::Release);
 
+    // #334 MSched: preditor Belady nasce junto com o tier VRAM (SESSION_274 —
+    // antes `msched_init` não tinha caller e o preditor era código morto).
+    msched_init();
+
     // SASOS (ADR-0087 Fase 4a): mapeia a aperture no espaço do heap
     // (0x4020_0000_0000+) — o ponteiro unificado para Tensor::location =
     // MemTier::Vram. Não falha o init se SASOS não conseguir (VRAM segue

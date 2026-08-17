@@ -150,24 +150,20 @@ impl IntelRing {
         self.wait_idle(1000000)
     }
 
-    /// Matmul via GPU: GEN compute shader (producao futura — placeholder CPU).
-    pub fn gpu_matmul(&mut self, a: &cortex::tensor::Tensor, b: &cortex::tensor::Tensor) -> Option<cortex::tensor::Tensor> {
-        // Verifica se shader está carregado, senão carrega
+    /// Matmul via GPU (SESSION_274, honesto): sem MEDIA_OBJECT/GPGPU_WALKER
+    /// real (zebin KernelPack — Layer S), NÃO há conta no device. Retorna
+    /// `None` — o caller (`backend::gpu_matmul`) faz o CPU fallback explícito
+    /// e a telemetria não conta como GPU. A versão anterior computava
+    /// `a.matmul(b)` na CPU aqui dentro e o work_queue registrava como GPU.
+    pub fn gpu_matmul(&mut self, _a: &cortex::tensor::Tensor, _b: &cortex::tensor::Tensor) -> Option<cortex::tensor::Tensor> {
         if !self.shader_loaded {
             if let Some(shader_pa) = self.load_gen_matmul_shader() {
                 self.shader_pa = shader_pa;
                 self.shader_loaded = true;
-                k_nano::slog_hal!("INTEL", "MATMUL", "GEN matmul shader carregado @ {:#x}", shader_pa);
-            } else {
-                k_nano::slog_hal!("INTEL", "MATMUL", "Falha ao carregar shader GEN — usando fallback CPU");
-                return a.matmul(b);
+                k_nano::slog_hal!("INTEL", "MATMUL", "GEN shader staging @ {:#x} (dispatch MEDIA_OBJECT = Layer S)", shader_pa);
             }
         }
-
-        // TODO: Implementar execução real do shader via MEDIA_OBJECT
-        // Por enquanto: fallback CPU matmul, infra GPU preparada
-        k_nano::slog_hal!("INTEL", "MATMUL", "GEN compute stub — usando fallback CPU");
-        a.matmul(b)
+        None
     }
 
     /// Carrega shader GEN para matmul na VRAM (stub preparado para shader real)

@@ -2530,6 +2530,11 @@ impl Agent for GpuDriverAgent {
                 k_nano::slog_jarbas!("VGPU", "info", "VirtIO-GPU OK.");
             }
         }
+        // A-015 honesto (SESSION_274): detect/canário rodaram no DriverInit
+        // (k_hal); o agente reporta a postura REAL do backend, não só VirtIO.
+        k_nano::slog_jarbas!("GPU", "info", "backend: {} | {}",
+            crate::gpu::backend::gpu_status(),
+            crate::gpu::vram::vram_status());
         AgentTickResult::Done
     }
 }

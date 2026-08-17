@@ -548,7 +548,3 @@ pub fn best_display_gpu(gpus: &[GpuInfo]) -> Option<&GpuInfo> {
         .max_by_key(|g| if g.is_integrated { 1 } else { 0 })
 }
 
-/// Marca compute Ready após canário (mutável no registry runtime).
-pub fn mark_compute_ready(gpu: &mut GpuInfo) {
-    gpu.has_compute = true;
-}

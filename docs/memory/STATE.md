@@ -1,4 +1,8 @@
-﻿# STATE — neural-os-core v1.9.99-s273 — AIOS: Trinity único + HUD/HITL honesto (CHJ)
+﻿# STATE — neural-os-core v1.9.99-s274 — GPU compute honesto + MHI tier0 CE wired
+#   SESSION_274: revisão GPU (Intel/AMD/NVIDIA). nvidia/intel gpu_matmul não fingem
+#     GPU (None até KernelPack W2A8); boot_report.gpu_ok real via note_gpu;
+#     mhi_tick promove Dram→Vram com dados via CE (hook só com canário golden);
+#     msched/sasos registram acessos; A-015 reporta backend real. QEMU inalterado.
 #   SESSION_273: 3ª revisão (cortex/hermes/jarbas). TRINITY só no crate cortex;
 #     LCG seed=42 não é MoE; HEALTH I5/HITL não vira LLM; HUD NET/LLM/MoE no render().
 #   SESSION_272: Storage NVMe>AHCI>USB>ATA no plano k_ai; Trust+HITL recipe; HANR;

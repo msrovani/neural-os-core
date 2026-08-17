@@ -72,6 +72,8 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#513** Storage Transport Resolver (self-adaptive I/O) | ADR-0088 (política) + ADR-0087/0062 P3 (técnica) | 🟡 fazendo | SESSION_272 slice: ordem NVMe>AHCI>USB>ATA no DeviceTree + skip backend ausente + ATA PIO último (não hang TCG se o plano não inclui). Residual: `measure_bandwidth` + BMIDE 0xC8 + degradação TCG medida. TODO #18 |
 | **#534** DeviceTree H1 + plano de bind NIC no boot | ADR-0088 + ADR-0041 H1 | ✅ implementado | SESSION_271 NIC rank; SESSION_272: Trust+HITL recipe+cards+storage+HANR. |
 | **#535** Trinity único + postura honesta (MoE/HUD/HITL health) | ADR-0088 + ADR-0083 | ✅ implementado | SESSION_273: um `TRINITY` no cortex; LCG≠MoE; HEALTH I5/Escalate observe-only; HUD `NET`/`slip`/`off` + `no-llm`/`MoE`. |
+| **#536** KernelPack W2A8 via cuda-oxide/kaio (PTX em Rust puro, offline) | ADR-0057 WS-D + ADR-0048 | ⏳ Layer S | SESSION_274: cuda-oxide (NVlabs, rustc→PTX) e kaio (PTX zero-dep) geram o kernel W2A8 no HOST; bare-metal continua QMD próprio + pack assinado + golden GTX 1050. Nenhuma crate roda compute no_std. |
+| **#537** MHI tier0 real: Dram→Vram via CE no mhi_tick | ADR-0087 F4b/F5 | ✅ implementado (HW-gated) | SESSION_274: `register_tier0_copier` + `try_tier0_promote` (dados + rollback CoW); hook só com canário CE golden; QEMU = metadata/AWAITING inalterado. Falta evidência HW real (GTX 1050). |
 
 | **#479** TLS 1.3 via embedded-tls no neural-os-core | ADR-0062 P1 / SESSION_157–158 | ✅ MVP (residual CertVerify/FAT) |
 | **#480** VFS layer + BlockDevice trait unificado | ADR-0062 P2 / SESSION_171 | ✅ MVP (StorageBus; residual POSIX) |

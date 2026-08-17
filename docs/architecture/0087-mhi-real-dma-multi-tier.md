@@ -193,6 +193,16 @@ GTX 1050 é o árbitro). HW-gated.
 (rate limit 64MB/janela de 100 ticks, LWN 898766) respeitado no `mhi_tick`
 (promoção async sem thrash). 3 testes novos (9 mhi tests total).
 
+**Fase 4b→5 wiring ✅ (SESSION_274):** o seam `mhi_tier0_copy` agora tem
+caller — `k_nano::mhi::register_tier0_copier(copy, free)` é registrado por
+`nvidia_pascal_ce::probe_global` **apenas com canário CE golden**; o
+`mhi_tick`/`execute_soft_migrate` promove Dram→Vram com DADOS
+(`try_tier0_promote`: alloc buddy → CE copy → re-register; falha = rollback
+VRAM, lição CoW F2). Sem hook (QEMU) o caminho metadata-only + AWAITING é
+inalterado. CE copy também alimenta `record_access` (§2.0.1); `msched_init`
+no `init_vram_tier` e `sasos_vram_ptr` registram acesso (Belady vivo).
+Evidência HW real (GTX 1050) pendente — IDEA #537.
+
 ## 6. Gaps/Notas de compatibilidade (desta sessão)
 
 - **C1 (TickvLite LBA 2048)**: já corrigido — região movida para o fim do disco (f07834f). O MHI tier 2 deve respeitar a mesma região.
