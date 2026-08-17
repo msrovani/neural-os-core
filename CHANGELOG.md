@@ -1,6 +1,15 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### SESSION_273: Trinity único + HUD/HITL honesto (cortex/hermes/jarbas) (2026-08-17)
+
+**3ª revisão AIOS (CHJ).**
+
+- **fix(cortex):** `TRINITY` canônico; `router_trained`; LCG não roteia; `CORTEX_POSTURE`.
+- **fix(hermes):** reexport Trinity; `runtime_observe` (I5/HITL ≠ LLM); greeting com HUD.
+- **fix(jarbas/k_nano):** HUD no `render()`; `net_hud_label`; I225 conta como NIC física.
+- Residual: TRUST_CACHE duplicado; #513 bandwidth.
+
 ### SESSION_272: Plano de bind completo (NIC+storage+Trust+HITL) (2026-08-17)
 
 **2ª revisão AIOS com todas as premissas (em cima da 271).**

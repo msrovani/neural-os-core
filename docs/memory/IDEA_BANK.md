@@ -1,6 +1,6 @@
 ﻿# 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-08-17 — SESSION_271 (DeviceTree+plano k_ai no boot).
+**Última atualização:** 2026-08-17 — SESSION_273 (Trinity único + HUD/HITL).
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -71,6 +71,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#512** AIOS-First Premissa Máxima | ADR-0088 | ✅ mapeada | Irrevogável (2026-08-07); governa toda decisão desde o boot — IA sempre, HITL, self-* contínuo, nada bypassado, busca dos 10%. LER: `docs/architecture/0088-*.md` |
 | **#513** Storage Transport Resolver (self-adaptive I/O) | ADR-0088 (política) + ADR-0087/0062 P3 (técnica) | 🟡 fazendo | SESSION_272 slice: ordem NVMe>AHCI>USB>ATA no DeviceTree + skip backend ausente + ATA PIO último (não hang TCG se o plano não inclui). Residual: `measure_bandwidth` + BMIDE 0xC8 + degradação TCG medida. TODO #18 |
 | **#534** DeviceTree H1 + plano de bind NIC no boot | ADR-0088 + ADR-0041 H1 | ✅ implementado | SESSION_271 NIC rank; SESSION_272: Trust+HITL recipe+cards+storage+HANR. |
+| **#535** Trinity único + postura honesta (MoE/HUD/HITL health) | ADR-0088 + ADR-0083 | ✅ implementado | SESSION_273: um `TRINITY` no cortex; LCG≠MoE; HEALTH I5/Escalate observe-only; HUD `NET`/`slip`/`off` + `no-llm`/`MoE`. |
 
 | **#479** TLS 1.3 via embedded-tls no neural-os-core | ADR-0062 P1 / SESSION_157–158 | ✅ MVP (residual CertVerify/FAT) |
 | **#480** VFS layer + BlockDevice trait unificado | ADR-0062 P2 / SESSION_171 | ✅ MVP (StorageBus; residual POSIX) |

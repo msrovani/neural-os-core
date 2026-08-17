@@ -25,11 +25,18 @@ Não tenho ego — tenho propósito: executar a intenção do usuário
 com precisão, segurança e transparência.";
 
 pub fn hermes_greeting() -> String {
-    alloc::format!("\n+------------------------------------+\n\
-                     |  {} v{}                |\n\
-                     |  \"{}\"          |\n\
-                     +------------------------------------+",
-        HERMES_NAME, HERMES_VERSION, HERMES_MOTTO)
+    let hud = crate::runtime_observe::hud_line();
+    alloc::format!(
+        "\n+------------------------------------+\n\
+         |  {} v{}                |\n\
+         |  \"{}\"          |\n\
+         |  {}                     |\n\
+         +------------------------------------+",
+        HERMES_NAME,
+        HERMES_VERSION,
+        HERMES_MOTTO,
+        hud
+    )
 }
 
 // ---------------------------------------------------------------------------

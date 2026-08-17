@@ -7,6 +7,7 @@
 ## Sessões Mantidas (107+)
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
+| 273 | AIOS | Premissas CHJ | Trinity único + HUD/HITL honesto | Dois TRINITY (bin vs hermes vazio); LCG fingia MoE; HUD NET=HwReal e LLM=busy; HEALTH I5/Escalate → chat LLM. Fix: `cortex::trinity::TRINITY`; `router_trained`; sem LCG no boot; `runtime_observe`; `net_hud_label`; compositor no render(). |
 | 272 | AIOS | Premissas todas no boot | Storage+Trust+HITL+cards+HANR no plano k_ai | 271 só rankeava NIC. Storage ainda ATA-first; xHCI/HDA martelados; SLIP como gate; sem Trust/HITL recipe; Cortex “decidia” sem pesos; plano não ia à SGDB. Fix: `StorageKind` + `storage_probe`; Escalate bloqueia Auto; `(1,boot_observe,plan)`; cards HW_CAPABILITY; `hydrate_memory`; USB/HDA/ATA persist gated; SLIP=DEGRADED+I5. #513 slice (skip ausente / NVMe-first) — `measure_bandwidth` residual. |
 | 271 | AIOS | H1+bind no boot | DeviceTree e plano k_ai ANTES dos drivers | `k_hal::init` era tardio + E1000-first + SelfHeal USB=inventário vazio. Fix: H1 idempotente pós-PCI; `boot_bind`+`boot_observe`; probe só NIC observada; SelfHeal `from_khal` sem rescan. |
 | 270 | Log | BOOT.LOG=DEV only | Padrão produto = timestamp (`boot_<tick>.log`) | BOOT.LOG fixo só Live/Install/early; Installed → `/logs/boot_<tick7hex>.log`; `boot_mode::peek()`; telemetria server já `neural-<stamp>.log`. 8+2 testes PASS. |

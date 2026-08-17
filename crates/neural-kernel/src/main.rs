@@ -239,7 +239,7 @@ use lazy_static::lazy_static;
 
 use cognitive::{IntentPlanner, SuccessEngine, NeuralCache, FeedbackLoop, WorkflowPredictor, CodebookVQ, ReActLoop, McpServer, AutoSkillGen, DynamicScaler, SelfOptScheduler, ReplayBuffer, BitNetTrainer, EpisodicMemory, TaskSpawner, WorkspaceIsolation, DeltaBranch, MatMulFreeLM};
 
-use trinity::TrinityRouter;
+pub use trinity::TRINITY;
 
 
 
@@ -634,8 +634,7 @@ lazy_static! {
     static ref FANOUT_POOL: ticket_lock::TicketLock<skill_registry::FanOutPool> = ticket_lock::TicketLock::new(skill_registry::FanOutPool::new());
 
     // Sprint 95-96: Cognitive + Memory globals
-
-    static ref TRINITY: ticket_lock::TicketLock<TrinityRouter> = ticket_lock::TicketLock::new(trinity::init_trinity());
+    // TRINITY: fonte única em cortex::trinity (SESSION_273)
 
     static ref INTENT_PLANNER: ticket_lock::TicketLock<IntentPlanner> = ticket_lock::TicketLock::new(IntentPlanner::new());
 
@@ -1710,6 +1709,7 @@ pub(crate) fn kernel_boot(
         || crate::net::I225.lock().is_some()
         || crate::net::RTL8139.lock().is_some()
         || crate::net::VIRTIO_DEV.lock().is_some();
+    crate::env::note_physical_nic(nic_found);
     if nic_found {
         if !is_sandbox {
             crate::env::set(crate::env::SystemEnv::HwReal);
@@ -1728,6 +1728,7 @@ pub(crate) fn kernel_boot(
                 payload: b"HEALTH_ISSUE:I5:net:degraded_slip_sandbox".to_vec(),
                 token: crate::CapabilityToken::Legacy(1),
             });
+            crate::env::note_slip_degraded(true);
             k_nano::slog_bin!(
                 "ENV",
                 "info",
@@ -1744,6 +1745,7 @@ pub(crate) fn kernel_boot(
             payload: b"HEALTH_ISSUE:I5:net:degraded_slip_sandbox".to_vec(),
             token: crate::CapabilityToken::Legacy(1),
         });
+        crate::env::note_slip_degraded(true);
         k_nano::slog_bin!("ENV", "info", "DEGRADED: SLIP/COM2 (sandbox sem NIC)");
     }
 
@@ -3877,12 +3879,10 @@ pub(crate) fn kernel_boot(
         }
     }
 
-    // Load Trinity MoE router weights (try file first, fallback to deterministic seed=42) before the N3 gate
+    // Load Trinity MoE: ROUTER.BITNET se existir; senão keyword (sem LCG)
     {
         let mut trinity = TRINITY.lock();
         if !trinity.moe_router_loaded() {
-            let n_exp = trinity.agent_count();
-            // Try loading from FAT32 first (ROUTER.BITNET)
             let router_loaded = {
                 let mut loaded = false;
                 // Try NVMe
@@ -3928,12 +3928,18 @@ pub(crate) fn kernel_boot(
                 }
                 loaded
             };
-            let (embed, weight) = if router_loaded {
-                crate::trinity::init_router_weights(n_exp)
+            if let Some((embed, weight)) = crate::trinity::init_router_weights(trinity.agent_count())
+            {
+                trinity.load_router(embed, weight, true);
             } else {
-                crate::trinity::generate_random_router_weights(n_exp)
-            };
-            trinity.load_router(embed, weight, router_loaded);
+                k_nano::slog_cortex!(
+                    "TRINITY",
+                    "warn",
+                    "ROUTER.BITNET ausente — MoE keyword only (nao carrega LCG seed=42)"
+                );
+                crate::trinity::publish_cortex_posture(false);
+            }
+            let _ = router_loaded;
         }
     }
 

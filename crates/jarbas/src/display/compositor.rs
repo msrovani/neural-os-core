@@ -409,13 +409,22 @@ impl JarbasDesktop {
                 0
             }
         };
-        let llm = if crate::display::console::llm_busy() {
-            "LLM"
+        let llm = if cortex::cortex::model_is_loaded() {
+            if crate::display::console::llm_busy() {
+                "LLM"
+            } else {
+                "idle"
+            }
         } else {
-            "idle"
+            "no-llm"
         };
-        let net = if k_nano::env::is_online() { "NET" } else { "off" };
-        let right = alloc::format!("{}MB  {}  {}", mem_mb, llm, net);
+        let moe = if cortex::trinity::moe_posture_trained() {
+            "MoE"
+        } else {
+            "kw"
+        };
+        let net = k_nano::env::net_hud_label();
+        let right = alloc::format!("{}MB  {}  {}  {}", mem_mb, llm, moe, net);
         let right_x = w.saturating_sub(right.len() * 8 + POWER_BTN_W + 24);
         draw_text(
             &mut self.fb,

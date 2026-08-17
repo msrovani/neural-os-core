@@ -1,6 +1,39 @@
+//! Trinity MoE — um único router no crate cortex (fonte da verdade).
+//! `moe_router_loaded` = pesos TREINADOS. LCG seed=42 não roteia (keyword).
+
 use crate::tensor::PackedTernaryTensor;
+use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::vec;
+use core::sync::atomic::{AtomicBool, Ordering};
+use event_bus::{CapabilityToken, Event};
+use lazy_static::lazy_static;
+use ticket_lock::TicketLock;
+
+/// EventBus: MoE treinado vs keyword (Hermes/Jarbas observam).
+pub const TOPIC_CORTEX_POSTURE: &str = "CORTEX_POSTURE";
+
+static MOE_POSTURE_TRAINED: AtomicBool = AtomicBool::new(false);
+
+/// HUD/gates sem lock: true só após `load_router(..., true)` ou pesos federados.
+pub fn moe_posture_trained() -> bool {
+    MOE_POSTURE_TRAINED.load(Ordering::Relaxed)
+}
+
+pub fn publish_cortex_posture(trained: bool) {
+    MOE_POSTURE_TRAINED.store(trained, Ordering::Release);
+    let payload: &[u8] = if trained {
+        b"CORTEX_POSTURE:moe=trained"
+    } else {
+        b"CORTEX_POSTURE:moe=keyword"
+    };
+    let _ = k_nano::EVENT_BUS.publish(Event {
+        id: 0,
+        topic: String::from(TOPIC_CORTEX_POSTURE),
+        payload: payload.to_vec(),
+        token: CapabilityToken::Legacy(1),
+    });
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ExpertKind {
@@ -66,6 +99,8 @@ pub struct TrinityRouter {
     router_weight: Option<PackedTernaryTensor>,
     /// Embedding table: VOCAB_SIZE x HIDDEN (f32)
     router_embed: Option<Vec<f32>>,
+    /// Só true se veio de ROUTER.BITNET (não LCG).
+    router_trained: bool,
 }
 
 const VOCAB: usize = 99;
@@ -97,7 +132,12 @@ fn softmax(scores: &mut [f32]) {
 
 impl TrinityRouter {
     pub fn new() -> Self {
-        TrinityRouter { experts: Vec::new(), router_weight: None, router_embed: None }
+        TrinityRouter {
+            experts: Vec::new(),
+            router_weight: None,
+            router_embed: None,
+            router_trained: false,
+        }
     }
 
     pub fn register_expert(&mut self, expert: Expert) {
@@ -112,25 +152,31 @@ impl TrinityRouter {
     /// determinístico (LCG seed=42, NÃO treinado). O log distingue os dois —
     /// nunca anunciar "loaded/trained" para ruído determinístico (auditoria 7.2).
     pub fn load_router(&mut self, embed: Vec<f32>, weight: PackedTernaryTensor, trained: bool) {
-        self.router_embed = Some(embed);
-        self.router_weight = Some(weight);
-        if trained {
-            k_nano::slog_cortex!(
-                "TRINITY",
-                "info",
-                "Router MoE loaded (trained): {} dim, {} experts",
-                ROUTER_HIDDEN,
-                self.experts.len()
-            );
-        } else {
+        if !trained {
+            // Honesty: LCG seed=42 não entra no matmul nem no flag "loaded".
+            self.router_embed = None;
+            self.router_weight = None;
+            self.router_trained = false;
+            publish_cortex_posture(false);
             k_nano::slog_cortex!(
                 "TRINITY",
                 "warn",
-                "Router MoE weights: DETERMINISTIC FALLBACK (LCG seed=42, UNTRAINED) — {} dim, {} experts",
-                ROUTER_HIDDEN,
-                self.experts.len()
+                "Router MoE recusou fallback LCG — roteamento = keyword (ADR-0083/SESSION_273)"
             );
+            let _ = (embed, weight);
+            return;
         }
+        self.router_embed = Some(embed);
+        self.router_weight = Some(weight);
+        self.router_trained = true;
+        publish_cortex_posture(true);
+        k_nano::slog_cortex!(
+            "TRINITY",
+            "info",
+            "Router MoE loaded (trained): {} dim, {} experts",
+            ROUTER_HIDDEN,
+            self.experts.len()
+        );
     }
 
     /// Substitui os pesos do router MoE por pesos treinados/federados (F4).
@@ -145,6 +191,10 @@ impl TrinityRouter {
             shape: (ROUTER_HIDDEN, n_exp),
             packed_data: PackedTernaryTensor::pack_weights(weights),
         });
+        if self.router_embed.is_some() {
+            self.router_trained = true;
+            publish_cortex_posture(true);
+        }
         crate::global_arena::reset_moe_cache();
         k_nano::slog_cortex!(
             "TRINITY", "info",
@@ -185,6 +235,7 @@ impl TrinityRouter {
             });
         }
         let text = extract_user_utterance(text);
+        if self.router_trained {
         if let (Some(ref embed_table), Some(ref weight)) = (&self.router_embed, &self.router_weight) {
             let tokens = encode(text);
             if !tokens.is_empty() {
@@ -233,6 +284,7 @@ impl TrinityRouter {
                 }
             }
         }
+        } // router_trained
         let expert = self.classify_intent(text);
         let emb = [0.0f32; ROUTER_HIDDEN];
         let logits = [1.0f32];
@@ -254,8 +306,11 @@ impl TrinityRouter {
             return &FALLBACK_GENERATOR;
         }
         let text = extract_user_utterance(text);
-        // Tenta router neural primeiro (só no utterance)
-        if let (Some(ref embed_table), Some(ref weight)) = (&self.router_embed, &self.router_weight) {
+        // Neural só com router TREINADO. LCG seed=42 não é MoE (ADR-0083 / SESSION_273).
+        if self.router_trained {
+            if let (Some(ref embed_table), Some(ref weight)) =
+                (&self.router_embed, &self.router_weight)
+            {
             let tokens = encode(text);
             if !tokens.is_empty() {
                 let mut embedding = vec![0.0f32; ROUTER_HIDDEN];
@@ -297,6 +352,7 @@ impl TrinityRouter {
                         return &self.experts[best_idx];
                     }
                 }
+            }
             }
         }
         self.classify_keywords(text)
@@ -480,9 +536,11 @@ impl TrinityRouter {
 
     pub fn agent_count(&self) -> usize { self.experts.len() }
 
-    /// True se pesos do router MoE neural estão carregados (senão: keyword/R3).
+    /// True só com pesos de arquivo treinado. LCG/ausente = keyword (honesto).
     pub fn moe_router_loaded(&self) -> bool {
-        self.router_weight.is_some() && self.router_embed.is_some()
+        self.router_trained
+            && self.router_weight.is_some()
+            && self.router_embed.is_some()
     }
 
     /// Tem expert generator registrado (rota default segura).
@@ -602,22 +660,15 @@ pub fn load_router_from_file(data: &[u8]) -> bool {
 static ROUTER_EMBED: spin::Mutex<Option<Vec<f32>>> = spin::Mutex::new(None);
 static ROUTER_WEIGHT: spin::Mutex<Option<PackedTernaryTensor>> = spin::Mutex::new(None);
 
-/// Tenta carregar router do arquivo; se falhar, gera determinístico (seed=42).
-/// Deve ser chamado ANTES de TrinityRouter::new() ou load_router().
-pub fn init_router_weights(num_experts: usize) -> (Vec<f32>, PackedTernaryTensor) {
-    // Try to take from file-loaded statics
+/// Toma pesos parseados por `load_router_from_file`. None = sem arquivo (keyword).
+/// Não gera LCG — o boot não pode fingir MoE (SESSION_273).
+pub fn init_router_weights(_num_experts: usize) -> Option<(Vec<f32>, PackedTernaryTensor)> {
     let embed = ROUTER_EMBED.lock().take();
     let weight = ROUTER_WEIGHT.lock().take();
-    if let (Some(e), Some(w)) = (embed, weight) {
-        return (e, w);
+    match (embed, weight) {
+        (Some(e), Some(w)) => Some((e, w)),
+        _ => None,
     }
-    // Fallback: deterministic LCG (buraco de log honesto fechado — ADR-0083)
-    k_nano::slog_cortex!(
-        "TRINITY",
-        "warn",
-        "Router MoE: fallback deterministic LCG seed=42 UNTRAINED — nenhum peso de arquivo carregado (statics vazios)"
-    );
-    generate_random_router_weights(num_experts)
 }
 
 pub fn init_trinity() -> TrinityRouter {
@@ -654,9 +705,17 @@ pub fn init_trinity() -> TrinityRouter {
     router
 }
 
+lazy_static! {
+    /// Fonte única — Hermes/Jarbas/bin reexportam. Não duplicar (SESSION_237/273).
+    pub static ref TRINITY: TicketLock<TrinityRouter> = TicketLock::new(init_trinity());
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{load_router_from_file, ROUTER_EMBED, ROUTER_WEIGHT, ROUTER_HIDDEN};
+    use super::{
+        generate_random_router_weights, init_trinity, load_router_from_file, ROUTER_EMBED,
+        ROUTER_HIDDEN, ROUTER_WEIGHT,
+    };
 
     /// Monta um blob v6 posicional em memória (espelha tools/train_router.py export_bitnet)
     /// e valida que o loader Rust o parseia — a ponte treino→kernel (item 11 ADR-0083).
@@ -686,5 +745,19 @@ mod tests {
         // Limpa statics p/ não vazar para outros testes.
         *ROUTER_EMBED.lock() = None;
         *ROUTER_WEIGHT.lock() = None;
+    }
+
+    #[test]
+    fn untrained_lcg_is_not_moe_and_keywords_win() {
+        let r = init_trinity();
+        assert!(!r.moe_router_loaded());
+        assert_eq!(r.classify_intent("mute volume").name, "hw_control");
+        let n = r.agent_count();
+        let (embed, weight) = generate_random_router_weights(n);
+        let mut r2 = init_trinity();
+        r2.load_router(embed, weight, false);
+        assert!(!r2.moe_router_loaded());
+        assert!(!super::moe_posture_trained());
+        assert_eq!(r2.classify_intent("mute volume").name, "hw_control");
     }
 }
