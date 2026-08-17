@@ -45,6 +45,7 @@ pub fn boot_init() {
         let _ = n;
         populate_hw_namespace();
     }
+    crate::boot_observe::hydrate_memory();
 }
 
 /// ADR-0082 Onda CPU: `hw/<categoria>/<propriedade>` — valores string lowercase,

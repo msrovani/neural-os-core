@@ -547,7 +547,7 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
             }
         }
 
-        if !ok && skip & SKIP_ATA == 0 {
+        if !ok && skip & SKIP_ATA == 0 && crate::boot_bind::storage_includes(crate::boot_bind::StorageKind::Ata) {
             if let Some(mut g) = crate::globals::ATA_DRIVER.try_lock() {
                 if let Some(ref mut ata) = *g {
                     any_tried = true;

@@ -69,8 +69,8 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#491–#505** TicKV + NoProto + Índices IA SGDB | ADR-0063 | 🟡 fazendo | **Memory Quality SESSION_176:** SleepCycle ckpt✅ recall L4 hybrid✅ V-flag✅ ART SIMD✅. Residual: crates upstream, HNSW, DoD 10M/100k |
 
 | **#512** AIOS-First Premissa Máxima | ADR-0088 | ✅ mapeada | Irrevogável (2026-08-07); governa toda decisão desde o boot — IA sempre, HITL, self-* contínuo, nada bypassado, busca dos 10%. LER: `docs/architecture/0088-*.md` |
-| **#513** Storage Transport Resolver (self-adaptive I/O) | ADR-0088 (política) + ADR-0087/0062 P3 (técnica) | 🟡 agendada | Boot FS deixa de hardcodar `AtaDriver` PIO → resolve transporte em runtime (NVMe PRP → AHCI PRDT → BMIDE 0xC8 → PIO fallback), mede com `measure_bandwidth` existente, degrada com honra (TCG lento → boot sem disco + log CRÍTICO, nunca trava). Primeiro caso prático da PREMISSA MÁXIMA (#512). TODO #18 |
-| **#534** DeviceTree H1 + plano de bind NIC no boot | ADR-0088 + ADR-0041 H1 | ✅ implementado | SESSION_271: `k_hal::init_h1` cedo (idempotente); `k_ai::boot_observe` rank I225>VirtIO>e1000>RTL; bin só `probe_nics_from_bind_plan`; SelfHeal lê a árvore (sem rescan PCI / sem noop USB vazio). |
+| **#513** Storage Transport Resolver (self-adaptive I/O) | ADR-0088 (política) + ADR-0087/0062 P3 (técnica) | 🟡 fazendo | SESSION_272 slice: ordem NVMe>AHCI>USB>ATA no DeviceTree + skip backend ausente + ATA PIO último (não hang TCG se o plano não inclui). Residual: `measure_bandwidth` + BMIDE 0xC8 + degradação TCG medida. TODO #18 |
+| **#534** DeviceTree H1 + plano de bind NIC no boot | ADR-0088 + ADR-0041 H1 | ✅ implementado | SESSION_271 NIC rank; SESSION_272: Trust+HITL recipe+cards+storage+HANR. |
 
 | **#479** TLS 1.3 via embedded-tls no neural-os-core | ADR-0062 P1 / SESSION_157–158 | ✅ MVP (residual CertVerify/FAT) |
 | **#480** VFS layer + BlockDevice trait unificado | ADR-0062 P2 / SESSION_171 | ✅ MVP (StorageBus; residual POSIX) |

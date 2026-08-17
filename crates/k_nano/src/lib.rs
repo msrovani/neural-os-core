@@ -76,6 +76,7 @@ pub mod multi_user;
 pub mod net;
 pub mod nic_globals;
 pub mod storage;
+pub mod storage_probe;
 pub mod numa_alloc;
 pub mod core_pinning;
 pub mod cpufreq;

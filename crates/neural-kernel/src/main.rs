@@ -1590,10 +1590,8 @@ pub(crate) fn kernel_boot(
 
     
 
-    // Inicializa CortexAgent AGORA — o sistema nervoso acorda antes do HW discovery
-
-    // para que o LLM possa participar das decisoes de hardware.
-
+    // CortexAgent existe cedo (tick carrega pesos depois). Bind de HW no T+0
+    // e tabela+DeviceRecipe — Cortex ainda sem pesos (honesto, SESSION_272).
     let cortex_agent = agents::CortexAgent::new();
 
     // Cortex precisa de pelo menos 1 tick para carregar modelo
@@ -1615,20 +1613,33 @@ pub(crate) fn kernel_boot(
     // H1 é idempotente — o k_hal::init() tardio só refresca HalOffer.
     crate::display::fb::boot_ckpt(17, "k_hal H1 DeviceTree");
     let h1_n = k_hal::init_h1();
-    let (obs_n, nic_n) = k_ai::boot_observe::observe_and_plan();
+    let trusted = crate::TRUST_CACHE.lock().check_or_cache_agent(
+        1,
+        "boot_observe",
+        "plan",
+        0,
+        u64::MAX,
+    );
+    let (obs_n, nic_n) = k_ai::boot_observe::observe_and_plan(trusted);
     k_nano::slog_bin!(
         "Boot",
         "aios",
-        "H1 devices={} observe={} nic_plan={} (bind por evidencia, nao E1000-first)",
+        "H1 devices={} observe={} nic_plan={} trust={} (evidencia+recipe+Trust)",
         h1_n,
         obs_n,
-        nic_n
+        nic_n,
+        trusted
     );
 
     // ── Early BOOT.LOG (live USB / HW sem COM) ──────────────────────────
     // Pós platform_sync (PCI). Micro-ckpts: se xHCI hangar, FB mostra K181/K182.
     crate::display::fb::boot_ckpt(18, "early USB BOOT.LOG");
     {
+        let want_usb = k_nano::boot_bind::should_probe_usb_host();
+        if !want_usb {
+            crate::display::fb::boot_ckpt(18, "early USB skip (sem UsbHost no plano)");
+            k_nano::slog_nano!("USB", "msc", "EARLY skip — DeviceTree sem xHCI");
+        } else {
         crate::display::fb::boot_ckpt(181, "early xhci init");
         unsafe { crate::xhci::init_xhci(); }
         crate::display::fb::boot_ckpt(182, "early xhci done");
@@ -1656,6 +1667,7 @@ pub(crate) fn kernel_boot(
             }
         }
         crate::display::fb::boot_ckpt(184, "early USB done");
+        }
     }
 
     // ponytail: hardware/ probe moved to LEGACY — StandardUma is always the detected profile.
@@ -1685,7 +1697,7 @@ pub(crate) fn kernel_boot(
         if hv_name.contains("Microsoft") {
             crate::apic::SKIP_PIT.store(true, core::sync::atomic::Ordering::Relaxed);
         }
-        k_nano::slog_bin!("ENV", "info", "Sandbox detectado: {} — usando bypass serial", hv_name.trim_end());
+        k_nano::slog_bin!("ENV", "info", "Sandbox detectado: {} — SLIP so se NIC ausente (DEGRADED)", hv_name.trim_end());
     }
     // NIC: ordem do plano k_ai (I225>VirtIO>e1000>RTL se o silício estiver lá).
     unsafe {
@@ -1709,12 +1721,30 @@ pub(crate) fn kernel_boot(
         // Apenas em sandbox: ativa serial tunnel como bypass
         if is_sandbox {
             unsafe { crate::net::init_serial_tunnel(); }
-            publish_boot_phase(BootPhase::DriverInit, "Serial tunnel (SLIP) ativo");
+            publish_boot_phase(BootPhase::DriverInit, "Serial tunnel (SLIP) DEGRADED");
+            let _ = crate::EVENT_BUS.publish(crate::Event {
+                id: 0,
+                topic: alloc::string::String::from("HEALTH_ISSUE"),
+                payload: b"HEALTH_ISSUE:I5:net:degraded_slip_sandbox".to_vec(),
+                token: crate::CapabilityToken::Legacy(1),
+            });
+            k_nano::slog_bin!(
+                "ENV",
+                "info",
+                "DEGRADED: SLIP/COM2 (sandbox sem NIC) — nao e Net gate; IDEA #513 path"
+            );
         }
     } else {
-        // Sandbox sem NIC: serial tunnel
+        // Sandbox sem NIC: SLIP degradado (nao e Net gate)
         unsafe { crate::net::init_serial_tunnel(); }
-        publish_boot_phase(BootPhase::DriverInit, "Serial tunnel (SLIP) ativo");
+        publish_boot_phase(BootPhase::DriverInit, "Serial tunnel (SLIP) DEGRADED");
+        let _ = crate::EVENT_BUS.publish(crate::Event {
+            id: 0,
+            topic: alloc::string::String::from("HEALTH_ISSUE"),
+            payload: b"HEALTH_ISSUE:I5:net:degraded_slip_sandbox".to_vec(),
+            token: crate::CapabilityToken::Legacy(1),
+        });
+        k_nano::slog_bin!("ENV", "info", "DEGRADED: SLIP/COM2 (sandbox sem NIC)");
     }
 
     k_nano::slog_bin!("ENV", "info", "Sistema: {} | Rede: {}", crate::env::name(),
@@ -1743,13 +1773,8 @@ pub(crate) fn kernel_boot(
     let _ = hermes_crate::ntp::try_sync();
     publish_boot_phase(BootPhase::DriverInit, "Net bootstrap_early (static/DNS/HTTP/TLS/NTP smoke)");
 
-    let ata_found = {
-        let ata_dev = unsafe { ata::AtaDriver::probe() };
-        let is_some = ata_dev.is_some();
-        // Um único ATA_DRIVER (k_nano) — k_hal LEGO/fat_assets leem o mesmo estático.
-        *ATA_DRIVER.lock() = ata_dev;
-        is_some
-    };
+    unsafe { k_nano::storage_probe::probe_storage_drivers(); }
+    let ata_found = crate::ATA_DRIVER.lock().is_some();
 
     // Labor 12: pins FAT após ATA (smoke HTTPS pode ter aprendido em RAM antes).
     crate::tls_trust::load_pins_from_fat();
@@ -1768,8 +1793,8 @@ pub(crate) fn kernel_boot(
         k_nano::slog_bin!("OTA", "info", "boot trigger: {}", report);
     }
 
-    // Intel HDA audio capture (SD0) — microphone input for wake word / STT
-    {
+    // Intel HDA — so se DeviceTree tem Snd (ou plano ainda nao instalado).
+    if k_nano::boot_bind::should_probe_snd() {
         let hda_ok = unsafe { k_nano::audio::hda::init_hda() };
         if hda_ok {
             k_nano::slog_bin!("HDA", "info", "Intel HDA capture driver initialized (SD0)");
@@ -1777,89 +1802,60 @@ pub(crate) fn kernel_boot(
             k_nano::slog_bin!("HDA", "warn", "Intel HDA not found or init failed");
         }
         publish_boot_phase(BootPhase::DriverInit, "HDA audio init");
+    } else {
+        k_nano::slog_bin!("HDA", "info", "skip — DeviceTree sem classe Snd");
     }
 
-    // AHCI probe (SATA 6G NCQ) — zero alocação via callback
-    {
-        let mut ahci_init = false;
-        unsafe {
-            crate::pci::scan_pci_cb(|bus, slot, func, vid, did| {
-                let cr = crate::pci::read_config_word(bus, slot, func, 0x0A);
-                if (cr >> 8) as u8 == 0x01 && (cr & 0xFF) as u8 == 0x06 {
-                    let pi = (crate::pci::read_config_word(bus, slot, func, 0x08) >> 8) as u8;
-                    let bar0_val = crate::pci::read_bar_value(bus, slot, func, 0);
-                    let bar5_val = crate::pci::read_bar_value(bus, slot, func, 5);
-                    let dev = crate::pci::PciDevice {
-                        bus, device: slot, function: func,
-                        vendor_id: vid, device_id: did,
-                        class: 0x01, subclass: 0x06, prog_if: pi,
-                        bar0: bar0_val, bar1: 0, bar2: 0, bar3: 0, bar4: 0, bar5: bar5_val,
-                    };
-                    if let Some(mut ahci) = crate::ahci::AhciDriver::new(&dev) {
-                        let port_count = ahci.ports.len();
-                        k_nano::slog_nano!("Disk", "ahci", "SATA controller init: {} ports", port_count);
-                        // Testa leitura do primeiro setor via AHCI
-                        for (pi, p) in ahci.ports.iter().enumerate() {
-                            if p.present {
-                                let mut buf = [0u8; 512];
-                                if unsafe { ahci.read(pi, 0, 1, &mut buf) } {
-                                    let magic = &buf[0x1FE..=0x1FF];
-                                    let sig = core::str::from_utf8(&buf[3..7]).unwrap_or("????");
-                                    kjson!("AHCI", "DISK", "probe", "port", pi, "sig", format_args!("\"{}\"", sig), "magic", format_args!("\"{:02x}{:02x}\"", magic[0], magic[1]));
-                                }
-                                break;
-                            }
-                        }
-                        *crate::AHCI_DRIVER.lock() = Some(ahci);
-                        ahci_init = true;
-                    }
-                    true
-                } else {
-                    false
-                }
-            });
-        }
-        if !ahci_init {
-            k_nano::slog_nano!("Disk", "ahci", "Nenhum controlador SATA AHCI encontrado");
-        }
-    }
+    // AHCI/NVMe/ATA ja probed em storage_probe::probe_storage_drivers (plano k_ai).
 
-    unsafe { crate::xhci::init_xhci(); } // idempotente se early path já subiu
-    crate::display::fb::boot_ckpt(15, "xhci init done");
+    let want_usb = k_nano::boot_bind::should_probe_usb_host();
+    if want_usb {
+        unsafe { crate::xhci::init_xhci(); } // idempotente se early path já subiu
+        crate::display::fb::boot_ckpt(15, "xhci init done");
+    } else {
+        crate::display::fb::boot_ckpt(15, "xhci skip (plano sem UsbHost)");
+        k_nano::slog_nano!("USB", "xhci", "skip — DeviceTree sem UsbHost");
+    }
 
     crate::display::fb::boot_ckpt(24, "antes USB-MSC probe");
     {
-        // Se early path já tem MSC, não re-probe (Address Device de novo quebra BOT).
-        if crate::USB_MSC.lock().is_none() {
-            let msc = unsafe { k_nano::usb_msc::UsbMassStorage::probe() };
-            if msc.is_some() {
-                k_nano::slog_nano!("USB", "msc", "stored for FAT model load (unified USB)");
-                crate::display::fb::boot_ckpt(16, "USB-MSC OK");
+        if want_usb {
+            // Se early path já tem MSC, não re-probe (Address Device de novo quebra BOT).
+            if crate::USB_MSC.lock().is_none() {
+                let msc = unsafe { k_nano::usb_msc::UsbMassStorage::probe() };
+                if msc.is_some() {
+                    k_nano::slog_nano!("USB", "msc", "stored for FAT model load (unified USB)");
+                    crate::display::fb::boot_ckpt(16, "USB-MSC OK");
+                } else {
+                    crate::display::fb::boot_ckpt(16, "USB-MSC AUSENTE");
+                    k_nano::slog_nano!(
+                        "USB",
+                        "msc",
+                        "AUSENTE — bringup/enum/BOT falhou; BOOT.LOG so ramlog (ADR-0062 P11 residual)"
+                    );
+                }
+                *crate::USB_MSC.lock() = msc;
             } else {
-                crate::display::fb::boot_ckpt(16, "USB-MSC AUSENTE");
-                k_nano::slog_nano!(
-                    "USB",
-                    "msc",
-                    "AUSENTE — bringup/enum/BOT falhou; BOOT.LOG so ramlog (ADR-0062 P11 residual)"
-                );
+                crate::display::fb::boot_ckpt(16, "USB-MSC OK (early)");
+                k_nano::slog_nano!("USB", "msc", "reuse early MSC — skip re-probe");
             }
-            *crate::USB_MSC.lock() = msc;
         } else {
-            crate::display::fb::boot_ckpt(16, "USB-MSC OK (early)");
-            k_nano::slog_nano!("USB", "msc", "reuse early MSC — skip re-probe");
+            crate::display::fb::boot_ckpt(16, "USB-MSC skip (plano)");
         }
         crate::display::fb::boot_ckpt(25, "antes BOOT.LOG flush");
         crate::boot_logger::init_after_usb();
         crate::display::fb::boot_ckpt(17, "BOOT.LOG flush tentado");
-        // ADR-0062 P24a: HID boot keyboard (porta ≠ MSC)
-        if unsafe { crate::xhci::bringup_hid_keyboard() } {
-            crate::boot_logger::log("BOOT: P24a HID keyboard ready");
-        }
-        // ADR-0062 P24b: HID boot mouse (porta ≠ MSC/kb); hub=AWAITING se class 09h
-        if unsafe { crate::xhci::bringup_hid_mouse() } {
-            crate::boot_logger::log("BOOT: P24b HID mouse ready");
-        } else {
-            crate::boot_logger::log("BOOT: P24b HID mouse SKIP");
+        if want_usb {
+            // ADR-0062 P24a: HID boot keyboard (porta ≠ MSC)
+            if unsafe { crate::xhci::bringup_hid_keyboard() } {
+                crate::boot_logger::log("BOOT: P24a HID keyboard ready");
+            }
+            // ADR-0062 P24b: HID boot mouse (porta ≠ MSC/kb); hub=AWAITING se class 09h
+            if unsafe { crate::xhci::bringup_hid_mouse() } {
+                crate::boot_logger::log("BOOT: P24b HID mouse ready");
+            } else {
+                crate::boot_logger::log("BOOT: P24b HID mouse SKIP");
+            }
         }
     }
 
@@ -1944,10 +1940,9 @@ pub(crate) fn kernel_boot(
         crate::boot_logger::log("BOOT: DiskAgent USB-MSC available (global USB_MSC)");
     }
 
-    // StorageBus ordem: NVMe > AHCI > ATA > USB (ADR-0062 P2/P3)
-    crate::display::fb::boot_ckpt(32, "NVMe probe");
-    if let Some(nvme) = unsafe { k_nano::disk_agent::nvme::NvmeDriver::probe() } {
-        *k_nano::disk_agent::nvme::NVME_DRIVER.lock() = Some(nvme);
+    // StorageBus: registra o que o plano ja trouxe (sem re-probe NVMe).
+    crate::display::fb::boot_ckpt(32, "StorageBus register");
+    if k_nano::disk_agent::nvme::NVME_DRIVER.lock().is_some() {
         {
             let mut g = k_nano::disk_agent::nvme::NVME_DRIVER.lock();
             if let Some(ref mut n) = *g {

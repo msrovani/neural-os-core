@@ -140,6 +140,52 @@ impl AhciDriver {
         Some(driver)
     }
 
+    /// 1º HBA AHCI no PCI; grava `AHCI_DRIVER`. Sem rescan se já ocupado.
+    pub unsafe fn probe_first() -> bool {
+        use crate::globals::AHCI_DRIVER;
+        if AHCI_DRIVER.lock().is_some() {
+            return true;
+        }
+        let mut found = false;
+        crate::pci::scan_pci_cb(|bus, slot, func, vid, did| {
+            let cr = crate::pci::read_config_word(bus, slot, func, 0x0A);
+            if (cr >> 8) as u8 != 0x01 || (cr & 0xFF) as u8 != 0x06 {
+                return false;
+            }
+            let pi = (crate::pci::read_config_word(bus, slot, func, 0x08) >> 8) as u8;
+            let bar0_val = crate::pci::read_bar_value(bus, slot, func, 0);
+            let bar5_val = crate::pci::read_bar_value(bus, slot, func, 5);
+            let dev = crate::pci::PciDevice {
+                bus,
+                device: slot,
+                function: func,
+                vendor_id: vid,
+                device_id: did,
+                class: 0x01,
+                subclass: 0x06,
+                prog_if: pi,
+                bar0: bar0_val,
+                bar1: 0,
+                bar2: 0,
+                bar3: 0,
+                bar4: 0,
+                bar5: bar5_val,
+            };
+            if let Some(ahci) = AhciDriver::new(&dev) {
+                crate::slog_nano!("Disk", "ahci", "SATA controller init: {} ports", ahci.ports.len());
+                *AHCI_DRIVER.lock() = Some(ahci);
+                found = true;
+                true
+            } else {
+                false
+            }
+        });
+        if !found {
+            crate::slog_nano!("Disk", "ahci", "Nenhum controlador SATA AHCI encontrado");
+        }
+        found
+    }
+
     /// Lê setores via DMA (NCQ quando múltiplos comandos)
     pub unsafe fn read(&mut self, port_idx: usize, lba: u64, count: usize, buffer: &mut [u8]) -> bool {
         if port_idx >= self.ports.len() { return false; }
