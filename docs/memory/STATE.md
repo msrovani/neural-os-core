@@ -1,4 +1,7 @@
-﻿# STATE — neural-os-core v1.9.99-s268 — K130 freeze Alienware Meteor Lake: granular checkpoints
+﻿# STATE — neural-os-core v1.9.99-s269 — BOOT.LOG self-heal (1ª falha sem spam)
+#   SESSION_269: `flush FALHOU - ATA PIO` repetido ≠ AIOS. Circuit breaker +
+#     OverwriteResult tipado + skip backend sem BOOT.LOG + HEALTH_ISSUE:I5 na
+#     1ª falha + backoff 50→3200 + re-probe MSC. 6 testes host PASS.
 #   SESSION_268: freeze no K130 (pre-smokes) em Alienware Intel Core 7 240h (Meteor Lake).
 #   Adicionados checkpoints por smoke test (K130: hw_gate/ipc_bus/async_io/git_thin;
 #   K131: wifi_softmac/wpa2_hs/dhcp; K132: limine_esp/ath10k/tls_trust/self_update/ntp;

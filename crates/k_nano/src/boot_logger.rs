@@ -1,10 +1,14 @@
-//! Boot Logger â€” buffer RAM â†’ flush FAT32 (`BOOT.LOG` 8.3) via BlockDevice.
+//! Boot Logger — buffer RAM → flush FAT32 (`BOOT.LOG` 8.3) via BlockDevice.
 //!
-//! Notebooks modernos sem COM: este Ã© o canal de diagnÃ³stico.
+//! Notebooks modernos sem COM: este é o canal de diagnóstico.
 //! Feature `fat-boot-log` (ativa no crate `boot` para imagem HW).
 //!
-//! `BOOT.LOG` Ã© prÃ©-alocado no mkfat32 (256 KiB) para sobrescrita via BlockDevice
+//! `BOOT.LOG` é pré-alocado no mkfat32 (256 KiB) para sobrescrita via BlockDevice
 //! (USB-MSC ou ATA) sem alocar clusters novos no boot.
+//!
+//! **SESSION_269 — self-heal na 1ª falha:** não spammar `flush FALHOU`. Na primeira
+//! falha: diagnosticar backend (USB/ATA/AHCI/NVMe), pular quem não tem BOOT.LOG,
+//! re-probe MSC, publicar HEALTH_ISSUE uma vez, backoff exponencial.
 //!
 //! Display-dependent wrappers (init_after_usb, maybe_uefi_flush_reboot,
 //! flush_bootlog_after_greeting) vivem no neural-kernel bin.
@@ -13,7 +17,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Write;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use spin::Mutex;
 
 use crate::block_dev::BlockDevice;
@@ -66,9 +70,90 @@ static PRE_FAT_BUF: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 /// ConteÃºdo acumulado da sessÃ£o (cabe no BOOT.LOG prÃ©-alocado).
 static SESSION_BODY: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 static DISK_WRITES: AtomicUsize = AtomicUsize::new(0);
-/// Mensagens desde o Ãºltimo flush bem-sucedido (USB MSC Ã© lento: nÃ£o reescreve a cada linha).
+/// Mensagens desde o último flush bem-sucedido (USB MSC é lento: não reescreve a cada linha).
 static SINCE_FLUSH: AtomicUsize = AtomicUsize::new(0);
 const FLUSH_EVERY: usize = 16;
+
+/// Circuit breaker / self-heal (SESSION_269).
+/// Bits: 1=USB 2=ATA 4=AHCI 8=NVMe — backend sem BOOT.LOG ou inadequado.
+static BACKEND_SKIP: AtomicU8 = AtomicU8::new(0);
+const SKIP_USB: u8 = 1;
+const SKIP_ATA: u8 = 2;
+const SKIP_AHCI: u8 = 4;
+const SKIP_NVME: u8 = 8;
+/// Próximo tick em que persist pode tentar de novo após falha.
+static NEXT_RETRY_TICK: AtomicU64 = AtomicU64::new(0);
+/// Falhas consecutivas → backoff 50→3200 (padrão mesh).
+static FAIL_STREAK: AtomicUsize = AtomicUsize::new(0);
+/// Já publicou HEALTH_ISSUE + diagnóstico nesta sessão de falha.
+static HEAL_FIRED: AtomicBool = AtomicBool::new(false);
+
+/// Resultado tipado — self-heal distingue arquivo ausente (skip) de I/O (backoff).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverwriteResult {
+    Ok,
+    NoFatParts,
+    BootLogMissing,
+    IoFail,
+}
+
+impl OverwriteResult {
+    fn is_ok(self) -> bool {
+        matches!(self, OverwriteResult::Ok)
+    }
+    fn unsuitable(self) -> bool {
+        matches!(
+            self,
+            OverwriteResult::NoFatParts | OverwriteResult::BootLogMissing
+        )
+    }
+    fn as_reason(self) -> &'static str {
+        match self {
+            OverwriteResult::Ok => "ok",
+            OverwriteResult::NoFatParts => "sem particao FAT32 util",
+            OverwriteResult::BootLogMissing => "BOOT.LOG ausente no root",
+            OverwriteResult::IoFail => "I/O FAT read/write falhou",
+        }
+    }
+}
+
+/// Backoff exponencial 50 → 100 → … → 3200 ticks (espelha mesh probe_node).
+pub fn bootlog_backoff_ticks(streak: usize) -> u64 {
+    let shift = streak.saturating_sub(1).min(6) as u32;
+    50u64.saturating_mul(1u64 << shift).min(3200)
+}
+
+fn now_tick() -> u64 {
+    crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64
+}
+
+fn persist_allowed_now() -> bool {
+    now_tick() >= NEXT_RETRY_TICK.load(Ordering::Relaxed)
+}
+
+fn schedule_backoff() {
+    let streak = FAIL_STREAK.fetch_add(1, Ordering::Relaxed) + 1;
+    let delay = bootlog_backoff_ticks(streak);
+    let next = now_tick().saturating_add(delay);
+    NEXT_RETRY_TICK.store(next, Ordering::Relaxed);
+    SINCE_FLUSH.store(0, Ordering::Relaxed);
+}
+
+fn clear_breaker_on_success() {
+    FAIL_STREAK.store(0, Ordering::Relaxed);
+    NEXT_RETRY_TICK.store(0, Ordering::Relaxed);
+    HEAL_FIRED.store(false, Ordering::Relaxed);
+}
+
+fn publish_bootlog_health(reason: &str) {
+    let payload = alloc::format!("HEALTH_ISSUE:I5:boot_log:{}", reason);
+    let _ = crate::EVENT_BUS.publish(event_bus::Event {
+        id: 0,
+        topic: String::from("HEALTH_ISSUE"),
+        payload: payload.into_bytes(),
+        token: event_bus::CapabilityToken::Legacy(1),
+    });
+}
 
 fn buffer_log(msg: &str) {
     // Espelho fÃ­sico (ramlog); persistÃªncia FAT sÃ³ via MSC/ATA â€” sem soft-reboot.
@@ -130,42 +215,40 @@ fn fat32_parts(dev: &mut dyn BlockDevice) -> Vec<crate::fat32::Partition> {
     parts
 }
 
-/// Sobrescreve payload de `BOOT.LOG` prÃ©-alocado via BlockDevice (USB ou ATA).
-/// SESSÃƒO_260: logs de diagnÃ³stico no motivo exato de cada falha â€” no HW real
-/// (pendrive bootÃ¡vel via USB-MSC) o flush falhava silencioso e o BOOT.LOG
-/// ficava vazio; com o motivo, o prÃ³ximo boot mostra onde trava.
+/// Sobrescreve payload de `BOOT.LOG` pré-alocado via BlockDevice (USB ou ATA).
 ///
-/// **SESSION_260 (dir rasgado):** reescrever o dir cluster a cada flush rasgava
-/// o FAT se o boot crashasse no meio (triple fault) â†’ Windows nÃ£o montava o
-/// volume. PolÃ­tica segura:
-/// 1. Escreve **sÃ³ clusters de dados** (payload + padding zero atÃ© o fim do
-///    Ãºltimo setor tocado).
-/// 2. SÃ³ toca a directory entry se o tamanho em disco for 0 ou absurdo
-///    (< 512) â€” aÃ­ fixa em `BOOT_LOG_CAP` **num Ãºnico WRITE** do setor do
-///    dirent (nÃ£o reescreve o cluster inteiro). Demais flushes = data-only.
-unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
+/// SESSION_260: dir rasgado → data-only após 1º dirent; logs de diagnóstico.
+/// SESSION_269: retorna `OverwriteResult` tipado p/ self-heal (skip vs backoff).
+unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> OverwriteResult {
     let want = encode_83(BOOT_LOG_NAME);
     let parts = fat32_parts(dev);
     if parts.is_empty() {
-        log_no_flush(&alloc::format!("bootlog: 0 particoes FAT32 encontradas (MBR/GPT parse?)"));
-        return false;
+        return OverwriteResult::NoFatParts;
     }
+    let mut saw_fat = false;
+    let mut saw_missing = false;
+    let mut saw_io = false;
     for part in &parts {
-        if !matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0x73) { continue; }
+        // 0xEF = ESP GPT (Fat32Reader aceita); BOOT.LOG costuma estar em 0x0C.
+        if !matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0x73 | 0xEF) {
+            continue;
+        }
+        saw_fat = true;
         let lba_start = part.lba_start as u64;
         let mut bpb = [0u8; 512];
         if !dev.read_sectors(lba_start, &mut bpb) {
-            log_no_flush(&alloc::format!("bootlog: read BPB LBA {} falhou", lba_start));
+            saw_io = true;
             continue;
         }
-        if &bpb[3..11] == b"EXFAT   " { continue; }
+        if &bpb[3..11] == b"EXFAT   " {
+            continue;
+        }
         let bps = u16::from_le_bytes([bpb[0x0B], bpb[0x0C]]) as u32;
         let spc = bpb[0x0D] as u32;
         let reserved = u16::from_le_bytes([bpb[0x0E], bpb[0x0F]]) as u32;
         let fat_count = bpb[0x10] as u32;
         let root_entries = u16::from_le_bytes([bpb[0x11], bpb[0x12]]);
         if root_entries > 0 || bps < 512 || bps > 4096 || bps % 32 != 0 || spc == 0 {
-            log_no_flush(&alloc::format!("bootlog: LBA {} BPB nao-FAT32 (re={} bps={} spc={})", lba_start, root_entries, bps, spc));
             continue;
         }
         let spf = u32::from_le_bytes([bpb[0x24], bpb[0x25], bpb[0x26], bpb[0x27]]);
@@ -183,21 +266,29 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
             for s in 0..spc {
                 let off = (s * bps) as usize;
                 if !dev.read_sectors((clba + s) as u64, &mut dir[off..off + bps as usize]) {
-                    log_no_flush(&alloc::format!("bootlog: read dir LBA {} falhou", u64::from(clba) + u64::from(s)));
-                    return false;
+                    return OverwriteResult::IoFail;
                 }
             }
             for entry in (0..dir.len()).step_by(32) {
                 let first = dir[entry];
-                if first == 0 { break; }
-                if first == 0xE5 { continue; }
-                if dir[entry + 11] & 0x0F == 0x0F || dir[entry + 11] & 0x08 != 0 { continue; }
-if &dir[entry..entry + 11] != &want { continue; }
+                if first == 0 {
+                    break;
+                }
+                if first == 0xE5 {
+                    continue;
+                }
+                if dir[entry + 11] & 0x0F == 0x0F || dir[entry + 11] & 0x08 != 0 {
+                    continue;
+                }
+                if &dir[entry..entry + 11] != &want {
+                    continue;
+                }
                 let alloc_size = u32::from_le_bytes([
-                    dir[entry + 28], dir[entry + 29], dir[entry + 30], dir[entry + 31],
+                    dir[entry + 28],
+                    dir[entry + 29],
+                    dir[entry + 30],
+                    dir[entry + 31],
                 ]) as usize;
-                // Capacidade efetiva: se o dirent ainda tem size "curto" (seed
-                // truncado / 0), assumimos o pré-alocado de mkfat32 (BOOT_LOG_CAP).
                 let capacity = if alloc_size >= 512 {
                     alloc_size.min(BOOT_LOG_CAP)
                 } else {
@@ -212,14 +303,14 @@ if &dir[entry..entry + 11] != &want { continue; }
                 while fc >= 2 && fc < 0x0FFF_FFF8 && written < write_len {
                     let fc_lba = data_lba + (fc - 2) * spc;
                     for s in 0..spc {
-                        if written >= write_len { break; }
+                        if written >= write_len {
+                            break;
+                        }
                         let mut sector = [0u8; 512];
                         let take = (write_len - written).min(512);
                         sector[..take].copy_from_slice(&data[written..written + take]);
-                        // Padding zero no resto do setor → leitor vê EOF limpo.
                         if !dev.write_sectors((fc_lba + s) as u64, &sector) {
-                            log_no_flush(&alloc::format!("bootlog: WRITE LBA {} falhou (tick={})", u64::from(fc_lba) + u64::from(s), crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed)));
-                            return false;
+                            return OverwriteResult::IoFail;
                         }
                         written += take;
                     }
@@ -227,38 +318,66 @@ if &dir[entry..entry + 11] != &want { continue; }
                     let fat_sec = fat_lba + (fat_off as u32 / bps);
                     let mut fsec = [0u8; 512];
                     if !dev.read_sectors(fat_sec as u64, &mut fsec) {
-                        log_no_flush(&alloc::format!("bootlog: read FAT LBA {} falhou", fat_sec));
-                        return false;
+                        return OverwriteResult::IoFail;
                     }
                     let boff = fat_off % bps as usize;
-                    fc = u32::from_le_bytes([fsec[boff], fsec[boff + 1], fsec[boff + 2], fsec[boff + 3]]) & 0x0FFF_FFFF;
+                    fc = u32::from_le_bytes([
+                        fsec[boff],
+                        fsec[boff + 1],
+                        fsec[boff + 2],
+                        fsec[boff + 3],
+                    ]) & 0x0FFF_FFFF;
                 }
 
-                // Dirent: só se size inválido/curto — fixa CAP com 1 WRITE de setor.
-                // Flushes seguintes = data-only (crash-safe vs SESSION_260).
                 if alloc_size < 512 || alloc_size > BOOT_LOG_CAP {
                     let target = (capacity as u32).to_le_bytes();
                     dir[entry + 28..entry + 32].copy_from_slice(&target);
                     let sector_idx = (entry as u32) / bps;
                     let off = (sector_idx * bps) as usize;
-                    if !dev.write_sectors((clba + sector_idx) as u64, &dir[off..off + bps as usize]) {
-                        log_no_flush(&alloc::format!("bootlog: write dir LBA {} falhou", u64::from(clba) + u64::from(sector_idx)));
-                        return false;
+                    if !dev.write_sectors(
+                        (clba + sector_idx) as u64,
+                        &dir[off..off + bps as usize],
+                    ) {
+                        return OverwriteResult::IoFail;
                     }
                 }
-                log_no_flush(&alloc::format!("bootlog: OK {} bytes em {} (LBA {})", written, BOOT_LOG_NAME, lba_start));
-                return written > 0 || write_len == 0;
+                log_no_flush(&alloc::format!(
+                    "bootlog: OK {} bytes em {} (LBA {})",
+                    written,
+                    BOOT_LOG_NAME,
+                    lba_start
+                ));
+                if written > 0 || write_len == 0 {
+                    return OverwriteResult::Ok;
+                }
+                return OverwriteResult::IoFail;
             }
             let fat_off = cluster as usize * 4;
             let fat_sec = fat_lba + (fat_off as u32 / bps);
             let mut fsec = [0u8; 512];
-            if !dev.read_sectors(fat_sec as u64, &mut fsec) { break; }
+            if !dev.read_sectors(fat_sec as u64, &mut fsec) {
+                break;
+            }
             let boff = fat_off % bps as usize;
-            cluster = u32::from_le_bytes([fsec[boff], fsec[boff + 1], fsec[boff + 2], fsec[boff + 3]]) & 0x0FFF_FFFF;
+            cluster = u32::from_le_bytes([
+                fsec[boff],
+                fsec[boff + 1],
+                fsec[boff + 2],
+                fsec[boff + 3],
+            ]) & 0x0FFF_FFFF;
         }
-        log_no_flush(&alloc::format!("bootlog: BOOT.LOG NAO encontrado no root dir (walked={})", walked));
+        // Chegou ao fim do root sem achar BOOT.LOG nesta partição.
+        saw_missing = true;
     }
-    false
+    if !saw_fat {
+        OverwriteResult::NoFatParts
+    } else if saw_io {
+        OverwriteResult::IoFail
+    } else if saw_missing {
+        OverwriteResult::BootLogMissing
+    } else {
+        OverwriteResult::NoFatParts
+    }
 }
 
 pub fn build_session_bytes() -> Vec<u8> {
@@ -267,7 +386,8 @@ pub fn build_session_bytes() -> Vec<u8> {
     let mut content = alloc::format!(
         "[S] neural-os-core {} BOOT.LOG tick={} fat-boot-log=1\n",
         ver, tick
-    ).into_bytes();
+    )
+    .into_bytes();
     let buf = PRE_FAT_BUF.lock();
     for line in buf.iter() {
         content.extend_from_slice(line);
@@ -281,64 +401,150 @@ pub fn build_session_bytes() -> Vec<u8> {
     content
 }
 
+/// Self-heal na 1ª falha: re-probe USB-MSC + limpa skip USB se MSC voltar.
+fn heal_on_first_failure(detail: &str) {
+    if HEAL_FIRED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    log_no_flush(&alloc::format!(
+        "BOOT.LOG self-heal 1a falha: {} — re-probe MSC + skip backends sem arquivo",
+        detail
+    ));
+    publish_bootlog_health(detail);
+    // Live USB: o stick é a verdade. ATA interno sem BOOT.LOG não deve ser martelado.
+    let msc_ok = try_ensure_usb_msc();
+    if msc_ok {
+        BACKEND_SKIP.fetch_and(!SKIP_USB, Ordering::Relaxed);
+        log_no_flush("BOOT.LOG self-heal: USB-MSC re-probe OK");
+    } else {
+        log_no_flush("BOOT.LOG self-heal: USB-MSC ainda ausente");
+    }
+}
+
+fn mark_skip(bit: u8) {
+    BACKEND_SKIP.fetch_or(bit, Ordering::Relaxed);
+}
+
+fn is_skipped(bit: u8) -> bool {
+    BACKEND_SKIP.load(Ordering::Relaxed) & bit != 0
+}
+
 #[cfg(feature = "fat-boot-log")]
 fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
+    if !persist_allowed_now() {
+        return false;
+    }
     let content = build_session_bytes();
     let ok = if let Some(d) = dev {
-        unsafe { overwrite_boot_log(d, &content) }
+        unsafe { overwrite_boot_log(d, &content) }.is_ok()
     } else {
-        // Tenta USB-MSC â†’ ATA PIO â†’ AHCI SATA â†’ NVMe â€” nesta ordem.
-        // USB-MSC tem sync_cache apÃ³s cada write.
-        // SESSÃƒO_260: loga o MOTIVO de cada falha â€” no HW real (pendrive via
-        // USB-MSC) o flush falhava silencioso e o BOOT.LOG ficava vazio.
+        let skip = BACKEND_SKIP.load(Ordering::Relaxed);
         let mut ok = false;
-        let mut reason = "nenhum backend disponivel";
-        if let Some(mut g) = crate::globals::USB_MSC.try_lock() {
-            if let Some(ref mut msc) = *g {
-                ok = unsafe { overwrite_boot_log(msc, &content) };
-                if ok {
-                    msc.sync_cache();
-                } else {
-                    reason = "USB-MSC: overwrite_boot_log falhou (leitura/escrita do FAT32)";
+        let mut last = OverwriteResult::NoFatParts;
+        let mut last_name = "nenhum";
+        let mut any_tried = false;
+
+        if skip & SKIP_USB == 0 {
+            if let Some(mut g) = crate::globals::USB_MSC.try_lock() {
+                if let Some(ref mut msc) = *g {
+                    any_tried = true;
+                    last_name = "USB-MSC";
+                    last = unsafe { overwrite_boot_log(msc, &content) };
+                    if last.is_ok() {
+                        msc.sync_cache();
+                        ok = true;
+                    } else if last.unsuitable() {
+                        mark_skip(SKIP_USB);
+                    }
                 }
-            } else {
-                reason = "USB-MSC: presente mas None";
             }
-        } else {
-            reason = "USB-MSC: try_lock falhou (lock ocupado)";
         }
-        if !ok {
+
+        if !ok && skip & SKIP_ATA == 0 {
             if let Some(mut g) = crate::globals::ATA_DRIVER.try_lock() {
                 if let Some(ref mut ata) = *g {
-                    ok = unsafe { overwrite_boot_log(ata, &content) };
-                    if !ok {
-                        reason = "ATA PIO: overwrite_boot_log falhou";
+                    any_tried = true;
+                    last_name = "ATA-PIO";
+                    last = unsafe { overwrite_boot_log(ata, &content) };
+                    if last.is_ok() {
+                        ok = true;
+                    } else if last.unsuitable() {
+                        // Disco ATA sem BOOT.LOG (HD interno) → nunca martelar de novo.
+                        mark_skip(SKIP_ATA);
                     }
                 }
             }
         }
-        if !ok {
+
+        if !ok && skip & SKIP_AHCI == 0 {
             if let Some(mut g) = crate::globals::AHCI_DRIVER.try_lock() {
                 if let Some(ref mut ahci) = *g {
-                    ok = unsafe { overwrite_boot_log(ahci, &content) };
-                    if !ok {
-                        reason = "AHCI: overwrite_boot_log falhou";
+                    any_tried = true;
+                    last_name = "AHCI";
+                    last = unsafe { overwrite_boot_log(ahci, &content) };
+                    if last.is_ok() {
+                        ok = true;
+                    } else if last.unsuitable() {
+                        mark_skip(SKIP_AHCI);
                     }
                 }
             }
         }
-        if !ok {
+
+        if !ok && skip & SKIP_NVME == 0 {
             if let Some(mut g) = crate::disk_agent::nvme::NVME_DRIVER.try_lock() {
                 if let Some(ref mut nvme) = *g {
-                    ok = unsafe { overwrite_boot_log(nvme, &content) };
-                    if !ok {
-                        reason = "NVMe: overwrite_boot_log falhou";
+                    any_tried = true;
+                    last_name = "NVMe";
+                    last = unsafe { overwrite_boot_log(nvme, &content) };
+                    if last.is_ok() {
+                        ok = true;
+                    } else if last.unsuitable() {
+                        mark_skip(SKIP_NVME);
                     }
                 }
             }
         }
+
         if !ok {
-            log_no_flush(&alloc::format!("BOOT.LOG flush FALHOU - {}", reason));
+            let detail = if !any_tried {
+                alloc::format!(
+                    "nenhum backend tentavel (skip=0x{:02x} usb={} ata={} ahci={})",
+                    skip,
+                    crate::globals::USB_MSC.try_lock().map(|g| g.is_some()).unwrap_or(false),
+                    crate::globals::ATA_DRIVER.try_lock().map(|g| g.is_some()).unwrap_or(false),
+                    crate::globals::AHCI_DRIVER.try_lock().map(|g| g.is_some()).unwrap_or(false),
+                )
+            } else {
+                alloc::format!("{}: {}", last_name, last.as_reason())
+            };
+            // Capturar ANTES do heal (heal seta HEAL_FIRED).
+            let first = !HEAL_FIRED.load(Ordering::Relaxed);
+            heal_on_first_failure(&detail);
+            if first {
+                // Retry imediato pós-heal (MSC pode ter voltado).
+                if !is_skipped(SKIP_USB) {
+                    if let Some(mut g) = crate::globals::USB_MSC.try_lock() {
+                        if let Some(ref mut msc) = *g {
+                            let r = unsafe { overwrite_boot_log(msc, &content) };
+                            if r.is_ok() {
+                                msc.sync_cache();
+                                ok = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if !ok {
+                schedule_backoff();
+                if first {
+                    log_no_flush(&alloc::format!(
+                        "BOOT.LOG flush FALHOU - {} (backoff {} ticks; sem spam)",
+                        detail,
+                        bootlog_backoff_ticks(FAIL_STREAK.load(Ordering::Relaxed))
+                    ));
+                }
+            }
         }
         ok
     };
@@ -346,6 +552,7 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
         DISK_WRITES.fetch_add(1, Ordering::Relaxed);
         FAT_READY.store(true, Ordering::Relaxed);
         SINCE_FLUSH.store(0, Ordering::Relaxed);
+        clear_breaker_on_success();
         *SESSION_FILENAME.lock() = Some(String::from(BOOT_LOG_NAME));
     }
     ok
@@ -440,6 +647,11 @@ pub fn log_quiet(msg: &str) {
         }
         let n = SINCE_FLUSH.fetch_add(1, Ordering::Relaxed) + 1;
         if n >= FLUSH_EVERY {
+            // SESSION_269: em backoff não martela persist (nem loga de novo).
+            if !persist_allowed_now() {
+                SINCE_FLUSH.store(FLUSH_EVERY, Ordering::Relaxed);
+                return;
+            }
             let _ = persist_now(None);
         }
     }
@@ -460,31 +672,50 @@ pub fn flush() -> bool {
 }
 
 /// Tenta (re)enumerar USB-MSC se ainda nao ha BlockDevice util p/ BOOT.LOG.
-/// Usado pelo SysInfoAgent em HW real quando o bring-up early falhou (porta
-/// CCS atrasada) - sem isto o retry so chamava `flush()` em vao.
+/// Usado pelo SysInfoAgent / self-heal quando o bring-up early falhou.
+/// Host/test: nunca toca xHCI (SEGv) — só reporta se o static já está populado.
 pub fn try_ensure_usb_msc() -> bool {
     if crate::globals::USB_MSC.lock().is_some() {
         return true;
     }
-    if crate::xhci::XHCI_STATE.lock().is_none() {
-        unsafe { crate::xhci::init_xhci(); }
+    #[cfg(not(target_os = "none"))]
+    {
+        return false;
     }
-    let msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
-    let ok = msc.is_some();
-    if ok {
-        *crate::globals::USB_MSC.lock() = msc;
-        crate::slog_nano!("LOG", "info", "try_ensure_usb_msc: MSC OK (retry)");
+    #[cfg(target_os = "none")]
+    {
+        if crate::xhci::XHCI_STATE.lock().is_none() {
+            unsafe {
+                crate::xhci::init_xhci();
+            }
+        }
+        let msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
+        let ok = msc.is_some();
+        if ok {
+            *crate::globals::USB_MSC.lock() = msc;
+            crate::slog_nano!("LOG", "info", "try_ensure_usb_msc: MSC OK (retry)");
+        }
+        ok
     }
-    ok
 }
 
-/// Retry completo: re-probe MSC se preciso + flush. Retorna true se FAT_READY.
+/// Retry completo: re-probe MSC se preciso + flush. Respeita backoff (SESSION_269).
+/// Retorna true se FAT_READY.
 pub fn ensure_persisted() -> bool {
     if FAT_READY.load(Ordering::Relaxed) {
-        let _ = flush();
+        if persist_allowed_now() {
+            let _ = flush();
+        }
         return true;
     }
-    let _ = try_ensure_usb_msc();
+    if !persist_allowed_now() {
+        return false;
+    }
+    let msc = try_ensure_usb_msc();
+    if msc {
+        // Stick voltou → libera skip USB p/ nova tentativa.
+        BACKEND_SKIP.fetch_and(!SKIP_USB, Ordering::Relaxed);
+    }
     flush()
 }
 
@@ -502,6 +733,10 @@ pub fn append_raw(msg: &str) {
         }
         let n = SINCE_FLUSH.fetch_add(1, Ordering::Relaxed) + 1;
         if n >= FLUSH_EVERY {
+            if !persist_allowed_now() {
+                SINCE_FLUSH.store(FLUSH_EVERY, Ordering::Relaxed);
+                return;
+            }
             let _ = persist_now(None);
         }
     }
@@ -524,6 +759,24 @@ mod tests {
         assert_eq!(BOOT_LOG_NAME, "BOOT.LOG");
     }
 
+    #[test]
+    fn bootlog_backoff_grows_to_cap() {
+        assert_eq!(bootlog_backoff_ticks(1), 50);
+        assert_eq!(bootlog_backoff_ticks(2), 100);
+        assert_eq!(bootlog_backoff_ticks(3), 200);
+        assert_eq!(bootlog_backoff_ticks(7), 3200);
+        assert_eq!(bootlog_backoff_ticks(99), 3200);
+    }
+
+    #[test]
+    fn overwrite_result_classifies_unsuitable() {
+        assert!(OverwriteResult::BootLogMissing.unsuitable());
+        assert!(OverwriteResult::NoFatParts.unsuitable());
+        assert!(!OverwriteResult::IoFail.unsuitable());
+        assert!(!OverwriteResult::Ok.unsuitable());
+        assert_eq!(OverwriteResult::BootLogMissing.as_reason(), "BOOT.LOG ausente no root");
+    }
+
     /// Garante que, com `--features fat-boot-log`, o path real (não o stub)
     /// está compilado. Sem a feature este teste nem entra no binário de teste
     /// sob o cfg abaixo — rode: `cargo test -p k-nano --features fat-boot-log`.
@@ -533,6 +786,17 @@ mod tests {
         // flush() sob a feature chama persist_now real (sem BlockDevice → false,
         // mas não é o stub cfg(not(...)) que sempre retornava false sem tentar).
         assert!(!flush() || FAT_READY.load(Ordering::Relaxed));
+    }
+
+    /// SESSION_269: após falha simulada via NEXT_RETRY_TICK futuro,
+    /// ensure_persisted não tenta de novo (circuit breaker).
+    #[cfg(feature = "fat-boot-log")]
+    #[test]
+    fn ensure_persisted_respects_backoff() {
+        FAT_READY.store(false, Ordering::Relaxed);
+        NEXT_RETRY_TICK.store(u64::MAX, Ordering::Relaxed);
+        assert!(!ensure_persisted());
+        NEXT_RETRY_TICK.store(0, Ordering::Relaxed);
     }
 }
 
