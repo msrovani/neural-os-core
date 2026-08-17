@@ -285,7 +285,7 @@ Processo canônico em `docs/architecture/0086-instalacao-e-update-ota.md`. ✅ 1
 |------|---------|
 | GGUF v3 loader (modelos 9B+) | ~500 LOC |
 | ADR-0057 WS-B speedup matmul multicore (HW real; AVX2 off no TCG) | validação HW |
-| ADR-0057 WS-D GPU BitLinearW2A8 kernel + KernelPack assinado (Layer S/HW) | ~800 LOC + HW |
+| ADR-0057 WS-D GPU BitLinearW2A8 kernel + KernelPack assinado (Layer S/HW) | ~800 LOC + HW; s274 honesty feito, resta device kernel (#536) |
 | ADR-0057 WS-E NPU AMD XDNA driver (💰 sponsor, firmware/overlay Vitis) | ~2.000 LOC |
 | ADR-0057 WS-E NPU Intel (Meteor/Lunar Lake, NCE) (💰 sponsor, firmware) | ~1.500 LOC |
 | ADR-0057 WS-F scheduler heterogêneo (IPI reschedule, run-queues, per-CPU slab) | ~1.000 LOC |

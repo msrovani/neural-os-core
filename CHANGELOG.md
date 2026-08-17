@@ -1,6 +1,10 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### docs: ritual SESSION_271–274 (AGENTS / TECNOLOGIAS / tag)
+
+Memória de sessão no AGENTS (sprint atual + 4 lições), catálogo 3.11/3.12, codemap GPU, índice.
+
 ### SESSION_274: GPU compute honesto + MHI tier0 CE wired (2026-08-17)
 
 **Revisão do uso de GPU (Intel/AMD/NVIDIA) para computação.**
