@@ -45,6 +45,15 @@ impl BootReport {
 
 static BOOT_REPORT: Mutex<Option<BootReport>> = Mutex::new(None);
 
+/// Postura GPU real, anotada pelo BE (k_hal) no fim do bring-up — R0 não vê
+/// k_hal (ordem de anéis), então o valor chega por nota (SESSION_274).
+static GPU_NOTE: Mutex<Option<(String, bool)>> = Mutex::new(None);
+
+/// k_hal chama no fim de `init_backend_with_plan` (qualquer terminal).
+pub fn note_gpu(name: &str, ok: bool) {
+    *GPU_NOTE.lock() = Some((String::from(name), ok));
+}
+
 pub fn store(report: BootReport) {
     *BOOT_REPORT.lock() = Some(report);
 }
@@ -69,8 +78,13 @@ pub fn finalize_and_publish() -> BootReport {
         || crate::globals::AHCI_DRIVER.lock().is_some()
         || crate::disk_agent::nvme::NVME_DRIVER.lock().is_some();
 
-    // GPU detect — falha nao bloqueia boot
-    r.gpu_ok = true; // placeholder: k_hal::gpu::backend::has_gpu()
+    // GPU: valor REAL anotado pelo k_hal (note_gpu). Sem nota = false —
+    // nunca claim Ready sem evidência (era `true` placeholder até SESSION_274).
+    let gpu_note = GPU_NOTE.lock().clone();
+    r.gpu_ok = gpu_note.as_ref().map(|(_, ok)| *ok).unwrap_or(false);
+    if let Some((name, ok)) = gpu_note {
+        r.push(BootEvent::Gpu { name, ok });
+    }
 
     r.push(BootEvent::Storage {
         bus: String::from("USB-MSC"),

@@ -38,6 +38,8 @@ pub unsafe fn init_sasos_vram(vram_phys: u64, vram_size: u64, pmoff: u64) -> boo
 
 /// Converte offset na aperture VRAM → VA SASOS (ponteiro CPU para a VRAM).
 /// None se SASOS não inicializado ou offset fora do range mapeado.
+/// ADR-0087 §2.0.1 (SESSION_274): acesso SASOS registra no MHI/MSched — o
+/// preditor Belady e a policy de tier só valem com acessos reais (lição F2).
 pub fn sasos_vram_ptr(vram_off: u64) -> Option<u64> {
     if !SASOS_VRAM_READY.load(Ordering::Acquire) {
         return None;
@@ -46,6 +48,8 @@ pub fn sasos_vram_ptr(vram_off: u64) -> Option<u64> {
     if vram_off + 1 > size {
         return None;
     }
+    let phys = SASOS_VRAM_PHYS.load(Ordering::Acquire) + vram_off;
+    crate::gpu::vram::msched_record(phys);
     Some(SASOS_VRAM_BASE + vram_off)
 }
 

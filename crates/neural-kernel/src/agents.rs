@@ -665,13 +665,7 @@ impl Agent for HermesAgent {
         if let Some(event) = self.health_receiver.try_receive() {
             had_work = true;
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
-            k_nano::slog_bin!("Health", "info", "{}", text);
-            // Health issues viram intent para o LLM resolver
-            let _ = EVENT_BUS.publish(Event {
-                id: 0, topic: String::from(hermes::TOPIC_USER_INTENT),
-                payload: alloc::format!("diagnostique e corrija: {}", text).into_bytes(),
-                token: CapabilityToken::Legacy(1),
-            });
+            hermes_crate::runtime_observe::ingest_health_issue(text);
         }
 
         // HW plug-and-play agentico: card completo → Hermes decide → efêmera → WASM
@@ -2536,6 +2530,11 @@ impl Agent for GpuDriverAgent {
                 k_nano::slog_jarbas!("VGPU", "info", "VirtIO-GPU OK.");
             }
         }
+        // A-015 honesto (SESSION_274): detect/canário rodaram no DriverInit
+        // (k_hal); o agente reporta a postura REAL do backend, não só VirtIO.
+        k_nano::slog_jarbas!("GPU", "info", "backend: {} | {}",
+            crate::gpu::backend::gpu_status(),
+            crate::gpu::vram::vram_status());
         AgentTickResult::Done
     }
 }

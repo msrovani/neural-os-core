@@ -654,13 +654,7 @@ impl Agent for HermesAgent {
         if let Some(event) = self.health_receiver.try_receive() {
             had_work = true;
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
-            k_nano::slog_hermes!("Health", "info", "{}", text);
-            // Health issues viram intent para o LLM resolver
-            let _ = EVENT_BUS.publish(Event {
-                id: 0, topic: String::from(hermes::TOPIC_USER_INTENT),
-                payload: alloc::format!("diagnostique e corrija: {}", text).into_bytes(),
-                token: CapabilityToken::Legacy(1),
-            });
+            crate::runtime_observe::ingest_health_issue(text);
         }
 
         // HW plug-and-play agentico: card → decide → efêmera → WASM

@@ -88,6 +88,7 @@ pub mod neural_fs;
 pub mod vfs;
 pub mod link_watcher;
 pub mod globals;
+pub mod runtime_observe;
 pub mod wifi_agent;
 pub mod wifi_protocol;
 pub mod wpa2_hs;

@@ -11,8 +11,10 @@ use k_ai::usage::UsageTracker;
 use k_ai::self_heal::SelfHeal;
 use k_ai::audit::AuditTrail;
 use k_ai::inventory::SystemArchitecture;
-use cortex::trinity::TrinityRouter;
 use crate::executive::ExecutiveSupervisor;
+
+/// Trinity único no crate cortex (SESSION_273). Não duplicar static vazio.
+pub use cortex::trinity::TRINITY;
 
 pub use k_nano::{EVENT_BUS, SKILL_REGISTRY};
 
@@ -44,7 +46,6 @@ lazy_static! {
     pub static ref CONVERSATION_TRACKER: TicketLock<crate::hermes::ConversationTracker> =
         TicketLock::new(crate::hermes::ConversationTracker::new());
     pub static ref PENDING_SKILL: TicketLock<Option<(String, String)>> = TicketLock::new(None);
-    pub static ref TRINITY: TicketLock<TrinityRouter> = TicketLock::new(TrinityRouter::new());
     pub static ref SELF_HEAL: TicketLock<SelfHeal> = TicketLock::new(SelfHeal::new());
     pub static ref BITNET_TRAINER: TicketLock<BitNetTrainer> =
         TicketLock::new(BitNetTrainer::new());

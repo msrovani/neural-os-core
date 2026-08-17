@@ -123,6 +123,7 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
         *CURRENT_BACKEND.lock() = Some(GpuAccel::CpuOnly);
         *COMPUTE_STATE.lock() = BackendState::CpuOnly;
         log_gpu_hw_verdict("no_compute_gpu");
+        k_nano::boot_report::note_gpu("nenhuma", false);
         let _ = crate::gpu::direct_storage::probe_gds();
         return;
     }
@@ -141,6 +142,12 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
         *CURRENT_BACKEND.lock() = Some(GpuAccel::CpuOnly);
         *COMPUTE_STATE.lock() = BackendState::CpuOnly;
         log_gpu_hw_verdict("no_compute_index");
+        // Display-only (ex.: VirtIO/iGPU sem compute) = GPU presente e ok.
+        let disp_ok = plan.display_index().and_then(|i| gpus.get(i));
+        match disp_ok {
+            Some(dg) => k_nano::boot_report::note_gpu(dg.name, true),
+            None => k_nano::boot_report::note_gpu("nenhuma", false),
+        }
         let _ = crate::gpu::direct_storage::probe_gds();
         return;
     };
@@ -163,6 +170,7 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
         *CURRENT_BACKEND.lock() = Some(GpuAccel::CpuOnly);
         *COMPUTE_STATE.lock() = BackendState::Quarantine;
         log_gpu_hw_verdict("bar0_validate_failed");
+        k_nano::boot_report::note_gpu(gpu.name, false);
         return;
     }
 
@@ -232,6 +240,7 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
             *CURRENT_BACKEND.lock() = Some(GpuAccel::CpuOnly);
             *COMPUTE_STATE.lock() = BackendState::CpuOnly;
             log_gpu_verdict_unified(gpu, "CPU_FALLBACK", "virtio_display_only");
+            k_nano::boot_report::note_gpu(gpu.name, true);
             return;
         }
         _ => {
@@ -296,6 +305,12 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
             log_gpu_verdict_unified(gpu, verdict, reason);
         }
     }
+    // BootReport (SESSION_274): backend real probed = ok (CpuOnly/None = false).
+    let backend_ok = !matches!(
+        CURRENT_BACKEND.lock().as_ref(),
+        Some(GpuAccel::CpuOnly) | None
+    );
+    k_nano::boot_report::note_gpu(gpu.name, backend_ok);
     let _ = crate::gpu::direct_storage::probe_gds();
     crate::compute_port::sync_from_backend();
 }
@@ -352,8 +367,8 @@ pub fn compute_state() -> BackendState {
 pub fn gpu_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     let _ = crate::gpu::work_queue::submit_tensor(TensorOp::MatmulTernary);
     let ready = *COMPUTE_STATE.lock() == BackendState::Ready;
-    let mut guard = CURRENT_BACKEND.lock();
     let result = if ready {
+        let mut guard = CURRENT_BACKEND.lock();
         match guard.as_mut() {
             Some(GpuAccel::Intel(ring, _)) => ring.gpu_matmul(a, b),
             Some(GpuAccel::Nvidia(nv)) if nv.compute_ready => nvidia_matmul(nv, a, b),
@@ -362,12 +377,9 @@ pub fn gpu_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     } else {
         None
     };
-    drop(guard);
-    let _ = crate::gpu::work_queue::drain(ready && result.is_some());
-    result.or_else(|| {
-        let _ = crate::gpu::work_queue::drain(false);
-        cpu_matmul(a, b)
-    })
+    // Telemetria honesta: só conta GPU quando o device fez a conta.
+    let _ = crate::gpu::work_queue::drain(result.is_some());
+    result.or_else(|| cpu_matmul(a, b))
 }
 
 /// ADR-0047 gate: HW só após canário Ready — nunca por PFIFO NOP sozinho.
@@ -376,36 +388,18 @@ pub fn adr0047_compute_gate() -> &'static str {
     crate::gpu::work_queue::gate_status(hw)
 }
 
-fn nvidia_matmul(nv: &NvidiaGpu, a: &Tensor, b: &Tensor) -> Option<Tensor> {
-    if a.shape.1 != b.shape.0 {
-        return None;
-    }
-    // DMA handshake opcional; matmul real exige KernelPack + QMD Ready.
-    if nv.pfifo_ready && nv.vram_size > 0 && nv.compute_ready {
-        let sz = a.data.len() * 4;
-        if let Some(pa) = crate::gpu::vram::vram_alloc(sz) {
-            if let Some(off) = nv.vram_rel(pa) {
-                let bytes: &[u8] =
-                    unsafe { core::slice::from_raw_parts(a.data.as_ptr() as *const u8, sz) };
-                unsafe { nv.cpu_to_vram(off, bytes); }
-                let mut rb = [0u8; 64];
-                unsafe { nv.vram_to_cpu(off, &mut rb); }
-            }
-            crate::gpu::vram::vram_free(pa, sz);
-        }
-    }
-    a.matmul(b)
+/// Honesto (SESSION_274): sem KernelPack W2A8 + QMD não há matmul no device —
+/// retorna `None` e o caller faz o CPU fallback EXPLÍCITO. A versão anterior
+/// fazia um "DMA handshake" por chamada (upload+readback 64B sem uso) e depois
+/// computava `a.matmul(b)` na CPU, contando como GPU no work_queue — mentira
+/// de telemetria + custo por chamada. O caminho VRAM já é provado 1x no boot
+/// pelo canário CE/vector_add.
+fn nvidia_matmul(_nv: &NvidiaGpu, _a: &Tensor, _b: &Tensor) -> Option<Tensor> {
+    None
 }
 
 fn cpu_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     a.matmul(b)
-}
-
-pub fn gpu_forward(
-    _model: &cortex::cortex::TransformerModel,
-    _tokens: &[u16],
-) -> Option<(Tensor, Tensor)> {
-    None
 }
 
 pub fn job_ring_info() -> alloc::string::String {

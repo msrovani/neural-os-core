@@ -18,6 +18,20 @@ pub fn register_vram_allocator(hook: fn(usize) -> Option<u64>) {
     crate::slog_bin!("MHI", "info", "VRAM alloc hook registered (IDEA #67)");
 }
 
+/// ADR-0087 Fase 4b→5 (SESSION_274): copier tier1→tier0 via engine (CE DMA).
+/// k_hal registra quando o canário CE passa (`ce_ready`); sem hook a promoção
+/// Dram→Vram continua metadata-only + AWAITING (comportamento QEMU inalterado).
+static mut TIER0_COPY_HOOK: Option<fn(u64, u64, usize) -> bool> = None;
+static mut VRAM_FREE_HOOK: Option<fn(u64, usize)> = None;
+
+pub fn register_tier0_copier(copy: fn(u64, u64, usize) -> bool, free: fn(u64, usize)) {
+    unsafe {
+        TIER0_COPY_HOOK = Some(copy);
+        VRAM_FREE_HOOK = Some(free);
+    }
+    crate::slog_bin!("MHI", "info", "tier0 copier (CE DMA) registrado — Dram→Vram com dados reais");
+}
+
 fn log_mhi_dma_awaiting(reason: &str) {
     if MHI_DMA_LOGGED.swap(true, Ordering::Relaxed) {
         return;
@@ -393,6 +407,39 @@ pub fn mhi_tick(tick: u64) {
     }
 }
 
+/// Promoção Dram→Vram com DADOS (não só metadata): aloca no buddy VRAM,
+/// copia via engine (hook CE) e re-registra no novo endereço. `false` = sem
+/// hook / sem VRAM / cópia falhou — o caller segue no caminho metadata-only.
+/// Rollback: VRAM alocada é devolvida se a cópia falhar (lição CoW F2).
+fn try_tier0_promote(req: &MigrationRequest) -> bool {
+    let copy = match unsafe { TIER0_COPY_HOOK } {
+        Some(f) => f,
+        None => return false,
+    };
+    let Some(dst) = alloc_by_tier(AllocTier::Vram, req.size) else {
+        return false;
+    };
+    let dst_pa = dst.as_u64();
+    if !copy(req.phys_addr, dst_pa, req.size) {
+        if let Some(free) = unsafe { VRAM_FREE_HOOK } {
+            free(dst_pa, req.size);
+        }
+        return false;
+    }
+    // vram_alloc (hook) já registrou dst como Vram/"vram" — re-registra com o
+    // owner real da página promovida e remove o registro DRAM antigo.
+    let mut reg = MHI_REGISTRY.lock();
+    reg.allocations.remove(&req.phys_addr);
+    reg.register(PhysAddr::new(dst_pa), req.size, AllocTier::Vram, &req.owner);
+    drop(reg);
+    MHI_SOFT_COPY.fetch_add(1, Ordering::Relaxed);
+    crate::slog_nano!("MHI", "info", "tier0 promote Dram->Vram @{:x} -> @{:x} ({} B via CE)",
+        req.phys_addr,
+        dst_pa,
+        req.size);
+    true
+}
+
 fn execute_soft_migrate(req: MigrationRequest) {
     // Partition stubs register LBA*sector as "phys" — never memcpy those.
     let looks_like_ram_page = req.from == AllocTier::Dram
@@ -407,6 +454,12 @@ fn execute_soft_migrate(req: MigrationRequest) {
     }
 
     if looks_like_ram_page && req.to != AllocTier::Dram {
+        // Dram→Vram com engine real (CE) quando o hook está registrado —
+        // fecha o seam morto `mhi_tier0_copy` (ADR-0087 F2: política só vale
+        // com wiring). Falhou/ausente → cai no metadata-only abaixo.
+        if req.to == AllocTier::Vram && try_tier0_promote(&req) {
+            return;
+        }
         // Demote Dram→cold: metadata only (no disk/VRAM peer DMA yet)
         let needs_peer = matches!(req.to, AllocTier::Vram | AllocTier::Nvme);
         if needs_peer {
@@ -582,5 +635,59 @@ mod tests {
         assert!(migration_rate_ok(tick, 10 * 1024 * 1024));
         assert!(migration_rate_ok(tick, 10 * 1024 * 1024)); // 40MB < 64MB
         assert!(!migration_rate_ok(tick, 30 * 1024 * 1024)); // 70MB > 64MB
+    }
+
+    // ── SESSION_274: promoção tier0 (Dram→Vram) com engine registrado ──────
+
+    const FAKE_VRAM_PA: u64 = 0xDEAD_0000;
+
+    fn fake_vram_alloc(_size: usize) -> Option<u64> {
+        Some(FAKE_VRAM_PA)
+    }
+    fn fake_ce_copy(_src: u64, dst: u64, _bytes: usize) -> bool {
+        dst == FAKE_VRAM_PA
+    }
+    fn fake_ce_copy_fail(_src: u64, _dst: u64, _bytes: usize) -> bool {
+        false
+    }
+    fn fake_vram_free(_addr: u64, _size: usize) {}
+
+    #[test]
+    fn tier0_promote_requires_hook_and_moves_registry() {
+        let src = 0x7710_0000u64;
+        let req = MigrationRequest {
+            phys_addr: src,
+            from: AllocTier::Dram,
+            to: AllocTier::Vram,
+            size: 4096,
+            owner: String::from("kv_test"),
+        };
+        // Sem hook: honesto — false (caller cai no metadata-only/AWAITING).
+        unsafe { TIER0_COPY_HOOK = None };
+        assert!(!try_tier0_promote(&req));
+
+        // Com hooks: registry migra Dram@src → Vram@dst preservando o owner.
+        MHI_REGISTRY.lock().register(PhysAddr::new(src), 4096, AllocTier::Dram, "kv_test");
+        register_vram_allocator(fake_vram_alloc);
+        register_tier0_copier(fake_ce_copy, fake_vram_free);
+        assert!(try_tier0_promote(&req));
+        {
+            let reg = MHI_REGISTRY.lock();
+            assert!(reg.allocations.get(&src).is_none(), "registro DRAM antigo removido");
+            let p = reg.allocations.get(&FAKE_VRAM_PA).expect("registrado na VRAM");
+            assert_eq!(p.tier, AllocTier::Vram);
+            assert_eq!(p.owner, "kv_test");
+        }
+        MHI_REGISTRY.lock().unregister(FAKE_VRAM_PA);
+
+        // Cópia falhou → false (rollback via free hook; sem re-registro).
+        register_tier0_copier(fake_ce_copy_fail, fake_vram_free);
+        assert!(!try_tier0_promote(&req));
+        assert!(MHI_REGISTRY.lock().allocations.get(&FAKE_VRAM_PA).is_none());
+        unsafe {
+            TIER0_COPY_HOOK = None;
+            VRAM_FREE_HOOK = None;
+            VRAM_ALLOC_HOOK = None;
+        }
     }
 }

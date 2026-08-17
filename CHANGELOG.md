@@ -1,6 +1,25 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### SESSION_274: GPU compute honesto + MHI tier0 CE wired (2026-08-17)
+
+**Revisão do uso de GPU (Intel/AMD/NVIDIA) para computação.**
+
+- **fix(k_hal):** `nvidia_matmul`/Intel `gpu_matmul` → `None` (device math = Layer S); telemetria work_queue só conta GPU real; `gpu_forward`/`mark_compute_ready` (mortos) removidos.
+- **fix(k_nano):** `boot_report.gpu_ok` real via `note_gpu` (era `true` hardcoded).
+- **feat(mhi):** `register_tier0_copier` — `mhi_tick` promove Dram→Vram com dados via CE (gated canário golden; rollback CoW; QEMU inalterado). msched/sasos registram acessos.
+- **feat(bin):** A-015 GpuDriverAgent reporta `gpu_status`/`vram_status` reais.
+- Pesquisa: cuda-oxide/kaio = PTX offline p/ KernelPack W2A8 (#536); nada roda compute em no_std.
+
+### SESSION_273: Trinity único + HUD/HITL honesto (cortex/hermes/jarbas) (2026-08-17)
+
+**3ª revisão AIOS (CHJ).**
+
+- **fix(cortex):** `TRINITY` canônico; `router_trained`; LCG não roteia; `CORTEX_POSTURE`.
+- **fix(hermes):** reexport Trinity; `runtime_observe` (I5/HITL ≠ LLM); greeting com HUD.
+- **fix(jarbas/k_nano):** HUD no `render()`; `net_hud_label`; I225 conta como NIC física.
+- Residual: TRUST_CACHE duplicado; #513 bandwidth.
+
 ### SESSION_272: Plano de bind completo (NIC+storage+Trust+HITL) (2026-08-17)
 
 **2ª revisão AIOS com todas as premissas (em cima da 271).**
