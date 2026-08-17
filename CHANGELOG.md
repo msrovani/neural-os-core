@@ -1,6 +1,15 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### SESSION_272: Plano de bind completo (NIC+storage+Trust+HITL) (2026-08-17)
+
+**2ª revisão AIOS com todas as premissas (em cima da 271).**
+
+- **feat(k_nano):** `StorageKind` + `storage_probe` (NVMe>AHCI>USB>ATA); skip ATA persist / xHCI / HDA se o DeviceTree não viu.
+- **feat(k_ai):** `observe_and_plan(trust_ok)` — cards PnP, Escalate≠Auto, HANR `hydrate_memory`.
+- **feat(bin):** Trust `(1,boot_observe,plan)`; SLIP degradado + HEALTH_ISSUE I5; Cortex sem pesos (log honesto).
+- Residual #513: `measure_bandwidth` / BMIDE.
+
 ### SESSION_264: Early BOOT.LOG no pendrive live USB — feature wire + safe overwrite (2026-08-14)
 
 **PR #7 `063d741` integrado ao HEAD local (s263), 0 erros, cargo check --release.**

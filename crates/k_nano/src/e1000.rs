@@ -11,6 +11,19 @@ pub const E1000_VENDOR_INTEL: u16 = 0x8086;
 pub const E1000_DEVICE_82540EM: u16 = 0x100E;
 pub const E1000_DEVICE_82574L: u16 = 0x10D3;
 pub const E1000_DEVICE_82579LM: u16 = 0x1502;
+pub const E1000_DEVICE_82579V: u16 = 0x1503;
+
+/// Tabela curada (QEMU 82540EM + e1000e comuns). Sem NN — SESSION_248.
+pub fn is_e1000_family(vendor: u16, device: u16) -> bool {
+    vendor == E1000_VENDOR_INTEL
+        && matches!(
+            device,
+            E1000_DEVICE_82540EM
+                | E1000_DEVICE_82574L
+                | E1000_DEVICE_82579LM
+                | E1000_DEVICE_82579V
+        )
+}
 
 // Register offsets (MMIO)
 pub const REG_CTRL: u64 = 0x0000;

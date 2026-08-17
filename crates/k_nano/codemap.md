@@ -134,7 +134,7 @@ Root-level single files (not submodules): `memory`, `allocator`, `interrupts`, `
 `exfat`, `exfat_write`, `ext2_reader`, `ntfs_reader`, `btrfs_reader`, `luks_open`,
 `usb_msc`, `usb_trust`, `tpm`, `fw_cfg`, `hw_rng`, `async_rt`, `io_scheduler`,
 `suspend_resume`, `cpufreq`, `core_pinning`, `numa_alloc`, `mhi`, `slab`, `slab_buddy`,
-`hal`, `boot_handoff`, `boot_logger`, `boot_ramlog`, `boot_report`, `boot_chime`,
+`hal`, `boot_handoff`, `boot_bind`, `storage_probe`, `boot_logger`, `boot_ramlog`, `boot_report`, `boot_chime`,
 `load_status`, `identity`, `verify`, `proof_gate`, `rollback`, `firewall`, `env`,
 `multi_user`, `user_accounts`, `time`, `rtc`, `telemetry`, `tracer`, `slog`, `slip`,
 `scancode_to_ascii`, `p2p`, `sys_installer`, `installer_agent`, `self_check`,

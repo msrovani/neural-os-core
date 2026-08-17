@@ -28,6 +28,8 @@ fn main() {
     fs::create_dir_all(&boot_dir).unwrap();
 
     // Copia kernel + bootloader
+    // Feature fat-boot-log no artefato = canal DEV/TEST (`BOOT.LOG` 8.3).
+    // Produto Installed usa nome com timestamp (SESSION_270 / k_nano::boot_logger).
     fs::copy(&kernel, esp_root.join("kernel.elf")).unwrap();
     if efi_bin.exists() {
         fs::copy(&efi_bin, efi_dir.join("BOOTX64.EFI")).unwrap();

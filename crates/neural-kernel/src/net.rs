@@ -164,27 +164,24 @@ pub unsafe fn init_driver_e1000() -> bool {
     if E1000.lock().is_some() { return true; }
     let pci_devices = crate::pci::scan_pci();
     for dev in &pci_devices {
-        if dev.vendor_id == 0x8086 {
-            let valid_devices = [0x100E, 0x10D3, 0x1502];
-            if valid_devices.contains(&dev.device_id) {
-                k_nano::slog_hermes!("Net", "info", "e1000 detectado: {:02x}:{:02x}.{:02x} device={:#06x}", dev.bus, dev.device, dev.function, dev.device_id);
-                let mut driver = match E1000Driver::new(dev) { Some(d) => d, None => { k_nano::slog_hermes!("Net", "info", "E1000 new() falhou"); return false; } };
-                if driver.init() {
-                    let mac = driver.mac();
-                    NET_CONFIG.lock().mac = mac;
-                    *E1000.lock() = Some(driver);
+        if crate::e1000::is_e1000_family(dev.vendor_id, dev.device_id) {
+            k_nano::slog_hermes!("Net", "info", "e1000 detectado: {:02x}:{:02x}.{:02x} device={:#06x}", dev.bus, dev.device, dev.function, dev.device_id);
+            let mut driver = match E1000Driver::new(dev) { Some(d) => d, None => { k_nano::slog_hermes!("Net", "info", "E1000 new() falhou"); return false; } };
+            if driver.init() {
+                let mac = driver.mac();
+                NET_CONFIG.lock().mac = mac;
+                *E1000.lock() = Some(driver);
 
-                    k_nano::slog_hermes!("Net", "info", "e1000 iniciado. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-                    println!("[NET] e1000 iniciado.");
+                k_nano::slog_hermes!("Net", "info", "e1000 iniciado. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                println!("[NET] e1000 iniciado.");
 
-                    let _ = crate::EVENT_BUS.publish(crate::Event {
-                        id: 0,
-                        topic: alloc::string::String::from("HW_NET_E1000"),
-                        payload: alloc::vec![mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]],
-                        token: crate::CapabilityToken::Legacy(1),
-                    });
-                    return true;
-                }
+                let _ = crate::EVENT_BUS.publish(crate::Event {
+                    id: 0,
+                    topic: alloc::string::String::from("HW_NET_E1000"),
+                    payload: alloc::vec![mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]],
+                    token: crate::CapabilityToken::Legacy(1),
+                });
+                return true;
             }
         }
     }
@@ -245,6 +242,36 @@ pub unsafe fn init_driver_i225() -> bool {
         k_nano::slog_hermes!("Net", "i225", "init() FAIL DID={:#06x}", dev.device_id);
     }
     k_nano::slog_hermes!("Net", "i225", "nao encontrado (esperado em QEMU — sem emu i225)");
+    false
+}
+
+/// Probes na ordem do plano k_ai (DeviceTree). Primeiro sucesso encerra.
+/// `n==0` com árvore populada = silício sem NIC conhecida — skip honesto (ADR-0088).
+pub unsafe fn probe_nics_from_bind_plan() -> bool {
+    use k_nano::boot_bind::NicKind;
+    let (order, n) = k_nano::boot_bind::nic_probe_order();
+    if n == 0 {
+        k_nano::slog_hermes!(
+            "Net",
+            "bind",
+            "DeviceTree sem NIC classificada — skip probe (observe, nao martelo)"
+        );
+        return false;
+    }
+    for i in 0..n {
+        let kind = order[i];
+        let ok = match kind {
+            NicKind::I225 => init_driver_i225(),
+            NicKind::Virtio => crate::virtio_net::init_driver_virtio(),
+            NicKind::E1000 => init_driver_e1000(),
+            NicKind::Rtl8139 => init_driver_rtl8139(),
+            NicKind::None => false,
+        };
+        k_nano::slog_hermes!("Net", "bind", "probe {} ok={}", kind.as_str(), ok);
+        if ok {
+            return true;
+        }
+    }
     false
 }
 
