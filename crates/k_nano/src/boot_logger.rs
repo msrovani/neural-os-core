@@ -1,17 +1,10 @@
-//! Boot Logger — buffer RAM → flush FAT32 (`BOOT.LOG` 8.3) via BlockDevice.
+//! Boot Logger — buffer RAM → flush FAT32 / VFS.
 //!
-//! Notebooks modernos sem COM: este é o canal de diagnóstico.
-//! Feature `fat-boot-log` (ativa no crate `boot` para imagem HW).
+//! - **DEV/TEST:** arquivo fixo `BOOT.LOG` 8.3 (feature `fat-boot-log`, Live/Install).
+//! - **Produto (Installed):** padrão com **timestamp** → `/logs/boot_<tick7hex>.log`
+//!   (ADR-0086 telemetria `neural-<stamp>.log` no server).
 //!
-//! `BOOT.LOG` é pré-alocado no mkfat32 (256 KiB) para sobrescrita via BlockDevice
-//! (USB-MSC ou ATA) sem alocar clusters novos no boot.
-//!
-//! **SESSION_269 — self-heal na 1ª falha:** não spammar `flush FALHOU`. Na primeira
-//! falha: diagnosticar backend (USB/ATA/AHCI/NVMe), pular quem não tem BOOT.LOG,
-//! re-probe MSC, publicar HEALTH_ISSUE uma vez, backoff exponencial.
-//!
-//! Display-dependent wrappers (init_after_usb, maybe_uefi_flush_reboot,
-//! flush_bootlog_after_greeting) vivem no neural-kernel bin.
+//! Self-heal SESSION_269: na 1ª falha do canal DEV — diagnose, skip, HEALTH_ISSUE, backoff.
 
 use alloc::string::String;
 use alloc::vec;
@@ -22,9 +15,10 @@ use spin::Mutex;
 
 use crate::block_dev::BlockDevice;
 
-/// Nome 8.3 fixo â€” fÃ¡cil achar no Windows apÃ³s atribuir letra ao volume.
+/// Nome 8.3 fixo — **somente DEV/TEST** (Live stick / QEMU / early bring-up).
+/// Produto (BootMode::Installed) usa `timestamped_session_name()` → `/logs/boot_<tick>.log`.
 pub const BOOT_LOG_NAME: &str = "BOOT.LOG";
-/// Capacidade do arquivo prÃ©-alocado (mkfat32).
+/// Capacidade do arquivo pré-alocado (mkfat32) — só canal DEV.
 pub const BOOT_LOG_CAP: usize = 256 * 1024;
 
 struct StackBuf {
@@ -153,6 +147,70 @@ fn publish_bootlog_health(reason: &str) {
         payload: payload.into_bytes(),
         token: event_bus::CapabilityToken::Legacy(1),
     });
+}
+
+/// `BOOT.LOG` fixo = canal **DEV/TEST** (Live/Install/early).
+/// Residente (`Installed`) usa log com timestamp — padrão ADR-0086 / LogFs.
+pub fn fixed_boot_log_dev_only() -> bool {
+    #[cfg(not(feature = "fat-boot-log"))]
+    {
+        return false;
+    }
+    #[cfg(feature = "fat-boot-log")]
+    {
+        match crate::boot_mode::peek() {
+            Some(crate::boot_mode::BootMode::Installed) => false,
+            // Live, Install, ou ainda Unknown (early stick antes do probe) → DEV OK.
+            _ => true,
+        }
+    }
+}
+
+/// Nome de sessão com timestamp (tick hex) — padrão on-device.
+/// Espelha `BootLogAgent` (`boot_{:07X}.log`) e o server `neural-<stamp>-<seq>.log`.
+pub fn timestamped_session_name() -> String {
+    let tick = now_tick();
+    alloc::format!("boot_{:07X}.log", (tick as u32) & 0x0FFF_FFFF)
+}
+
+fn session_name_for_persist() -> String {
+    let mut g = SESSION_FILENAME.lock();
+    if let Some(ref n) = *g {
+        // Early DEV gravou BOOT.LOG; depois Installed → migra p/ timestamp.
+        if n.as_str() == BOOT_LOG_NAME && !fixed_boot_log_dev_only() {
+            let neu = timestamped_session_name();
+            *g = Some(neu.clone());
+            return neu;
+        }
+        return n.clone();
+    }
+    let n = if fixed_boot_log_dev_only() {
+        String::from(BOOT_LOG_NAME)
+    } else {
+        timestamped_session_name()
+    };
+    *g = Some(n.clone());
+    n
+}
+
+/// Persistência produto: `/logs/<boot_TICK.log>` (timestamp), sem tocar BOOT.LOG.
+fn persist_timestamped_vfs(content: &[u8]) -> bool {
+    let name = session_name_for_persist();
+    let path = alloc::format!("/logs/{}", name);
+    match crate::fs::write_vfs(&path, content) {
+        Ok(()) => {
+            log_no_flush(&alloc::format!(
+                "bootlog: OK {} bytes em {} (timestamped; BOOT.LOG=DEV-only)",
+                content.len(),
+                path
+            ));
+            true
+        }
+        Err(e) => {
+            log_no_flush(&alloc::format!("bootlog: VFS {} falhou: {}", path, e));
+            false
+        }
+    }
 }
 
 fn buffer_log(msg: &str) {
@@ -383,9 +441,15 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> Overwrit
 pub fn build_session_bytes() -> Vec<u8> {
     let tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
     let ver = env!("CARGO_PKG_VERSION");
+    let session = session_name_for_persist();
+    let channel = if fixed_boot_log_dev_only() {
+        "dev"
+    } else {
+        "timestamped"
+    };
     let mut content = alloc::format!(
-        "[S] neural-os-core {} BOOT.LOG tick={} fat-boot-log=1\n",
-        ver, tick
+        "[S] neural-os-core {} session={} channel={} tick={} fat-boot-log=1\n",
+        ver, session, channel, tick
     )
     .into_bytes();
     let buf = PRE_FAT_BUF.lock();
@@ -435,6 +499,29 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
         return false;
     }
     let content = build_session_bytes();
+
+    // Produto (Installed): NÃO usa BOOT.LOG fixo — padrão com timestamp em /logs/.
+    if !fixed_boot_log_dev_only() {
+        let ok = persist_timestamped_vfs(&content);
+        if ok {
+            DISK_WRITES.fetch_add(1, Ordering::Relaxed);
+            FAT_READY.store(true, Ordering::Relaxed);
+            SINCE_FLUSH.store(0, Ordering::Relaxed);
+            clear_breaker_on_success();
+        } else {
+            let first = !HEAL_FIRED.load(Ordering::Relaxed);
+            if first {
+                HEAL_FIRED.store(true, Ordering::Relaxed);
+                publish_bootlog_health("timestamped_vfs_fail");
+                log_no_flush(
+                    "BOOT.LOG skipped (Installed=produto); persist timestamped /logs/ falhou (backoff)",
+                );
+            }
+            schedule_backoff();
+        }
+        return ok;
+    }
+
     let ok = if let Some(d) = dev {
         unsafe { overwrite_boot_log(d, &content) }.is_ok()
     } else {
@@ -553,7 +640,7 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
         FAT_READY.store(true, Ordering::Relaxed);
         SINCE_FLUSH.store(0, Ordering::Relaxed);
         clear_breaker_on_success();
-        *SESSION_FILENAME.lock() = Some(String::from(BOOT_LOG_NAME));
+        let _ = session_name_for_persist(); // grava BOOT.LOG ou timestamp no SESSION_FILENAME
     }
     ok
 }
@@ -775,6 +862,28 @@ mod tests {
         assert!(!OverwriteResult::IoFail.unsuitable());
         assert!(!OverwriteResult::Ok.unsuitable());
         assert_eq!(OverwriteResult::BootLogMissing.as_reason(), "BOOT.LOG ausente no root");
+    }
+
+    #[test]
+    fn timestamped_session_name_has_boot_prefix() {
+        let n = timestamped_session_name();
+        assert!(n.starts_with("boot_"), "{}", n);
+        assert!(n.ends_with(".log"), "{}", n);
+    }
+
+    #[test]
+    fn fixed_boot_log_denied_when_installed() {
+        crate::boot_mode::set_boot_mode(crate::boot_mode::BootMode::Installed);
+        #[cfg(feature = "fat-boot-log")]
+        {
+            assert!(!fixed_boot_log_dev_only());
+        }
+        crate::boot_mode::set_boot_mode(crate::boot_mode::BootMode::Live);
+        #[cfg(feature = "fat-boot-log")]
+        {
+            assert!(fixed_boot_log_dev_only());
+        }
+        crate::boot_mode::set_boot_mode(crate::boot_mode::BootMode::Unknown);
     }
 
     /// Garante que, com `--features fat-boot-log`, o path real (não o stub)

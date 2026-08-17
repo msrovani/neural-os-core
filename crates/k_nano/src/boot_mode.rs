@@ -66,18 +66,23 @@ fn has_neuralfs_on_boot() -> bool {
     parts.iter().any(|p| p.type_code == crate::neural_fs::volume::MBR_TYPE_NEURALFS)
 }
 
+/// Lê o cache sem probe (seguro sob lock de ATA — SESSION_269/270).
+/// `None` = ainda não determinado (early boot).
+pub fn peek() -> Option<BootMode> {
+    match CACHED.load(Ordering::Relaxed) {
+        1 => Some(BootMode::Live),
+        2 => Some(BootMode::Install),
+        3 => Some(BootMode::Installed),
+        _ => None,
+    }
+}
+
 /// Determina o modo de boot (cacheado).
 /// Ordem: CONFIG.TXT BOOT_MODE (instalação explícita) → NeuralFS no boot (instalado)
 /// → senão pendrive live (default seguro, não-destrutivo).
 pub fn boot_mode() -> BootMode {
-    let cached = CACHED.load(Ordering::Relaxed);
-    if cached != 0 {
-        return match cached {
-            1 => BootMode::Live,
-            2 => BootMode::Install,
-            3 => BootMode::Installed,
-            _ => BootMode::Unknown,
-        };
+    if let Some(m) = peek() {
+        return m;
     }
     let mode = if let Some(m) = boot_mode_from_config() {
         m
@@ -98,7 +103,7 @@ pub fn set_boot_mode(m: BootMode) {
 
 #[cfg(test)]
 mod tests {
-    use super::{to_code, BootMode};
+    use super::{peek, set_boot_mode, to_code, BootMode};
 
     #[test]
     fn mode_codes_roundtrip() {
@@ -106,5 +111,16 @@ mod tests {
         assert_eq!(to_code(BootMode::Install), 2);
         assert_eq!(to_code(BootMode::Installed), 3);
         assert_eq!(to_code(BootMode::Unknown), 0);
+    }
+
+    #[test]
+    fn peek_reflects_set_boot_mode() {
+        set_boot_mode(BootMode::Installed);
+        assert_eq!(peek(), Some(BootMode::Installed));
+        set_boot_mode(BootMode::Live);
+        assert_eq!(peek(), Some(BootMode::Live));
+        // Restaura unknown p/ não vazar estado entre testes.
+        set_boot_mode(BootMode::Unknown);
+        assert_eq!(peek(), None);
     }
 }

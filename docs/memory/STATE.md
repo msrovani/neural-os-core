@@ -1,4 +1,6 @@
-﻿# STATE — neural-os-core v1.9.99-s269 — BOOT.LOG self-heal (1ª falha sem spam)
+﻿# STATE — neural-os-core v1.9.99-s270 — BOOT.LOG=DEV; padrão timestamp
+#   SESSION_270: BOOT.LOG fixo só Live/Install/early (DEV/TEST). Installed →
+#     /logs/boot_<tick>.log; server neural-<stamp>.log. peek() sem lock ATA.
 #   SESSION_269: `flush FALHOU - ATA PIO` repetido ≠ AIOS. Circuit breaker +
 #     OverwriteResult tipado + skip backend sem BOOT.LOG + HEALTH_ISSUE:I5 na
 #     1ª falha + backoff 50→3200 + re-probe MSC. 6 testes host PASS.

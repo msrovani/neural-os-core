@@ -397,12 +397,13 @@ def populate(path):
     # (ex: note 1 no cabo/ICS: UPDATE_URL=http://192.168.137.1:8080/UPDATE.MANIFEST).
     update_url = os.environ.get("UPDATE_URL", "http://10.0.2.2:8080/UPDATE.MANIFEST").strip()
     files.append(("UPDATE.CFG", f"UPDATE_URL={update_url}\n".encode()))
-    # BOOT.LOG pre-alocado (256 KiB): USB-MSC ou soft-reboot UEFI ramlog.
+    # BOOT.LOG pre-alocado (256 KiB): canal DEV/TEST (Live stick / QEMU).
+    # Produto Installed usa /logs/boot_<tick>.log com timestamp (SESSION_270).
     boot_log = (
-        b"[S] neural-os-core BOOT.LOG\n"
+        b"[S] neural-os-core BOOT.LOG (DEV/TEST only)\n"
         b"# Placeholder - apos soft-reboot HW deve ter linhas [T+] / Knn:\n"
         b"# Se ainda so isto: UEFI nao achou SFS do volume de dados.\n"
-        + b"\x00" * (256 * 1024 - 160)
+        + b"\x00" * (256 * 1024 - 180)
     )
     files.append(("BOOT.LOG", boot_log[: 256 * 1024]))
 
