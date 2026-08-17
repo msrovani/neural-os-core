@@ -105,6 +105,8 @@ pub fn populate_from_pci() -> usize {
             pci_fn: dev.function,
             bar0,
             is_integrated: matches!(dev.vendor_id, 0x8086 | 0x1002) && dev.class == 0x03,
+            pci_class: dev.class,
+            pci_subclass: dev.subclass,
         };
         let mut cap = DeviceCap::unbound(id, name_hint(dev.vendor_id, class));
         cap.virtio_bound = virtio;

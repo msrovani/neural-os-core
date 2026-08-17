@@ -1,4 +1,6 @@
-﻿# STATE — neural-os-core v1.9.99-s270 — BOOT.LOG=DEV; padrão timestamp
+﻿# STATE — neural-os-core v1.9.99-s271 — AIOS: DeviceTree+plano bind no boot
+#   SESSION_271: k_hal H1 cedo (idempotente); k_ai observa e instala nic_probe_order
+#     (I225>VirtIO>e1000>RTL); bin só executa; SelfHeal usa DeviceTree (sem ATA-noop).
 #   SESSION_270: BOOT.LOG fixo só Live/Install/early (DEV/TEST). Installed →
 #     /logs/boot_<tick>.log; server neural-<stamp>.log. peek() sem lock ATA.
 #   SESSION_269: `flush FALHOU - ATA PIO` repetido ≠ AIOS. Circuit breaker +

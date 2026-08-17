@@ -23,6 +23,7 @@ pub struct HardwareInventory {
     pub has_virtio_gpu: bool,
     pub has_nvme: bool,
     pub has_xhci: bool,
+    pub has_gpu: bool,
 }
 
 impl HardwareInventory {
@@ -32,6 +33,7 @@ impl HardwareInventory {
         let has_virtio_gpu = pci_devices.iter().any(|d| d.vendor_id == 0x1AF4 && d.device_id == 0x1050);
         let has_nvme = pci_devices.iter().any(|d| d.class == 0x01 && d.subclass == 0x08);
         let has_xhci = pci_devices.iter().any(|d| d.class == 0x0C && d.subclass == 0x03);
+        let has_gpu = pci_devices.iter().any(|d| d.class == 0x03);
         let total_ram_bytes = {
             let guard = k_nano::memory::GLOBAL_ALLOCATOR.lock();
             guard.as_ref().map_or(0, |a| a.usable_memory_bytes())
@@ -46,15 +48,55 @@ impl HardwareInventory {
             has_virtio_gpu,
             has_nvme,
             has_xhci,
+            has_gpu,
+        }
+    }
+
+    /// Inventário a partir do DeviceTree (sem `scan_pci` — boot USB / SESSION_262).
+    pub fn from_khal() -> Self {
+        let tree = khal_device_tree();
+        let has_virtio_net = tree.iter().any(|d| {
+            d.id.vendor_id == 0x1AF4 && (d.id.device_id == 0x1041 || d.id.device_id == 0x1000)
+        });
+        let has_virtio_gpu = tree
+            .iter()
+            .any(|d| d.id.vendor_id == 0x1AF4 && d.id.class == k_hal::device_cap::DeviceClass::Gpu);
+        let has_nvme = tree
+            .iter()
+            .any(|d| d.id.pci_class == 0x01 && d.id.pci_subclass == 0x08);
+        let has_xhci = tree
+            .iter()
+            .any(|d| d.id.class == k_hal::device_cap::DeviceClass::UsbHost);
+        let has_gpu = tree
+            .iter()
+            .any(|d| d.id.class == k_hal::device_cap::DeviceClass::Gpu);
+        let total_ram_bytes = {
+            let guard = k_nano::memory::GLOBAL_ALLOCATOR.lock();
+            guard.as_ref().map_or(0, |a| a.usable_memory_bytes())
+        };
+        HardwareInventory {
+            cpu_count: 1,
+            total_ram_bytes,
+            pci_devices: Vec::new(),
+            lapic_count: 1,
+            has_virtio_net,
+            has_virtio_gpu,
+            has_nvme,
+            has_xhci,
+            has_gpu,
         }
     }
 
     /// Tuplas (VID, DID, class, subclass) para SelfHeal VID-gated (ADR-0042 N2).
     pub fn vid_class_triples(&self) -> Vec<(u16, u16, u8, u8)> {
-        self.pci_devices
-            .iter()
-            .map(|d| (d.vendor_id, d.device_id, d.class, d.subclass))
-            .collect()
+        if !self.pci_devices.is_empty() {
+            return self
+                .pci_devices
+                .iter()
+                .map(|d| (d.vendor_id, d.device_id, d.class, d.subclass))
+                .collect();
+        }
+        crate::boot_observe::heal_triples_from_tree()
     }
 
     /// Subconjunto que precisa de check de firmware (política NVIDIA-coerente).
@@ -80,7 +122,7 @@ pub struct SystemArchitecture {
 
 impl SystemArchitecture {
     pub fn infer(inv: &HardwareInventory) -> Self {
-        let has_gpu = inv.pci_devices.iter().any(|d| d.class == 0x03);
+        let has_gpu = inv.has_gpu || inv.pci_devices.iter().any(|d| d.class == 0x03);
         let ram_gb = inv.total_ram_bytes as f64 / 1_073_741_824.0;
         let is_many_cores = inv.cpu_count > 4;
 

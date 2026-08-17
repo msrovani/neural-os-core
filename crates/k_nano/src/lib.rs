@@ -22,6 +22,7 @@ pub mod ata;
 pub mod block_dev;
 pub mod boot_chime;
 pub mod boot_handoff;
+pub mod boot_bind;
 pub mod boot_logger;
 pub mod boot_mode;
 pub mod boot_report;

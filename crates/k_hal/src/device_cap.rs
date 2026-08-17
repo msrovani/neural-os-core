@@ -51,6 +51,9 @@ pub struct DeviceId {
     pub pci_fn: u8,
     pub bar0: u64,
     pub is_integrated: bool,
+    /// Class/subclass PCI crus (SelfHeal VID-gated; DeviceClass é a oferta lógica).
+    pub pci_class: u8,
+    pub pci_subclass: u8,
 }
 
 /// Capability publicada no DeviceTree (não é Cap bitflag de syscall).

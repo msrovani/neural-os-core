@@ -14,6 +14,7 @@ pub mod agency_importer;
 pub mod arch;
 pub mod audit;
 pub mod boot_log_agent;
+pub mod boot_observe;
 pub mod merkle_audit;
 pub mod chunker;
 pub mod economy;

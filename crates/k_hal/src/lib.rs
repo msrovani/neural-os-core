@@ -35,12 +35,23 @@ pub mod audio;
 pub mod gpu;
 pub mod npu;
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
+static H1_RAN: AtomicBool = AtomicBool::new(false);
+
 /// Bring-up H1: DeviceTree + UnlockDAG tokens + HalOffer (ADR-0056).
+/// Idempotente: o 1º call popula PCI; calls seguintes só refrescam a oferta
+/// (não `clear_tree` — senão o plano k_ai do boot some).
 pub fn init_h1() -> usize {
+    if H1_RAN.load(Ordering::Relaxed) {
+        offer::refresh_from_tree();
+        return discovery::device_count();
+    }
     let n = discovery::populate_from_pci();
     let fat = device_recipe::fat_readable_hint();
     unlock_dag::boot_platform_tokens(n > 0, fat);
     offer::refresh_from_tree();
+    H1_RAN.store(true, Ordering::Relaxed);
     k_nano::slog_hal!(
         "DeviceCap",
         "ready",

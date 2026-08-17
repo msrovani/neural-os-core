@@ -1611,6 +1611,20 @@ pub(crate) fn kernel_boot(
     publish_boot_phase(BootPhase::HardwareDiscovery, "PCI+ACPI+APIC+SMP sync");
     unsafe { agents::init_platform_sync(); }
 
+    // ADR-0088 / emagrecer: DeviceTree + plano k_ai ANTES de DriverInit.
+    // H1 é idempotente — o k_hal::init() tardio só refresca HalOffer.
+    crate::display::fb::boot_ckpt(17, "k_hal H1 DeviceTree");
+    let h1_n = k_hal::init_h1();
+    let (obs_n, nic_n) = k_ai::boot_observe::observe_and_plan();
+    k_nano::slog_bin!(
+        "Boot",
+        "aios",
+        "H1 devices={} observe={} nic_plan={} (bind por evidencia, nao E1000-first)",
+        h1_n,
+        obs_n,
+        nic_n
+    );
+
     // ── Early BOOT.LOG (live USB / HW sem COM) ──────────────────────────
     // Pós platform_sync (PCI). Micro-ckpts: se xHCI hangar, FB mostra K181/K182.
     crate::display::fb::boot_ckpt(18, "early USB BOOT.LOG");
@@ -1673,26 +1687,17 @@ pub(crate) fn kernel_boot(
         }
         k_nano::slog_bin!("ENV", "info", "Sandbox detectado: {} — usando bypass serial", hv_name.trim_end());
     }
-    // Init E1000 primeiro (apos PCI scan)
-    unsafe { crate::net::init_driver_e1000(); }
-    publish_boot_phase(BootPhase::DriverInit, "E1000 init");
-
-    // ADR-0062 P7: I225/I226 se e1000 ausente (HW real; QEMU skip esperado)
-    if crate::net::E1000.lock().is_none() {
-        unsafe { crate::net::init_driver_i225(); }
-        publish_boot_phase(BootPhase::DriverInit, "I225 init (fallback)");
+    // NIC: ordem do plano k_ai (I225>VirtIO>e1000>RTL se o silício estiver lá).
+    unsafe {
+        crate::net::probe_nics_from_bind_plan();
     }
-
-    // Fallback: RTL8139
-    if crate::net::E1000.lock().is_none() && crate::net::I225.lock().is_none() {
-        unsafe { crate::net::init_driver_rtl8139(); }
-        publish_boot_phase(BootPhase::DriverInit, "RTL8139 init (fallback)");
-    }
+    publish_boot_phase(BootPhase::DriverInit, "NIC bind (plano DeviceTree)");
 
     // Decisão final: se NIC real encontrada → HW real. Se não → sandbox ou offline.
     let nic_found = crate::net::E1000.lock().is_some()
         || crate::net::I225.lock().is_some()
-        || crate::net::RTL8139.lock().is_some();
+        || crate::net::RTL8139.lock().is_some()
+        || crate::net::VIRTIO_DEV.lock().is_some();
     if nic_found {
         if !is_sandbox {
             crate::env::set(crate::env::SystemEnv::HwReal);
@@ -2440,7 +2445,7 @@ pub(crate) fn kernel_boot(
 
 
 
-    // ADR-0041 H1: k-hal DeviceTree + ports (antes do GPU BE)
+    // ADR-0041 H1: refresh HalOffer (DeviceTree já populado pós-platform_sync)
     let _khal_n = k_hal::init();
     k_hal::virtio::init_h4_log();
     k_hal::cap_gate::demo_h5_deny();

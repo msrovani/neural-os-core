@@ -1776,14 +1776,8 @@ impl Agent for NetDriverAgent {
             return AgentTickResult::Done;
         }
         unsafe {
-            if crate::virtio_net::init_driver_virtio() {
-                k_nano::slog_hermes!("Net", "info", "VirtIO-net OK.");
-            } else if crate::net::init_driver_e1000() {
-                k_nano::slog_hermes!("Net", "info", "e1000 OK.");
-            } else if crate::net::init_driver_i225() {
-                k_nano::slog_hermes!("Net", "i225", "OK (P7).");
-            } else if crate::net::init_driver_rtl8139() {
-                k_nano::slog_hermes!("Net", "info", "RTL8139 OK.");
+            if crate::net::probe_nics_from_bind_plan() {
+                k_nano::slog_hermes!("Net", "info", "NIC OK (plano DeviceTree).");
             } else {
                 k_nano::slog_hermes!("Net", "info", "Sem hardware de rede. Modo offline.");
             }
@@ -1836,34 +1830,18 @@ impl Agent for BootSelfHealAgent {
             if !trusted {
                 k_nano::slog_kai!("Gate", "n2", "trust DENY (token,agent,skill)=(1,self_heal,recover) — skip scan");
             } else {
-                // SESSÃO_260: no metal sem ATA (boot USB, ATA probe=none), o
-                // scan_pci() pode travar em devices com MMIO lento. Pula o
-                // inventário pesado e faz honest noop — o boot continua.
-                let has_ata = crate::ATA_DRIVER.lock().is_some();
-                if !has_ata {
-                    k_nano::slog_kai!("Gate", "n2", "trust OK mas sem ATA (boot USB) — skip PCI scan pesado (honest noop)");
-                    let mut heal = crate::SELF_HEAL.lock();
-                    let report = heal.run_vid_gated_scan(&[]);
-                    let _inv = crate::inventory::HardwareInventory {
-                        cpu_count: 1,
-                        total_ram_bytes: 0,
-                        pci_devices: alloc::vec::Vec::new(),
-                        lapic_count: 1,
-                        has_virtio_net: false,
-                        has_virtio_gpu: false,
-                        has_nvme: false,
-                        has_xhci: false,
-                    };
-                    k_nano::slog_kai!("Gate", "n2", "gate complete (noop USB) heal={} noop={} HEALTH_ISSUE={}",
-                        report.heal_issues, report.noop, report.health_published);
-                } else {
-                    let devices = unsafe { crate::pci::scan_pci() };
-                    let inv = crate::inventory::HardwareInventory::collect(devices, None);
-                let triples = inv.vid_class_triples();
+                // ADR-0088: inventário = DeviceTree (H1 já rodou). Sem re-scan PCI
+                // (SESSION_262: scan_pci no metal USB travava). Sem ATA ≠ árvore vazia.
+                let inv = crate::inventory::HardwareInventory::from_khal();
+                let triples = k_ai::boot_observe::heal_triples_from_tree();
                 let fw_n = inv.fw_gated_devices().len();
-                k_nano::slog_kai!("Gate", "n2", "inventory pci={} fw_gated={} trust=OK",
+                k_nano::slog_kai!(
+                    "Gate",
+                    "n2",
+                    "inventory tree={} fw_gated={} trust=OK (sem rescan PCI)",
                     triples.len(),
-                    fw_n);
+                    fw_n
+                );
                 if fw_n == 0 {
                     k_nano::slog_kai!("Gate", "n2", "HEALTH_ISSUE: honest noop (fw_gated=0 — no known VID needs FW)");
                 }
@@ -1872,12 +1850,15 @@ impl Agent for BootSelfHealAgent {
                 let _ = crate::SYSTEM_ARCH.lock().get_or_insert_with(|| {
                     crate::inventory::SystemArchitecture::infer(&inv)
                 });
-                k_nano::slog_kai!("Gate", "n2", "gate complete heal={} noop={} HEALTH_ISSUE={} (k_ai crate N2.5)",
+                k_nano::slog_kai!(
+                    "Gate",
+                    "n2",
+                    "gate complete heal={} noop={} HEALTH_ISSUE={} (k_ai crate N2.5)",
                     report.heal_issues,
                     report.noop,
-                    report.health_published);
+                    report.health_published
+                );
             }
-        }
         }
 
         // Shutdown persistente via FAT — orçado (ver boot_log_agent). Sem budget,
