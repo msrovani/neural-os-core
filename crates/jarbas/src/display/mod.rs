@@ -9,6 +9,7 @@ pub mod card;
 pub mod console;
 pub mod font;
 pub mod agent;
+pub mod overlay;
 pub mod theme;
 pub mod compositor;
 pub mod avatar;

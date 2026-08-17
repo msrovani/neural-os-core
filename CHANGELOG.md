@@ -1,6 +1,15 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### SESSION_275: Jarbas compositor honesto (J-01..J-09) (2026-08-17)
+
+**Hit-test, overlays, HDA único, HUD LLM — sem ADR nova (0045/0058).**
+
+- **fix(jarbas):** `handle_desktop_click` dock→cards→janelas; chat/apps via `add_window_floating`; `overlay.rs` + `paint_overlays()` + dock + NotificationQueue no `render()`; `CARD_ACTION` + drag sync floating; HITL card 8001, drain teto 16, `has_pending`.
+- **fix(k_nano/k_hal):** HDA fonte única IRQ 0x30; facade Oneshot não reseta GCTL se `is_ready()`.
+- **fix(cortex):** `infer_in_flight` no hot path; gauges GPU/HD sem 0.15/0.55; HUD s273 intacto.
+- Residual: SD1 pin OUT/DAC AWAITING_HW; EventBus unbounded (#538–#540).
+
 ### docs: ritual SESSION_271–274 (AGENTS / TECNOLOGIAS / tag)
 
 Memória de sessão no AGENTS (sprint atual + 4 lições), catálogo 3.11/3.12, codemap GPU, índice.

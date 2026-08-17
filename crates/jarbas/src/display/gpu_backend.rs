@@ -18,10 +18,9 @@ pub use k_hal::gpu::firmware::{preload_blob, load_firmware_file, has_named_blob}
 
 /// Initialize GPU backend — verifies compute backend is ready (not CpuOnly).
 /// Called from DisplayAgent::tick() on first tick.
-/// Returns Ok(()) if GPU compute is available, Err with reason if CPU fallback.
+/// Ready = canário CE/vector_add, NÃO KernelPack/matmul no device (SESSION_274).
 pub fn init_gpu_backend() -> Result<(), &'static str> {
     // k_hal GPU init happens in Phase 5 (DriverInit) via PlatformAgent
-    // Here we just verify the backend state after init
     let state = compute_state();
     match state {
         BackendState::Ready => Ok(()),

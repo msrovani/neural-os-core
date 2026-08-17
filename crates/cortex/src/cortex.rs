@@ -3806,9 +3806,29 @@ pub fn set_model(model: Box<dyn Model>) {
     k_nano::slog_cortex!("CORTEX", "info", "model=bitnet-real dim={} status=AI_READY", dim);
 }
 
+static INFER_IN_FLIGHT: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// True enquanto `generate_via_model*` está no hot path (HUD Jarbas).
+pub fn infer_in_flight() -> bool {
+    INFER_IN_FLIGHT.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+fn infer_guard() -> InferGuard {
+    INFER_IN_FLIGHT.store(true, core::sync::atomic::Ordering::Relaxed);
+    InferGuard
+}
+struct InferGuard;
+impl Drop for InferGuard {
+    fn drop(&mut self) {
+        INFER_IN_FLIGHT.store(false, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Generate text using the currently loaded model (simplified, no Trinity routing).
 /// Called by hermes (crate dependency) — bin's version adds Trinity routing.
 pub fn generate_via_model(prompt: &str) -> String {
+    let _busy = infer_guard();
     let guard = CURRENT_MODEL.lock();
     match guard.as_ref() {
         Some(m) => m.generate(prompt),
@@ -3818,6 +3838,7 @@ pub fn generate_via_model(prompt: &str) -> String {
 
 /// Generate text with structured decoding using the currently loaded model.
 pub fn generate_via_model_with_decoder(prompt: &str, dec: &mut StructuredDecoder) -> String {
+    let _busy = infer_guard();
     DECODER_CELL.set(dec as *mut StructuredDecoder);
     let guard = CURRENT_MODEL.lock();
     match guard.as_ref() {

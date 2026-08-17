@@ -1,4 +1,12 @@
-﻿# STATE — neural-os-core v1.9.99-s274 — GPU compute honesto + MHI tier0 CE wired
+﻿# STATE — neural-os-core v1.9.99-s275 — Jarbas compositor honesto (J-01..J-09)
+#   SESSION_275: hit-test dock→cards→janelas; chat via add_window_floating;
+#     overlays/toast/dock pintados só no render(); HDA fonte única k_nano IRQ 0x30
+#     (k_hal facade, Oneshot não reseta GCTL se is_ready()); GPU log = canário
+#     não KernelPack; CARD_ACTION + drag sync floating; HITL card 8001 teto 16;
+#     infer_in_flight no HUD. Residual honesto: SD1 pin OUT/DAC AWAITING_HW;
+#     EventBus unbounded. Checks jarbas+neural-kernel 0 erros.
+#
+# STATE — neural-os-core v1.9.99-s274 — GPU compute honesto + MHI tier0 CE wired
 #   SESSION_274: revisão GPU (Intel/AMD/NVIDIA). nvidia/intel gpu_matmul não fingem
 #     GPU (None até KernelPack W2A8); boot_report.gpu_ok real via note_gpu;
 #     mhi_tick promove Dram→Vram com dados via CE (hook só com canário golden);

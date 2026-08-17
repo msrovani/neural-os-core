@@ -273,6 +273,7 @@ impl Agent for CortexAgent {
     fn manifest(&self) -> &AgentManifest { &CORTEX_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         if let Some(event) = self.receiver.try_receive() {
+            jarbas_crate::display::console::set_llm_busy(true);
             let user_text = core::str::from_utf8(&event.payload).unwrap_or("");
             // Classifica SÓ o utterance (nunca o envelope de skills).
             let expert = {
@@ -326,6 +327,7 @@ impl Agent for CortexAgent {
                 id: 0, topic: alloc::string::String::from(cortex::TOPIC_LLM_RESPONSE),
                 payload: output.into_bytes(), token: CapabilityToken::Legacy(1),
             });
+            jarbas_crate::display::console::set_llm_busy(false);
         }
         AgentTickResult::Pending
     }

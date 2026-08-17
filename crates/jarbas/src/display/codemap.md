@@ -7,17 +7,24 @@
 `WindowContent::Card` windows, power dialog, dock/workspaces/tiling/focus),
 declarative cards (`card.rs`: `UiDeclaration`/`Widget`, `parse_card`,
 `render_card`, `card_json_schema_hint`; `eg.rs`: `FbTarget` =
-`embedded-graphics::DrawTarget` over `DoubleBuffer`), avatar/orb (`avatar.rs`,
-`avatar8.rs`), HUD gauges, notifications, chat console, shortcuts, TTF engine.
+`embedded-graphics::DrawTarget` over `DoubleBuffer`), overlays retidos
+(`overlay.rs`: `EMBED_MARKS`, `RENDER_OVERLAYS` — tick grava, `render()` pinta),
+avatar/orb (`avatar.rs`, `avatar8.rs`), HUD gauges (snapshot MetricsAgent;
+compositor NÃO chama `draw_status_gauges` — HUD SESSION_273), notifications
+(`NotificationQueue` no `render()`), chat console, shortcuts, TTF engine.
 
 **Key symbols**: `fb::{DoubleBuffer, GpuDevice, GPU, probe_raw_framebuffer}`;
-`compositor::{COMPOSITOR, JarbasDesktop, spawn_card, card_click, Layer,
-MOUSE_X/Y/BUTTONS, POWER_STATE}`; `card::{UiDeclaration, Widget, parse_card,
-render_card}`; `eg::FbTarget`; `agent::DisplayAgent` (EventBus-driven
-Continuous agent that builds the desktop on first tick and renders each tick).
+`compositor::{COMPOSITOR, JarbasDesktop, spawn_card, card_click,
+handle_desktop_click, show_app, add_window_floating, paint_overlays, Layer,
+MOUSE_X/Y/BUTTONS, POWER_STATE, TOPIC_CARD_ACTION}`;
+`overlay::{EMBED_MARKS, RENDER_OVERLAYS, push_embed, set_render_overlay}`;
+`card::{UiDeclaration, Widget, parse_card, render_card}`; `eg::FbTarget`;
+`agent::DisplayAgent` (EventBus-driven Continuous; `has_pending`; HITL card 8001).
 
 **Integration**: bin calls `probe_raw_framebuffer` (limine_boot.rs) and
 `fb_remap_uc` (main.rs:2537), registers `DisplayAgent` (main.rs:2540); cards
-are spawned from `UI_SPEC` JSON (LLM/skill), clicks return
-`"close|resize|drag|btn|focus|miss"` for `CARD_ACTION` routing; SysInfoAgent
-(bin) reads `COMPOSITOR` + card types directly.
+are spawned from `UI_SPEC` JSON (LLM/skill); hit-test canónico dock → cards →
+janelas (orb/mesh = miss); clicks return `"close|resize|drag|btn|focus|miss|dock:*"`
+e botão publica `CARD_ACTION` (`card_id:idx`); SysInfoAgent (bin) reads
+`COMPOSITOR` + card types directly. HDA capture/playback: `k_nano::audio::hda`
+(IRQ 0x30); k_hal = facade.

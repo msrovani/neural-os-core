@@ -381,6 +381,7 @@ impl Agent for JarbasAgent {
                 self.greeted = true;
             }
 
+            crate::display::console::set_llm_busy(true);
             let _ = k_nano::EVENT_BUS.publish(Event {
                 id: 0,
                 topic: String::from("LLM_REQUEST"),

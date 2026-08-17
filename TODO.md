@@ -12,6 +12,8 @@
 **Residuals por onda:** 0–7 ✅ · Pós-LAN ✅ (NetFs PASS) · **ADR-0086 ✅ (Instalação + Update OTA completos, SESSION_252)** · WiFi AWAITING · **TLS parcial ✅ (s156 smoke PASS; PKI real pendente)** · R soft-float defer.
 **Fora do gate (não atracar):** SmileyOS 279a–b/e, Cube 283a, XDNA 💰, SKYNET 315.26–27, Mach-O/APK, wasmi-USB #8/#11.
 
+**Feito recente (SESSION_275):** Jarbas compositor honesto J-01..J-09 — hit-test dock→cards→janelas, chat via `add_window_floating`, overlays/toast/dock no `render()`, HDA único k_nano, GPU log canário. Residual: SD1 pin OUT/DAC AWAITING_HW (#540); EventBus unbounded (#539); HITL card 8001 wire (#538).
+
 **Feito recente (SESSION_261):** mesh graph UI — orb virou hub do grafo P2P (peers ≤12, aresta por p99 RTT); chat Hermes + card SysInfo 9001 removidos da UI; cards de mesh invisíveis corrigidos (draw dentro do render()). Segue: grafo persistente via SGDB (#532) + click-to-inspect (#533).
 
 ---
@@ -32,7 +34,7 @@ Fonte: `docs/architecture/INDEX.md` (lifecycle). Sequência de execução recome
 | 7 | F4 W2A8 kernel (gated WHPX/HW real) | 0084 | 2 | ~400 | ⏳ ▶️ |
 | 8 | AirLLM residuals (prefetch DMA / stream-to-disk / K-quants / e2e GGUF grande) | 0046 | 2 | ~500 | 🟡 SESSION_252: hot-swap ATA+Net reais (stubs → `cortex::gguf` header-only + stream-to-disk Range 4MB chunks + append FAT); DMA prefetch / K-quants avançados = AWAITING |
 | 9 | FS residuals (NTFS/EXT **read** ✅ · NTFS/EXT **write** defer · **SysInstaller UI** · Storage Manager UI · Cloud mounts S3/WebDAV; MHI DMA + GPU DS ▶️ AWAITING_HW) | 0040 | 2 | ~800 (vários) | 🟡 **SysInstaller núcleo ✅ ADR-0086 (I3/I6/I8/I12)** — resta seleção disco UI (A5). **NTFS/EXT READ ✅ conectado**: `storage_bus::detect_ext/detect_ntfs` montam `/mnt/ext`+`/mnt/ntfs` via BlockDevice genérico (cobre **USB-MSC/pendrives** e ATA/AHCI/NVMe; lado a lado com NeuralFS p/ dual boot). **NTFS/EXT WRITE = defer honesto** (SESSION_252): OS escreve FAT32/exFAT/NeuralFS nativos; risco de corromper disco alheio; reabrir no dual boot quando for escrever partições alheias. Cloud S3/WebDAV = defer (NetFs HTTP cobre — §3.6B). SMART = AWAITING_HW. Storage Manager CLI ✅; card = cauda 0058 |
-| 10 | Cards S5 (widgets ricos/tema/TTF) + A/V real (HDA/UVC) | 0058 | 3 | ~800 | ⏳ |
+| 10 | Cards S5 (widgets ricos/tema/TTF) + A/V real (HDA/UVC) | 0058 | 3 | ~800 | ⏳ compositor J-01..J-09 ✅ s275; SD1 pin OUT/DAC ▶️ #540 |
 | 11 | Backprop real + router treinado (`ROUTER.BITNET`) | 0083 | 3 | ~1.000 | ✅ SESSION_252: `train_router.py` 93.5% (gate 0.80) exporta ROUTER.BITNET v6 (25.818B); **loader Rust corrigido v3→v6** (antes nunca carregava → fallback LCG); teste host load_router_v6_roundtrip PASS |
 | 12 | Cross-OS Ecosystem F1–F5 (Skill Manifest, Membrane, …) | 0076 | 3 | ~1.500 | ⏳ |
 | 13 | SemanticRouter / merge CRDT / merkle piece (BitTorrent ❌) | 0081 | 3 | ~1.500 | ⏳ |

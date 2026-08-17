@@ -1,6 +1,6 @@
 ﻿# 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-08-17 — SESSION_273 (Trinity único + HUD/HITL).
+**Última atualização:** 2026-08-17 — SESSION_275 (Jarbas compositor honesto J-01..J-09).
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -74,6 +74,9 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#535** Trinity único + postura honesta (MoE/HUD/HITL health) | ADR-0088 + ADR-0083 | ✅ implementado | SESSION_273: um `TRINITY` no cortex; LCG≠MoE; HEALTH I5/Escalate observe-only; HUD `NET`/`slip`/`off` + `no-llm`/`MoE`. |
 | **#536** KernelPack W2A8 via cuda-oxide/kaio (PTX em Rust puro, offline) | ADR-0057 WS-D + ADR-0048 | ⏳ Layer S | SESSION_274: cuda-oxide (NVlabs, rustc→PTX) e kaio (PTX zero-dep) geram o kernel W2A8 no HOST; bare-metal continua QMD próprio + pack assinado + golden GTX 1050. Nenhuma crate roda compute no_std. |
 | **#537** MHI tier0 real: Dram→Vram via CE no mhi_tick | ADR-0087 F4b/F5 | ✅ implementado (HW-gated) | SESSION_274: `register_tier0_copier` + `try_tier0_promote` (dados + rollback CoW); hook só com canário CE golden; QEMU = metadata/AWAITING inalterado. Falta evidência HW real (GTX 1050). |
+| **#538** HITL card 8001 — botão `/approve`/`/deny` → Hermes | ADR-0036 + ADR-0058 | 🟡 parcial | SESSION_275: card 8001 spawn + `CARD_ACTION` no clique; Hermes ainda parseia `/approve` no chat. Falta consumidor HITL do payload `8001:idx`. |
+| **#539** EventBus bounded / backpressure DisplayAgent | ADR-0062 P14 | ⏳ residual | SESSION_275: drain teto 16/tick evita starvation; a fila continua unbounded. Bound estrutural + drop honesto = follow-up. |
+| **#540** HDA SD1 pin widget OUT/DAC (playback real) | ADR-0045 | ▶️ AWAITING_HW | SESSION_275: `write_hda_playback` no BDL da mesma instância IRQ 0x30; roteamento pin OUT/DAC do codec não evidenciado em silício. |
 
 | **#479** TLS 1.3 via embedded-tls no neural-os-core | ADR-0062 P1 / SESSION_157–158 | ✅ MVP (residual CertVerify/FAT) |
 | **#480** VFS layer + BlockDevice trait unificado | ADR-0062 P2 / SESSION_171 | ✅ MVP (StorageBus; residual POSIX) |

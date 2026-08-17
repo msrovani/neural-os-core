@@ -110,6 +110,6 @@ k_hal (R1), cortex, hermes. `no_std`, ~62 `.rs` files, 12 top-level modules
 |---|---|
 | `src/audio/` | JARVIS voice pipeline (ADR-0045): VAD, wake-word, STT (CTC), Piper + formant TTS, SER, UAC USB, mixer, skills; agents `JarbasVoiceAgent`/`JarbasAgent`/`AudioPipelineAgent`. |
 | `src/cards/` | Data-only `UiDeclaration` builders (ADR-0040 #419, ADR-0079): storage card (reads `k_nano::ATA_DRIVER`), install progress card. |
-| `src/display/` | Framebuffer + DoubleBuffer + compositor/WM + cards + avatar/orb + HUD + chat console + shortcuts (largest submodule, 30 files). |
+| `src/display/` | Framebuffer + DoubleBuffer + compositor/WM + cards + overlay snapshots (`overlay.rs`) + avatar/orb + HUD + chat console + shortcuts (SESSION_275: hit-test/dock/toast no `render()`). |
 | `src/gpu/` | GPU FE: re-exports `k_hal::gpu::*` (MMIO BE in k_hal, ADR-0041 H2) + `cube` (workspace crossfade demo on DoubleBuffer). |
 | `src/*.rs` (top) | `jarvis` persona (SoulProfile/Emotion), `vconsole` (6 virtual consoles), `ide` (BitNet IDE), `image_viewer`, `screensaver`, `uvc_driver` + `virtio_gpu` + `vision_agent` (camera FE via HalOffer), `clipboard_notify` (toast bridge). |

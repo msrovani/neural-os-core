@@ -1,4 +1,4 @@
-﻿# SESSION INDEX — neural-os-core v1.9.99 TEST (SESSION_274)
+﻿# SESSION INDEX — neural-os-core v1.9.99 TEST (SESSION_275)
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -7,6 +7,7 @@
 ## Sessões Mantidas (107+)
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
+| 275 | AIOS | Jarbas compositor | Honest click/chat/toast/dock + HDA único (J-01..J-09) | Hit-test 35% Hermes + `return` cedo matava `card_click`/dock; janela em `windows[]` ≠ `add_window_floating` (invisível); overlay/toast no tick apagados no `render()` do mesmo frame; dois `init_hda` (k_hal resetava GCTL vs k_nano IRQ 0x30); Ready≠matmul; CARD_ACTION morto; HITL drain unbounded. Fix: `handle_desktop_click` dock→cards→janelas; floating no path do render; `overlay.rs`+NotificationQueue+dock no `render()`; HDA facade `is_ready()`; log GPU canário; card 8001 teto 16; `infer_in_flight`. Residual: SD1 pin OUT/DAC AWAITING_HW; EventBus unbounded. |
 | 274 | AIOS | GPU compute | Honesty matmul + MHI tier0 CE wired | `nvidia_matmul` fazia handshake DMA por chamada + `a.matmul(b)` CPU contado como GPU (`drain(true)`); Intel idem; `boot_report.gpu_ok=true` placeholder; `mhi_tier0_copy` (CE, ADR-0087 F4b) sem caller no `mhi_tick`; `msched_*` mortos. Fix: vendor matmuls → `None` (W2A2 Layer S); `note_gpu` real; `register_tier0_copier` (promote Dram→Vram com dados + rollback CoW); msched no init_vram + sasos record; A-015 reporta backend. Pesquisa: cuda-oxide/kaio = geradores PTX host p/ KernelPack (nada roda no_std). |
 | 273 | AIOS | Premissas CHJ | Trinity único + HUD/HITL honesto | Dois TRINITY (bin vs hermes vazio); LCG fingia MoE; HUD NET=HwReal e LLM=busy; HEALTH I5/Escalate → chat LLM. Fix: `cortex::trinity::TRINITY`; `router_trained`; sem LCG no boot; `runtime_observe`; `net_hud_label`; compositor no render(). |
 | 272 | AIOS | Premissas todas no boot | Storage+Trust+HITL+cards+HANR no plano k_ai | 271 só rankeava NIC. Storage ainda ATA-first; xHCI/HDA martelados; SLIP como gate; sem Trust/HITL recipe; Cortex “decidia” sem pesos; plano não ia à SGDB. Fix: `StorageKind` + `storage_probe`; Escalate bloqueia Auto; `(1,boot_observe,plan)`; cards HW_CAPABILITY; `hydrate_memory`; USB/HDA/ATA persist gated; SLIP=DEGRADED+I5. #513 slice (skip ausente / NVMe-first) — `measure_bandwidth` residual. |

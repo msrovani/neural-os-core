@@ -230,26 +230,24 @@ power_armed_until: 0,
         }
     }
 
-    /// Drena receiver → overlay Hermes (HITL / terminal / memory nudge).
+    /// Drena receiver → overlay HITL/chat (spawn de janela, sem draw no tick).
     fn drain_hermes_overlay(
         avatar: &mut Option<Avatar8>,
         rx: &mut event_bus::Receiver,
         mode: OverlayMode,
     ) {
-        while let Some(ev) = rx.try_receive() {
+        for _ in 0..DRAIN_CAP {
+            let Some(ev) = rx.try_receive() else { break; };
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                desktop.show_app(AppId::HermesChat);
                 if let Some(chat) = desktop.windows.iter_mut().find(|w| w.app_id == Some(AppId::HermesChat)) {
-                    chat.visible = true;
                     match mode {
                         OverlayMode::HitlConfirm => {
-                            chat.data.push_str("[HITL] Confirmação necessária\n");
+                            chat.data.push_str("[HITL] Confirmacao necessaria\n");
                             chat.data.push_str(text);
                             chat.data.push('\n');
                             chat.data.push_str("Responda: /approve <id>  ou  /deny <id>\n");
-                            chat.data.push_str(
-                                "Preferência: /ui jarbas | /ui terminal | /commands\n",
-                            );
                         }
                         OverlayMode::HitlTerminal => {
                             chat.title = alloc::string::String::from("Hermes Terminal");
@@ -262,6 +260,20 @@ power_armed_until: 0,
                             chat.data.push('\n');
                         }
                     }
+                }
+                if matches!(mode, OverlayMode::HitlConfirm) {
+                    spawn_or_update_hitl_card(desktop, text);
+                }
+            }
+            {
+                let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
+                if cw.is_none() {
+                    *cw = Some(crate::display::chat_window::ChatWindow::new(0));
+                }
+                if let Some(ref mut chat) = *cw {
+                    chat.process_packet(hermes::stream_packet::StreamPacket::UserMessage {
+                        content: alloc::format!("[{}] {}", overlay_tag(mode), text),
+                    });
                 }
             }
             if matches!(mode, OverlayMode::HitlConfirm | OverlayMode::MemoryNudge) {
@@ -360,7 +372,6 @@ power_armed_until: 0,
             *POWER_BANNER.lock() = None;
         }
 
-        // FIX 11: Notification click — testa antes do dock/app.
         if (btn & 1) != 0 {
             let notif_hit = {
                 let comp = COMPOSITOR.lock();
@@ -376,20 +387,19 @@ power_armed_until: 0,
             }
         }
 
-        // ── FocusMode: clique no painel esquerdo = Chat, fora = Ambient ──
-        let left_w = scr_w * 35 / 100;
-        if cx < left_w {
-            *crate::display::compositor::FOCUS_MODE.lock() = crate::display::compositor::FocusMode::Chat;
-            // Repassa clique pro ChatWindow (handle_click para toggle mic, etc.)
-            let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
-            if let Some(ref mut chat) = *cw {
-                chat.handle_click(cx, cy, 2, 0, left_w.saturating_sub(4), scr_h);
+        // Hit-test real: dock → cards → janelas. Clique no orb/grafo = miss.
+        let hit = {
+            let mut comp = COMPOSITOR.lock();
+            match comp.as_mut() {
+                Some(d) => d.handle_desktop_click(cx as i32, cy as i32),
+                None => "miss",
             }
-            return "focus:chat";
-        } else {
-            *crate::display::compositor::FOCUS_MODE.lock() = crate::display::compositor::FocusMode::Ambient;
-            return "focus:ambient";
+        };
+        if hit == "drag" || hit == "resize" || hit == "win:drag" {
+            self.dragging = true;
+            self.drag_id = AppId::None;
         }
+        hit
     }
 
     fn apply_ui_spec(&mut self, json: &str) {
@@ -440,6 +450,38 @@ enum OverlayMode {
     MemoryNudge,
 }
 
+const DRAIN_CAP: usize = 16;
+const HITL_CARD_ID: u32 = 8001;
+
+fn overlay_tag(mode: OverlayMode) -> &'static str {
+    match mode {
+        OverlayMode::HitlConfirm => "HITL",
+        OverlayMode::HitlTerminal => "TERM",
+        OverlayMode::MemoryNudge => "MEM",
+    }
+}
+
+fn spawn_or_update_hitl_card(desktop: &mut crate::display::compositor::JarbasDesktop, text: &str) {
+    let body = alloc::format!("{}", text);
+    if let Some(win) = desktop.windows.iter_mut().find(|w| {
+        matches!(&w.content, crate::display::window::WindowContent::Card(d) if d.id == HITL_CARD_ID)
+    }) {
+        if let crate::display::window::WindowContent::Card(d) = &mut win.content {
+            d.body.clear();
+            d.body.push(crate::display::card::Widget::Text(body));
+            d.body.push(crate::display::card::Widget::Button(alloc::string::String::from("/approve")));
+            d.body.push(crate::display::card::Widget::Button(alloc::string::String::from("/deny")));
+        }
+        win.visible = true;
+        return;
+    }
+    let decl = crate::display::card::UiDeclaration::new(HITL_CARD_ID, "HITL", 72, 48, 440, 200)
+        .push(crate::display::card::Widget::Text(body))
+        .push(crate::display::card::Widget::Button(alloc::string::String::from("/approve")))
+        .push(crate::display::card::Widget::Button(alloc::string::String::from("/deny")));
+    desktop.spawn_card(decl);
+}
+
 // === Keyboard shortcut dispatch (ADR-0065 FASE 1.1 — FIX 1) ===
 //
 // FIX 1: parse_input_to_keycombo era broken (shortcut_to_text retornava None sempre).
@@ -465,13 +507,27 @@ fn dispatch_key_event(payload: &[u8]) -> Option<WmAction> {
 impl Agent for DisplayAgent {
     fn manifest(&self) -> &AgentManifest { &DISPLAY_MANIFEST }
 
+    fn has_pending(&self) -> bool {
+        self.receiver.has_pending()
+            || self.hitl_receiver.has_pending()
+            || self.hitl_term_receiver.has_pending()
+            || self.memory_nudge_receiver.has_pending()
+            || self.ui_receiver.has_pending()
+            || self.toast_receiver.has_pending()
+            || self.render_window_receiver.has_pending()
+    }
+
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
         if !self.gpu_inited {
             // Initialize GPU backend (k_hal GPU BE) — check compute state
             if let Err(e) = gpu_backend::init_gpu_backend() {
                 k_nano::slog_jarbas!("GPU", "init", "backend init: {}", e);
             } else {
-                k_nano::slog_jarbas!("GPU", "init", "backend READY — compute accelerated");
+                k_nano::slog_jarbas!(
+                    "GPU",
+                    "init",
+                    "canary Ready / copy-engine; device math = None until KernelPack"
+                );
             }
 
             // Não segurar GPU.lock() durante claim_graphics (spin::Mutex ≠ reentrante).
@@ -569,6 +625,17 @@ impl Agent for DisplayAgent {
         // ── LLM_STREAM: processa pacotes streaming no ChatWindow ──
         while let Some(ev) = self.llm_stream_receiver.try_receive() {
             if let Some(pkt) = hermes::stream_packet::StreamPacket::decode(&ev.payload) {
+                match &pkt {
+                    hermes::stream_packet::StreamPacket::ReasoningStart
+                    | hermes::stream_packet::StreamPacket::MessageStart { .. } => {
+                        crate::display::console::set_llm_busy(true);
+                    }
+                    hermes::stream_packet::StreamPacket::Stop
+                    | hermes::stream_packet::StreamPacket::Error { .. } => {
+                        crate::display::console::set_llm_busy(false);
+                    }
+                    _ => {}
+                }
                 let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
                 if cw.is_none() {
                     *cw = Some(crate::display::chat_window::ChatWindow::new(0));
@@ -619,55 +686,69 @@ impl Agent for DisplayAgent {
             );
         }
 
-        // ── RENDER_WINDOW: executa skill de render no framebuffer ──
-        while let Some(ev) = self.render_window_receiver.try_receive() {
+        // ── RENDER_WINDOW: snapshot no overlay (render() pinta) ──
+        for _ in 0..DRAIN_CAP {
+            let Some(ev) = self.render_window_receiver.try_receive() else { break; };
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             if let Some((name, data)) = text.split_once('|') {
-                let registry = crate::display::render_registry::RENDER_REGISTRY.lock();
-                // Obtém framebuffer + rect do compositor
-                let mut comp = COMPOSITOR.lock();
-                if let Some(ref mut desktop) = *comp {
-                    let rect = crate::display::tiling::Rect {
-                        x: 60, y: 60,
-                        width: (desktop.w.saturating_sub(120)) as u32,
-                        height: (desktop.h.saturating_sub(120)) as u32,
-                    };
-                    let theme = crate::display::theme::current_theme();
-                    if registry.render(name, &mut desktop.fb, rect, &theme, data.as_bytes()) {
-                        k_nano::slog_jarbas!("RENDER", "info", "window '{}' ({} bytes)", name, data.len());
-                    } else {
-                        k_nano::slog_jarbas!("RENDER", "warn", "skill '{}' nao registrada", name);
-                    }
+                let (w, h) = {
+                    let comp = COMPOSITOR.lock();
+                    comp.as_ref().map(|d| (d.w, d.h)).unwrap_or((1280, 800))
+                };
+                let rect = crate::display::tiling::Rect {
+                    x: 60, y: 60,
+                    width: w.saturating_sub(120) as u32,
+                    height: h.saturating_sub(120) as u32,
+                };
+                crate::display::overlay::set_render_overlay(name, data.as_bytes(), rect);
+                k_nano::slog_jarbas!("RENDER", "info", "overlay '{}' ({} bytes)", name, data.len());
+            }
+        }
+
+        // Toast → NotificationQueue (pintado no render, SESSION_261).
+        {
+            let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            for _ in 0..DRAIN_CAP {
+                let Some(ev) = self.toast_receiver.try_receive() else { break; };
+                let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+                if text.is_empty() { continue; }
+                crate::clipboard_notify::toast_push(text);
+                if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                    desktop.notifications.push(
+                        text,
+                        "toast",
+                        crate::display::notifications::Urgency::Normal,
+                        None,
+                        now,
+                    );
                 }
             }
         }
 
-        // Toast notifications — drain TOAST topic and render via compositor
-        if let Some(ref mut desktop) = *COMPOSITOR.lock() {
-            let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            while let Some(ev) = self.toast_receiver.try_receive() {
-                let text = core::str::from_utf8(&ev.payload).unwrap_or("");
-                if !text.is_empty() {
-                    crate::clipboard_notify::toast_push(text);
-                }
+        // HITL / HERMES_RESPONSE / memory — teto por tick (fila EventBus unbounded).
+        Self::drain_hermes_overlay(&mut self.avatar, &mut self.hitl_receiver, OverlayMode::HitlConfirm);
+        Self::drain_hermes_overlay(&mut self.avatar, &mut self.hitl_term_receiver, OverlayMode::HitlTerminal);
+        Self::drain_hermes_overlay(&mut self.avatar, &mut self.memory_nudge_receiver, OverlayMode::MemoryNudge);
+        for _ in 0..DRAIN_CAP {
+            let Some(ev) = self.receiver.try_receive() else { break; };
+            let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+            crate::display::console::set_llm_busy(false);
+            if text.is_empty() { continue; }
+            if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                desktop.show_app(AppId::HermesChat);
             }
-            // Get active toasts and render as overlay
-            let toasts = crate::clipboard_notify::toast_get_active(now);
-            if !toasts.is_empty() {
-                // Render toasts at bottom of screen
-                let (w, h) = (desktop.w, desktop.h);
-                let toast_h = 24;
-                let start_y = h.saturating_sub(toast_h * toasts.len().min(4) + 10);
-                for (i, msg) in toasts.iter().rev().take(4).enumerate() {
-                    let y = start_y + i * toast_h;
-                    // Semi-transparent background
-                    desktop.fb.fill_rect(10, y, w.saturating_sub(20), toast_h - 4, 20, 25, 35);
-                    // Border
-                    desktop.fb.fill_rect(10, y, w.saturating_sub(20), 1, 80, 100, 120);
-                    desktop.fb.fill_rect(10, y + toast_h - 5, w.saturating_sub(20), 1, 80, 100, 120);
-                    // Text
-                    crate::display::compositor::draw_text(&mut desktop.fb, 16, y + 4, msg, w, 200, 220, 255);
-                }
+            let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
+            if cw.is_none() {
+                *cw = Some(crate::display::chat_window::ChatWindow::new(0));
+            }
+            if let Some(ref mut chat) = *cw {
+                chat.process_packet(hermes::stream_packet::StreamPacket::MessageStart {
+                    pre_answer_seconds: None,
+                });
+                chat.process_packet(hermes::stream_packet::StreamPacket::MessageDelta {
+                    content: alloc::string::String::from(text),
+                });
+                chat.process_packet(hermes::stream_packet::StreamPacket::Stop);
             }
         }
 
@@ -697,21 +778,14 @@ impl Agent for DisplayAgent {
                 let w = desktop.fb.info.width;
                 let h = desktop.fb.info.height;
                 let (x, y) = crate::display::embed_viz::latent_to_xy(&pkt.vec, w, h);
-                crate::display::embed_viz::draw_embed_point(
-                    &mut desktop.fb,
-                    x,
-                    y,
-                    0x00_7F_CF,
-                );
+                crate::display::overlay::push_embed(crate::display::overlay::EmbedMark {
+                    x, y, color: 0x00_7F_CF, splat: false,
+                });
                 crate::display::embed_viz::mark_h2();
                 if norm > 0.5 {
-                    crate::display::embed_viz::draw_thought_splat(
-                        &mut desktop.fb,
-                        x,
-                        y,
-                        8,
-                        0xCF_7F_00,
-                    );
+                    crate::display::overlay::push_embed(crate::display::overlay::EmbedMark {
+                        x, y, color: 0xCF_7F_00, splat: true,
+                    });
                     crate::display::embed_viz::mark_h5();
                 }
             }
@@ -818,6 +892,7 @@ impl Agent for DisplayAgent {
             if let Some(ref mut desktop) = *comp {
                 desktop.card_drag_step(mx as i32, my as i32, (btn & 1) != 0);
                 desktop.card_resize_step(mx as i32, my as i32, (btn & 1) != 0);
+                desktop.window_drag_step(mx as i32, my as i32, (btn & 1) != 0);
             }
         } else if self.dragging {
             if (btn & 1) == 0 {
