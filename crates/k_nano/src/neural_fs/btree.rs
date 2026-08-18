@@ -90,6 +90,21 @@ impl LeafValue {
         (mode, size, data_block, block_count)
     }
 
+    /// Inode + CRC32C dos dados do arquivo (bytes sobrando 22..26 do LeafValue).
+    /// Port redoxfs ("Data/metadata checksums"): o checksum cobre EXATAMENTE os
+    /// bytes lógicos (data.len()), não o padding zero do último bloco — o
+    /// read_file recomputa sobre o mesmo span. crc==0 = legado/sem checksum
+    /// (verificação é pulada — compatibilidade com volumes formatados antes do F4).
+    pub fn from_inode_crc(mode: u16, size: u64, data_block: u64, block_count: u32, data_crc: u32) -> Self {
+        let mut v = Self::from_inode(mode, size, data_block, block_count);
+        v.raw[22..26].copy_from_slice(&data_crc.to_le_bytes());
+        v
+    }
+
+    pub fn inode_crc(&self) -> u32 {
+        u32::from_le_bytes(self.raw[22..26].try_into().unwrap_or([0; 4]))
+    }
+
     pub fn from_dir(child_inode: u64, name: &str) -> Self {
         let mut v = Self::zero();
         v.raw[0..8].copy_from_slice(&child_inode.to_le_bytes());

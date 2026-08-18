@@ -592,18 +592,29 @@ impl NeuralVolume {
         Ok(root.level())
     }
 
-    pub fn lookup_inode(
+    /// Inode completo + CRC32C dos dados (0 = legado/sem checksum).
+    pub fn lookup_inode_full(
         &self,
         dev: &mut dyn BlockDevice,
         ino: u64,
-    ) -> Option<(u16, u64, u64, u32)> {
+    ) -> Option<(u16, u64, u64, u32, u32)> {
         let v = btree_lookup(
             dev,
             self.start_lba,
             self.sb.inode_tree_root,
             &Inode::make_key(ino),
         )?;
-        Some(v.as_inode())
+        let (mode, size, db, bc) = v.as_inode();
+        Some((mode, size, db, bc, v.inode_crc()))
+    }
+
+    pub fn lookup_inode(
+        &self,
+        dev: &mut dyn BlockDevice,
+        ino: u64,
+    ) -> Option<(u16, u64, u64, u32)> {
+        self.lookup_inode_full(dev, ino)
+            .map(|(m, s, d, b, _)| (m, s, d, b))
     }
 
     pub fn lookup_dir_entry(
@@ -751,6 +762,11 @@ impl NeuralVolume {
         }
         self.begin_tx();
 
+        // F4/redoxfs: checksum dos dados — CRC32C cobre exatamente data.len()
+        // (bytes lógicos), calculado numa passada sobre o buffer em memória.
+        // O read_file recomputa sobre o mesmo span e recusa dados corrompidos.
+        let data_crc = super::checksum::crc32c(data);
+
         // F2: ordem CoW correta — (1) aloca+escreve dados NOVOS primeiro,
         // (2) cow da folha, (3) commit, (4) SÓ ENTÃO reclaim antigos.
         // Reclaim antes do commit destruía a versão boa se ENOSPC/erro/power-loss
@@ -781,7 +797,13 @@ impl NeuralVolume {
         let mut leaf = self.cow_leaf_for_key(dev, &inode_key).ok_or("cow")?;
         leaf.delete_key(&inode_key);
         leaf.delete_key(&extent_key);
-        let new_val = LeafValue::from_inode(mode, data.len() as u64, first_block, block_count);
+        let new_val = LeafValue::from_inode_crc(
+            mode,
+            data.len() as u64,
+            first_block,
+            block_count,
+            data_crc,
+        );
         if !leaf.insert(&inode_key, &new_val) {
             self.journal.log_block(leaf.block_addr, &leaf.data);
             let _ = leaf.write(dev, self.start_lba);
@@ -827,13 +849,15 @@ impl NeuralVolume {
         Ok(())
     }
 
+    /// Lê o arquivo e VERIFICA o CRC32C dos dados (redoxfs "data checksums").
+    /// Volumes legados (crc==0) ou arquivos vazios pulam a verificação.
     pub fn read_file(
         &self,
         dev: &mut dyn BlockDevice,
         ino: u64,
     ) -> Result<Vec<u8>, &'static str> {
-        let (mode, size, data_block, block_count) =
-            self.lookup_inode(dev, ino).ok_or("no inode")?;
+        let (mode, size, data_block, block_count, data_crc) =
+            self.lookup_inode_full(dev, ino).ok_or("no inode")?;
         if mode & Inode::S_IFREG == 0 {
             return Err("not a file");
         }
@@ -868,7 +892,64 @@ impl NeuralVolume {
             }
         }
         out.truncate(size as usize);
+        // F4: recusa dados corrompidos — quem lê modelo/firmware prefere um erro
+        // explícito a um blob com bytes errados (antes só o parse downstream pegava).
+        if data_crc != 0 && size > 0 {
+            let actual = super::checksum::crc32c(&out);
+            if actual != data_crc {
+                return Err("data crc mismatch");
+            }
+        }
         Ok(out)
+    }
+
+    /// RedoxFS-style integrity check (equivalente ao `verify` do redoxfs):
+    /// relê os blocos de dados e confere o CRC32C gravado no inode, streaming
+    /// (sem materializar o arquivo na RAM — um modelo v6 de 792MB não cabe).
+    /// Ok(true) = íntegro; Ok(false) = dados corrompidos; Err = falha de I/O.
+    pub fn verify_file(
+        &self,
+        dev: &mut dyn BlockDevice,
+        ino: u64,
+    ) -> Result<bool, &'static str> {
+        let (mode, size, data_block, block_count, data_crc) =
+            self.lookup_inode_full(dev, ino).ok_or("no inode")?;
+        if mode & Inode::S_IFREG == 0 {
+            return Err("not a file");
+        }
+        // Legado (crc==0) ou vazio: nada a conferir.
+        if size == 0 || block_count == 0 || data_crc == 0 {
+            return Ok(true);
+        }
+        let (start, count) = if let Some(v) = btree_lookup(
+            dev,
+            self.start_lba,
+            self.sb.inode_tree_root,
+            &Key {
+                object_id: ino,
+                item_type: ItemType::FileExtent,
+                offset: 0,
+            },
+        ) {
+            v.as_extent()
+        } else {
+            (data_block, block_count as u64)
+        };
+        let mut crc = super::checksum::Crc32c::new();
+        let mut consumed: usize = 0;
+        for bi in 0..count {
+            let mut page = [0u8; 4096];
+            if !self.read_block_raw(dev, start + bi, &mut page) {
+                return Err("data read");
+            }
+            let n = (size as usize - consumed).min(4096);
+            crc.update(&page[..n]);
+            consumed += n;
+            if consumed >= size as usize {
+                break;
+            }
+        }
+        Ok(crc.finish() == data_crc)
     }
 
     /// F8: leitura por intervalo (offset, len) — destrava AirLLM streaming de

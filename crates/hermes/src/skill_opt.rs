@@ -30,6 +30,12 @@ pub struct EvolvingSkill {
 
 pub static EVOLVING: Mutex<BTreeMap<String, EvolvingSkill>> = Mutex::new(BTreeMap::new());
 
+/// Serializa os testes que tocam `EVOLVING` (mapa global) — sem isto, dois
+/// testes em paralelo resetam/gravam no mesmo mapa e corrompem as asserções
+/// (ex.: um skill elegível de outro teste aparece no `check_skill_promotion`).
+#[cfg(test)]
+pub static EVOLVING_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 /// Registra execução Python efêmera (primeiro uso).
 pub fn record_python_run(name: &str, source: &str, success: bool) {
     let mut map = EVOLVING.lock();

@@ -75,6 +75,42 @@ const MAX_BINDS: usize = 32;
 static OFFERS: Mutex<Vec<OfferSlot>> = Mutex::new(Vec::new());
 static NEXT_SLOT: Mutex<u8> = Mutex::new(1);
 
+// ─── Absent backoff (ADR-0041 — silenciamento de polling) ──────────────
+// LinkWatcher/virtio_gpu/hal_offer consultam `query()` a cada tick; sem
+// dispositivo na classe, cada consulta lockava OFFERS e logava "status=Absent"
+// (poluição do log/EventBus + CPU desperdiçada). Backoff exponencial POR
+// CLASSE: 50 → 100 → … → 3200 ticks entre consultas EFETIVAS; no meio,
+// `query()` retorna Absent silencioso. Reset imediato quando a classe volta
+// a Available/Bound (bind/release).
+const ABSENT_BACKOFF_BASE: u64 = 50;
+const ABSENT_BACKOFF_CAP: u64 = 3200;
+
+#[derive(Clone, Copy)]
+struct AbsentBackoff {
+    /// 0 = nunca esteve Absent (próxima consulta efetiva imediata).
+    delay: u64,
+    /// Tick em que a próxima consulta EFETIVA pode rodar.
+    next_effective: u64,
+}
+
+const ABSENT_BACKOFF_DEFAULT: AbsentBackoff = AbsentBackoff {
+    delay: 0,
+    next_effective: 0,
+};
+
+/// Um slot por DeviceClass (discriminants 0..=10, ver device_cap.rs).
+static ABSENT_BACKOFF: Mutex<[AbsentBackoff; 11]> =
+    Mutex::new([ABSENT_BACKOFF_DEFAULT; 11]);
+
+fn now_ticks() -> u64 {
+    k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64
+}
+
+/// Reseta o backoff da classe (bind/release — dispositivo presente de novo).
+fn absent_backoff_reset(class: DeviceClass) {
+    ABSENT_BACKOFF.lock()[class as usize] = ABSENT_BACKOFF_DEFAULT;
+}
+
 pub fn topic_for(class: DeviceClass) -> &'static str {
     match class {
         DeviceClass::Video => TOPIC_CAMERA_FRAME,
@@ -244,6 +280,18 @@ pub fn refresh_from_tree() {
 }
 
 pub fn query(class: DeviceClass) -> OfferStatus {
+    let now = now_ticks();
+    let idx = class as usize;
+    // Silenciamento: classe em backoff (última consulta efetiva foi Absent e o
+    // tempo ainda não expirou) → retorna Absent SEM lock nem log.
+    let silenced = {
+        let b = ABSENT_BACKOFF.lock();
+        let t = &b[idx];
+        t.delay != 0 && now < t.next_effective
+    };
+    if silenced {
+        return OfferStatus::Absent;
+    }
     let offers = OFFERS.lock();
     let st = offers
         .iter()
@@ -256,13 +304,34 @@ pub fn query(class: DeviceClass) -> OfferStatus {
             OfferStatus::Absent => 0,
         })
         .unwrap_or(OfferStatus::Absent);
-    k_nano::slog_hal!(
-        "HalOffer",
-        "query",
-        "class={} status={:?}",
-        class.as_str(),
-        st
-    );
+    drop(offers);
+    let mut b = ABSENT_BACKOFF.lock();
+    let t = &mut b[idx];
+    if st == OfferStatus::Absent {
+        // Primeira vez: inicia o backoff na base; depois dobra até o cap.
+        if t.delay == 0 {
+            t.delay = ABSENT_BACKOFF_BASE;
+        }
+        t.next_effective = now + t.delay;
+        t.delay = t.delay.saturating_mul(2).min(ABSENT_BACKOFF_CAP);
+        k_nano::slog_hal!(
+            "HalOffer",
+            "query",
+            "class={} status=Absent (backoff efetivo, próxima em {} ticks)",
+            class.as_str(),
+            t.delay
+        );
+    } else {
+        // Dispositivo presente — reset do backoff + log normal.
+        *t = ABSENT_BACKOFF_DEFAULT;
+        k_nano::slog_hal!(
+            "HalOffer",
+            "query",
+            "class={} status={:?}",
+            class.as_str(),
+            st
+        );
+    }
     st
 }
 
@@ -354,6 +423,8 @@ pub fn bind(class: DeviceClass, agent_name: &str) -> Result<BindHandle, OfferErr
     let topic = slot.topic;
     drop(next);
     drop(offers);
+    // Dispositivo voltou a existir — backoff de Absent zera imediatamente.
+    absent_backoff_reset(class);
 
     // H5+: HalOffer bind granta Cap lógica ao agent
     if let Some(cap) = crate::cap_gate::fe_for_class(class) {
@@ -390,6 +461,8 @@ pub fn release(handle: BindHandle) {
         );
     }
     drop(offers);
+    // Available de novo — próxima query efetiva imediata.
+    absent_backoff_reset(handle.class);
     if let Some(cap) = crate::cap_gate::fe_for_class(handle.class) {
         crate::cap_gate::revoke_fe(cap);
     }
@@ -424,6 +497,65 @@ pub fn request_video(agent_name: &str) -> Result<BindHandle, OfferError> {
 }
 
 /// Parse nome de classe (`video`, `gpu`, `wifi`, …).
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reset_state() {
+        *OFFERS.lock() = Vec::new();
+        let mut b = ABSENT_BACKOFF.lock();
+        for t in b.iter_mut() {
+            *t = ABSENT_BACKOFF_DEFAULT;
+        }
+    }
+
+    /// 1ª query efetiva (Absent) arma backoff; a 2ª no mesmo tick é SILENCIADA
+    /// (delay NÃO dobra de novo) — prova o silenciamento sem depender de log.
+    #[test]
+    fn absent_query_silences_within_window() {
+        reset_state();
+        // OFFERS vazio → Gpu sempre Absent. 1ª consulta: efetiva, delay 0→50,
+        // armazenado 100 (dobrado p/ a próxima), next = tick0 + 50.
+        assert_eq!(query(DeviceClass::Gpu), OfferStatus::Absent);
+        {
+            let b = ABSENT_BACKOFF.lock();
+            let t = &b[DeviceClass::Gpu as usize];
+            assert_eq!(t.delay, 100);
+            assert_eq!(t.next_effective, 50);
+        }
+        // 2ª consulta no mesmo tick (0 < 50): silenciada — estado intacto.
+        assert_eq!(query(DeviceClass::Gpu), OfferStatus::Absent);
+        {
+            let b = ABSENT_BACKOFF.lock();
+            let t = &b[DeviceClass::Gpu as usize];
+            assert_eq!(t.delay, 100, "2ª query silenciada não deve dobrar o backoff");
+            assert_eq!(t.next_effective, 50);
+        }
+    }
+
+    /// Reset (bind/release) zera o backoff → próxima query volta a ser efetiva.
+    #[test]
+    fn backoff_reset_restores_immediate_query() {
+        reset_state();
+        let _ = query(DeviceClass::Gpu);
+        {
+            let b = ABSENT_BACKOFF.lock();
+            assert!(b[DeviceClass::Gpu as usize].delay > 0);
+        }
+        absent_backoff_reset(DeviceClass::Gpu);
+        {
+            let b = ABSENT_BACKOFF.lock();
+            assert_eq!(b[DeviceClass::Gpu as usize].delay, 0);
+        }
+        // Pós-reset: query é efetiva de novo → backoff rearmado (delay 100).
+        assert_eq!(query(DeviceClass::Gpu), OfferStatus::Absent);
+        {
+            let b = ABSENT_BACKOFF.lock();
+            assert_eq!(b[DeviceClass::Gpu as usize].delay, 100);
+        }
+    }
+}
+
 pub fn class_from_str(s: &str) -> Option<DeviceClass> {
     match s {
         "video" | "camera" | "uvc" | "webcam" => Some(DeviceClass::Video),

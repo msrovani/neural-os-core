@@ -561,6 +561,13 @@ impl NeuralFsAgent {
         } else {
             crate::slog_bin!("NEURALFS", "info", "smoke_power_loss_soft=FAIL");
         }
+        // F4/redoxfs: checksum de dados — write grava CRC no inode, read_file
+        // verifica e verify_file detecta bit-flip em bloco de dados.
+        if crate::neural_fs::tests::smoke_data_crc() {
+            crate::slog_bin!("NEURALFS", "info", "smoke_data_crc=OK");
+        } else {
+            crate::slog_bin!("NEURALFS", "info", "smoke_data_crc=FAIL");
+        }
         // ponytail: smokes em RAM não cobrem flush real de disco (AWAITING_HW)
     }
 

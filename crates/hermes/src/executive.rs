@@ -161,6 +161,62 @@ impl PonderNet {
 
 // ─── Supervisor Verdict ───────────────────────────────────────────────
 
+#[cfg(test)]
+mod promotion_tests {
+    use super::*;
+    use crate::skill_opt::{maybe_promote_to_wasm, record_python_run, EVOLVING};
+
+    fn reset_evolving() {
+        EVOLVING.lock().clear();
+    }
+
+    /// ADR-0059 F5: 3 execuções bem-sucedidas → veredito PromoteSkill.
+    #[test]
+    fn promotion_trigger_fires_after_3_successful_runs() {
+        let _g = crate::skill_opt::EVOLVING_TEST_LOCK.lock();
+        reset_evolving();
+        let supervisor = ExecutiveSupervisor::new();
+        record_python_run("skill_x", "src", true);
+        record_python_run("skill_x", "src", true);
+        assert!(supervisor.check_skill_promotion().is_none(), "<3 runs não promove");
+        record_python_run("skill_x", "src", true);
+        assert_eq!(
+            supervisor.check_skill_promotion(),
+            Some(SupervisorVerdict::PromoteSkill {
+                skill_name: String::from("skill_x")
+            })
+        );
+    }
+
+    /// Promoção só dispara no estágio EphemeralPython — após maybe_promote
+    /// (estágio → WasmPersistent) não re-promove a cada tick.
+    #[test]
+    fn promotion_not_fired_after_stage_change() {
+        let _g = crate::skill_opt::EVOLVING_TEST_LOCK.lock();
+        reset_evolving();
+        let supervisor = ExecutiveSupervisor::new();
+        for _ in 0..3 {
+            record_python_run("skill_y", "src", true);
+        }
+        assert!(supervisor.check_skill_promotion().is_some());
+        assert!(maybe_promote_to_wasm("skill_y").is_some());
+        assert!(supervisor.check_skill_promotion().is_none(), "não re-promove");
+    }
+
+    /// Taxa < 70% (mesmo com ≥3 runs) não promove.
+    #[test]
+    fn promotion_not_fired_on_low_success_rate() {
+        let _g = crate::skill_opt::EVOLVING_TEST_LOCK.lock();
+        reset_evolving();
+        let supervisor = ExecutiveSupervisor::new();
+        record_python_run("skill_z", "src", true);
+        record_python_run("skill_z", "src", false);
+        record_python_run("skill_z", "src", false);
+        record_python_run("skill_z", "src", false);
+        assert!(supervisor.check_skill_promotion().is_none(), "25% < 70%");
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SupervisorVerdict {
     Proceed,
@@ -330,11 +386,16 @@ impl ExecutiveSupervisor {
 
     /// Check if any evolving skill is ready for WASM promotion.
     /// Returns PromoteSkill verdict if a candidate is found.
+    /// Só skills ainda no estágio EphemeralPython promovem — evita re-promover
+    /// a mesma skill a cada tick (o estágio muda em maybe_promote_to_wasm).
     pub fn check_skill_promotion(&self) -> Option<SupervisorVerdict> {
         // Lightweight check: delegate to skill_opt which tracks evolving skills
         let map = crate::skill_opt::EVOLVING.lock();
         for (name, skill) in map.iter() {
-            if skill.runs >= 3 && skill.success_rate >= 0.7 {
+            if skill.stage == crate::skill_opt::SkillStage::EphemeralPython
+                && skill.runs >= 3
+                && skill.success_rate >= 0.7
+            {
                 return Some(SupervisorVerdict::PromoteSkill { skill_name: name.clone() });
             }
         }
@@ -391,7 +452,13 @@ impl ExecutiveSupervisor {
             }
         }
 
-        // 4. Budget allocation
+        // 4. Skill promotion (ADR-0059 F5): skill efêmera com ≥3 runs e ≥70%
+        //    de sucesso promove AUTONOMAMENTE para WASM (veredito PromoteSkill).
+        if let Some(verdict) = self.check_skill_promotion() {
+            return verdict;
+        }
+
+        // 5. Budget allocation
         self.inference_budget(route_budget)
     }
 

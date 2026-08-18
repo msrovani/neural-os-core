@@ -21,12 +21,31 @@ const fn make_table() -> [u32; 256] {
     t
 }
 
-pub fn crc32c(data: &[u8]) -> u32 {
-    let mut crc = !0u32;
-    for &b in data {
-        crc = CRC32C_TABLE[((crc as u8) ^ b) as usize] ^ (crc >> 8);
+/// CRC32C streaming (estado incremental) — permite verificar arquivos grandes
+/// bloco a bloco sem materializar o buffer inteiro (padrão redoxfs verify).
+#[derive(Clone, Copy)]
+pub struct Crc32c(u32);
+
+impl Crc32c {
+    pub const fn new() -> Self {
+        Crc32c(!0u32)
     }
-    !crc
+
+    pub fn update(&mut self, data: &[u8]) {
+        for &b in data {
+            self.0 = CRC32C_TABLE[((self.0 as u8) ^ b) as usize] ^ (self.0 >> 8);
+        }
+    }
+
+    pub fn finish(self) -> u32 {
+        !self.0
+    }
+}
+
+pub fn crc32c(data: &[u8]) -> u32 {
+    let mut c = Crc32c::new();
+    c.update(data);
+    c.finish()
 }
 
 pub fn crc32c_block(block: &[u8; 4096]) -> u32 {

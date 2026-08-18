@@ -399,11 +399,11 @@ BAFS é **GPL-3.0** desde v1.2 (repo AGPL-3.0) — TECNOLOGIAS.md marcava "MIT" 
 
 ### Estado real vs doc (correções de descrição)
 - **Inodes/dirents são INLINE** na leaf B-tree (48B items, 84/folha) — o "inode de 128B em bloco dedicado" (`inode.rs`) e a checksum tree eram **design-only, código morto** (removidos).
-- **Sem checksum de dados**: CRC32C cobre nós B-tree (toda leitura), superblocos, header do journal. Dados de arquivo sem checksum (`checksum_tree_root` fica 0) — mitigado downstream pelo parse no `load_model`.
+- **Checksum de dados POR ARQUIVO (F4, port redoxfs)**: o CRC32C dos dados vive nos bytes 22..26 do `LeafValue` de inode (`from_inode_crc`/`inode_crc`) — `write_file` grava, `read_file` recusa `data crc mismatch` e `verify_file(dev, ino)` relê os blocos streaming e confere (equivalente ao `verify` do redoxfs, sem materializar arquivos grandes). crc==0 (legado) pula verificação — volumes antigos continuam montando. `checksum_tree_root` continua reservado para a futura árvore de checksums por bloco (estilo redoxfs/ZFS).
 - **Journal não-circular** (1 record) confirmado; `sfence` ≠ flush de dispositivo — flush real via `sync_cache` agora no commit (AWAITING_HW para USB/NVMe write cache).
 
 ### Pendências (documentadas, não aplicadas)
 - **F7 — Volume global único**: 6 consumers montam `NeuralVolume` independentes sem serialização global → risco de double-alloc em SMP/async futuro. Estrutural (toca 6 call sites) — documentar como dívida até haver concorrência real.
 - **F9 — Batch read**: `read_file` lê bloco a bloco (1.5M syscalls p/ 792MB) — otimização quando os modelos grandes forem o caso de uso no boot.
-- **F4 — Wire da checksum de dados**: campo reservado; evolução quando precisar de detecção de bit-flip no FS (hoje o parse downstream cobre).
+- **F4b — Árvore de checksums por bloco** (estilo redoxfs/ZFS): o CRC por arquivo cobre bit-flip no FS como um todo, mas `read_range` (AirLLM streaming) não verifica bloco a bloco sem reler o arquivo inteiro. `verify_file` existe para o check pontual; a `checksum_tree` por bloco (ItemType::Checksum já reservado, 0x05) seria a evolução para verificação no streaming.
 - **F7b — Free list 510 entradas**: leak além do cap é intencional (ponytail documentado) — free-extent tree (extent.rs removido) seria a evolução.

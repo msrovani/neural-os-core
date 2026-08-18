@@ -19,10 +19,10 @@ pub struct Superblock {
     pub root_inode: u64,
     pub inode_tree_root: u64,
     pub free_extent_root: u64,
-    /// F4: checksum de dados NÃO implementado — campo reservado (fica 0).
-    /// CRC32C cobre nós B-tree (toda leitura), superblocos e header do journal;
-    /// blocos de DADOS não têm checksum (mitigado downstream: modelos são
-    /// validados pelo parse no load_model). Wire do checksum_tree = evolução.
+    /// F4: checksum de dados POR ARQUIVO implementado (redoxfs-style) — o
+    /// CRC32C dos dados vive no LeafValue do inode (bytes 22..26) e é verificado
+    /// no read_file + verify_file. Campo reservado para uma futura ÁRVORE de
+    /// checksums por bloco (como o redoxfs/ZFS) — fica 0 até lá.
     pub checksum_tree_root: u64,
     pub journal_start: u64,
     pub journal_blocks: u64,

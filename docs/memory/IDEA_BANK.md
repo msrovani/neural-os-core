@@ -173,6 +173,7 @@ Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.
 | 280j | browser-use: HwRegistry device tree (ja tinhamos!) | ✅ Confirmado | v0.59.1 | HW context para LLM |
 | 280k | micro/go-micro: endpoints discovery (ja tinhamos!) | ✅ Confirmado | v0.55.0 | AgentManifest extensivel |
 | 280l | pydantic-ai: SkillManifest derive macro (conceitual) | ⏳ defer gate | ADR-0052 | Manifests manuais bastam; nice-to-have |
+| 280m | redox-os/redoxfs: Data/metadata checksums (verify) | ✅ v1.9.9 TEST | v1.9.9 | F4 NeuralFS: CRC32C dos dados no LeafValue do inode (bytes 22..26) + `verify_file` streaming (redoxfs verify-style); read_file recusa `data crc mismatch`. Legado (crc==0) skip. `checksum_tree_root` reservado p/ árvore por bloco |
 
 ### 1.6. VFS + MHI Bridge (IDEA #281)
 | # | Item | Destino | Target | Motivação |

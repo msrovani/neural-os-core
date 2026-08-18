@@ -281,7 +281,24 @@ impl BeiState {
                     // Trigger BitNetTrainer for this domain
                 }
                 SupervisorVerdict::PromoteSkill { skill_name } => {
-                    k_nano::slog_bin!("BEI", "supervisor", "PromoteSkill: {}", skill_name);
+                    // ADR-0059 F5: age, não só loga — promove a skill efêmera
+                    // comprovada (≥3 runs, ≥70%) para WASM via sandbox wasmi
+                    // (mesmo fluxo do hw_pnp). Falha → log (não derruba o boot).
+                    match hermes_crate::evolve::promote_ephemeral_to_wasm(&skill_name, "") {
+                        Ok(()) => k_nano::slog_bin!(
+                            "BEI",
+                            "supervisor",
+                            "PromoteSkill: {} → WASM promovida",
+                            skill_name
+                        ),
+                        Err(e) => k_nano::slog_bin!(
+                            "BEI",
+                            "supervisor",
+                            "PromoteSkill: {} falhou: {}",
+                            skill_name,
+                            e
+                        ),
+                    }
                 }
             }
         }
