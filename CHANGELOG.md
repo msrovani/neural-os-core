@@ -1,6 +1,13 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### Pós-tarefa SESSION_272 (2026-08-18)
+
+Ciclo GOVERNANCE fechado: Aprenda → Memorize → Documente → Versione.
+
+- **docs:** AGENTS Current Sprint + lições 271/272; IDEA_BANK header; CONTEXT glossário DeviceTree/`boot_bind`; TODO pista; ADR-0088 operacionalização + Planos Cursor; INDEX; TECNOLOGIAS 1.10; STATE.
+- Residual inalterado: #513 `measure_bandwidth` / BMIDE.
+
 ### SESSION_272: Plano de bind completo (NIC+storage+Trust+HITL) (2026-08-17)
 
 **2ª revisão AIOS com todas as premissas (em cima da 271).**

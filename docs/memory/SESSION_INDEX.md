@@ -1,4 +1,4 @@
-﻿# SESSION INDEX — neural-os-core v1.9.5 TEST
+﻿# SESSION INDEX — neural-os-core v1.9.99 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 

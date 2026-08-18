@@ -1,6 +1,6 @@
 ﻿# 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-08-17 — SESSION_271 (DeviceTree+plano k_ai no boot).
+**Última atualização:** 2026-08-18 — SESSION_272 (pós-tarefa: Trust+HITL+storage+HANR no plano k_ai).
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---

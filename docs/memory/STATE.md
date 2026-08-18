@@ -2,6 +2,8 @@
 #   SESSION_272: 2ª revisão (todas as premissas). Storage NVMe>AHCI>USB>ATA no plano
 #     k_ai; probe em k_nano::storage_probe; Escalate ≠ Auto; Trust (1,boot_observe,plan);
 #     cards PnP; HANR hydrate; SLIP degradado; USB/HDA gated; Cortex sem pesos (honesto).
+#   Pós-tarefa 2026-08-18: AGENTS/IDEA/CONTEXT/TODO/ADR-0088/INDEX/TECNOLOGIAS 1.10
+#     alinhados. Residual #513 measure_bandwidth/BMIDE. Tag alvo: v1.9.99-s272.
 #   SESSION_271: k_hal H1 cedo (idempotente); k_ai observa e instala nic_probe_order
 #     (I225>VirtIO>e1000>RTL); bin só executa; SelfHeal usa DeviceTree (sem ATA-noop).
 #   SESSION_270: BOOT.LOG fixo só Live/Install/early (DEV/TEST). Installed →
