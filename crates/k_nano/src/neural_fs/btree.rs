@@ -136,6 +136,20 @@ impl LeafValue {
         let count = u64::from_le_bytes(self.raw[8..16].try_into().unwrap_or([0; 8]));
         (start, count)
     }
+
+    /// ItemType::Checksum (F4b): CRC32C da PÁGINA de 4096B como gravada
+    /// (inclui o padding zero do último bloco — determinístico). O checksum
+    /// por bloco cobre bit-flip silencioso em read_range streaming (AirLLM),
+    /// além do CRC por arquivo (F4, no inode).
+    pub fn from_checksum(crc: u32) -> Self {
+        let mut v = Self::zero();
+        v.raw[0..4].copy_from_slice(&crc.to_le_bytes());
+        v
+    }
+
+    pub fn as_checksum(&self) -> u32 {
+        u32::from_le_bytes(self.raw[0..4].try_into().unwrap_or([0; 4]))
+    }
 }
 
 pub struct BTreeNode {

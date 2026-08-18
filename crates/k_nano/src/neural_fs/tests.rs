@@ -194,3 +194,73 @@ pub fn smoke_power_loss_soft() -> bool {
         Err(_) => false,
     }
 }
+
+/// F4b: árvore de checksums POR BLOCO (ItemType::Checksum) — write grava um
+/// item por página, read_range verifica página a página e detecta bit-flip no
+/// bloco corrompido SEM reler o arquivo inteiro; range limpo continua OK.
+pub fn smoke_block_crc_tree() -> bool {
+    let mut disk = MemoryDisk::new(4 * 1024 * 1024);
+    let total = disk.sector_count();
+    if !NeuralVolume::format(&mut disk, 0, total) {
+        return false;
+    }
+    let Some(mut vol) = NeuralVolume::mount(&mut disk, 0) else {
+        return false;
+    };
+    let Ok(ino) = vol.create_file(&mut disk, 1, "blk.bin") else {
+        return false;
+    };
+    // 2 blocos cheios + 1 parcial (última página com padding — o CRC da
+    // página inclui o padding, determinístico).
+    let payload = alloc::vec![0x7Bu8; 9000];
+    if vol.write_file(&mut disk, ino, &payload).is_err() {
+        return false;
+    }
+
+    // read_range íntegro (3 páginas) devolve exatamente o payload.
+    if vol.read_range(&mut disk, ino, 0, 9000).map(|d| d == payload).unwrap_or(false) == false {
+        return false;
+    }
+    // Range parcial cruzando fronteira de bloco também OK.
+    if vol.read_range(&mut disk, ino, 4000, 1000).map(|d| d == &payload[4000..5000]).unwrap_or(false) == false {
+        return false;
+    }
+
+    // Corrompe um byte no MEIO da 2ª página (bloco 1 do extent).
+    let Some((start, count)) = btree_lookup(
+        &mut disk,
+        0,
+        vol.sb.inode_tree_root,
+        &Key {
+            object_id: ino,
+            item_type: ItemType::FileExtent,
+            offset: 0,
+        },
+    )
+    .map(|v| v.as_extent())
+    else {
+        return false;
+    };
+    if count < 2 {
+        return false;
+    }
+    let corrupt_block = start + 1;
+    disk.data[corrupt_block as usize * 4096 + 333] ^= 0xFF;
+
+    // Range que cruza o bloco corrompido → recusa "block crc mismatch".
+    match vol.read_range(&mut disk, ino, 4096, 4096) {
+        Err("block crc mismatch") => {}
+        _ => return false,
+    }
+    // Range que NÃO toca o bloco corrompido continua OK (bloco 0 íntegro).
+    if vol.read_range(&mut disk, ino, 0, 4096).map(|d| d == &payload[..4096]).unwrap_or(false) == false {
+        return false;
+    }
+    true
+}
+
+#[cfg(test)]
+#[test]
+fn block_crc_tree_detects_corruption() {
+    assert!(smoke_block_crc_tree(), "smoke_block_crc_tree falhou");
+}

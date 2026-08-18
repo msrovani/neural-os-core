@@ -456,6 +456,54 @@ impl NeuralVolume {
         }
     }
 
+    /// F4b: remove TODOS os items `(ino, ItemType::Checksum, *)` da árvore —
+    /// os checksums do bloco da versão ANTIGA do arquivo, que apontariam para
+    /// blocos já reclaimados (ou colidiriam com os novos no rewrite).
+    ///
+    /// Estratégia segura contra CoW: NÃO coleta endereços de folhas antecipada-
+    /// mente (um reclaim de folha CoW'd poderia reutilizar o endereço de uma
+    /// folha ainda não processada — corrupção). Em vez disso, re-escaneia a
+    /// árvore a cada iteração e CoW somente a folha do PRIMEIRO item restante
+    /// (chave mínima). Cada iteração remove ≥1 item → termina; custo O(items ×
+    /// scan) só em rewrite, nunca no caminho quente de leitura.
+    fn purge_checksum_items(
+        &mut self,
+        dev: &mut dyn BlockDevice,
+        ino: u64,
+    ) -> Result<(), &'static str> {
+        loop {
+            let mut first: Option<Key> = None;
+            btree_scan_leaves(dev, self.start_lba, self.sb.inode_tree_root, |k, _| {
+                if first.is_none() && k.object_id == ino && k.item_type == ItemType::Checksum {
+                    first = Some(*k);
+                }
+            });
+            let Some(hint) = first else {
+                return Ok(());
+            };
+            let mut leaf = self.cow_leaf_for_key(dev, &hint).ok_or("cow leaf")?;
+            let mut removed = false;
+            let mut i = 0;
+            while i < leaf.item_count() as usize {
+                if let Some((k, _)) = leaf.get_key_value(i) {
+                    if k.object_id == ino && k.item_type == ItemType::Checksum {
+                        leaf.delete_at(i);
+                        removed = true;
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+            if !removed {
+                return Err("purge no item");
+            }
+            self.journal.log_block(leaf.block_addr, &leaf.data);
+            if !leaf.write(dev, self.start_lba) {
+                return Err("purge leaf write");
+            }
+        }
+    }
+
     fn split_and_insert(
         &mut self,
         dev: &mut dyn BlockDevice,
@@ -772,6 +820,10 @@ impl NeuralVolume {
         // Reclaim antes do commit destruía a versão boa se ENOSPC/erro/power-loss
         // no meio (oracle F2 + BAFS b81b43f + LiberFS "freeing adiado por 1 commit").
         let blocks_needed = (data.len() + 4095) / 4096;
+        // F4b: checksum POR BLOCO (ItemType::Checksum) — CRC32C de cada página
+        // de 4096B COMO GRAVADA (padding zero incluso, determinístico). O
+        // read_range verifica página a página sem reler o arquivo inteiro.
+        let mut page_crcs: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(blocks_needed);
         let (first_block, block_count) = self.alloc_contiguous(blocks_needed).ok_or("no space")?;
         for bi in 0..blocks_needed {
             let b = first_block + bi as u64;
@@ -779,6 +831,7 @@ impl NeuralVolume {
             let start = bi * 4096;
             let end = (start + 4096).min(data.len());
             page[..end - start].copy_from_slice(&data[start..end]);
+            page_crcs.push(super::checksum::crc32c(&page));
             if !self.write_block_raw(dev, b, &page) {
                 // F2: no erro, devolve os blocos recém-alocados (sem leak)
                 for j in 0..blocks_needed {
@@ -832,6 +885,29 @@ impl NeuralVolume {
             // F15: cow_leaf_for_key já atualiza inode_tree_root em árvore de
             // folha única — o bloco redundante de re-checagem foi removido.
         }
+        // F4b: árvore de checksums por bloco — purga os checksums ANTIGOS do
+        // ino (CoW das folhas afetadas) e insere os NOVOS na mesma tx. Falha →
+        // devolve os blocos de dados recém-alocados (F2) e aborta sem commit.
+        if let Err(e) = self.purge_checksum_items(dev, ino) {
+            for j in 0..blocks_needed {
+                self.reclaim_block(first_block + j as u64);
+            }
+            return Err(e);
+        }
+        for (bi, crc) in page_crcs.iter().enumerate() {
+            let key = Key {
+                object_id: ino,
+                item_type: ItemType::Checksum,
+                offset: bi as u64,
+            };
+            if self.leaf_insert(dev, &key, &LeafValue::from_checksum(*crc)).is_err() {
+                for j in 0..blocks_needed {
+                    self.reclaim_block(first_block + j as u64);
+                }
+                return Err("checksum insert");
+            }
+        }
+
         if !self.commit_tx(dev) {
             // F2: commit falhou — os dados novos não são o estado durável;
             // devolve-os e mantém os antigos intactos (nunca reclaimados).
@@ -996,6 +1072,25 @@ impl NeuralVolume {
             let mut page = [0u8; 4096];
             if !self.read_block_raw(dev, start + first_blk as u64 + bi as u64, &mut page) {
                 return Err("data read");
+            }
+            // F4b: verifica o bloco contra a árvore de checksums (ItemType::
+            // Checksum) ANTES de copiar — bit-flip é detectado no streaming
+            // (AirLLM), sem reler o arquivo inteiro. Volumes legados (item
+            // ausente) ou crc==0 pulam a verificação (mesma política do F4).
+            if let Some(v) = btree_lookup(
+                dev,
+                self.start_lba,
+                self.sb.inode_tree_root,
+                &Key {
+                    object_id: ino,
+                    item_type: ItemType::Checksum,
+                    offset: (first_blk + bi) as u64,
+                },
+            ) {
+                let stored = v.as_checksum();
+                if stored != 0 && super::checksum::crc32c(&page) != stored {
+                    return Err("block crc mismatch");
+                }
             }
             let abs = (first_blk + bi) * 4096;
             let rel = abs.saturating_sub(offset);

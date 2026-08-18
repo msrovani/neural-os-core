@@ -19,10 +19,12 @@ pub struct Superblock {
     pub root_inode: u64,
     pub inode_tree_root: u64,
     pub free_extent_root: u64,
-    /// F4: checksum de dados POR ARQUIVO implementado (redoxfs-style) — o
-    /// CRC32C dos dados vive no LeafValue do inode (bytes 22..26) e é verificado
-    /// no read_file + verify_file. Campo reservado para uma futura ÁRVORE de
-    /// checksums por bloco (como o redoxfs/ZFS) — fica 0 até lá.
+    /// F4/F4b: checksums implementados na MESMA b-tree via ItemType::Checksum
+    /// (0x05) — F4 = CRC32C do arquivo no inode (bytes 22..26, read_file +
+    /// verify_file); F4b = CRC32C POR PÁGINA (key (ino, Checksum, bloco),
+    /// verificado no read_range streaming). Este campo fica 0: a "árvore de
+    /// checksums" não é um root separado — os items convivem com inodes/extents
+    /// na inode_tree_root, ordenados por (object_id, item_type, offset).
     pub checksum_tree_root: u64,
     pub journal_start: u64,
     pub journal_blocks: u64,
