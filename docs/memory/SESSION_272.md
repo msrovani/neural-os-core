@@ -68,5 +68,7 @@ Checklist GOVERNANCE (`docs/GOVERNANCE.md`) + ritual AGENTS (Aprenda → Memoriz
 - [x] AGENTS.md Current Sprint + lições 271/272; CONTEXT glossário
 - [x] TECNOLOGIAS 1.10 DeviceTree bind T+0
 - [x] CHANGELOG Unreleased
-- [ ] `cargo test -p k-nano boot_bind` / `cargo test -p k_ai boot_observe` / `cargo check --release` (esta rodada)
-- [ ] tag `v1.9.99-s272` após check verde
+- [x] `cargo test -p k-nano boot_bind` — 5 PASS (`classify_known_nics`, `rank_empty_present_is_skip`, `classify_storage_families`, `nvme_before_ata`, `rank_i225_beats_e1000`)
+- [x] `cargo test -p k_ai boot_observe` — 3 PASS (`qemu_e1000_only_plan`, `usb_live_skips_ata_in_rank`, `triples_empty_without_h1`)
+- [x] `cargo check --release -p neural-kernel --features fat-boot-log --target x86_64-unknown-none` — 0 erros (1 warning conhecido: unused import `k_nano::ahci::*`)
+- [x] tag `v1.9.99-s272` (este commit)
