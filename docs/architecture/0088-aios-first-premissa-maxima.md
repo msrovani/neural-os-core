@@ -76,9 +76,36 @@ dev, IA).
 - **ADR-0041/0042 (K³CHJ):** a estrutura de agentes/skills é o veículo; esta
   premissa é a política que a dirige.
 
+## Operacionalização no boot (SESSION_271–274)
+
+A premissa deixa de ser só política: o T+0 materializa Observe→Plan→Act→Verify→Remember.
+
+| Anel | Módulo | Papel |
+|------|--------|--------|
+| R1 | `k_hal::init` (H1, idempotente, pós-PCI) | Observa silício → DeviceTree |
+| R2 | `k_ai::boot_observe` | Plano NIC+storage; Trust `(1,boot_observe,plan)`; recipe Escalate ≠ Auto; cards `HW_CAPABILITY`; HANR `hydrate_memory` |
+| R0 | `k_nano::boot_bind` + `storage_probe` | Executa só o que a árvore viu: NIC rank I225>VirtIO>e1000>RTL; storage NVMe>AHCI>USB-MSC>ATA PIO |
+| bin | wire | Trust check; skip ATA persist / xHCI / HDA se o plano não inclui; SLIP = DEGRADED + `HEALTH_ISSUE:I5`; Cortex sem pesos = log honesto |
+| R2/R3 | `cortex::trinity` + `hermes::runtime_observe` + Jarbas HUD | MoE posture honesta; HEALTH I5/Escalate observe-only; HUD no `render()` |
+| R1/R0 | `k_hal` GPU + `k_nano::mhi` | Matmul sem fingir device; `gpu_ok` real; MHI tier0 CE quando canário passa |
+
+Mandamento 4 (nada bypassado): martelar E1000/ATA/xHCI “porque sempre foi assim” era o gap. SESSION_271 fechou NIC; SESSION_272 storage+Trust+HITL; SESSION_273–274 honestidade de telemetria (MoE/GPU/HUD).
+
+Residual honesto (#513 / TODO #18): `measure_bandwidth` + BMIDE 0xC8 — ordem e skip já no plano; medição de banda ainda não escolhe o transporte.
+
+## Planos Cursor implementados
+
+| Plano | Status | Evidência |
+|-------|--------|-----------|
+| DeviceTree H1 cedo + plano NIC (`boot_bind`) | ✅ SESSION_271 | `k_hal::init` pós-PCI; SelfHeal `from_khal` |
+| Plano completo NIC+storage+Trust+HITL | ✅ SESSION_272 | PR #12 `6b0e4f5`; `SESSION_272.md` |
+| Trinity único + HUD/HITL honesto | ✅ SESSION_273 | PR #13; `runtime_observe`, `CORTEX_POSTURE` |
+| GPU compute honesto + MHI tier0 | ✅ SESSION_274 | PR #13; `note_gpu`, `register_tier0_copier` |
+
 ## Verificação
 
+- [x] SESSION_271–274 apreciam esta premissa no boot (Observe→Plan→Act→Verify→Remember + telemetria honesta).
+- [x] Workaround SLIP/COM2 e hang ATA-PIO no TCG têm IDEA #513 (slice 272 = ordem+skip; residual = medir banda).
+- [ ] Métrica auditável de “decisões com IA” no boot — **parcial:** cards PnP + `HEALTH_ISSUE` + log Trust; contador formal residual.
 - [ ] Toda nova ADR/TODO/SESSION daqui em diante menciona a apreciação desta premissa.
-- [ ] Todo workaround manual documentado (ex.: `-NoDisk` TCG) tem IDEA/ADR de
-      auto-adaptação correspondente.
-- [ ] Métrica de "decisões com IA" no boot/runtime existe e é auditável.
+- [ ] Todo workaround manual documentado (ex.: `-NoDisk` TCG) tem IDEA/ADR de auto-adaptação correspondente.

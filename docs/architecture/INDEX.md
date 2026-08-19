@@ -181,6 +181,7 @@ Registro dos planos de implementação (Cursor Plans) já refletidos no corpo da
 | `Sandbox gates SMP` | **0055** | ✅ Fases 0–C wired; evidência TCG/WHPX | SESSION_141 |
 | `Neural Device LEGOs` | **0056** (+ 0051–53, NeuralFS §12) | ✅ docs hub+specs+H1 bind; goldens VirtIO/ath10k | community + `device_recipe.rs` |
 | `Sanitizar pasta docs` | INDEX + GOVERNANCE | ✅ ciclo IDEA→ADR | archive + INDEX |
+| DeviceTree H1 + plano bind boot | **0088** + **0041** H1 | ✅ NIC (s271) + storage/Trust/HITL (s272) + honesty (s273–274) | SESSION_271–274 / PR #12–13 |
 
 **Próximo aceite operacional (0041):** ✅ CONCLUÍDO (SESSION_251) — boot WHPX com slog `NotifySent` + Cap/AS non-fatal evidenciado em `docs/evidence/boot-whpx-20260805.txt`. Fix raiz do reboot loop (commit 2662d50): GDT passa a usar `&*TSS` (lazy_static TSS com ISTs zerados nunca era dereferenciado → entrega #PF/#GP/timer fazia push para 0 → triple fault).
 

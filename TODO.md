@@ -5,14 +5,14 @@
 **Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.
 **Documento oficial:** AGENTS.md (seção roadmap)
 **Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado
-**Pista ativa:** **ADR-0086 ✅ concluída (SESSION_252, 10 gaps)** — próximo: fila ADR item 5 (Market fetch v3) ou U3 (assinatura/TPM) quando update for público.
+**Pista ativa:** **ADR-0088 boot AIOS (SESSION_271–274)** — DeviceTree+plano k_ai ✅; Trinity/HUD/HITL honesto ✅; GPU matmul+MHI tier0 ✅. Residual #513: `measure_bandwidth` / BMIDE 0xC8.
 **PreFlight:** `python tools/preflight_wave.py --wave N` · `--idea 418` · `--anti-fake-ready` · cache `.preflight_cache/`
 **Tags:** `depends_on: lan` (✅ L3.5–L5) / `depends_on: wifi` ▶️ · ▶️ **AWAITING_HW** · **BEI** (BitNet Ecosystem Intelligence)
 **Gate v2.0.0:** `por_fazer` zerado **ou** residual replanejado + OK maintainer. AWAITING_HW bloqueia salvo defer explícito.
 **Residuals por onda:** 0–7 ✅ · Pós-LAN ✅ (NetFs PASS) · **ADR-0086 ✅ (Instalação + Update OTA completos, SESSION_252)** · WiFi AWAITING · **TLS parcial ✅ (s156 smoke PASS; PKI real pendente)** · R soft-float defer.
 **Fora do gate (não atracar):** SmileyOS 279a–b/e, Cube 283a, XDNA 💰, SKYNET 315.26–27, Mach-O/APK, wasmi-USB #8/#11.
 
-**Feito recente (SESSION_261):** mesh graph UI — orb virou hub do grafo P2P (peers ≤12, aresta por p99 RTT); chat Hermes + card SysInfo 9001 removidos da UI; cards de mesh invisíveis corrigidos (draw dentro do render()). Segue: grafo persistente via SGDB (#532) + click-to-inspect (#533).
+**Feito recente (SESSION_274):** GPU compute honesto — vendor matmuls → `None`; `boot_report.gpu_ok` real; MHI tier0 CE wired; msched/sasos acessos. SESSION_273: Trinity único + `runtime_observe` + HUD no render. SESSION_272: storage NVMe-first + Trust/HITL no boot.
 
 ---
 

@@ -24,11 +24,15 @@ Linguagem compartilhada entre humanos e agentes. Este arquivo só fixa **vocabul
 ## Boot
 
 - **8 fases event-driven** — SafeHarbor → MemoryCore → SystemBringup → Diagnostics → HardwareDiscovery → DriverInit → AgentFleet → Runtime. Cada fase publica `BOOT_PHASE` no EventBus.
+- **DeviceTree / H1** — `k_hal::init` pós-PCI, **antes** dos drivers. Árvore de `DeviceCap` é a evidência de silício; SelfHeal lê `from_khal`, não rescaneia ATA.
+- **boot_bind / boot_observe** — R0 instala ordem NIC+storage; R2 (`k_ai`) observa a árvore, aplica Trust `(1,boot_observe,plan)` e recipe HITL. Bin só executa. Escalate ≠ Auto.
+- **Observe→Plan→Act→Verify→Remember** — “IA desde o boot” (ADR-0088): DeviceTree → plano k_ai → probe na ordem → SelfHeal na mesma árvore → HANR `hydrate_memory`. Não é CortexAgent no T+0.
 - **Limine** — bootloader atual. `kernel.elf` no ESP é contrato de path.
 - **uefi.img / bios.img** — só UEFI/OVMF boota; a imagem BIOS dá triple-fault.
 
 ## Storage
 
+- **Ordem de probe storage** — NVMe > AHCI > USB-MSC > ATA PIO (`StorageKind` + `storage_probe`). ATA PIO é último, não default. Residual #513: `measure_bandwidth` / BMIDE 0xC8.
 - **NeuralFS** — FS principal (vive em k_nano). Herança BAFS. **Contrato**: blocos contíguos (data_block+count) — o alocador DEVE validar contiguidade (ordenar + `w[i+1]==w[i]+1`, fallback bump).
 - **Ordem CoW** — dados novos → commit → SÓ ENTÃO reclaim antigos (freeing adiado 1 commit).
 - **SGDB vs FAT** — SGDB = path cognitivo (HANR/Audit/Pkg meta/Skills/Episodic/RAG); FAT = blobs/firmware/WIFI.CFG/BOOT.LOG.

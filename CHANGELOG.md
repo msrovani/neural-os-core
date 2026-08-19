@@ -1,6 +1,14 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### Pós-tarefa SESSION_272–274 (2026-08-18)
+
+Ciclo GOVERNANCE fechado: Aprenda → Memorize → Documente → Versione.
+
+- **docs:** AGENTS Current Sprint + lições 271–274; CONTEXT glossário DeviceTree/`boot_bind`; TODO pista; ADR-0088 operacionalização + Planos Cursor; INDEX; TECNOLOGIAS 1.10; SESSION_272 pós-tarefa.
+- **code (PR #13):** Trinity único; `runtime_observe`; GPU matmul honesto; MHI tier0 CE wired.
+- Residual inalterado: #513 `measure_bandwidth` / BMIDE.
+
 ### SESSION_274: GPU compute honesto + MHI tier0 CE wired (2026-08-17)
 
 **Revisão do uso de GPU (Intel/AMD/NVIDIA) para computação.**

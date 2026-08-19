@@ -55,3 +55,20 @@ SESSION_271 fechou NIC rank + H1 cedo. A segunda revisão (este pedido) cruzou *
 ## Lição
 
 “IA desde o boot” não é um CortexAgent construído cedo. É Observe (DeviceTree) → Plan (Trust+recipe+tabela) → Act (probe na ordem) → Verify (SelfHeal na árvore) → Remember (HANR). Martelar ATA/xHCI “porque sempre foi assim” é bypass, mesmo com log.
+
+## Pós-tarefa (2026-08-18)
+
+Checklist GOVERNANCE (`docs/GOVERNANCE.md`) + ritual AGENTS (Aprenda → Memorize → Documente → Versione):
+
+- [x] IDEA #513 🟡 (slice 272; residual measure_bandwidth) · #534 ✅
+- [x] ADR-0088 operacionalização + Planos Cursor; INDEX lifecycle coerente (`fazendo`, residual #513)
+- [x] TODO #18 🟡 residual explícito; pista ativa = ADR-0088 boot
+- [x] STATE verdade operacional atual
+- [x] SESSION evidência + limites (esta seção)
+- [x] AGENTS.md Current Sprint + lições 271–274; CONTEXT glossário
+- [x] TECNOLOGIAS 1.10 DeviceTree bind T+0
+- [x] CHANGELOG Unreleased
+- [x] `cargo test -p k-nano boot_bind` — 5 PASS
+- [x] `cargo test -p k_ai boot_observe` — 3 PASS
+- [x] `cargo test -p cortex trinity` — 2 PASS · `cargo test -p hermes runtime_observe` — 1 PASS · `cargo test -p k-nano mhi` — 10 PASS
+- [x] `cargo check --release -p neural-kernel --features fat-boot-log --target x86_64-unknown-none` — 0 erros
