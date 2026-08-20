@@ -203,6 +203,7 @@ def populate(path):
         ("HW_EXPERT.BITNET", find_file("hw_expert_tf.bitnet") or find_file("hw_expert_v3.bitnet")),
         ("HWEXPRT.BIN", find_file("hw_expert_v3.bitnet") or find_file("hw_expert_tf.bitnet") or find_file("HWEXPRT.BIN")),
         ("HWEXPRT4.BIN", find_file("hw_expert_v6.bitnet") or find_file("hw_expert_v4.bitnet") or find_file("HWEXPRT4.BIN")),
+        ("HWEXPRT.v6", find_file("hw_expert_v6.bitnet") or find_file("HWEXPRT.v6")),
         ("PIPER.BIN", find_file("PIPER_PT_BR.BIN") or find_file("PIPER.BIN") or find_file("PIPER_PT_BR_CADU_MEDIUM.bitnet")),
         ("PIPER_EN.BIN", find_file("PIPER_EN.BIN")),
         ("STT.BIN", find_file("STT.BIN")),
