@@ -273,6 +273,159 @@ pub fn resolve_target_core(affinity_ring: u8, coherence_partner: Option<usize>, 
     best_core
 }
 
+// ─── Core Role Mapping (ADR-0057 CorePair + ADR-0089) ──────────────────────
+
+/// Papel do core no sistema (espelha CoreRole de core_pair.rs).
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoreRole {
+    /// System: k_nano I/O, drivers, VFS, agents críticos (ring0).
+    System = 0,
+    /// Compute: LLM decode, matmul, inferência.
+    Compute = 1,
+    /// Memory: SGDB, vector search, fact indexing.
+    Memory = 2,
+    /// Worker: WASM sandbox, orquestração, tarefas auxiliares.
+    Worker = 3,
+    /// Idle: dormindo em hlt/mwait.
+    Idle = 4,
+}
+
+impl CoreRole {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::System => "SYS",
+            Self::Compute => "COMP",
+            Self::Memory => "MEM",
+            Self::Worker => "WORK",
+            Self::Idle => "IDLE",
+        }
+    }
+}
+
+/// Papel de cada core — configurável em boot.
+/// Default: core 0 = System, cores 1-N = Worker (conservador).
+static CORE_ROLES: [core::sync::atomic::AtomicU8; MAX_CORES] = [
+    core::sync::atomic::AtomicU8::new(CoreRole::System as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+    core::sync::atomic::AtomicU8::new(CoreRole::Worker as u8),
+];
+
+/// Retorna o papel de um core.
+pub fn core_role(core_id: usize) -> CoreRole {
+    let raw = CORE_ROLES[core_id.min(MAX_CORES - 1)].load(Ordering::Relaxed);
+    match raw {
+        0 => CoreRole::System,
+        1 => CoreRole::Compute,
+        2 => CoreRole::Memory,
+        3 => CoreRole::Worker,
+        _ => CoreRole::Idle,
+    }
+}
+
+/// Define o papel de um core (chamado pelo boot após CorePools init).
+pub fn set_core_role(core_id: usize, role: CoreRole) {
+    if core_id < MAX_CORES {
+        CORE_ROLES[core_id].store(role as u8, Ordering::Release);
+    }
+}
+
+/// Configura papéis padrão baseado em CorePools (r0=System, r1=Compute, r2=Worker).
+/// Chamado pelo boot após .
+pub fn init_default_roles() {
+    // Core 0 (BSP) = System (já setado no static)
+    set_core_role(0, CoreRole::System);
+
+    if let Some(pools) = crate::smp::corepools::pools() {
+        // ring1 (P-cores) = Compute
+        for i in 0..pools.ring1_len as usize {
+            let cpu_id = pools.ring1[i] as usize;
+            set_core_role(cpu_id, CoreRole::Compute);
+        }
+        // ring2 (E-cores ou P-restantes) = Worker
+        for i in 0..pools.ring2_len as usize {
+            let cpu_id = pools.ring2[i] as usize;
+            set_core_role(cpu_id, CoreRole::Worker);
+        }
+    }
+
+    // Core 3 (se existe) = Memory (SGDB + network)
+    let cores = crate::smp::percpu::CPU_COUNT.load(Ordering::Relaxed) as usize;
+    if cores > 3 {
+        set_core_role(3, CoreRole::Memory);
+    }
+
+    // Log
+    let cores = crate::smp::percpu::CPU_COUNT.load(Ordering::Relaxed) as usize;
+    let mut roles_log = alloc::string::String::from("SMP: core roles = [");
+    for i in 0..cores.min(MAX_CORES) {
+        if i > 0 { roles_log.push(' '); }
+        use core::fmt::Write;
+        let _ = write!(roles_log, "{}:{}", i, core_role(i).name());
+    }
+    roles_log.push(']');
+    crate::slog_nano!("SMP", "info", "{}", roles_log);
+}
+
+/// Resolve core alvo considerando papéis: agents de latência-crítica
+/// (affinity_ring=0) ficam em System; compute em Compute; memória em Memory.
+pub fn resolve_target_core_for_role(
+    affinity_ring: u8,
+    _coherence_partner: Option<usize>,
+    _agent_idx: usize,
+) -> usize {
+    if affinity_ring == 0 { return 0; }
+
+    let target_role = match affinity_ring {
+        1 => CoreRole::Compute,
+        2 => CoreRole::Worker,
+        _ => CoreRole::Worker,
+    };
+
+    // Encontra core com o papel desejado e menor carga
+    let cores = crate::smp::percpu::CPU_COUNT.load(Ordering::Relaxed) as usize;
+    if cores <= 1 { return 0; }
+
+    let mut best_core = 1;
+    let mut best_len = usize::MAX;
+
+    for c in 1..cores.min(MAX_CORES) {
+        if core_role(c) == target_role {
+            let len = RUN_QUEUES[c].len();
+            if len < best_len {
+                best_len = len;
+                best_core = c;
+            }
+        }
+    }
+
+    // Fallback: se nenhum core com o papel desejado, menor carga geral
+    if best_len == usize::MAX {
+        for c in 1..cores.min(MAX_CORES) {
+            let len = RUN_QUEUES[c].len();
+            if len < best_len {
+                best_len = len;
+                best_core = c;
+            }
+        }
+    }
+
+    best_core
+}
+
 /// Distribui batch de agents para run-queues. Retorna quantos distribuídos.
 pub fn distribute_batch(
     agents: &[(u32, u8, u8, Option<usize>, u8)],
@@ -430,5 +583,72 @@ mod tests {
         clear_all_queues();
         let t = AgentTask::default();
         assert!(!t.is_valid());
+    }
+
+    #[test]
+    fn core_role_default_system() {
+        // Core 0 should be System by default
+        assert_eq!(core_role(0), CoreRole::System);
+    }
+
+    #[test]
+    fn core_role_set_and_get() {
+        let _lock = TEST_LOCK.lock();
+        set_core_role(5, CoreRole::Compute);
+        assert_eq!(core_role(5), CoreRole::Compute);
+        set_core_role(5, CoreRole::Memory);
+        assert_eq!(core_role(5), CoreRole::Memory);
+    }
+
+    #[test]
+    fn core_role_name() {
+        assert_eq!(CoreRole::System.name(), "SYS");
+        assert_eq!(CoreRole::Compute.name(), "COMP");
+        assert_eq!(CoreRole::Memory.name(), "MEM");
+        assert_eq!(CoreRole::Worker.name(), "WORK");
+        assert_eq!(CoreRole::Idle.name(), "IDLE");
+    }
+
+    #[test]
+    fn resolve_target_core_for_role_compute() {
+        let _lock = TEST_LOCK.lock();
+        clear_all_queues();
+        crate::smp::percpu::CPU_COUNT.store(4, Ordering::SeqCst);
+        set_core_role(0, CoreRole::System);
+        set_core_role(1, CoreRole::Compute);
+        set_core_role(2, CoreRole::Worker);
+        set_core_role(3, CoreRole::Memory);
+        // ring 1 (Compute) -> core 1
+        let target = resolve_target_core_for_role(1, None, 10);
+        assert_eq!(target, 1);
+    }
+
+    #[test]
+    fn resolve_target_core_for_role_worker() {
+        let _lock = TEST_LOCK.lock();
+        clear_all_queues();
+        crate::smp::percpu::CPU_COUNT.store(4, Ordering::SeqCst);
+        set_core_role(0, CoreRole::System);
+        set_core_role(1, CoreRole::Compute);
+        set_core_role(2, CoreRole::Worker);
+        set_core_role(3, CoreRole::Memory);
+        // ring 2 (Worker) -> core 2
+        let target = resolve_target_core_for_role(2, None, 10);
+        assert_eq!(target, 2);
+    }
+
+    #[test]
+    fn resolve_target_core_for_role_ring0_stays_bsp() {
+        let _lock = TEST_LOCK.lock();
+        clear_all_queues();
+        let target = resolve_target_core_for_role(0, None, 10);
+        assert_eq!(target, 0);
+    }
+
+    #[test]
+    fn init_default_roles_doesnt_panic() {
+        let _lock = TEST_LOCK.lock();
+        // Just call it — shouldn't panic
+        init_default_roles();
     }
 }

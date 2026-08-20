@@ -98,6 +98,33 @@ cargo build --release --features smp-runqueue -p neural-kernel
 # [SMP] AP 1: 2 agents executados (steal: 1)
 ```
 
+## 6. Core Role Mapping (ADR-0057 CorePair + ADR-0089)
+
+Mapeamento de papéis por core (configurável em boot):
+
+| Core | Papel | Ring | Agents |
+|------|-------|------|--------|
+| 0 (BSP) | System | R0 | HwBridge, Input, Display, Cron, Security, Safety |
+| 1 (AP1) | Compute | R1 | CortexAgent (LLM decode), matmul workers |
+| 2 (AP2) | Worker | R2 | HermesAgent (orchestration), WASM sandbox |
+| 3 (AP3) | Memory | R2 | NetAgent, WifiAgent, SGDB, SelfHeal |
+
+Funções:
+-  enum: System/Compute/Memory/Worker/Idle
+-  / 
+- : configura baseado em CorePools (r0→System, r1→Compute, r2→Worker)
+- : distribui por papel + menor carga
+
+## 7. Relatório de Uso de Cores
+
+Ver  para o mapeamento completo.
+
+Gargalos identificados:
+1. **CortexAgent monopoliza BSP** (~60-95% do tempo em inference)
+2. **WASM sandbox compete com agents críticos** no mesmo core
+3. **SGDB sync compete com inference** por cache L2/L3
+4. **APs subutilizados** (~10% em média, 90% em idle)
+
 ## Pendente (Futuro)
 
 - **Objetivo 4 (Telemetria no HUD):** `MonitorAgent` lê `cpu_stats()` e
