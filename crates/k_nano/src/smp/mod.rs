@@ -6,6 +6,8 @@ pub mod percpu;
 pub mod spsc;
 pub mod trampoline;
 pub mod work_stealing;
+#[cfg(feature = "smp-runqueue")]
+pub mod runqueue;
 
 use crate::apic;
 use crate::memory;

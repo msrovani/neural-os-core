@@ -35,10 +35,12 @@ soft-reboot-bootlog = []
 boot-chime = []
 # Labor 53: AP workers vivos (`ap_pollable`) — OFF default (deadlock sem IDT/IPI pleno).
 ap-pollable = []
+# ADR-0089: Per-CPU run-queues para agents + work-stealing entre cores (default OFF).
+smp-runqueue = []
 # Persiste BOOT.LOG no FAT32 (pendrive live USB / HW sem COM). O bin propaga
 # via `fat-boot-log = ["k-nano/fat-boot-log"]` — sem isto, persist_now era
 # stub permanente (feature inexistente na crate) e o stick nunca recebia log.
 fat-boot-log = []
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "soft-reboot-bootlog", "fat-boot-log"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "soft-reboot-bootlog", "fat-boot-log", "smp-runqueue"))'] }

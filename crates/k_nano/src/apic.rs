@@ -568,7 +568,7 @@ unsafe fn lapic_write_reg(reg: u64, value: u32) {
 
 /// Espera ICR idle (bit 12). Timeout evita hang eterno em HW real.
 /// Em x2APIC o bit 12 é reserved/0 — retorna imediato.
-unsafe fn icr_wait_idle() {
+pub(crate) unsafe fn icr_wait_idle() {
     if USING_X2APIC.load(Ordering::Relaxed) {
         return;
     }
