@@ -1,4 +1,13 @@
-﻿# STATE — neural-os-core v1.9.99-s274 — GPU compute honesto + MHI tier0 CE wired
+﻿# STATE — neural-os-core v1.9.99-s275 — Mesh P2P GOAL1/2/3 OK (TCG); WHPX/matriz abertos
+#   SESSION_275: dual-QEMU mesh. GOAL1 stack 8MB+guard antes do AgentRegistry +
+#     caches agent-core + is_page_present BPE/STT/Piper. GOAL2 TOFU settle 130 ticks
+#     + FORCE_HEARTBEAT; ROLE/SkillSync gated; become_worker preserva Memory/Compute.
+#     GOAL3 MicroPython MVP wasmi (sem stub) + mesh_g3_probe Master→Worker.
+#     Evidência: TCG 2c/6G/NoModels Both — SCHED estável, A=Master B=Memory,
+#     sec=0/0/0, SkillSync OK. WHPX FAIL OVMF #GP. Matriz {1,4,8}×WHPX×WithModels
+#     NÃO rodada. Gaps: ESP build.rs (mk_esp_fat manual); opt-level=3 / -Z threads
+#     ILLEGAL_INSTRUCTION neste host; MVP≠full emcc; 6 falhas pré-existentes
+#     hermes::wasm_build.
 #   SESSION_274: revisão GPU (Intel/AMD/NVIDIA). nvidia/intel gpu_matmul não fingem
 #     GPU (None até KernelPack W2A8); boot_report.gpu_ok real via note_gpu;
 #     mhi_tick promove Dram→Vram com dados via CE (hook só com canário golden);

@@ -170,6 +170,10 @@ fn try_load_piper_from_loader() -> Option<PiperEngine> {
         return None;
     }
     let pm = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    if !k_nano::memory::is_page_present(LOAD_ADDR + pm) {
+        k_nano::slog_jarbas!("Audio", "piper", "QEMU-loader @0x124200000 page absent (skip)");
+        return None;
+    }
     let ptr = (LOAD_ADDR + pm) as *const u8;
     let magic = unsafe { core::ptr::read_volatile(ptr as *const u32) };
     if magic != 0xBE11BE11 {

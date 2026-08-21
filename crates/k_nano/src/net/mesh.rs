@@ -458,6 +458,14 @@ impl BrainMeshEngine {
                 if node.is_none() {
                     *node = Some(MeshNode::new(capabilities));
                     self.node_count.fetch_add(1, Ordering::Release);
+                    // 1º peer: agenda HB imediato + settle timer (ROLE/skills
+                    // esperam TOFU bilateral — evita drop "peer desconhecido").
+                    note_first_peer_discovered();
+                    crate::slog_nano!(
+                        "P2P", "info",
+                        "peer discovered node={} — HB imediato, settle em {} ticks",
+                        capabilities.node_id[0], TOFU_SETTLE_TICKS
+                    );
                     return;
                 }
             }
@@ -524,9 +532,15 @@ impl BrainMeshEngine {
         self.assign_roles();
     }
 
-    /// Become Worker node
+    /// Become Worker node (não-Master).
+    /// Preserva Memory/Compute já aplicados via ROLE\0 do Master — a eleição
+    /// local só decide Master vs não-Master; não clobber o papel fino.
     fn become_worker(&self) {
         self.is_master.store(false, Ordering::Release);
+        let cur = self.local_role.load(Ordering::Acquire);
+        if cur == NodeRole::Memory as u8 || cur == NodeRole::Compute as u8 {
+            return;
+        }
         self.local_role.store(NodeRole::Worker as u8, Ordering::Release);
     }
 
@@ -545,6 +559,12 @@ impl BrainMeshEngine {
     /// nó conhecido (transporte não tem unicast — receptor filtra pelo node_id).
     fn assign_roles(&self) {
         if !self.is_master.load(Ordering::Acquire) {
+            return;
+        }
+        // Settle TOFU: não envia ROLE até o peer ter janela de receber nosso HB
+        // (PK\0). Caso contrário o Worker dropa Sync com "peer desconhecido".
+        if !tofu_settled() {
+            FORCE_HEARTBEAT.store(true, Ordering::Release);
             return;
         }
 
@@ -782,6 +802,15 @@ pub fn set_local_tier(t: NodeTier) {
 /// Tamanho 16 = máximo de nós do mesh (BrainMeshEngine).
 static PEER_KEYS: Mutex<[Option<(u8, [u8; PUBLIC_KEY_LEN], u64)>; 16]> = Mutex::new([None; 16]);
 
+/// Tick em que o 1º peer entrou no MESH_ENGINE (0 = nenhum ainda).
+/// Usado para TOFU settle: ROLE/SkillSync só após ~1 intervalo de heartbeat,
+/// para o peer receber nosso `PK\0` antes do flood Sync (ADR-0081).
+static FIRST_PEER_TICK: AtomicU64 = AtomicU64::new(0);
+/// Força TX de heartbeat no próximo `p2p_tick` (descoberta de peer novo).
+static FORCE_HEARTBEAT: AtomicBool = AtomicBool::new(false);
+/// Intervalo mínimo (ticks) após 1º peer antes de ROLE/SkillSync — >110 HB.
+const TOFU_SETTLE_TICKS: u64 = 130;
+
 /// Health metrics per peer: (node_id, PeerHealth). Slot livre = None.
 static PEER_HEALTH: Mutex<[Option<(u8, PeerHealth)>; 16]> = Mutex::new([const { None }; 16]);
 
@@ -872,9 +901,37 @@ fn peer_bind(node_id: u8, pk: [u8; PUBLIC_KEY_LEN]) {
     for slot in table.iter_mut() {
         if slot.is_none() {
             *slot = Some((node_id, pk, 0));
+            crate::slog_nano!("P2P", "info", "TOFU bind node={} (pk vinculada)", node_id);
+            // Peer acabou de nos conhecer via HB — responde HB já para ele
+            // vincular nossa pk antes de Sync/ROLE.
+            FORCE_HEARTBEAT.store(true, Ordering::Release);
             return;
         }
     }
+}
+
+/// Quantidade de peers com pk TOFU vinculada.
+pub fn peer_tofu_count() -> usize {
+    let table = PEER_KEYS.lock();
+    table.iter().filter(|s| s.is_some()).count()
+}
+
+/// True quando há ≥1 peer TOFU e passou `TOFU_SETTLE_TICKS` desde o 1º peer
+/// no MESH_ENGINE — janela para ambos trocarem `PK\0` antes de Sync/ROLE.
+pub fn tofu_settled() -> bool {
+    let first = FIRST_PEER_TICK.load(Ordering::Acquire);
+    if first == 0 || peer_tofu_count() == 0 {
+        return false;
+    }
+    let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    now.wrapping_sub(first) >= TOFU_SETTLE_TICKS
+}
+
+/// Marca descoberta de peer novo no engine (idempotente p/ o 1º).
+fn note_first_peer_discovered() {
+    let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    let _ = FIRST_PEER_TICK.compare_exchange(0, now, Ordering::AcqRel, Ordering::Acquire);
+    FORCE_HEARTBEAT.store(true, Ordering::Release);
 }
 
 /// Último clock aceito de um peer (anti-replay do canal de heartbeat).
@@ -1598,7 +1655,8 @@ pub fn p2p_tick(_tick: u64) {
     // pular o tick múltiplo).
     static LAST_SENT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
     let last = LAST_SENT.load(Ordering::Relaxed);
-    if now.wrapping_sub(last) >= 110 || last == 0 {
+    let force_hb = FORCE_HEARTBEAT.swap(false, Ordering::AcqRel);
+    if force_hb || now.wrapping_sub(last) >= 110 || last == 0 {
         LAST_SENT.store(now, Ordering::Relaxed);
         // node_id único por instância (último octeto do IP: 10.0.3.2→2, .3→3).
         // SESSION_234: usar local_role() colidia — ambas enviavam o mesmo ID

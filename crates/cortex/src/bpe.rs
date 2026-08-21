@@ -489,6 +489,11 @@ pub fn try_load_from_qemu_loader() -> bool {
 fn scan_and_load_bpb1(phys_off: u64, start: u64, end: u64, step: u64) -> bool {
     let mut addr = start;
     while addr < end {
+        // SESSION_262 / matrix QA: hole além da RAM -> #PF storm (CR2=pmoff+0x140000000).
+        if !k_nano::memory::is_page_present(addr + phys_off) {
+            addr = addr.saturating_add(step);
+            continue;
+        }
         let va = (addr + phys_off) as *const u8;
         unsafe {
             let magic = core::slice::from_raw_parts(va, 4);

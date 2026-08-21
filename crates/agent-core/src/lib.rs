@@ -156,6 +156,9 @@ pub struct AgentInstance {
     pub state: AgentState,
     pub last_poll: u64,
     pub tick_counter: u64,
+    /// Cached at register - avoid dyn manifest() in scheduler hot path.
+    pub name: &'static str,
+    pub auto_start: bool,
     pub schedule: ScheduleKind,
     pub consecutive_pending: u64,  // watchdog: ticks consecutivos sem Done
     pub crew: CrewManifest,
@@ -176,6 +179,10 @@ pub struct AgentInstance {
 
 impl AgentInstance {
     pub fn new(agent: Box<dyn Agent>) -> Self {
+        // Copia campos Copy/&'static ANTES de mover o Box — evita borrow
+        // atravessando o move e garante cache estável p/ o hot path.
+        let name = agent.manifest().name;
+        let auto_start = agent.manifest().auto_start;
         let schedule = agent.manifest().schedule;
         let affinity_ring = match schedule {
             ScheduleKind::Continuous => 0,
@@ -188,6 +195,8 @@ impl AgentInstance {
             state: AgentState::Inactive,
             last_poll: 0,
             tick_counter: 0,
+            name,
+            auto_start,
             schedule,
             consecutive_pending: 0,
             // Espelha schedule no flow — PollEvery/EventDriven funcionam de fato.
@@ -234,8 +243,12 @@ impl AgentRegistry {
 
     pub fn register(&mut self, agent: Box<dyn Agent>) -> usize {
         let name = agent.manifest().name;
+        let auto_start = agent.manifest().auto_start;
         let idx = self.agents.len();
-        let instance = AgentInstance::new(agent);
+        let mut instance = AgentInstance::new(agent);
+        // Re-stamp after move into instance (matrix QA: cached name was empty in run()).
+        instance.name = name;
+        instance.auto_start = auto_start;
         self.agents.push(instance);
         self.budget_manager.register(name, None);
         idx
@@ -264,11 +277,11 @@ impl AgentRegistry {
     }
 
     pub fn get(&self, name: &str) -> Option<&AgentInstance> {
-        self.agents.iter().find(|a| a.agent.manifest().name == name)
+        self.agents.iter().find(|a| a.name == name)
     }
 
     pub fn get_mut(&mut self, name: &str) -> Option<&mut AgentInstance> {
-        self.agents.iter_mut().find(|a| a.agent.manifest().name == name)
+        self.agents.iter_mut().find(|a| a.name == name)
     }
 
     /// Goal-aware: agents com urgency > 0 NÃO são rate-limited pelo scheduler
@@ -330,7 +343,7 @@ impl AgentRegistry {
     /// Budget watchdog check before calling agent.tick().
     /// Returns `true` if tick should proceed, `false` if agent is paused/crashed.
     fn check_budget(&mut self, idx: usize) -> bool {
-        let name = self.agents[idx].agent.manifest().name;
+        let name = self.agents[idx].name;
 
         // If already Paused: track pause time, maybe auto-recover, skip tick
         if self.agents[idx].paused_ticks > 0 {
@@ -378,7 +391,7 @@ impl AgentRegistry {
         const MAX_ROUNDS: u64 = 10_000;
         for i in 0..self.agents.len() {
             if self.agents[i].schedule != ScheduleKind::Oneshot { continue; }
-            if !self.agents[i].agent.manifest().auto_start { continue; }
+            if !self.agents[i].auto_start { continue; }
             if self.agents[i].state == AgentState::Done || self.agents[i].state == AgentState::Crashed {
                 continue;
             }
@@ -389,16 +402,27 @@ impl AgentRegistry {
         loop {
             round += 1;
             let mut any_active = false;
-            for i in 0..self.agents.len() {
+            let n = self.agents.len();
+            for i in 0..n {
+                // Defesa: tick profundo (self_heal) já corrompeu Vec via stack smash
+                // quando registry ficava abaixo do sched stack no bump — aborta honesto.
+                if i >= self.agents.len() {
+                    break;
+                }
                 if self.agents[i].schedule != ScheduleKind::Oneshot { continue; }
                 if self.agents[i].state != AgentState::Active { continue; }
                 any_active = true;
                 self.agents[i].tick_counter += 1;
                 let tc = self.agents[i].tick_counter;
                 if let Some(trace) = self.init_trace {
-                    trace(self.agents[i].agent.manifest().name, round);
+                    trace(self.agents[i].name, round);
                 }
-                match self.agents[i].agent.tick(round, tc) {
+                let result = self.agents[i].agent.tick(round, tc);
+                if i >= self.agents.len() {
+                    // Registry corrompido sob o tick — não indexar.
+                    break;
+                }
+                match result {
                     AgentTickResult::Done => self.agents[i].state = AgentState::Done,
                     AgentTickResult::Crashed => self.agents[i].state = AgentState::Crashed,
                     AgentTickResult::Pending => {}
@@ -419,18 +443,19 @@ impl AgentRegistry {
     ) -> ! {
         if let Some(trace) = self.init_trace { trace(">> ENTER run", 0); }
         for i in 0..self.agents.len() {
-            if self.agents[i].state == AgentState::Done || self.agents[i].state == AgentState::Crashed {
+            if self.agents[i].state != AgentState::Inactive {
                 continue;
             }
-            let a_name = self.agents[i].agent.manifest().name;
+            let a_name = self.agents[i].name;
             if let Some(trace) = self.init_trace { trace(a_name, i as u64); }
-            if self.agents[i].agent.manifest().auto_start {
+            if self.agents[i].auto_start {
                 self.agents[i].state = AgentState::Active;
                 self.agents[i].agent.on_activate();
             }
         }
         if let Some(trace) = self.init_trace { trace(">> ACT_DONE", 0); }
-        // Expose BudgetManager for Hermes monitoring via agent_budget_stats()
+        // BudgetManager vive dentro do AgentRegistry heap-pinned (bin: Box::leak
+        // antes do switch de RSP). Ponteiro global válido pelo noreturn do run().
         set_budget_stats_ref(&mut self.budget_manager);
 
         let mut tick_id: u64 = 0;
@@ -492,7 +517,7 @@ impl AgentRegistry {
                 }
 
                 // PreTick hook: block agent execution if any hook returns Block
-                let agent_name = self.agents[i].agent.manifest().name;
+                let agent_name = self.agents[i].name;
                 if !self.hooks.check(hooks::HookType::PreTick, agent_name, tick_id) {
                     continue;
                 }

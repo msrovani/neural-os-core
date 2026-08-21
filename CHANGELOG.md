@@ -1,6 +1,18 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### SESSION_275: Mesh P2P GOAL1/2/3 — TCG dual-QEMU estável (2026-08-21)
+
+**Matriz mesh QEMU: scheduler smash + TOFU settle + MicroPython MVP wasmi.**
+
+- **fix(sched):** stack 8MB+guard **antes** de `Box::leak(AgentRegistry)` (overflow não esmaga Vec/BTree); caches `name`/`auto_start` no `agent-core`.
+- **fix(mesh/ADR-0081):** TOFU settle 130 ticks + `FORCE_HEARTBEAT`; ROLE/SkillSync/MKTP gated pós-settle; `become_worker` preserva Memory/Compute; `clear_synced_for_resync`.
+- **feat(hermes/ADR-0059 F6):** MicroPython MVP WASM (sem stub wasmi); probe `mesh_g3_probe` Master→Worker; `mkfat32` + `MICROPY.WASM`.
+- **feat(script):** `run-qemu-p2p-mesh.ps1` `-Cores`/`-Accel`/`-Mem`/`-WithModels`/`-Instance`.
+- **fix(scans):** `is_page_present` em BPE/STT/Piper QEMU-loader.
+- **build:** remove `-Z threads=16` (ILLEGAL_INSTRUCTION neste host).
+- Evidência: TCG 2c/6G/NoModels Both PASS; WHPX OVMF `#GP`; matriz completa WHPX×cores×models aberta.
+
 ### Pós-tarefa SESSION_272–274 (2026-08-18)
 
 Ciclo GOVERNANCE fechado: Aprenda → Memorize → Documente → Versione.

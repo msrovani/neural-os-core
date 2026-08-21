@@ -50,6 +50,9 @@ impl SkillSync {
 
     /// Marca P2P como ativo (chamado pela camada de transporte ao estabelecer link mesh).
     pub fn activate(&mut self) {
+        if self.active {
+            return;
+        }
         self.active = true;
         // ADR-0081 C3: conhecimento via mesh ativa junto (peer presente).
         crate::mesh_knowledge::mark_active();
@@ -87,6 +90,11 @@ impl SkillSync {
             return;
         }
         self.last_sync_tick = tick;
+
+        // Master só empurra após TOFU settle (peer já tem nossa pk).
+        if role == NodeRole::Master && !mesh::tofu_settled() {
+            return;
+        }
 
         match role {
             NodeRole::Master => {
@@ -272,6 +280,46 @@ pub fn pending_sync_count() -> usize {
 /// Chamado pelo kernel quando há pelo menos um peer no mesh.
 pub fn activate_global() {
     SKILL_SYNC.lock().activate();
+}
+
+/// Limpa a lista `synced` para o Master re-empurrar skills após TOFU settle
+/// (skills enviadas antes do peer vincular pk eram dropadas e marcadas synced).
+pub fn clear_synced_for_resync() {
+    let mut sync = SKILL_SYNC.lock();
+    sync.synced.clear();
+    slog_hermes!(
+        "SkillSync", "info",
+        "synced limpo — re-push apos TOFU settle"
+    );
+}
+
+/// GOAL3 mesh smoke: Master registra UMA skill nova pós-settle (não nativa).
+/// Worker ainda não a tem → deve logar `aplicada do Master`. Só Master; 1x.
+pub fn register_mesh_g3_probe_on_master() {
+    if mesh::local_role() != NodeRole::Master {
+        return;
+    }
+    const NAME: &str = "mesh_g3_probe";
+    const DESC: &str = "GOAL3 SkillSync probe (Master-only post-TOFU)";
+    {
+        let mut reg = k_nano::SKILL_REGISTRY.lock();
+        if reg.has_skill(NAME) {
+            return;
+        }
+        reg.register(alloc::boxed::Box::new(skill_registry::DynamicSkill::new(
+            NAME,
+            DESC,
+            "mesh_g3_probe body — smoke SkillSync apply",
+        )));
+    }
+    // Garante push no próximo sync_skills (e no re-push pós clear_synced).
+    register_skill_for_sync(NAME);
+    slog_hermes!(
+        "SkillSync",
+        "info",
+        "Master: skill '{}' registrada pos-TOFU (GOAL3 probe)",
+        NAME
+    );
 }
 
 /// Recebe um pacote NoProto do mesh e aplica skill enviada pelo Master.

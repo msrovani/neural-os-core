@@ -225,6 +225,8 @@ def populate(path):
         ("RERANKER.BIN", find_file("RERANKER.v6") or find_file("RERANKER.BIN") or find_file("RERANKER.BITNET")),
         ("LEARNER.BIN", find_file("LEARNER.v6") or find_file("LEARNER.BIN") or find_file("LEARNER.BITNET")),
         ("AGENT.BIN", find_file("AGENT.v6") or find_file("AGENT.BIN") or find_file("AGENT.BITNET")),
+        # GOAL3: MicroPython WASM (tools/build_micropython_wasm.py → models/MICROPY.WASM)
+        ("MICROPY.WASM", find_file("MICROPY.WASM") or find_file("micropython.wasm")),
     ]
     # ADR-0056: LEGOs cedo (antes do walk firmware) — evita esgotar root dir
     _inject_device_legos(files)

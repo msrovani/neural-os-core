@@ -386,6 +386,10 @@ pub fn try_load_from_qemu_loader() -> bool {
             }
         }
     }
+    if !k_nano::memory::is_page_present(LOAD_ADDR + phys_off) {
+        k_nano::slog_bin!("Audio", "stt", "QEMU-loader @0x163000000 page absent (skip)");
+        return false;
+    }
     let va = (LOAD_ADDR + phys_off) as *const u8;
     let magic = unsafe { core::ptr::read_volatile(va as *const u32) };
     if magic != 0xBE11BE11 {

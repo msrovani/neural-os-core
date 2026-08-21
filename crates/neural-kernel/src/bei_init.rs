@@ -440,15 +440,36 @@ pub fn bei_tick(_tick: u64) {
         }
         k_nano::net::mesh::set_local_caps(caps);
     }
-    // Com peer presente, ativa sync de skills + marketplace (idempotente).
-    // O bin orquestra k_nano↔hermes — k_nano não conhece hermes.
-    if k_nano::net::mesh::MESH_ENGINE.lock().as_ref().map_or(false, |e| e.node_count() >= 1) {
+    // Com peer TOFU settled, ativa sync de skills + marketplace (idempotente).
+    // Settle evita Master push/ROLE antes do Worker vincular nossa pk (drops
+    // "peer desconhecido"). Na 1ª transição settled→true, limpa synced p/
+    // re-empurrar skills que teriam sido marcadas cedo demais.
+    if k_nano::net::mesh::tofu_settled() {
+        static WAS_SETTLED: core::sync::atomic::AtomicBool =
+            core::sync::atomic::AtomicBool::new(false);
+        if !WAS_SETTLED.swap(true, core::sync::atomic::Ordering::AcqRel) {
+            // GOAL3: skill nova só no Master, antes do re-push (Worker não a tem).
+            hermes_crate::skill_sync::register_mesh_g3_probe_on_master();
+            hermes_crate::skill_sync::clear_synced_for_resync();
+            k_nano::slog_bin!("P2P", "info", "TOFU settled — SkillSync/MKTP liberados");
+        }
         hermes_crate::skill_sync::activate_global();
         hermes_crate::skill_marketplace::activate_global();
     }
     // Consumo dos pacotes P2P não-heartbeat (EventBus) — lazy subscribe + dreno.
     hermes_crate::skill_sync::poll_p2p();
     hermes_crate::skill_marketplace::poll_p2p();
+    // RX de requests mesh (Master responde só se settled + Master — ver gates).
+    cortex_crate::compute::poll_mesh_requests();
+    cortex_crate::mesh_distrib::poll_expert_requests();
+    cortex_crate::speculative::dsd_tick(_tick);
+
+    // TX de dados (skills/CRDT/FL/MKTP/self-test) só após TOFU settle.
+    // Heartbeat/ROLE já gated em k_nano::mesh (FORCE_HB + assign_roles).
+    if !k_nano::net::mesh::tofu_settled() {
+        return;
+    }
+
     // Sync de skills (Master push / diff) + marketplace broadcast periódico.
     let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
     hermes_crate::skill_sync::sync_skills(now);
@@ -457,15 +478,6 @@ pub fn bei_tick(_tick: u64) {
     // MemoryDocs (throttled ~500 ticks interno). RX "MEM\0" de qualquer layer
     // já é aplicado via put_doc no mesh_knowledge::poll_p2p.
     hermes_crate::mesh_knowledge::broadcast_learner_memory();
-    // SESSION_235 (ADR-0081 item 4): matmul distribuído — o Master responde
-    // requests "MW\0" vindos de Workers (EventBus P2P_PACKET, pós p2p_tick).
-    cortex_crate::compute::poll_mesh_requests();
-    // SESSION_237 (ADR-0081 C2): distribuição de experts — o Master responde
-    // "ED\0" dos Workers com o assign ponderado ("EDR\0"); Workers aplicam o
-    // EDR recebido.
-    cortex_crate::mesh_distrib::poll_expert_requests();
-    // DSD (ADR-0081 C3): speculative decoding stats (throttle interno ~200 ticks).
-    cortex_crate::speculative::dsd_tick(_tick);
     // Self-test do matmul distribuído: o Worker exercita o round-trip MW→MR
     // com o Master (DIAG do boot roda antes da eleição — role Undecided, então
     // nunca pegava o caminho P2P). Retry até 5x: sob TCG o Master pode ainda
@@ -481,7 +493,7 @@ pub fn bei_tick(_tick: u64) {
     // ADR-0081 Fase C (C4/C5): CRDT version sync + FL federado via P2P real.
     // k_ai consome o EventBus P2P_PACKET (assinatura já verificada no ingress
     // do k_nano — Fase A fail-closed). No-op quando role == Undecided.
-k_ai::sgdb::crdt_sync::crdt_sync_global(_tick);
+    k_ai::sgdb::crdt_sync::crdt_sync_global(_tick);
     k_ai::fl_trainer::mesh_tick_global(_tick);
     // Diagnóstico FL/CRDT (throttle ~500 ticks do TIMER — SESSION_235).
     static LAST_FL_LOG: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);

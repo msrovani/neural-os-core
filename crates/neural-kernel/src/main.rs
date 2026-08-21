@@ -844,6 +844,15 @@ fn sched_metrics_hook(tick: u64, n_agents: usize, polled: u32) {
 fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     // init_phase AQUI (stack é 2MB): round-robin Oneshot + timeout — seguro com System/Monitor
     k_nano::slog_bin!("BOOT", "info", "init_phase (heap stack, round-robin)...");
+    let n = registry.agents.len();
+    let sample = if n > 0 { registry.agents[0].name } else { "(none)" };
+    k_nano::slog_bin!(
+        "BOOT",
+        "info",
+        "sched_enter agents={} sample0='{}' (empty_name=bug)",
+        n,
+        sample
+    );
     crate::display::fb::boot_ckpt(51, "init_phase start");
     // SESSÃO_260: trace do init_phase — loga cada Oneshot ANTES do tick no
     // ramlog (dump ">>> BOOT.LOG (RAM) <<<" no FB). HW real travou no K51.
@@ -4066,32 +4075,63 @@ pub(crate) fn kernel_boot(
         }
     }
 
-    // Stack do scheduler no heap (≥2MB). NÃO usar Box::new([0u8; N]) — estoura stack do boot.
-    const SCHED_STACK_SIZE: usize = 2 * 1024 * 1024;
-    unsafe {
+    // Stack do scheduler no heap. NÃO usar Box::new([0u8; N]) — estoura stack do boot.
+    // Ordem no bump allocator (cresce p/ cima): [stack 8MB][guard 64K][registry].
+    // RSP fica no TOPO do buffer; stack cresce p/ BAIXO. Se o registry fosse
+    // alocado ANTES da stack, overflow de 2MB esmagava Vec/BTree (#PF CR2=0x18 /
+    // index OOB len=0) — visto após self_heal no init_phase (SESSION matriz).
+    const SCHED_STACK_SIZE: usize = 8 * 1024 * 1024;
+    const SCHED_STACK_GUARD: usize = 64 * 1024;
+
+    let (sp, registry): (u64, &'static mut agent_core::AgentRegistry) = {
         let heap_stack = alloc::vec![0u8; SCHED_STACK_SIZE].into_boxed_slice();
         let sp = (heap_stack.as_ptr() as u64 + SCHED_STACK_SIZE as u64) & !0xFu64;
         core::mem::forget(heap_stack);
+        // Guarda: absorve overflow raso antes de tocar o registry.
+        let guard = alloc::vec![0u8; SCHED_STACK_GUARD].into_boxed_slice();
+        core::mem::forget(guard);
+        // Registry DEPOIS da stack+guard no bump — overflow não zera agents/BTree.
+        let registry: &'static mut agent_core::AgentRegistry =
+            alloc::boxed::Box::leak(alloc::boxed::Box::new(registry));
+        (sp, registry)
+    };
+    k_nano::slog_bin!(
+        "BOOT",
+        "info",
+        "AgentRegistry heap-pinned agents={} ptr=0x{:x} sched_stack={}MB+guard",
+        registry.agents.len(),
+        registry as *const _ as usize,
+        SCHED_STACK_SIZE / (1024 * 1024)
+    );
+
+    unsafe {
         // ── BootReport: publica resumo do boot no EventBus ──
-    let report = k_nano::boot_report::finalize_and_publish();
-    k_nano::slog_bin!("BOOT", "REPORT", "storage={} usb_msc={} log_written={} ckpt=K{}",
-        report.storage_ok, report.usb_msc, report.boot_log_written, report.last_ckpt);
+        let report = k_nano::boot_report::finalize_and_publish();
+        k_nano::slog_bin!(
+            "BOOT",
+            "REPORT",
+            "storage={} usb_msc={} log_written={} ckpt=K{}",
+            report.storage_ok,
+            report.usb_msc,
+            report.boot_log_written,
+            report.last_ckpt
+        );
 
-    // ── Dump boot_ramlog no FB antes do Runtime ──
-    // Última tentativa de persistir BOOT.LOG (ATA agora retorna false sem travar)
-    crate::boot_logger::flush();
-    // Mostra o log completo no FB pra foto
-    let session = k_nano::boot_logger::build_session_bytes();
-    let session_str = core::str::from_utf8(&session).unwrap_or("");
-    if !session_str.is_empty() {
-        crate::display::fb::console_print(">>> BOOT.LOG (RAM) <<<");
-        for line in session_str.lines().take(40) {
-            crate::display::fb::console_print(line);
+        // ── Dump boot_ramlog no FB antes do Runtime ──
+        // Última tentativa de persistir BOOT.LOG (ATA agora retorna false sem travar)
+        crate::boot_logger::flush();
+        // Mostra o log completo no FB pra foto
+        let session = k_nano::boot_logger::build_session_bytes();
+        let session_str = core::str::from_utf8(&session).unwrap_or("");
+        if !session_str.is_empty() {
+            crate::display::fb::console_print(">>> BOOT.LOG (RAM) <<<");
+            for line in session_str.lines().take(40) {
+                crate::display::fb::console_print(line);
+            }
+            crate::display::fb::console_print(">>> FIM BOOT.LOG <<<");
         }
-        crate::display::fb::console_print(">>> FIM BOOT.LOG <<<");
-    }
 
-    let reg = &mut registry as *mut agent_core::AgentRegistry;
+        let reg = registry as *mut agent_core::AgentRegistry;
         core::arch::asm!(
             "mov rsp, {sp}",
             "mov rdi, {reg}",
