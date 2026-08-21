@@ -531,6 +531,15 @@ impl E1000Driver {
     /// Kick RX engine: clear DD, re-enable, THEN set RDT.
     /// NÃO escrever RDH (RO no HW real) nem RDT==RDH — QEMU e1000 trata RDH==RDT
     /// como ring full e deixa de entregar RX (slirp/TAP).
+    /// SESSION_275: Lightweight RDT re-poke. Just tells the NIC that descriptors
+    /// are available, without the expensive disable/re-enable cycle of kick_rx.
+    /// Called before each recv to keep QEMU e1000 DMA alive.
+    pub unsafe fn kick_rx_lite(&mut self) {
+        let rdh = self.read32(REG_RDH) as usize % RX_DESC_COUNT;
+        let rdt = (rdh + RX_DESC_COUNT - 2) % RX_DESC_COUNT;
+        self.write32(REG_RDT, rdt as u32);
+    }
+
     pub unsafe fn kick_rx(&mut self) {
         let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         let rctl = RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_LBM_NONE

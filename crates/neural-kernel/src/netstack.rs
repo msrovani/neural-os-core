@@ -238,6 +238,9 @@ unsafe fn nic_recv() -> Option<Vec<u8>> {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
     if let Some(ref mut nic) = *crate::net::E1000.lock() {
+        // SESSION_275: Re-poke RDT before recv to ensure NIC knows ring has space.
+        // Without this, QEMU e1000 may stall DMA after prove_rx resets the ring.
+        nic.kick_rx_lite();
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
     if let Some(ref mut nic) = *crate::net::I225.lock() {
