@@ -54,6 +54,8 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 2.3 | **Bitmap Frame Allocator 8GB** | 🔄 Adaptado para suportar até 8GB RAM com bitmap 128KB | `linked_list_allocator`, OSDev | MIT/Apache 2.0 | `memory.rs` | ✅ 0 err |
 | 2.4 | **Adaptive Heap (AI Budget) + talc Dual-Tier** | 🏆 Tier 1: `talc` como `#[global_allocator]` (substitui `linked_list_allocator`). Tier 2: `TensorArena` bump em `0x4800_0000_0000` exclusiva Cortex/R3. `resize_heap_to_mb()` via `talc::extend`. | `talc` crate, bumpalo pattern | MIT/Apache 2.0 | `allocator.rs`, `arena.rs` | ✅ 0 err |
 | 2.5 | **TicketLock FIFO + IrqSafeLock** | 🏆 Lock FIFO com TicketLock adaptado para no_std. `IrqSafeLock` com cli/sti automático, deadlock-free em ISRs. | `ticket-lock` crate, Linux spinlock | MIT | `ticket-lock/`, `sync/irq_lock.rs` | ✅ 0 err |
+| 2.5b | **CachePadded** | 🔄 Padding alinhado a linha de cache para statics/atomics hot-path (false sharing). Wired SESSION_277. | crossbeam / Linux cacheline | MIT | `k_nano/src/sync/cache_padded.rs` | ✅ wired |
+| 2.5c | **TSC calibração + sleep_us** | 🏆 `busy_wait_us` deixou de ser `us*40` fixo: calibra TSC via HPET→PIT→CPUID; SMP wake usa tempo real (TCG/WHPX/HW). | Intel SDM, OSDev PIT/HPET | — | `k_nano/src/tsc.rs`, `smp/mod.rs` | ✅ SESSION_277 |
 | 2.6 | **SMP Multi-Core + PerCpu** | ✅ ADR-0055/0057: FeatureGate + trampoline raw + AP work + CorePools. Wake **multi-AP** por SIPI direcionado sequencial + stack/PerCpu por-AP + retry (TCG `-smp 4`→APs=3). WHPX OFF. | OSDev, Linux SMP, `x86_64` crate | MIT/GPLv2 | `platform_probe.rs`, `smp/*` | ✅ SESSION_141 / ADR-0057 |
 | 2.6b | **FeatureGate / CpuFeatures / CacheTopology** | ✅ PlatformProbe HV∩ISA; IsaPath; tiles L1/L2; OSXSAVE/XCR0 | Intel SDM, ADR-0055 | — | `k_nano/src/platform_probe.rs` | ✅ SESSION_141 |
 | 2.6c | **Compute Dispatch (ComputeBackend) SMP+GPU+NPU** | 🔄 ADR-0057: choke point único `cortex::compute` (NPU→GPU→CPU-SMP→AVX2→scalar); GPU registra só se canário `Ready`; NPU XDNA/Intel detecção PCI + fallback software honesto. WS-B gated `ap_pollable` (deadlock-proof); on-demand AP-worker (IDT/IPI) + kernel GPU W2A8 + driver NPU = Layer S/HW. | Intel SDM, ADR-0048–50, IDEA #211/#330 | MIT | `cortex/compute.rs`, `k_hal/{npu,gpu/compute_dispatch}.rs` | 🟡 wired / Layer S |
@@ -105,6 +107,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 3.8 | **AMD Compute Multigeração (ADR-0049)** | 🔄 KiQ/Mes por arch; IP Discovery hint; doorbell MMIO noop até C3; NKP HSACO packer; FW amdgpu no download script. | amdgpu, LLVM AMDGPU | MIT/GPLv2 | `gpu/amd.rs`, `tools/pack_amd_kernels.py` | 🟡 fazendo |
 | 3.9 | **Intel Compute Multigeração (ADR-0050)** | 🔄 Gen9 `GPGPU_WALKER` vs Arc `COMPUTE_WALKER` paths separados; NKP zebin packer; iGPU display / dGPU compute. | i915/xe, IGC | MIT/GPLv2 | `gpu/intel.rs`, `tools/pack_intel_kernels.py` | 🟡 fazendo |
 | 3.10 | **KernelPack NKP1 + gpu_kernels host** | 🏆 Envelope assinado FNV1a64+Ed25519; crate `tools/gpu_kernels` isolada (CPU golden); zero Vulkan/CUDA no bin. | ADR-0052, rust-gpu no_std patterns | MIT | `gpu/kernel_pack.rs`, `tools/gpu_kernels/` | 🟡 fundação |
+| 3.11 | **PCIe bypass / ReBAR report** | 🔬 Report de config PCIe (BARs/ReBAR) no boot — honesty de aperture; sem claim de compute. Specs GPU/CPU auditadas SESSION_277. | PCIe spec, amdgpu/nouveau BAR roles | — | `k_hal/src/gpu/pcie_bypass.rs`, boot wire | ✅ report |
 
 ---
 
@@ -173,7 +176,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
 |---|-----------|------------|------------|---------------|---------|--------|
 | 6.1 | **ATA PIO (CORRIGIDO v1.2.0)** | 🏆 **Bug crítico descoberto e corrigido:** `in al, dx+1` lia FEATURES/ERROR, não o segundo byte do dado. Fix: `in ax, dx` (16-bit). **Todo acesso a disco desde v0.1 era lixo.** | ATA/ATAPI spec, OSDev | — (especificação) | `ata.rs` | ✅ 0 err |
-| 6.2 | **FAT32 Read/Write** | 🔄 Leitura e escrita de partições FAT32 LBA. MBR parser, cluster chain, diretórios, long filenames. | FAT32 spec, Microsoft | — (especificação) | `fat32.rs` | ✅ 0 err |
+| 6.2 | **FAT32 Read/Write + Fat32Io** | 🔄 Leitura/escrita FAT32 LBA + trait `Fat32Io` + `format_fat32_bps` + `BlockDevice::sector_size` no canônico (SESSION_277; sem dual-module neural_fs/fat32). | FAT32 spec, Microsoft | — (especificação) | `k_nano/src/fat32.rs`, `block_dev.rs` | ✅ 0 err |
 | 6.3 | **NVMe Driver + TRIM** | 🔄 Driver NVMe com admin queue, SQ/CQ, e comando DSM TRIM para SSD. | NVMe spec, Linux NVMe driver | GPLv2 | `disk_agent/nvme.rs` | ✅ 0 err |
 | 6.4 | **AHCI SATA NCQ** | 🔄 AHCI driver com Native Command Queuing, PRDT, DMA. | AHCI spec, Linux ahci driver | GPLv2 | `ahci.rs` | ✅ 0 err |
 | 6.5 | **NeuralFS (B-tree CoW + CRC32C)** | ✅ FS CoW: leaf B-tree mutavel, journal, create/read/write, agent `/mnt/neural` RAM 4MB. Disco fisico / multi-level = `por_fazer`. | BAFS, Btrfs, ZFS | **GPL-3.0** (BAFS v1.2+, repo AGPL-3.0; corrigido 2026-08-05 — antes marcava MIT) | `neural_fs/` | ✅ I/O RAM / ⏳ `por_fazer` disco |

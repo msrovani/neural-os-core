@@ -858,6 +858,83 @@ pub unsafe fn parse_srat(table_ptr: *const u8) -> NumaTopologyMap {
     map
 }
 
+/// Base física do HPET (ACPI "HPET" → GAS address, System Memory).
+/// `None` se RSDP/tabela ausente, GAS não-MMIO, ou address=0.
+/// Usado por `tsc::calibrate_tsc` (SESSION_277 — seam faltava no wire).
+pub fn hpet_base_phys() -> Option<u64> {
+    let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Acquire);
+    if pmoff == 0 {
+        return None;
+    }
+    unsafe { find_hpet_base_phys(pmoff) }
+}
+
+unsafe fn find_hpet_base_phys(physical_memory_offset: u64) -> Option<u64> {
+    let rsdp_phys = find_rsdp(physical_memory_offset)?;
+    let rsdp_virt = VirtAddr::new(physical_memory_offset + rsdp_phys);
+    let rsdp = &*(rsdp_virt.as_u64() as *const RsdpDescriptor);
+
+    let rsdt_phys = if rsdp.revision >= 2 && rsdp.xsdt_address != 0 {
+        rsdp.xsdt_address
+    } else {
+        rsdp.rsdt_address as u64
+    };
+    let rsdt_virt = VirtAddr::new(physical_memory_offset + rsdt_phys);
+    let rsdt_ptr = rsdt_virt.as_u64() as *const u8;
+
+    let mut sig = [0u8; 4];
+    for i in 0..4 {
+        sig[i] = read_volatile(rsdt_ptr.add(i));
+    }
+    let is_xsdt = &sig == b"XSDT";
+    if &sig != b"RSDT" && !is_xsdt {
+        return None;
+    }
+
+    let rsdt_len = read_volatile(rsdt_ptr.add(4) as *const u32) as usize;
+    if rsdt_len < 36 {
+        return None;
+    }
+    let entry_size: usize = if is_xsdt { 8 } else { 4 };
+    let entry_count = (rsdt_len - 36) / entry_size;
+
+    for i in 0..entry_count {
+        let entry_offset = 36 + i * entry_size;
+        let table_phys = if is_xsdt {
+            read_volatile(rsdt_ptr.add(entry_offset) as *const u64)
+        } else {
+            read_volatile(rsdt_ptr.add(entry_offset) as *const u32) as u64
+        };
+        if table_phys == 0 {
+            continue;
+        }
+        let table_virt = physical_memory_offset + table_phys;
+        let mut tbl_sig = [0u8; 4];
+        for j in 0..4 {
+            tbl_sig[j] = read_volatile((table_virt as *const u8).add(j));
+        }
+        if &tbl_sig != b"HPET" {
+            continue;
+        }
+        // HPET: header 36 + block ID 4 + GAS@40 (space_id@40, address@44).
+        let len = read_volatile((table_virt as *const u8).add(4) as *const u32) as usize;
+        if len < 52 {
+            return None;
+        }
+        let space_id = read_volatile((table_virt as *const u8).add(40));
+        if space_id != 0 {
+            // só System Memory (MMIO); I/O space → None (PIT fallback)
+            return None;
+        }
+        let addr = read_volatile((table_virt as *const u8).add(44) as *const u64);
+        if addr == 0 {
+            return None;
+        }
+        return Some(addr);
+    }
+    None
+}
+
 /// Parseia SRAT a partir do RSDP já conhecido.
 /// Retorna None se SRAT não for encontrada.
 pub unsafe fn parse_srat_from_rsdp(physical_memory_offset: u64) -> Option<NumaTopologyMap> {

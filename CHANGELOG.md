@@ -1,6 +1,18 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### SESSION_277: Integração branches restantes (2026-08-21)
+
+**Net/APIC + Jarbas 276 + silicon wire + limpeza de remotes. Tip código `ebd262f`.**
+
+- **fix(apic):** INIT deassert IPI (`level=1`+`assert=0`).
+- **fix(net):** SLIRP gateway `10.0.2.2`; e1000 RDT off-by-one + `kick_rx_lite` ARP/DNS.
+- **feat(models):** mkfat32 lê `D:\modelos` + BGE_M3 / hw_expert_v6.
+- **feat(silicon):** `k_nano::tsc` calibrado (HPET→PIT→CPUID) → `busy_wait_us`; `CachePadded`; boot `pcie_bypass_report`; specs honestas (AMX/work_queue).
+- **fix(acpi):** `hpet_base_phys` (seam do TSC — faltava no wire `ebd262f`).
+- **feat(fat32):** `Fat32Io` + `format_fat32_bps` + `BlockDevice::sector_size` no canônico (sem dual-module).
+- **chore(remotes):** cherry-net / aios-chj / jarbas-s276 / silicon-wire apagados; KEEP_WIP `cursor/silicon-gpu-directives-wip`.
+
 ### SESSION_276: Jarbas compositor honesto + HDA único (2026-08-21)
 
 **Port seletivo `ac4e853` (aios-chj) — UI/HDA/HUD sem colidir com SESSION_275 mesh.**

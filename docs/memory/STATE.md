@@ -1,4 +1,12 @@
-﻿# STATE — neural-os-core v1.9.99-s276 — Jarbas compositor honesto + mesh s275 OK
+﻿# STATE — neural-os-core v1.9.99-s277 — Integração branches restantes (net+Jarbas+silicon)
+#   SESSION_277: plano branches restantes FECHADO. Fase1 cherry-net (APIC INIT
+#     deassert, SLIRP gw=.2, e1000 RDT/kick_rx_lite, D:\modelos). Fase2 = SESSION_276
+#     port seletivo ac4e853 (sem tip c234138). Fase3.1 wire TSC calibrado→busy_wait_us,
+#     CachePadded, pcie_bypass_report; specs AMX/work_queue honestas. Fase3.2 Fat32Io
+#     + format_fat32_bps no fat32.rs canônico (órfão neural_fs/fat32 NÃO wired).
+#     Fase4 remotes apagados; KEEP_WIP origin/cursor/silicon-gpu-directives-wip.
+#     Tip código ebd262f + fix residual hpet_base_phys (seam TSC). Locais gone
+#     não podados: cherry-net / jarbas-s276 / silicon-wire.
 #   SESSION_276: port seletivo ac4e853 — compositor/overlay/CARD_ACTION; HDA k_nano
 #     fonte única + k_hal facade; infer_in_flight HUD. Sem tip c234138.
 #   SESSION_275: dual-QEMU mesh. GOAL1 stack 8MB+guard antes do AgentRegistry +

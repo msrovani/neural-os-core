@@ -159,7 +159,7 @@ fn measure_with_pit() -> Option<u64> {
     const COUNT: u64 = 0xFFFF; // 54925 µs @ 1.193182 MHz
     unsafe {
         // gate 2 HIGH (bit 0) + speaker data (bit 1) → canal 2 conta
-        let mut ctrl: u8 = Port::new(PIT_STATUS).read();
+        let ctrl: u8 = Port::new(PIT_STATUS).read();
         Port::new(PIT_STATUS).write(ctrl | 0x03);
         // canal 2, lobyte/hibyte, modo 0 (one-shot), binário
         Port::new(PIT_CMD).write(0xB0u8);
