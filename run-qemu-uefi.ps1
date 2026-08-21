@@ -160,10 +160,16 @@ function Build-QemuArgs {
     # O usuário só precisa colocar o arquivo na pasta — o script descobre.
     # Prioridade: arquivos maiores primeiro (LLM base), depois os pequenos (experts).
     # Endereço base: 0x100000000 (4GB), sobe em passos de 0x100000 (1MB) + tamanho.
-    $modelDir = Join-Path $Root "target"
-    $modelFiles = @(Get-ChildItem -Path $modelDir -Filter "*.bitnet" -ErrorAction SilentlyContinue) +
-                  @(Get-ChildItem -Path $modelDir -Filter "*.BIN" -ErrorAction SilentlyContinue) +
-                  @(Get-ChildItem -Path $modelDir -Filter "*.bin" -ErrorAction SilentlyContinue)
+    # SESSION_275: modelos em D:\modelos (repo externo) + target/ (legado)
+    $extModelDir = "D:\modelos"
+    $modelDirs = @((Join-Path $Root "target"))
+    if (Test-Path $extModelDir) { $modelDirs += $extModelDir }
+    $modelFiles = @()
+    foreach ($d in $modelDirs) {
+        $modelFiles += @(Get-ChildItem -Path $d -Filter "*.bitnet" -ErrorAction SilentlyContinue) +
+                        @(Get-ChildItem -Path $d -Filter "*.BIN" -ErrorAction SilentlyContinue) +
+                        @(Get-ChildItem -Path $d -Filter "*.bin" -ErrorAction SilentlyContinue)
+    }
     # Remove duplicatas (mesmo nome, extensões diferentes) e ordena por tamanho decrescente
     $seen = @{}
     $unique = @()

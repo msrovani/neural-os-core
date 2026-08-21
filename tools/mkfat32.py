@@ -54,9 +54,13 @@ def pack_llm_set() -> set[str]:
 
 def find_file(name):
     # target1 = canônico de modelos v6 (SESSION_254+); depois staging/legado.
+    # D:\modelos = repo externo de modelos (SESSION_275+).
+    import platform
+    ext_model_dir = r"D:\modelos" if platform.system() == "Windows" else "/mnt/d/modelos"
     for d in [os.path.join(ROOT, "target1"), os.path.join(ROOT, "models"), ROOT,
               os.path.join(ROOT, "target"), os.path.join(ROOT, "firmware"),
-              os.path.join(ROOT, "crates/neural-kernel"), os.path.join(ROOT, "tools/target")]:
+              os.path.join(ROOT, "crates/neural-kernel"), os.path.join(ROOT, "tools/target"),
+              ext_model_dir]:
         p = os.path.join(d, name)
         if os.path.exists(p): return p
     return None
@@ -195,12 +199,12 @@ def populate(path):
     llm = pack_llm_set()
     print(f"[PACK_LLM] {sorted(llm) or 'none'} (env PACK_LLM; default=850)")
     files = [
-        ("BGE.BIN", find_file("bge-small.bitnet") or find_file("bge.bin") or find_file("BGE.BIN")),
+        ("BGE.BIN", find_file("BGE_M3.BIN") or find_file("bge-small.bitnet") or find_file("bge.bin") or find_file("BGE.BIN")),
         # ADR-0083 §5.3: roteador MoE treinado (tools/train_router.py). Opcional —
         # sem ele o boot usa fallback determinístico com log honesto.
         ("ROUTER.BITNET", find_file("ROUTER.BITNET")),
         ("RUSTCDR.BITNET", find_file("rust_coder.bitnet") or find_file("RUSTCDR.BITNET") or find_file("RUSTCDR2.BIN")),
-        ("HW_EXPERT.BITNET", find_file("hw_expert_tf.bitnet") or find_file("hw_expert_v3.bitnet")),
+        ("HW_EXPERT.BITNET", find_file("hw_expert_v6.bitnet") or find_file("hw_expert_tf.bitnet") or find_file("hw_expert_v3.bitnet")),
         ("HWEXPRT.BIN", find_file("hw_expert_v3.bitnet") or find_file("hw_expert_tf.bitnet") or find_file("HWEXPRT.BIN")),
         ("HWEXPRT4.BIN", find_file("hw_expert_v6.bitnet") or find_file("hw_expert_v4.bitnet") or find_file("HWEXPRT4.BIN")),
         ("HWEXPRT.v6", find_file("hw_expert_v6.bitnet") or find_file("HWEXPRT.v6")),
