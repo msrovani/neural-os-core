@@ -173,12 +173,16 @@ static HDA_SD0_BUF: AtomicU64 = AtomicU64::new(0);
 static HDA_CORB_WP: AtomicU32 = AtomicU32::new(0);
 static HDA_RIRB_RP: AtomicU32 = AtomicU32::new(0);
 static HDA_SD0_RPI: AtomicU32 = AtomicU32::new(0); // Read Pointer Index for BDL
+static HDA_SD1_BDL: AtomicU64 = AtomicU64::new(0);
+static HDA_SD1_BUF: AtomicU64 = AtomicU64::new(0);
 
 // DMA buffers (kept alive)
 static mut CORB_DMA: Option<DmaBuf> = None;
 static mut RIRB_DMA: Option<DmaBuf> = None;
 static mut SD0_BDL_DMA: Option<DmaBuf> = None;
 static mut SD0_AUDIO_DMA: Option<DmaBuf> = None;
+static mut SD1_BDL_DMA: Option<DmaBuf> = None;
+static mut SD1_AUDIO_DMA: Option<DmaBuf> = None;
 
 // ============================================================================
 // MMIO Access Helpers
@@ -653,6 +657,61 @@ unsafe fn init_sd0_capture(bar: u64) -> bool {
     true
 }
 
+/// SD1 playback BDL (mesmo layout do SD0). Falha não aborta o bring-up de captura.
+unsafe fn init_sd1_playback(bar: u64) -> bool {
+    let bdl_dma = match dma_alloc(256) {
+        Some(buf) => buf,
+        None => return false,
+    };
+    let bdl_phys = bdl_dma.phys;
+    HDA_SD1_BDL.store(bdl_phys, Ordering::Release);
+    SD1_BDL_DMA = Some(bdl_dma);
+
+    let audio_size = 16 * 4096;
+    let audio_dma = match dma_alloc(audio_size) {
+        Some(buf) => buf,
+        None => return false,
+    };
+    let audio_phys = audio_dma.phys;
+    HDA_SD1_BUF.store(audio_phys, Ordering::Release);
+    SD1_AUDIO_DMA = Some(audio_dma);
+
+    let bdl_virt = (bdl_phys + PHYS_MEM_OFFSET.load(Ordering::Acquire)) as *mut u8;
+    for i in 0..16 {
+        let entry_phys = audio_phys + (i as u64 * 4096);
+        let entry_base = bdl_virt.add(i * 16);
+        core::ptr::write_volatile(entry_base as *mut u64, entry_phys);
+        core::ptr::write_volatile(entry_base.add(8) as *mut u32, 4096u32);
+        core::ptr::write_volatile(entry_base.add(12) as *mut u32, 1u32);
+    }
+
+    let ctl = SD1_BASE + SDX_CTL;
+    let sts = SD1_BASE + SDX_STS;
+    let cbl = SD1_BASE + SDX_CBL;
+    let lvi = SD1_BASE + SDX_LVI;
+    let fmt = SD1_BASE + SDX_FMT;
+    let bdpl = SD1_BASE + SDX_BDPL;
+    let bdpu = SD1_BASE + SDX_BDPU;
+
+    w8(bar, ctl, 0);
+    for _ in 0..1000 { core::hint::spin_loop(); }
+    w8(bar, ctl, SD_CTL_SRST as u8);
+    for _ in 0..1000 { core::hint::spin_loop(); }
+    w8(bar, ctl, 0);
+    for _ in 0..1000 { core::hint::spin_loop(); }
+
+    w32(bar, bdpl, bdl_phys as u32);
+    w32(bar, bdpu, (bdl_phys >> 32) as u32);
+    w32(bar, cbl, audio_size as u32);
+    w16(bar, lvi, 15);
+    w16(bar, fmt, FMT_16BIT_48KHZ_STEREO as u16);
+    w16(bar, sts, 0xFFFF);
+    w8(bar, ctl, SD_CTL_RUN as u8 | SD_CTL_IOCE as u8);
+
+    slog_nano!("HDA", "info", "SD1 playback: BDL @ 0x{:x} buf @ 0x{:x}", bdl_phys, audio_phys);
+    true
+}
+
 // ============================================================================
 // IRQ Handler
 // ============================================================================
@@ -830,6 +889,11 @@ pub fn init_hda() -> bool {
         if !init_sd0_capture(bar) {
             return false;
         }
+
+        // Playback SD1 — best-effort (AWAITING_HW se codec não tem DAC).
+        if !init_sd1_playback(bar) {
+            slog_nano!("HDA", "warn", "SD1 playback not armed — write_hda_playback no-op");
+        }
         
         // Enable global interrupts
         w32(bar, HDA_INTCTL, 0xFFFF_FFFF); // Enable all stream interrupts
@@ -899,6 +963,35 @@ pub fn poll_hda_audio() {
                 let next_rpi = (rpi + 1) % 16;
                 HDA_SD0_RPI.store(next_rpi, Ordering::Release);
             }
+        }
+    }
+}
+
+/// IRQ+MMIO já programados por `init_hda` (mesmo BAR do IDT 0x30).
+pub fn is_ready() -> bool {
+    HDA_INIT_DONE.load(Ordering::Acquire) && HDA_BAR.load(Ordering::Acquire) != 0
+}
+
+/// Escreve samples no BDL SD1 (mesma instância do IRQ/captura). No-op se SD1 não armou.
+pub fn write_hda_playback(samples: &[i16]) {
+    if !is_ready() {
+        return;
+    }
+    let bar = HDA_BAR.load(Ordering::Acquire);
+    let audio_phys = HDA_SD1_BUF.load(Ordering::Acquire);
+    if bar == 0 || audio_phys == 0 {
+        return;
+    }
+    unsafe {
+        let sts_off = SD1_BASE + SDX_STS;
+        let sts = r16(bar, sts_off);
+        if sts & SD_STS_BCIS as u16 != 0 {
+            w16(bar, sts_off, sts | SD_STS_BCIS as u16);
+        }
+        let virt = (audio_phys + PHYS_MEM_OFFSET.load(Ordering::Acquire)) as *mut i16;
+        let count = samples.len().min(16 * 2048);
+        for i in 0..count {
+            core::ptr::write_volatile(virt.add(i), samples[i]);
         }
     }
 }

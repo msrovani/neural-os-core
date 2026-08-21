@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::collections::BTreeMap;
 use k_nano::sync::IrqSafeLock;
+use k_nano::EVENT_BUS;
 use crate::display::decorations;
 use crate::display::fb::DoubleBuffer;
 use crate::display::soul_mirror::{SoulMirrorRenderer, SoulMirrorState};
@@ -12,10 +13,13 @@ use crate::display::workspaces::Workspaces;
 use crate::display::focus::{FocusStack, FocusPolicy};
 use crate::display::dock::Dock;
 pub use crate::display::window::AppId;
-use crate::display::window::{Window, WindowContent};
+use crate::display::window::{HitArea, Window, WindowContent};
 use crate::display::theme::Theme;
 use crate::display::tiling::{Rect, SplitDirection, WindowId};
 use crate::display::notifications::NotificationQueue;
+
+/// Tópico EventBus — botão de card (FeedbackAgent: `"id:idx"`).
+pub const TOPIC_CARD_ACTION: &str = "CARD_ACTION";
 
 pub static COMPOSITOR: IrqSafeLock<Option<JarbasDesktop>> = IrqSafeLock::new(None);
 
@@ -178,7 +182,7 @@ pub struct JarbasDesktop {
     pub notifications: NotificationQueue,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum DragState {
     Move { window_id: WindowId, offset_x: i32, offset_y: i32 },
     Resize { window_id: WindowId, area: crate::display::window::HitArea },
@@ -303,7 +307,7 @@ impl JarbasDesktop {
             x: 0,
             y: 0,
             width: self.w as u32,
-            height: self.h as u32 - self.dock.height,
+            height: self.h as u32 - if self.dock.visible { self.dock.height } else { 0 },
         };
         let layouts = ws.layout_tiled(screen_rect);
         for (wid, rect) in layouts {
@@ -509,7 +513,8 @@ impl JarbasDesktop {
         // CAMADA 3: Workspace — ChatWindow (esquerdo, opaco, com gap)
         // ═════════════════════════════════════════════════════════════
         let gap = 4usize; // COSMIC tile gap
-        let panel_h = h.saturating_sub(sb_h + gap * 2); // área útil sob a barra de status
+        let dock_h = if self.dock.visible { self.dock.height as usize } else { 0 };
+        let panel_h = h.saturating_sub(sb_h + gap * 2 + dock_h);
         let left_w = w.saturating_sub(gap * 2); // margens laterais pequenas (painel Hermes removido)
         let window_updates = {
             let ws = self.workspaces.active();
@@ -524,13 +529,20 @@ impl JarbasDesktop {
         };
         for (wid, rect) in window_updates {
             if let Some(idx) = self.windows.iter().position(|w| w.id == wid) {
-                // Aplica gap COSMIC entre tiles
-                let gap = 4i32;
-                let gapped = Rect {
-                    x: rect.x + gap / 2,
-                    y: rect.y + gap / 2,
-                    width: (rect.width as i32 - gap).max(0) as u32,
-                    height: (rect.height as i32 - gap).max(0) as u32,
+                if !self.windows[idx].visible || self.windows[idx].minimized {
+                    continue;
+                }
+                // Aplica gap COSMIC entre tiles (floating já tem geom próprio)
+                let gapped = if self.windows[idx].floating {
+                    rect
+                } else {
+                    let gap = 4i32;
+                    Rect {
+                        x: rect.x + gap / 2,
+                        y: rect.y + gap / 2,
+                        width: (rect.width as i32 - gap).max(0) as u32,
+                        height: (rect.height as i32 - gap).max(0) as u32,
+                    }
                 };
                 self.windows[idx].rect = gapped;
                 draw_window_fb(&mut self.fb, &self.windows[idx], theme, self.w);
@@ -541,14 +553,26 @@ impl JarbasDesktop {
         // ═════════════════════════════════════════════════════════════
         // CAMADA 4: Notificações + foco + power dialog
         // ═════════════════════════════════════════════════════════════
+        // Overlay H2/H5 + RENDER_WINDOW — depois do fill, antes do swap (SESSION_261).
+        self.paint_overlays(theme);
+
+        if self.dock.visible {
+            self.dock.render(&mut self.fb, theme);
+        }
+
         self.notifications.render(&mut self.fb, theme, Rect { x: 0, y: 0, width: w as u32, height: h as u32 }, self.tick);
 
         // Modo Chat: hint discreto (Ambient = silêncio — orb é o sinal)
         if mode == FocusMode::Chat {
+            let hint_y = if self.dock.visible {
+                h.saturating_sub(self.dock.height as usize + 16)
+            } else {
+                h.saturating_sub(16)
+            };
             draw_text(
                 &mut self.fb,
                 12,
-                h.saturating_sub(16),
+                hint_y,
                 "CHAT",
                 self.w,
                 theme.fg_muted.0,
@@ -650,6 +674,201 @@ impl JarbasDesktop {
         }
     }
 
+    fn paint_overlays(&mut self, theme: &Theme) {
+        {
+            let marks = crate::display::overlay::EMBED_MARKS.lock();
+            for m in marks.iter() {
+                if m.splat {
+                    crate::display::embed_viz::draw_thought_splat(
+                        &mut self.fb, m.x, m.y, 8, m.color,
+                    );
+                } else {
+                    crate::display::embed_viz::draw_embed_point(
+                        &mut self.fb, m.x, m.y, m.color,
+                    );
+                }
+            }
+        }
+        let overlays: alloc::vec::Vec<_> = crate::display::overlay::RENDER_OVERLAYS.lock().clone();
+        if overlays.is_empty() {
+            return;
+        }
+        let registry = crate::display::render_registry::RENDER_REGISTRY.lock();
+        for ov in &overlays {
+            let _ = registry.render(&ov.name, &mut self.fb, ov.rect, theme, &ov.data);
+        }
+    }
+
+    /// Hit-test canónico: dock → cards → janelas tiled/floating. Orb/mesh = miss.
+    /// Sem painel legado 35% (SESSION_261).
+    pub fn handle_desktop_click(&mut self, cx: i32, cy: i32) -> &'static str {
+        if self.dock.visible {
+            if let Some(idx) = self.dock.hit_test(cx, cy) {
+                if let Some(item) = self.dock.items.get(idx) {
+                    let app = item.app_id;
+                    if app == AppId::Power {
+                        self.open_power_dialog();
+                        return "dock:power";
+                    }
+                    self.toggle_app(app);
+                    return "dock:app";
+                }
+            }
+        }
+        let card = self.card_click(cx, cy);
+        if card != "miss" {
+            return card;
+        }
+        self.hit_workspace_window(cx, cy)
+    }
+
+    fn hit_workspace_window(&mut self, cx: i32, cy: i32) -> &'static str {
+        let ids: alloc::vec::Vec<WindowId> = {
+            let ws = self.workspaces.active();
+            let mut ids: alloc::vec::Vec<WindowId> = ws.floating_windows.iter().map(|f| f.window_id).collect();
+            if let Some(root) = &ws.tiling_root {
+                let mut tiled = alloc::vec::Vec::new();
+                root.layout(Rect { x: 0, y: 0, width: 1, height: 1 }, &mut tiled);
+                for (id, _) in tiled { ids.push(id); }
+            }
+            ids
+        };
+        for id in ids.into_iter().rev() {
+            let idx = match self.windows.iter().position(|w| w.id == id && w.visible && !w.minimized) {
+                Some(i) => i,
+                None => continue,
+            };
+            if matches!(self.windows[idx].content, WindowContent::Card(_)) {
+                continue;
+            }
+            let Some(area) = decorations::hit_test(cx as usize, cy as usize, &self.windows[idx]) else {
+                continue;
+            };
+            match area {
+                HitArea::CloseButton => {
+                    self.close_tiled_window(id);
+                    return "win:close";
+                }
+                HitArea::MaximizeButton => {
+                    self.focus_stack.focus(id);
+                    self.maximize_focused();
+                    return "win:max";
+                }
+                HitArea::MinimizeButton => {
+                    self.focus_stack.focus(id);
+                    self.minimize_focused();
+                    return "win:min";
+                }
+                HitArea::TitleBar => {
+                    let wr = self.windows[idx].rect;
+                    self.drag_state = Some(DragState::Move {
+                        window_id: id,
+                        offset_x: cx - wr.x,
+                        offset_y: cy - wr.y,
+                    });
+                    return "win:drag";
+                }
+                HitArea::Body | HitArea::Client => {
+                    if self.windows[idx].app_id == Some(AppId::HermesChat) {
+                        *FOCUS_MODE.lock() = FocusMode::Chat;
+                        let wr = self.windows[idx].rect;
+                        let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
+                        if let Some(ref mut chat) = *cw {
+                            chat.handle_click(
+                                cx as usize, cy as usize,
+                                wr.x.max(0) as usize, wr.y.max(0) as usize,
+                                wr.width as usize, wr.height as usize,
+                            );
+                        }
+                    }
+                    self.focus_stack.focus(id);
+                    for w in &mut self.windows { w.focused = w.id == id; }
+                    self.bring_to_front(id);
+                    return "win:focus";
+                }
+                _ => {
+                    self.focus_stack.focus(id);
+                    return "win:resize";
+                }
+            }
+        }
+        *FOCUS_MODE.lock() = FocusMode::Ambient;
+        "miss"
+    }
+
+    fn window_in_active_ws(&self, id: WindowId) -> bool {
+        let ws = self.workspaces.active();
+        if ws.floating_windows.iter().any(|f| f.window_id == id) {
+            return true;
+        }
+        ws.tiling_root.as_ref().and_then(|r| r.find_window(id)).is_some()
+    }
+
+    fn sync_floating_rect(&mut self, id: WindowId, rect: Rect) {
+        if let Some(fw) = self.workspaces.active_mut().floating_windows.iter_mut().find(|f| f.window_id == id) {
+            fw.rect = rect;
+            if let WindowContent::Card(ref mut d) = fw.content {
+                d.x = rect.x;
+                d.y = rect.y;
+                d.w = rect.width as i32;
+                d.h = rect.height as i32;
+            }
+        }
+    }
+
+    /// Garante janela no que `render()` itera (floating da workspace).
+    pub fn show_app(&mut self, app_id: AppId) {
+        if !self.windows.iter().any(|w| w.app_id == Some(app_id)) {
+            let title = match app_id {
+                AppId::HermesChat => "Jarbas Chat",
+                AppId::Settings => "Settings",
+                AppId::Power => "Power",
+                _ => "App",
+            };
+            self.register_app(app_id, title, Layer::AppWindows);
+        }
+        let idx = match self.windows.iter().position(|w| w.app_id == Some(app_id)) {
+            Some(i) => i,
+            None => return,
+        };
+        let id = self.windows[idx].id;
+        if self.windows[idx].visible && self.window_in_active_ws(id) {
+            self.windows[idx].minimized = false;
+            self.focus_stack.focus(id);
+            self.bring_to_front(id);
+            return;
+        }
+        let rect = Rect {
+            x: 48,
+            y: 40,
+            width: (self.w as u32 * 3 / 5).clamp(360, 720),
+            height: (self.h as u32 * 3 / 5).clamp(240, 520),
+        };
+        self.windows[idx].visible = true;
+        self.windows[idx].minimized = false;
+        self.windows[idx].floating = true;
+        self.windows[idx].rect = rect;
+        self.windows[idx].focused = true;
+        if !self.window_in_active_ws(id) {
+            let content = self.windows[idx].content.clone();
+            self.workspaces.active_mut().add_window_floating(
+                crate::display::window::FloatingWindow::new(id, rect, content),
+            );
+        } else {
+            self.sync_floating_rect(id, rect);
+        }
+        self.focus_stack.focus(id);
+        self.bring_to_front(id);
+        self.dock.set_running(app_id, true, 1);
+        if app_id == AppId::HermesChat {
+            let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
+            if cw.is_none() {
+                *cw = Some(crate::display::chat_window::ChatWindow::new(0));
+            }
+            *FOCUS_MODE.lock() = FocusMode::Chat;
+        }
+    }
+
     // ── Métodos cosméticos do WM (ADR-0065) ────────────────────────────
 
     pub fn register_app(&mut self, app_id: AppId, title: &str, layer: Layer) {
@@ -680,6 +899,11 @@ impl JarbasDesktop {
 
     pub fn open_power_dialog(&mut self) { self.power_dialog = true; }
     pub fn close_power_dialog(&mut self) { self.power_dialog = false; }
+
+    /// Overlay Hermes = janela floating real (SESSION_261). Não pinta no tick.
+    pub fn ensure_hermes_overlay(&mut self) {
+        self.show_app(AppId::HermesChat);
+    }
 
     pub fn spawn_card(&mut self, decl: crate::display::card::UiDeclaration) {
         let id = WindowId(self.next_window_id);
@@ -712,12 +936,18 @@ impl JarbasDesktop {
     pub fn card_click(&mut self, cx: i32, cy: i32) -> &'static str {
         self.card_hit_button = None;
         for i in (0..self.windows.len()).rev() {
+            if !self.windows[i].visible {
+                continue;
+            }
             let content = self.windows[i].content.clone();
             if let WindowContent::Card(ref decl) = content {
                 if cx >= decl.x && cx < decl.x + decl.w && cy >= decl.y && cy < decl.y + decl.h {
+                    let card_id = decl.id;
+                    let win_id = self.windows[i].id;
                     // Close button
                     let (crx, cry, crw, crh) = decl.close_rect();
                     if decl.closable && cx >= crx && cx < crx + crw && cy >= cry && cy < cry + crh {
+                        self.workspaces.active_mut().remove_window(win_id);
                         self.windows.remove(i);
                         return "close";
                     }
@@ -725,20 +955,26 @@ impl JarbasDesktop {
                     let hx = decl.x + decl.w - 10;
                     let hy = decl.y + decl.h - 10;
                     if cx >= hx && cx < hx + 10 && cy >= hy && cy < hy + 10 {
-                        self.resizing_card_id = Some(self.windows[i].id);
+                        self.resizing_card_id = Some(win_id);
                         return "resize";
                     }
                     // Title bar drag
                     if cy < decl.y + 22 {
-                        self.dragging_card_id = Some(self.windows[i].id);
+                        self.dragging_card_id = Some(win_id);
                         self.card_drag_off = (cx - decl.x, cy - decl.y);
                         return "drag";
                     }
-                    // Button check — usa hit_test_buttons puro (sem side-effect de render).
                     let hits = crate::display::card::hit_test_buttons(decl);
                     for btn in &hits {
                         if cx >= btn.x && cx < btn.x + btn.w && cy >= btn.y && cy < btn.y + btn.h {
-                            self.card_hit_button = Some((decl.id, btn.index));
+                            self.card_hit_button = Some((card_id, btn.index));
+                            let payload = alloc::format!("{}:{}", card_id, btn.index);
+                            let _ = EVENT_BUS.publish(event_bus::Event {
+                                id: 0,
+                                topic: String::from(TOPIC_CARD_ACTION),
+                                payload: payload.into_bytes(),
+                                token: event_bus::CapabilityToken::Legacy(1),
+                            });
                             return "btn";
                         }
                     }
@@ -751,43 +987,85 @@ impl JarbasDesktop {
 
     pub fn card_drag_step(&mut self, mx: i32, my: i32, btn_down: bool) {
         if !btn_down { self.dragging_card_id = None; return; }
-        if let Some(card_id) = self.dragging_card_id {
-            if let Some(win) = self.windows.iter_mut().find(|w| w.id == card_id) {
-                if let WindowContent::Card(ref mut decl) = win.content {
-                    decl.x = mx - self.card_drag_off.0;
-                    decl.y = my - self.card_drag_off.1;
-                    win.rect.x = decl.x;
-                    win.rect.y = decl.y;
-                }
+        let Some(card_id) = self.dragging_card_id else { return; };
+        let rect = if let Some(win) = self.windows.iter_mut().find(|w| w.id == card_id) {
+            if let WindowContent::Card(ref mut decl) = win.content {
+                decl.x = mx - self.card_drag_off.0;
+                decl.y = my - self.card_drag_off.1;
+                win.rect.x = decl.x;
+                win.rect.y = decl.y;
+                Some(win.rect)
+            } else {
+                None
             }
+        } else {
+            None
+        };
+        if let Some(rect) = rect {
+            self.sync_floating_rect(card_id, rect);
         }
     }
 
     pub fn card_resize_step(&mut self, mx: i32, my: i32, btn_down: bool) {
         if !btn_down { self.resizing_card_id = None; return; }
-        if let Some(card_id) = self.resizing_card_id {
-            if let Some(win) = self.windows.iter_mut().find(|w| w.id == card_id) {
-                if let WindowContent::Card(ref mut decl) = win.content {
-                    decl.w = (mx - decl.x).max(100);
-                    decl.h = (my - decl.y).max(60);
-                    win.rect.width = decl.w.max(0) as u32;
-                    win.rect.height = decl.h.max(0) as u32;
-                }
+        let Some(card_id) = self.resizing_card_id else { return; };
+        let rect = if let Some(win) = self.windows.iter_mut().find(|w| w.id == card_id) {
+            if let WindowContent::Card(ref mut decl) = win.content {
+                decl.w = (mx - decl.x).max(100);
+                decl.h = (my - decl.y).max(60);
+                win.rect.width = decl.w.max(0) as u32;
+                win.rect.height = decl.h.max(0) as u32;
+                Some(win.rect)
+            } else {
+                None
             }
+        } else {
+            None
+        };
+        if let Some(rect) = rect {
+            self.sync_floating_rect(card_id, rect);
+        }
+    }
+
+    /// Arraste de janela app: atualiza `windows[]` e `floating_windows` (o que render lê).
+    pub fn window_drag_step(&mut self, mx: i32, my: i32, btn_down: bool) {
+        if !btn_down {
+            self.drag_state = None;
+            return;
+        }
+        let Some(DragState::Move { window_id, offset_x, offset_y }) = self.drag_state else {
+            return;
+        };
+        let nx = (mx - offset_x).max(0);
+        let ny = (my - offset_y).max(28);
+        let rect = if let Some(win) = self.windows.iter_mut().find(|w| w.id == window_id) {
+            win.rect.x = nx.min(self.w.saturating_sub(80) as i32);
+            win.rect.y = ny.min(self.h.saturating_sub(80) as i32);
+            Some(win.rect)
+        } else {
+            None
+        };
+        if let Some(rect) = rect {
+            self.sync_floating_rect(window_id, rect);
         }
     }
 
     pub fn toggle_app(&mut self, app_id: AppId) {
-        // Count visible windows first (immutable), then mutate via index.
-        let cnt = self.windows.iter().filter(|w| w.visible).count();
         let idx = self.windows.iter().position(|w| w.app_id == Some(app_id));
         if let Some(idx) = idx {
-            self.windows[idx].visible = !self.windows[idx].visible;
-            if self.windows[idx].visible {
-                self.windows[idx].rect.x = (40 + (cnt % 5) * 20) as i32;
-                self.windows[idx].rect.y = (60 + (cnt % 4) * 20) as i32;
+            let id = self.windows[idx].id;
+            let on_ws = self.window_in_active_ws(id);
+            if self.windows[idx].visible && on_ws && !self.windows[idx].minimized {
+                self.windows[idx].visible = false;
+                self.workspaces.active_mut().remove_window(id);
+                self.dock.set_running(app_id, false, 0);
+                if app_id == AppId::HermesChat {
+                    *FOCUS_MODE.lock() = FocusMode::Ambient;
+                }
+                return;
             }
         }
+        self.show_app(app_id);
     }
 
     // ── WM actions (ADR-0065 FASE 1.2 — implementação real) ───────────────

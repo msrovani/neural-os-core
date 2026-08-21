@@ -1,6 +1,14 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### SESSION_276: Jarbas compositor honesto + HDA único (2026-08-21)
+
+**Port seletivo `ac4e853` (aios-chj) — UI/HDA/HUD sem colidir com SESSION_275 mesh.**
+
+- **fix(jarbas):** click/dock/`show_app` floating; `overlay.rs` pintado só no `render()`; CARD_ACTION no botão do card.
+- **fix(audio):** HDA fonte única `k_nano` + facade `k_hal` (sem double GCTL).
+- **feat(cortex):** `infer_in_flight` + wire `set_llm_busy` no generate; gauges sem inventar GPU/HD.
+
 ### SESSION_275: Mesh P2P GOAL1/2/3 — TCG dual-QEMU estável (2026-08-21)
 
 **Matriz mesh QEMU: scheduler smash + TOFU settle + MicroPython MVP wasmi.**

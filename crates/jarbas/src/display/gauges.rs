@@ -90,13 +90,8 @@ fn sample_gpu() -> (f32, String) {
             return (pct, alloc::format!("{}/{}M", a, b));
         }
     }
-    let gpu = crate::display::fb::GPU.lock();
-    if let Some(ref g) = *gpu {
-        if g.present && g.fb_addr != 0 {
-            return (0.15, alloc::format!("{}x{}", g.fb_width, g.fb_height));
-        }
-    }
-    (0.0, String::from("-"))
+    // FB presente ≠ occupancy de GPU. Sem VRAM meter → n/a (não inventar 0.15).
+    (0.0, String::from("n/a"))
 }
 
 fn sample_hd() -> (f32, String) {
@@ -116,10 +111,11 @@ fn sample_hd() -> (f32, String) {
         sectors
     };
     if sectors == 0 {
-        return (0.0, String::from("-"));
+        return (0.0, String::from("n/a"));
     }
     let gb = ((sectors * 512) / (1024 * 1024 * 1024)).max(1);
-    (0.55, alloc::format!("{}G", gb))
+    // Capacidade conhecida; ocupação real do FS não medida aqui.
+    (0.0, alloc::format!("{}G", gb))
 }
 
 /// Chamado pelo MetricsAgent (~0,5s) — amostra e publica snapshot.
@@ -137,8 +133,8 @@ pub fn refresh_snapshot(log_serial: bool) {
         hd_pct,
         cpu_val: alloc::format!("{}c{}%", cores, (cpu_pct * 100.0) as u32),
         mem_val: alloc::format!("{}/{}M", mem_used, mem_tot),
-        gpu_val,
-        hd_val,
+        gpu_val: gpu_val.clone(),
+        hd_val: hd_val.clone(),
         timer_at: now,
     };
     *SNAPSHOT.lock() = snap;
@@ -147,11 +143,11 @@ pub fn refresh_snapshot(log_serial: bool) {
         k_nano::slog_jarbas!(
             "Metrics",
             "info",
-            "snapshot cpu={}% mem={}% gpu={}% hd={}%",
+            "snapshot cpu={}% mem={}% gpu={} hd={}",
             (cpu_pct * 100.0) as u32,
             (mem_pct * 100.0) as u32,
-            (gpu_pct * 100.0) as u32,
-            (hd_pct * 100.0) as u32
+            gpu_val,
+            hd_val
         );
     }
 }

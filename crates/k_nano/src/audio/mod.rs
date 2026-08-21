@@ -3,4 +3,4 @@
 
 pub mod hda;
 
-pub use hda::{init_hda, poll_hda_audio};
+pub use hda::{init_hda, poll_hda_audio, write_hda_playback, is_ready};

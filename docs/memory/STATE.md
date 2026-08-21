@@ -1,4 +1,6 @@
-﻿# STATE — neural-os-core v1.9.99-s275 — Mesh P2P GOAL1/2/3 OK (TCG); WHPX/matriz abertos
+﻿# STATE — neural-os-core v1.9.99-s276 — Jarbas compositor honesto + mesh s275 OK
+#   SESSION_276: port seletivo ac4e853 — compositor/overlay/CARD_ACTION; HDA k_nano
+#     fonte única + k_hal facade; infer_in_flight HUD. Sem tip c234138.
 #   SESSION_275: dual-QEMU mesh. GOAL1 stack 8MB+guard antes do AgentRegistry +
 #     caches agent-core + is_page_present BPE/STT/Piper. GOAL2 TOFU settle 130 ticks
 #     + FORCE_HEARTBEAT; ROLE/SkillSync gated; become_worker preserva Memory/Compute.
