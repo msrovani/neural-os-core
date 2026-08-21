@@ -338,7 +338,9 @@ impl E1000Driver {
         self.write32(REG_TCTRL, TCTL_EN | TCTL_PSP | (0x10 << TCTL_CT_SHIFT) | (0x40 << TCTL_COLD_SHIFT));
 
         // RDT só DEPOIS de habilitar o receiver — NIC precisa ver RDT válido após enable
-        self.write32(REG_RDT, RX_DESC_COUNT as u32 - 1);
+        // SESSION_275: RX_DESC_COUNT-1=63 makes QEMU think ring full.
+        // Use RX_DESC_COUNT-2=62 to leave safe buffer for DMA.
+        self.write32(REG_RDT, RX_DESC_COUNT as u32 - 2);
 
         // Mask all interrupts via IMC + IMASK (poll mode)
         self.write32(REG_IMC, 0xFFFF_FFFF);
@@ -555,7 +557,9 @@ impl E1000Driver {
         self.write32(REG_RCTRL, rctl);
         Self::fence_write();
         let rdh = self.read32(REG_RDH) as usize % RX_DESC_COUNT;
-        let rdt = (rdh + RX_DESC_COUNT - 1) % RX_DESC_COUNT;
+        // SESSION_275: RDT=RDH-1 (63) faz QEMU e1000 pensar ring cheio (off-by-one).
+        // Fix: RDT=RDH-2 → 62 slots livres para DMA. Nunca RDT==RDH (full).
+        let rdt = (rdh + RX_DESC_COUNT - 2) % RX_DESC_COUNT;
         self.write32(REG_RDT, rdt as u32);
         let _ = self.read32(REG_ICR);
         crate::slog_nano!(
@@ -592,7 +596,14 @@ impl E1000Driver {
     /// Poll RX after ARP who-has; returns (rdh, dd_count, got_pkt).
     /// `iters` ≈ poll rounds × 200µs wall (~iters*0.2ms). Retries ARP 3× for slirp latency.
     pub unsafe fn prove_rx(&mut self, sip: [u8; 4], tip: [u8; 4], iters: u32) -> (u32, u32, bool) {
-        self.kick_rx();
+        // SESSION_275: Don't call kick_rx here — it disables/enables the receiver
+        // which can cause QEMU e1000 backend to drop in-flight packets.
+        // The init() already set up the ring correctly. Just poke RDT to ensure
+        // the NIC knows descriptors are available.
+        let rdh = self.read32(REG_RDH) as usize % RX_DESC_COUNT;
+        let rdt = (rdh + RX_DESC_COUNT - 2) % RX_DESC_COUNT;
+        self.write32(REG_RDT, rdt as u32);
+        Self::fence_write();
         let rounds = 3u32;
         let per_round = (iters / rounds).max(200);
         for attempt in 0..rounds {
@@ -605,15 +616,23 @@ impl E1000Driver {
             };
             let tdh = self.read32(REG_TDH);
             let tdt = self.read32(REG_TDT);
+            // SESSION_275: Poke RDT after TX to ensure NIC knows RX ring has space.
+            // QEMU e1000 may stall DMA if RDT isn't re-asserted periodically.
+            let rdh_now = self.read32(REG_RDH) as usize % RX_DESC_COUNT;
+            let rdt_now = (rdh_now + RX_DESC_COUNT - 2) % RX_DESC_COUNT;
+            self.write32(REG_RDT, rdt_now as u32);
+            Self::fence_write();
             crate::slog_nano!(
                 "Net",
                 "e1000",
-                "prove_rx ARP#{} sent={} tx_dd={} TDH={} TDT={}",
+                "prove_rx ARP#{} sent={} tx_dd={} TDH={} TDT={} RDH={} RDT={}",
                 attempt + 1,
                 sent,
                 tx_dd,
                 tdh,
-                tdt
+                tdt,
+                rdh_now,
+                rdt_now
             );
             for _ in 0..per_round {
                 if let Some(_pkt) = self.recv() {
@@ -625,6 +644,10 @@ impl E1000Driver {
                     let rdh = self.read32(REG_RDH);
                     return (rdh, self.count_rx_dd(), true);
                 }
+                // SESSION_275: Re-poke RDT every 200µs to keep DMA alive.
+                let rdh_p = self.read32(REG_RDH) as usize % RX_DESC_COUNT;
+                let rdt_p = (rdh_p + RX_DESC_COUNT - 2) % RX_DESC_COUNT;
+                self.write32(REG_RDT, rdt_p as u32);
                 Self::pause_us(200);
             }
         }

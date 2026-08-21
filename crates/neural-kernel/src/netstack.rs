@@ -382,7 +382,8 @@ impl NetStack {
         let ip = Ipv4Address::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
         let cidr = IpCidr::new(IpAddress::Ipv4(ip), 24);
         self.iface.update_ip_addrs(|addrs| { addrs.push(cidr).ok(); });
-        let gw = Ipv4Address::new(ip_bytes[0], ip_bytes[1], gw_byte3, 1);
+        // SESSION_275: SLIRP gateway é .2 (não .1). Fix: gw=.2, DNS=.3
+        let gw = Ipv4Address::new(ip_bytes[0], ip_bytes[1], gw_byte3, 2);
         self.iface.routes_mut().add_default_ipv4_route(gw.into()).ok();
         self.dhcp_done = true;
         self.has_static_ip = true;
@@ -390,7 +391,7 @@ impl NetStack {
         {
             let mut cfg = crate::net::NET_CONFIG.lock();
             cfg.ip = ip_bytes;
-            cfg.gateway_ip = [ip_bytes[0], ip_bytes[1], gw_byte3, 1];
+            cfg.gateway_ip = [ip_bytes[0], ip_bytes[1], gw_byte3, 2];
             cfg.subnet_mask = [255, 255, 255, 0];
             cfg.dns_ip = dns_ip;
             cfg.configured = true;
@@ -399,7 +400,7 @@ impl NetStack {
         // SESSION_234: sincroniza MAC/IP para o transporte P2P do k_nano (R0).
         k_nano::net::set_nic_config(crate::net::NET_CONFIG.lock().mac, ip_bytes);
         k_nano::slog_hermes!("Net", "info",
-            "Static IP: {}.{}.{}.{}/24 gw={}.{}.{}.1 dns={}.{}.{}.3",
+            "Static IP: {}.{}.{}.{}/24 gw={}.{}.{}.2 dns={}.{}.{}.3",
             ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3],
             ip_bytes[0], ip_bytes[1], gw_byte3,
             ip_bytes[0], ip_bytes[1], gw_byte3);
