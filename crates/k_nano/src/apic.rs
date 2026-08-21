@@ -615,14 +615,15 @@ pub unsafe fn send_init_ipi() {
 
 pub unsafe fn send_init_deassert_ipi() {
     icr_wait_idle();
-
+    // SESSION_275: deassert = level=1 (bit15) + assert=0 (bit14).
+    // Bug antigo: ambos os bits zerados → edge+assert (re-assert em vez de deassert).
     if USING_X2APIC.load(Ordering::Relaxed) {
-        let icr_val: u64 = (5u64 << 8) | (3u64 << 18);
+        let icr_val: u64 = (5u64 << 8) | (3u64 << 18) | (1u64 << 15); // level=1, assert=0
         let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
-        msr.write(icr_val & !(1u64 << 15)); // de-assert = bit 15 = 0
+        msr.write(icr_val);
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        let icr_val = (5u32 << 8) | (3 << 18);
+        let icr_val = (5u32 << 8) | (3u32 << 18) | (1u32 << 15); // level=1, assert=0
         write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
         write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
     }
@@ -669,14 +670,18 @@ pub unsafe fn send_init_ipi_to(dest_apic: u8) {
 /// travado. QEMU tolera a ausência; HW real não.
 pub unsafe fn send_init_deassert_ipi_to(dest_apic: u8) {
     icr_wait_idle();
+    // ADR-0057 + SESSION_275: INIT deassert REQUIRES level=1 (bit15) + assert=0 (bit14).
+    // Bug antigo: bit14=1 re-asserted INIT em vez de deassert → AP nunca sai de
+    // wait-for-SIPI → counter=0 em todas as tentativas. Corrigido para
+    // (5 << 8) | (1 << 15) = level-triggered + deassert.
     if USING_X2APIC.load(Ordering::Relaxed) {
-        let icr_val: u64 = ((dest_apic as u64) << 32) | (5u64 << 8) | (1 << 14); // level=0 → deassert
+        let icr_val: u64 = ((dest_apic as u64) << 32) | (5u64 << 8) | (1u64 << 15);
         let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
         msr.write(icr_val);
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
         write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, (dest_apic as u32) << 24);
-        let icr_val = (5u32 << 8) | (1 << 14); // level=0, assert=0 → deassert
+        let icr_val = (5u32 << 8) | (1u32 << 15); // level=1 + assert=0 = deassert
         write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
     }
 }
