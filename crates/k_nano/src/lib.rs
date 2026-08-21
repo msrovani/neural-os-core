@@ -102,6 +102,7 @@ pub mod installer_agent;
 pub mod self_check;
 pub mod rollback;
 pub mod smp;
+pub mod tsc;
 pub mod storage_manager;
 pub mod storage_bus;
 pub mod sync;

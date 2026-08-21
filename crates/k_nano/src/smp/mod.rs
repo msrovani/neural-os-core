@@ -155,9 +155,8 @@ pub unsafe fn wake_aps() {
 }
 
 fn busy_wait_us(us: u64) {
-    for _ in 0..us * 40 {
-        core::hint::spin_loop();
-    }
+    // SESSION integration: TSC calibrado (HPET→PIT→CPUID) em vez de spin fixo us*40.
+    crate::tsc::sleep_us(us);
 }
 
 /// ADR-0057 WS-A: acorda os APs **um a um** por LAPIC ID (directed IPI), cada

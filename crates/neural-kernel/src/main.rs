@@ -1516,6 +1516,15 @@ pub(crate) fn kernel_boot(
     crate::display::fb::boot_ckpt(136, "probe ok");
     simd::enable_simd();
     crate::display::fb::boot_ckpt(137, "SIMD ok2");
+    // Calibração TSC (HPET→PIT→CPUID) — busy_wait_us/SMP usam sleep real.
+    let tsc_hz = k_nano::tsc::calibrate_tsc();
+    k_nano::slog_bin!(
+        "TSC",
+        "info",
+        "hz={} source={}",
+        tsc_hz,
+        k_nano::tsc::tsc_source_name()
+    );
 
     // ADR-0082 F1.4: SYSCALL/SYSRET MSRs — após o probe (hypervisor real
     // conhecido; gate por probe_done() evita wrmsr em WHPX/TCG → #GP).
@@ -2467,6 +2476,19 @@ pub(crate) fn kernel_boot(
 
         let gpus = crate::gpu::detect::detect_all();
         crate::display::fb::boot_ckpt(43, "GPU detect done");
+        // ReBAR/ACS probe-only (sem try_enable_* — HITL/HW depois).
+        #[cfg(target_os = "none")]
+        {
+            for g in gpus.iter() {
+                let cfg = k_hal::gpu::pcie_bypass::RealPciConfig {
+                    bus: g.pci_bus,
+                    device: g.pci_dev,
+                    function: g.pci_fn,
+                };
+                let rep = k_hal::gpu::pcie_bypass::pcie_bypass_report(&cfg);
+                k_nano::slog_bin!("GPU", "pcie", "{}:{}.{} {}", g.pci_bus, g.pci_dev, g.pci_fn, rep);
+            }
+        }
 
         if !gpus.is_empty() {
 

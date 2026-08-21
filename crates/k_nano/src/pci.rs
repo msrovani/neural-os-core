@@ -299,7 +299,7 @@ pub unsafe fn read_bar_size(bus: u8, device: u8, function: u8, bar_index: u8) ->
     raw + 16
 }
 
-pub(crate) unsafe fn write_config_dword(bus: u8, device: u8, function: u8, offset: u8, value: u32) {
+pub unsafe fn write_config_dword(bus: u8, device: u8, function: u8, offset: u8, value: u32) {
     let address = 0x8000_0000u32
         | ((bus as u32) << 16)
         | ((device as u32) << 11)

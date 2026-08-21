@@ -40,6 +40,7 @@ pub mod bench;
 pub mod work_queue;
 pub mod sasos;
 pub mod pipeline_g5;
+pub mod pcie_bypass;
 
 // Seam ADR-0087 Fase 4b — Copy Engine (MHI tier1→tier0). mhi.rs (Fase 5) chama.
 pub use nvidia_pascal_ce::{ce_ready, mhi_tier0_copy};

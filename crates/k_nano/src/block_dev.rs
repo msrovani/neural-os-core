@@ -9,6 +9,10 @@ pub trait BlockDevice {
     fn total_sectors(&self) -> u64 {
         0
     }
+    /// Bytes por setor lógico (512 ou 4Kn). Default 512.
+    fn sector_size(&self) -> u16 {
+        512
+    }
     /// Nome curto para StorageBus / logs (`nvme0`, `ahci0`, …).
     fn name(&self) -> &str {
         "blk"

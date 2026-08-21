@@ -334,6 +334,45 @@ pub unsafe fn mount_partitions(ata: &AtaDriver) {
 // ── FAT32 Reader ──────────────────────────────────────────────
 // FAT32 usa 28-bit clusters, root dir como cluster chain, BPB extendido.
 
+/// I/O mínimo exigido pelo parser FAT32 (host-testável com MemoryDisk).
+pub trait Fat32Io {
+    fn io_read_sectors(&self, lba: u32, buf: &mut [u8], count: u8) -> bool;
+    fn io_write_sectors(&self, lba: u32, buf: &[u8], count: u8) -> bool;
+}
+
+impl Fat32Io for AtaDriver {
+    fn io_read_sectors(&self, lba: u32, buf: &mut [u8], count: u8) -> bool {
+        unsafe { AtaDriver::read_sectors(self, lba, buf, count) }
+    }
+    fn io_write_sectors(&self, lba: u32, buf: &[u8], count: u8) -> bool {
+        unsafe { AtaDriver::write_sectors(self, lba, buf, count) }
+    }
+}
+
+impl Fat32Io for crate::neural_fs::volume::MemoryDisk {
+    fn io_read_sectors(&self, lba: u32, buf: &mut [u8], count: u8) -> bool {
+        let start = lba as usize * 512;
+        let len = count as usize * 512;
+        if start + len > self.data.len() || buf.len() < len {
+            return false;
+        }
+        buf[..len].copy_from_slice(&self.data[start..start + len]);
+        true
+    }
+    fn io_write_sectors(&self, lba: u32, buf: &[u8], count: u8) -> bool {
+        let start = lba as usize * 512;
+        let len = count as usize * 512;
+        if start + len > self.data.len() || buf.len() < len {
+            return false;
+        }
+        let dst = unsafe { self.data.as_ptr().add(start) } as *mut u8;
+        unsafe {
+            core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, len);
+        }
+        true
+    }
+}
+
 pub struct Fat32Reader<'a> {
     pub ata: &'a AtaDriver,
     pub lba_start: u32,
@@ -1046,134 +1085,132 @@ impl<'a> Fat32Writer<'a> {
 }
 
 // ── FAT32 Format ───────────────────────────────────────────────
-/// Formata uma partição como FAT32 (ESP). Cria BPB, FSInfo, duas FATs,
-/// diretório raiz vazio. A partição deve ter >= 65525 clusters (>= ~32MB).
-/// `dev` — BlockDevice (já posicionado na partição via start_lba).
-/// `start_lba` — LBA absoluto da partição.
-/// `part_sectors` — tamanho da partição em setores.
+/// Formata uma partição como FAT32 (ESP) — 512B/setor, spc=1 (Limine/instalador).
+/// Delega a ormat_fat32_bps (4Kn / bps nativo).
 pub fn format_fat32_esp(
     dev: &mut dyn BlockDevice,
     start_lba: u64,
     part_sectors: u64,
 ) -> bool {
-    if part_sectors < 65536 {
+    let bps = dev.sector_size();
+    format_fat32_bps(dev, start_lba, part_sectors, bps, 1)
+}
+
+/// Formata partição FAT32 com ps ∈ {512,1024,2048,4096} (4Kn).
+/// start_lba/part_sectors em blocos do dispositivo; traduz para LBA 512 via mult.
+pub fn format_fat32_bps(
+    dev: &mut dyn BlockDevice,
+    start_lba: u64,
+    part_sectors: u64,
+    bps: u16,
+    spc: u32,
+) -> bool {
+    if !(512..=4096).contains(&bps) || bps % 32 != 0 || spc == 0 {
         return false;
     }
-
-    // Parâmetros FAT32 (reuso do Python mk_esp_fat.py)
+    let mult = (bps / 512) as u64;
     let reserved: u64 = 32;
     let fats: u64 = 2;
-    let spc: u64 = 1; // 1 setor por cluster (~32MB mínimo)
-    let part = part_sectors as u64;
+    let part = part_sectors;
 
-    // Calcula FAT sectors
     let data_sectors = part.saturating_sub(reserved + fats);
-    let clusters = data_sectors / spc;
+    let clusters = data_sectors / spc as u64;
     if clusters < 65525 {
-        return false; // não é FAT32 real
+        return false;
     }
-    let fat_sectors = ((clusters + 2) * 4 + 511) / 512;
+    let fat_sectors = ((clusters + 2) * 4 + bps as u64 - 1) / bps as u64;
     let data_start = reserved + fats * fat_sectors;
     if data_start >= part {
         return false;
     }
 
-    // ── BPB (LBA start_lba + 0) ──
-    let mut bpb = [0u8; 512];
-    bpb[0..3].copy_from_slice(b"\xeb\x58\x90");
-    bpb[3..11].copy_from_slice(b"MSWIN4.1");
-    bpb[0x0B..0x0D].copy_from_slice(&(512u16).to_le_bytes()); // bytes per sector
-    bpb[0x0D] = spc as u8;                                     // sectors per cluster
-    bpb[0x0E..0x10].copy_from_slice(&(reserved as u16).to_le_bytes()); // reserved sectors
-    bpb[0x10] = fats as u8;                                     // FAT count
-    bpb[0x11..0x13].copy_from_slice(&0u16.to_le_bytes());      // root entry count = 0
-    bpb[0x13..0x15].copy_from_slice(&0u16.to_le_bytes());      // total sectors 16 = 0
-    bpb[0x15] = 0xF8;                                           // media descriptor
-    bpb[0x16..0x18].copy_from_slice(&0u16.to_le_bytes());      // FAT sz 16 = 0
-    bpb[0x18..0x1A].copy_from_slice(&63u16.to_le_bytes());     // sectors per track
-    bpb[0x1A..0x1C].copy_from_slice(&255u16.to_le_bytes());    // heads
-    bpb[0x1C..0x20].copy_from_slice(&(start_lba as u32).to_le_bytes()); // hidden sectors
-    bpb[0x20..0x24].copy_from_slice(&(part as u32).to_le_bytes());      // total sectors 32
-    bpb[0x24..0x28].copy_from_slice(&(fat_sectors as u32).to_le_bytes()); // FAT size 32
-    bpb[0x28..0x2A].copy_from_slice(&0u16.to_le_bytes());      // extended flags
-    bpb[0x2A..0x2C].copy_from_slice(&0u16.to_le_bytes());      // FS version
-    bpb[0x2C..0x30].copy_from_slice(&2u32.to_le_bytes());      // root cluster = 2
-    bpb[0x30..0x32].copy_from_slice(&1u16.to_le_bytes());      // FSInfo sector = 1
-    bpb[0x32..0x34].copy_from_slice(&6u16.to_le_bytes());      // backup boot sector = 6
-    bpb[0x40] = 0x80;                                           // drive number
-    bpb[0x41] = 0x00;                                           // reserved
-    bpb[0x42] = 0x29;                                           // boot signature
-    bpb[0x43..0x47].copy_from_slice(&0x4E45524Fu32.to_le_bytes()); // volume ID
-    bpb[0x47..0x52].copy_from_slice(b"NEURAL-ESP ");           // volume label
-    bpb[0x52..0x5A].copy_from_slice(b"FAT32   ");              // FAT type label
-    bpb[0x1FE..0x200].copy_from_slice(b"\x55\xAA");            // boot signature
-    if !dev.write_sectors(start_lba, &bpb) {
+    let mut bpb_raw = [0u8; 512];
+    bpb_raw[0..3].copy_from_slice(b"\xeb\x58\x90");
+    bpb_raw[3..11].copy_from_slice(b"MSWIN4.1");
+    bpb_raw[0x0B..0x0D].copy_from_slice(&bps.to_le_bytes());
+    bpb_raw[0x0D] = spc as u8;
+    bpb_raw[0x0E..0x10].copy_from_slice(&(reserved as u16).to_le_bytes());
+    bpb_raw[0x10] = fats as u8;
+    bpb_raw[0x11..0x13].copy_from_slice(&0u16.to_le_bytes());
+    bpb_raw[0x13..0x15].copy_from_slice(&0u16.to_le_bytes());
+    bpb_raw[0x15] = 0xF8;
+    bpb_raw[0x16..0x18].copy_from_slice(&0u16.to_le_bytes());
+    bpb_raw[0x18..0x1A].copy_from_slice(&63u16.to_le_bytes());
+    bpb_raw[0x1A..0x1C].copy_from_slice(&255u16.to_le_bytes());
+    bpb_raw[0x1C..0x20].copy_from_slice(&(start_lba as u32).to_le_bytes());
+    bpb_raw[0x20..0x24].copy_from_slice(&(part as u32).to_le_bytes());
+    bpb_raw[0x24..0x28].copy_from_slice(&(fat_sectors as u32).to_le_bytes());
+    bpb_raw[0x28..0x2A].copy_from_slice(&0u16.to_le_bytes());
+    bpb_raw[0x2A..0x2C].copy_from_slice(&0u16.to_le_bytes());
+    bpb_raw[0x2C..0x30].copy_from_slice(&2u32.to_le_bytes());
+    bpb_raw[0x30..0x32].copy_from_slice(&1u16.to_le_bytes());
+    bpb_raw[0x32..0x34].copy_from_slice(&6u16.to_le_bytes());
+    bpb_raw[0x40] = 0x80;
+    bpb_raw[0x41] = 0x00;
+    bpb_raw[0x42] = 0x29;
+    bpb_raw[0x43..0x47].copy_from_slice(&0x4E45524Fu32.to_le_bytes());
+    bpb_raw[0x47..0x52].copy_from_slice(b"NEURAL-ESP ");
+    bpb_raw[0x52..0x5A].copy_from_slice(b"FAT32   ");
+    bpb_raw[0x1FE..0x200].copy_from_slice(b"\x55\xAA");
+    let mut bpb_sec = alloc::vec![0u8; bps as usize];
+    bpb_sec[..512].copy_from_slice(&bpb_raw);
+    if !dev.write_sectors(start_lba * mult, &bpb_sec) {
         return false;
     }
 
-    // ── FSInfo (LBA start_lba + 1) ──
-    let mut fsi = [0u8; 512];
-    fsi[0..4].copy_from_slice(&0x41615252u32.to_le_bytes());   // lead sig
-    fsi[0x1E4..0x1E8].copy_from_slice(&0x61417272u32.to_le_bytes()); // struct sig
-    fsi[0x1E8..0x1EC].copy_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // free cluster count (unknown)
-    fsi[0x1EC..0x1F0].copy_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // next free cluster
-    fsi[0x1FE..0x200].copy_from_slice(b"\x55\xAA");
-    if !dev.write_sectors(start_lba + 1, &fsi) {
+    let mut fsi_raw = [0u8; 512];
+    fsi_raw[0..4].copy_from_slice(&0x41615252u32.to_le_bytes());
+    fsi_raw[0x1E4..0x1E8].copy_from_slice(&0x61417272u32.to_le_bytes());
+    fsi_raw[0x1E8..0x1EC].copy_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+    fsi_raw[0x1EC..0x1F0].copy_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+    fsi_raw[0x1FE..0x200].copy_from_slice(b"\x55\xAA");
+    let mut fsi_sec = alloc::vec![0u8; bps as usize];
+    fsi_sec[..512].copy_from_slice(&fsi_raw);
+    if !dev.write_sectors((start_lba + 1) * mult, &fsi_sec) {
+        return false;
+    }
+    if !dev.write_sectors((start_lba + 6) * mult, &bpb_sec) {
+        return false;
+    }
+    if !dev.write_sectors((start_lba + 7) * mult, &fsi_sec) {
         return false;
     }
 
-    // ── Backup BPB (LBA start_lba + 6) ──
-    if !dev.write_sectors(start_lba + 6, &bpb) {
-        return false;
-    }
-
-    // ── Backup FSInfo (LBA start_lba + 7) ──
-    if !dev.write_sectors(start_lba + 7, &fsi) {
-        return false;
-    }
-
-    // ── FATs (LBA start_lba + reserved) ──
-    let fat_bytes = (fat_sectors * 512) as usize;
+    let fat_bytes = (fat_sectors * bps as u64) as usize;
     let mut fat = alloc::vec![0u8; fat_bytes];
-    // Cluster 0: media descriptor
     fat[0..4].copy_from_slice(&0x0FFFFFF8u32.to_le_bytes());
-    // Cluster 1: EOC (dirty)
     fat[4..8].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
-    // Cluster 2: EOC (root directory, 1 cluster)
     fat[8..12].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
-    // FAT1
     let fat1_lba = start_lba + reserved;
-    let total_fat_sectors = fat_bytes / 512;
+    let total_fat_sectors = fat_bytes / bps as usize;
     for i in 0..total_fat_sectors {
-        let off = i * 512;
-        let end = (off + 512).min(fat_bytes);
-        let mut sector = [0u8; 512];
+        let off = i * bps as usize;
+        let end = (off + bps as usize).min(fat_bytes);
+        let mut sector = alloc::vec![0u8; bps as usize];
         sector[..end - off].copy_from_slice(&fat[off..end]);
-        if !dev.write_sectors(fat1_lba + i as u64, &sector) {
+        if !dev.write_sectors((fat1_lba + i as u64) * mult, &sector) {
             return false;
         }
     }
-    // FAT2 (cópia)
     for i in 0..total_fat_sectors {
-        let off = i * 512;
-        let end = (off + 512).min(fat_bytes);
-        let mut sector = [0u8; 512];
+        let off = i * bps as usize;
+        let end = (off + bps as usize).min(fat_bytes);
+        let mut sector = alloc::vec![0u8; bps as usize];
         sector[..end - off].copy_from_slice(&fat[off..end]);
-        if !dev.write_sectors(fat1_lba + fat_sectors + i as u64, &sector) {
+        if !dev.write_sectors((fat1_lba + fat_sectors + i as u64) * mult, &sector) {
             return false;
         }
     }
 
-    // ── Diretório raiz (cluster 2, LBA data_start) ──
-    // Raiz vazio — só precisa existir. O setor zero é suficiente.
     let root_lba = start_lba + data_start;
-    let root_sector = [0u8; 512];
-    if !dev.write_sectors(root_lba, &root_sector) {
+    let root_sector = alloc::vec![0u8; spc as usize * bps as usize];
+    if !dev.write_sectors(root_lba * mult, &root_sector) {
         return false;
     }
 
     true
 }
+
 /// Escreve mensagem no arquivo de log do boot atual (FAT32, B<TICK>.LOG).
 pub unsafe fn write_boot_log(ata: &AtaDriver, part: &Partition, msg: &str) -> bool {
     let boot_tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
