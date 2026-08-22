@@ -276,20 +276,42 @@ impl SgdbAgent {
 
     /// recall: recall_semantic + prompt_slice
     fn cmd_recall(&self, query: &str, k: usize) {
-        if !k_ai::sgdb::ready() {
-            self.publish_result("err", "sgdb not ready");
+        // Fase 3.0-C: recall lexical via neural-sgdb (default MCP, ADR-0008)
+        let hits = k_ai::sgdb::nsgdb_bridge::recall_lexical_bridge(query, k);
+        if hits.is_empty() {
+            // Fallback: prompt_slice (engine interno)
+            let text = k_ai::sgdb::prompt_slice(400);
+            let result = if text.is_empty() {
+                String::from("(no memories)")
+            } else {
+                text
+            };
+            k_nano::slog_hermes!("SGDB", "recall", "lexical_empty fallback prompt_slice");
+            self.publish_result("ok", &result);
             return;
         }
-        // Ponytail: recall semântico precisa de embedding — hoje é stub.
-        // Usa prompt_slice como fallback textual simples.
-        let text = k_ai::sgdb::prompt_slice(400);
-        let result = if text.is_empty() {
-            String::from("(no recent context)")
+        // Formata hits tipados para output
+        let mut out = String::new();
+        let mut n = 0usize;
+        for hit in &hits {
+            if n >= k || n >= 5 { break; }
+            if hit.text.is_empty() { continue; }
+            let ct = match hit.content_type {
+                k_ai::sgdb::nsgdb_bridge::ContentType::Json => "JSON",
+                k_ai::sgdb::nsgdb_bridge::ContentType::Code => "CODE",
+                _ => "TXT",
+            };
+            out.push_str(&format!("#{}) [{}] {}
+", n + 1, ct,
+                &hit.text[..hit.text.len().min(200)]));
+            n += 1;
+        }
+        if out.is_empty() {
+            self.publish_result("ok", "(no text memories)");
         } else {
-            text
-        };
-        k_nano::slog_hermes!("SGDB", "recall", "query={} k={} len={}", query, k, result.len());
-        self.publish_result("ok", &result);
+            self.publish_result("ok", &out);
+        }
+        k_nano::slog_hermes!("SGDB", "recall", "query={} k={} hits={}", query, k, hits.len());
     }
 }
 

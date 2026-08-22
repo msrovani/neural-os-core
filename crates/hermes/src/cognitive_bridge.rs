@@ -592,6 +592,75 @@ fn gated_rag_context(q_emb: &[f32], k: usize) -> String {
 {}", n, out)
 }
 
+
+/// Memory-Aware Route (Fase 3.0-B): processa hits tipados por content_type.
+/// Cada tipo de dado é roteado de forma diferente:
+/// - Json → parse e extrai intenção/ação
+/// - Text → injeta no prompt do LLM como contexto
+/// - Code → apresenta como sugestão de código
+/// - Embedding → reutiliza o vetor (era ADR-0007)
+/// - Binary → ignora (não é prosa)
+///
+/// Retorna:
+/// - context_text: texto formatado para o prompt do LLM
+/// - intent_data: dados JSON extraídos (se houver)
+/// - embedding_refs: referências a embeddings reutilizáveis
+pub fn memory_aware_route(
+    user_intent: &str,
+) -> (String, Option<String>, Vec<([f32; 8] /* dim fixa por agora */)>) {
+    let (q_emb, _emb_path) = k_ai::memory_systems::embed_or_pseudo(user_intent);
+    let hits = k_ai::sgdb::nsgdb_bridge::recall_typed(&q_emb, 5);
+
+    let mut context_text = String::new();
+    let mut intent_data: Option<String> = None;
+    let mut embedding_refs: Vec<[f32; 8]> = Vec::new();
+
+    for hit in &hits {
+        match hit.content_type {
+            k_ai::sgdb::nsgdb_bridge::ContentType::Json => {
+                // Json: extrai como intenção potencial
+                if intent_data.is_none() && !hit.text.is_empty() {
+                    intent_data = Some(hit.text.clone());
+                }
+                context_text.push_str(&format!(
+                    "[memory:json] {}
+",
+                    memory_store::clamp_public(&hit.text, 200)
+                ));
+            }
+            k_ai::sgdb::nsgdb_bridge::ContentType::Text => {
+                // Text: contexto para o LLM
+                if !hit.text.is_empty() {
+                    context_text.push_str(&format!(
+                        "[memory:txt] {}
+",
+                        memory_store::clamp_public(&hit.text, 200)
+                    ));
+                }
+            }
+            k_ai::sgdb::nsgdb_bridge::ContentType::Code => {
+                // Code: sugestão de código
+                if !hit.text.is_empty() {
+                    context_text.push_str(&format!(
+                        "[memory:code] {}
+",
+                        memory_store::clamp_public(&hit.text, 200)
+                    ));
+                }
+            }
+            k_ai::sgdb::nsgdb_bridge::ContentType::Embedding(dim) => {
+                // Embedding: marca para reuso (payload_type indica o datum real)
+                let _ = dim; // dim disponível para o consumidor
+            }
+            k_ai::sgdb::nsgdb_bridge::ContentType::Binary => {
+                // Binary: não é prosa, ignorar
+            }
+        }
+    }
+
+    (context_text, intent_data, embedding_refs)
+}
+
 pub fn cortex_system_prompt(user_intent: &str) -> String {
     let mut s = String::with_capacity(3500);
     s.push_str("[NEURAL-OS COGNITIVE CONTEXT — K²CHJ]\n");

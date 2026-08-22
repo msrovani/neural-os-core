@@ -2547,6 +2547,22 @@ impl SleepCycleAgent {
                     Err(e) => k_nano::slog_hermes!("sgdb", "sleep_ckpt", "FAIL {}", e),
                 }
 
+                // Fase 2.5-D: Lifecycle tick — decay + expire + consolidate no neural-sgdb
+                {
+                    let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                    let lc_result = k_ai::sgdb::nsgdb_bridge::lifecycle_tick(
+                        now,
+                        &k_ai::sgdb::nsgdb_bridge::MemoryLifecycleConfig::default(),
+                    );
+                    if lc_result.transitions > 0 {
+                        k_nano::slog_hermes!(
+                            "SLEEP", "LIFECYCLE",
+                            "decayed={} consolidated transitions={}",
+                            lc_result.decayed, lc_result.transitions,
+                        );
+                    }
+                }
+
                 // Post-consolidation quality
                 let post_quality = cortex::global_arena::token_steps() as f32;
 
