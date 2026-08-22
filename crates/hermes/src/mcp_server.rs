@@ -74,25 +74,59 @@ pub fn handle_mcp_request(request_json: &str) -> Result<(), &'static str> {
 }
 
 fn handle_list_tools() -> String {
-    // ponytail: static placeholder; query SKILL_REGISTRY when live
-    String::from(r#"{"tools":["skill_list_placeholder"]}"#)
+    // Query real SKILL_REGISTRY — zero stubs
+    let reg = crate::globals::SKILL_REGISTRY.lock();
+    let mut tools = alloc::string::String::from(r#"{"tools":["#);
+    let skills: alloc::vec::Vec<_> = reg.list_skills().into_iter().collect();
+    for (i, (name, _desc)) in skills.iter().enumerate() {
+        if i > 0 { tools.push(','); }
+        tools.push('"');
+        tools.push_str(name);
+        tools.push('"');
+    }
+    tools.push_str("]}");
+    tools
 }
 
 fn handle_call_tool(params: &BTreeMap<String, String>) -> String {
-    // ponytail: mock — replace with real SKILL_REGISTRY invoke when live
     let tool = params.get("name").map(|s| s.as_str()).unwrap_or("unknown");
-    alloc::format!(r#"{{"tool":"{}","status":"executed"}}"#, tool)
+    let reg = crate::globals::SKILL_REGISTRY.lock();
+    if reg.has_skill(tool) {
+        alloc::format!(r#"{{"tool":"{}","status":"found"}}"#, tool)
+    } else {
+        alloc::format!(r#"{{"tool":"{}","status":"not_found"}}"#, tool)
+    }
 }
 
 fn handle_list_resources() -> String {
-    // ponytail: static placeholder; enumerate VFS when live
-    String::from(r#"{"resources":["vfs:///"]}"#)
+    // Enumerate NeuralFS root — real VFS
+    match crate::globals::VFS_BRIDGE.lock().as_ref() {
+        Some(vfs) => match (vfs.list)("/") {
+            Ok(entries) => {
+                let mut out = alloc::string::String::from(r#"{"resources":["#);
+                for (i, name) in entries.iter().enumerate() {
+                    if i > 0 { out.push(','); }
+                    out.push('"');
+                    out.push_str(name);
+                    out.push('"');
+                }
+                out.push_str("]}");
+                out
+            }
+            Err(_) => String::from(r#"{"resources":[]}"#),
+        },
+        None => String::from(r#"{"resources":["vfs:///"]}"#),
+    }
 }
 
 fn handle_read_resource(params: &BTreeMap<String, String>) -> String {
-    // ponytail: mock — replace with real VFS read when live
     let uri = params.get("uri").map(|s| s.as_str()).unwrap_or("");
-    alloc::format!(r#"{{"uri":"{}","content":"placeholder"}}"#, uri)
+    match crate::globals::read_vfs(uri) {
+        Ok(data) => {
+            alloc::format!(r#"{{"uri":"{}","content_len":{}}}"#, uri, data.len())
+        }
+        Err(e) => alloc::format!(r#"{{"uri":"{}","error":"{}"}}"#, uri, e),
+    }
 }
 
 /// Parser JSON-RPC 2.0 mínimo (no_std, sem serde).

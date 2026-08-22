@@ -174,7 +174,7 @@ impl ConfigLearner {
     pub fn snapshot(&mut self) {
         let tick = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         // Locks individuais (sem aninhamento) para evitar deadlock
-        let gpu_present = false; // TODO: jarbas::display::fb::GPU
+        let gpu_present = crate::globals::SYSTEM_ARCH.lock().as_ref().map_or(false, |a| a.ring1_mode > 0);
         let net_online = crate::net::NET_CONFIG.lock().online;
         let ring0_mode = crate::globals::SYSTEM_ARCH.lock().as_ref().map_or(0, |a| a.ring0_mode);
         let heap_mb = crate::globals::SYSTEM_ARCH.lock().as_ref().map_or(0, |a| a.heap_size_mb as u64);

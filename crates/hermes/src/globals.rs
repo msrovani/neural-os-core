@@ -53,7 +53,7 @@ lazy_static! {
     pub static ref MEMORY_HIERARCHY: Mutex<Option<k_nano::mhi::MemoryHierarchy>> = Mutex::new(None);
     pub static ref AUDIT_TRAIL: Mutex<AuditTrail> = Mutex::new(AuditTrail::new());
     pub static ref EXECUTIVE_SUPERVISOR: Mutex<Option<ExecutiveSupervisor>> = Mutex::new(None);
-    static ref VFS_BRIDGE: TicketLock<Option<VfsBridge>> = TicketLock::new(None);
+    pub static ref VFS_BRIDGE: TicketLock<Option<VfsBridge>> = TicketLock::new(None);
 }
 
 /// Instala o VFS do bin de integração sem criar dependência hermes → neural-kernel.

@@ -78,8 +78,18 @@ pub fn execute(cmd: &str) -> String {
         "ping" => String::from("pong\n"),
         "dns" => { let ip = [10,0,2,3]; alloc::format!("DNS: {}.{}.{}.{}\n", ip[0], ip[1], ip[2], ip[3]) }
         "http" | "fetch" => { if args.is_empty() { String::from("Usage: fetch <url>\n") } else { fetch_cmd(args) } }
-"gpu" => String::from("GPU stub"), /* TODO: jarbas::gpu::backend::gpu_status */
-"vram" => String::from("VRAM stub"), /* TODO: jarbas::gpu::vram::vram_status */
+"gpu" => {
+            let loaded = cortex::cortex::model_is_loaded();
+            let status = if loaded { "AI_READY" } else { "NO_MODEL" };
+            alloc::format!("GPU: backend={} model={}
+",
+                if cfg!(target_arch = "x86_64") { "x86_64" } else { "unknown" }, status)
+        }
+"vram" => {
+            let ram = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
+            alloc::format!("VRAM: RAM={}MB (GPU VRAM: AWAITING_HW)
+", ram)
+        }
         "agents" => alloc::format!("Agents: 248\n"),
         "skills" => alloc::format!("Skills: see /skills\n"),
         "events" => alloc::format!("Events: see EventBus\n"),
