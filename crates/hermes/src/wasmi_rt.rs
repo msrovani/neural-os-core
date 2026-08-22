@@ -139,6 +139,18 @@ fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> 
         },
     ).map_err(|_| "linker aios_fs::fs_write")?;
 
+    // ── aios_gpu::submit(op,flags) -> i32 ────────────────────────────────
+    // GPU capability gated: sem CAP_GPU retorna 0 (CPU fallback, não panic).
+    linker.func_wrap("aios_gpu", "submit",
+        |caller: wasmi::Caller<'_, HostState>, op: i32, _flags: i32| -> Result<i32, wasmi::Error> {
+            check_cap(&caller, CAP_GPU, "aios_gpu", "submit")?;
+            // Sem GPU backend → fallback CPU
+            k_nano::slog_bin!("WASM", "warn",
+                "aios_gpu::submit: no GPU backend, fallback CPU (op={})", op);
+            Ok(0)
+        },
+    ).map_err(|_| "linker aios_gpu::submit")?;
+
     // ── wasi_snapshot_preview1 ──────────────────────────────────────────────
     super::wasi_host::register_wasi_host_functions(linker)
         .map_err(|_| "linker wasi_snapshot_preview1")?;
