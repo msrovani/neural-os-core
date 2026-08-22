@@ -12,6 +12,7 @@ pub mod layers;
 pub mod memory_doc;
 pub mod metrics;
 pub mod store;
+pub mod tickv_adapter;
 
 pub use art::ArtIndex;
 pub use bq::{hamming, hamming_path, quantize_f32, BqFlatIndex};

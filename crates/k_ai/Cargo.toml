@@ -15,6 +15,7 @@ agent-core = { path = "../agent-core" }
 cortex = { path = "../cortex" }
 k-nano = { path = "../k_nano" }
 k-hal = { path = "../k_hal" }
+neural-sgdb = { path = "../neural-sgdb", default-features = false }
 
 [features]
 kernel = []
