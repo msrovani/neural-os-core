@@ -1,4 +1,6 @@
-﻿# STATE — neural-os-core v1.9.99-s283 — Onda 0–1 ADR-0100 no tree
+﻿# STATE — neural-os-core v1.9.99-s284 — neural-sgdb migration completa (ADR-0091)
+#   SESSION_284: neural-sgdb v1.1.11 migration completa (ADR-0091): TickvStorageAdapter, NSGDB Bridge,
+#     Hits tipados 12 campos, recall_lexical, lifecycle, memory-aware route. 9 commits, ~1150 LOC, 0 regressão.
 #   SESSION_283: BOOT_AI + storage_bw TSC; TCG skip ATA/medida. Próximo T-017 metal K23.
 #   SESSION_281: i5 7ª reboot + 240H freeze em K22. ICR x2APIC sem bits 12–19;
 #   SESSION_281: i5 7ª reboot + 240H freeze em K22. ICR x2APIC sem bits 12–19;

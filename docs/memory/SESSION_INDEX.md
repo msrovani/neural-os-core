@@ -251,6 +251,8 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 | 106-9 | ✅ | Escalonamento Evolutivo (Python→WASM via SkillOpt) |
 | 106-10 | ✅ | SkillOpt: Tradução Python→Rust no_std |
 
+| 284 | ✅ | Migração neural-sgdb externo — substrato de memória cognitiva (ADR-0091); Hits tipados 12 campos, recall_lexical, lifecycle, memory-aware route |
+
 **Status v2.0:** ✅ Sprint 106 concluída (10/10). ✅ Sprint 107 Voice FECHADA (PASS parcial forte+).  
 **Pista ativa:** gate `v2.0.0` review + residual soft-float/VITS. Sprint Sound ✅ (`SESSION_122.md`). ADR-0042 **N1–N5 + wire N2.5–N5.7 ✅** no marco v1.8.0.
 
