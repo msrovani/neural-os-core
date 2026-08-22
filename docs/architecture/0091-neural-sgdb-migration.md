@@ -1,7 +1,7 @@
 # ADR-0091: Migração para neural-sgdb Externos como Substrato de Memória para Agentes
 
-**Status:** Implemented (Fase 0+1+2) / Planejado (Fase 2.5+3.0)  
-**Lifecycle:** `fazendo`  
+**Status:** Implemented  
+**Lifecycle:** `proposta_feita`  
 **Data:** 2026-08-22  
 **Ideias:** #527–#535  
 **Supersede:** —  
