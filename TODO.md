@@ -1,48 +1,124 @@
 # 📋 TODO MASTER — neural-os-core
 
-**Versão release:** v1.9.5 TEST / BEI planejado
-**Data:** 2026-07-21
-**Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.
-**Documento oficial:** AGENTS.md (seção roadmap)
-**Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado
-**Pista ativa:** **ADR-0088 boot AIOS (SESSION_271–274)** — DeviceTree+plano k_ai ✅; Trinity/HUD/HITL honesto ✅; GPU matmul+MHI tier0 ✅. Residual #513: `measure_bandwidth` / BMIDE 0xC8.
+**Versão release:** v1.9.99 TEST
+**Data:** 2026-08-22
+**Propósito:** Checklist mestre; execução = ADR-0100 T-001–T-075.
+**Documento oficial:** AGENTS.md + `docs/architecture/0100-k3chj-backlog-custo-anel.md`
+**Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado | `[ ]` TODO 0100
+**Pista ativa:** **ADR-0100** (SESSION_282) — ondas 0–10. Premissa 0088. SMP s281 código ✅; metal K23 = T-017+.
 **PreFlight:** `python tools/preflight_wave.py --wave N` · `--idea 418` · `--anti-fake-ready` · cache `.preflight_cache/`
 **Tags:** `depends_on: lan` (✅ L3.5–L5) / `depends_on: wifi` ▶️ · ▶️ **AWAITING_HW** · **BEI** (BitNet Ecosystem Intelligence)
 **Gate v2.0.0:** `por_fazer` zerado **ou** residual replanejado + OK maintainer. AWAITING_HW bloqueia salvo defer explícito.
-**Residuals por onda:** 0–7 ✅ · Pós-LAN ✅ (NetFs PASS) · **ADR-0086 ✅ (Instalação + Update OTA completos, SESSION_252)** · WiFi AWAITING · **TLS parcial ✅ (s156 smoke PASS; PKI real pendente)** · R soft-float defer.
+**Residuals por onda:** 0–7 ✅ · Pós-LAN ✅ (NetFs PASS) · **ADR-0086 núcleo ✅ (U1/U2/U4/U6 + I3–I12 SESSION_252; A1–A9 residual)** · WiFi AWAITING · **TLS parcial ✅ (s156 smoke PASS; PKI real pendente)** · R soft-float defer.
 **Fora do gate (não atracar):** SmileyOS 279a–b/e, Cube 283a, XDNA 💰, SKYNET 315.26–27, Mach-O/APK, wasmi-USB #8/#11.
 
 **Feito recente (SESSION_274):** GPU compute honesto — vendor matmuls → `None`; `boot_report.gpu_ok` real; MHI tier0 CE wired; msched/sasos acessos. SESSION_273: Trinity único + `runtime_observe` + HUD no render. SESSION_272: storage NVMe-first + Trust/HITL no boot.
 
 ---
 
-## ▶️ FILA ADR — pendências ordenadas por complexidade (mais simples → mais complexo)
+## ▶️ FILA ADR-0100 — custo × anel (simples → complexo)
 
-Fonte: `docs/architecture/INDEX.md` (lifecycle). Sequência de execução recomendada: 1→2→3→4 (aquecimento), depois 5→6→8→9 (padrão já dominado). 🔴 = blocker · ▶️ = AWAITING_HW.
+Fonte canônica: `docs/architecture/0100-k3chj-backlog-custo-anel.md`. Fila antiga 0–18 mapeada nas ondas (itens ✅ permanecem histórico).
 
-| # | Item | ADR | Tier | Esforço | Status |
-|---|------|-----|------|---------|--------|
-| 0 | **Instalação + Update OTA (processo unificado)** — 10 gaps fechados (U1/U2/U4/U6 + I3–I12): slot→kernel.elf, rollback, GPT, boot_mode, SELF.STATE, ModelProvisioner, NeuralFS boot, telemetria, imagem mini | 0086 | 0 | ~1.200 | ✅ SESSION_252 (U3 Ed25519/TPM = defer p/ update público) |
-| 1 | Aceite QEMU slog (`NotifySent` + Cap/AS non-fatal como evidência) | 0041 | 0 | ~0 (evidência) | ✅ `docs/evidence/boot-whpx-20260805.txt` (WHPX; fix raiz: GDT usa `&*TSS` p/ ISTs) |
-| 2 | Log honesto no fallback LCG + assets FAT (`ROUTER.BITNET`) | 0083 | 1 | ~50 | ✅ SESSION_251 (warn honesto + ROUTER.BITNET no FAT) |
-| 3 | Cutover jarbas pleno (espelho áudio → crate; soft-float/VITS defer honesto) | 0045 | 1 | ~150 | ✅ SESSION_251 (cutover já feito e51a48b; docs reconciliados) |
-| 4 | HardwareInfo expansão em ondas (MVP já em `platform_probe.rs`; snapshot WASM futuro) | 0082 | 1 | ~200 | ✅ Onda CPU (SESSION_251) — expansão restante 🟡 |
-| 5 | Market fetch v3 | 0056 | 2 | ~200 | ✅ SESSION_252: `search_remote` usa base do UPDATE.CFG (não hardcoded 10.0.2.2) + `/api/search` no serve_update.py (testado: ROUTER.BITNET listado) |
-| 6 | SGDB DoD 10M chaves / 100k docs (benchmark + tuning ART) | 0063 | 2 | ~300 | ✅ SESSION_252: `bench_dod` (ART 10M chaves hex sem alloc + BQ 100k×1024-dim), host-only, teste PASS (75s); P50 via TSC sem claim P99 (honestidade ADR-0063); D-series 100k mantido |
-| 7 | F4 W2A8 kernel (gated WHPX/HW real) | 0084 | 2 | ~400 | ⏳ ▶️ |
-| 8 | AirLLM residuals (prefetch DMA / stream-to-disk / K-quants / e2e GGUF grande) | 0046 | 2 | ~500 | 🟡 SESSION_252: hot-swap ATA+Net reais (stubs → `cortex::gguf` header-only + stream-to-disk Range 4MB chunks + append FAT); DMA prefetch / K-quants avançados = AWAITING |
-| 9 | FS residuals (NTFS/EXT **read** ✅ · NTFS/EXT **write** defer · **SysInstaller UI** · Storage Manager UI · Cloud mounts S3/WebDAV; MHI DMA + GPU DS ▶️ AWAITING_HW) | 0040 | 2 | ~800 (vários) | 🟡 **SysInstaller núcleo ✅ ADR-0086 (I3/I6/I8/I12)** — resta seleção disco UI (A5). **NTFS/EXT READ ✅ conectado**: `storage_bus::detect_ext/detect_ntfs` montam `/mnt/ext`+`/mnt/ntfs` via BlockDevice genérico (cobre **USB-MSC/pendrives** e ATA/AHCI/NVMe; lado a lado com NeuralFS p/ dual boot). **NTFS/EXT WRITE = defer honesto** (SESSION_252): OS escreve FAT32/exFAT/NeuralFS nativos; risco de corromper disco alheio; reabrir no dual boot quando for escrever partições alheias. Cloud S3/WebDAV = defer (NetFs HTTP cobre — §3.6B). SMART = AWAITING_HW. Storage Manager CLI ✅; card = cauda 0058 |
-| 10 | Cards S5 (widgets ricos/tema/TTF) + A/V real (HDA/UVC) | 0058 | 3 | ~800 | ⏳ |
-| 11 | Backprop real + router treinado (`ROUTER.BITNET`) | 0083 | 3 | ~1.000 | ✅ SESSION_252: `train_router.py` 93.5% (gate 0.80) exporta ROUTER.BITNET v6 (25.818B); **loader Rust corrigido v3→v6** (antes nunca carregava → fallback LCG); teste host load_router_v6_roundtrip PASS |
-| 12 | Cross-OS Ecosystem F1–F5 (Skill Manifest, Membrane, …) | 0076 | 3 | ~1.500 | ⏳ |
-| 13 | SemanticRouter / merge CRDT / merkle piece (BitTorrent ❌) | 0081 | 3 | ~1.500 | ⏳ |
-| 14 | Layer S/HW: APs workers vivos (IDT/IPI reschedule) + GPU W2A8 + driver NPU (pós-v2.0) | 0057 | 3 | ~2.000 + HW | ⏳ |
-| 15 | Ring3 isolation — 🔴 triple-fault blocker (`TRY_ENTER_RING3=false`; sessão debug dedicada) | 0077 | 4 | ~1.500 | 🔴 |
-| 16 | Multi-slot multimodal (GGUF→ternário, 6 slots, visão SigLIP, learning contínuo) | 0078 | 4 | ~2.500 | ⏳ |
-| 17 | Golden silício GPU multi-geração (NVIDIA ACR/GSP · AMD PSP/KIQ/MES · Intel GuC/walkers) | 0048–50 | 4 | ~3.000 + HW | ⏳ ▶️ |
-| 18 | **Storage Transport Resolver (self-adaptive I/O)** — boot FS via `BlockDevice` (não `AtaDriver` fixo); escolhe transporte em runtime (NVMe PRP → AHCI PRDT → BMIDE 0xC8 → PIO); usa `measure_bandwidth`; degradação honrada (TCG lento → boot sem disco + log CRÍTICO, nunca trava) | 0088 (política) + 0087/0062 P3 | 2 | ~500 | 🟡 SESSION_272: ordem+skip no plano k_ai. Residual: measure_bandwidth / BMIDE. IDEA #513 |
+| Onda | Custo | Anel | Tema | TODOs | Status |
+|------|-------|------|------|-------|--------|
+| 0 | S | R2 `k_ai` + bin | Honesty `BOOT_AI` + freeze HardwareInfo | T-001–T-006 | `[ ]` |
+| 1 | S–M | R0 `k_nano` | `measure_bandwidth` + `/hw/storage|gpu|net` | T-007–T-016 | `[ ]` |
+| 2 | S evidência | R0 (já s281) | Metal K23 `online==madt-1` | T-017–T-021 | `[ ]` |
+| 3 | S–M | R3 hermes/jarbas | 0086 A2–A8; A1/A9 HITL | T-022–T-032 | `[ ]` |
+| 4 | M–L | R0 + cortex + agent-core | `ap_pollable` + runqueue 0089 | T-033–T-044 | `[ ]` |
+| 5 | M | R0/R3 | Mesh 2c + CRDT; SemanticRouter defer | T-045–T-050 | `[ ]` |
+| 6 | L | R0 + bin + hermes | Ring3 HW + `register_native_ring` + PIN_DMA | T-051–T-057 | `[ ]` |
+| 7 | M–L | R2 cortex | W2A8 gated; 0078 **só Fase 1** | T-058–T-065 | `[ ]` |
+| 8 | XL ▶️ | R1 `k_hal` | Golden GPU / SDMA / NPU 💰 | T-066–T-069 | ▶️ |
+| 9 | M | R3 jarbas | 0058 S5 um widget; A/V | T-070–T-072 | `[ ]` |
+| 10 | L ▶️ | R2 | AirLLM DMA/e2e | T-073–T-075 | ▶️ |
 
-**Regra:** itens ▶️ AWAITING_HW não bloqueiam o gate v2.0.0 se tiverem defer explícito; 🔴 0077 resolve ANTES de re-habilitar Ring3 (ver `interrupts_ext.rs` review HIGH, SESSION_245).
+**Próximo (paralelo):** T-001 (`BOOT_AI`) e T-017 (USB metal).
+
+**Fora:** BitTorrent/merkle; NTFS write; 0078 Fase 2–4; 0076 F1–F17 (já ✅); WireGuard; Vulkan.
+
+**Regra:** ▶️ AWAITING_HW não bloqueia v2.0.0 com defer. Ring3 TCG ≠ `register_native_ring`.
+
+### Checklist T-001–T-075 (marcar aqui; detalhe na ADR-0100)
+
+- [ ] T-001 boot_report Observe/Plan/Act/Verify
+- [ ] T-002 Auto vs Escalate
+- [ ] T-003 linha serial `BOOT_AI`
+- [ ] T-004 teste host parse
+- [ ] T-005 congelar `HardwareInfo`
+- [ ] T-006 wrappers `hw_cpu_*`
+- [ ] T-007 API `measure_bandwidth`
+- [ ] T-008 medir NVMe
+- [ ] T-009 medir AHCI
+- [ ] T-010 BMIDE 0xC8 ou skip honesto
+- [ ] T-011 TCG: CRÍTICO + sem freeze
+- [ ] T-012 plano `k_ai` usa medida
+- [ ] T-013 `/hw/storage`
+- [ ] T-014 `/hw/gpu`
+- [ ] T-015 `/hw/net`
+- [ ] T-016 wifi só se device
+- [ ] T-017 imagem USB unified
+- [ ] T-018 i5 K23 + online
+- [ ] T-019 240H K23 + online
+- [ ] T-020 log ICR canônico
+- [ ] T-021 SESSION se falhar (não BSP-only destino)
+- [ ] T-022 smoke QEMU A2
+- [ ] T-023 evidência `docs/evidence/`
+- [ ] T-024 provision NET_READY
+- [ ] T-025 HITL download
+- [ ] T-026 telemetria cron backoff
+- [ ] T-027 verificar A5 s253
+- [ ] T-028 menu Live/Install
+- [ ] T-029 default Live
+- [ ] T-030 tries 3 + last_good
+- [ ] T-031 A9 mini — só HITL
+- [ ] T-032 A1 Ed25519 defer público
+- [ ] T-033 barreira AP_IDT_READY
+- [ ] T-034 sti só com IST
+- [ ] T-035 parallel_* nos APs
+- [ ] T-036 self-test matmul smp2
+- [ ] T-037 PerCpu heap ≠ BSS 511
+- [ ] T-038 boot 1c sem 511 TSS
+- [ ] T-039 feature runqueue pós T-033
+- [ ] T-040 dispatch; ring0 não migra
+- [ ] T-041 steal min-1
+- [ ] T-042 IPI reschedule
+- [ ] T-043 testes host CPU_COUNT
+- [ ] T-044 HUD pending/core no render()
+- [ ] T-045 mesh 2c vs s281
+- [ ] T-046 WHPX OVMF não é sprint kernel
+- [ ] T-047 teto 4G script
+- [ ] T-048 CRDT merge no_std
+- [ ] T-049 teste host merge
+- [ ] T-050 SemanticRouter não nesta pista
+- [ ] T-051 WHPX Ring3 vs OVMF
+- [ ] T-052 metal iretq
+- [ ] T-053 0077 §6 HW
+- [ ] T-054 register_native_ring + HITL
+- [ ] T-055 isolation_ring_available
+- [ ] T-056 JIT sem SSE default
+- [ ] T-057 SYS_PIN_DMA pós Ring3
+- [ ] T-058 W2A8 gated ISA
+- [ ] T-059 golden GTX 1050
+- [ ] T-060 paridade quantizada
+- [ ] T-061 threshold adaptativo
+- [ ] T-062 convert GGUF script
+- [ ] T-063 1 modelo pequeno QEMU
+- [ ] T-064 PPL vs fixo
+- [ ] T-065 0078 F2–F4 fora
+- [ ] T-066 NVIDIA ACR ▶️
+- [ ] T-067 AMD SDMA ▶️
+- [ ] T-068 Intel GuC ▶️
+- [ ] T-069 XDNA 💰
+- [ ] T-070 um widget S5
+- [ ] T-071 A/V HDA; UVC ▶️
+- [ ] T-072 sem draw no tick()
+- [ ] T-073 prefetch DMA ▶️
+- [ ] T-074 e2e GGUF hash
+- [ ] T-075 K-quants residual documentar
+
+**Mapa fila antiga:** #7→Onda7 · #8→Onda10 · #10→Onda9 · #12 0076✅ · #13→Onda5 · #14→Onda2+4 · #15→Onda6 · #16→Onda7 F1 só · #17→Onda8 · #18→Onda1.
 
 ---
 
@@ -369,7 +445,7 @@ Processo canônico em `docs/architecture/0086-instalacao-e-update-ota.md`. ✅ 1
 - `boot_log_agent.rs` (k_ai 7,2 KB ↔ bin 13,4 KB): AMBOS vivos (bin registrado + hermes via BootSelfHealAgent). Bin tem fixes de produção (budget FAT, SelfHeal hook) com deps bin-locais; portar budget p/ k_ai + seam ErrorContext, depois facade.
 - `agents/mouse_agent.rs`, `agents/log_analyst_agent.rs` (hermes ↔ bin): idem agents.rs.
 - Espelhos `net/` (netstack, network_agent, net.rs), `fs/` (ata_agent, proc_fs_agent, …), `cortex.rs`/`k_ai` (hnsw, chunker, …): listados pelo guarda `tools/check_duplication.py` (50 DUPs restantes pós-higiene). Programa emagrecer — ver `.cursor/rules/neural-emagrecer-bin.mdc`.
-- `interrupts_ext.rs` (bin): residuais Ring3 referenciam GDT/TSS próprios — o review (oracle, f41aa03) marcou HIGH mascarado por `TRY_ENTER_RING3=false`: GDT user segments não é carregado (k_nano carrega o dele), TSS per-proc `set_rsp0` muta TSS que não é o do LTR, AP RSP0 nunca setado. Resolver ANTES de re-habilitar Ring3 (ADR-0060), não antes.
+- `interrupts_ext.rs` (bin): residuais Ring3 vs GDT/TSS do k_nano (oracle f41aa03). SESSION_278 moveu user segments para a GDT carregada. Residual: produção HW/`register_native_ring` (ADR-0077), não o demo TCG.
 
 ---
 

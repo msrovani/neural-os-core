@@ -1,5 +1,7 @@
 # ADR-0082: Ring3 Isolation — Registro Completo de Itens
 
+> **Conflito de ID:** `0082` canônico no INDEX é **HardwareInfo** (`0082-hardware-info-registry.md`). Este registro e `0082-ring3-isolation-production.md` são o **checklist Ring3** (execução → ADR-0077). Não misturar com HardwareInfo.
+
 **Data:** 2026-08-02  
 **Fonte:** `docs/architecture/0082-ring3-isolation-production.md`  
 **Status:** Proposed — registro estruturado para execução e rastreamento

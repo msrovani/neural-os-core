@@ -1,6 +1,9 @@
 # ADR-0089: Per-CPU Run-Queues para Agents — Distribuição SMP Cooperativa
 
-**Status:** Proposed
+> **Conflito de ID:** `0089` no INDEX também tem o whitepaper **Novo Hermes** (`0089-novo-hermes-malha-cognitiva-global.md`, `pesquisa`). Este arquivo é a ADR de **runqueue SMP** (Proposed, #492). Não fundir os dois.
+
+**Status:** Proposed  
+**Lifecycle:** `por_fazer` (código `smp-runqueue` gated; SESSION_281 não wirea agents no AP)
 **Date:** 2026-08-20
 **Deciders:** Marcelo Scapin Rovani
 **Relates to:** ADR-0055 (FeatureGate), ADR-0057 (Compute Dispatch), ADR-0065 (TSS/IST multi-AP)

@@ -1,4 +1,7 @@
-﻿# STATE — neural-os-core v1.9.99-s281 — K22 SMP metal (ICR x2APIC + GDT por CPU)
+﻿# STATE — neural-os-core v1.9.99-s282 — pista ADR-0100 (backlog custo×anel)
+#   SESSION_282: ADR-0100 Proposed — ondas 0–10, T-001–T-075; filtro valor/aderência/viabilidade.
+#     Próximo: T-001 métrica BOOT_AI + T-017 aceite metal K23 (paralelo, anéis distintos).
+#   SESSION_281: i5 7ª reboot + 240H freeze em K22. ICR x2APIC sem bits 12–19;
 #   SESSION_281: i5 7ª reboot + 240H freeze em K22. ICR x2APIC sem bits 12–19;
 #     deassert só xAPIC; GDT própria 1 TSS/CPU (crate 8 slots não é o silício);
 #     IST heap; sti no AP. Testes x2apic_icr 2/2. Aceite metal: K23 + online==madt-1.

@@ -1,5 +1,7 @@
 # ADR-0060: Ring3 Isolation Ring — execução nativa isolada (ex-ADR-0059 F6)
 
+> **Conflito de ID:** `0060` canônico no INDEX é **BEI** (`0060-bitnet-cognitivo-bei.md`). Este arquivo é cópia histórica. Autoridade Ring3 = **ADR-0077**. Não seguir este número.
+
 **Data:** 2026-07-22
 **Status:** Proposed — **BLOQUEADOR conhecido** (habilitar hoje = triple-fault → reboot loop). NÃO habilitado; kernel em **porto seguro** (ver §4).
 **Lifecycle (INDEX):** `pesquisa`

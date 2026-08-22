@@ -1,8 +1,8 @@
 # ADR-0077: Ring3 Isolation Ring — execução nativa isolada (ex-ADR-0059 F6)
 
 **Data:** 2026-07-26
-**Status:** Proposed — **BLOQUEADOR conhecido** (habilitar hoje = triple-fault → reboot loop). NÃO habilitado; kernel em **porto seguro** (ver §4).
-**Lifecycle (INDEX):** `pesquisa`
+**Status:** Proposed — **B/C nativo ainda gated**. Demos P6 TCG (SESSION_278): `TRY_ENTER_RING3=true`, iretq+CPL3 + fault-containment PASS. WHPX/HW e `register_native_ring` **não** liberados. Sem Ring3, código de IA não-confiável continua só wasmi.
+**Lifecycle (INDEX):** `fazendo`
 **Extraído de:** ADR-0059 §F6 (esta ADR é o lar dedicado do "ring de isolamento").
 **Nota sobre o número:** Originalmente proposto como ADR-0060 no PR #5, mas `0060` já estava alocado para BEI (BitNet Ecosystem Intelligence). Renumerado para 0077.
 **Depende de / reusa:** ADR-0041 (Ring3/AS/CR3/int 0x90 PoC), ADR-0059 F7 (`exec_arena` W^X — codegen nativo).
@@ -35,7 +35,7 @@ Só quando esses critérios (§6) passarem, `isolation_ring_available()` vira `t
 
 ### Perdas / riscos
 
-- **Bricar o boot:** hoje habilitar = **triple-fault → reboot loop** (§3). Qualquer erro (page tables, TSS/IST, GDT, iretq, CR3, syscall) → reset/corrupção.
+- **Bricar o boot:** erro em page tables, TSS/IST, GDT, iretq, CR3 ou syscall ainda pode resetar. SESSION_278 fechou o loop TCG conhecido; WHPX/HW **não** têm o mesmo aceite.
 - **Complexidade/manutenção:** AS por-sandbox, TSS RSP0 + **IST** por vetor, ABI de syscall, save/restore, ciclo de vida (spawn/kill/timeout/quota).
 - **Overhead:** troca de CR3 (flush TLB sem PCID), transições de anel, marshaling — pode superar o ganho em tarefas curtas.
 - **Divergência QEMU×HW** (TCG/KVM/WHPX/HW): pode ficar flaky → gating por hypervisor.
@@ -47,30 +47,27 @@ Só quando esses critérios (§6) passarem, `isolation_ring_available()` vira `t
 
 O Caminho A (wasmi) já entrega a **funcionalidade** "IA cria app em runtime" com segurança. O F6 agrega **performance nativa** e a **trilha self-hosting (C)** — não é pré-requisito funcional. Por isso: **F3/F4 (wasmi) primeiro**; F6 como projeto de kernel dedicado.
 
-## 3. Diagnóstico confirmado
+## 3. Diagnóstico (histórico) + SESSION_278
 
-Habilitando `TRY_ENTER_RING3=true` (teste isolado, revertido):
-- Boot entra em **reboot loop** — "P6 Ring3 user-mode demo" + "Cap::ENTER_USER deny OK" repetem 3× no log, **sem chegar ao scheduler**.
-- O `iretq` real (`user_mode::enter_user_mode`) faz **`#PF err=0x10`** (supervisor, instruction-fetch, not-present) logo após `mov cr3, {user_l4}`.
-- O próprio handler de #PF **não roda** sob o CR3 do user (kernel text/IDT/handler/IST não confiavelmente mapeados no clone raso) → **double → triple fault → reset**.
+Habilitar `TRY_ENTER_RING3` **antes** do HHDM no sandbox AS + GDT user na GDT **carregada** + TSS.RSP0 dava triple-fault (`#PF` pós-`mov cr3`). SESSION_278 corrigiu isso em **QEMU TCG NoDisk**. O texto antigo de “reboot loop hoje” **não** descreve o tree pós-278.
 
-**Causa-raiz (hipótese forte):** o `AddressSpace::clone_current()` é um **clone raso do L4** — herda entradas do kernel, mas ao trocar de CR3 antes do `iretq`, as instruções seguintes / o vetor de #PF / a pilha IST não estão garantidamente presentes e alcançáveis no novo AS.
+**Ainda aberto:** WHPX `#GP` OVMF (não é o mesmo bug); `ring3_is_safe` só KVM; B/C HITL; `isolation_ring_available()=false`.
 
 ## 4. Porto seguro do kernel — por que está OK HOJE
 
-O kernel está **estável e seguro** justamente porque o Ring3 está **desligado por design**:
+O kernel **não** libera B/C nativo. Demos P6 em TCG usam `TRY_ENTER_RING3=true` (SESSION_278). Invariante de produto: **wasmi** para IA não-confiável até `register_native_ring` + §6 completo em HW.
 
 | Salvaguarda | Estado | Onde |
 |---|---|---|
-| `TRY_ENTER_RING3` | **`false`** (iretq real nunca executa) | `neural-kernel/src/user_mode.rs` |
+| `TRY_ENTER_RING3` | **`true`** (demo TCG; não é aceite HW) | `neural-kernel/src/user_mode.rs` |
 | `isolation_ring_available()` | **`false`** (nenhum ring nativo registrado) | `crates/hermes/src/app_factory.rs` |
 | Caminhos B/C nativo | **gated** (`AWAITING_ISOLATION`) | `app_factory::execute` |
-| Código de IA não-confiável | roda **só no wasmi** (sandbox software) | `crates/hermes/src/wasmi_rt.rs` |
+| Código de IA não-confiável | roda **só no wasmi** | `crates/hermes/src/wasmi_rt.rs` |
 | `exec_arena` (F7) | roda **só código próprio/confiável** em Ring 0 | `neural-kernel/src/exec_arena.rs` |
 | `isolation_ring::init_connectors` | loga diagnóstico mas **não registra** ring | `neural-kernel/src/isolation_ring.rs` |
 | Boot QEMU | 8 fases + scheduler vivo + sem panic | evidência em `logs/` |
 
-**Invariante:** enquanto **nenhum** "ring nativo" for registrado no seam (§5) e `TRY_ENTER_RING3=false`, o kernel **não executa nenhum código nativo não-confiável** — o pior caso é wasmi (sandbox) ou negação honesta. **Não regredir esse invariante** ao atacar o F6.
+**Invariante:** `isolation_ring_available()==false` (nenhum ring nativo registrado) ⇒ IA não-confiável **só** wasmi. `TRY_ENTER_RING3=true` no tree é **demo P6 TCG**, não liberação de B/C. **Não** registrar `register_native_ring` até §6 passar em HW.
 
 ## 5. Conectores no código (seams para quando atacarmos o F6)
 
@@ -84,14 +81,11 @@ Quando o F6 estiver validado (§6), `isolation_ring::init_connectors()` chamará
 
 ## 6. Critérios de aceite (gate para habilitar — não ligar meio-pronto)
 
-- [ ] **iretq estável:** blob nativo roda em **CPL=3** e retorna ao kernel limpo (sem #PF após `mov cr3`).
-- [ ] **AS isolado:** kernel mapeado **supervisor-only** no AS do sandbox; sandbox só acessa suas páginas + página de gate; kernel text + IDT + handlers de falta + **IST** alcançáveis para tratar traps de CPL=3.
-- [ ] **Contenção de falta:** #PF/#GP/#UD **forçados** no sandbox → **mata o sandbox, kernel continua** (não triple-fault, não halt global).
-- [ ] **Syscall gate:** ABI (registrador ou página dedicada) mediada por **CapGate**; sem cap → deny.
-- [ ] **DMA/MMIO negados:** caps `PIN_DMA`/`MAP_FB`/MMIO **negadas** ao sandbox (sem IOMMU).
-- [ ] **Soft-float:** JIT nativo sem SSE (respeita a config do kernel) ou trap tratado.
-- [ ] **Gating por hypervisor:** se instável em WHPX/HW, `isolation_ring_available()` fica `false` naquele ambiente.
-- [ ] `cargo check --release` 0 erros; **boot QEMU sem reboot loop**; self-test do ring PASS.
+- [x] **iretq estável (TCG):** SESSION_278 `SUCCESS iretq+CPL3` NoDisk. Metal/WHPX aberto.
+- [x] **Contenção de falta (TCG):** fault-containment demo PASS.
+- [x] **DMA/MMIO negados (demo):** CapGate sandbox deny PIN_DMA/MAP_FB (SESSION_278).
+- [x] **Soft-float SSE:** `#UD` contido no demo.
+- [ ] **AS isolado / syscall gate / WHPX+HW / register_native_ring** — B/C continuam gated.
 
 Só com **todos** ✅ → `register_native_ring(...)` → B/C nativo liberado (HITL forte).
 

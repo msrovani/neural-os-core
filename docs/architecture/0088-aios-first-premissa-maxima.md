@@ -89,9 +89,9 @@ A premissa deixa de ser só política: o T+0 materializa Observe→Plan→Act→
 | R2/R3 | `cortex::trinity` + `hermes::runtime_observe` + Jarbas HUD | MoE posture honesta; HEALTH I5/Escalate observe-only; HUD no `render()` |
 | R1/R0 | `k_hal` GPU + `k_nano::mhi` | Matmul sem fingir device; `gpu_ok` real; MHI tier0 CE quando canário passa |
 
-Mandamento 4 (nada bypassado): martelar E1000/ATA/xHCI “porque sempre foi assim” era o gap. SESSION_271 fechou NIC; SESSION_272 storage+Trust+HITL; SESSION_273–274 honestidade de telemetria (MoE/GPU/HUD).
+Mandamento 4 (nada bypassado): martelar E1000/ATA/xHCI “porque sempre foi assim” era o gap. SESSION_271 fechou NIC; SESSION_272 storage+Trust+HITL; SESSION_273–274 honestidade de telemetria (MoE/GPU/HUD). SESSION_281: K22 SMP — ICR x2APIC canônico + GDT 1 TSS/CPU (teto da crate `x86_64` 8 slots **não** é o silício).
 
-Residual honesto (#513 / TODO #18): `measure_bandwidth` + BMIDE 0xC8 — ordem e skip já no plano; medição de banda ainda não escolhe o transporte.
+Residual honesto (#513): `measure_bandwidth` + BMIDE 0xC8 — ordem e skip já no plano; medição ainda não escolhe o transporte. Residual SMP: aceite metal K23. **Fila executável:** ADR-0100 (ondas 0–10, T-001–T-075).
 
 ## Planos Cursor implementados
 
@@ -101,6 +101,7 @@ Residual honesto (#513 / TODO #18): `measure_bandwidth` + BMIDE 0xC8 — ordem e
 | Plano completo NIC+storage+Trust+HITL | ✅ SESSION_272 | PR #12 `6b0e4f5`; `SESSION_272.md` |
 | Trinity único + HUD/HITL honesto | ✅ SESSION_273 | PR #13; `runtime_observe`, `CORTEX_POSTURE` |
 | GPU compute honesto + MHI tier0 | ✅ SESSION_274 | PR #13; `note_gpu`, `register_tier0_copier` |
+| SMP K22 ICR+GDT (não bypass crate-8) | 🟡 SESSION_281 | código ✅; aceite metal K23 aberto |
 
 ## Verificação
 

@@ -1,7 +1,7 @@
 # ADR-0055: Revisão SMP — FeatureGate, ISA, Caches e Multicore Real
 
 **Data:** 2026-07-18  
-**Status:** Accepted (Fase A evidenciada TCG; WHPX BSP-only)  
+**Status:** Accepted (Fase A evidenciada TCG; metal K22 SESSION_281 — ICR/GDT; aceite `online==madt-1` aberto)  
 **Lifecycle (INDEX):** `fazendo`  
 **Substitui (deprecated):**
 - ADR-0037 — tema SMP / SPSC / IPI / PerCpu / work-steal / parallel matmul CPU
@@ -25,14 +25,13 @@ CR0/CR4 SSE (EM clear, MP/NE/OSFXSR/OSXMMEXCPT) permanece obrigatório no boot; 
 
 ---
 
-## 1. Contexto (gap v1.8.6)
+## 1. Contexto (gap v1.8.6 — snapshot 2026-07; **não** é o tree atual)
 
-Documentação (0037 / IDEA ✅) à frente do código:
-- Trampoline stub (`sipi_ready() == false`) — APs não acordam
-- `ap_entry` = `hlt`; `WorkStealingPool` / `parallel_matmul` sem wire real
-- `CPU_TYPE_P/E` sem leaf 0x1A; sandbox parcial sem FeatureGate unificado
-- `cache_size` só no attention Cortex; não alimenta matmul/SPSC/align
-- WHPX + SIPI → `Unexpected VP exit code 4` → SMP OFF sob Microsoft Hv
+Documentação (0037 / IDEA ✅) à frente do código **naquela data**:
+
+O tree 2026-08 (SESSION_279–281) fechou trampoline jmp@0, MADT u32, ICR x2APIC canônico e GDT 1 TSS/CPU. Residual: evidência metal K23; `ap_pollable`/matmul HW; BSS 511.
+
+Snapshot 2026-07 (histórico): trampoline stub, WHPX SIPI VP exit 4, FeatureGate incompleto.
 
 ---
 
@@ -103,6 +102,8 @@ IDEA #20–41 e claims “AgentScheduler multicore ✅” voltam a `fazendo` at�
 - [x] Logs `[ENV]` / `[CPU]` / `[CACHE]` no boot (SESSION_141)
 - [x] TCG: AVX2 off; WHPX: SMP off estável (`logs/boot_adr55_*`)
 - [x] TCG `-smp 2`: `APs acordados: 1` + CorePools (Fase A)
+- [x] SESSION_281: ICR x2APIC sem bits reservados; GDT própria 1 TSS/CPU (ADR-0088: teto crate ≠ silício)
+- [ ] Metal: K23 + `online == madt_enabled - 1` (i5 7ª / 240H)
 - [ ] `parallel_matmul` speedup em HW (Fase B) — código wired; aceite HW
 - [ ] CorePools log em Intel hybrid (Fase B/C) — log P-only em QEMU; hybrid = HW
 
