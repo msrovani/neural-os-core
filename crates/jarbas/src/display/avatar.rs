@@ -9,12 +9,18 @@ use libm::{sinf, cosf};
 use spin::Mutex;
 
 /// Buffer de energia FFT (16 bins espectrais)
-static FFT_BINS: Mutex<[f32; 16]> = Mutex::new([0.0f32; 16]);
+static FFT_BINS: Mutex<[f32; 32]> = Mutex::new([0.0f32; 32]);
 
 /// Le a energia FFT atual (usado pelo compositor para animar o orb)
 pub fn read_audio_energy() -> f32 {
     let bins = FFT_BINS.lock();
     bins.iter().sum::<f32>() / bins.len() as f32
+}
+
+/// Le um bin individual (usado pelo waveform 32 barras)
+pub fn read_fft_bin(i: usize) -> f32 {
+    let bins = FFT_BINS.lock();
+    if i < bins.len() { bins[i] } else { 0.0 }
 }
 
 /// Processa buffer de audio PCM (i16) em 16 bins de energia espectral
@@ -25,8 +31,8 @@ pub fn process_audio_fft(pcm: &[i16]) {
     if n < 16.0 {
         return;
     }
-    for bin in 0..16 {
-        let freq = (bin as f32 + 1.0) / 16.0 * (16000.0 / 2.0); // 0-8kHz
+    for bin in 0..32 {
+        let freq = (bin as f32 + 1.0) / 32.0 * (16000.0 / 2.0); // 0-8kHz
         let omega = 2.0 * PI * freq / 16000.0;
         let mut power = 0.0f32;
         let mut chunk = pcm;

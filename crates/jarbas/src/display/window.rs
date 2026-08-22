@@ -94,6 +94,8 @@ pub struct Window {
     pub maximized: bool,
     pub title: String,
     pub visible: bool,
+    /// FASE 4.1: animation scale (0.0=opening, 1.0=fully open)
+    pub anim_scale: f32,
     pub data: String,
     pub z: super::compositor::Layer,
 }
@@ -111,6 +113,7 @@ impl Window {
             floating,
             minimized: false,
             maximized: false,
+            anim_scale: 0.0f32,
             title: String::from(title),
             visible: false,
             data: String::new(),
@@ -121,4 +124,13 @@ impl Window {
     pub fn app_id(&self) -> AppId {
         self.app_id.unwrap_or(AppId::None)
     }
+
+    /// FASE 4.1: Animate window open (scale 0->1 in 8 ticks, ease-out).
+    /// Returns true if still animating.
+    pub fn anim_tick(&mut self) -> bool {
+        if self.anim_scale >= 1.0 { return false; }
+        self.anim_scale = (self.anim_scale + 0.125).min(1.0);
+        true
+    }
 }
+

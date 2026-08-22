@@ -123,6 +123,22 @@ impl ChatWindow {
         }
     }
 
+
+    /// FASE 4.2: Scroll via mouse wheel. delta > 0 = scroll up.
+    pub fn handle_scroll(&mut self, delta: i32) {
+        let total_lines: usize = self.messages.iter().map(|m| {
+            match m {
+                DisplayMsg::User { content } => self.wrap_text(content, 400).len() + 1,
+                DisplayMsg::Assistant { content, .. } => self.wrap_text(content, 400).len() + 1,
+                DisplayMsg::Error { content } => self.wrap_text(content, 400).len() + 1,
+                DisplayMsg::System { .. } => 1,
+            }
+        }).sum();
+        let max_scroll = total_lines.saturating_sub(15);
+        self.scroll = (self.scroll as i32 + delta).max(0).min(max_scroll as i32) as usize;
+        self.dirty = true;
+    }
+
     /// Processa um StreamPacket e atualiza estado interno
     pub fn process_packet(&mut self, pkt: StreamPacket) {
         self.dirty = true;
@@ -363,6 +379,29 @@ impl ChatWindow {
         }
     }
 
+    /// Renderiza texto com markup inline: **bold** e `code`
+    fn render_styled_text(fb: &mut DoubleBuffer, x: usize, y: usize, text: &str, scr_w: usize, base_r: u8, base_g: u8, base_b: u8) {
+        let theme = crate::display::theme::current_theme();
+        let mut cx = x;
+        let mut chars = text.char_indices().peekable();
+        let mut in_bold = false;
+        let mut in_code = false;
+        let mut buf = [0u8; 4];
+        while let Some((i, c)) = chars.next() {
+            if c == '*' && chars.peek().map(|&(_, nc)| nc) == Some('*') {
+                if in_bold { in_bold = false; chars.next(); continue; }
+                else if text[i+2..].contains("**") { in_bold = true; chars.next(); continue; }
+            }
+            if c == 96u8 as char { in_code = !in_code; continue; }
+            if c == 10u8 as char { cx = x; continue; }
+            let (r, g, b) = if in_bold { (theme.accent.0, theme.accent.1, theme.accent.2) }
+                else if in_code { (220, 180, 60) }
+                else { (base_r, base_g, base_b) };
+            let s = c.encode_utf8(&mut buf);
+            crate::display::font::draw_text_scaled(fb, cx, y, s, 1, scr_w, r, g, b);
+            cx += crate::display::font::CHAR_W;
+        }
+    }
     /// Wrap texto simples em linhas (quebra no espaço mais próximo)
     fn wrap_text(&self, text: &str, max_px: usize) -> Vec<String> {
         let char_w = font::CHAR_W;

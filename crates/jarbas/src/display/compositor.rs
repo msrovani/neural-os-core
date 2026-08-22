@@ -128,6 +128,16 @@ pub fn draw_text(fb: &mut DoubleBuffer, x: usize, y: usize, text: &str, scr_w: u
     crate::display::font::draw_text_scaled(fb, x, y, text, 1, scr_w, r, g, b);
 }
 
+// FASE 4.3: Hover zone detection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoverZone {
+    None,
+    PowerButton,
+    DockItem(usize),
+    Orb,
+    Chat,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Layer { OrbBackground, HermesOverlay, AppWindows, DockBar }
 
@@ -146,6 +156,20 @@ pub struct JarbasDesktop {
     // Compositor base
     pub fb: DoubleBuffer,
     pub layers: [Layer; 4], // mantém Z-order fixo para background/overlay
+
+    // ── FASE 2: Per-layer dirty tracking ──
+    pub dirty_orb: bool,
+    pub dirty_hud: bool,
+    pub dirty_windows: bool,
+    pub dirty_mesh: bool,
+    pub dirty_cursor: bool,
+    pub dirty_dialog: bool,
+    pub last_orb_tick: u64,
+    pub last_hud_tick: u64,
+
+    // ── FASE 4.3: Hover state ──
+    pub hover_zone: HoverZone,
+    pub hover_prev: HoverZone,
 
     // WM novo (FASE 1.1)
     pub workspaces: Workspaces,
@@ -199,6 +223,10 @@ impl JarbasDesktop {
         JarbasDesktop { 
             fb, 
             layers: [Layer::OrbBackground, Layer::HermesOverlay, Layer::AppWindows, Layer::DockBar],
+            dirty_orb: true, dirty_hud: true, dirty_windows: true,
+            dirty_mesh: true, dirty_cursor: true, dirty_dialog: true,
+            last_orb_tick: 0, last_hud_tick: 0,
+            hover_zone: HoverZone::None, hover_prev: HoverZone::None,
             workspaces: Workspaces::default(),
             focus_stack: FocusStack::new(FocusPolicy::FollowsMouse),
             dock,
@@ -264,6 +292,7 @@ impl JarbasDesktop {
             maximized: false,
             title: alloc::string::String::from(title),
             visible: true,
+            anim_scale: 0.0f32,
             data: alloc::string::String::new(),
             z: Layer::AppWindows,
         };
@@ -324,6 +353,106 @@ impl JarbasDesktop {
         }
     }
 
+
+    // ── FASE 4.3: Hit-test hover ──────────────────────────────────────
+
+    // ── FASE 2: Per-layer invalidation ─────────────────────────────────
+    pub fn invalidate_orb(&mut self) { self.dirty_orb = true; }
+    pub fn invalidate_hud(&mut self) { self.dirty_hud = true; }
+    pub fn invalidate_windows(&mut self) { self.dirty_windows = true; }
+    pub fn invalidate_mesh(&mut self) { self.dirty_mesh = true; }
+    pub fn invalidate_cursor(&mut self) { self.dirty_cursor = true; }
+    pub fn invalidate_dialog(&mut self) { self.dirty_dialog = true; }
+    pub fn invalidate_all(&mut self) {
+        self.dirty_orb = true; self.dirty_hud = true; self.dirty_windows = true;
+        self.dirty_mesh = true; self.dirty_cursor = true; self.dirty_dialog = true;
+    }
+
+    pub fn hit_test_hover(&mut self, mx: usize, my: usize) -> HoverZone {
+        let (w, h) = (self.w, self.h);
+        let (bx, by, bw, bh) = power_btn_rect(w);
+        if mx >= bx && mx < bx + bw && my >= by && my < by + bh {
+            let zone = HoverZone::PowerButton;
+            if zone != self.hover_zone {
+                self.hover_prev = self.hover_zone;
+                self.hover_zone = zone;
+                self.dirty_hud = true;
+                self.dirty_cursor = true;
+            }
+            return self.hover_zone;
+        }
+        if self.dock.visible {
+            let dh = self.dock.height as usize;
+            if my >= h.saturating_sub(dh) {
+                let zone = HoverZone::DockItem(0);
+                if zone != self.hover_zone {
+                    self.hover_prev = self.hover_zone;
+                    self.hover_zone = zone;
+                    self.dirty_hud = true;
+                    self.dirty_cursor = true;
+                }
+                return self.hover_zone;
+            }
+        }
+        let cx = w / 2;
+        let cy = h / 2;
+        let dx = (mx as isize - cx as isize).unsigned_abs();
+        let dy = (my as isize - cy as isize).unsigned_abs();
+        let dist_sq = dx * dx + dy * dy;
+        if dist_sq < 264 * 264 {
+            let zone = HoverZone::Orb;
+            if zone != self.hover_zone {
+                self.hover_prev = self.hover_zone;
+                self.hover_zone = zone;
+                self.dirty_orb = true;
+                self.dirty_cursor = true;
+            }
+            return self.hover_zone;
+        }
+        let left_w = w * 35 / 100;
+        if mx < left_w {
+            let zone = HoverZone::Chat;
+            if zone != self.hover_zone {
+                self.hover_prev = self.hover_zone;
+                self.hover_zone = zone;
+                self.dirty_cursor = true;
+            }
+            return self.hover_zone;
+        }
+        if self.hover_zone != HoverZone::None {
+            self.hover_prev = self.hover_zone;
+            self.hover_zone = HoverZone::None;
+            self.dirty_cursor = true;
+        }
+        self.hover_zone
+    }
+
+    // ── FASE 4.4: Voice waveform (32 bars FFT) ────────────────────────
+    fn draw_voice_waveform(&mut self, tick: u64) {
+        let (w, h) = (self.w, self.h);
+        let bar_count = 32usize;
+        let bar_w = 6usize;
+        let bar_gap = 2usize;
+        let max_h = 40usize;
+        let start_x = (w - bar_count * (bar_w + bar_gap)) / 2;
+        let base_y = h.saturating_sub(max_h + 8);
+        let theme = crate::display::theme::current_theme();
+        self.fb.fill_rect_fast(start_x.saturating_sub(4), base_y.saturating_sub(2),
+            bar_count * (bar_w + bar_gap) + 8, max_h + 6, 10, 12, 18);
+        for i in 0..bar_count {
+            let energy = crate::display::avatar::read_fft_bin(i);
+            let bar_h = ((energy * max_h as f32) as usize).min(max_h);
+            if bar_h == 0 { continue; }
+            let x = start_x + i * (bar_w + bar_gap);
+            let y = base_y + max_h - bar_h;
+            let t = bar_h as f32 / max_h as f32;
+            let r = ((1.0 - t) * 40.0) as u8;
+            let g = (80.0 + t * 120.0) as u8;
+            let b = (160.0 + t * 80.0) as u8;
+            self.fb.fill_rect_fast(x, y, bar_w, bar_h, r, g, b);
+        }
+    }
+
     pub fn render(&mut self, tick: u64, avatar: Option<&mut crate::display::avatar8::Avatar8>, avatar_state: Option<&str>) {
         self.tick = tick; let (w, h) = (self.w, self.h);
 
@@ -331,6 +460,13 @@ impl JarbasDesktop {
         let last = LAST_FRAME_TICK.load(core::sync::atomic::Ordering::Relaxed);
         if tick.wrapping_sub(last) < TARGET_FRAME_TICKS { return; }
         LAST_FRAME_TICK.store(tick, core::sync::atomic::Ordering::Relaxed);
+
+        // ── FASE 2: early-exit ──
+        if !self.dirty_orb && !self.dirty_hud && !self.dirty_windows
+            && !self.dirty_mesh && !self.dirty_cursor && !self.dirty_dialog
+        {
+            return;
+        }
 
         let theme = crate::display::theme::current_theme();
         let mode = *FOCUS_MODE.lock();
@@ -893,6 +1029,7 @@ impl JarbasDesktop {
             maximized: false,
             title: alloc::string::String::from(title),
             visible: false,
+            anim_scale: 0.0f32,
             data: alloc::string::String::new(),
             z: layer,
         });
@@ -929,6 +1066,7 @@ impl JarbasDesktop {
             maximized: false,
             title,
             visible: true,
+            anim_scale: 0.0f32,
             data: alloc::string::String::new(),
             z: Layer::AppWindows,
         });
