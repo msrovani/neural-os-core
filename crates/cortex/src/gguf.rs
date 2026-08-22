@@ -1173,6 +1173,8 @@ impl Model for GgufBackedModel {
     fn max_seq(&self) -> usize {
         crate::cortex::MAX_SEQ
     }
+    fn num_layers(&self) -> usize { self.n_layers }
+    fn hidden(&self) -> usize { self.hidden_dim }
 }
 
 /// Carrega modelo GGUF e registra como modelo ativo via set_model()

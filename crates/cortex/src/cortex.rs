@@ -3726,6 +3726,8 @@ pub trait Model: Send {
     fn embed_dim(&self) -> usize;
     fn vocab_size(&self) -> u32;
     fn max_seq(&self) -> usize;
+    fn num_layers(&self) -> usize { 0 }
+    fn hidden(&self) -> usize { 0 }
 }
 
 pub static CURRENT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
@@ -3790,16 +3792,13 @@ impl core::fmt::Display for ModelInfo {
 pub fn model_info() -> Option<ModelInfo> {
     let guard = CURRENT_MODEL.lock();
     let st = model_status();
-    guard.as_ref().map(|m| {
-        let h = crate::model::loaded_model_header();
-        ModelInfo {
-            status: st,
-            embed_dim: m.embed_dim(),
-            vocab_size: m.vocab_size(),
-            num_layers: h.map_or(0, |h| h.num_layers),
-            max_seq: m.max_seq(),
-            hidden: h.map_or(0, |h| h.hidden),
-        }
+    guard.as_ref().map(|m| ModelInfo {
+        status: st,
+        embed_dim: m.embed_dim(),
+        vocab_size: m.vocab_size(),
+        num_layers: m.num_layers(),
+        max_seq: m.max_seq(),
+        hidden: m.hidden(),
     })
 }
 
@@ -4041,6 +4040,8 @@ impl Model for TransformerModel {
     fn embed_dim(&self) -> usize { self.hidden }
     fn vocab_size(&self) -> u32 { self.vocab_size }
     fn max_seq(&self) -> usize { self.max_seq }
+    fn num_layers(&self) -> usize { self.num_layers }
+    fn hidden(&self) -> usize { self.hidden }
 }
 
 // ---------------------------------------------------------------------------
