@@ -71,19 +71,9 @@ pub fn estimate_bitnet_mb(params: u64) -> u64 {
 }
 
 /// Falcon3 3B — preset principal (v6 genérico já suporta dims arbitrárias).
-/// hidden 3072, 22 layers, 12 heads, 4 kv_heads, intermediate 9216, vocab 131072,
-/// silu, rope 1000042, tie false, embed Q6_K.
-/// ternário ~0.75 GB + embed Q6_K ~0.33 GB → arquivo v6 ~0.77 GB (FALLBACK 771 MB);
-/// BF16 denso ~6 GB.
-pub const FALCON3_PARAMS: u64 = 3_000_000_000;
-pub const FALCON3_FILE_MB: u64 = 989;
-/// Nome canonico do modelo LLM default (tiiuae/Falcon3-3B-Instruct-1.58bit).
-pub const FALCON3_CANONICAL_NAME: &str = "Falcon3-3B-Instruct-1.58bit";
-/// Arquivo do modelo no FAT32 (8.3).
-pub const FALCON3_FILENAME: &str = "FALCON3.V6"; // v6 packed Q6_K 330MB + ternary 659MB = 1037071016 bytes (medido 22/08/2026, feat=0x04)
-pub const FALCON3_BF16_MB: u64 = 6144;
-
-/// KV heurístico alinhado ao MemoryAgent legado (params/40 → MB clamp).
+/// FALCON3 constants removidos (Fase 1 autonomia).
+/// Todos os valores agora vem de parse_model_header() em runtime.
+/// Use loaded_model_header() ou v6_file_size() em vez de constantes.
 pub fn estimate_kv_mb(params: u64) -> u64 {
     let mb = params / 40 / (1024 * 1024);
     mb.clamp(8, 4096)
@@ -181,7 +171,9 @@ pub fn slot_footprint_mb(slot_name: &str) -> Option<u64> {
             Some(220)
         }
         "generator_pro" | "pro" | "7b" | "3b" | "bitnet3b" => Some(1780),  // Falcon3-7B/3B v6 ~1.74 GB
-        "falcon3" | "falcon" | "f3" | "falcon3b" | "falcon-3b" => Some(FALCON3_FILE_MB),
+        "falcon3" | "falcon" | "f3" | "falcon3b" | "falcon-3b" => {
+            crate::model::loaded_model_header().map_or(Some(989), |h| Some(h.file_size_mb()))
+        }
         "tinystories" | "tiny" | "smoke" => Some(4),
         "rust_coder" | "rustcoder" => Some(260),
         "hw_identify" | "hwexpert" => Some(1),

@@ -312,10 +312,10 @@ pub fn slot_from_bitnet_bytes(len: usize) -> ModelSlot {
     } else if len < 450 * MB {
         ModelSlot::Vision
     } else if len < 1100 * MB {
-        // Falcon3-3B (~771MB v6: Q6_K embed + ternary) e modelos 3B → Agent
+        // Modelos <= 1100MB (medido via v6_file_size) → Agent
         ModelSlot::Agent
     } else {
-        // Falcon3-3B/7B v6 (~1.74 GB) e 10B (~2.5 GB) → GeneratorPro
+        // Modelos > 1100MB (medido via v6_file_size) → GeneratorPro
         ModelSlot::GeneratorPro
     }
 }
@@ -327,8 +327,8 @@ pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
         ModelSlot::Reranker => &["RERANKER.v6", "RERANKER.BIN", "RERANK.BITNET", "RERANK.BIN"],
         ModelSlot::Vision => &["VISION.v6", "VISION.BIN", "SIGLIP.BIN", "VIT.BIN"],
         ModelSlot::GeneratorPro => &[
-            "PRO.v6",       // Falcon3-7B-Instruct-1.58bit v6 (~1.74 GB)
-            "PRO.BIN",      // Falcon3-7B-Instruct-1.58bit legado
+            "PRO.v6",       // Modelo PRO (tamanho detectado do header v6)
+            "PRO.BIN",      // Modelo PRO legado
             "FALCON7B.v6",  // alias alternativo
             "FALCON7B.BIN",
             "BITNET3B.BIN",

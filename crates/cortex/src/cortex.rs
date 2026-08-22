@@ -3790,36 +3790,34 @@ impl core::fmt::Display for ModelInfo {
 pub fn model_info() -> Option<ModelInfo> {
     let guard = CURRENT_MODEL.lock();
     let st = model_status();
-    guard.as_ref().map(|m| ModelInfo {
-        status: st,
-        embed_dim: m.embed_dim(),
-        vocab_size: m.vocab_size(),
-        num_layers: 0, // ponytail: trait doesn't expose num_layers yet
-        max_seq: m.max_seq(),
-        hidden: 0,
+    guard.as_ref().map(|m| {
+        let h = crate::model::loaded_model_header();
+        ModelInfo {
+            status: st,
+            embed_dim: m.embed_dim(),
+            vocab_size: m.vocab_size(),
+            num_layers: h.map_or(0, |h| h.num_layers),
+            max_seq: m.max_seq(),
+            hidden: h.map_or(0, |h| h.hidden),
+        }
     })
 }
 
 pub const NO_MODEL_MSG: &str = "[CORTEX] AI indisponível — nenhum modelo carregado";
 
-/// Nome canonico do LLM default do Neural OS.
-pub const MODEL_NAME: &str = "Falcon3-3B-Instruct-1.58bit";
-/// Versao do formato do modelo.
+/// LLM default — nome dinamico, nao hardcoded. Valor real vem do header v6.
+/// Este const e usado APENAS para logs se o modelo nao estiver carregado.
+pub const MODEL_NAME: &str = "Falcon3 (auto-detect)";
 pub const MODEL_VERSION: &str = "v6";
-/// Dimensao de embed do Falcon3 3B.
-pub const FALCON3_EMBED_DIM: usize = 3072;
-/// Numero de layers do Falcon3 3B.
-pub const FALCON3_NUM_LAYERS: usize = 22;
-/// Numero de heads do Falcon3 3B.
-pub const FALCON3_NUM_HEADS: usize = 12;
-/// KV heads do Falcon3 3B.
-pub const FALCON3_KV_HEADS: usize = 4;
-/// Vocab size do Falcon3 3B.
-pub const FALCON3_VOCAB_SIZE: u32 = 131072;
-/// Context window do Falcon3 3B.
-pub const FALCON3_MAX_SEQ: usize = 4096;
-/// Tamanho do arquivo Falcon3 v6 (bytes).
-pub const FALCON3_FILE_SIZE: u64 = 1_037_071_016;
+
+/// Dynamic model info from the loaded header — zero hardcoded.
+pub fn loaded_model_name() -> alloc::string::String {
+    match crate::model::loaded_model_header() {
+        Some(h) => alloc::format!("h={} L={} heads={} kv={} vocab={}",
+            h.hidden, h.num_layers, h.num_heads, h.kv_heads, h.vocab),
+        None => alloc::string::String::from("none"),
+    }
+}
 
 pub fn set_model(model: Box<dyn Model>) {
     CURRENT_MODEL_EMBED_DIM.store(model.embed_dim(), core::sync::atomic::Ordering::Relaxed);
@@ -3827,7 +3825,8 @@ pub fn set_model(model: Box<dyn Model>) {
     MODEL_STATUS.store(ModelStatus::BitNetReal as u8, core::sync::atomic::Ordering::Release);
     crate::model_hub::mark_active(true);
     let dim = CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
-    k_nano::slog_cortex!("CORTEX", "info", "model={} dim={} status=AI_READY (LLM: {})", MODEL_NAME, dim, MODEL_NAME);
+    let name = loaded_model_name();
+    k_nano::slog_cortex!("CORTEX", "info", "model=AI_READY dim={} header={}", dim, name);
 }
 
 static INFER_IN_FLIGHT: core::sync::atomic::AtomicBool =

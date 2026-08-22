@@ -8,11 +8,24 @@ use x86_64::VirtAddr;
 
 /// Região virtual isolada do heap Hermes/JARBAS (Tier 1).
 pub const CORTEX_ARENA_VIRT: usize = 0x4800_0000_0000;
-/// Tamanho padrão: 2 GB (QEMU/dev). HW real pode expandir via init_arena_region.
-// 2 GB: suporta Falcon3-3B/7B v6 (~1.74 GB). 10B (2.5 GB) exige 4 GB.
+/// Maximum arena size: 4 GB (suporta Falcon3-10B 2.5 GB).
+pub const CORTEX_ARENA_MAX_SIZE: usize = 4 * 1024 * 1024 * 1024;
+/// Fallback default: 2 GB (se RAM não detectada).
 pub const CORTEX_ARENA_DEFAULT_SIZE: usize = 2 * 1024 * 1024 * 1024;
 
 static ARENA_SIZE_BYTES: AtomicUsize = AtomicUsize::new(CORTEX_ARENA_DEFAULT_SIZE);
+
+/// Auto-size arena based on detected RAM: 50% of RAM, clamped to [512MB, 4GB].
+/// Called at boot after memory detection. Returns the size to use.
+pub fn auto_arena_size() -> usize {
+    let ram_mb = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    if ram_mb == 0 {
+        return CORTEX_ARENA_DEFAULT_SIZE; // RAM not detected yet
+    }
+    // 50% of RAM for arena, minimum 512 MB, maximum 4 GB
+    let size = (ram_mb / 2) * 1024 * 1024;
+    size.clamp(512 * 1024 * 1024, CORTEX_ARENA_MAX_SIZE)
+}
 
 /// Bump allocator O(1) alloc / O(1) reset — zero fragmentação.
 pub struct TensorArena {
