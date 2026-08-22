@@ -323,8 +323,10 @@ pub unsafe fn wake_aps_sequential(
 }
 
 pub unsafe fn init_smp() {
+    crate::display::fb::boot_ckpt(220, "smp: enter");
     crate::slog_nano!("SMP", "info", "Inicializando SMP...");
     println!("[SMP] Inicializando SMP...");
+    crate::display::fb::boot_ckpt(221, "smp: allow check");
 
     if !crate::platform_probe::allow_smp() {
         crate::slog_nano!(
@@ -340,18 +342,23 @@ pub unsafe fn init_smp() {
         return;
     }
 
+    crate::display::fb::boot_ckpt(222, "smp: apic ok");
     if !apic::USING_APIC.load(Ordering::Relaxed) {
         crate::slog_nano!("SMP", "info", "APIC nao disponivel — SMP ignorado.");
         println!("[SMP] APIC nao disponivel — SMP ignorado.");
+        crate::display::fb::boot_ckpt(222, "smp: no apic bsp-only");
         return;
     }
 
+    crate::display::fb::boot_ckpt(223, "smp: cr3 read");
     let cr3_val = {
         let (frame, _) = x86_64::registers::control::Cr3::read();
         frame.start_address().as_u64()
     };
 
+    crate::display::fb::boot_ckpt(224, "smp: bsp id");
     let bsp_lapic_id = apic::lapic_id();
+    crate::display::fb::boot_ckpt(225, "smp: bsp percpu");
     percpu::init_bsp_percpu(bsp_lapic_id);
     crate::slog_nano!(
         "SMP",
@@ -360,7 +367,9 @@ pub unsafe fn init_smp() {
         bsp_lapic_id
     );
     println!("[SMP] BSP PerCpu inicializado.");
+    crate::display::fb::boot_ckpt(226, "smp: bsp done");
 
+    crate::display::fb::boot_ckpt(227, "smp: ap_expected");
     let mut ap_expected = AP_COUNT.load(Ordering::Relaxed);
     let max_aps = crate::platform_probe::max_aps();
     if max_aps < 255 && ap_expected > max_aps as u16 {
@@ -386,10 +395,12 @@ pub unsafe fn init_smp() {
         return;
     }
 
+    crate::display::fb::boot_ckpt(228, "smp: alloc tramp");
     let tramp_phys = {
         let mut guard = memory::GLOBAL_ALLOCATOR.lock();
         let Some(alloc) = guard.as_mut() else {
             crate::slog_nano!("SMP", "warn", "sem frame alloc — BSP-only");
+            crate::display::fb::boot_ckpt(228, "smp: no alloc bsp-only");
             corepools::init_from_boot(bsp_lapic_id, 0);
             return;
         };
@@ -398,6 +409,7 @@ pub unsafe fn init_smp() {
             None => {
                 drop(guard);
                 crate::slog_nano!("SMP", "warn", "sem lowmem tramp — BSP-only");
+                crate::display::fb::boot_ckpt(228, "smp: no lowmem bsp-only");
                 corepools::init_from_boot(bsp_lapic_id, 0);
                 return;
             }
@@ -405,6 +417,7 @@ pub unsafe fn init_smp() {
     };
     crate::slog_nano!("SMP", "info", "Trampoline page em 0x{:x}", tramp_phys);
     crate::display::fb::boot_ckpt(22, "smp: tramp ok");
+    crate::display::fb::boot_ckpt(229, "smp: tramp ok2");
 
     // ADR-0057 WS-A: stack por-AP (não mais um único `stack_64_top`).
     let stack_per_ap: u64 = AP_STACK_SIZE * 4;
