@@ -9,7 +9,8 @@ use x86_64::VirtAddr;
 /// Região virtual isolada do heap Hermes/JARBAS (Tier 1).
 pub const CORTEX_ARENA_VIRT: usize = 0x4800_0000_0000;
 /// Tamanho padrão: 2 GB (QEMU/dev). HW real pode expandir via init_arena_region.
-pub const CORTEX_ARENA_DEFAULT_SIZE: usize = 512 * 1024 * 1024;
+// 2 GB: suporta Falcon3-3B/7B v6 (~1.74 GB). 10B (2.5 GB) exige 4 GB.
+pub const CORTEX_ARENA_DEFAULT_SIZE: usize = 2 * 1024 * 1024 * 1024;
 
 static ARENA_SIZE_BYTES: AtomicUsize = AtomicUsize::new(CORTEX_ARENA_DEFAULT_SIZE);
 

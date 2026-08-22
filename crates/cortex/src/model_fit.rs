@@ -180,7 +180,7 @@ pub fn slot_footprint_mb(slot_name: &str) -> Option<u64> {
         "generator_fast" | "fast" | "850m" | "850" | "active" | "current" | "generator" => {
             Some(220)
         }
-        "generator_pro" | "pro" | "3b" | "bitnet3b" => Some(700),
+        "generator_pro" | "pro" | "7b" | "3b" | "bitnet3b" => Some(1780),  // Falcon3-7B/3B v6 ~1.74 GB
         "falcon3" | "falcon" | "f3" | "falcon3b" | "falcon-3b" => Some(FALCON3_FILE_MB),
         "tinystories" | "tiny" | "smoke" => Some(4),
         "rust_coder" | "rustcoder" => Some(260),
