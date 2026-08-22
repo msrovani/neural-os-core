@@ -1525,6 +1525,9 @@ pub(crate) fn kernel_boot(
         tsc_hz,
         k_nano::tsc::tsc_source_name()
     );
+    // Ponytail: K137 trava comum (i5 7ª / 240H) — tenta pendrive sem hang.
+    // USB-MSC pode ainda não estar, mas ATA fallback (try_lock) tenta.
+    let _ = k_nano::boot_logger::try_flush_ramlog();
 
     // ADR-0082 F1.4: SYSCALL/SYSRET MSRs — após o probe (hypervisor real
     // conhecido; gate por probe_done() evita wrmsr em WHPX/TCG → #GP).
@@ -1532,6 +1535,7 @@ pub(crate) fn kernel_boot(
 
     crate::boot_logger::log("BOOT: PlatformProbe+SIMD enabled");
     crate::display::fb::boot_ckpt(14, "SIMD ok");
+    let _ = k_nano::boot_logger::try_flush_ramlog();
 
     // Bridges leves necessários antes dos drivers (sem I/O de rede/disco).
     hermes_crate::theme_bridge::register(
@@ -1625,6 +1629,8 @@ pub(crate) fn kernel_boot(
     }
     publish_boot_phase(BootPhase::HardwareDiscovery, "PCI+ACPI+APIC+SMP sync");
     unsafe { agents::init_platform_sync(); }
+    // Ponytail: K22 (SMP wake) trava em TCG/240H — tenta pendrive sem hang.
+    let _ = k_nano::boot_logger::try_flush_ramlog();
 
     // ADR-0088 / emagrecer: DeviceTree + plano k_ai ANTES de DriverInit.
     // H1 é idempotente — o k_hal::init() tardio só refresca HalOffer.

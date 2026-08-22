@@ -499,6 +499,7 @@ fn draw_console_line(
 }
 
 /// Checkpoint de boot — uma linha no FB (sem serial duplicado no k_nano).
+/// Ponytail: oportunista flush para pendrive (USB-MSC ou ATA fallback) sem hang.
 pub fn boot_ckpt(n: u8, msg: &str) {
     let mut buf = [0u8; 100];
     let mut pos = 0usize;
@@ -532,6 +533,9 @@ pub fn boot_ckpt(n: u8, msg: &str) {
     }
     k_nano::boot_ramlog::set_last_ckpt(n);
     k_nano::boot_ramlog::append(s);
+    // Ponytail: tenta pendrive se já houver backend (USB-MSC ou ATA) sem bloquear.
+    // try_lock + backoff → nunca hang em K22 (SMP) nem K137 (TSC).
+    let _ = k_nano::boot_logger::try_flush_ramlog();
 }
 
 fn splash_draw_text(

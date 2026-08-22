@@ -157,6 +157,8 @@ fn measure_with_pit() -> Option<u64> {
     const PIT_CH2: u16 = 0x42;
     const PIT_STATUS: u16 = 0x61;
     const COUNT: u64 = 0xFFFF; // 54925 µs @ 1.193182 MHz
+    let t_anchor = rdtsc();
+    let t_limit = cpuid_estimate() / 20;
     unsafe {
         // gate 2 HIGH (bit 0) + speaker data (bit 1) → canal 2 conta
         let ctrl: u8 = Port::new(PIT_STATUS).read();
@@ -168,6 +170,9 @@ fn measure_with_pit() -> Option<u64> {
         // modo 0: OUT2 (bit 5 de 0x61) vai a HIGH quando o contador zera
         let t0 = rdtsc();
         while (Port::<u8>::new(PIT_STATUS).read() & 0x20) == 0 {
+            if rdtsc().wrapping_sub(t_anchor) > t_limit {
+                return None;
+            }
             core::hint::spin_loop();
         }
         let t1 = rdtsc();

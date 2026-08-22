@@ -259,6 +259,28 @@ unsafe fn soft_reboot() -> ! {
     }
 }
 
+/// Ponytail: dump não-bloqueante do ramlog phys no FB/serial (K22/K137 hang).
+/// Mantém em RAM quando pendrive não pronto; FB mostra foto para usuário.
+pub fn dump() {
+    if crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed) == 0 {
+        return;
+    }
+    unsafe {
+        let h = &*hdr_mut();
+        let len = (h.len as usize).min(data_cap());
+        if len == 0 {
+            return;
+        }
+        let slice = core::slice::from_raw_parts(data_ptr(), len);
+        if let Ok(s) = core::str::from_utf8(slice) {
+            // Slog já vai para serial; boot_ckpt FB já mostra Ks, mas dump completo ajuda foto.
+            for line in s.lines().take(40) {
+                crate::slog_nano!("RAMLOG", "dump", "{}", line);
+            }
+        }
+    }
+}
+
 /// Soft-reboot opt-in. Sem feature: no-op (produto).
 pub fn maybe_flush_reboot(reason: &str) {
     if SKIP_FLUSH_REBOOT.load(Ordering::Relaxed) {

@@ -758,6 +758,39 @@ pub fn flush() -> bool {
     { false }
 }
 
+/// Ponytail: flush oportunista não-bloqueante para pendrive em K22/K137.
+///
+/// Chamado após cada `boot_ckpt` crítico em `main.rs` e nos shims `display::fb`.
+/// - `try_lock` em todos os backends (USB-MSC/ATA/AHCI/NVMe) → nunca hang.
+/// - Respeita `HEAP_READY`, `PHYS_MEM_OFFSET` e backoff `NEXT_RETRY_TICK`.
+/// - Fallback ATA automático quando USB ausente (storage_available).
+/// - Se pendrive não pronto, só mantém ramlog em RAM (exposto via FB dump).
+pub fn try_flush_ramlog() -> bool {
+    if !HEAP_READY.load(Ordering::Relaxed) {
+        return false;
+    }
+    if crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed) == 0 {
+        return false;
+    }
+    #[cfg(not(feature = "fat-boot-log"))]
+    {
+        return false;
+    }
+    #[cfg(feature = "fat-boot-log")]
+    {
+        if !storage_available() && !FAT_READY.load(Ordering::Relaxed) {
+            return false;
+        }
+        if !persist_allowed_now() {
+            return false;
+        }
+        if SINCE_FLUSH.load(Ordering::Relaxed) == 0 && FAT_READY.load(Ordering::Relaxed) {
+            return false;
+        }
+        flush()
+    }
+}
+
 /// Tenta (re)enumerar USB-MSC se ainda nao ha BlockDevice util p/ BOOT.LOG.
 /// Usado pelo SysInfoAgent / self-heal quando o bring-up early falhou.
 /// Host/test: nunca toca xHCI (SEGv) — só reporta se o static já está populado.

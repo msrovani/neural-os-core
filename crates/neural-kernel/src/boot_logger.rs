@@ -12,11 +12,32 @@ pub use k_nano::boot_logger::{
     FAT_READY,
     ensure_persisted,
     flush,
+    try_flush_ramlog,
     log,
     log_quiet,
     mark_heap_ready,
     init,
 };
+
+/// Ponytail: expõe ramlog em RAM no FB quando pendrive não está pronto (K22/K137 hang).
+/// Chamado no final do boot e como fallback quando `try_flush_ramlog` não gravou.
+pub fn dump_ramlog_to_fb() {
+    let session = k_nano::boot_logger::build_session_bytes();
+    if session.is_empty() {
+        return;
+    }
+    if let Ok(s) = core::str::from_utf8(&session) {
+        crate::display::fb::console_print(">>> BOOT.LOG (RAM) <<<");
+        for line in s.lines().take(40) {
+            crate::display::fb::console_print(line);
+        }
+        crate::display::fb::console_print(">>> FIM BOOT.LOG <<<");
+        // Também mantém no ramlog phys (snapshot) para diagnóstico pós-reset.
+        for line in s.lines().take(80) {
+            k_nano::boot_ramlog::append(line);
+        }
+    }
+}
 
 /// Init imediato após USB-MSC (caminho notebook sem serial).
 /// Grava BOOT.LOG via BlockDevice (MSC/ATA/AHCI/NVMe) — sem soft-reboot.

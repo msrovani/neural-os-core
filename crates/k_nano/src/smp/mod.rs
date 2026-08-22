@@ -157,7 +157,25 @@ pub unsafe fn wake_aps() {
 }
 
 fn busy_wait_us(us: u64) {
-    // SESSION integration: TSC calibrado (HPET→PIT→CPUID) em vez de spin fixo us*40.
+    // Core 7 240H: se TSC ainda não calibrada, busy_wait_us(10000) com sleep_us
+    // tentaria HPET/PIT (50ms I/O) por AP e pareceria hang 12s. Guard não-bloqueante.
+    if crate::tsc::TSC_HZ.load(Ordering::Relaxed) == 0 {
+        // quick calibrate via CPUID (sem I/O) — não chama HPET/PIT aqui
+        let hz = crate::tsc::cpuid_estimate();
+        if hz >= 100_000_000 && hz <= 10_000_000_000 {
+            crate::tsc::TSC_HZ.store(hz, Ordering::Release);
+            crate::tsc::TSC_SOURCE.store(3, Ordering::Release);
+            crate::tsc::sleep_us(us);
+            return;
+        }
+        // fallback spin curto (nunca hang)
+        // ponytail: spin ~us*50 loops, cutoff 10ms -> <500k iters por INIT, não precisa TSC
+        let iters = (us as usize).saturating_mul(50).min(600_000);
+        for _ in 0..iters {
+            core::hint::spin_loop();
+        }
+        return;
+    }
     crate::tsc::sleep_us(us);
 }
 
@@ -185,6 +203,16 @@ pub unsafe fn wake_aps_sequential(
     send_sipi_to: unsafe fn(u32, u8),
     wait_delivery: unsafe fn(),
 ) -> u64 {
+    // Guard TSC não calibrada: evita hang de busy_wait_us antes de calibrate (240H n=16)
+    if crate::tsc::TSC_HZ.load(Ordering::Relaxed) == 0 {
+        let hz = crate::tsc::cpuid_estimate();
+        if hz >= 100_000_000 && hz <= 10_000_000_000 {
+            crate::tsc::TSC_HZ.store(hz, Ordering::Release);
+            crate::tsc::TSC_SOURCE.store(3, Ordering::Release);
+            crate::slog_nano!("SMP", "info", "TSC quick-cal {} MHz via CPUID (wake guard)", hz / 1_000_000);
+        }
+    }
+    crate::display::fb::boot_ckpt(22, "smp: wake start");
     let mut woke = 0u64;
     for (i, &dest) in ap_lapic_ids.iter().enumerate() {
         if i >= percpu::MAX_APS {
@@ -376,11 +404,13 @@ pub unsafe fn init_smp() {
         }
     };
     crate::slog_nano!("SMP", "info", "Trampoline page em 0x{:x}", tramp_phys);
+    crate::display::fb::boot_ckpt(22, "smp: tramp ok");
 
     // ADR-0057 WS-A: stack por-AP (não mais um único `stack_64_top`).
     let stack_per_ap: u64 = AP_STACK_SIZE * 4;
 
     trampoline::map_identity_executable(tramp_phys);
+    crate::display::fb::boot_ckpt(22, "smp: map ok");
 
     // Trampoline é (re)patchado por AP dentro de `wake_aps_sequential`.
     let tsize = trampoline::trampoline_size();
@@ -434,11 +464,35 @@ pub unsafe fn init_smp() {
             n_madt,
             percpu::MAX_APS
         );
+        crate::slog_nano!("SMP", "warn", "truncando APs {} -> {} (BSS guard, HITL)", n_madt, percpu::MAX_APS);
+        crate::display::fb::boot_ckpt(22, "smp: truncado HITL");
         ap_ids.truncate(percpu::MAX_APS);
     }
     let n_aps = ap_ids.len();
     AP_EXPECTED.store(n_aps as u16, Ordering::Release);
-    let region_base = heap_top2 - ((n_aps as u64) + 1) * stack_per_ap;
+    // Guard: heap_top2 - (n+1)*stack pode colidir com FALCON3 989MB ou estourar (Core 7 hybrid n=16)
+    // Usa checked_sub + fallback BSP-only não-bloqueante; evita wrap para 0x...ffff
+    let needed = ((n_aps as u64) + 1) * stack_per_ap;
+    let region_base = match heap_top2.checked_sub(needed) {
+        Some(v) if v >= crate::allocator::HEAP_START as u64 + 64 * 1024 => v,
+        _ => {
+            crate::slog_nano!("SMP", "warn", "heap colisao: heap_top2={:#x} needed={:#x} n={} — truncando", heap_top2, needed, n_aps);
+            crate::display::fb::boot_ckpt(22, "smp: heap colisao HITL");
+            // tenta reduzir n para caber, senão BSP-only
+            let avail = heap_top2.saturating_sub(crate::allocator::HEAP_START as u64 + 64 * 1024);
+            let max_fit = (avail / stack_per_ap).saturating_sub(1) as usize;
+            if max_fit == 0 || max_fit >= n_aps {
+                crate::slog_nano!("SMP", "warn", "sem espaco para stacks — BSP-only");
+                corepools::init_from_boot(bsp_lapic_id, 0);
+                return;
+            }
+            crate::slog_nano!("SMP", "warn", "reduzindo APs {} -> {} para caber no heap", n_aps, max_fit);
+            ap_ids.truncate(max_fit);
+            let n2 = ap_ids.len();
+            AP_EXPECTED.store(n2 as u16, Ordering::Release);
+            heap_top2 - ((n2 as u64) + 1) * stack_per_ap
+        }
+    };
 
     crate::slog_nano!(
         "SMP",
@@ -465,6 +519,7 @@ pub unsafe fn init_smp() {
         crate::slog_nano!("SMP", "info", "{}", s);
     }
 
+    crate::display::fb::boot_ckpt(22, "smp: antes wake");
     let ap_woke = wake_aps_sequential(
         tramp_phys,
         cr3_val,

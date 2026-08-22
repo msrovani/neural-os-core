@@ -14,6 +14,10 @@ pub fn ap_entry_count() -> u64 {
 
 pub unsafe fn init_smp() {
     crate::display::fb::boot_ckpt(22, "smp: k_nano");
+    crate::display::fb::boot_ckpt(22, "smp: init start");
     k_nano::smp::init_smp();
+    // granular: k_nano já fez map ok + tramp ok + antes wake (se hang, ver K22 no FB)
+    crate::display::fb::boot_ckpt(22, "smp: map ok");
     crate::display::fb::boot_ckpt(23, "smp: sipi done");
+    crate::display::fb::boot_ckpt(23, "smp: init done");
 }
