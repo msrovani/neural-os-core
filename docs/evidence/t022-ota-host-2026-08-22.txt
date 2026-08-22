@@ -1,0 +1,10 @@
+T-022 host (serve_update.py) 2026-08-22
+GET /UPDATE.MANIFEST HTTP 163 bytes
+{"channel": "stable", "version": "1.9.10", "url": "http://10.0.2.2:8080/KERNEL.BIN", "sha256": "055aad1262ac9e65d91a4aa5d93b3e67bac658868ef6426b64be406a5461d2ac"}
+
+POST /api/logs HTTP 200
+GET /KERNEL.BIN HTTP 200 bytes=18610504
+
+QEMU TCG smp=1 4G: [BOOT:Runtime] AgentScheduler OK; net_smoke=L3_5_FAIL (ARP cedo).
+Guest GET /UPDATE.MANIFEST nao visto no server neste intervalo. T-022 e2e guest ainda aberto.
+

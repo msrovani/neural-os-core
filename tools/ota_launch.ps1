@@ -1,5 +1,6 @@
 # ota_launch.ps1 - Sobe serve_update.py + QEMU (detached), retorna imediato.
 # PIDs salvos em logs/ota_pids.txt para o kill/estagios seguintes.
+# T-046: TCG only (WHPX OVMF #GP). T-047: 4G. T-045: smp 1 (smp 2 TCG SIPI hang).
 # Uso: powershell -File tools\ota_launch.ps1
 # IMPORTANTE: ASCII puro (PS 5.1 le sem BOM como ANSI).
 
@@ -38,8 +39,8 @@ $otaFlag = Join-Path $target "ota.flag"
 # QEMU (detached, SEM -NoNewWindow p/ nao segurar console; sem disco de dados:
 # ATA PIO sob TCG trava boot; UPDATE.CFG na ESP index 0)
 $args = @(
-    "-m", "6G",
-    "-smp", "2",
+    "-m", "4G",
+    "-smp", "1",
     "-cpu", "max",
     "-accel", "tcg",
     "-drive", "if=pflash,format=raw,file=$ovmf,readonly=on",

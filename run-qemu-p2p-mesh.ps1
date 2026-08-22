@@ -13,7 +13,7 @@
 .PARAMETER Accel
   whpx|tcg (default tcg). WHPX falha -> cai para TCG.
 .PARAMETER Mem
-  RAM em GB, ate 8 (default 6). Recomendado 4-6G se host nao comportar 2x8G.
+  -Mem RAM em GB, ate 8 (default 4). Teto T-047 / SESSION_280: 2x6G estoura host; 4G.
 .PARAMETER WithModels
   Liga -device loader (BITNET2B + HWEXPRT*). Default: ligado se nem -NoModels nem -NoDisk.
 .PARAMETER NoModels
@@ -32,7 +32,7 @@ param(
     [string]$Accel = "tcg",
 
     [ValidateRange(1,8)]
-    [int]$Mem = 6,
+    [int]$Mem = 4,
 
     [switch]$WithModels,
     [switch]$NoModels,

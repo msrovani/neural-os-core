@@ -193,7 +193,7 @@ impl InputAgent {
         if scancode >= 0x80 { return; }
         // ADR-0100 T-028: ~5s pós-boot, [L]ive / [I]nstall (default Live já é T-029).
         {
-            let ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            let ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
             let hz = crate::interrupts::TIMER_HZ.load(core::sync::atomic::Ordering::Relaxed).max(1);
             if ticks < hz.saturating_mul(5) {
                 match scancode {

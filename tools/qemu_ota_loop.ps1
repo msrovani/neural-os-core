@@ -74,8 +74,8 @@ function Start-Qemu {
     # SEM disco de dados (index 1): ATA PIO sob TCG trava o boot (SESSION_243);
     # o UPDATE.CFG vive na ESP (uefi.img, index 0) e o update baixa via rede.
     $args = @(
-        "-m", "6G",
-        "-smp", "2",
+        "-m", "4G",
+        "-smp", "1",
         "-cpu", "max",
         "-accel", "tcg",
         "-drive", "if=pflash,format=raw,file=$ovmf,readonly=on",
