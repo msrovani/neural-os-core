@@ -43,6 +43,8 @@ pub fn boot_init() {
     if k_nano::storage::is_ready() {
         let n = with_engine(|e| e.rebuild_indices_from_tickv()).unwrap_or(0);
         let _ = n;
+        // Fase 2: inicializa neural-sgdb global (ART/BQ externos)
+        let _nsgdb_n = super::nsgdb_bridge::nsgdb_init();
         populate_hw_namespace();
     }
     crate::boot_observe::hydrate_memory();
