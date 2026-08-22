@@ -150,9 +150,9 @@ impl Storage for TickvStorageAdapter {
 - `boot_init`: inicializa NSGDB após TickvLite montado
 - 3 testes host: init+health, recall vazio, rag vazio
 
-### Fase 2.5 — Adequações de Memória (⏳ planejado)
+### Fase 2.5 — Adequações de Memória (✅ commits 90132a3 + a765161)
 
-#### 2.5-A: Hits Tipados (prioridade 🔴 CRÍTICA)
+#### 2.5-A: Hits Tipados (✅ commit 90132a3)
 
 **Problema**: bridge devolve `(String, u32)` — perde content_type, path, matched_terms, rel, provenance, validity.
 
@@ -174,7 +174,7 @@ Consumidores decidem COMO usar cada Hit:
 
 **Arquivos**: `nsgdb_bridge.rs`, `cognitive_bridge.rs`, `sgdb_agent.rs`
 
-#### 2.5-B: Embedder Seam (prioridade 🔴 ALTA)
+#### 2.5-B: Embedder Seam (✅ commit 90132a3)
 
 **Problema**: neural-sgdb tem `trait Embedder` mas não está conectado ao BGE/pseudo do OS.
 
@@ -195,7 +195,7 @@ impl neural_sgdb::Embedder for OsEmbedder {
 
 **Arquivos**: `nsgdb_bridge.rs`
 
-#### 2.5-C: recall_lexical como Default (prioridade 🔴 ALTA)
+#### 2.5-C: recall_lexical como Default (✅ commit 90132a3)
 
 **Problema**: recall_lexical (BM25) é o default do MCP (ADR-0008) mas não está exposto.
 
@@ -212,7 +212,7 @@ pub fn recall_lexical_bridge(query_text: &str, k: usize) -> Vec<neural_sgdb::Hit
 
 **Arquivos**: `nsgdb_bridge.rs`, `cognitive_bridge.rs`, `sgdb_agent.rs`
 
-#### 2.5-D: Lifecycle Management (prioridade 🟡 MÉDIA)
+#### 2.5-D: Lifecycle Management (✅ commit a765161)
 
 **Problema**: memórias não decaem, não consolidam, não arquivam. O SGDB cresce indefinidamente.
 
@@ -232,7 +232,7 @@ with_nsgdb(|db| lifecycle.tick(db, now));
 
 **Arquivos**: `nsgdb_bridge.rs`, `bei_init.rs`, `agents.rs` (SleepCycleAgent)
 
-#### 2.5-E: Scoping Multi-Agente (prioridade 🟡 MÉDIA)
+#### 2.5-E: Scoping Multi-Agente (✅ commit 90132a3)
 
 **Problema**: todos os agentes competem pelos mesmos slots de recall. Sem isolamento.
 
@@ -251,7 +251,7 @@ with_nsgdb(|db| db.recall_scoped(&emb, 5, "agent:hermes"))
 
 **Arquivos**: `nsgdb_bridge.rs`, `cognitive_bridge.rs`, `sgdb_agent.rs`
 
-#### 2.5-F: Cognitive Operations (prioridade 🟢 BAIXA)
+#### 2.5-F: Cognitive Operations (✅ commit 90132a3)
 
 **Problema**: sem `reinforce`, `explain`, `feedback`. O agente não pode "reforçar" memórias importantes.
 
@@ -271,9 +271,9 @@ pub fn explain_bridge(key: &str) -> Option<MemoryExplanation> {
 
 **Arquivos**: `nsgdb_bridge.rs`, `sgdb_agent.rs`
 
-### Fase 3.0 — Cortex/Hermes Memory-Aware (⏳ planejado)
+### Fase 3.0 — Cortex/Hermes Memory-Aware (✅ parcial — commits a765161)
 
-#### 3.0-A: Memory Interpreter no Cortex
+#### 3.0-A: Memory Interpreter no Cortex (✅ commit a765161)
 
 O Cortex (LLM) precisa de um sistema que:
 1. Receba `Vec<Hit>` tipados
