@@ -510,6 +510,11 @@ impl JarbasDesktop {
         }
 
         // ═════════════════════════════════════════════════════════════
+        // CAMADA 2.5: Dock (bottom panel) -- FASE 3.4
+        if self.dock.visible {
+            self.dock.render(&mut self.fb, theme);
+        }
+
         // CAMADA 3: Workspace — ChatWindow (esquerdo, opaco, com gap)
         // ═════════════════════════════════════════════════════════════
         let gap = 4usize; // COSMIC tile gap

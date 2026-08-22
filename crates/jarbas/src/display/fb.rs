@@ -7,6 +7,41 @@ use core::ptr::write_volatile;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use alloc::vec::Vec;
 
+// FASE 2: LUT Alpha Blending -- shift >>8 em vez de /255
+#[inline(always)]
+fn blend_lut(fg: u8, bg: u8, alpha: u8) -> u8 {
+    if alpha == 0 { return bg; }
+    if alpha == 255 { return fg; }
+    let a = alpha as u16;
+    let inv = 255 - a;
+    ((fg as u16 * a + bg as u16 * inv + 128) >> 8) as u8
+}
+
+// FASE 3.3: SIN_LUT -- 256 entradas, elimina sinf/cosf em particles
+const SIN_LUT: [i8; 256] = [
+    0, 3, 6, 9, 12, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46,
+    49, 51, 54, 57, 60, 63, 65, 68, 71, 73, 76, 78, 81, 83, 85, 88,
+    90, 92, 94, 96, 98, 100, 102, 104, 106, 107, 109, 111, 112, 113, 115, 116,
+    117, 118, 120, 121, 122, 122, 123, 124, 125, 125, 126, 126, 126, 127, 127, 127,
+    127, 127, 127, 127, 126, 126, 126, 125, 125, 124, 123, 122, 122, 121, 120, 118,
+    117, 116, 115, 113, 112, 111, 109, 107, 106, 104, 102, 100, 98, 96, 94, 92,
+    90, 88, 85, 83, 81, 78, 76, 73, 71, 68, 65, 63, 60, 57, 54, 51,
+    49, 46, 43, 40, 37, 34, 31, 28, 25, 22, 19, 16, 12, 9, 6, 3,
+    0, -3, -6, -9, -12, -16, -19, -22, -25, -28, -31, -34, -37, -40, -43, -46,
+    -49, -51, -54, -57, -60, -63, -65, -68, -71, -73, -76, -78, -81, -83, -85, -88,
+    -90, -92, -94, -96, -98, -100, -102, -104, -106, -107, -109, -111, -112, -113, -115, -116,
+    -117, -118, -120, -121, -122, -122, -123, -124, -125, -125, -126, -126, -126, -127, -127, -127,
+    -127, -127, -127, -127, -126, -126, -126, -125, -125, -124, -123, -122, -122, -121, -120, -118,
+    -117, -116, -115, -113, -112, -111, -109, -107, -106, -104, -102, -100, -98, -96, -94, -92,
+    -90, -88, -85, -83, -81, -78, -76, -73, -71, -68, -65, -63, -60, -57, -54, -51,
+    -49, -46, -43, -40, -37, -34, -31, -28, -25, -22, -19, -16, -12, -9, -6, -3,
+];
+
+#[inline(always)]
+pub fn sin_lut(tick: u64) -> f32 { SIN_LUT[(tick & 0xFF) as usize] as f32 / 127.0 }
+#[inline(always)]
+pub fn cos_lut(tick: u64) -> f32 { SIN_LUT[((tick + 64) & 0xFF) as usize] as f32 / 127.0 }
+
 static CONSOLE_LINE: AtomicUsize = AtomicUsize::new(0);
 static CONSOLE_INITED: AtomicBool = AtomicBool::new(false);
 /// DisplayAgent / compositor assume o FB — console de boot (K*) deixa de pintar texto.
@@ -606,6 +641,7 @@ pub struct FramebufferInfo {
 pub struct DoubleBuffer {
     pub info: FramebufferInfo,
     back: Vec<u8>,
+    pub dirty: bool,
 }
 
 impl DoubleBuffer {
@@ -622,6 +658,7 @@ impl DoubleBuffer {
                 rgb_order: gpu.rgb_order,
             },
             back: alloc::vec![0u8; size],
+            dirty: true,
         }
     }
 
@@ -630,6 +667,7 @@ impl DoubleBuffer {
         let bpp = self.info.bpp;
         let offset = y * self.info.stride + x * bpp;
         if offset + (bpp - 1) >= self.back.len() { return; }
+        self.dirty = true;
         if self.info.rgb_order {
             self.back[offset + 0] = r;
             self.back[offset + 1] = g;
@@ -672,6 +710,41 @@ impl DoubleBuffer {
     }
 
     /// Bresenham line (set_pixel already bounds-checks).
+    pub fn fill_rect_fast(&mut self, x: usize, y: usize, w: usize, h: usize, r: u8, g: u8, b: u8) {
+        if x >= self.info.width || y >= self.info.height { return; }
+        let x2 = (x + w).min(self.info.width);
+        let y2 = (y + h).min(self.info.height);
+        let aw = x2 - x;
+        let ah = y2 - y;
+        if aw == 0 || ah == 0 { return; }
+        self.dirty = true;
+        let bpp = self.info.bpp;
+        let stride = self.info.stride;
+        let ptr = self.back.as_mut_ptr();
+        unsafe {
+            if bpp == 4 {
+                let pix = if self.info.rgb_order { u32::from_le_bytes([r,g,b,0xFF]) } else { u32::from_le_bytes([b,g,r,0xFF]) };
+                for dy in 0..ah {
+                    let off = (y+dy)*stride + x*bpp;
+                    let row = ptr.add(off) as *mut u32;
+                    for dx in 0..(aw/4) { row.add(dx).write(pix); }
+                }
+            } else {
+                for dy in 0..ah {
+                    let base = (y+dy)*stride + x*bpp;
+                    for dx in 0..aw {
+                        let off = base + dx*bpp;
+                        if off+3 < self.back.len() {
+                            if self.info.rgb_order { ptr.add(off).write(r); ptr.add(off+1).write(g); ptr.add(off+2).write(b); }
+                            else { ptr.add(off).write(b); ptr.add(off+1).write(g); ptr.add(off+2).write(r); }
+                            if bpp > 3 { ptr.add(off+3).write(0xFF); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn draw_line(&mut self, x0: isize, y0: isize, x1: isize, y1: isize, r: u8, g: u8, b: u8) {
         let mut x = x0;
         let mut y = y0;
@@ -756,6 +829,7 @@ impl DoubleBuffer {
     /// de bus writes de ~8M para ~1M em 1920x1080x4. Otimizacao adicional
     /// (rep movsb / dirty tracking) e possivel se o perfil mostrar gargalo.
     pub fn swap(&mut self) {
+        if !self.dirty { return; }
         // Acquire cursor lock to prevent data race with IRQ cursor draw
         while k_nano::interrupts::CURSOR_LOCK.swap(true, Ordering::Acquire) {
             core::hint::spin_loop();
@@ -783,6 +857,7 @@ impl DoubleBuffer {
                 i += 1;
             }
         }
+        self.dirty = false;
         k_nano::interrupts::CURSOR_LOCK.store(false, Ordering::Release);
     }
 }
