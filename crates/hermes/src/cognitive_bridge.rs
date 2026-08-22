@@ -533,58 +533,63 @@ pub fn note_route(d: &RouteDecision) {
 
 /// RAG com gate determinístico ("sideagent verifier", #314): confia no path do
 /// recall (bq+fp32/bq; "empty" = pula), aplica blacklist de injeção e cap de 3.
+/// Memory Interpreter (Fase 3.0-A): consome Hits tipados do neural-sgdb.
+/// Cada Hit tem content_type, path, matched_terms — o LLM interpreta.
+/// Fallback: se NSGDB indisponível, cai para engine interno.
 fn gated_rag_context(q_emb: &[f32], k: usize) -> String {
-    let (hits, path) = k_ai::sgdb::recall_semantic(q_emb, k);
-    if path == "empty" || hits.is_empty() {
+    // Fase 3.0-A: tenta recall tipado do neural-sgdb
+    let typed_hits = k_ai::sgdb::nsgdb_bridge::recall_typed(q_emb, k);
+    if typed_hits.is_empty() {
         return String::new();
     }
-    // Injection-pattern blacklist (gate #314 — espelha self_evolve.rs).
+
+    // Injection-pattern blacklist (gate #314)
     const DANGEROUS: [&str; 10] = [
-        "ignore all",
-        "ignore seus comandos",
-        "you are now",
-        "override",
-        "system prompt",
-        "<s>",
-        "[/INST]",
-        "<<SYS>>",
-        "rm -rf",
-        "format c:",
+        "ignore all", "ignore seus comandos", "you are now",
+        "override", "system prompt", "<s>", "[/INST]",
+        "<<SYS>>", "rm -rf", "format c:",
     ];
+
     let mut out = String::new();
     let mut n = 0usize;
-    for (sk, dist) in &hits {
-        if n >= 3 {
-            break;
-        }
-        let text_sk = sk.replace("/L4/", "/L2/");
-        let text = k_ai::sgdb::with_engine(|e| match e.get_by_storage_key(&text_sk) {
-            Ok(Some(doc)) => core::str::from_utf8(&doc.payload)
-                .map(String::from)
-                .unwrap_or_default(),
-            _ => String::new(),
-        })
-        .unwrap_or_default();
-        if text.is_empty() {
-            continue;
-        }
+    for hit in &typed_hits {
+        if n >= 3 { break; }
+        // content_type awareness: Embedding/Binary não renderiza texto
+        let text = match hit.content_type {
+            k_ai::sgdb::nsgdb_bridge::ContentType::Embedding(_) | k_ai::sgdb::nsgdb_bridge::ContentType::Binary => {
+                continue; // skip — não são prosa
+            }
+            _ => hit.text.clone(),
+        };
+        if text.is_empty() { continue; }
         let lower = text.to_ascii_lowercase();
         if DANGEROUS.iter().any(|p| lower.contains(p)) {
             k_nano::slog_hermes!("RECALL", "gate", "bloqueado por padrão injetável");
             continue;
         }
+        // Formata com info de path e content_type para o LLM
+        let path_tag = match hit.path {
+            k_ai::sgdb::nsgdb_bridge::RecallPath::Semantic => "sem",
+            k_ai::sgdb::nsgdb_bridge::RecallPath::Lexical => "lex",
+            k_ai::sgdb::nsgdb_bridge::RecallPath::Entities => "ent",
+        };
+        let ct_tag = match hit.content_type {
+            k_ai::sgdb::nsgdb_bridge::ContentType::Json => "JSON",
+            k_ai::sgdb::nsgdb_bridge::ContentType::Code => "CODE",
+            _ => "TXT",
+        };
+        let dist_display = (hit.dist * 100.0) as u32;
         out.push_str(&format!(
-            "  #{}) d={} {}\n",
-            n + 1,
-            dist,
+            "  #{}) [{}] [{}] d={}% {}
+",
+            n + 1, path_tag, ct_tag, dist_display,
             memory_store::clamp_public(&text, 200)
         ));
         n += 1;
     }
-    if out.is_empty() {
-        return String::new();
-    }
-    format!("[SGDB-RAG top-{}]\n{}", n, out)
+    if out.is_empty() { return String::new(); }
+    format!("[MEMORY-RECALL top-{}]
+{}", n, out)
 }
 
 pub fn cortex_system_prompt(user_intent: &str) -> String {

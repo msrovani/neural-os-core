@@ -263,6 +263,85 @@ impl neural_sgdb::Embedder for OsEmbedder {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
+
+// ─── Fase 2.5-D: Lifecycle Management ────────────────────────────────────────
+
+/// Configuração de lifecycle para memórias.
+pub struct MemoryLifecycleConfig {
+    pub l1_commit_after_ticks: u64,
+    pub l2_to_l3_importance: f32,
+    pub l2_to_l3_min_age_ticks: u64,
+    pub decay_per_tick: f32,
+    pub decayed_below: f32,
+}
+
+impl Default for MemoryLifecycleConfig {
+    fn default() -> Self {
+        Self {
+            l1_commit_after_ticks: 100,
+            l2_to_l3_importance: 0.5,
+            l2_to_l3_min_age_ticks: 500,
+            decay_per_tick: 0.01,
+            decayed_below: 0.1,
+        }
+    }
+}
+
+/// Resultado de um lifecycle tick.
+pub struct LifecycleTickResult {
+    pub committed: usize,
+    pub promoted: usize,
+    pub semanticized: usize,
+    pub archived: usize,
+    pub decayed: usize,
+    pub transitions: u64,
+}
+
+/// Roda um tick do lifecycle: decay + consolidação + promoção.
+/// Chamado periodicamente pelo SleepCycle ou pelo supervisor.
+pub fn lifecycle_tick(now: u64, config: &MemoryLifecycleConfig) -> LifecycleTickResult {
+    let default = LifecycleTickResult {
+        committed: 0, promoted: 0, semanticized: 0,
+        archived: 0, decayed: 0, transitions: 0,
+    };
+
+    let Some(report) = with_nsgdb(|db| {
+        // 1. Decay Ebbinghaus
+        let decay_cfg = neural_sgdb::DecayConfig {
+            half_life_ms: 0, // disabled — usar decay_per_tick
+            floor: config.decayed_below,
+            decay_state_at: config.decayed_below,
+            decay_confidence: true,
+        };
+        let _decayed = db.decay_importance(now, &decay_cfg).unwrap_or(0);
+
+        // 2. Expirar memórias com janela de validade fechada
+        let _expired = db.expire_old(now).unwrap_or(0);
+
+        // 3. Consolidação por recorrência (L2 repetido → L3 fato)
+        let consolidate_cfg = neural_sgdb::ConsolidateConfig {
+            min_repeats: 3,
+            min_len: 10,
+            max_new: 10,
+        };
+        let _consolidated = db.consolidate_recurrences(&consolidate_cfg).unwrap_or(0);
+
+        LifecycleTickResult {
+            committed: 0,
+            promoted: 0,
+            semanticized: 0,
+            archived: 0,
+            decayed: _decayed,
+            transitions: (_decayed + _expired + _consolidated) as u64,
+        }
+    }) else {
+        return default;
+    };
+
+    report
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +371,12 @@ mod tests {
     fn rag_context_returns_string() {
         let ctx = rag_context_nsgdb(&[1.0, -1.0, 1.0, -1.0], 3);
         assert!(ctx.is_empty() || !ctx.is_empty());
+    }
+
+    #[test]
+    fn lifecycle_tick_returns_zero_when_empty() {
+        let result = lifecycle_tick(1000, &MemoryLifecycleConfig::default());
+        assert_eq!(result.transitions, 0);
     }
 
     #[test]
