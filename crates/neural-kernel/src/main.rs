@@ -3092,7 +3092,7 @@ pub(crate) fn kernel_boot(
                         // Marca onde começa a região de experts (após modelos grandes,
                         // benchmarks, BPE, BGE — tudo ordenado por tamanho descendente
                         // pelo script PS1). Expert scan começa daqui, evita carregar
-                        // tinystories/Piper/BITNET2B como se fossem experts.
+                        // tinystories/Piper/BITNET2B como se fossem experts (Falcon3 ja no CURRENT_MODEL).
                         QEMU_LOADER_SCAN_START.store(0x129000000, core::sync::atomic::Ordering::Relaxed);
                     } else {
                         k_nano::slog_bin!("RAMDISK", "info", "QEMU loader: load_model FAILED");

@@ -1,7 +1,7 @@
 ﻿# Neural OS Hermes — K³CHJ Core
 
 A bare-metal operating system written in Rust (`no_std` + `no_main`), booting from
-UEFI, with an in-kernel ternary (BitNet b1.58) inference engine. Networking, storage,
+UEFI, with an in-kernel ternary (Falcon3-3B-Instruct-1.58bit) inference engine. Networking, storage,
 audio, a sandboxed WASM runtime and a small UI stack run natively — no POSIX, no
 Linux, no cloud dependency.
 
@@ -34,7 +34,7 @@ trust tokens). Boot is an 8-phase event-driven sequence (SafeHarbor → MemoryCo
 SystemBringup → Diagnostics → HardwareDiscovery → DriverInit → AgentFleet →
 Runtime) that publishes each phase on an in-kernel event bus.
 
-The inference engine is a ternary (BitNet b1.58) language model — 850M parameters,
+The inference engine is a ternary (Falcon3-3B-Instruct-1.58bit) language model — 3B parameters,
 2-bit packed weights, ADD/SUB-only matmul, AVX2/SSE kernels — loaded from disk and
 run inside the kernel address space, plus a small Mixture-of-Experts router
 (Trinity MoE) with specialized experts (hardware identification, code generation,
@@ -216,7 +216,7 @@ and Rust-subset paths exist but are gated behind the isolation ring.
 
 ### Inference & cognition
 
-- **BitNet b1.58** — 850M ternary params (`BITNET2B.BIN`, ~590MB, loaded via
+- **Falcon3-3B-Instruct-1.58bit** — 3B ternary params (`FALCON3.V6`, ~989MB, loaded via
   QEMU loader or FAT32), 30 layers, hidden 2560, GQA, Medusa speculative decode,
   AVX2/SSE4.2 kernels with runtime dispatch
 - **Trinity MoE** — router + 6 experts (hardware ID, code generation, disk
