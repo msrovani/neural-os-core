@@ -1,6 +1,5 @@
-﻿# STATE — neural-os-core v1.9.99-s282 — pista ADR-0100 (backlog custo×anel)
-#   SESSION_282: ADR-0100 Proposed — ondas 0–10, T-001–T-075; filtro valor/aderência/viabilidade.
-#     Próximo: T-001 métrica BOOT_AI + T-017 aceite metal K23 (paralelo, anéis distintos).
+﻿# STATE — neural-os-core v1.9.99-s283 — Onda 0–1 ADR-0100 no tree
+#   SESSION_283: BOOT_AI + storage_bw TSC; TCG skip ATA/medida. Próximo T-017 metal K23.
 #   SESSION_281: i5 7ª reboot + 240H freeze em K22. ICR x2APIC sem bits 12–19;
 #   SESSION_281: i5 7ª reboot + 240H freeze em K22. ICR x2APIC sem bits 12–19;
 #     deassert só xAPIC; GDT própria 1 TSS/CPU (crate 8 slots não é o silício);

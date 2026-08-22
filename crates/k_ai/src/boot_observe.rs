@@ -55,7 +55,13 @@ pub fn observe_and_plan(trust_ok: bool) -> (usize, usize) {
             classify_storage(cap.id.pci_class, cap.id.pci_subclass)
         };
         if st != StorageKind::None && allow_auto && !stores.iter().any(|k| *k == st) {
-            stores.push(st);
+            let tcg = k_nano::platform_probe::hypervisor()
+                == k_nano::platform_probe::HypervisorKind::Tcg;
+            if tcg && st == StorageKind::Ata {
+                k_nano::slog_kai!("Boot", "observe", "TCG skip ATA no plano");
+            } else {
+                stores.push(st);
+            }
         }
         if cards < 16 {
             emit_card(cap.id.vendor_id, cap.id.device_id, cap.id.pci_class, cap.id.pci_subclass, cap.name);
@@ -81,6 +87,21 @@ pub fn observe_and_plan(trust_ok: bool) -> (usize, usize) {
         "BOOT_OBSERVE:devices={}:nics={}:storage={}:block={}:gpu={}:usb={}:snd={}:escalate={}:trust={}",
         n, nic_n, sto_n, blocks, gpus, usb, snd, escalate_n, trust_ok
     );
+    let ai = k_nano::boot_report::BootAiCounts {
+        observe: n as u32,
+        plan: (nic_n.saturating_add(sto_n)) as u32,
+        act: (nics.len().saturating_add(stores.len())) as u32,
+        escalate: escalate_n,
+        verify: 0,
+    };
+    k_nano::boot_report::note_ai(ai);
+    k_nano::slog_kai!("Boot", "aios", "{}", ai.line());
+    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+        id: 0,
+        topic: String::from("BOOT_AI"),
+        payload: ai.line().into_bytes(),
+        token: event_bus::CapabilityToken::Legacy(1),
+    });
     k_nano::slog_kai!("Boot", "observe", "{} (tabela+recipe; Cortex sem pesos)", summary);
     let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
         id: 0,
@@ -136,6 +157,7 @@ pub fn hydrate_memory() {
     if crate::sgdb::ready() {
         let _ = crate::sgdb::put_hanr("boot_bind", &s);
         crate::self_state::record_life_event(&s);
+        k_nano::boot_report::note_ai_verify();
     } else {
         k_nano::slog_kai!("Boot", "observe", "SGDB nao ready — plano so no EventBus (honesto)");
         *PENDING_HANR.lock() = Some(s);
@@ -165,5 +187,19 @@ mod tests {
         assert_eq!(n, 2);
         assert_eq!(o[0], StorageKind::Nvme);
         assert_eq!(o[1], StorageKind::UsbHost);
+    }
+
+    #[test]
+    fn boot_ai_line_roundtrip() {
+        let c = k_nano::boot_report::BootAiCounts {
+            observe: 3,
+            plan: 2,
+            act: 2,
+            escalate: 1,
+            verify: 0,
+        };
+        let p = k_nano::boot_report::parse_boot_ai_line(&c.line()).unwrap();
+        assert_eq!(p.act, 2);
+        assert_eq!(p.escalate, 1);
     }
 }

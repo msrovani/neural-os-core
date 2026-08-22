@@ -107,6 +107,7 @@ pub mod tsc;
 pub mod display;
 pub mod storage_manager;
 pub mod storage_bus;
+pub mod storage_bw;
 pub mod sync;
 pub mod time;
 pub mod telemetry;

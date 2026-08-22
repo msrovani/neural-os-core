@@ -1,13 +1,11 @@
-//! BootReport — resumo do boot para camadas superiores (cortex/hermes/jarbas).
-//! Publicado no EventBus como tópico `BOOT_REPORT` após a inicialização.
-//! Agentes podem consultar o último relatório via `BootReport::last()`.
+//! BootReport — resumo do boot (EventBus `BOOT_REPORT` + `BOOT_AI`).
+//! ADR-0100 T-001–T-004: Observe/Plan/Act/Escalate/Verify.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 use spin::Mutex;
 
-/// Eventos de boot registrados sequencialmente.
 #[derive(Debug, Clone)]
 pub enum BootEvent {
     Phase { name: String, ok: bool },
@@ -16,14 +14,59 @@ pub enum BootEvent {
     Gpu { name: String, ok: bool },
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BootAiCounts {
+    pub observe: u32,
+    pub plan: u32,
+    pub act: u32,
+    pub escalate: u32,
+    pub verify: u32,
+}
+
+impl BootAiCounts {
+    pub fn line(&self) -> String {
+        alloc::format!(
+            "BOOT_AI observe={} plan={} act={} escalate={} verify={}",
+            self.observe,
+            self.plan,
+            self.act,
+            self.escalate,
+            self.verify
+        )
+    }
+}
+
+pub fn parse_boot_ai_line(s: &str) -> Option<BootAiCounts> {
+    let rest = s.find("BOOT_AI").map(|i| &s[i..])?;
+    let mut c = BootAiCounts::default();
+    for tok in rest.split(|ch: char| ch == ' ' || ch == ':' || ch == ',') {
+        let Some((k, v)) = tok.split_once('=') else {
+            continue;
+        };
+        let Ok(n) = v.parse::<u32>() else {
+            continue;
+        };
+        match k {
+            "observe" => c.observe = n,
+            "plan" => c.plan = n,
+            "act" => c.act = n,
+            "escalate" => c.escalate = n,
+            "verify" => c.verify = n,
+            _ => {}
+        }
+    }
+    rest.contains("observe=").then_some(c)
+}
+
 #[derive(Debug, Clone)]
 pub struct BootReport {
     pub events: Vec<BootEvent>,
-    pub storage_ok: bool,   // algum storage respondeu?
-    pub gpu_ok: bool,       // GPU detectada e backend ok?
-    pub usb_msc: bool,      // USB-MSC disponivel?
-    pub boot_log_written: bool, // BOOT.LOG foi escrito?
-    pub last_ckpt: u8,      // ultimo checkpoint
+    pub storage_ok: bool,
+    pub gpu_ok: bool,
+    pub usb_msc: bool,
+    pub boot_log_written: bool,
+    pub last_ckpt: u8,
+    pub ai: BootAiCounts,
 }
 
 impl BootReport {
@@ -35,6 +78,7 @@ impl BootReport {
             usb_msc: false,
             boot_log_written: false,
             last_ckpt: 0,
+            ai: BootAiCounts::default(),
         }
     }
 
@@ -44,14 +88,29 @@ impl BootReport {
 }
 
 static BOOT_REPORT: Mutex<Option<BootReport>> = Mutex::new(None);
-
-/// Postura GPU real, anotada pelo BE (k_hal) no fim do bring-up — R0 não vê
-/// k_hal (ordem de anéis), então o valor chega por nota (SESSION_274).
 static GPU_NOTE: Mutex<Option<(String, bool)>> = Mutex::new(None);
+static AI_NOTE: Mutex<BootAiCounts> = Mutex::new(BootAiCounts {
+    observe: 0,
+    plan: 0,
+    act: 0,
+    escalate: 0,
+    verify: 0,
+});
 
-/// k_hal chama no fim de `init_backend_with_plan` (qualquer terminal).
 pub fn note_gpu(name: &str, ok: bool) {
     *GPU_NOTE.lock() = Some((String::from(name), ok));
+}
+
+pub fn note_ai(c: BootAiCounts) {
+    let mut g = AI_NOTE.lock();
+    let verify = g.verify;
+    *g = c;
+    g.verify = g.verify.max(verify);
+}
+
+pub fn note_ai_verify() {
+    let mut g = AI_NOTE.lock();
+    g.verify = g.verify.saturating_add(1);
 }
 
 pub fn store(report: BootReport) {
@@ -62,7 +121,6 @@ pub fn last() -> Option<BootReport> {
     BOOT_REPORT.lock().clone()
 }
 
-/// Constrói relatório final e publica no EventBus.
 pub fn finalize_and_publish() -> BootReport {
     use crate::boot_logger::FAT_READY;
     use crate::boot_ramlog::last_ckpt;
@@ -71,15 +129,11 @@ pub fn finalize_and_publish() -> BootReport {
     r.last_ckpt = last_ckpt();
     r.boot_log_written = FAT_READY.load(Ordering::Relaxed);
     r.usb_msc = crate::globals::USB_MSC.lock().is_some();
-
-    // Storage: verifica qual bus respondeu
     r.storage_ok = crate::globals::USB_MSC.lock().is_some()
         || crate::globals::ATA_DRIVER.lock().is_some()
         || crate::globals::AHCI_DRIVER.lock().is_some()
         || crate::disk_agent::nvme::NVME_DRIVER.lock().is_some();
 
-    // GPU: valor REAL anotado pelo k_hal (note_gpu). Sem nota = false —
-    // nunca claim Ready sem evidência (era `true` placeholder até SESSION_274).
     let gpu_note = GPU_NOTE.lock().clone();
     r.gpu_ok = gpu_note.as_ref().map(|(_, ok)| *ok).unwrap_or(false);
     if let Some((name, ok)) = gpu_note {
@@ -97,6 +151,35 @@ pub fn finalize_and_publish() -> BootReport {
         });
     }
 
+    r.ai = *AI_NOTE.lock();
     store(r.clone());
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_boot_ai_canonical() {
+        let c = parse_boot_ai_line("BOOT_AI observe=4 plan=2 act=2 escalate=1 verify=1").unwrap();
+        assert_eq!(c.observe, 4);
+        assert_eq!(c.act, 2);
+        assert_eq!(c.escalate, 1);
+    }
+
+    #[test]
+    fn parse_boot_ai_prefixed() {
+        assert_eq!(
+            parse_boot_ai_line("klog BOOT_AI observe=0 plan=0 act=0 escalate=0 verify=0")
+                .unwrap()
+                .observe,
+            0
+        );
+    }
+
+    #[test]
+    fn parse_boot_ai_rejects_garbage() {
+        assert!(parse_boot_ai_line("hello").is_none());
+    }
 }

@@ -2,7 +2,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::collections::BTreeSet;
 use core::cell::UnsafeCell;
-use core::sync::atomic::Ordering;
 use crate::ata::AtaDriver;
 use crate::usb_msc::UsbMassStorage;
 use super::disk_info::*;
@@ -61,12 +60,10 @@ pub trait StorageController: Send {
     fn write_blocks(&self, disk: u8, lba: u64, data: &[u8], blocks: usize) -> bool;
     fn read_smart(&self, _disk: u8) -> Option<SmartData> { None }
     fn measure_bandwidth(&self, disk: u8) -> u32 {
-        let mut buf = alloc::vec![0u8; 512 * 256];
-        let start = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
-        if !self.read_blocks(disk, 0, &mut buf, 256) { return 0; }
-        let elapsed = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) - start;
-        if elapsed == 0 { return 0; }
-        (256 * 512 / (elapsed as u32 * 55 / 1000).max(1) / 1024 / 1024).max(1)
+        crate::storage_bw::measure_read_mbs(|buf| {
+            let n = buf.len() / 512;
+            self.read_blocks(disk, 0, buf, n)
+        })
     }
 }
 

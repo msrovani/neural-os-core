@@ -7,6 +7,7 @@
 ## Sessões Mantidas (107+)
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
+| 283 | ADR-0100 | Onda 0–1 | BOOT_AI + measure TSC/TCG skip | T-001–T-016 no código; T-017 metal. |
 | 282 | Plano | ADR-0100 | Backlog unificado custo×anel T-001–T-075 | Lacuna 0090–0099 intencional. 0078 só Fase 1 no plano; Ring3 TCG ≠ produção; metal K23 = Onda 2. |
 | 281 | SMP | K22 metal ADR-0088 | ICR x2APIC canônico + GDT 1 TSS/CPU | i5 7ª reboot = #GP ICR bits 14/15 reservados; 240H freeze = N×retry + deassert ilegal. GDT crate 8 slots ≠ silício. Testes icr 2/2; check k-nano none 0 erros. Aceite = K23 + online==madt-1 no metal. |
 | 280 | Mesh | Matriz QEMU GOAL1-3 | 1c NoDisk PASS; 2c+ hang TCG + WHPX #GP | Script já parametrizado (Cores/Accel/Mem/WithModels/Instance); parser mesh_log_parser.py; TCG 1c/4G/NoDisk Both PASS 325KB/4499 linhas A + 326KB/4525 B (Runtime tick1120, Master 2/Worker 3, TOFU settle, mesh_g3_probe→Worker, MKTP 18 skills, MicroPython 71B wasmi); 2c TCG FAIL hang INIT-SIPI-SIPI 168 linhas regressão 7d8116a; WHPX FAIL OVMF #GP 0834EEE; host 2×6G estoura 6.5GB free → 4G teto; `cargo check` 0 erros, 109/115 testes (6 wasm_build pré-existentes). |

@@ -99,7 +99,7 @@ impl Default for CacheTopology {
 }
 
 /// Registro consolidado de capacidades de HW, populado no boot.
-/// Qualquer crate/agente consulta via `hw_info()` — sem chamar funções internas.
+/// **CONGELADO (ADR-0100 T-005):** não adicionar campos. Expansão = SGDB `/hw/...`.
 #[derive(Debug, Clone)]
 pub struct HardwareInfo {
     /// Ambiente de execução (baremetal, WHPX, KVM, TCG…)
@@ -635,6 +635,19 @@ pub fn hw_info() -> &'static HardwareInfo {
     unsafe { &HW_INFO }
 }
 
+pub fn hw_cpu_avx2() -> bool {
+    hw_info().avx2_ready()
+}
+pub fn hw_cpu_avx512() -> bool {
+    hw_info().avx512_ready()
+}
+pub fn hw_cpu_isa() -> &'static str {
+    hw_info().isa_name()
+}
+pub fn hw_cpu_hv() -> HypervisorKind {
+    hw_info().hv
+}
+
 pub fn allow_avx2() -> bool {
     hw_info().avx2_ready()
 }
@@ -718,4 +731,14 @@ pub fn log_itd_probe() {
         ok,
         if ok { "available — deferred enable" } else { "absent" }
     );
+}
+
+#[cfg(test)]
+mod hw_cpu_wrapper_tests {
+    use super::*;
+    #[test]
+    fn hw_cpu_wrappers_match_hw_info() {
+        assert_eq!(hw_cpu_avx2(), hw_info().avx2_ready());
+        assert_eq!(hw_cpu_hv(), hw_info().hv);
+    }
 }

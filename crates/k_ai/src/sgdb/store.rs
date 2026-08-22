@@ -79,6 +79,54 @@ fn populate_hw_namespace() {
         hw.hv.name(),
         k_nano::memory::TOTAL_RAM_MB.load(Ordering::Relaxed)
     );
+    populate_hw_rest();
+}
+
+fn populate_hw_rest() {
+    let write = |key: &str, value: &str| {
+        if let Err(e) = put_kv(key, value.as_bytes()) {
+            k_nano::slog_kai!("SGDB", "hw", "warn put_kv {}: {}", key, e);
+        }
+    };
+    {
+        let bus = k_nano::storage_bus::STORAGE_BUS.lock();
+        write(
+            &format!("{}storage/count", ns::HW),
+            &format!("{}", bus.device_count()),
+        );
+        for (i, e) in bus.entries().iter().enumerate().take(8) {
+            let kind = match e.kind {
+                k_nano::storage_bus::BusKind::Nvme => "nvme",
+                k_nano::storage_bus::BusKind::Ahci => "ahci",
+                k_nano::storage_bus::BusKind::Ata => "ata",
+                k_nano::storage_bus::BusKind::Usb => "usb",
+            };
+            write(&format!("{}storage/{}/kind", ns::HW, i), kind);
+            write(
+                &format!("{}storage/{}/sectors", ns::HW, i),
+                &format!("{}", e.total_sectors_512),
+            );
+        }
+    }
+    let mut gpu_i = 0u32;
+    let mut wifi_n = 0u32;
+    for cap in crate::inventory::khal_device_tree() {
+        if cap.id.class == k_hal::device_cap::DeviceClass::Gpu && gpu_i < 4 {
+            write(&format!("{}gpu/{}/name", ns::HW, gpu_i), cap.name);
+            gpu_i = gpu_i.saturating_add(1);
+        }
+        if cap.id.class == k_hal::device_cap::DeviceClass::Wifi {
+            wifi_n = wifi_n.saturating_add(1);
+        }
+    }
+    if wifi_n > 0 {
+        write(&format!("{}wifi/present", ns::HW), "true");
+    }
+    let (order, n) = k_nano::boot_bind::nic_probe_order();
+    write(&format!("{}net/plan_n", ns::HW), &format!("{}", n));
+    for i in 0..n.min(4) {
+        write(&format!("{}net/{}/kind", ns::HW, i), order[i].as_str());
+    }
 }
 
 /// Varre PCI devices e escreve predições do HW Expert v4 no SGDB /hw/pci/.

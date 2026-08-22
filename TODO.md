@@ -22,8 +22,8 @@ Fonte canônica: `docs/architecture/0100-k3chj-backlog-custo-anel.md`. Fila anti
 
 | Onda | Custo | Anel | Tema | TODOs | Status |
 |------|-------|------|------|-------|--------|
-| 0 | S | R2 `k_ai` + bin | Honesty `BOOT_AI` + freeze HardwareInfo | T-001–T-006 | `[ ]` |
-| 1 | S–M | R0 `k_nano` | `measure_bandwidth` + `/hw/storage|gpu|net` | T-007–T-016 | `[ ]` |
+| 0 | S | R2 `k_ai` + bin | Honesty `BOOT_AI` + freeze HardwareInfo | T-001–T-006 | `[x]` s283 |
+| 1 | S–M | R0 `k_nano` | `measure_bandwidth` + `/hw/storage|gpu|net` | T-007–T-016 | `[x]` s283 (T-010 UNSUPPORTED) |
 | 2 | S evidência | R0 (já s281) | Metal K23 `online==madt-1` | T-017–T-021 | `[ ]` |
 | 3 | S–M | R3 hermes/jarbas | 0086 A2–A8; A1/A9 HITL | T-022–T-032 | `[ ]` |
 | 4 | M–L | R0 + cortex + agent-core | `ap_pollable` + runqueue 0089 | T-033–T-044 | `[ ]` |
@@ -34,7 +34,7 @@ Fonte canônica: `docs/architecture/0100-k3chj-backlog-custo-anel.md`. Fila anti
 | 9 | M | R3 jarbas | 0058 S5 um widget; A/V | T-070–T-072 | `[ ]` |
 | 10 | L ▶️ | R2 | AirLLM DMA/e2e | T-073–T-075 | ▶️ |
 
-**Próximo (paralelo):** T-001 (`BOOT_AI`) e T-017 (USB metal).
+**Próximo:** T-017 USB metal K23 (evidência HW).
 
 **Fora:** BitTorrent/merkle; NTFS write; 0078 Fase 2–4; 0076 F1–F17 (já ✅); WireGuard; Vulkan.
 
@@ -42,22 +42,22 @@ Fonte canônica: `docs/architecture/0100-k3chj-backlog-custo-anel.md`. Fila anti
 
 ### Checklist T-001–T-075 (marcar aqui; detalhe na ADR-0100)
 
-- [ ] T-001 boot_report Observe/Plan/Act/Verify
-- [ ] T-002 Auto vs Escalate
-- [ ] T-003 linha serial `BOOT_AI`
-- [ ] T-004 teste host parse
-- [ ] T-005 congelar `HardwareInfo`
-- [ ] T-006 wrappers `hw_cpu_*`
-- [ ] T-007 API `measure_bandwidth`
-- [ ] T-008 medir NVMe
-- [ ] T-009 medir AHCI
-- [ ] T-010 BMIDE 0xC8 ou skip honesto
-- [ ] T-011 TCG: CRÍTICO + sem freeze
-- [ ] T-012 plano `k_ai` usa medida
-- [ ] T-013 `/hw/storage`
-- [ ] T-014 `/hw/gpu`
-- [ ] T-015 `/hw/net`
-- [ ] T-016 wifi só se device
+- [x] T-001 boot_report Observe/Plan/Act/Verify
+- [x] T-002 Auto vs Escalate
+- [x] T-003 linha serial `BOOT_AI`
+- [x] T-004 teste host parse
+- [x] T-005 congelar `HardwareInfo`
+- [x] T-006 wrappers `hw_cpu_*`
+- [x] T-007 API `measure_bandwidth` (TSC, 16 setores)
+- [x] T-008 medir NVMe (default StorageController)
+- [x] T-009 medir AHCI (idem)
+- [x] T-010 BMIDE 0xC8 = UNSUPPORTED (ATA PIO amostra / skip TCG)
+- [x] T-011 TCG: skip medida + ATA fora do plano
+- [x] T-012 plano `k_ai` não inclui ATA em TCG
+- [x] T-013 `/hw/storage`
+- [x] T-014 `/hw/gpu`
+- [x] T-015 `/hw/net`
+- [x] T-016 wifi só se device
 - [ ] T-017 imagem USB unified
 - [ ] T-018 i5 K23 + online
 - [ ] T-019 240H K23 + online

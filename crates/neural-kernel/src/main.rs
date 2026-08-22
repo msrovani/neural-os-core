@@ -4168,11 +4168,12 @@ pub(crate) fn kernel_boot(
         k_nano::slog_bin!(
             "BOOT",
             "REPORT",
-            "storage={} usb_msc={} log_written={} ckpt=K{}",
+            "storage={} usb_msc={} log_written={} ckpt=K{} {}",
             report.storage_ok,
             report.usb_msc,
             report.boot_log_written,
-            report.last_ckpt
+            report.last_ckpt,
+            report.ai.line()
         );
 
         // ── Dump boot_ramlog no FB antes do Runtime ──
