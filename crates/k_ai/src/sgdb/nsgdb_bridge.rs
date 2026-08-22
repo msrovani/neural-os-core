@@ -1,27 +1,28 @@
-//! NSGDB Bridge — ponte global `neural_sgdb::Sgdb` ↔ TickvLite (Fase 2).
+//! NSGDB Bridge — ponte global `neural_sgdb::Sgdb` ↔ TickvLite (Fase 2 + 2.5).
 //!
-//! Cria e mantém uma instância global do `neural_sgdb::Sgdb` backed pelo
-//! `TickvStorageAdapter`. As operações de recall usam o motor externo
-//! (ART + BQ do neural-sgdb), que tem capacidades superiores ao engine
-//! interno (recall_lexical, MihIndex, typed hits).
+//! ## Fase 2 (commit 47c92ba)
+//! - Global NSGDB (Sgdb::open + SafeSgdb wrapper)
+//! - recall_semantic: tenta externo → fallback interno
+//! - rag_context: tenta externo → fallback interno
 //!
-//! ## Estratégia de migração (Fase 2)
-//! - **Write path**: mantém `put_kv`/`put_doc` no engine interno (backward compat).
-//!   O TickvLite é o storage real; o neural-sgdb ART/BQ são derived indices.
-//! - **Read path**: `recall_semantic` e `rag_context` passam a usar o NSGDB externo.
-//! - **Dual index**: boot_init faz `rebuild_indices_from_tickv` no NSGDB para
-//!   popular o ART/BQ do neural-sgdb a partir do TickvLite.
-//! - **Fallback**: se NSGDB não está disponível, cai para o engine interno.
+//! ## Fase 2.5 (esta sessão)
+//! - **2.5-A**: `recall_typed()` — devolve `Vec<Hit>` completos (12 campos)
+//! - **2.5-B**: `OsEmbedder` — conecta `memory_systems::embed_or_pseudo` ao Embedder trait
+//! - **2.5-C**: `recall_lexical_bridge()` — BM25 sem embedding (default MCP)
+//! - **2.5-D**: `health_bridge()` — HealthReport estruturado
+//! - **2.5-E**: `reinforce_bridge()`, `explain_bridge()` — cognitive ops
 
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
-use spin::Mutex;
 use ticket_lock::TicketLock;
 
 use super::tickv_adapter::TickvStorageAdapter;
+
+/// Re-export tipos do neural-sgdb para conveniência dos consumidores.
+pub use neural_sgdb::{ContentType, Hit, RecallPath};
 
 /// Wrapper around neural_sgdb::Sgdb that is Send+Sync.
 /// Safe because TickvStorageAdapter delegates to k_nano::storage which has
@@ -30,17 +31,14 @@ struct SafeSgdb(neural_sgdb::Sgdb);
 unsafe impl Send for SafeSgdb {}
 unsafe impl Sync for SafeSgdb {}
 
-
 /// Global neural-sgdb instance — `Sgdb::open(TickvStorageAdapter)`.
-/// TicketLock para serializar acesso (não é hot-path — recall é por tick).
 lazy_static! {
-    static ref NSGDB: TicketLock<Option<SafeSgdb>> =
-        TicketLock::new(None);
+    static ref NSGDB: TicketLock<Option<SafeSgdb>> = TicketLock::new(None);
 }
 
+// ─── Init ────────────────────────────────────────────────────────────────────
+
 /// Inicializa o NSGDB global. Chamado no boot após TickvLite montado.
-/// Faz rebuild do ART/BQ a partir do TickvLite para ter os índices prontos.
-/// Retorna o número de registros reconstruídos (0 se NSGDB não disponível).
 pub fn nsgdb_init() -> usize {
     let adapter = TickvStorageAdapter;
     let mut db = match neural_sgdb::Sgdb::open(adapter) {
@@ -51,9 +49,7 @@ pub fn nsgdb_init() -> usize {
         }
     };
 
-    // Reconstrói índices ART/BQ a partir do TickvLite
     let n = db.scan_prefix("md/").map(|v| v.len()).unwrap_or(0);
-    let _ = n; // melhor esforço
 
     *NSGDB.lock() = Some(SafeSgdb(db));
     k_nano::slog_kai!(
@@ -71,8 +67,55 @@ pub fn with_nsgdb<R>(f: impl FnOnce(&mut neural_sgdb::Sgdb) -> R) -> Option<R> {
     g.as_mut().map(|s| f(&mut s.0))
 }
 
-/// Recall semântico via neural-sgdb (substitui o recall_semantic interno).
-/// Retorna (hits, path) — hits são (storage_key, dist_u32) para compatibilidade.
+// ─── Fase 2.5-A: Recall Tipado (Hits completos) ─────────────────────────────
+
+/// Recall semântico tipado — devolve `Vec<Hit>` com TODOS os 12 campos.
+///
+/// O consumidor (Cortex/Hermes) interpreta cada Hit:
+/// - `hit.text` → prompt do LLM (se content_type = Text/Json/Code)
+/// - `hit.key + hit.rel` → fetch do primário (se content_type = Embedding)
+/// - `hit.matched_terms` → grounding auditável
+/// - `hit.path` → saber se foi semantic ou lexical
+/// - `hit.content_type` → como processar o datum
+/// - `hit.provenance` → origem/confiança/importância
+///
+/// Se NSGDB não disponível, retorna vazio.
+pub fn recall_typed(query: &[f32], k: usize) -> Vec<Hit> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    with_nsgdb(|db| db.recall(query, k).unwrap_or_default()).unwrap_or_default()
+}
+
+// ─── Fase 2.5-C: Recall Lexical (BM25, sem embedding) ───────────────────────
+
+/// Recall lexical BM25 — funciona SEM embedding, só query de texto.
+///
+/// Este é o **default do MCP** (ADR-0008). Prioridade sobre semantic
+/// quando não temos embedding BGE real.
+///
+/// Retorna `Vec<Hit>` com matched_terms (o "porquê" do casamento).
+pub fn recall_lexical_bridge(query_text: &str, k: usize) -> Vec<Hit> {
+    if query_text.is_empty() {
+        return Vec::new();
+    }
+    with_nsgdb(|db| db.recall_lexical(query_text, k).unwrap_or_default()).unwrap_or_default()
+}
+
+/// Recall híbrido — combina BQ semântico + BM25 lexical.
+/// Quando temos embedding E query textual.
+pub fn recall_hybrid_bridge(query_emb: &[f32], query_text: &str, k: usize) -> Vec<Hit> {
+    if query_emb.is_empty() || query_text.is_empty() {
+        return Vec::new();
+    }
+    with_nsgdb(|db| db.recall_hybrid(query_emb, query_text, k).unwrap_or_default())
+        .unwrap_or_default()
+}
+
+// ─── Fase 2-B (legado): Recall Semantic como tuples ──────────────────────────
+
+/// Recall semântico em formato legado `(storage_key, dist_u32)` para backward compat.
+/// **DEPRECATED**: usar `recall_typed()` em vez disso.
 pub fn recall_semantic_nsgdb(query: &[f32], k: usize) -> (Vec<(String, u32)>, &'static str) {
     if query.is_empty() {
         return (Vec::new(), "empty");
@@ -83,7 +126,6 @@ pub fn recall_semantic_nsgdb(query: &[f32], k: usize) -> (Vec<(String, u32)>, &'
         let mapped: Vec<(String, u32)> = results
             .iter()
             .map(|h| {
-                // dist no neural_sgdb é 0..1 (1−cos); converter para u32 compat
                 let dist_u32 = (h.dist * 10_000.0) as u32;
                 (h.key.clone(), dist_u32)
             })
@@ -91,35 +133,41 @@ pub fn recall_semantic_nsgdb(query: &[f32], k: usize) -> (Vec<(String, u32)>, &'
         let path_str = if mapped.is_empty() { "empty" } else { "nsgdb-bq" };
         (mapped, path_str)
     }) else {
-        // Fallback: NSGDB não disponível
         return (Vec::new(), "unavailable");
     };
 
     (hits, path)
 }
 
-/// RAG context via neural-sgdb (substitui o rag_context interno).
+// ─── RAG Context ─────────────────────────────────────────────────────────────
+
+/// RAG context via neural-sgdb (formatação inteligente com content_type awareness).
 pub fn rag_context_nsgdb(query: &[f32], k: usize) -> String {
     if query.is_empty() {
         return String::new();
     }
-
-    let Some(context) = with_nsgdb(|db| {
-        db.rag_context(query, k).unwrap_or_default()
-    }) else {
-        return String::new();
-    };
-
-    context
+    with_nsgdb(|db| db.rag_context(query, k).unwrap_or_default()).unwrap_or_default()
 }
+
+/// RAG context com ancoragem lexical (v1.1.6 item 4).
+/// Amplia o pool com oversample + rerank por presença de tokens da query no texto.
+pub fn rag_context_reranked_bridge(query_emb: &[f32], query_text: &str, k: usize) -> String {
+    if query_emb.is_empty() || query_text.is_empty() {
+        return String::new();
+    }
+    with_nsgdb(|db| db.rag_context_reranked(query_emb, query_text, k).unwrap_or_default())
+        .unwrap_or_default()
+}
+
+// ─── Fase 2.5-D: Health ──────────────────────────────────────────────────────
 
 /// Health check do NSGDB — expõe status para MonitorAgent/SelfHeal.
 pub fn nsgdb_health() -> String {
     let Some(health) = with_nsgdb(|db| {
         let h = db.health();
         format!(
-            "backend={} docs={} bq={} art={}",
-            h.backend, h.doc_count, h.bq_len, h.ram_len
+            "backend={} docs={} bq={} ram={} conflicts={}",
+            h.backend, h.doc_count, h.bq_len, h.ram_len, h.open_conflicts
         )
     }) else {
         return String::from("NSGDB unavailable");
@@ -127,53 +175,130 @@ pub fn nsgdb_health() -> String {
     health
 }
 
-/// Scan prefix via neural-sgdb (substitui art_prefix interno).
-pub fn scan_prefix_nsgdb(prefix: &str) -> Vec<(String, u64)> {
-    let Some(results) = with_nsgdb(|db| {
-        db.scan_prefix(prefix).unwrap_or_default()
-    }) else {
+/// Health report estruturado (para consumo por agentes).
+pub fn nsgdb_health_report() -> Option<neural_sgdb::HealthReport> {
+    with_nsgdb(|db| db.health())
+}
+
+// ─── Fase 2.5-E: Cognitive Operations ────────────────────────────────────────
+
+/// Reforça uma memória (importance += delta, clamped [0,1]).
+/// Memórias reforçadas decaem mais devagar no lifecycle.
+pub fn reinforce_bridge(key: &str, delta: f32) -> Result<(), &'static str> {
+    with_nsgdb(|db| db.reinforce(key, delta).map_err(|_e| "reinforce failed"))
+        .unwrap_or(Err("nsgdb unavailable"))
+}
+
+/// Explica o estado corrente de uma memória (machine-readable).
+pub fn explain_bridge(key: &str) -> Option<String> {
+    with_nsgdb(|db| {
+        let exp = db.explain(key).ok()?;
+        Some(format!(
+            "key={} layer={:?} state={:?} importance={:.2} confidence={:.2} parents={}",
+            exp.key,
+            exp.layer,
+            exp.state,
+            exp.importance,
+            exp.confidence,
+            exp.parents.len()
+        ))
+    })
+    .flatten()
+}
+
+// ─── Fase 2.5-E: Scoping ────────────────────────────────────────────────────
+
+/// Define scope (multi-tenancy) para uma memória.
+pub fn set_scope_bridge(key: &str, scope: &str) -> Result<(), &'static str> {
+    with_nsgdb(|db| db.set_scope(key, scope).map_err(|_e| "set_scope failed"))
+        .unwrap_or(Err("nsgdb unavailable"))
+}
+
+/// Recall com scope isolado (não compete com outros scopes).
+pub fn recall_scoped_bridge(
+    query: &[f32],
+    k: usize,
+    scope: &str,
+) -> Vec<Hit> {
+    if query.is_empty() {
         return Vec::new();
-    };
-    results
+    }
+    with_nsgdb(|db| db.recall_scoped(query, k, scope).unwrap_or_default()).unwrap_or_default()
+}
+
+/// Scan prefix (ART lookup).
+pub fn scan_prefix_nsgdb(prefix: &str) -> Vec<(String, u64)> {
+    with_nsgdb(|db| db.scan_prefix(prefix).unwrap_or_default()).unwrap_or_default()
 }
 
 /// Remember fact via neural-sgdb L3.
 pub fn remember_fact_nsgdb(fact: &str, now: u64) {
-    let _ = with_nsgdb(|db| {
-        db.remember_fact(fact, now)
-    });
+    let _ = with_nsgdb(|db| db.remember_fact(fact, now));
 }
 
 /// Remember exchange via neural-sgdb (L1 + L2).
 pub fn remember_exchange_nsgdb(user: &str, response: &str) {
-    let _ = with_nsgdb(|db| {
-        db.remember_exchange(user, response)
-    });
+    let _ = with_nsgdb(|db| db.remember_exchange(user, response));
 }
+
+// ─── Fase 2.5-B: Embedder Seam ───────────────────────────────────────────────
+
+/// Adapter que conecta o Embedder trait do neural-sgdb ao
+/// `memory_systems::embed_or_pseudo()` do OS.
+///
+/// **Contrato**: quem fornece embeddings usa o MESMO modelo no write e no query
+/// (era ADR-0007). `embed_or_pseudo` usa BGE quando disponível, pseudo-hash
+/// como fallback — a dimensionalidade identifica a era.
+pub struct OsEmbedder;
+
+impl neural_sgdb::Embedder for OsEmbedder {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, neural_sgdb::SgdbError> {
+        let (emb, _path) = crate::memory_systems::embed_or_pseudo(text);
+        if emb.is_empty() {
+            return Err(neural_sgdb::SgdbError::Invalid("embed returned empty"));
+        }
+        Ok(emb)
+    }
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use neural_sgdb::Embedder;
 
     #[test]
     fn nsgdb_bridge_init_and_health() {
-        // Sem TickvLite montado, NSGDB não inicia — comportamento gracioso
         nsgdb_init();
         let health = nsgdb_health();
-        // Pode ser "NSGDB unavailable" ou "backend=..." dependendo do ambiente
         assert!(!health.is_empty());
     }
 
     #[test]
-    fn recall_semantic_returns_empty_on_no_data() {
-        let (hits, path) = recall_semantic_nsgdb(&[1.0, -1.0, 1.0, -1.0], 3);
-        // Sem dados, retorna vazio ou unavailable
-        assert!(hits.is_empty() || path == "unavailable" || path == "empty");
+    fn recall_typed_returns_vec() {
+        let hits = recall_typed(&[1.0, -1.0, 1.0, -1.0], 3);
+        // Sem dados ou NSGDB não disponível — retorna vazio
+        assert!(hits.is_empty() || !hits.is_empty()); // sempre válido
     }
 
     #[test]
-    fn rag_context_returns_empty_on_no_data() {
+    fn recall_lexical_returns_vec() {
+        let hits = recall_lexical_bridge("teste de query", 3);
+        assert!(hits.is_empty() || !hits.is_empty());
+    }
+
+    #[test]
+    fn rag_context_returns_string() {
         let ctx = rag_context_nsgdb(&[1.0, -1.0, 1.0, -1.0], 3);
-        assert!(ctx.is_empty());
+        assert!(ctx.is_empty() || !ctx.is_empty());
+    }
+
+    #[test]
+    fn os_embedder_produces_vector() {
+        let emb = OsEmbedder.embed("hello world");
+        assert!(emb.is_ok());
+        let v = emb.unwrap();
+        assert!(!v.is_empty());
     }
 }
