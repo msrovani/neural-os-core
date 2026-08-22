@@ -76,7 +76,7 @@ pub fn estimate_bitnet_mb(params: u64) -> u64 {
 /// ternário ~0.75 GB + embed Q6_K ~0.33 GB → arquivo v6 ~0.77 GB (FALLBACK 771 MB);
 /// BF16 denso ~6 GB.
 pub const FALCON3_PARAMS: u64 = 3_000_000_000;
-pub const FALCON3_FILE_MB: u64 = 771; // v6 packed (Q6_K embed + ternary)
+pub const FALCON3_FILE_MB: u64 = 989; // v6 packed Q6_K 330MB + ternary 659MB = 1037071016 bytes (medido 22/08/2026, feat=0x04)
 pub const FALCON3_BF16_MB: u64 = 6144;
 
 /// KV heurístico alinhado ao MemoryAgent legado (params/40 → MB clamp).
