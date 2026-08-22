@@ -21,7 +21,7 @@ from typing import Any
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Degraus canônicos alinhados a mkfat32 / mkexfat
-TOKENS = ("850", "13", "2b", "3b")
+TOKENS = ("850", "13", "2b", "3b", "falcon3")
 
 # Footprints estáticos (MB) se blob ausente — ordem de grandeza BitNet
 FALLBACK_BLOB_MB = {
@@ -29,6 +29,7 @@ FALLBACK_BLOB_MB = {
     "13": 320,
     "2b": 590,
     "3b": 700,
+    "falcon3": 771,
 }
 
 HEAP_FLOOR_MB = 128
@@ -76,6 +77,8 @@ def resolve_blob(token: str) -> tuple[str | None, int]:
         )
     elif token == "3b":
         path = find_large("BITNET3B.BIN") or find_large("bitnet_3B.bitnet")
+    elif token == "falcon3":
+        path = find_large("FALCON3.V6") or find_large("FALCON3.BIN") or find_large("falcon3.v6")
 
     if path and os.path.isfile(path):
         mb = max(1, os.path.getsize(path) // (1024 * 1024))
@@ -101,6 +104,8 @@ def parse_pack(raw: str) -> set[str]:
             out.add("2b")
         elif t in ("3b", "3", "pro"):
             out.add("3b")
+        elif t in ("falcon3", "falcon", "f3", "falcon-3b", "falcon3b"):
+            out.add("falcon3")
     return out
 
 

@@ -70,6 +70,15 @@ pub fn estimate_bitnet_mb(params: u64) -> u64 {
     (bytes / (1024 * 1024)).max(if params > 0 { 1 } else { 0 })
 }
 
+/// Falcon3 3B — preset principal (v6 genérico já suporta dims arbitrárias).
+/// hidden 3072, 22 layers, 12 heads, 4 kv_heads, intermediate 9216, vocab 131072,
+/// silu, rope 1000042, tie false, embed Q6_K.
+/// ternário ~0.75 GB + embed Q6_K ~0.33 GB → arquivo v6 ~0.77 GB (FALLBACK 771 MB);
+/// BF16 denso ~6 GB.
+pub const FALCON3_PARAMS: u64 = 3_000_000_000;
+pub const FALCON3_FILE_MB: u64 = 771; // v6 packed (Q6_K embed + ternary)
+pub const FALCON3_BF16_MB: u64 = 6144;
+
 /// KV heurístico alinhado ao MemoryAgent legado (params/40 → MB clamp).
 pub fn estimate_kv_mb(params: u64) -> u64 {
     let mb = params / 40 / (1024 * 1024);
@@ -163,11 +172,12 @@ pub fn score_fit(
 
 /// Footprints estáticos por nome de slot / token (MB on-disk + runtime order).
 pub fn slot_footprint_mb(slot_name: &str) -> Option<u64> {
-    match slot_name {
+    match slot_name.to_ascii_lowercase().as_str() {
         "generator_fast" | "fast" | "850m" | "850" | "active" | "current" | "generator" => {
             Some(220)
         }
         "generator_pro" | "pro" | "3b" | "bitnet3b" => Some(700),
+        "falcon3" | "falcon" | "f3" | "falcon3b" | "falcon-3b" => Some(FALCON3_FILE_MB),
         "tinystories" | "tiny" | "smoke" => Some(4),
         "rust_coder" | "rustcoder" => Some(260),
         "hw_identify" | "hwexpert" => Some(1),

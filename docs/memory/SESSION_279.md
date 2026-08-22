@@ -35,6 +35,9 @@ SMP no QEMU e no HW real. AIOS: **detectar o x86 e usar o que existe**. Não har
 
 ## Limites
 
+- QEMU TCG = DEV/TEST. **Objetivo principal e aceite = HW real** (não substituir o metal por serial TCG).
+- Aceite QEMU TCG (`sipi_hit`/`ready`/`ONLINE`/`counter`) só como evidência de debug; metal: `online == madt_enabled - 1`.
+
 - Aceite QEMU TCG (`sipi_hit`/`ready`/`ONLINE`/`counter`) = este SESSION após rebuild `uefi.img`.
 - `ap_pollable` / GDT 1 TSS / runqueue 16 = residual 0057 WS-F.
 - Não Ring3 / `register_native_ring`.

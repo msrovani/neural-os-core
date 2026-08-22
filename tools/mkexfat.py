@@ -39,13 +39,13 @@ def _apply_fit_gate_if_enabled() -> None:
 
 
 def pack_llm_set() -> set[str]:
-    """PACK_LLM=850|13|2b|3b|all — default 850 (primeiro degrau). FIT_GATE=1 filtra."""
+    """PACK_LLM=850|13|2b|3b|falcon3|all — default falcon3 (principal). FIT_GATE=1 filtra."""
     _apply_fit_gate_if_enabled()
-    raw = os.environ.get("PACK_LLM", "850").strip().lower()
+    raw = os.environ.get("PACK_LLM", "falcon3").strip().lower()
     if not raw or raw in ("none", "0", "off"):
         return set()
     if raw in ("all", "*"):
-        return {"850", "13", "2b", "3b"}
+        return {"850", "13", "2b", "3b", "falcon3"}
     out: set[str] = set()
     for tok in raw.replace(";", ",").split(","):
         t = tok.strip().lower().replace(" ", "")
@@ -57,6 +57,8 @@ def pack_llm_set() -> set[str]:
             out.add("2b")
         elif t in ("3b", "3", "pro"):
             out.add("3b")
+        elif t in ("falcon3", "falcon", "f3", "falcon-3b", "falcon3b"):
+            out.add("falcon3")
     return out
 
 
@@ -103,7 +105,7 @@ def align_up(v: int, a: int) -> int:
 
 def collect_files() -> list[tuple[str, bytes | str | None]]:
     llm = pack_llm_set()
-    print(f"[PACK_LLM] {sorted(llm) or 'none'} (env PACK_LLM; default=850)")
+    print(f"[PACK_LLM] {sorted(llm) or 'none'} (env PACK_LLM; default=falcon3)")
     files: list[tuple[str, bytes | str | None]] = [
         ("BGE.BIN", find_file("bge-small.bitnet") or find_file("bge.bin")),
         # ADR-0083 §5.3: roteador MoE treinado (tools/train_router.py). Opcional.

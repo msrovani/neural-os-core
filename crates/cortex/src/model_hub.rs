@@ -312,7 +312,7 @@ pub fn slot_from_bitnet_bytes(len: usize) -> ModelSlot {
     } else if len < 450 * MB {
         ModelSlot::Vision
     } else if len < 1100 * MB {
-        // Falcon3-3B (~771MB) e modelos 3B → Agent
+        // Falcon3-3B (~771MB v6: Q6_K embed + ternary) e modelos 3B → Agent
         ModelSlot::Agent
     } else {
         // Falcon3-7B (~1781MB) e maiores → GeneratorPro
@@ -337,8 +337,18 @@ pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
         ModelSlot::RustCoder => &["RUSTCDR3.v6", "RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"],
         ModelSlot::HwExpert => &["HWEXPRT.v6", "HWEXPRT.BIN", "HWEXPERT.BIN", "HWEXPRT4.BIN", "HWEXPRT4.bin"],
         ModelSlot::Learner => &["LEARNER.v6", "LEARNER.BIN", "QWEEN05.BIN", "QWEN05B.BIN"],
-        ModelSlot::Agent => &["AGENT.v6", "AGENT.BIN", "QWEN3B.BIN", "QWEN.BIN"],
+        ModelSlot::Agent => &[
+            "FALCON3.V6",
+            "FALCON3.BIN",
+            "AGENT.v6",
+            "AGENT.BIN",
+            "QWEN3B.BIN",
+            "QWEN.BIN",
+        ],
         ModelSlot::Active => &[
+            // Falcon3 3B é o preset principal (hidden 3072 L22 H12 kv4 vocab 131072 silu rope 1000042 tie false)
+            "FALCON3.V6",
+            "FALCON3.BIN",
             "BITNET2B.v6",
             "BITNET2B.BIN",
             "BITNET13.BIN",

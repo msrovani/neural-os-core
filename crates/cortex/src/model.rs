@@ -2,6 +2,9 @@
 //! Fronteira de formato única: load_model_v6 despacha por model_type para
 //! LLM / HWExpert. Router é formato posicional próprio (trinity) — separado.
 //! ModelHub usa `register_bytes` como ponto único.
+//! Preset principal: Falcon3 3B (hidden 3072 L22 H12 kv4 intermediate 9216
+//! vocab 131072 silu rope 1000042 tie false, BF16 → Q6_K+ternary v6). v6 é
+//! genérico: `v6_file_size` e loader já aceitam dims arbitrárias.
 
 use crate::cortex::{HwExpertV4Model, TransformerModel};
 

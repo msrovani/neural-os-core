@@ -2,8 +2,8 @@
 """Cria imagem FAT32 com MBR, formata, copia modelos .bitnet e CONFIG.TXT.
 Uso: python tools/mkfat32.py [--size 3072] [--label NEURAL-OS] [--output target/disk_qemu.raw]
 
-PACK_LLM=850|13|2b|3b|all  — progressivo (default: 850). Ex: PACK_LLM=850,13
-  850 → BITNET850; 13 → BITNET13 (~1.3B xl); 2b → BITNET2B; 3b → BITNET3B; all → tudo
+PACK_LLM=850|13|2b|3b|falcon3|all  — progressivo (default: 850). Ex: PACK_LLM=850,13
+  850 → BITNET850; 13 → BITNET13 (~1.3B xl); 2b → BITNET2B; 3b → BITNET3B; falcon3 → FALCON3.V6/.BIN (Q6_K 771MB, addr 0x100000000); all → tudo
 FIT_GATE=1 — filtra PACK_LLM via tools/llmfit_pack_filter.py (nunca sobe degrau).
 FAT32: partição pode ser 3GB+; limite ~4GB-1 é por *arquivo*. Modelos grandes (>PIO):
   preferir AirLLM (/model GGUF ATA) em vez de PIO full-RAM.
@@ -32,13 +32,13 @@ def _apply_fit_gate_if_enabled() -> None:
 
 
 def pack_llm_set() -> set[str]:
-    """Tokens normalizados: 850, 13, 2b, 3b. Default só 850 (primeiro degrau)."""
+    """Tokens normalizados: 850, 13, 2b, 3b, falcon3. Default falcon3 (preset principal)."""
     _apply_fit_gate_if_enabled()
-    raw = os.environ.get("PACK_LLM", "850").strip().lower()
+    raw = os.environ.get("PACK_LLM", "falcon3").strip().lower()
     if not raw or raw in ("none", "0", "off"):
         return set()
     if raw in ("all", "*"):
-        return {"850", "13", "2b", "3b"}
+        return {"850", "13", "2b", "3b", "falcon3"}
     out: set[str] = set()
     for tok in raw.replace(";", ",").split(","):
         t = tok.strip().lower().replace(" ", "")
@@ -50,6 +50,8 @@ def pack_llm_set() -> set[str]:
             out.add("2b")
         elif t in ("3b", "3", "pro"):
             out.add("3b")
+        elif t in ("falcon3", "falcon", "f3", "falcon-3b", "falcon3b"):
+            out.add("falcon3")
     return out
 
 def find_file(name):
@@ -85,6 +87,11 @@ def find_bitnet_850():
 
 def find_bitnet_3b():
     return find_large("BITNET3B.BIN") or find_large("bitnet_3B.bitnet")
+
+def find_falcon3():
+    return (find_large("FALCON3.V6") or find_large("FALCON3.BIN")
+            or find_large("falcon3.v6") or find_large("falcon3.bitnet")
+            or find_large("BITNET_FALCON3.BIN"))
 
 def align_up(v, a): return (v + a - 1) // a * a
 
@@ -197,7 +204,7 @@ def _inject_device_legos(files: list) -> None:
 
 def populate(path):
     llm = pack_llm_set()
-    print(f"[PACK_LLM] {sorted(llm) or 'none'} (env PACK_LLM; default=850)")
+    print(f"[PACK_LLM] {sorted(llm) or 'none'} (env PACK_LLM; default=falcon3)")
     files = [
         ("BGE.BIN", find_file("BGE_M3.BIN") or find_file("bge-small.bitnet") or find_file("bge.bin") or find_file("BGE.BIN")),
         # ADR-0083 §5.3: roteador MoE treinado (tools/train_router.py). Opcional —
@@ -221,6 +228,8 @@ def populate(path):
          if "2b" in llm else None),
         ("BITNET.BIN", None),  # alias legado; não empacota stub
         ("BITNET3B.BIN", find_bitnet_3b() if "3b" in llm else None),
+        ("FALCON3.V6", find_falcon3() if "falcon3" in llm else None),
+        ("FALCON3.BIN", find_falcon3() if "falcon3" in llm else None),
         ("MICRO.BITNET", None if ("850" in llm or "13" in llm) else find_file("MICRO.BITNET")),
         # ADR-0078/0079: todos os slots ModelHub (fat_names_for em cortex::model_hub)
         ("VISION.BIN", find_file("VISION.v6") or find_file("VISION.BIN")),

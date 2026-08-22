@@ -1,6 +1,15 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### SESSION_280: Matriz QEMU Mesh P2P GOAL1-3 (2026-08-22)
+
+**GOAL1-3 PASS em TCG 1c/4G/NoDisk Both; 2c+ hang + WHPX #GP documentados.**
+
+- **feat(script):** `run-qemu-p2p-mesh.ps1` verificado já parametrizado `-Cores 1|2|4|8 -Accel whpx|tcg -Mem 1..8 -WithModels/-NoModels -Instance A|B|Both` (ASCII puro, fallback `target1→target`, `netmode_a/b.flag` 10.0.3.2/3, socket `127.0.0.1:12345`, `logs/boot_mesh_a/b.txt`; confirmação Etapa 0 — sem alteração).
+- **feat(tool):** `tools/mesh_log_parser.py` — tail ao vivo Get-Content -Wait + marcos `BOOT:AgentFleet/Runtime`, `Framebuffer`, `Piper formant`, `orb`, `MESH_ENGINE`, `mesh role=`, `TOFU settled`, `mesh_g3_probe`, `MKTP` → JSON goals.
+- **fix(mesh):** GOAL1-3 PASS TCG 1c/4G/NoDisk Both: 325418B/4499 linhas A + 326172B/4525 linhas B, Runtime tick1120, Master 2/Worker 3, TOFU settle T+1505/T+1569, `mesh_g3_probe` aplicada do Master, MKTP 18 skills, MicroPython 71B wasmi. 2c TCG FAIL hang `INIT-SIPI-SIPI sequencial ap_ids=[0x01]` 168 linhas (regressão 7d8116a); WHPX FAIL `X64 #GP RIP 0834EEE OvmfPkg/PlatformPei` (OVMF, não kernel); host 2×6G estoura 6.5GB free → 4G teto. Loop 5 relaunches + `Stop-Process qemu*` entre.
+- **build:** `cargo check --release` 0 erros, `cargo test --workspace --exclude neural-kernel --exclude boot` 109 passed 6 failed (pré-existentes `hermes::wasm_build` CAP_GPU).
+
 ### SESSION_279: SMP AIOS — MADT inventário, trampoline estilo Redox (2026-08-21)
 
 **ADR-0088 + 0055/0057. IDEA #492 em andamento. Sem teto de 8 cores.**
