@@ -25,7 +25,7 @@ Fonte canônica: `docs/architecture/0100-k3chj-backlog-custo-anel.md`. Fila anti
 | 0 | S | R2 `k_ai` + bin | Honesty `BOOT_AI` + freeze HardwareInfo | T-001–T-006 | `[x]` s283 |
 | 1 | S–M | R0 `k_nano` | `measure_bandwidth` + `/hw/storage|gpu|net` | T-007–T-016 | `[x]` s283 (T-010 UNSUPPORTED) |
 | 2 | S evidência | R0 (já s281) | Metal K23 `online==madt-1` | T-017–T-021 | `[ ]` |
-| 3 | S–M | R3 hermes/jarbas | 0086 A2–A8; A1/A9 HITL | T-022–T-032 | `[ ]` |
+| 3 | S–M | R3 hermes/jarbas | 0086 A2–A8; A1/A9 HITL | T-022–T-032 | `[~]` T-022/023/031 abertos |
 | 4 | M–L | R0 + cortex + agent-core | `ap_pollable` + runqueue 0089 | T-033–T-044 | `[ ]` |
 | 5 | M | R0/R3 | Mesh 2c + CRDT; SemanticRouter defer | T-045–T-050 | `[ ]` |
 | 6 | L | R0 + bin + hermes | Ring3 HW + `register_native_ring` + PIN_DMA | T-051–T-057 | `[ ]` |
@@ -34,7 +34,7 @@ Fonte canônica: `docs/architecture/0100-k3chj-backlog-custo-anel.md`. Fila anti
 | 9 | M | R3 jarbas | 0058 S5 um widget; A/V | T-070–T-072 | `[ ]` |
 | 10 | L ▶️ | R2 | AirLLM DMA/e2e | T-073–T-075 | ▶️ |
 
-**Próximo:** T-017 USB metal K23 (evidência HW).
+**Próximo:** T-017 USB metal K23 (evidência HW). Onda 3 software: T-024–T-030 no tree; A2 QEMU T-022 ainda aberto.
 
 **Fora:** BitTorrent/merkle; NTFS write; 0078 Fase 2–4; 0076 F1–F17 (já ✅); WireGuard; Vulkan.
 
@@ -65,15 +65,15 @@ Fonte canônica: `docs/architecture/0100-k3chj-backlog-custo-anel.md`. Fila anti
 - [ ] T-021 SESSION se falhar (não BSP-only destino)
 - [ ] T-022 smoke QEMU A2
 - [ ] T-023 evidência `docs/evidence/`
-- [ ] T-024 provision NET_READY
-- [ ] T-025 HITL download
-- [ ] T-026 telemetria cron backoff
-- [ ] T-027 verificar A5 s253
-- [ ] T-028 menu Live/Install
-- [ ] T-029 default Live
-- [ ] T-030 tries 3 + last_good
+- [x] T-024 provision NET_READY
+- [x] T-025 HITL download (Active só via shell)
+- [x] T-026 telemetria cron backoff
+- [x] T-027 verificar A5 s253 (card 7902 + DISK_SELECTION)
+- [x] T-028 menu Live/Install (I/L ~5s)
+- [x] T-029 default Live (`boot_mode()` sem CONFIG)
+- [x] T-030 tries 3 + last_good
 - [ ] T-031 A9 mini — só HITL
-- [ ] T-032 A1 Ed25519 defer público
+- [x] T-032 A1 Ed25519 defer público (ADR-0100 §3.8)
 - [ ] T-033 barreira AP_IDT_READY
 - [ ] T-034 sti só com IST
 - [ ] T-035 parallel_* nos APs

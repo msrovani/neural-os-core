@@ -6,7 +6,16 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 use crate::model_hub::{self, ModelSlot};
+
+static PROVISION_ONCE: AtomicBool = AtomicBool::new(false);
+/// Active (2B) exige HITL — T-025; não baixa no 1º boot automático.
+const AUTO_ORDER: &[ModelSlot] = &[
+    ModelSlot::HwExpert,
+    ModelSlot::RustCoder,
+    ModelSlot::Reranker,
+];
 
 /// Ordem de provisionamento (menor → maior; Active por último, só se model_fit OK).
 const ORDER: &[ModelSlot] = &[
@@ -102,12 +111,46 @@ fn download_slot(base: &str, slot: ModelSlot) -> bool {
 /// Provisiona os slots vazios. Retorna nº de slots baixados.
 /// Base URL = UPDATE.CFG (config); sem config → 0 (não inventa endereço).
 pub fn provision_missing() -> usize {
+    provision_slots(ORDER, true)
+}
+
+/// T-024: 1º boot Residente + NET_READY. Live/Install não baixam modelos.
+/// T-025: slot Active (grande) só via shell `provision` (HITL).
+pub fn maybe_on_net_ready() {
+    if PROVISION_ONCE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    match k_nano::boot_mode::boot_mode() {
+        k_nano::boot_mode::BootMode::Installed => {}
+        other => {
+            k_nano::slog_bin!("PROV", "info", "NET_READY skip (boot_mode={:?}, nao residente)", other);
+            return;
+        }
+    }
+    if !k_ai::self_state::is_first_boot() {
+        k_nano::slog_bin!("PROV", "info", "NET_READY skip (nao first_boot)");
+        return;
+    }
+    let n = provision_slots(AUTO_ORDER, false);
+    k_nano::slog_bin!(
+        "PROV",
+        "info",
+        "NET_READY auto: {} slots; Active=HITL (shell provision)",
+        n
+    );
+}
+
+fn provision_slots(slots: &[ModelSlot], include_active: bool) -> usize {
     let Some(base) = crate::self_update::read_update_cfg() else {
-        k_nano::slog_bin!("PROV", "info", "sem UPDATE.CFG — skip provision");
+        k_nano::slog_bin!("PROV", "info", "sem UPDATE.CFG — skip provision (net down ou sem config)");
         return 0;
     };
     let mut n = 0;
-    for &slot in ORDER {
+    for &slot in slots {
+        if slot == ModelSlot::Active && !include_active {
+            k_nano::slog_bin!("PROV", "info", "slot=active ESCALATE HITL (download grande)");
+            continue;
+        }
         if model_hub::slot_loaded(slot) {
             continue;
         }

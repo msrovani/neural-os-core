@@ -57,6 +57,14 @@ pub fn read_self_state() -> Option<String> {
     }
 }
 
+/// `first_boot=true` no SELF.STATE, ou ausência de autobiografia (1º ciclo).
+pub fn is_first_boot() -> bool {
+    match read_self_state() {
+        None => true,
+        Some(s) => s.contains("first_boot=true"),
+    }
+}
+
 /// Fase gravada no SELF.STATE (default Residente se legível).
 pub fn current_phase() -> LifePhase {
     match read_self_state() {
@@ -96,5 +104,11 @@ mod tests {
         assert_eq!(LifePhase::Visitante.as_str(), "visitante");
         assert_eq!(LifePhase::Mensageiro.as_str(), "mensageiro");
         assert_eq!(LifePhase::Residente.as_str(), "residente");
+    }
+
+    #[test]
+    fn first_boot_line() {
+        assert!("SELF.STATE v1\nphase=residente\nfirst_boot=true\n".contains("first_boot=true"));
+        assert!(!"first_boot=false\n".contains("first_boot=true"));
     }
 }

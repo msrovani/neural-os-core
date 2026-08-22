@@ -191,6 +191,24 @@ impl InputAgent {
         }
         if !pressed { return; }
         if scancode >= 0x80 { return; }
+        // ADR-0100 T-028: ~5s pós-boot, [L]ive / [I]nstall (default Live já é T-029).
+        {
+            let ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            let hz = crate::interrupts::TIMER_HZ.load(core::sync::atomic::Ordering::Relaxed).max(1);
+            if ticks < hz.saturating_mul(5) {
+                match scancode {
+                    0x17 => {
+                        k_nano::boot_mode::set_boot_mode(k_nano::boot_mode::BootMode::Install);
+                        k_nano::slog_bin!("BOOT", "menu", "tecla I -> Install (nao formata sozinho)");
+                    }
+                    0x26 => {
+                        k_nano::boot_mode::set_boot_mode(k_nano::boot_mode::BootMode::Live);
+                        k_nano::slog_bin!("BOOT", "menu", "tecla L -> Live");
+                    }
+                    _ => {}
+                }
+            }
+        }
         match scancode {
             0x1C => {
                 let text = core::mem::take(&mut self.buffer);

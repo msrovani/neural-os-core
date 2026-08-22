@@ -7,7 +7,7 @@
 //! `bootstrap_early` sobe L2–L3.5 (+ smoke L4/L5 se RX ok) no boot, antes do scheduler.
 
 extern crate alloc;
-use crate::net::{NETSTACK, NET_CONFIG, TOPIC_NETWORK_CONFIGURED, QemuNetMode};
+use crate::net::{NETSTACK, NET_CONFIG, TOPIC_NETWORK_CONFIGURED, TOPIC_NET_READY, QemuNetMode};
 use crate::netstack::{HttpConn, HttpState};
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use event_bus::{CapabilityToken, Event};
@@ -70,6 +70,13 @@ fn publish_configured() {
         payload: b"configured".to_vec(),
         token: CapabilityToken::Legacy(1),
     });
+    let _ = crate::EVENT_BUS.publish(Event {
+        id: 0,
+        topic: alloc::string::String::from(TOPIC_NET_READY),
+        payload: b"ready".to_vec(),
+        token: CapabilityToken::Legacy(1),
+    });
+    crate::model_provisioner::maybe_on_net_ready();
 }
 
 struct NetState {

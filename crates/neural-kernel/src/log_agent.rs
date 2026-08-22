@@ -6,6 +6,11 @@
 use alloc::string::String;
 use alloc::format;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
+
+/// T-026: não spam POST (PIT ~18Hz → 2000 ticks ≈ 110s).
+static LAST_PUSH_TICK: AtomicU64 = AtomicU64::new(0);
+const PUSH_BACKOFF_TICKS: u64 = 2000;
 
 /// Envia o BOOT.LOG atual para o server (POST /api/logs). Best-effort.
 /// URL base vem do UPDATE.CFG (config file, nunca hardcoded).
@@ -31,6 +36,19 @@ pub fn push_boot_log() -> String {
         }
         None => String::from("Telemetry push FAIL (rede indisponivel)\n"),
     }
+}
+
+/// Cron/Continuous: POST /api/logs com backoff s269 (ADR-0100 T-026).
+pub fn maybe_push_periodic(tick: u64) {
+    let last = LAST_PUSH_TICK.load(Ordering::Relaxed);
+    if last != 0 && tick.saturating_sub(last) < PUSH_BACKOFF_TICKS {
+        return;
+    }
+    if !crate::net::NET_CONFIG.lock().online {
+        return;
+    }
+    LAST_PUSH_TICK.store(tick, Ordering::Relaxed);
+    let _ = push_boot_log();
 }
 
 /// Monta request POST /api/logs com Content-Length. ponytail: connection close,

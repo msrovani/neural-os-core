@@ -260,6 +260,7 @@ impl Agent for BootLogAgent {
             let msg = core::str::from_utf8(&ev.payload).unwrap_or("?");
             k_nano::slog_bin!("BOOT", "LOG-AGENT", "fase={}", msg);
         }
+        crate::log_agent::maybe_push_periodic(_tick);
         // FAT so uma vez — senao Continuous remonta BPB e engasga o scheduler
         if !self.analyzed {
             self.analyzed = true;

@@ -195,29 +195,40 @@ impl SelfUpdate {
             return false;
         }
         let cfg_text = alloc::format!(
-            "{{\"boot_slot\":\"{}\",\"kernel\":\"{}\",\"tries\":1}}",
-            next, next_name
+            "{{\"boot_slot\":\"{}\",\"kernel\":\"{}\",\"tries\":3,\"attempts\":0,\"last_good\":\"{}\"}}",
+            next, next_name, current
         );
         Self::write_bootcfg(&cfg_text)
     }
 
-    /// Rollback: volta o kernel bom (slot oposto) → kernel.elf.
-    /// Só executa se há update pendente (tries==1, gravado pelo switch_slot);
-    /// após o rollback, tries=0 impede loop de alternância (U4 ADR-0086).
+    /// Rollback: volta `last_good` (ChromeOS-like, ADR-0100 T-030).
+    /// Só se tries>0; após rollback, tries=0 impede loop.
     pub fn rollback() -> bool {
         let (active, tries, _attempts) = Self::boot_state();
         if tries == 0 {
             k_nano::slog_hermes!("UPDATE", "info", "rollback skip: no pending update (tries=0)");
             return false;
         }
-        let fallback = if active == 1 { 2 } else { 1 };
+        let cfg = Self::read_fat_file(BOOT_CFG);
+        let text = cfg
+            .as_ref()
+            .and_then(|c| core::str::from_utf8(c).ok())
+            .unwrap_or("");
+        let (_s, _tr, _att, last_good) = parse_bootcfg(text);
+        let fallback = if last_good == 1 || last_good == 2 {
+            last_good
+        } else if active == 1 {
+            2
+        } else {
+            1
+        };
         let fb_name = if fallback == 1 { SLOT_A } else { SLOT_B };
         if !Self::promote_slot(fb_name) {
             return false;
         }
         let cfg_text = alloc::format!(
-            "{{\"boot_slot\":\"{}\",\"kernel\":\"{}\",\"tries\":0,\"attempts\":0}}",
-            fallback, fb_name
+            "{{\"boot_slot\":\"{}\",\"kernel\":\"{}\",\"tries\":0,\"attempts\":0,\"last_good\":\"{}\"}}",
+            fallback, fb_name, fallback
         );
         let ok = Self::write_bootcfg(&cfg_text);
         k_nano::slog_hermes!(
@@ -237,19 +248,7 @@ impl SelfUpdate {
             return (1, 0, 0);
         };
         let text = core::str::from_utf8(&cfg).unwrap_or("");
-        let slot = if text.contains("\"boot_slot\":\"2\"") || text.contains("slot_b") { 2 } else { 1 };
-        let tries = if text.contains("\"tries\":1") { 1 } else { 0 };
-        // S5: contador de tentativas de boot com update pendente.
-        let attempts = if let Some(idx) = text.find("\"attempts\":") {
-            text[idx + 10..]
-                .chars()
-                .take_while(|c| c.is_ascii_digit())
-                .collect::<String>()
-                .parse::<u8>()
-                .unwrap_or(0)
-        } else {
-            0
-        };
+        let (slot, tries, attempts, _) = parse_bootcfg(text);
         (slot, tries, attempts)
     }
 
@@ -282,8 +281,8 @@ impl SelfUpdate {
         let next = attempts.saturating_add(1);
         let cur_name = if active == 1 { SLOT_A } else { SLOT_B };
         let cfg_text = alloc::format!(
-            "{{\"boot_slot\":\"{}\",\"kernel\":\"{}\",\"tries\":1,\"attempts\":{}}}",
-            active, cur_name, next
+            "{{\"boot_slot\":\"{}\",\"kernel\":\"{}\",\"tries\":{},\"attempts\":{}}}",
+            active, cur_name, tries, next
         );
         let _ = Self::write_bootcfg(&cfg_text);
         if next >= max_attempts {
@@ -473,6 +472,31 @@ pub fn read_update_cfg() -> Option<String> {
 
 /// Extrai `"<key>":"..."` de um JSON simples (sem serde — no_std).
 /// Aceita `"key":"` e `"key": "` (json.dumps do Python emite espaço após `:`).
+fn json_u8(body: &str, key: &str) -> Option<u8> {
+    let pat = alloc::format!("\"{}\"", key);
+    let i = body.find(&pat)?;
+    let after = &body[i + pat.len()..];
+    let rest = after.strip_prefix(':')?.trim_start();
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// (slot, tries, attempts, last_good). last_good 0 = ausente.
+pub(crate) fn parse_bootcfg(text: &str) -> (u8, u8, u8, u8) {
+    let slot = if text.contains("\"boot_slot\":\"2\"") || text.contains("slot_b") {
+        2
+    } else {
+        1
+    };
+    let tries = json_u8(text, "tries").unwrap_or(0);
+    let attempts = json_u8(text, "attempts").unwrap_or(0);
+    let last_good = json_field(text, "last_good")
+        .and_then(|s| s.parse().ok())
+        .or_else(|| json_u8(text, "last_good"))
+        .unwrap_or(0);
+    (slot, tries, attempts, last_good)
+}
+
 fn json_field(body: &str, key: &str) -> Option<String> {
     let pat = alloc::format!("\"{}\"", key);
     let i = body.find(&pat)?;
@@ -608,7 +632,17 @@ impl skill_registry::Skill for UpdateCheckSkill {
 
 #[cfg(test)]
 mod tests {
-    use super::{json_field, parse_version};
+    use super::{json_field, parse_bootcfg, parse_version};
+
+    #[test]
+    fn bootcfg_tries3_last_good() {
+        let m = r#"{"boot_slot":"2","kernel":"SLOT_B","tries":3,"attempts":1,"last_good":"1"}"#;
+        assert_eq!(parse_bootcfg(m), (2, 3, 1, 1));
+        let old = r#"{"boot_slot":"1","tries":1}"#;
+        assert_eq!(parse_bootcfg(old), (1, 1, 0, 0));
+        let zero = r#"{"boot_slot":"1","tries":0,"attempts":0}"#;
+        assert_eq!(parse_bootcfg(zero), (1, 0, 0, 0));
+    }
 
     #[test]
     fn manifest_field_extraction() {

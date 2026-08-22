@@ -7,6 +7,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 pub const TOPIC_HW_NET_RTL8139: &str = "HW_NET_RTL8139";
 pub const TOPIC_NETWORK_CONFIGURED: &str = "NETWORK_CONFIGURED";
+/// ADR-0100 T-024 — alias de “L3 up” para provision (mesmo instante de CONFIGURED).
+pub const TOPIC_NET_READY: &str = "NET_READY";
 pub const TOPIC_NETWORK_DEGRADED: &str = "NETWORK_DEGRADED";
 pub const TOPIC_NETWORK_HEALTH: &str = "NETWORK_HEALTH";
 
