@@ -4,7 +4,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize
 use lazy_static::lazy_static;
 // ponytail: PICS/pic8259 removed — kernel só usa APIC
 use x86_64::instructions::segmentation::Segment;
-use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
+use x86_64::structures::gdt::SegmentSelector;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
@@ -102,60 +102,30 @@ lazy_static! {
 }
 
 lazy_static! {
-    static ref GDT: (GlobalDescriptorTable, Selectors) = {
-        let mut gdt = GlobalDescriptorTable::new();
-        let code_selector = gdt.add_entry(Descriptor::kernel_code_segment());
-        // Kernel data + user CS/DS ANTES do TSS — necessários para iretq CPL=3
-        // (SESSION_278: seletores em interrupts_ext apontavam GDT NÃO carregada → #GP(0x20)).
-        // Layout alinhado a STAR em neural-kernel/syscall.rs:
-        //   0x08 KCS, 0x10 KDS, 0x18|3 UCS, 0x20|3 UDS, 0x28 TSS
-        let data_selector = gdt.add_entry(Descriptor::kernel_data_segment());
-        let user_code_selector = gdt.add_entry(Descriptor::user_code_segment());
-        let user_data_selector = gdt.add_entry(Descriptor::user_data_segment());
-
-        // GDT do x86_64 0.14.13 é FIXO em 8 slots (gdt.rs:49) e cada TSS
-        // (SystemSegment) ocupa 2. null+KCS+KDS+UCS+UDS+TSS = 7 slots.
-        // ⚠️ &*TSS (deref do lazy_static) FORÇA o init do TSS — sem isso os
-        // interrupt_stack_table ficam zerados (TaskStateSegment::new) e a
-        // entrega de #PF/#GP/timer com IST faz push para 0 → #DF → triple
-        // (SESSION_250 — reboot loop pós-heap do commit 2662d50).
-        let shared_tss_selector = gdt.add_entry(Descriptor::tss_segment(&*TSS));
-        let tss_selectors = [shared_tss_selector; MAX_APS + 1];
-
-        (
-            gdt,
-            Selectors {
-                code_selector,
-                data_selector,
-                user_code_selector,
-                user_data_selector,
-                tss_selectors,
-            },
-        )
+    static ref GDT: crate::gdt::Selectors = {
+        // SESSION_251: &*TSS preenche IST do BSP antes dos descriptors.
+        let _bsp = &*TSS;
+        unsafe { crate::gdt::build(_bsp, core::ptr::addr_of_mut!(TSS_ARRAY)) }
     };
-}
-
-struct Selectors {
-    code_selector: SegmentSelector,
-    data_selector: SegmentSelector,
-    user_code_selector: SegmentSelector,
-    user_data_selector: SegmentSelector,
-    tss_selectors: [SegmentSelector; MAX_APS + 1],
 }
 
 /// CS Ring3 (RPL=3 embutido).
 pub fn user_code_selector() -> SegmentSelector {
-    GDT.1.user_code_selector
+    GDT.user_code_selector
 }
 
 /// DS/SS Ring3 (RPL=3 embutido).
 pub fn user_data_selector() -> SegmentSelector {
-    GDT.1.user_data_selector
+    GDT.user_data_selector
 }
 
 /// DS Ring0.
 pub fn kernel_data_selector() -> SegmentSelector {
-    GDT.1.data_selector
+    GDT.data_selector
+}
+
+pub fn shared_tss_selector() -> SegmentSelector {
+    GDT.tss_selectors[0]
 }
 
 // --------------------------------------------------------------------------
@@ -603,27 +573,31 @@ pub fn init_ap_tss(ap_index: usize, ist_tops: [VirtAddr; 3]) -> ApTss {
     // Timer IST can reuse DF stack
     tss.interrupt_stack_table[TIMER_IST_INDEX as usize] = ist_tops[0];
     
-    let selector = GDT.1.tss_selectors[tss_idx];
+    let selector = GDT.tss_selectors[tss_idx];
     ApTss { tss, ist_stacks: ist_tops, selector }
 }
 
-/// Load shared IDT + this CPU's TSS on AP, then enable interrupts.
-pub unsafe fn ap_load_idt_and_tss(tss_selector: SegmentSelector) {
+/// GDT+IDT deste CPU. `ltr`+`sti` só com TSS próprio (silício, não crate-8).
+pub unsafe fn ap_load_idt_and_tss(tss_selector: Option<SegmentSelector>) {
+    crate::gdt::load();
+    x86_64::instructions::segmentation::CS::set_reg(GDT.code_selector);
+    x86_64::instructions::segmentation::SS::set_reg(GDT.data_selector);
     #[cfg(not(windows))]
     IDT.load();
-    x86_64::instructions::tables::load_tss(tss_selector);
-    // Enable interrupts
-    x86_64::instructions::interrupts::enable();
+    if let Some(sel) = tss_selector {
+        x86_64::instructions::tables::load_tss(sel);
+        x86_64::instructions::interrupts::enable();
+    }
 }
 
 // --------------------------------------------------------------------------
 
 /// Carrega GDT + TSS + IDT
 pub fn init_idt() {
-    GDT.0.load();
+    crate::gdt::load();
     unsafe {
-        x86_64::instructions::segmentation::CS::set_reg(GDT.1.code_selector);
-        x86_64::instructions::tables::load_tss(GDT.1.tss_selectors[0]); // BSP uses index 0
+        x86_64::instructions::segmentation::CS::set_reg(GDT.code_selector);
+        x86_64::instructions::tables::load_tss(GDT.tss_selectors[0]); // BSP uses index 0
         // Recarrega SS com um seletor nulo (evita #GP no iretq quando
         // o bootloader usa seletor diferente do nosso GDT)
         core::arch::asm!("mov ss, ax", in("ax") 0u16, options(nostack, preserves_flags));

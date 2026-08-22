@@ -39,50 +39,51 @@ pub extern "C" fn ap_entry(_cpu_id: u64) -> ! {
     percpu::AP_ONLINE.fetch_add(1, Ordering::SeqCst);
     crate::slog_nano!("SMP", "info", "AP {} entrou em modo 64-bit Rust!", cpu_id);
     println!("[SMP] AP {} entrou em modo 64-bit Rust!", cpu_id);
-    drop(_lock);
 
     unsafe {
-        let base = crate::apic::LAPIC_VIRT_BASE.load(Ordering::Acquire);
-        if base > 0 {
-            let svr = core::ptr::read_volatile((base + 0xF0) as *const u32);
-            core::ptr::write_volatile(
-                (base + 0xF0) as *mut u32,
-                (svr & 0xFFFFFF00) | 0xFF | 0x100,
-            );
-            core::ptr::write_volatile((base + 0x80) as *mut u32, 0u32);
-            apic::apic_eoi();
+        if apic::USING_X2APIC.load(Ordering::Relaxed) {
+            apic::enable_x2apic_this_cpu();
         }
+        // SVR via path vivo (MSR se x2APIC). MMIO no AP após EXTD = #GP.
+        let svr = apic::lapic_read_reg(0xF0);
+        apic::lapic_write_reg(0xF0, (svr & 0xFFFFFF00) | 0xFF | 0x100);
+        apic::apic_eoi();
     }
 
-// P13: Initialize per-AP TSS/IST and load IDT
     let ap_index = (cpu_id - 1) as usize;
     let ist_tops = unsafe { percpu::init_ap_ist(ap_index) };
-    // Convert u64 stack tops to VirtAddr
-    let ist_tops_va = [
-        x86_64::VirtAddr::new(ist_tops[0]),
-        x86_64::VirtAddr::new(ist_tops[1]),
-        x86_64::VirtAddr::new(ist_tops[2]),
-    ];
-    let ap_tss = crate::interrupts::init_ap_tss(ap_index, ist_tops_va);
+    let ap_tss = if let Some(tops) = ist_tops {
+        let va = [
+            x86_64::VirtAddr::new(tops[0]),
+            x86_64::VirtAddr::new(tops[1]),
+            x86_64::VirtAddr::new(tops[2]),
+        ];
+        Some(crate::interrupts::init_ap_tss(ap_index, va))
+    } else {
+        crate::slog_nano!("SMP", "warn", "AP {} IST alloc fail — IDT sem sti", cpu_id);
+        None
+    };
     unsafe {
         if ap_index < percpu::MAX_APS {
             let pcpu = percpu::AP_PCPU.0[ap_index].get();
-            (*pcpu).tss_ptr = &ap_tss.tss as *const _ as u64;
             (*pcpu).lapic_id = apic::lapic_id();
+            if let Some(ref t) = ap_tss {
+                (*pcpu).tss_ptr = t.tss as *const _ as u64;
+            }
             (*pcpu).cpu_type = match corepools::detect_core_type() {
                 corepools::CoreType::Efficiency => percpu::CPU_TYPE_E_CORE,
                 _ => percpu::CPU_TYPE_P_CORE,
             };
         }
     }
-    // Load IDT + TSS + enable interrupts
-    unsafe { crate::interrupts::ap_load_idt_and_tss(ap_tss.selector); }
+    unsafe {
+        crate::interrupts::ap_load_idt_and_tss(ap_tss.as_ref().map(|t| t.selector));
+    }
+    drop(_lock);
 
-    // Signal IDT ready
     let ready = AP_IDT_READY.fetch_add(1, Ordering::SeqCst) + 1;
     let expected = AP_EXPECTED.load(Ordering::Acquire);
     if ready == expected {
-        // Last AP — enable AP workers
         set_ap_pollable(true);
         crate::slog_nano!("SMP", "info", "All {} APs IDT ready — ap_pollable=true", expected);
     }
@@ -219,12 +220,17 @@ pub unsafe fn wake_aps_sequential(
             break;
         }
         if dest > 0xFF && !apic::USING_X2APIC.load(Ordering::Relaxed) {
+            unsafe { apic::enable_x2apic_this_cpu() };
+            crate::boot_logger::log("SMP: x2APIC on-demand (MADT id>255)");
+        }
+        if dest > 0xFF && !apic::USING_X2APIC.load(Ordering::Relaxed) {
             crate::boot_logger::log(&alloc::format!(
-                "SMP: AP {:#x} skip — precisa x2APIC (id>255)",
+                "SMP: AP {:#x} skip — x2APIC enable falhou",
                 dest
             ));
             continue;
         }
+        crate::display::fb::boot_ckpt(22, "smp: wake ap");
         let ap_stack = ap_stack_base + ((i as u64) + 1) * stack_per_ap;
         let percpu_addr = percpu::ap_percpu_ptr(i);
 
@@ -247,9 +253,11 @@ pub unsafe fn wake_aps_sequential(
             send_init_to(dest);
             wait_delivery();
             busy_wait_us(10000);
-            send_init_deassert_to(dest);
-            wait_delivery();
-            busy_wait_us(10000);
+            if !apic::USING_X2APIC.load(Ordering::Relaxed) {
+                send_init_deassert_to(dest);
+                wait_delivery();
+                busy_wait_us(10000);
+            }
             send_sipi_to(dest, tramp_vector);
             wait_delivery();
             busy_wait_us(200);
@@ -457,7 +465,7 @@ pub unsafe fn init_smp() {
             return;
         }
         for &id in ids.iter() {
-            if id != bsp_lapic_id {
+            if id != bsp_lapic_id && !ap_ids.contains(&id) {
                 ap_ids.push(id);
             }
         }

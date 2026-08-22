@@ -1,6 +1,5 @@
 use core::cell::UnsafeCell;
 use core::sync::atomic::AtomicU16;
-use x86_64::PhysAddr;
 
 #[repr(C)]
 pub struct PerCpu {
@@ -122,41 +121,15 @@ pub fn cpu_id() -> u64 {
     id
 }
 
-/// ADR-0057 WS-F / ADR-0065 FASE 3.1 P13: Allocate IST stacks for an AP.
-/// Allocates 3 × 16KB contiguous frames via the global allocator.
-/// Returns array of stack tops (virtual addresses) for #DF, #PF, #GP.
-pub unsafe fn init_ap_ist(_ap_index: usize) -> [u64; 3] {
-    use crate::memory::GLOBAL_ALLOCATOR;
-    use x86_64::VirtAddr;
-    use x86_64::structures::paging::FrameAllocator;
-
-    const IST_STACK_SIZE: usize = 16384; // 16KB
-    const IST_COUNT: usize = 3;
-
-    let _layout = alloc::alloc::Layout::from_size_align(IST_STACK_SIZE * IST_COUNT, 4096)
-        .expect("IST layout");
-    let ptr = {
-        let mut guard = GLOBAL_ALLOCATOR.lock();
-        let alloc = guard.as_mut().expect("GLOBAL_ALLOCATOR not initialized");
-        // Allocate 3 contiguous frames (48KB total)
-        let mut frames = alloc::vec::Vec::new();
-        for _ in 0..(IST_STACK_SIZE * IST_COUNT / 4096) {
-            if let Some(frame) = alloc.allocate_frame() {
-                frames.push(frame);
-            } else {
-                panic!("IST alloc failed");
-            }
+/// IST por AP: 3 stacks no heap (VA contígua). Frames físicos soltos não servem de stack.
+pub unsafe fn init_ap_ist(_ap_index: usize) -> Option<[u64; 3]> {
+    fn one_stack() -> Option<u64> {
+        let layout = alloc::alloc::Layout::from_size_align(IST_STACK_SIZE, 16).ok()?;
+        let p = unsafe { alloc::alloc::alloc(layout) };
+        if p.is_null() {
+            return None;
         }
-        // Get the first frame's start address
-        PhysAddr::new(frames[0].start_address().as_u64()).as_u64() as *mut u8
-    };
-    let base = VirtAddr::from_ptr(ptr);
-    let top = base + (IST_STACK_SIZE * IST_COUNT);
-
-    // Return stack tops for each IST (growing down from top)
-    [
-        top.as_u64(),                           // #DF IST (top of 1st 16KB)
-        (top - IST_STACK_SIZE).as_u64(),        // #PF IST (top of 2nd 16KB)
-        (top - 2 * IST_STACK_SIZE).as_u64(),    // #GP IST (top of 3rd 16KB)
-    ]
+        Some((p as u64) + IST_STACK_SIZE as u64)
+    }
+    Some([one_stack()?, one_stack()?, one_stack()?])
 }

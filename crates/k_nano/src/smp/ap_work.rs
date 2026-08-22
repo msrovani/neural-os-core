@@ -179,8 +179,10 @@ pub fn ap_idle_loop(worker_id: usize) -> ! {
 
         if use_mwait {
             unsafe { mwait_idle() };
-        } else {
+        } else if x86_64::instructions::interrupts::are_enabled() {
             x86_64::instructions::hlt();
+        } else {
+            core::hint::spin_loop();
         }
     }
 }

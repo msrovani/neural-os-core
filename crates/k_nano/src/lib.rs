@@ -55,6 +55,7 @@ pub use globals::SKILL_REGISTRY;
 pub use scancode_to_ascii::scancode_to_ascii;
 pub mod fs_driver;
 pub mod gpt;
+pub mod gdt;
 pub mod hal;
 pub mod hardware;
 pub mod hw_profiler;

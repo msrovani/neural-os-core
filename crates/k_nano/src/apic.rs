@@ -10,6 +10,16 @@ pub static USING_X2APIC: AtomicBool = AtomicBool::new(false);
 pub static LAPIC_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
 
 const IA32_APIC_BASE_MSR: u32 = 0x1B;
+/// SDM Vol 3A §10.12.9: x2APIC ICR é MSR 64-bit; bits 12–17 (status/assert/level)
+/// e 18–19 (shorthand) são **reservados**. INIT deassert não existe nesse modo.
+const X2APIC_DELIVERY_INIT: u8 = 5;
+const X2APIC_DELIVERY_SIPI: u8 = 6;
+
+/// ICR x2APIC canônico: dest[63:32] | delivery[10:8] | vector[7:0]. Sem bits reservados.
+#[inline]
+pub const fn x2apic_icr_value(dest: u32, delivery: u8, vector: u8) -> u64 {
+    ((dest as u64) << 32) | ((delivery as u64) << 8) | (vector as u64)
+}
 
 /// x2APIC: MSR base = 0x800 + (LAPIC_offset >> 4)
 const fn lapic_msr(reg: u64) -> u32 {
@@ -187,10 +197,30 @@ impl IoApic {
     }
 
 unsafe fn read_lapic_base_msr() -> u64 {
-    let msr_value = x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR).read();
+    let msr_value = read_apic_base_raw();
     let base = msr_value & 0xFFFF_FFFF_FFFF_F000;
     crate::slog_nano!("APIC", "info", "LAPIC base via MSR: 0x{:x}", base);
     base
+}
+
+unsafe fn read_apic_base_raw() -> u64 {
+    x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR).read()
+}
+
+/// Liga x2APIC **neste** CPU (MSR 0x1B EN+EXTD). EXTD é por-CPU: o BSP
+/// não habilita o AP. Retorna se EXTD já estava ligado antes do write.
+pub unsafe fn enable_x2apic_this_cpu() -> bool {
+    let apic_base = read_apic_base_raw();
+    let was_x2 = (apic_base & (1 << 11)) != 0;
+    x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR)
+        .write(apic_base | (1 << 10) | (1 << 11));
+    USING_X2APIC.store(true, Ordering::Release);
+    was_x2
+}
+
+unsafe fn x2apic_icr_write(val: u64) {
+    let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
+    msr.write(val);
 }
 
 /// Mapeia uma página MMIO 4KiB como uncacheable e presente.
@@ -495,14 +525,21 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
     // (valor padrão de reset) causando "Ignoring request for interrupt vector 0" no QEMU.
     let lapic_virt_base = info.lapic_base + info.phys_mem_offset;
     LAPIC_VIRT_BASE.store(lapic_virt_base, Ordering::Release);
-    let svr_early = read_volatile((lapic_virt_base + LAPIC_SVR) as *const u32);
-    let svr_fixed_early = (svr_early & 0xFFFFFF00) | 0xFF | 0x100;
-    write_volatile((lapic_virt_base + LAPIC_SVR) as *mut u32, svr_fixed_early);
-    crate::slog_nano!("APIC", "info", "SVR set early: {:#x}", svr_fixed_early);
 
-    let _msr_base = read_lapic_base_msr();
+    let apic_base_now = read_apic_base_raw();
+    let firmware_x2 = (apic_base_now & (1 << 11)) != 0;
+    // MMIO 0xFEE00000 é #GP se o firmware já deixou EXTD=1 (240H comum).
+    if firmware_x2 {
+        USING_X2APIC.store(true, Ordering::Release);
+        crate::slog_nano!("APIC", "info", "firmware já em x2APIC — skip SVR MMIO");
+    } else {
+        let svr_early = read_volatile((lapic_virt_base + LAPIC_SVR) as *const u32);
+        let svr_fixed_early = (svr_early & 0xFFFFFF00) | 0xFF | 0x100;
+        write_volatile((lapic_virt_base + LAPIC_SVR) as *mut u32, svr_fixed_early);
+        crate::slog_nano!("APIC", "info", "SVR set early: {:#x}", svr_fixed_early);
+    }
 
-    let mut x2apic_supported = false;
+    let mut x2apic_supported = firmware_x2;
     #[cfg(target_arch = "x86_64")]
     {
         let result = core::arch::x86_64::__cpuid(0x0000_0001);
@@ -513,19 +550,12 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
 
     let lapic = Lapic::new(if x2apic_supported { 0 } else { lapic_virt_base });
     if x2apic_supported {
-        // Enable x2APIC: set IA32_APIC_BASE[11] (EXTD) + [10] (EN).
-        // SESSÃO_262: antes só setava bit 10 (EN) — se o firmware deixou o BSP
-        // em xAPIC, o hardware continuava em xAPIC mas USING_X2APIC=true → os
-        // IPIs iam para o MSR 0x830 (no-op em xAPIC) → INIT/SIPI nunca saíam
-        // (0 APs acordavam no metal). Bit 11 = EXTD habilita x2APIC de verdade.
-        let apic_base = x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR).read();
-        let was_x2 = (apic_base & (1 << 11)) != 0;
-        x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR)
-            .write(apic_base | (1 << 10) | (1 << 11));
-        USING_X2APIC.store(true, Ordering::Release);
+        // Enable x2APIC neste CPU: EN (10) + EXTD (11). ICR daqui pra frente
+        // usa x2apic_icr_value — bits 14/15 no MSR 0x830 = #GP no Kaby Lake.
+        let was_x2 = enable_x2apic_this_cpu();
         crate::boot_logger::log(&alloc::format!(
             "APIC: x2APIC ativado (era_x2={} base_msr={:#x})",
-            was_x2, apic_base
+            was_x2, apic_base_now
         ));
         crate::slog_nano!("APIC", "info", "x2APIC ativado via MSR (era_x2={}).", was_x2);
     }
@@ -556,7 +586,7 @@ pub unsafe fn lapic_read_reg(reg: u64) -> u32 {
 }
 
 /// Escreve registrador LAPIC (compatível xAPIC/x2APIC)
-unsafe fn lapic_write_reg(reg: u64, value: u32) {
+pub unsafe fn lapic_write_reg(reg: u64, value: u32) {
     if USING_X2APIC.load(Ordering::Relaxed) {
         let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(reg));
         msr.write(value as u64);
@@ -597,64 +627,45 @@ pub unsafe fn apic_eoi() {
 
 pub unsafe fn send_init_ipi() {
     icr_wait_idle();
-
     if USING_X2APIC.load(Ordering::Relaxed) {
-        // x2APIC: ICR 64-bit, delivery=INIT(5), shorthand=all_excl_self(0x180000)
-        let icr_val: u64 = (5u64 << 8) | (3u64 << 18);
-        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
-        msr.write(icr_val);
-        crate::slog_nano!("SMP", "info", "INIT IPI (x2APIC, ICR={:#x})", icr_val);
-    } else {
-        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
-        let icr_val = (5u32 << 8) | (1 << 14) | (1 << 15) | (3 << 18);
-        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
-        crate::slog_nano!("SMP", "info", "INIT IPI (xAPIC, ICR=0x{:08x})", icr_val);
+        crate::slog_nano!("SMP", "warn", "INIT broadcast ignorado em x2APIC (use dirigido)");
+        return;
     }
+    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+    write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
+    let icr_val = (5u32 << 8) | (1 << 14) | (1 << 15) | (3 << 18);
+    write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+    crate::slog_nano!("SMP", "info", "INIT IPI (xAPIC, ICR=0x{:08x})", icr_val);
 }
 
 pub unsafe fn send_init_deassert_ipi() {
-    icr_wait_idle();
-    // SESSION_275: deassert = level=1 (bit15) + assert=0 (bit14).
-    // Bug antigo: ambos os bits zerados → edge+assert (re-assert em vez de deassert).
     if USING_X2APIC.load(Ordering::Relaxed) {
-        let icr_val: u64 = (5u64 << 8) | (3u64 << 18) | (1u64 << 15); // level=1, assert=0
-        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
-        msr.write(icr_val);
-    } else {
-        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        let icr_val = (5u32 << 8) | (3u32 << 18) | (1u32 << 15); // level=1, assert=0
-        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
-        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+        return;
     }
+    icr_wait_idle();
+    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+    let icr_val = (5u32 << 8) | (3u32 << 18) | (1u32 << 15);
+    write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
+    write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
 }
 
 pub unsafe fn send_sipi(trampoline_vector: u8) {
     icr_wait_idle();
-
     if USING_X2APIC.load(Ordering::Relaxed) {
-        let icr_val: u64 = (6u64 << 8) | (3u64 << 18) | trampoline_vector as u64;
-        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
-        msr.write(icr_val);
-        crate::slog_nano!("SMP", "info", "SIPI (x2APIC, ICR={:#x}, vetor={:#04x})", icr_val, trampoline_vector);
-    } else {
-        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        let icr_val = (6u32 << 8) | (3 << 18) | trampoline_vector as u32;
-        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
-        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
-        crate::slog_nano!("SMP", "info", "SIPI (xAPIC, ICR=0x{:08x}, vetor={:#04x})", icr_val, trampoline_vector);
+        crate::slog_nano!("SMP", "warn", "SIPI broadcast ignorado em x2APIC (use dirigido)");
+        return;
     }
+    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+    let icr_val = (6u32 << 8) | (3 << 18) | trampoline_vector as u32;
+    write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
+    write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
 }
 
 /// ADR-0057 WS-A: INIT IPI direcionado a UM LAPIC ID (sem shorthand).
-/// Necessário para o wake sequencial (broadcast acorda todos ao mesmo tempo →
-/// corrompem a stack compartilhada na transição de modo).
 pub unsafe fn send_init_ipi_to(dest_apic: u32) {
     icr_wait_idle();
     if USING_X2APIC.load(Ordering::Relaxed) {
-        let icr_val: u64 = ((dest_apic as u64) << 32) | (5u64 << 8) | (1 << 14) | (1 << 15);
-        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
-        msr.write(icr_val);
+        x2apic_icr_write(x2apic_icr_value(dest_apic, X2APIC_DELIVERY_INIT, 0));
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
         write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
@@ -663,33 +674,27 @@ pub unsafe fn send_init_ipi_to(dest_apic: u32) {
     }
 }
 
-/// ADR-0057 WS-A: INIT deassert dirigido a UM LAPIC ID.
-/// Sequência canônica do Linux (arch/x86/kernel/apic/ipi.c): INIT assert →
-/// ~10ms → INIT deassert → ~10ms → SIPI → 200µs → SIPI. Sem o deassert,
-/// alguns firmwares/CPUs reais (Kaby Lake) mantêm o AP em wait-for-SIPI
-/// travado. QEMU tolera a ausência; HW real não.
+/// INIT deassert só em xAPIC (Kaby Lake). x2APIC: no-op (SDM).
 pub unsafe fn send_init_deassert_ipi_to(dest_apic: u32) {
-    icr_wait_idle();
-    // ADR-0057 + SESSION_275: INIT deassert REQUIRES level=1 (bit15) + assert=0 (bit14).
     if USING_X2APIC.load(Ordering::Relaxed) {
-        let icr_val: u64 = ((dest_apic as u64) << 32) | (5u64 << 8) | (1u64 << 15);
-        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
-        msr.write(icr_val);
-    } else {
-        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
-        let icr_val = (5u32 << 8) | (1u32 << 15);
-        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+        return;
     }
+    icr_wait_idle();
+    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+    write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
+    let icr_val = (5u32 << 8) | (1u32 << 15);
+    write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
 }
 
 /// ADR-0057 WS-A: SIPI direcionado a UM LAPIC ID (sem shorthand).
 pub unsafe fn send_sipi_to(dest_apic: u32, trampoline_vector: u8) {
     icr_wait_idle();
     if USING_X2APIC.load(Ordering::Relaxed) {
-        let icr_val: u64 = ((dest_apic as u64) << 32) | (6u64 << 8) | trampoline_vector as u64;
-        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
-        msr.write(icr_val);
+        x2apic_icr_write(x2apic_icr_value(
+            dest_apic,
+            X2APIC_DELIVERY_SIPI,
+            trampoline_vector,
+        ));
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
         write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
@@ -725,9 +730,8 @@ pub fn lapic_id() -> u32 {
 pub unsafe fn send_ipi_reschedule_to(dest_apic: u32) {
     icr_wait_idle();
     if USING_X2APIC.load(Ordering::Relaxed) {
-        let icr_val: u64 = ((dest_apic as u64) << 32) | 0x80u64;
-        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
-        msr.write(icr_val);
+        let icr_val = x2apic_icr_value(dest_apic, 0, 0x80);
+        x2apic_icr_write(icr_val);
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
         write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
@@ -736,55 +740,41 @@ pub unsafe fn send_ipi_reschedule_to(dest_apic: u32) {
     }
 }
 
-/// Envia IPI de reschedule para todas as APs
+/// Envia IPI de reschedule para todas as APs (dirigido — shorthand ilegal em x2APIC).
 pub unsafe fn send_ipi_reschedule() {
-    icr_wait_idle();
-
-    if USING_X2APIC.load(Ordering::Relaxed) {
-        // x2APIC: ICR 64-bit, delivery=Fixed(0), shorthand=all_excl_self(0x180000), vector=0x80
-        let icr_val: u64 = (3u64 << 18) | 0x80u64;
-        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
-        msr.write(icr_val);
-    } else {
-        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
-        let icr_val = (0 << 8) | (1 << 14) | (1 << 15) | (3 << 18) | 0x80u32;
-        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
-    }
+    ipi_all_aps_fixed(0x80);
 }
 
 /// Envia IPI de halt para todas as APs
 pub unsafe fn send_ipi_halt() {
-    icr_wait_idle();
+    ipi_all_aps_fixed(0x81);
+}
 
+unsafe fn ipi_all_aps_fixed(vector: u8) {
+    let bsp = lapic_id();
+    let ids = crate::acpi::BOOT_APIC_IDS.lock();
+    for &id in ids.iter() {
+        if id == bsp {
+            continue;
+        }
+        send_ipi_vector_to(id, vector);
+    }
+}
+
+unsafe fn send_ipi_vector_to(dest_apic: u32, vector: u8) {
+    icr_wait_idle();
     if USING_X2APIC.load(Ordering::Relaxed) {
-        // x2APIC: ICR 64-bit, delivery=Fixed(0), shorthand=all_excl_self(0x180000), vector=0x81
-        let icr_val: u64 = (3u64 << 18) | 0x81u64;
-        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
-        msr.write(icr_val);
+        x2apic_icr_write(x2apic_icr_value(dest_apic, 0, vector));
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
-        let icr_val = (0 << 8) | (1 << 14) | (1 << 15) | (3 << 18) | 0x81u32;
-        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
+        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, vector as u32);
     }
 }
 
 /// Envia IPI de call function para todas as APs
 pub unsafe fn send_ipi_call_function() {
-    icr_wait_idle();
-
-    if USING_X2APIC.load(Ordering::Relaxed) {
-        // x2APIC: ICR 64-bit, delivery=Fixed(0), shorthand=all_excl_self(0x180000), vector=0x82
-        let icr_val: u64 = (3u64 << 18) | 0x82u64;
-        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
-        msr.write(icr_val);
-    } else {
-        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
-        let icr_val = (0 << 8) | (1 << 14) | (1 << 15) | (3 << 18) | 0x82u32;
-        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
-    }
+    ipi_all_aps_fixed(0x82);
 }
 
 /// Send End of Interrupt (EOI) to the Local APIC
@@ -833,4 +823,27 @@ pub fn estimate_timer_hz(tsc_hz: u64) -> u64 {
         }
     }
     0 // falha
+}
+
+#[cfg(test)]
+mod x2apic_icr_tests {
+    use super::*;
+
+    #[test]
+    fn icr_init_has_no_reserved_bits() {
+        let v = x2apic_icr_value(4, X2APIC_DELIVERY_INIT, 0);
+        assert_eq!(v >> 32, 4);
+        assert_eq!((v >> 8) & 7, 5);
+        assert_eq!(v & 0xFF, 0);
+        // bits 12–19 must be 0 (SDM reserved + no shorthand)
+        assert_eq!(v & 0xFF_000, 0);
+    }
+
+    #[test]
+    fn icr_sipi_vector_in_low_byte() {
+        let v = x2apic_icr_value(0x11, X2APIC_DELIVERY_SIPI, 0x08);
+        assert_eq!(v & 0xFF, 0x08);
+        assert_eq!((v >> 8) & 7, 6);
+        assert_eq!(v & 0xFF_000, 0);
+    }
 }

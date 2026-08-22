@@ -1,6 +1,16 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### SESSION_281: K22 metal — ICR x2APIC + GDT por CPU (2026-08-22)
+
+**ADR-0088: teto da crate não é o silício. IDEA #492.**
+
+- **fix(apic):** ICR x2APIC só dest+delivery+vector (bits 12–19 = 0). INIT deassert só xAPIC. Firmware EXTD skip MMIO SVR. `enable_x2apic_this_cpu` por CPU. IPI all = dirigido.
+- **fix(smp):** MADT type 0+9 dedup; id>255 liga x2APIC. Wake sequencial sem deassert x2.
+- **feat(gdt):** `k_nano::gdt` 1 TSS/CPU; IST AP no heap; `ltr`+`sti` no AP.
+- **test:** `x2apic_icr` 2/2; `k-nano` none check 0 erros.
+- **aceite:** metal K23 + `online == madt_enabled - 1` (rebuild USB).
+
 ### SESSION_280: Matriz QEMU Mesh P2P GOAL1-3 (2026-08-22)
 
 **GOAL1-3 PASS em TCG 1c/4G/NoDisk Both; 2c+ hang + WHPX #GP documentados.**

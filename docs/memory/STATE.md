@@ -1,4 +1,7 @@
-﻿# STATE — neural-os-core v1.9.99-s280 — Matriz Mesh QEMU GOAL1-3 (1c NoDisk PASS; 2c+ hang)
+﻿# STATE — neural-os-core v1.9.99-s281 — K22 SMP metal (ICR x2APIC + GDT por CPU)
+#   SESSION_281: i5 7ª reboot + 240H freeze em K22. ICR x2APIC sem bits 12–19;
+#     deassert só xAPIC; GDT própria 1 TSS/CPU (crate 8 slots não é o silício);
+#     IST heap; sti no AP. Testes x2apic_icr 2/2. Aceite metal: K23 + online==madt-1.
 #   SESSION_280: run-qemu-p2p-mesh.ps1 já parametrizado (Cores/Accel/Mem/WithModels/Instance); parser tools/mesh_log_parser.py ao vivo; GOAL1-3 PASS em TCG 1c/4G/NoDisk Both (325KB/4499 linhas A + 326KB/4525 linhas B; Runtime tick1120, Master 2/Worker 3, TOFU settle, mesh_g3_probe aplicada, MKTP 18 skills, MicroPython 71B wasmi); GOAL1 2c TCG FAIL hang INIT-SIPI-SIPI (168 linhas, ap_ids=[0x01], regressão 7d8116a); WHPX FAIL #GP OvmfPkg/PlatformPei; host 2×6G estoura 6.5GB free → 4G teto.
 #   SESSION_279: SIPI jmp@IP=0 + handshake lowmem; IDs u32; sem teto 8 / sem cap RAM.
 #     MADT Enabled é Observe, não cap. BSS MAX_APS=511 = dívida array. TCG gate 4 = ADR-0055.

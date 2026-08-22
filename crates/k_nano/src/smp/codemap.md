@@ -14,4 +14,5 @@ AP_PCPU, CPU_COUNT, init_bsp_percpu, this_cpu}`, `trampoline::init_trampoline`,
 **Integration**: called from bin `init_platform_sync` after `apic::init_apic`; APs load
 shared IDT + per-AP TSS via `interrupts::{init_ap_tss, ap_load_idt_and_tss}` and signal
 `AP_IDT_READY`; `core_pinning::init_pools` runs after. Gated BSP-only when
-`platform_probe::allow_smp()` is false. See crate root map, "SMP AP wake".
+`platform_probe::allow_smp()` is false. GDT = `k_nano::gdt` (1 TSS/CPU, SESSION_281).
+See crate root map, "SMP AP wake".
