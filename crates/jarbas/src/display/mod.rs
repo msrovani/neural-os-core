@@ -34,3 +34,6 @@ pub mod render_registry;
 
 // GPU Backend Bridge (Phase 2 — k_hal GPU BE integration)
 pub mod gpu_backend;
+pub mod client_buffer;
+pub mod gpu_compositor;
+pub mod edid;

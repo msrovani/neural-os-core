@@ -828,6 +828,46 @@ impl DoubleBuffer {
     /// HW-8: usa chunked copy (u64) em vez de byte-a-byte, reduzindo o numero
     /// de bus writes de ~8M para ~1M em 1920x1080x4. Otimizacao adicional
     /// (rep movsb / dirty tracking) e possivel se o perfil mostrar gargalo.
+
+    /// Write raw byte at back buffer offset (used by client-side rendering)
+    pub fn write_back_raw(&mut self, offset: usize, b: u8, g: u8, r: u8) {
+        if offset + 3 < self.back.len() {
+            self.dirty = true;
+            if self.info.rgb_order {
+                self.back[offset] = r;
+                self.back[offset + 1] = g;
+                self.back[offset + 2] = b;
+            } else {
+                self.back[offset] = b;
+                self.back[offset + 1] = g;
+                self.back[offset + 2] = r;
+            }
+            if self.info.bpp > 3 { self.back[offset + 3] = 0xFF; }
+        }
+    }
+
+    /// Back buffer length in bytes
+    pub fn back_len(&self) -> usize {
+        self.back.len()
+    }
+
+
+    /// Physical address for pixel at (x, y) - for GPU DMA blit
+    pub fn phys_addr_for(&self, x: usize, y: usize) -> Option<u64> {
+        let offset = y * self.info.stride + x * self.info.bpp;
+        if offset + self.info.bpp > self.back.len() { return None; }
+        // Back buffer physical address via HHDM
+        let virt = self.back.as_ptr() as u64 + offset as u64;
+        let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        if pmoff == 0 { return None; } // HHDM not initialized
+        Some(virt - pmoff)
+    }
+
+    /// Mark buffer dirty (external compositor wrote to it)
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
     pub fn swap(&mut self) {
         if !self.dirty { return; }
         // Acquire cursor lock to prevent data race with IRQ cursor draw
