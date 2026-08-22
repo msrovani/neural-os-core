@@ -2,3 +2,5 @@
 //! Each card returns a `UiDeclaration` for the compositor to render.
 
 pub mod disk_selection_card;
+pub mod file_manager_card;
+pub mod terminal_card;
