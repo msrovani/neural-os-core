@@ -48,8 +48,9 @@ pub struct CrdtMemorySync {
     /// Versão monotônica local — incrementada a cada `record_change()`.
     local_version: u64,
     /// Versões conhecidas de outros nós: (node_id, version).
-    /// Usado para detectar quais nós precisam de diffs.
     pub node_versions: Vec<(u8, u64)>,
+    /// Último blob local (merge T-048); vazio = só versão.
+    local_blob: Vec<u8>,
 }
 
 impl CrdtMemorySync {
@@ -60,6 +61,7 @@ impl CrdtMemorySync {
             last_sync_tick: 0,
             local_version: 0,
             node_versions: Vec::new(),
+            local_blob: Vec::new(),
         }
     }
 
@@ -139,6 +141,7 @@ impl CrdtMemorySync {
         let mut buf = udp_broadcast::serialize(&pkt);
         buf.extend_from_slice(b"CRDT\0");
         buf.extend_from_slice(&self.local_version.to_le_bytes());
+        buf.extend_from_slice(&self.local_blob);
         // Fase A (SESSION_236): todo TX assina — RX fail-closed dropa não-assinados.
         let Some(signed) = udp_broadcast::sign_packet(&buf) else { return };
         let ok = udp_broadcast::send_fragmented(&signed, P2P_PORT);
@@ -182,17 +185,11 @@ impl CrdtMemorySync {
             } else {
                 &[][..]
             };
-            // "CRDT\0" + version u64 LE
-            if !payload.starts_with(b"CRDT\0") || payload.len() < 5 + 8 {
+            let Some((v, blob)) = super::crdt_merge::parse_crdt_body(payload) else {
                 continue;
-            }
-            let v = u64::from_le_bytes([
-                payload[5], payload[6], payload[7], payload[8],
-                payload[9], payload[10], payload[11], payload[12],
-            ]);
+            };
             match role {
                 NodeRole::Master => {
-                    // Master registra a versão do peer (source of truth local).
                     self.upsert_peer_version(pkt.source_id, v);
                     k_nano::slog_kai!(
                         "CRDT", "info",
@@ -200,13 +197,31 @@ impl CrdtMemorySync {
                     );
                 }
                 NodeRole::Worker => {
-                    // LWW merge: maior version vence.
-                    if v > self.local_version {
-                        k_nano::slog_kai!(
-                            "CRDT", "info",
-                            "sync local_v={} -> master_v={} merged", self.local_version, v
-                        );
-                        self.local_version = v;
+                    let m = super::crdt_merge::merge_lww(
+                        self.local_version,
+                        &self.local_blob,
+                        v,
+                        blob,
+                    );
+                    match m.kind {
+                        super::crdt_merge::MergeKind::KeepLocal => {}
+                        super::crdt_merge::MergeKind::AdoptRemote => {
+                            k_nano::slog_kai!(
+                                "CRDT", "info",
+                                "sync local_v={} -> remote_v={} adopted",
+                                self.local_version, v
+                            );
+                            self.local_version = m.version;
+                            self.local_blob = m.payload;
+                        }
+                        super::crdt_merge::MergeKind::ConflictBoth => {
+                            k_nano::slog_kai!(
+                                "CRDT", "warn",
+                                "CONFLICT v={} both sides kept (no silent overwrite)",
+                                m.version
+                            );
+                            self.local_blob = m.payload;
+                        }
                     }
                 }
                 _ => {}

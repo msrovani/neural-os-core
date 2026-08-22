@@ -3,6 +3,7 @@
 pub mod art;
 pub mod bench;
 pub mod bq;
+pub mod crdt_merge;
 pub mod crdt_sync;
 pub mod e2e_smoke;
 pub mod engine;

@@ -26,15 +26,15 @@ Fonte canônica: `docs/architecture/0100-k3chj-backlog-custo-anel.md`. Fila anti
 | 1 | S–M | R0 `k_nano` | `measure_bandwidth` + `/hw/storage|gpu|net` | T-007–T-016 | `[x]` s283 (T-010 UNSUPPORTED) |
 | 2 | S evidência | R0 (já s281) | Metal K23 `online==madt-1` | T-017–T-021 | `[~]` T-017 img; T-018+ metal |
 | 3 | S–M | R3 hermes/jarbas | 0086 A2–A8; A1/A9 HITL | T-022–T-032 | `[~]` T-022/023/031 abertos |
-| 4 | M–L | R0 + cortex + agent-core | `ap_pollable` + runqueue 0089 | T-033–T-044 | `[ ]` |
-| 5 | M | R0/R3 | Mesh 2c + CRDT; SemanticRouter defer | T-045–T-050 | `[ ]` |
+| 4 | M–L | R0 + cortex + agent-core | `ap_pollable` + runqueue 0089 | T-033–T-044 | `[~]` feature OFF; T-037 BSS |
+| 5 | M | R0/R3 | Mesh 2c + CRDT; SemanticRouter defer | T-045–T-050 | `[~]` T-048/049; T-045 2c |
 | 6 | L | R0 + bin + hermes | Ring3 HW + `register_native_ring` + PIN_DMA | T-051–T-057 | `[ ]` |
 | 7 | M–L | R2 cortex | W2A8 gated; 0078 **só Fase 1** | T-058–T-065 | `[ ]` |
 | 8 | XL ▶️ | R1 `k_hal` | Golden GPU / SDMA / NPU 💰 | T-066–T-069 | ▶️ |
 | 9 | M | R3 jarbas | 0058 S5 um widget; A/V | T-070–T-072 | `[ ]` |
 | 10 | L ▶️ | R2 | AirLLM DMA/e2e | T-073–T-075 | ▶️ |
 
-**Próximo:** T-018 metal K23 (Rufus `target/usb_hw.img`). T-022 smoke QEMU A2.
+**Próximo:** T-018 metal K23. T-022 guest OTA. T-037 BSS 511. T-044 HUD. T-045 mesh 2c.
 
 **Fora:** BitTorrent/merkle; NTFS write; 0078 Fase 2–4; 0076 F1–F17 (já ✅); WireGuard; Vulkan.
 
@@ -64,7 +64,7 @@ Fonte canônica: `docs/architecture/0100-k3chj-backlog-custo-anel.md`. Fila anti
 - [ ] T-020 log ICR canônico
 - [ ] T-021 SESSION se falhar (não BSP-only destino)
 - [ ] T-022 smoke QEMU A2
-- [ ] T-023 evidência `docs/evidence/`
+- [x] T-023 evidência host `docs/evidence/t022-ota-host-2026-08-22.txt` (guest A2 aberto)
 - [x] T-024 provision NET_READY
 - [x] T-025 HITL download (Active só via shell)
 - [x] T-026 telemetria cron backoff
@@ -74,24 +74,24 @@ Fonte canônica: `docs/architecture/0100-k3chj-backlog-custo-anel.md`. Fila anti
 - [x] T-030 tries 3 + last_good
 - [ ] T-031 A9 mini — só HITL
 - [x] T-032 A1 Ed25519 defer público (ADR-0100 §3.8)
-- [ ] T-033 barreira AP_IDT_READY
-- [ ] T-034 sti só com IST
-- [ ] T-035 parallel_* nos APs
+- [ ] T-033 barreira AP_IDT_READY (código s281; aceite = metal T-018)
+- [x] T-034 sti só com IST (`ap_load_idt_and_tss`)
+- [x] T-035 parallel_* gated `ap_pollable()` (BSP até T-033 metal)
 - [ ] T-036 self-test matmul smp2
 - [ ] T-037 PerCpu heap ≠ BSS 511
 - [ ] T-038 boot 1c sem 511 TSS
-- [ ] T-039 feature runqueue pós T-033
-- [ ] T-040 dispatch; ring0 não migra
-- [ ] T-041 steal min-1
-- [ ] T-042 IPI reschedule
-- [ ] T-043 testes host CPU_COUNT
+- [ ] T-039 feature runqueue pós T-033 (OFF no bin)
+- [x] T-040 dispatch; ring0 não migra (`resolve_target_core`)
+- [x] T-041 steal min-1
+- [x] T-042 IPI reschedule (`wake_core_if_needed`, gated pollable)
+- [x] T-043 testes host CPU_COUNT + TEST_LOCK
 - [ ] T-044 HUD pending/core no render()
 - [ ] T-045 mesh 2c vs s281
 - [x] T-046 WHPX OVMF não é sprint kernel (scripts TCG)
 - [x] T-047 teto 4G script (mesh default 4; ota_launch/qemu_ota_loop)
-- [ ] T-048 CRDT merge no_std
-- [ ] T-049 teste host merge
-- [ ] T-050 SemanticRouter não nesta pista
+- [x] T-048 CRDT merge LWW + conflito visível
+- [x] T-049 teste host merge
+- [x] T-050 SemanticRouter não nesta pista (lexical/intent_bus)
 - [ ] T-051 WHPX Ring3 vs OVMF
 - [ ] T-052 metal iretq
 - [ ] T-053 0077 §6 HW
