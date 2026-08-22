@@ -308,6 +308,22 @@ def convert(source: Path, output: Path, native: bool) -> None:
     sz = os.path.getsize(output)
     print(f"\n[OK] {output}: {sz:,} bytes ({sz/1024/1024:.1f} MB)")
     print(f"  v6: act=SILU embed=Q6_K feat=0x{feat:02x} tie={tie} theta={rope_theta}")
+    # Espelha para models/ (SESSION_280: modelos devem ficar em target1 E models)
+    try:
+        mirror = ROOT / "models" / "FALCON3.V6"
+        mirror.parent.mkdir(parents=True, exist_ok=True)
+        if mirror.resolve() != output.resolve():
+            import shutil
+            shutil.copy2(output, mirror)
+            print(f"[MIRROR] {mirror}: {sz:,} bytes (espelho de {output.name})")
+        # Alias .BIN para compat mkfat32 find_falcon3()
+        for alias in [ROOT / "target1" / "FALCON3.BIN", ROOT / "models" / "FALCON3.BIN"]:
+            if not alias.exists():
+                import shutil
+                shutil.copy2(output, alias)
+                print(f"[MIRROR] {alias}: alias .BIN")
+    except Exception as e:
+        print(f"[MIRROR] WARN espelho falhou: {e}")
 
 
 def main():
