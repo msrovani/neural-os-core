@@ -26,7 +26,7 @@ Fonte canônica: `docs/architecture/0100-k3chj-backlog-custo-anel.md`. Fila anti
 | 1 | S–M | R0 `k_nano` | `measure_bandwidth` + `/hw/storage|gpu|net` | T-007–T-016 | `[x]` s283 (T-010 UNSUPPORTED) |
 | 2 | S evidência | R0 (já s281) | Metal K23 `online==madt-1` | T-017–T-021 | `[~]` T-017 img; T-018+ metal |
 | 3 | S–M | R3 hermes/jarbas | 0086 A2–A8; A1/A9 HITL | T-022–T-032 | `[~]` T-022/023/031 abertos |
-| 4 | M–L | R0 + cortex + agent-core | `ap_pollable` + runqueue 0089 | T-033–T-044 | `[~]` feature OFF; T-037 BSS |
+| 4 | M–L | R0 + cortex + agent-core | `ap_pollable` + runqueue 0089 | T-033–T-044 | `[~]` T-037 heap; feature OFF |
 | 5 | M | R0/R3 | Mesh 2c + CRDT; SemanticRouter defer | T-045–T-050 | `[~]` T-048/049; T-045 2c |
 | 6 | L | R0 + bin + hermes | Ring3 HW + `register_native_ring` + PIN_DMA | T-051–T-057 | `[ ]` |
 | 7 | M–L | R2 cortex | W2A8 gated; 0078 **só Fase 1** | T-058–T-065 | `[ ]` |
@@ -78,8 +78,8 @@ Fonte canônica: `docs/architecture/0100-k3chj-backlog-custo-anel.md`. Fila anti
 - [x] T-034 sti só com IST (`ap_load_idt_and_tss`)
 - [x] T-035 parallel_* gated `ap_pollable()` (BSP até T-033 metal)
 - [ ] T-036 self-test matmul smp2
-- [ ] T-037 PerCpu heap ≠ BSS 511
-- [ ] T-038 boot 1c sem 511 TSS
+- [x] T-037 PerCpu/TSS heap = MADT (sem BSS 511)
+- [x] T-038 boot 1c: GDT early 7 u64; ap_slots()=0
 - [ ] T-039 feature runqueue pós T-033 (OFF no bin)
 - [x] T-040 dispatch; ring0 não migra (`resolve_target_core`)
 - [x] T-041 steal min-1

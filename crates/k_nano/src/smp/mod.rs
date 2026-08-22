@@ -64,13 +64,12 @@ pub extern "C" fn ap_entry(_cpu_id: u64) -> ! {
         None
     };
     unsafe {
-        if ap_index < percpu::MAX_APS {
-            let pcpu = percpu::AP_PCPU.0[ap_index].get();
-            (*pcpu).lapic_id = apic::lapic_id();
+        if let Some(p) = percpu::ap_pcpu_ptr_mut(ap_index) {
+            (*p).lapic_id = apic::lapic_id();
             if let Some(ref t) = ap_tss {
-                (*pcpu).tss_ptr = t.tss as *const _ as u64;
+                (*p).tss_ptr = t.tss as *const _ as u64;
             }
-            (*pcpu).cpu_type = match corepools::detect_core_type() {
+            (*p).cpu_type = match corepools::detect_core_type() {
                 corepools::CoreType::Efficiency => percpu::CPU_TYPE_E_CORE,
                 _ => percpu::CPU_TYPE_P_CORE,
             };
@@ -216,7 +215,7 @@ pub unsafe fn wake_aps_sequential(
     crate::display::fb::boot_ckpt(22, "smp: wake start");
     let mut woke = 0u64;
     for (i, &dest) in ap_lapic_ids.iter().enumerate() {
-        if i >= percpu::MAX_APS {
+        if i >= percpu::ap_slots() {
             break;
         }
         if dest > 0xFF && !apic::USING_X2APIC.load(Ordering::Relaxed) {
@@ -476,20 +475,7 @@ pub unsafe fn init_smp() {
         corepools::init_from_boot(bsp_lapic_id, 0);
         return;
     }
-    // Array estático PerCpu/TSS ainda é BSS (não é política de cores).
-    if n_madt > percpu::MAX_APS {
-        crate::slog_nano!(
-            "SMP",
-            "error",
-            "MADT APs={} > BSS PerCpu[{}] — HITL: arrays devem virar Vec no boot",
-            n_madt,
-            percpu::MAX_APS
-        );
-        crate::slog_nano!("SMP", "warn", "truncando APs {} -> {} (BSS guard, HITL)", n_madt, percpu::MAX_APS);
-        crate::display::fb::boot_ckpt(22, "smp: truncado HITL");
-        ap_ids.truncate(percpu::MAX_APS);
-    }
-    let n_aps = ap_ids.len();
+    let mut n_aps = n_madt;
     AP_EXPECTED.store(n_aps as u16, Ordering::Release);
     // Guard: heap_top2 - (n+1)*stack pode colidir com FALCON3 989MB ou estourar (Core 7 hybrid n=16)
     // Usa checked_sub + fallback BSP-only não-bloqueante; evita wrap para 0x...ffff
@@ -509,11 +495,22 @@ pub unsafe fn init_smp() {
             }
             crate::slog_nano!("SMP", "warn", "reduzindo APs {} -> {} para caber no heap", n_aps, max_fit);
             ap_ids.truncate(max_fit);
-            let n2 = ap_ids.len();
-            AP_EXPECTED.store(n2 as u16, Ordering::Release);
-            heap_top2 - ((n2 as u64) + 1) * stack_per_ap
+            n_aps = ap_ids.len();
+            AP_EXPECTED.store(n_aps as u16, Ordering::Release);
+            heap_top2 - ((n_aps as u64) + 1) * stack_per_ap
         }
     };
+
+    if !percpu::alloc_slots(n_aps) {
+        crate::slog_nano!("SMP", "warn", "PerCpu heap fail — BSP-only");
+        corepools::init_from_boot(bsp_lapic_id, 0);
+        return;
+    }
+    if !crate::interrupts::expand_gdt_aps(n_aps) {
+        crate::slog_nano!("SMP", "warn", "GDT expand fail — BSP-only");
+        corepools::init_from_boot(bsp_lapic_id, 0);
+        return;
+    }
 
     crate::slog_nano!(
         "SMP",

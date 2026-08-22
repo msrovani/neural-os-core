@@ -241,8 +241,8 @@ pub fn wake_core_if_needed(core_id: usize) {
     if !crate::smp::ap_pollable() { return; }
     if RUN_QUEUES[core_id].is_empty() { return; }
     let ap_index = core_id - 1;
-    if ap_index >= crate::smp::percpu::MAX_APS { return; }
-    let lapic_id = unsafe { (*crate::smp::percpu::AP_PCPU.0[ap_index].get()).lapic_id };
+    let Some(p) = crate::smp::percpu::ap_pcpu_ptr_mut(ap_index) else { return; };
+    let lapic_id = unsafe { (*p).lapic_id };
     if lapic_id == 0 { return; }
     unsafe { send_reschedule_ipi_to(lapic_id); }
 }

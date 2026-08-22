@@ -8,7 +8,6 @@ use x86_64::structures::gdt::SegmentSelector;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
-use crate::smp::percpu::MAX_APS;
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = 40;
@@ -56,15 +55,14 @@ const PAGE_FAULT_IST_INDEX: u16 = 1;
 const GENERAL_PROTECTION_IST_INDEX: u16 = 2;
 const TIMER_IST_INDEX: u16 = 3;
 
-// Pre-allocate TSS for BSP + all APs (MAX_APS + 1 total).
-// Each TSS gets its own IST stacks allocated at runtime for APs.
-// BSP uses static stacks; APs will have their IST stacks allocated via init_ap_ist().
-static mut TSS_ARRAY: [TaskStateSegment; MAX_APS + 1] = [TaskStateSegment::new(); MAX_APS + 1];
+// BSP TSS only in BSS (T-037). APs: heap via expand_gdt_aps.
+static mut BSP_TSS_STORAGE: TaskStateSegment = TaskStateSegment::new();
+static AP_TSS_PTR: AtomicUsize = AtomicUsize::new(0);
+static AP_TSS_LEN: AtomicUsize = AtomicUsize::new(0);
 
 lazy_static! {
     static ref TSS: &'static TaskStateSegment = {
-        // BSP TSS at index 0
-        let tss = unsafe { &mut TSS_ARRAY[0] };
+        let tss = unsafe { &mut BSP_TSS_STORAGE };
         tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
             const STACK_SIZE: usize = 4096 * 5;
             static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
@@ -105,7 +103,7 @@ lazy_static! {
     static ref GDT: crate::gdt::Selectors = {
         // SESSION_251: &*TSS preenche IST do BSP antes dos descriptors.
         let _bsp = &*TSS;
-        unsafe { crate::gdt::build(_bsp, core::ptr::addr_of_mut!(TSS_ARRAY)) }
+        unsafe { crate::gdt::build_early(_bsp) }
     };
 }
 
@@ -560,21 +558,44 @@ pub struct ApTss {
     pub selector: SegmentSelector,
 }
 
-/// Initialize TSS for an AP with given IST stack tops.
-/// Uses pre-allocated TSS slot from TSS_ARRAY.
+/// Initialize TSS for an AP with given IST stack tops (heap slot).
 pub fn init_ap_tss(ap_index: usize, ist_tops: [VirtAddr; 3]) -> ApTss {
-    // ap_index is 0-based for APs, TSS_ARRAY[0] is BSP, so AP i uses index i+1
-    let tss_idx = ap_index + 1;
-    let tss = unsafe { &mut TSS_ARRAY[tss_idx] };
-    
+    let n = AP_TSS_LEN.load(Ordering::Acquire);
+    let base = AP_TSS_PTR.load(Ordering::Acquire) as *mut TaskStateSegment;
+    assert!(!base.is_null() && ap_index < n, "T-037: expand_gdt_aps antes do wake");
+    let tss = unsafe { &mut *base.add(ap_index) };
+
     tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = ist_tops[0];
     tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = ist_tops[1];
     tss.interrupt_stack_table[GENERAL_PROTECTION_IST_INDEX as usize] = ist_tops[2];
-    // Timer IST can reuse DF stack
     tss.interrupt_stack_table[TIMER_IST_INDEX as usize] = ist_tops[0];
-    
-    let selector = GDT.tss_selectors[tss_idx];
+
+    let selector = crate::gdt::tss_selector(ap_index + 1).unwrap_or(GDT.tss_selectors[0]);
     ApTss { tss, ist_stacks: ist_tops, selector }
+}
+
+/// MADT conhecido: TSS APs no heap + GDT expandida. 1c = no-op.
+pub unsafe fn expand_gdt_aps(n_aps: usize) -> bool {
+    if n_aps == 0 {
+        return true;
+    }
+    let mut v = alloc::vec::Vec::with_capacity(n_aps);
+    for _ in 0..n_aps {
+        v.push(TaskStateSegment::new());
+    }
+    let leaked = alloc::boxed::Box::leak(v.into_boxed_slice());
+    AP_TSS_PTR.store(leaked.as_mut_ptr() as usize, Ordering::Release);
+    AP_TSS_LEN.store(n_aps, Ordering::Release);
+    let bsp = *TSS;
+    if !crate::gdt::expand_for_aps(n_aps, leaked, bsp) {
+        return false;
+    }
+    crate::gdt::load();
+    x86_64::instructions::segmentation::CS::set_reg(GDT.code_selector);
+    x86_64::instructions::segmentation::SS::set_reg(GDT.data_selector);
+    x86_64::instructions::tables::load_tss(GDT.tss_selectors[0]);
+    crate::slog_nano!("GDT", "info", "BSP lgdt+ltr após expand n_aps={}", n_aps);
+    true
 }
 
 /// GDT+IDT deste CPU. `ltr`+`sti` só com TSS próprio (silício, não crate-8).

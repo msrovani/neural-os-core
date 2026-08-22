@@ -105,8 +105,8 @@ pub fn init_from_boot(bsp_lapic: u32, ap_count: u16) {
     });
     for i in 0..ap_count as usize {
         let (lapic, ctype) = unsafe {
-            if i < crate::smp::percpu::MAX_APS {
-                let p = &*crate::smp::percpu::AP_PCPU.0[i].get();
+            if let Some(p) = crate::smp::percpu::ap_pcpu_ptr_mut(i) {
+                let p = &*p;
                 let t = if p.cpu_type == CPU_TYPE_E_CORE {
                     CoreType::Efficiency
                 } else {

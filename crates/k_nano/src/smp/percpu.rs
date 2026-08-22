@@ -1,5 +1,5 @@
 use core::cell::UnsafeCell;
-use core::sync::atomic::AtomicU16;
+use core::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 
 #[repr(C)]
 pub struct PerCpu {
@@ -39,38 +39,63 @@ pub static BSP_PCPU: PerCpu = PerCpu {
 pub static CPU_COUNT: AtomicU16 = AtomicU16::new(1);
 pub static AP_ONLINE: AtomicU16 = AtomicU16::new(0);
 
-/// Tamanho do array BSS PerCpu/TSS (implementação, não política).
-/// O silício é o MADT Enabled. Se o MADT for maior, é dívida: Vec no boot, não “usar menos cores”.
-pub const MAX_APS: usize = 511;
+/// T-037: não é teto de silício. Slots AP = MADT, alocados no heap.
+pub fn ap_slots() -> usize {
+    AP_PCPU_LEN.load(Ordering::Acquire) as usize
+}
 
-/// Array de PerCpu por-AP. Cada AP recebe GS.base próprio (não mais o BSP
-/// compartilhado — causa do não-wake com ≥2 APs).
-pub struct ApPcpuArray(pub [UnsafeCell<PerCpu>; MAX_APS]);
-unsafe impl Sync for ApPcpuArray {}
+fn empty_pcpu() -> PerCpu {
+    PerCpu {
+        self_ptr: 0,
+        cpu_id: 0,
+        cpu_type: CPU_TYPE_P_CORE,
+        lapic_id: 0,
+        is_bsp: false,
+        online: 0,
+        ring: 1,
+        tss_ptr: 0,
+        ist_stacks: [0, 0, 0],
+        _padding: [0u8; 16],
+    }
+}
 
-pub static AP_PCPU: ApPcpuArray = ApPcpuArray(
-    [const {
-        UnsafeCell::new(PerCpu {
-            self_ptr: 0,
-            cpu_id: 0,
-            cpu_type: CPU_TYPE_P_CORE,
-            lapic_id: 0,
-            is_bsp: false,
-            online: 0,
-            ring: 1,
-            tss_ptr: 0,
-            ist_stacks: [0, 0, 0],
-            _padding: [0u8; 16],
-        })
-    }; MAX_APS],
-);
+static AP_PCPU_PTR: AtomicUsize = AtomicUsize::new(0);
+static AP_PCPU_LEN: AtomicU16 = AtomicU16::new(0);
+
+/// Aloca PerCpu[n_aps] no heap (leak). 1c → n_aps=0, sem reserva.
+pub fn alloc_slots(n_aps: usize) -> bool {
+    if n_aps == 0 {
+        AP_PCPU_LEN.store(0, Ordering::Release);
+        return true;
+    }
+    let mut v = alloc::vec::Vec::with_capacity(n_aps);
+    for _ in 0..n_aps {
+        v.push(UnsafeCell::new(empty_pcpu()));
+    }
+    let leaked = alloc::boxed::Box::leak(v.into_boxed_slice());
+    AP_PCPU_PTR.store(leaked.as_mut_ptr() as usize, Ordering::Release);
+    AP_PCPU_LEN.store(n_aps as u16, Ordering::Release);
+    crate::slog_nano!("SMP", "info", "PerCpu heap slots={} (T-037, sem BSS 511)", n_aps);
+    true
+}
+
+pub fn ap_pcpu_ptr_mut(i: usize) -> Option<*mut PerCpu> {
+    let n = ap_slots();
+    if i >= n {
+        return None;
+    }
+    let p = AP_PCPU_PTR.load(Ordering::Acquire) as *mut UnsafeCell<PerCpu>;
+    if p.is_null() {
+        return None;
+    }
+    Some(unsafe { (*p.add(i)).get() })
+}
 
 /// Ponteiro (u64) para o PerCpu do AP de índice `i` (para patch do trampoline).
 pub fn ap_percpu_ptr(i: usize) -> u64 {
-    if i >= MAX_APS {
+    let Some(p) = ap_pcpu_ptr_mut(i) else {
         return 0;
-    }
-    let p = AP_PCPU.0[i].get();
+    };
     unsafe {
         (*p).self_ptr = p as u64;
         (*p).cpu_id = (i as u64) + 1;
@@ -119,6 +144,15 @@ pub fn cpu_id() -> u64 {
         );
     }
     id
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn no_511_ap_array_in_bss() {
+        // Slots começam em 0; 1c não reserva PerCpu[511].
+        assert_eq!(super::ap_slots(), 0);
+    }
 }
 
 /// IST por AP: 3 stacks no heap (VA contígua). Frames físicos soltos não servem de stack.
