@@ -271,7 +271,7 @@ pub fn explain_bridge(key: &str) -> Option<MemoryExplanation> {
 
 **Arquivos**: `nsgdb_bridge.rs`, `sgdb_agent.rs`
 
-### Fase 3.0 — Cortex/Hermes Memory-Aware (✅ parcial — commits a765161)
+### Fase 3.0 — Cortex/Hermes Memory-Aware (✅ completa — commits a765161 + 4fc8889)
 
 #### 3.0-A: Memory Interpreter no Cortex (✅ commit a765161)
 
