@@ -317,6 +317,8 @@ ID=9001) retry periódico até FAT_READY=true.
 - **Ring3: GDT fantasma ≠ GDT carregada (SESSION_278):** seletores `user_code/data` em `interrupts_ext` vinham de lazy_static GDT **nunca** `lgdt` — índices colidiam com TSS da GDT `k_nano` → `#GP(0x20)` no iretq. User segments vivem na GDT que `init_idt` carrega.
 - **Ring3: CR3 user sem HHDM (SESSION_278):** stack Limine/kernel em HHDM; `create_sandbox_as` só P4[511] → `#PF` pós-CR3 pré-iretq. Copiar P4[HHDM] **supervisor-only** (CPL=3 não USER).
 - **Ring3: int 0x90 exige TSS.RSP0 (SESSION_278):** iretq CPL=3 OK mas `privilege_stack_table[0]==0` → `#PF` no syscall. Inicializar RSP0 no TSS BSP.
+- **Ring3: RAX no handler `x86-interrupt` não é o RAX do user (SESSION_278):** prologue clobbera; mailbox em página USER (ou frame salvo) para nr. `from_user` via CS no frame OK; ler `rax` no handler não.
+- **Ring3: SSE em CPL=3 com CR0.EM=1 → #UD (SESSION_278):** qemu64 tem OSFXSR; `xorps` só é #UD com EM. Patch IDT #UD → `fault_abort` no demo.
 - **Colisão SESSION_275 mesh ≠ jarbas → port vira SESSION_276 (SESSION_277):** `main` já tinha SESSION_275 = mesh P2P GOAL1–3; branch aios-chj rotulava jarbas como 275. Nunca sobrescrever o número — renumerar o port (276) e documentar a colisão no SESSION_INDEX.
 - **Não merge/rebase branch 10 commits atrás (SESSION_277):** `aios-chj` / tip `c234138` divergia (stack/mesh/LAPIC já em main). Port seletivo do commit útil (`ac4e853` → compositor/HDA/`infer_in_flight`); descartar o tip inteiro.
 - **Specs órfãs overclaimam — corrigir ao wire (SESSION_277):** diretivas silício/GPU afirmavam AMX/`work_queue`/`trinity_inject` prontos; ao wirar TSC/CachePadded/ReBAR report, reescrever specs com honesty (detect vs compute, WIP vs wired).

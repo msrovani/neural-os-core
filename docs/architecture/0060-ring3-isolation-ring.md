@@ -79,18 +79,18 @@ Quando o F6 estiver validado (§6), `isolation_ring::init_connectors()` chamará
 
 ## 6. Critérios de aceite (gate para habilitar — não ligar meio-pronto)
 
-Evidência SESSION_278 (QEMU **TCG**, NoDisk): `SUCCESS iretq+CPL3` + `fault-containment sandbox_dead kernel_alive`. **B/C ainda NÃO liberados** — faltam DMA/MMIO CapGate + soft-float + gate HV expandido.
+Evidência SESSION_278+ (QEMU **TCG**, NoDisk): `SUCCESS iretq+CPL3` + fault-containment + **CapGate DMA/MMIO deny** + **soft-float SSE #UD**. **B/C ainda NÃO liberados** — `ring3_is_safe` só KVM; WHPX/HW não medidos.
 
 - [x] **iretq estável (TCG):** blob demo em **CPL=3** + `int 0x90` EXIT + retorno kernel (SESSION_278). WHPX/HW não medidos nesta sessão.
 - [x] **AS isolado (parcial):** sandbox `create_sandbox_as` = P4[511] + P4[HHDM] supervisor-only + páginas USER dedicadas (não clone raso). HHDM supervisor é necessário ao kernel com CR3 sandbox; CPL=3 não tem USER no HHDM.
 - [x] **Contenção de falta (TCG):** stub força #PF em CPL=3 → `fault_abort` → kernel vivo (`demo_ring3_fault_containment`).
-- [~] **Syscall gate:** Cap::ENTER_USER deny OK + EXIT via `int 0x90`; ABI completa CapGate residual.
-- [ ] **DMA/MMIO negados:** caps `PIN_DMA`/`MAP_FB`/MMIO **negadas** ao sandbox (sem IOMMU) — **não** fechado nesta sessão.
-- [ ] **Soft-float:** JIT nativo sem SSE ou trap tratado — stub demo integer-only; **não** medido.
+- [~] **Syscall gate:** Cap::ENTER_USER deny OK + EXIT via `int 0x90`; mailbox CPL=3 para nr (prologue clobbera RAX).
+- [x] **DMA/MMIO negados (TCG):** `dispatch` deny-by-default `PIN_DMA`/`MAP_DMA`/`MAP_FB`/`PRESENT_FB` enquanto sandbox ativo; stub CPL=3 `SUCCESS CapGate sandbox deny PIN_DMA=1 MAP_FB=1`.
+- [x] **Soft-float (TCG):** CR0.EM=1 + `xorps` em CPL=3 → `#UD` → `fault_abort` (`demo_ring3_softfloat_sse`).
 - [x] **Gating por hypervisor (porto seguro):** `ring3_is_safe()` permanece **só KVM**; TCG/WHPX não registram `register_native_ring` mesmo com `TRY_ENTER_RING3=true`.
-- [x] `cargo build --release` + **boot QEMU TCG sem reboot loop**; self-test iretq + falta PASS.
+- [x] `cargo build --release` + **boot QEMU TCG sem reboot loop**; self-tests P6 PASS.
 
-Só com **todos** ✅ (incluindo DMA/MMIO + soft-float) → `register_native_ring(...)` → B/C nativo liberado (HITL forte).
+Só com **WHPX/HW** + ABI syscall completa + estes ✅ → `register_native_ring(...)` → B/C nativo (HITL forte).
 
 ## 7. Plano (sessão dedicada, modo depurador)
 

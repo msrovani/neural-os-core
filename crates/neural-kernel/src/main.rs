@@ -2687,6 +2687,26 @@ pub(crate) fn kernel_boot(
                     crate::boot_logger::log("BOOT: P6 Ring3 fault-containment WARN (non-fatal)");
                 }
             }
+            match crate::user_mode::demo_ring3_capgate_dma_mmio() {
+                Ok(()) => {
+                    k_nano::slog_bin!("P6", "info", "Ring3 CapGate DMA/MMIO OK");
+                    crate::boot_logger::log("BOOT: P6 Ring3 CapGate DMA/MMIO OK");
+                }
+                Err(e) => {
+                    k_nano::slog_bin!("P6", "info", "WARN: {} — boot continua", e);
+                    crate::boot_logger::log("BOOT: P6 Ring3 CapGate DMA/MMIO WARN (non-fatal)");
+                }
+            }
+            match crate::user_mode::demo_ring3_softfloat_sse() {
+                Ok(()) => {
+                    k_nano::slog_bin!("P6", "info", "Ring3 soft-float SSE OK");
+                    crate::boot_logger::log("BOOT: P6 Ring3 soft-float OK");
+                }
+                Err(e) => {
+                    k_nano::slog_bin!("P6", "info", "WARN: {} — boot continua", e);
+                    crate::boot_logger::log("BOOT: P6 Ring3 soft-float WARN (non-fatal)");
+                }
+            }
         }
         Err(e) => {
             k_nano::slog_bin!("P6", "info", "WARN: {} — boot continua", e);

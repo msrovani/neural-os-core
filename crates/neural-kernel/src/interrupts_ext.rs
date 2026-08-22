@@ -216,6 +216,15 @@ fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Opt
 // #GP/#PF com abort P6 + demand-page/allocator.
 // --------------------------------------------------------------------------
 
+extern "x86-interrupt" fn invalid_opcode_handler(f: InterruptStackFrame) {
+    if crate::user_mode::demo_active() {
+        dump_exception("#UD", &f, None);
+        crate::user_mode::fault_abort("P6 #UD in Ring3 demo");
+    }
+    dump_exception("#UD", &f, None);
+    loop { x86_64::instructions::hlt(); }
+}
+
 extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFrame, code: u64) {
     if crate::user_mode::demo_active() {
         dump_exception("#GP", &f, Some(code));
@@ -296,12 +305,13 @@ pub fn patch_idt() {
         return;
     }
     unsafe {
+        write_gate(base, 0x06, invalid_opcode_handler as *const () as u64, 0, 0);
         write_gate(base, 0x0D, general_protection_fault_handler as *const () as u64, GENERAL_PROTECTION_IST_INDEX as u8, 0);
         write_gate(base, 0x0E, page_fault_handler as *const () as u64, PAGE_FAULT_IST_INDEX as u8, 0);
         // MVP C / P6: soft-syscall (0x90) — Cap gate; DPL=3 para int de Ring3
         write_gate(base, 0x90, crate::syscall::syscall_int_handler as *const () as u64, 0, 3);
     }
-    k_nano::slog_bin!("IDT", "info", "patch_idt: overlays bin instalados (0x90 syscall DPL3, #GP/#PF hooks P6+demand).");
+    k_nano::slog_bin!("IDT", "info", "patch_idt: overlays bin instalados (0x90 syscall DPL3, #UD/#GP/#PF hooks P6+demand).");
 }
 
 // --------------------------------------------------------------------------

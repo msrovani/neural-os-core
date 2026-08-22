@@ -248,6 +248,20 @@ unsafe extern "C" fn dispatch_syscall(
 /// ADR-0076 §4.3: 9 syscalls — SEND_TCP e VRING_SETUP removidos,
 /// WRITE_RING + READ_RING consolidados em SYS_RING_OP (subcomando em arg).
 pub fn dispatch(nr: u64, arg: u64, cap: Cap) -> Result<u64, &'static str> {
+    // ADR-0060 §6: sandbox Ring3 nunca PIN_DMA / MAP_FB / MMIO (sem IOMMU).
+    if crate::user_mode::sandbox_syscalls()
+        && matches!(nr, SYS_PIN_DMA | SYS_MAP_DMA | SYS_MAP_FB | SYS_PRESENT_FB)
+    {
+        crate::user_mode::note_sandbox_cap_deny(nr);
+        k_nano::slog_bin!(
+            "CapGate",
+            "info",
+            "DENY sandbox DMA/MMIO nr={} held=0x{:x}",
+            nr,
+            cap.bits()
+        );
+        return Err("EPERM: sandbox DMA/MMIO");
+    }
     match nr {
         SYS_PING => {
             if !cap.contains(Cap::PING) {
@@ -418,40 +432,50 @@ pub fn soft_syscall(nr: u64, arg: u64, cap: Cap) -> Result<u64, &'static str> {
 }
 
 pub extern "x86-interrupt" fn syscall_int_handler(_stack: InterruptStackFrame) {
-    // Phase 3: ABI por registrador para Ring3 (RAX=nr, RDI=arg0, RSI=arg1, RDX=cap_bits).
-    // Fallback para atomics staging (kernel→kernel, compat).
-    let nr = SYS_NR.load(Ordering::SeqCst);
-    let _arg = SYS_ARG.load(Ordering::SeqCst);
-    let cap = Cap::from_bits(SYS_CAP.load(Ordering::SeqCst));
-
-    // Se veio de Ring3 (CS.RPL==3) ou foi pré-carregado via stage, usa ABI registrador.
-    // O stub user carrega RAX=nr, RDI=arg, RDX=caps antes de int 0x90.
-    if nr == 0 || cap == Cap::EMPTY {
-        // Ler registradores (ABI Ring3: RAX=nr, RDI=arg0, RDX=cap_bits)
-        let reg_nr: u64;
-        let reg_arg: u64;
-        let reg_cap: u64;
-        unsafe {
-            core::arch::asm!(
-                "mov {}, rax",
-                "mov {}, rdi",
-                "mov {}, rdx",
-                out(reg) reg_nr,
-                out(reg) reg_arg,
-                out(reg) reg_cap,
-                options(nostack, preserves_flags)
-            );
+    if crate::user_mode::mailbox_syscalls() {
+        let mbox = unsafe {
+            core::ptr::read_volatile(crate::user_mode::USER_MARKER_VA as *const u32) as u64
+        };
+        if mbox != 0 {
+            SYS_NR.store(mbox, Ordering::SeqCst);
+            SYS_ARG.store(0, Ordering::SeqCst);
+            let cap_bits = match mbox {
+                SYS_EXIT_USER => Cap::ENTER_USER.bits(),
+                SYS_PIN_DMA => Cap::PIN_DMA.bits(),
+                SYS_MAP_FB => Cap::MAP_FB.bits(),
+                SYS_MAP_DMA => Cap::MAP_DMA.bits(),
+                SYS_PRESENT_FB => Cap::WRITE_FB.bits(),
+                _ => 0,
+            };
+            SYS_CAP.store(cap_bits, Ordering::SeqCst);
         }
-        // Só usa registrador se stage não setou (stage tem prioridade para compat)
-        let use_reg = SYS_NR.load(Ordering::SeqCst) == 0;
-        if use_reg && reg_nr != 0 {
-            SYS_NR.store(reg_nr, Ordering::SeqCst);
-            SYS_ARG.store(reg_arg, Ordering::SeqCst);
-            SYS_CAP.store(reg_cap, Ordering::SeqCst);
+    } else {
+        let nr = SYS_NR.load(Ordering::SeqCst);
+        let cap = Cap::from_bits(SYS_CAP.load(Ordering::SeqCst));
+        if nr == 0 || cap == Cap::EMPTY {
+            let reg_nr: u64;
+            let reg_arg: u64;
+            let reg_cap: u64;
+            unsafe {
+                core::arch::asm!(
+                    "mov {}, rax",
+                    "mov {}, rdi",
+                    "mov {}, rdx",
+                    out(reg) reg_nr,
+                    out(reg) reg_arg,
+                    out(reg) reg_cap,
+                    options(nostack, preserves_flags)
+                );
+            }
+            let use_reg = SYS_NR.load(Ordering::SeqCst) == 0;
+            if use_reg && reg_nr != 0 {
+                SYS_NR.store(reg_nr, Ordering::SeqCst);
+                SYS_ARG.store(reg_arg, Ordering::SeqCst);
+                SYS_CAP.store(reg_cap, Ordering::SeqCst);
+            }
         }
     }
 
-    // Re-read after potential register ABI update
     let nr = SYS_NR.load(Ordering::SeqCst);
     let arg = SYS_ARG.load(Ordering::SeqCst);
     let cap = Cap::from_bits(SYS_CAP.load(Ordering::SeqCst));

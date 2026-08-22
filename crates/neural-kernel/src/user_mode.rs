@@ -8,7 +8,7 @@ use x86_64::VirtAddr;
 
 use crate::address_space::self;
 use crate::interrupts_ext::{user_code_selector, user_data_selector};
-use crate::syscall::{self, Cap, SYS_EXIT_USER};
+use crate::syscall::{self, Cap, SYS_EXIT_USER, SYS_MAP_FB, SYS_PIN_DMA};
 
 /// Região user isolada (após Cortex weights VA).
 pub const USER_CODE_VA: u64 = 0x0000_7000_0030_0000;
@@ -24,6 +24,13 @@ static ABORTING: AtomicBool = AtomicBool::new(false);
 static EXIT_OK: AtomicU64 = AtomicU64::new(0);
 static SAVED_CR3: AtomicU64 = AtomicU64::new(0);
 static SAVED_CR3_FLAGS: AtomicU64 = AtomicU64::new(0);
+/// CR0 salvo quando o self-test soft-float liga EM (SSE → #UD).
+static SAVED_CR0: AtomicU64 = AtomicU64::new(0);
+/// false = stub usa ABI registrador (nr/cap em rax/rdx); default stage EXIT.
+static STAGE_EXIT: AtomicBool = AtomicBool::new(true);
+static USE_MAILBOX: AtomicBool = AtomicBool::new(false);
+static SANDBOX_DMA_DENY: AtomicU64 = AtomicU64::new(0);
+static SANDBOX_MMIO_DENY: AtomicU64 = AtomicU64::new(0);
 
 // Continuação kernel (CLI; single-threaded na demo P6).
 // Gated by feature=ring3 (default on); cfg-d out when off since these are only
@@ -47,6 +54,36 @@ pub const TRY_ENTER_RING3: bool = true;
 #[inline]
 pub fn demo_active() -> bool {
     DEMO_ACTIVE.load(Ordering::SeqCst) || ABORTING.load(Ordering::SeqCst)
+}
+
+/// True enquanto CPL=3 sandbox (CapGate DMA/MMIO deny-by-default).
+#[inline]
+pub fn sandbox_syscalls() -> bool {
+    demo_active()
+}
+
+#[inline]
+pub fn mailbox_syscalls() -> bool {
+    USE_MAILBOX.load(Ordering::SeqCst)
+}
+
+pub fn note_sandbox_cap_deny(nr: u64) {
+    match nr {
+        SYS_PIN_DMA | crate::syscall::SYS_MAP_DMA => {
+            SANDBOX_DMA_DENY.fetch_add(1, Ordering::SeqCst);
+        }
+        SYS_MAP_FB | crate::syscall::SYS_PRESENT_FB => {
+            SANDBOX_MMIO_DENY.fetch_add(1, Ordering::SeqCst);
+        }
+        _ => {}
+    }
+}
+
+pub fn sandbox_dma_denies() -> u64 {
+    SANDBOX_DMA_DENY.load(Ordering::SeqCst)
+}
+pub fn sandbox_mmio_denies() -> u64 {
+    SANDBOX_MMIO_DENY.load(Ordering::SeqCst)
 }
 
 /// Abort non-fatal de #GP/#PF durante a demo — restaura kernel e continua boot.
@@ -74,12 +111,19 @@ pub fn return_from_user(ok: bool) -> ! {
 
 unsafe fn jump_back_to_kernel() -> ! {
     DEMO_ACTIVE.store(false, Ordering::SeqCst);
+    USE_MAILBOX.store(false, Ordering::SeqCst);
     let cr3_addr = SAVED_CR3.load(Ordering::SeqCst);
     let cr3_flags = SAVED_CR3_FLAGS.load(Ordering::SeqCst);
     if cr3_addr != 0 {
         let frame = PhysFrame::<Size4KiB>::containing_address(x86_64::PhysAddr::new(cr3_addr));
         let flags = Cr3Flags::from_bits_truncate(cr3_flags);
         address_space::restore_cr3(frame, flags);
+    }
+    let cr0 = SAVED_CR0.swap(0, Ordering::SeqCst);
+    if cr0 != 0 {
+        unsafe {
+            core::arch::asm!("mov cr0, {}", in(reg) cr0, options(nostack));
+        }
     }
     #[cfg(feature = "ring3")]
     let rip = SAVED_RIP;
@@ -152,7 +196,11 @@ pub unsafe fn enter_user_mode(
     SAVED_CR3_FLAGS.store(k_flags.bits(), Ordering::SeqCst);
     EXIT_OK.store(0, Ordering::SeqCst);
 
-    syscall::stage_syscall(SYS_EXIT_USER, 0, Cap::ENTER_USER);
+    if STAGE_EXIT.swap(true, Ordering::SeqCst) {
+        syscall::stage_syscall(SYS_EXIT_USER, 0, Cap::ENTER_USER);
+    } else {
+        syscall::stage_syscall(0, 0, Cap::EMPTY);
+    }
 
     let ucs = user_code_selector().0 as u64;
     let uds = user_data_selector().0 as u64;
@@ -434,6 +482,184 @@ pub fn demo_ring3_fault_containment() -> Result<(), &'static str> {
         }
         Ok(()) => Err("P6: fault stub nao gerou falta"),
         Err(e) => Err(e),
+    }
+}
+
+/// ADR-0060 §6: stub CPL=3 tenta PIN_DMA + MAP_FB (cap forjada) → deny; EXIT limpo.
+pub fn demo_ring3_capgate_dma_mmio() -> Result<(), &'static str> {
+    if !TRY_ENTER_RING3 {
+        return Ok(());
+    }
+    k_nano::slog_bin!("P6", "info", "Ring3 CapGate DMA/MMIO deny self-test");
+    SANDBOX_DMA_DENY.store(0, Ordering::SeqCst);
+    SANDBOX_MMIO_DENY.store(0, Ordering::SeqCst);
+
+    let mut as_user = address_space::create_sandbox_as()?;
+    let code_frame = address_space::alloc_frame()?;
+    let stack_frame = address_space::alloc_frame()?;
+    let marker_frame = address_space::alloc_frame()?;
+    write_capgate_stub(code_frame);
+    unsafe {
+        as_user.map_user_page(
+            VirtAddr::new(USER_CODE_VA),
+            code_frame,
+            address_space::user_code_flags(),
+        )?;
+        as_user.map_user_page(
+            VirtAddr::new(USER_STACK_VA),
+            stack_frame,
+            address_space::user_data_flags(),
+        )?;
+        as_user.map_user_page(
+            VirtAddr::new(USER_MARKER_VA),
+            marker_frame,
+            address_space::user_data_flags(),
+        )?;
+        address_space::hhdm_mut::<u64>(marker_frame).write_volatile(0);
+    }
+    USE_MAILBOX.store(true, Ordering::SeqCst);
+    STAGE_EXIT.store(false, Ordering::SeqCst);
+    let stack_top = USER_STACK_VA + 0x1000;
+    x86_64::instructions::interrupts::without_interrupts(|| unsafe {
+        enter_user_mode(
+            USER_CODE_VA,
+            stack_top,
+            as_user.l4_frame,
+            Cap::ENTER_USER,
+        )
+    })?;
+    let dma = sandbox_dma_denies();
+    let mmio = sandbox_mmio_denies();
+    if dma == 0 || mmio == 0 {
+        return Err("P6: sandbox nao negou PIN_DMA/MAP_FB");
+    }
+    k_nano::slog_bin!(
+        "P6",
+        "info",
+        "SUCCESS CapGate sandbox deny PIN_DMA={} MAP_FB={}",
+        dma,
+        mmio
+    );
+    Ok(())
+}
+
+fn write_capgate_stub(code: PhysFrame<Size4KiB>) {
+    // movabs rax, MARKER; mov dword [rax], PIN_DMA; int 0x90;
+    // mov dword [rax], MAP_FB; int 0x90;
+    // mov dword [rax], EXIT; int 0x90; hlt
+    let mut buf = [0u8; 64];
+    let mut o = 0usize;
+    buf[o] = 0x48;
+    buf[o + 1] = 0xB8;
+    o += 2;
+    buf[o..o + 8].copy_from_slice(&USER_MARKER_VA.to_le_bytes());
+    o += 8;
+    buf[o] = 0xC7;
+    buf[o + 1] = 0x00;
+    o += 2;
+    buf[o..o + 4].copy_from_slice(&(SYS_PIN_DMA as u32).to_le_bytes());
+    o += 4;
+    buf[o] = 0xCD;
+    buf[o + 1] = 0x90;
+    o += 2;
+    buf[o] = 0xC7;
+    buf[o + 1] = 0x00;
+    o += 2;
+    buf[o..o + 4].copy_from_slice(&(SYS_MAP_FB as u32).to_le_bytes());
+    o += 4;
+    buf[o] = 0xCD;
+    buf[o + 1] = 0x90;
+    o += 2;
+    buf[o] = 0xC7;
+    buf[o + 1] = 0x00;
+    o += 2;
+    buf[o..o + 4].copy_from_slice(&(SYS_EXIT_USER as u32).to_le_bytes());
+    o += 4;
+    buf[o] = 0xCD;
+    buf[o + 1] = 0x90;
+    o += 2;
+    buf[o] = 0xF4;
+    o += 1;
+    let dst = address_space::hhdm_mut::<u8>(code);
+    unsafe {
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, o);
+    }
+}
+
+/// ADR-0060 §6 soft-float: CR0.EM=1 + `xorps` em CPL=3 → #UD → fault_abort, kernel vivo.
+pub fn demo_ring3_softfloat_sse() -> Result<(), &'static str> {
+    if !TRY_ENTER_RING3 {
+        return Ok(());
+    }
+    k_nano::slog_bin!("P6", "info", "Ring3 soft-float SSE #UD self-test");
+
+    let mut as_user = address_space::create_sandbox_as()?;
+    let code_frame = address_space::alloc_frame()?;
+    let stack_frame = address_space::alloc_frame()?;
+    write_sse_stub(code_frame);
+    unsafe {
+        as_user.map_user_page(
+            VirtAddr::new(USER_CODE_VA),
+            code_frame,
+            address_space::user_code_flags(),
+        )?;
+        as_user.map_user_page(
+            VirtAddr::new(USER_STACK_VA),
+            stack_frame,
+            address_space::user_data_flags(),
+        )?;
+    }
+
+    let mut cr0: u64;
+    unsafe {
+        core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nostack));
+    }
+    SAVED_CR0.store(cr0, Ordering::SeqCst);
+    let em = cr0 | (1 << 2);
+    unsafe {
+        core::arch::asm!("mov cr0, {}", in(reg) em, options(nostack));
+    }
+
+    let stack_top = USER_STACK_VA + 0x1000;
+    let r = x86_64::instructions::interrupts::without_interrupts(|| unsafe {
+        enter_user_mode(
+            USER_CODE_VA,
+            stack_top,
+            as_user.l4_frame,
+            Cap::ENTER_USER,
+        )
+    });
+    let cr0_now = SAVED_CR0.swap(0, Ordering::SeqCst);
+    if cr0_now != 0 {
+        unsafe {
+            core::arch::asm!("mov cr0, {}", in(reg) cr0_now, options(nostack));
+        }
+    }
+    match r {
+        Err(e) if e.contains("fault") || e.contains("P6") => {
+            k_nano::slog_bin!(
+                "P6",
+                "info",
+                "SUCCESS soft-float SSE #UD contained ({})",
+                e
+            );
+            Ok(())
+        }
+        Ok(()) => Err("P6: xorps nao gerou #UD"),
+        Err(e) => Err(e),
+    }
+}
+
+fn write_sse_stub(code: PhysFrame<Size4KiB>) {
+    // xorps xmm0, xmm0; hlt  — com CR0.EM=1 → #UD (SDM)
+    let mut buf = [0u8; 8];
+    buf[0] = 0x0F;
+    buf[1] = 0x57;
+    buf[2] = 0xC0;
+    buf[3] = 0xF4;
+    let dst = address_space::hhdm_mut::<u8>(code);
+    unsafe {
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, 4);
     }
 }
 

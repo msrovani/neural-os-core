@@ -34,8 +34,8 @@ Serial: `logs/ring3_tcg.txt`. Accel TCG, 2c/6G, sem 2º disco, OVMF edk2.
 | AS isolado (sandbox + kernel supervisor) | PASS parcial (P4[511]+HHDM; HHDM supervisor — CPL=3 não USER) |
 | Contenção de falta | PASS (`demo_ring3_fault_containment`) |
 | Syscall gate Cap | PASS parcial (deny Cap vazio + EXIT via int 0x90) |
-| DMA/MMIO negados CapGate Ring3 | NÃO nesta sessão |
-| Soft-float / SSE trap | NÃO medido (stub integer-only) |
+| DMA/MMIO negados CapGate Ring3 | PASS (TCG: PIN_DMA=1 MAP_FB=1) |
+| Soft-float / SSE trap | PASS (TCG: CR0.EM + xorps → #UD contained) |
 | Gate HV (`ring3_is_safe`) | Mantido: só KVM; TCG/WHPX = false → **sem** `register_native_ring` |
 | Boot sem reboot loop | PASS |
 
@@ -47,6 +47,6 @@ Serial: `logs/ring3_tcg.txt`. Accel TCG, 2c/6G, sem 2º disco, OVMF edk2.
 
 ## Residual / próximo
 
-- Expandir `ring3_is_safe(Tcg)` só após CapGate DMA/MMIO + soft-float medidos.
+- Expandir `ring3_is_safe(Tcg)` só após evidência WHPX/HW (CapGate+soft-float já PASS em TCG).
 - WHPX: campanha própria (MSR SYSCALL já gated).
 - PCID / lazy FPU: residual ADR-0082, não bloqueador deste aceite.

@@ -9,8 +9,9 @@
 - **fix(gdt):** user CS/DS na GDT carregada `k_nano` (fim da GDT fantasma `interrupts_ext`).
 - **fix(tss):** `privilege_stack_table[0]` (RSP0) para `int 0x90` desde CPL=3.
 - **feat(p6):** `TRY_ENTER_RING3=true`; `demo_ring3_fault_containment`.
-- **evidência:** `SUCCESS iretq+CPL3` + `fault-containment sandbox_dead kernel_alive` (`logs/ring3_tcg.txt`).
-- **não feito:** `register_native_ring` / CapGate DMA-MMIO Ring3 / `ring3_is_safe(Tcg)`.
+- **feat(p6):** CapGate sandbox deny `PIN_DMA`/`MAP_FB`; soft-float `xorps`+#UD (`demo_ring3_capgate_dma_mmio` / `demo_ring3_softfloat_sse`).
+- **evidência:** `SUCCESS iretq+CPL3` + fault-containment + `CapGate sandbox deny PIN_DMA=1 MAP_FB=1` + `soft-float SSE #UD contained`.
+- **não feito:** `register_native_ring` / `ring3_is_safe(Tcg)` / WHPX.
 
 ### SESSION_277: Integração branches restantes (2026-08-21)
 
