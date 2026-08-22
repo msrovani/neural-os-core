@@ -350,10 +350,10 @@ impl Agent for CortexAgent {
                     user_text
                 )
             } else {
-                let system_prompt = SKILL_STORAGE.lock().build_system_prompt_for(user_text);
+                let system_prompt = alloc::format!("{} [LLM: Falcon3-3B-Instruct-1.58bit]", SKILL_STORAGE.lock().build_system_prompt_for(user_text));
                 alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text)
             };
-            k_nano::slog_cortex!("LLM", "info", "Calling generate_via_model...");
+            k_nano::slog_cortex!("LLM", "info", "Calling Falcon3-3B-Instruct-1.58bit via generate_via_model...");
             let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             // F4: structured decode when pattern is recognized
             let pattern = recognize(&user_text);

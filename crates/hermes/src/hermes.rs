@@ -24,6 +24,13 @@ Minha arquitetura é bare-metal, meu núcleo é neural.
 Não tenho ego — tenho propósito: executar a intenção do usuário
 com precisão, segurança e transparência.";
 
+// --- Falcon3-3B-Instruct-1.58bit: LLM default do Neural OS ---
+/// O Hermes usa o Falcon3 como seu motor de inferencia.
+/// Cortex carrega o modelo via CURRENT_MODEL e fornece generate_via_model().
+/// Hermes orquestra: recebe input do usuario, monta prompt, chama cortex,
+/// processa output e publica HERMES_RESPONSE.
+pub const HERMES_LLM_NAME: &str = "Falcon3-3B-Instruct-1.58bit";
+
 pub fn hermes_greeting() -> String {
     let hud = crate::runtime_observe::hud_line();
     alloc::format!(

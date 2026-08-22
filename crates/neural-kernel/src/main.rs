@@ -3087,7 +3087,7 @@ pub(crate) fn kernel_boot(
                             fit_ram,
                             airllm
                         );
-                        crate::boot_logger::log("BOOT: QEMU loader BitNet loaded");
+                        crate::boot_logger::log("BOOT: QEMU loader Falcon3-3B-Instruct-1.58bit loaded");
                         model_loaded = true;
                         // Marca onde começa a região de experts (após modelos grandes,
                         // benchmarks, BPE, BGE — tudo ordenado por tamanho descendente
@@ -3129,7 +3129,7 @@ pub(crate) fn kernel_boot(
                         });
                         if let Some(big_model) = llm_v6.or_else(|| crate::cortex::load_model(model_data2)) {
                             crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-                            k_nano::slog_bin!("RAMDISK", "info", "LLM LOADED file=BITNET (QEMU-loader @0x120000000)");
+                            k_nano::slog_bin!("RAMDISK", "info", "LLM LOADED file=Falcon3-3B-Instruct-1.58bit (QEMU-loader @0x120000000)");
                             model_loaded = true;
                         }
                     }

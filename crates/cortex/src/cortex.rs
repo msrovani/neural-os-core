@@ -3802,13 +3802,32 @@ pub fn model_info() -> Option<ModelInfo> {
 
 pub const NO_MODEL_MSG: &str = "[CORTEX] AI indisponível — nenhum modelo carregado";
 
+/// Nome canonico do LLM default do Neural OS.
+pub const MODEL_NAME: &str = "Falcon3-3B-Instruct-1.58bit";
+/// Versao do formato do modelo.
+pub const MODEL_VERSION: &str = "v6";
+/// Dimensao de embed do Falcon3 3B.
+pub const FALCON3_EMBED_DIM: usize = 3072;
+/// Numero de layers do Falcon3 3B.
+pub const FALCON3_NUM_LAYERS: usize = 22;
+/// Numero de heads do Falcon3 3B.
+pub const FALCON3_NUM_HEADS: usize = 12;
+/// KV heads do Falcon3 3B.
+pub const FALCON3_KV_HEADS: usize = 4;
+/// Vocab size do Falcon3 3B.
+pub const FALCON3_VOCAB_SIZE: u32 = 131072;
+/// Context window do Falcon3 3B.
+pub const FALCON3_MAX_SEQ: usize = 4096;
+/// Tamanho do arquivo Falcon3 v6 (bytes).
+pub const FALCON3_FILE_SIZE: u64 = 1_037_071_016;
+
 pub fn set_model(model: Box<dyn Model>) {
     CURRENT_MODEL_EMBED_DIM.store(model.embed_dim(), core::sync::atomic::Ordering::Relaxed);
     *CURRENT_MODEL.lock() = Some(model);
     MODEL_STATUS.store(ModelStatus::BitNetReal as u8, core::sync::atomic::Ordering::Release);
     crate::model_hub::mark_active(true);
     let dim = CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
-    k_nano::slog_cortex!("CORTEX", "info", "model=bitnet-real dim={} status=AI_READY", dim);
+    k_nano::slog_cortex!("CORTEX", "info", "model={} dim={} status=AI_READY (LLM: {})", MODEL_NAME, dim, MODEL_NAME);
 }
 
 static INFER_IN_FLIGHT: core::sync::atomic::AtomicBool =

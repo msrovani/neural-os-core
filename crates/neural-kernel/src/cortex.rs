@@ -77,7 +77,7 @@ fn fallback_generate(prompt: &str) -> String {
             {
                 return out;
             }
-            String::from("[CORTEX] No model loaded")
+            String::from("[CORTEX] Falcon3-3B-Instruct-1.58bit not loaded")
         }
     }
 }
@@ -175,7 +175,7 @@ pub fn generate_via_model(prompt: &str) -> String {
         let guard = CURRENT_MODEL.lock();
         return match guard.as_ref() {
             Some(m) => m.generate(prompt),
-            None => String::from("[CORTEX] No model loaded"),
+            None => String::from("[CORTEX] Falcon3-3B-Instruct-1.58bit not loaded"),
         };
     }
 
