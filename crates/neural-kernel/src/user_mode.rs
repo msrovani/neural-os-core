@@ -40,9 +40,9 @@ static mut SAVED_RSP: u64 = 0;
 #[cfg(feature = "ring3")]
 static mut SAVED_CALLEE: [u64; 6] = [0; 6];
 
-/// Feature: `iretq` real. Default off — QEMU UEFI storm #PF (CR2=ip, err=0x10).
-/// Cap deny path still runs; re-enable when clone CR3 maps kernel text.
-pub const TRY_ENTER_RING3: bool = false; // Ring3 disabled — pages USER with USER_ACCESSIBLE, safe HHDM
+/// Feature: `iretq` real. ADR-0060 / SESSION_278 — ligado nesta branch para
+/// campanha QEMU TCG. `register_native_ring` permanece gated por `ring3_is_safe()`.
+pub const TRY_ENTER_RING3: bool = true;
 
 #[inline]
 pub fn demo_active() -> bool {
@@ -187,16 +187,14 @@ pub unsafe fn enter_user_mode(
     }
 
     // 3. Switch para page table do user enquanto ainda CPL=0.
-    //    Kernel text em P4[511] é compartilhado (clone raso) → ainda executável.
+    //    P4[511]+HHDM supervisor no sandbox AS (create_sandbox_as / SESSION_278).
     DEMO_ACTIVE.store(true, Ordering::SeqCst);
     crate::interrupts_ext::puts(b"[P6] B: cr3->user\n");
     address_space::restore_cr3(user_l4, Cr3Flags::empty());
     crate::interrupts_ext::puts(b"[P6] C: cr3 switched (CPL0)\n");
 
     // 4. IRETQ para CPL=3. CR3 já é a page table do user.
-    //    A label "2:" é o return point — jump_back_to_kernel restaura CR3,
-    //    restaura callee-saved (lê SAVED_CALLEE em CPL=0/kernel CR3) e salta
-    //    pra cá; então o epílogo do compilador retorna ao caller.
+    //    A label "2:" é o return point — jump_back_to_kernel restaura CR3.
     #[cfg(feature = "ring3")]
     let rip_ptr = core::ptr::addr_of_mut!(SAVED_RIP);
     #[cfg(not(feature = "ring3"))]
@@ -387,4 +385,75 @@ pub fn run_elf(data: &[u8]) -> Result<(), &'static str> {
 
     k_nano::slog_bin!("P6", "info", "SUCCESS iretq+CPL3 marker={:x} Cap::ENTER_USER", marker);
     Ok(())
+}
+
+/// Self-test ADR-0060 §6 contenção: stub CPL=3 lê VA não mapeada → #PF →
+/// `fault_abort` → kernel vivo (Err esperado, não panic).
+pub fn demo_ring3_fault_containment() -> Result<(), &'static str> {
+    if !TRY_ENTER_RING3 {
+        return Ok(());
+    }
+    const UNMAPPED_VA: u64 = 0x0000_7000_0040_0000;
+    k_nano::slog_bin!("P6", "info", "Ring3 fault-containment self-test");
+
+    let mut as_user = address_space::create_sandbox_as()?;
+    let code_frame = address_space::alloc_frame()?;
+    let stack_frame = address_space::alloc_frame()?;
+    write_fault_stub(code_frame, UNMAPPED_VA);
+    unsafe {
+        as_user.map_user_page(
+            VirtAddr::new(USER_CODE_VA),
+            code_frame,
+            address_space::user_code_flags(),
+        )?;
+        as_user.map_user_page(
+            VirtAddr::new(USER_STACK_VA),
+            stack_frame,
+            address_space::user_data_flags(),
+        )?;
+    }
+
+    let stack_top = USER_STACK_VA + 0x1000;
+    let r = x86_64::instructions::interrupts::without_interrupts(|| unsafe {
+        enter_user_mode(
+            USER_CODE_VA,
+            stack_top,
+            as_user.l4_frame,
+            Cap::ENTER_USER,
+        )
+    });
+    match r {
+        Err(e) if e.contains("fault") || e.contains("P6") => {
+            k_nano::slog_bin!(
+                "P6",
+                "info",
+                "SUCCESS fault-containment sandbox_dead kernel_alive ({})",
+                e
+            );
+            Ok(())
+        }
+        Ok(()) => Err("P6: fault stub nao gerou falta"),
+        Err(e) => Err(e),
+    }
+}
+
+fn write_fault_stub(code: PhysFrame<Size4KiB>, bad_va: u64) {
+    // movabs rax, bad_va; mov rax, [rax]; hlt
+    let mut buf = [0u8; 24];
+    let mut o = 0usize;
+    buf[o] = 0x48;
+    buf[o + 1] = 0xB8;
+    o += 2;
+    buf[o..o + 8].copy_from_slice(&bad_va.to_le_bytes());
+    o += 8;
+    buf[o] = 0x48;
+    buf[o + 1] = 0x8B;
+    buf[o + 2] = 0x00;
+    o += 3;
+    buf[o] = 0xF4;
+    o += 1;
+    let dst = address_space::hhdm_mut::<u8>(code);
+    unsafe {
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, o);
+    }
 }

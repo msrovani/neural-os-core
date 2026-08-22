@@ -164,14 +164,14 @@ pub fn kernel_data_selector() -> SegmentSelector {
     GDT.1.data_selector
 }
 
-/// Seletor CS Ring3 (RPL=3 já embutido via DPL).
+/// Seletor CS Ring3 — **GDT carregada** em `k_nano::interrupts` (SESSION_278).
 pub fn user_code_selector() -> SegmentSelector {
-    GDT.1.user_code_selector
+    k_nano::interrupts::user_code_selector()
 }
 
-/// Seletor DS/SS Ring3.
+/// Seletor DS/SS Ring3 — GDT k_nano (não a GDT fantasma local).
 pub fn user_data_selector() -> SegmentSelector {
-    GDT.1.user_data_selector
+    k_nano::interrupts::user_data_selector()
 }
 
 // --------------------------------------------------------------------------

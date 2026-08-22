@@ -89,6 +89,14 @@ lazy_static! {
             let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
             stack_start + STACK_SIZE
         };
+        // RSP0: stack kernel em trap CPL=3 (int 0x90 / exceções sem IST).
+        // SESSION_278: RSP0=0 → #PF no int 0x90 após iretq Ring3.
+        tss.privilege_stack_table[0] = {
+            const STACK_SIZE: usize = 4096 * 4;
+            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
+            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
+            stack_start + STACK_SIZE
+        };
         tss
     };
 }
@@ -97,27 +105,57 @@ lazy_static! {
     static ref GDT: (GlobalDescriptorTable, Selectors) = {
         let mut gdt = GlobalDescriptorTable::new();
         let code_selector = gdt.add_entry(Descriptor::kernel_code_segment());
-        
+        // Kernel data + user CS/DS ANTES do TSS — necessários para iretq CPL=3
+        // (SESSION_278: seletores em interrupts_ext apontavam GDT NÃO carregada → #GP(0x20)).
+        // Layout alinhado a STAR em neural-kernel/syscall.rs:
+        //   0x08 KCS, 0x10 KDS, 0x18|3 UCS, 0x20|3 UDS, 0x28 TSS
+        let data_selector = gdt.add_entry(Descriptor::kernel_data_segment());
+        let user_code_selector = gdt.add_entry(Descriptor::user_code_segment());
+        let user_data_selector = gdt.add_entry(Descriptor::user_data_segment());
+
         // GDT do x86_64 0.14.13 é FIXO em 8 slots (gdt.rs:49) e cada TSS
-        // (SystemSegment) ocupa 2. O loop per-AP (MAX_APS+1 = 8 TSS) estourava
-        // ("GDT requires two free spaces") — panic em todo boot (f41aa03).
-        // Restaura 1 TSS compartilhado (TSS_ARRAY[0], BSP), design pré-f41aa03
-        // com boot conhecido OK. ISTs per-AP continuam alocadas em TSS_ARRAY
-        // (init_ap_tss preenche; GDT referencia TSS[0] até haver GDT maior).
+        // (SystemSegment) ocupa 2. null+KCS+KDS+UCS+UDS+TSS = 7 slots.
         // ⚠️ &*TSS (deref do lazy_static) FORÇA o init do TSS — sem isso os
         // interrupt_stack_table ficam zerados (TaskStateSegment::new) e a
         // entrega de #PF/#GP/timer com IST faz push para 0 → #DF → triple
         // (SESSION_250 — reboot loop pós-heap do commit 2662d50).
         let shared_tss_selector = gdt.add_entry(Descriptor::tss_segment(&*TSS));
         let tss_selectors = [shared_tss_selector; MAX_APS + 1];
-        
-        (gdt, Selectors { code_selector, tss_selectors })
+
+        (
+            gdt,
+            Selectors {
+                code_selector,
+                data_selector,
+                user_code_selector,
+                user_data_selector,
+                tss_selectors,
+            },
+        )
     };
 }
 
 struct Selectors {
     code_selector: SegmentSelector,
+    data_selector: SegmentSelector,
+    user_code_selector: SegmentSelector,
+    user_data_selector: SegmentSelector,
     tss_selectors: [SegmentSelector; MAX_APS + 1],
+}
+
+/// CS Ring3 (RPL=3 embutido).
+pub fn user_code_selector() -> SegmentSelector {
+    GDT.1.user_code_selector
+}
+
+/// DS/SS Ring3 (RPL=3 embutido).
+pub fn user_data_selector() -> SegmentSelector {
+    GDT.1.user_data_selector
+}
+
+/// DS Ring0.
+pub fn kernel_data_selector() -> SegmentSelector {
+    GDT.1.data_selector
 }
 
 // --------------------------------------------------------------------------

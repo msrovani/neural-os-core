@@ -79,16 +79,18 @@ Quando o F6 estiver validado (§6), `isolation_ring::init_connectors()` chamará
 
 ## 6. Critérios de aceite (gate para habilitar — não ligar meio-pronto)
 
-- [ ] **iretq estável:** blob nativo roda em **CPL=3** e retorna ao kernel limpo (sem #PF após `mov cr3`).
-- [ ] **AS isolado:** kernel mapeado **supervisor-only** no AS do sandbox; sandbox só acessa suas páginas + página de gate; kernel text + IDT + handlers de falta + **IST** alcançáveis para tratar traps de CPL=3.
-- [ ] **Contenção de falta:** #PF/#GP/#UD **forçados** no sandbox → **mata o sandbox, kernel continua** (não triple-fault, não halt global).
-- [ ] **Syscall gate:** ABI (registrador ou página dedicada) mediada por **CapGate**; sem cap → deny.
-- [ ] **DMA/MMIO negados:** caps `PIN_DMA`/`MAP_FB`/MMIO **negadas** ao sandbox (sem IOMMU).
-- [ ] **Soft-float:** JIT nativo sem SSE (respeita a config do kernel) ou trap tratado.
-- [ ] **Gating por hypervisor:** se instável em WHPX/HW, `isolation_ring_available()` fica `false` naquele ambiente.
-- [ ] `cargo check --release` 0 erros; **boot QEMU sem reboot loop**; self-test do ring PASS.
+Evidência SESSION_278 (QEMU **TCG**, NoDisk): `SUCCESS iretq+CPL3` + `fault-containment sandbox_dead kernel_alive`. **B/C ainda NÃO liberados** — faltam DMA/MMIO CapGate + soft-float + gate HV expandido.
 
-Só com **todos** ✅ → `register_native_ring(...)` → B/C nativo liberado (HITL forte).
+- [x] **iretq estável (TCG):** blob demo em **CPL=3** + `int 0x90` EXIT + retorno kernel (SESSION_278). WHPX/HW não medidos nesta sessão.
+- [x] **AS isolado (parcial):** sandbox `create_sandbox_as` = P4[511] + P4[HHDM] supervisor-only + páginas USER dedicadas (não clone raso). HHDM supervisor é necessário ao kernel com CR3 sandbox; CPL=3 não tem USER no HHDM.
+- [x] **Contenção de falta (TCG):** stub força #PF em CPL=3 → `fault_abort` → kernel vivo (`demo_ring3_fault_containment`).
+- [~] **Syscall gate:** Cap::ENTER_USER deny OK + EXIT via `int 0x90`; ABI completa CapGate residual.
+- [ ] **DMA/MMIO negados:** caps `PIN_DMA`/`MAP_FB`/MMIO **negadas** ao sandbox (sem IOMMU) — **não** fechado nesta sessão.
+- [ ] **Soft-float:** JIT nativo sem SSE ou trap tratado — stub demo integer-only; **não** medido.
+- [x] **Gating por hypervisor (porto seguro):** `ring3_is_safe()` permanece **só KVM**; TCG/WHPX não registram `register_native_ring` mesmo com `TRY_ENTER_RING3=true`.
+- [x] `cargo build --release` + **boot QEMU TCG sem reboot loop**; self-test iretq + falta PASS.
+
+Só com **todos** ✅ (incluindo DMA/MMIO + soft-float) → `register_native_ring(...)` → B/C nativo liberado (HITL forte).
 
 ## 7. Plano (sessão dedicada, modo depurador)
 

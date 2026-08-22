@@ -2677,6 +2677,16 @@ pub(crate) fn kernel_boot(
         Ok(()) => {
             k_nano::slog_bin!("P6", "info", "Ring3 user-mode demo OK");
             crate::boot_logger::log("BOOT: P6 Ring3 OK");
+            match crate::user_mode::demo_ring3_fault_containment() {
+                Ok(()) => {
+                    k_nano::slog_bin!("P6", "info", "Ring3 fault-containment OK");
+                    crate::boot_logger::log("BOOT: P6 Ring3 fault-containment OK");
+                }
+                Err(e) => {
+                    k_nano::slog_bin!("P6", "info", "WARN: {} — boot continua", e);
+                    crate::boot_logger::log("BOOT: P6 Ring3 fault-containment WARN (non-fatal)");
+                }
+            }
         }
         Err(e) => {
             k_nano::slog_bin!("P6", "info", "WARN: {} — boot continua", e);

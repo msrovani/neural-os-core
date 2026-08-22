@@ -1,6 +1,17 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### SESSION_278: Ring3 TCG — iretq CPL=3 + fault-containment (2026-08-21)
+
+**ADR-0060 §6 parcial em QEMU TCG. B/C nativo permanece gated.**
+
+- **fix(as):** `create_sandbox_as` copia P4[HHDM] supervisor (stack Limine pós-CR3).
+- **fix(gdt):** user CS/DS na GDT carregada `k_nano` (fim da GDT fantasma `interrupts_ext`).
+- **fix(tss):** `privilege_stack_table[0]` (RSP0) para `int 0x90` desde CPL=3.
+- **feat(p6):** `TRY_ENTER_RING3=true`; `demo_ring3_fault_containment`.
+- **evidência:** `SUCCESS iretq+CPL3` + `fault-containment sandbox_dead kernel_alive` (`logs/ring3_tcg.txt`).
+- **não feito:** `register_native_ring` / CapGate DMA-MMIO Ring3 / `ring3_is_safe(Tcg)`.
+
 ### SESSION_277: Integração branches restantes (2026-08-21)
 
 **Net/APIC + Jarbas 276 + silicon wire + limpeza de remotes. Tip código `ebd262f`.**

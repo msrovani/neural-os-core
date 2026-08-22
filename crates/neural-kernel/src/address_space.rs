@@ -260,8 +260,12 @@ pub fn hhdm_mut<T>(frame: PhysFrame<Size4KiB>) -> *mut T {
 }
 
 /// Phase 4: Cria um AddressSpace de sandbox DO ZERO, em vez de clonar o kernel.
-/// Só mapeia o que o sandbox precisa: kernel text/data (P4[511]) e HHDM (P4[~255]).
-/// Não herda tabelas L3/L2/L1 compartilhadas com o kernel → isolamento real.
+/// Mapeia o mínimo p/ CPL=0 sobreviver ao switch CR3 (Moros) + handlers:
+/// - P4[511] kernel text/data/bss (IDT/GDT/TSS/IST se na imagem)
+/// - P4[HHDM] (tipicamente 256) supervisor-only — stack Limine/kernel e frames
+///   via HHDM; CPL=3 **não** acessa (sem USER). SESSION_278: sem HHDM o
+///   `restore_cr3(user)` → #PF CR2=stack HHDM antes do iretq.
+/// Páginas user entram depois via `map_user_page`.
 pub fn create_sandbox_as() -> Result<AddressSpace, &'static str> {
     let (kernel_l4, _) = Cr3::read();
     let kernel_l4_ptr = unsafe { &*frame_as_table(kernel_l4) };
@@ -269,19 +273,25 @@ pub fn create_sandbox_as() -> Result<AddressSpace, &'static str> {
     let l4_frame = alloc_zeroed_frame().ok_or("sandbox: sem frame L4")?;
     let l4_ptr = unsafe { &mut *frame_as_table(l4_frame) };
 
-    // Fronteira de isolamento: copiar SÓ P4[511] (kernel text/data/bss — IDT,
-    // GDT, TSS e IST stacks; obrigatório senão a 1ª exceção em CPL=3 dá triple
-    // fault). Todo o resto da metade alta fica fora: copiar qualquer P4 ≥ 256
-    // dava ao sandbox o HHDM inteiro (= toda a RAM física) — o oposto do
-    // isolamento. As páginas de user são mapeadas depois via `map_user_page`.
-    // Nota: sem HHDM (P4[256]) qualquer handler que rode com CR3=sandbox e
-    // toque HHDM dá #PF — os handlers do caminho Ring3 usam só port I/O.
     const KERNEL_P4: usize = 511;
     let kernel_entry = &kernel_l4_ptr[KERNEL_P4];
     if !kernel_entry.flags().contains(PageTableFlags::PRESENT) {
         return Err("sandbox: P4[511] kernel ausente");
     }
     l4_ptr[KERNEL_P4] = kernel_entry.clone();
+
+    // HHDM: índice PML4 = bits 47:39 do PHYS_MEM_OFFSET (Limine).
+    let pm = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Acquire);
+    if pm != 0 {
+        let hhdm_p4 = ((pm >> 39) & 0x1ff) as usize;
+        if hhdm_p4 != KERNEL_P4 {
+            let e = &kernel_l4_ptr[hhdm_p4];
+            if e.flags().contains(PageTableFlags::PRESENT) {
+                // Cópia rasa do L3 HHDM — flags do L3 já são supervisor (sem USER).
+                l4_ptr[hhdm_p4] = e.clone();
+            }
+        }
+    }
 
     Ok(AddressSpace { l4_frame })
 }
