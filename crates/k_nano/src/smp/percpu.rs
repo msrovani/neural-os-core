@@ -1,5 +1,5 @@
 use core::cell::UnsafeCell;
-use core::sync::atomic::AtomicU8;
+use core::sync::atomic::AtomicU16;
 use x86_64::PhysAddr;
 
 #[repr(C)]
@@ -7,13 +7,13 @@ pub struct PerCpu {
     pub self_ptr: u64,
     pub cpu_id: u64,
     pub cpu_type: u8,
-    pub lapic_id: u8,
+    pub lapic_id: u32,
     pub is_bsp: bool,
     pub online: u8,
     pub ring: u8,
     pub tss_ptr: u64,           // pointer to this CPU's TSS
     pub ist_stacks: [u64; 3],   // IST stack tops for #DF, #PF, #GP (16KB each)
-    _padding: [u8; 19],
+    _padding: [u8; 16],
 }
 
 pub const CPU_TYPE_P_CORE: u8 = 0;
@@ -34,14 +34,15 @@ pub static BSP_PCPU: PerCpu = PerCpu {
     ring: 0,
     tss_ptr: 0,
     ist_stacks: [0, 0, 0],
-    _padding: [0u8; 19],
+    _padding: [0u8; 16],
 };
 
-pub static CPU_COUNT: AtomicU8 = AtomicU8::new(1);
-pub static AP_ONLINE: AtomicU8 = AtomicU8::new(0);
+pub static CPU_COUNT: AtomicU16 = AtomicU16::new(1);
+pub static AP_ONLINE: AtomicU16 = AtomicU16::new(0);
 
-/// ADR-0057 WS-A: máximo de APs suportados (total de cores = MAX_APS + 1 BSP).
-pub const MAX_APS: usize = 7;
+/// Tamanho do array BSS PerCpu/TSS (implementação, não política).
+/// O silício é o MADT Enabled. Se o MADT for maior, é dívida: Vec no boot, não “usar menos cores”.
+pub const MAX_APS: usize = 511;
 
 /// Array de PerCpu por-AP. Cada AP recebe GS.base próprio (não mais o BSP
 /// compartilhado — causa do não-wake com ≥2 APs).
@@ -60,7 +61,7 @@ pub static AP_PCPU: ApPcpuArray = ApPcpuArray(
             ring: 1,
             tss_ptr: 0,
             ist_stacks: [0, 0, 0],
-            _padding: [0u8; 19],
+            _padding: [0u8; 16],
         })
     }; MAX_APS],
 );
@@ -78,7 +79,7 @@ pub fn ap_percpu_ptr(i: usize) -> u64 {
     p as u64
 }
 
-pub fn init_bsp_percpu(lapic_id: u8) {
+pub fn init_bsp_percpu(lapic_id: u32) {
     let pcpu = &BSP_PCPU as *const PerCpu as *mut PerCpu;
     unsafe {
         (*pcpu).self_ptr = pcpu as u64;

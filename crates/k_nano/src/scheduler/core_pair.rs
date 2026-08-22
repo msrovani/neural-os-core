@@ -364,7 +364,7 @@ impl CorePairAllocator {
         // target (x86_64-unknown-none) keeps the real IPI.
         #[cfg(target_os = "none")]
         unsafe {
-            crate::apic::send_ipi_reschedule_to(core)
+            crate::apic::send_ipi_reschedule_to(core as u32)
         }
         #[cfg(not(target_os = "none"))]
         let _ = core;

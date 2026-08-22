@@ -51,7 +51,7 @@ fn is_fluent_boot_text(text: &str) -> bool {
 
 /// Template suit-boot (fallback honesto quando LLM mash / soft-float).
 /// Tom: upload confirmado + HUD + fleet + serviço — original Neural OS.
-fn compose_boot_greeting(mem_mb: u64, cpu_count: u8, agent_count: usize) -> String {
+fn compose_boot_greeting(mem_mb: u64, cpu_count: u16, agent_count: usize) -> String {
     let fleet = if agent_count > 200 {
         "full agent fleet online"
     } else if agent_count > 20 {
@@ -79,7 +79,7 @@ fn compose_boot_greeting(mem_mb: u64, cpu_count: u8, agent_count: usize) -> Stri
     )
 }
 
-fn compose_boot_llm_prompt(mem_mb: u64, cpu_count: u8, agent_count: usize) -> String {
+fn compose_boot_llm_prompt(mem_mb: u64, cpu_count: u16, agent_count: usize) -> String {
     alloc::format!(
         "You are JARBAS, the Neural OS companion AI coming online after boot — \
          like a calm suit AI confirming upload into the armor HUD. \
@@ -108,7 +108,7 @@ pub struct JarbasAgent {
     greeted: bool,
     greeting_prompt_sent: bool,
     greet_mem_mb: u64,
-    greet_cpu: u8,
+    greet_cpu: u16,
     greet_agents: usize,
     /// Streaming TTS state machine.
     stream_tts: StreamingTtsState,

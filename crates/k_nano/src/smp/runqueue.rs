@@ -231,14 +231,8 @@ pub fn steal_agent(core_id: usize) -> Option<AgentTask> {
 ///
 /// # Safety
 /// Requer LAPIC habilitada e AP com IDT carregada.
-pub unsafe fn send_reschedule_ipi_to(lapic_id: u8) {
-    let base = crate::apic::LAPIC_VIRT_BASE.load(Ordering::Acquire);
-    if base == 0 { return; }
-    let icr_high = (lapic_id as u32) << 24;
-    let icr_low = 0x80u32;
-    crate::apic::icr_wait_idle();
-    core::ptr::write_volatile((base + 0x310) as *mut u32, icr_high);
-    core::ptr::write_volatile((base + 0x300) as *mut u32, icr_low);
+pub unsafe fn send_reschedule_ipi_to(lapic_id: u32) {
+    crate::apic::send_ipi_reschedule_to(lapic_id);
 }
 
 /// Acorda o AP se tiver trabalho na run-queue.
@@ -351,14 +345,11 @@ pub fn init_default_roles() {
 
     if let Some(pools) = crate::smp::corepools::pools() {
         // ring1 (P-cores) = Compute
-        for i in 0..pools.ring1_len as usize {
-            let cpu_id = pools.ring1[i] as usize;
-            set_core_role(cpu_id, CoreRole::Compute);
+        for &cpu_id in pools.ring1.iter() {
+            set_core_role(cpu_id as usize, CoreRole::Compute);
         }
-        // ring2 (E-cores ou P-restantes) = Worker
-        for i in 0..pools.ring2_len as usize {
-            let cpu_id = pools.ring2[i] as usize;
-            set_core_role(cpu_id, CoreRole::Worker);
+        for &cpu_id in pools.ring2.iter() {
+            set_core_role(cpu_id as usize, CoreRole::Worker);
         }
     }
 

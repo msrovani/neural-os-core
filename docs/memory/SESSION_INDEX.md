@@ -7,6 +7,7 @@
 ## Sessões Mantidas (107+)
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
+| 279 | SMP | ADR-0088+0055 | AIOS wake: MADT inventário, trampoline jmp@0 | SIPI não executava header de patch (IP=0). Redox-ideia: jmp 16-bit + ready lowmem + PTE NX off. IDs u32/x2APIC; sem MAX_APS=7 / .min(8) / cap heap. BSS 511=dívida. TCG max_aps=4=gate ambiente. Check 0 erros; QEMU neste SESSION. |
 | 278 | Ring3 | ADR-0060 TCG | iretq CPL=3 + fault-containment PASS | 3 ciclos: HHDM no sandbox AS; GDT user na GDT **carregada** k_nano (fantasma interrupts_ext → #GP(0x20)); TSS.RSP0≠0 p/ int 0x90. QEMU TCG NoDisk: SUCCESS iretq+CPL3 + fault-containment; B/C **não** liberados (`ring3_is_safe` só KVM). |
 | 277 | Integração | Branches restantes | Net+APIC + Jarbas 276 + silicon wire + remotes | Fase1 cherry-net: INIT deassert, SLIRP gw=.2, e1000 RDT/kick_rx_lite, D:\modelos. Fase2 SESSION_276 port `ac4e853` (sem tip c234138). Fase3.1 wire TSC calibrado→`busy_wait_us`, CachePadded, `pcie_bypass_report`; specs honestas. Fase3.2 Fat32Io/`format_fat32_bps` no canônico fat32.rs. Fase4 remotes limpos; KEEP_WIP `silicon-gpu-directives-wip`. Tip código `ebd262f`. |
 | 276 | Jarbas | UI honesta | Compositor/overlay/HDA único + infer_in_flight | Port seletivo `ac4e853` (aios-chj). Click/dock/`show_app` floating; `overlay.rs` só no `render()` (SESSION_261); CARD_ACTION no botão; HDA fonte `k_nano` + facade `k_hal`; `infer_in_flight` HUD. Não veio tip `c234138` (stack/mesh/LAPIC). Colisão: SESSION_275 mesh ≠ jarbas — este é 276. |

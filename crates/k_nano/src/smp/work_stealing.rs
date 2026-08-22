@@ -117,9 +117,9 @@ impl WorkStealingDeque {
     }
 }
 
-/// Work-Stealing Pool — gerencia múltiplas deques (uma por core)
+/// Work-Stealing Pool — uma deque por lógico acordado (tamanho = MADT, não 8).
 pub struct WorkStealingPool {
-    deques: [WorkStealingDeque; 8], // Até 8 cores
+    deques: alloc::vec::Vec<WorkStealingDeque>,
     num_workers: usize,
 }
 
@@ -143,20 +143,14 @@ pub fn try_steal_global(worker_id: usize) -> Option<Task> {
 impl WorkStealingPool {
     /// Cria um pool com N workers (cores)
     pub fn new(num_workers: usize) -> Self {
-        let deques = [
-            WorkStealingDeque::new(),
-            WorkStealingDeque::new(),
-            WorkStealingDeque::new(),
-            WorkStealingDeque::new(),
-            WorkStealingDeque::new(),
-            WorkStealingDeque::new(),
-            WorkStealingDeque::new(),
-            WorkStealingDeque::new(),
-        ];
-        
+        let n = num_workers.max(1);
+        let mut deques = alloc::vec::Vec::with_capacity(n);
+        for _ in 0..n {
+            deques.push(WorkStealingDeque::new());
+        }
         WorkStealingPool {
             deques,
-            num_workers: num_workers.min(8),
+            num_workers: n,
         }
     }
     

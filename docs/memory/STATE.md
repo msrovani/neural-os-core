@@ -1,4 +1,7 @@
-﻿# STATE — neural-os-core v1.9.99-s278 — Ring3 TCG aceite parcial (iretq+falta); B/C gated
+﻿# STATE — neural-os-core v1.9.99-s279 — SMP AIOS (MADT=inventário; trampoline Redox-ideia)
+#   SESSION_279: SIPI jmp@IP=0 + handshake lowmem; IDs u32; sem teto 8 / sem cap RAM.
+#     MADT Enabled é Observe, não cap. BSS MAX_APS=511 = dívida array. TCG gate 4 = ADR-0055.
+#     QEMU aceite SMP = rebuild uefi.img + serial. ap_pollable/GDT TSS = residual 0057.
 #   SESSION_278: TRY_ENTER_RING3=true + create_sandbox_as(+HHDM) + GDT user em k_nano
 #     + TSS.RSP0. QEMU TCG: SUCCESS iretq+CPL3 + fault-containment. Sem register_native_ring.
 #   SESSION_277: plano branches restantes FECHADO. Fase1 cherry-net (APIC INIT

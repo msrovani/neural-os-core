@@ -88,7 +88,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#489** ext4/btrfs/NTFS read-write | ADR própria (P8/P9/P10) | ⏳ | **NTFS read+list ✅ SESSION_253** ($MFT parse, resident data, root dir); NTFS/EXT write = defer honesto |
 | **#490** USB Storage driver | ADR-0062 P11 / SESSION_170 | ✅ MVP (bringup+BOT; residual hubs/SS) |
 | **#491** Vulkan driver | ADR própria (P12) | ⏳ |
-| **#492** SMP completo (trampoline + work-stealing) | ADR própria (P13) | ⏳ |
+| **#492** SMP completo (trampoline + work-stealing) | ADR-0055/0057 (não ADR nova) | 🔄 SESSION_279 trampoline+MADT u32; residual ap_pollable/GDT TSS/Vec PerCpu |
 | **#493** IPC MessageBus + Channels | ADR própria (P14) | 🔄 Fundido em #483 |
 | **#494** Linux binary compatibility | ADR própria (P15) | ⏳ |
 | **#495** Async executor híbrido | ADR própria (P16) | 🔄 Fundido em #484 |

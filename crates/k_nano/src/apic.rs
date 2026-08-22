@@ -649,7 +649,7 @@ pub unsafe fn send_sipi(trampoline_vector: u8) {
 /// ADR-0057 WS-A: INIT IPI direcionado a UM LAPIC ID (sem shorthand).
 /// Necessário para o wake sequencial (broadcast acorda todos ao mesmo tempo →
 /// corrompem a stack compartilhada na transição de modo).
-pub unsafe fn send_init_ipi_to(dest_apic: u8) {
+pub unsafe fn send_init_ipi_to(dest_apic: u32) {
     icr_wait_idle();
     if USING_X2APIC.load(Ordering::Relaxed) {
         let icr_val: u64 = ((dest_apic as u64) << 32) | (5u64 << 8) | (1 << 14) | (1 << 15);
@@ -657,7 +657,7 @@ pub unsafe fn send_init_ipi_to(dest_apic: u8) {
         msr.write(icr_val);
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, (dest_apic as u32) << 24);
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
         let icr_val = (5u32 << 8) | (1 << 14) | (1 << 15);
         write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
     }
@@ -668,26 +668,23 @@ pub unsafe fn send_init_ipi_to(dest_apic: u8) {
 /// ~10ms → INIT deassert → ~10ms → SIPI → 200µs → SIPI. Sem o deassert,
 /// alguns firmwares/CPUs reais (Kaby Lake) mantêm o AP em wait-for-SIPI
 /// travado. QEMU tolera a ausência; HW real não.
-pub unsafe fn send_init_deassert_ipi_to(dest_apic: u8) {
+pub unsafe fn send_init_deassert_ipi_to(dest_apic: u32) {
     icr_wait_idle();
     // ADR-0057 + SESSION_275: INIT deassert REQUIRES level=1 (bit15) + assert=0 (bit14).
-    // Bug antigo: bit14=1 re-asserted INIT em vez de deassert → AP nunca sai de
-    // wait-for-SIPI → counter=0 em todas as tentativas. Corrigido para
-    // (5 << 8) | (1 << 15) = level-triggered + deassert.
     if USING_X2APIC.load(Ordering::Relaxed) {
         let icr_val: u64 = ((dest_apic as u64) << 32) | (5u64 << 8) | (1u64 << 15);
         let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
         msr.write(icr_val);
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, (dest_apic as u32) << 24);
-        let icr_val = (5u32 << 8) | (1u32 << 15); // level=1 + assert=0 = deassert
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
+        let icr_val = (5u32 << 8) | (1u32 << 15);
         write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
     }
 }
 
 /// ADR-0057 WS-A: SIPI direcionado a UM LAPIC ID (sem shorthand).
-pub unsafe fn send_sipi_to(dest_apic: u8, trampoline_vector: u8) {
+pub unsafe fn send_sipi_to(dest_apic: u32, trampoline_vector: u8) {
     icr_wait_idle();
     if USING_X2APIC.load(Ordering::Relaxed) {
         let icr_val: u64 = ((dest_apic as u64) << 32) | (6u64 << 8) | trampoline_vector as u64;
@@ -695,7 +692,7 @@ pub unsafe fn send_sipi_to(dest_apic: u8, trampoline_vector: u8) {
         msr.write(icr_val);
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, (dest_apic as u32) << 24);
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
         let icr_val = (6u32 << 8) | trampoline_vector as u32;
         write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
     }
@@ -705,33 +702,35 @@ pub unsafe fn wait_for_ipi_delivery() {
     icr_wait_idle();
 }
 
-pub fn lapic_id() -> u8 {
+pub fn lapic_id() -> u32 {
     if USING_X2APIC.load(Ordering::Relaxed) {
         unsafe {
-            let msr = x86_64::registers::model_specific::Msr::new(0x802); // LAPIC_ID MSR
-            (msr.read() >> 24) as u8
+            let msr = x86_64::registers::model_specific::Msr::new(0x802);
+            // SDM: em x2APIC o ID é o valor inteiro de 32 bits (não bits 31:24).
+            msr.read() as u32
         }
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        if base == 0 { return 0; }
+        if base == 0 {
+            return 0;
+        }
         unsafe {
             let id_reg = read_volatile((base + 0x20) as *const u32);
-            (id_reg >> 24) as u8
+            id_reg >> 24
         }
     }
 }
 
 /// Envia IPI de reschedule para UMA AP específica (directed, LAPIC ID).
-pub unsafe fn send_ipi_reschedule_to(dest_apic: u8) {
+pub unsafe fn send_ipi_reschedule_to(dest_apic: u32) {
     icr_wait_idle();
     if USING_X2APIC.load(Ordering::Relaxed) {
-        // x2APIC: ICR[63:32] = dest LAPIC ID, delivery=Fixed(0), vector=0x80
         let icr_val: u64 = ((dest_apic as u64) << 32) | 0x80u64;
         let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
         msr.write(icr_val);
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, (dest_apic as u32) << 24);
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
         let icr_val = 0x80u32;
         write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
     }

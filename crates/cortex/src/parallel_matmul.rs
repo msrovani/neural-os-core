@@ -86,7 +86,7 @@ pub fn parallel_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     CTX.store(&mut ctx as *mut _, Ordering::Release);
 
     let aps = k_nano::smp::ap_entry_count() as usize;
-    let n_workers = (aps + 1).min(8);
+    let n_workers = aps + 1;
     k_nano::smp::ap_work::clear_queue();
     // Barreira = só APs (BSP sincroniza localmente após seu próprio trabalho)
     k_nano::smp::ap_work::reset_barrier(aps.min(n_workers.saturating_sub(1)) as u32);
@@ -191,7 +191,7 @@ pub fn parallel_ternary_matmul(
     T_CTX.store(&mut ctx as *mut _, Ordering::Release);
 
     let aps = k_nano::smp::ap_entry_count() as usize;
-    let n_workers = (aps + 1).min(8);
+    let n_workers = aps + 1;
     k_nano::smp::ap_work::clear_queue();
     k_nano::smp::ap_work::reset_barrier(aps.min(n_workers.saturating_sub(1)) as u32);
     for jid in 0..aps.min(n_workers.saturating_sub(1)) {

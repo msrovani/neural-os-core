@@ -33,7 +33,7 @@ struct RsdpDescriptor {
 pub struct AcpiInfo {
     pub lapic_base: u64,
     pub ioapic_base: u64,
-    pub lapic_count: u8,
+    pub lapic_count: u16,
     pub ioapic_count: u8,
     pub has_x2apic: bool,
     pub phys_mem_offset: u64,
@@ -573,7 +573,7 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
 
     let mut lapic_base = 0xFEE0_0000u64;
     let mut ioapic_base = 0xFEC0_0000u64;
-    let mut lapic_count = 0u8;
+    let mut lapic_count = 0u16;
     let mut ioapic_count = 0u8;
     let mut has_x2apic = false;
     let mut iso_overrides = Vec::new();
@@ -641,10 +641,20 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
 
                     match entry_type {
                         0 => {
-                            // HW-5: LAPIC entry — extract real APIC ID
-                            let apic_id = read_volatile(table_ptr.add(offset + 3)) as u32;
-                            BOOT_APIC_IDS.lock().push(apic_id);
-                            lapic_count += 1;
+                            // Type 0: Processor Local APIC. Flags@+4 bit0=Enabled (ACPI).
+                            let flags = read_volatile(table_ptr.add(offset + 4) as *const u32);
+                            if (flags & 1) == 0 {
+                                crate::slog_nano!(
+                                    "ACPI",
+                                    "info",
+                                    "MADT LAPIC id={} skipped (Enabled=0)",
+                                    read_volatile(table_ptr.add(offset + 3))
+                                );
+                            } else {
+                                let apic_id = read_volatile(table_ptr.add(offset + 3)) as u32;
+                                BOOT_APIC_IDS.lock().push(apic_id);
+                                lapic_count += 1;
+                            }
                         }
                         1 => {
                             let ioapic_id = read_volatile(table_ptr.add(offset + 2) as *const u8);
@@ -670,11 +680,22 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
                             }
                         }
                         9 => {
-                            // HW-5: x2APIC entry — extract real x2APIC ID
-                            let x2apic_id = read_volatile(table_ptr.add(offset + 4) as *const u32);
-                            BOOT_APIC_IDS.lock().push(x2apic_id);
-                            lapic_count += 1;
-                            has_x2apic = true;
+                            // Type 9: Processor Local x2APIC. Flags@+8 bit0=Enabled.
+                            let flags = read_volatile(table_ptr.add(offset + 8) as *const u32);
+                            if (flags & 1) == 0 {
+                                crate::slog_nano!(
+                                    "ACPI",
+                                    "info",
+                                    "MADT x2APIC id={} skipped (Enabled=0)",
+                                    read_volatile(table_ptr.add(offset + 4) as *const u32)
+                                );
+                            } else {
+                                let x2apic_id =
+                                    read_volatile(table_ptr.add(offset + 4) as *const u32);
+                                BOOT_APIC_IDS.lock().push(x2apic_id);
+                                lapic_count += 1;
+                                has_x2apic = true;
+                            }
                         }
                         _ => {}
                     }

@@ -15,10 +15,10 @@ pub fn khal_device_count() -> usize {
 
 #[derive(Debug, Clone)]
 pub struct HardwareInventory {
-    pub cpu_count: u8,
+    pub cpu_count: u16,
     pub total_ram_bytes: u64,
     pub pci_devices: Vec<PciDevice>,
-    pub lapic_count: u8,
+    pub lapic_count: u16,
     pub has_virtio_net: bool,
     pub has_virtio_gpu: bool,
     pub has_nvme: bool,

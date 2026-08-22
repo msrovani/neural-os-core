@@ -1,6 +1,16 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### SESSION_279: SMP AIOS — MADT inventário, trampoline estilo Redox (2026-08-21)
+
+**ADR-0088 + 0055/0057. IDEA #492 em andamento. Sem teto de 8 cores.**
+
+- **fix(smp):** SIPI `jmp` no IP=0; handshake `sipi_hit`/`ready` HHDM; PTE identity sem NX.
+- **fix(smp):** `init_smp` só em `k_nano`; MADT Enabled; IDs `u32`; x2APIC ID = MSR 802.
+- **fix(aios):** sem guess `bsp+1`; sem `.min(8)` no matmul/pool; sem cap ¼ heap.
+- **feat(smp):** CorePools `Vec`; CPUID 0x1A no AP.
+- **dívida:** BSS `MAX_APS=511`; FeatureGate TCG `max_aps=4`; GDT 1 TSS; `ap_pollable` off.
+
 ### SESSION_278: Ring3 TCG — iretq CPL=3 + fault-containment (2026-08-21)
 
 **ADR-0060 §6 parcial em QEMU TCG. B/C nativo permanece gated.**
