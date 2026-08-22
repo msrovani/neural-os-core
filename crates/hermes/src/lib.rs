@@ -107,6 +107,7 @@ pub use k_hal::net::wifi_msix;
 // ADR-0062 E3 — SoftMAC BE via k-hal; hermes re-exporta
 pub use k_hal::net::wifi_softmac;
 pub mod voice_skill;
+pub mod trinity_inject;
 pub mod proactive;
 pub mod net_fallback;
 pub mod stream_packet;

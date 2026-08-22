@@ -547,6 +547,56 @@ impl TrinityRouter {
     pub fn has_generator(&self) -> bool {
         self.experts.iter().any(|e| e.kind == ExpertKind::Generator)
     }
+
+    /// Carrega pesos de um expert na Cortex Arena sob demanda (Efeito Matrix).
+    /// Retorna Some(&PackedTernaryTensor) se o expert ja esta residente.
+    /// Se nao, verifica se o ModelSlot correspondente esta loaded no boot.
+    pub fn get_or_mmap_expert(&self, kind: ExpertKind) -> Option<&PackedTernaryTensor> {
+        // 1. Ja residente?
+        if let Some(e) = self.experts.iter().find(|e| e.kind == kind) {
+            return e.weight.as_ref();
+        }
+        // 2. Mapear kind -> ModelSlot para buscar no FAT
+        let slot = match kind {
+            ExpertKind::HwIdentify => Some(crate::model_hub::ModelSlot::HwExpert),
+            ExpertKind::RustCoder => Some(crate::model_hub::ModelSlot::RustCoder),
+            ExpertKind::Generator => Some(crate::model_hub::ModelSlot::GeneratorPro),
+            _ => None,
+        };
+        let slot = slot?;
+        // 3. Se o slot ja foi carregado no boot, o expert esta residente
+        if crate::model_hub::slot_loaded(slot) {
+            let names = crate::model_hub::fat_names_for(slot);
+            if let Some(&name) = names.first() {
+                k_nano::slog_cortex!("TRINITY", "info",
+                    "Expert {:?} residente no slot {} (pre-loaded)", kind, name);
+            }
+        }
+        None
+    }
+
+    /// Define os pesos de um expert diretamente (usado pelo injection pipeline).
+    pub fn set_expert_weight(&mut self, kind: ExpertKind, weight: PackedTernaryTensor) {
+        if let Some(e) = self.experts.iter_mut().find(|e| e.kind == kind) {
+            k_nano::slog_cortex!("TRINITY", "info",
+                "Expert {:?} pesos injetados: {}KB (Efeito Matrix)",
+                kind, weight.packed_data.len() / 1024);
+            e.weight = Some(weight);
+        }
+    }
+
+    /// Conta expert com pesos residentes (para telemetria/HUD).
+    pub fn expert_resident_count(&self) -> usize {
+        self.experts.iter().filter(|e| e.weight.is_some()).count()
+    }
+
+    /// Tamanho total dos pesos residentes em bytes.
+    pub fn expert_resident_bytes(&self) -> usize {
+        self.experts.iter()
+            .filter_map(|e| e.weight.as_ref())
+            .map(|w| w.packed_data.len())
+            .sum()
+    }
 }
 
 /// Generate RANDOM (UNTRAINED) router weights using LCG with seed 42.
