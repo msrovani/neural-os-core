@@ -85,7 +85,7 @@ Fonte canônica: `docs/architecture/0100-k3chj-backlog-custo-anel.md`. Fila anti
 - [x] T-041 steal min-1
 - [x] T-042 IPI reschedule (`wake_core_if_needed`, gated pollable)
 - [x] T-043 testes host CPU_COUNT + TEST_LOCK
-- [ ] T-044 HUD pending/core no render()
+- [x] T-044 HUD pending/core no render()
 - [ ] T-045 mesh 2c vs s281
 - [x] T-046 WHPX OVMF não é sprint kernel (scripts TCG)
 - [x] T-047 teto 4G script (mesh default 4; ota_launch/qemu_ota_loop)
