@@ -577,7 +577,36 @@ impl JarbasDesktop {
             theme.fg_muted.2,
         );
 
-        // Botão OFF — canto SD
+                // ── Per-core load bars (T-044: HUD pending/core) ──
+        {
+            let snap = crate::display::gauges::snapshot();
+            let n = snap.core_count as usize;
+            if n > 0 {
+                let bar_w = 3usize;
+                let bar_h = 10usize;
+                let gap = 2usize;
+                let base_x = 12 + 6 * 8 + 12;
+                for c in 0..n.min(16) {
+                    let load = snap.per_core_load[c].clamp(0.0, 1.0);
+                    let filled = (load * bar_h as f32) as usize;
+                    let x = base_x + c * (bar_w + gap);
+                    self.fb.fill_rect(x, 14, bar_w, bar_h, 20, 25, 35);
+                    if filled > 0 {
+                        let y_fill = 14 + bar_h - filled;
+                        let (cr, cg, cb) = if load < 0.55 {
+                            (40, 200, 120)
+                        } else if load < 0.80 {
+                            (220, 180, 40)
+                        } else {
+                            (230, 70, 60)
+                        };
+                        self.fb.fill_rect(x, y_fill, bar_w, filled, cr, cg, cb);
+                    }
+                }
+            }
+        }
+
+// Botão OFF — canto SD
         {
             let (_bxp, by, bw, bh) = power_btn_rect(w);
             let off_x = w.saturating_sub(bw + 10);

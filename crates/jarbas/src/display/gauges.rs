@@ -23,6 +23,9 @@ pub struct GaugeSnapshot {
     pub gpu_val: String,
     pub hd_val: String,
     pub timer_at: usize,
+    /// Load por core (0.0-1.0).
+    pub per_core_load: [f32; 16],
+    pub core_count: u8,
 }
 
 impl GaugeSnapshot {
@@ -37,6 +40,8 @@ impl GaugeSnapshot {
             gpu_val: String::from("-"),
             hd_val: String::from("-"),
             timer_at: 0,
+            per_core_load: [0.0; 16],
+            core_count: 0,
         }
     }
 }
@@ -51,6 +56,8 @@ static SNAPSHOT: Mutex<GaugeSnapshot> = Mutex::new(GaugeSnapshot {
     gpu_val: String::new(),
     hd_val: String::new(),
     timer_at: 0,
+    per_core_load: [0.0; 16],
+    core_count: 0,
 });
 static SNAPSHOT_READY: AtomicBool = AtomicBool::new(false);
 static CACHED_HD_SECTORS: AtomicU64 = AtomicU64::new(u64::MAX);
@@ -120,6 +127,25 @@ fn sample_hd() -> (f32, String) {
 
 /// Chamado pelo MetricsAgent (~0,5s) — amostra e publica snapshot.
 /// `log_serial`: true só na 1ª amostra / periodicamente (HW sem serial satura COM).
+
+/// Amostra load por-core via runqueue CpuStats.
+#[cfg(feature = "smp-runqueue")]
+fn sample_per_core_load() -> ([f32; 16], u8) {
+    let cores = k_nano::smp::percpu::CPU_COUNT.load(Ordering::Relaxed) as usize;
+    let mut load = [0.0f32; 16];
+    for c in 0..cores.min(16) {
+        let stats = k_nano::smp::runqueue::cpu_stats(c);
+        let running = stats.running.load(Ordering::Relaxed) as f32;
+        let blocked = stats.blocked.load(Ordering::Relaxed) as f32;
+        let total = running + blocked;
+        load[c] = if total > 0.0 { (running / total).clamp(0.0, 1.0) } else { 0.0 };
+    }
+    (load, cores.min(16) as u8)
+}
+
+#[cfg(not(feature = "smp-runqueue"))]
+fn sample_per_core_load() -> ([f32; 16], u8) { ([0.0; 16], 0) }
+
 pub fn refresh_snapshot(log_serial: bool) {
     let (cpu_pct, cores) = sample_cpu();
     let (mem_pct, mem_used, mem_tot) = sample_mem();
@@ -136,6 +162,8 @@ pub fn refresh_snapshot(log_serial: bool) {
         gpu_val: gpu_val.clone(),
         hd_val: hd_val.clone(),
         timer_at: now,
+        per_core_load: sample_per_core_load().0,
+        core_count: sample_per_core_load().1,
     };
     *SNAPSHOT.lock() = snap;
     SNAPSHOT_READY.store(true, Ordering::Release);
@@ -258,4 +286,9 @@ fn draw_gauge(fb: &mut DoubleBuffer, cx: isize, cy: isize, r: isize, pct: f32) {
             fb.set_pixel(x as usize, y as usize, 230, 240, 255);
         }
     }
+}
+
+/// Retorna copia do snapshot (compositor per-core).
+pub fn snapshot() -> GaugeSnapshot {
+    SNAPSHOT.lock().clone()
 }
