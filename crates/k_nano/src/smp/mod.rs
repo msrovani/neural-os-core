@@ -37,6 +37,7 @@ pub extern "C" fn ap_entry(_cpu_id: u64) -> ! {
     let _lock = AP_BOOT_LOCK.lock();
     let cpu_id = percpu::CPU_COUNT.fetch_add(1, Ordering::SeqCst);
     percpu::AP_ONLINE.fetch_add(1, Ordering::SeqCst);
+    crate::slog_nano!("SMP", "trace", "AP_READY rust cpu={}", cpu_id);
     crate::slog_nano!("SMP", "info", "AP {} entrou em modo 64-bit Rust!", cpu_id);
     println!("[SMP] AP {} entrou em modo 64-bit Rust!", cpu_id);
 
@@ -188,13 +189,11 @@ fn busy_wait_us(us: u64) {
 /// A APIC é injetada por fn-pointers porque o `apic` do binário e o do `k_nano`
 /// têm bases LAPIC independentes; o chamador passa a sua (a que está viva).
 ///
-/// `ap_stack_base` = base da região reservada; o AP `i` recebe topo
-/// `ap_stack_base + (i+1) * stack_per_ap`. Retorna quantos APs subiram.
+/// Stack 64-bit do AP vem de `percpu::alloc_mapped_stack` (VA do heap real).
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn wake_aps_sequential(
     tramp_phys: u64,
     cr3_val: u64,
-    ap_stack_base: u64,
     stack_per_ap: u64,
     tramp_vector: u8,
     ap_lapic_ids: &[u32],
@@ -230,12 +229,34 @@ pub unsafe fn wake_aps_sequential(
             continue;
         }
         crate::display::fb::boot_ckpt(22, "smp: wake ap");
-        let ap_stack = ap_stack_base + ((i as u64) + 1) * stack_per_ap;
+        unsafe { apic::smp_trace_apic_mode(apic::lapic_id()) };
+        crate::slog_nano!(
+            "SMP",
+            "trace",
+            "TARGET_APIC_ID={:#x} tramp_phys={:#x} vec={:#04x} slot={}",
+            dest,
+            tramp_phys,
+            tramp_vector,
+            i
+        );
+        let Some(ap_stack) = percpu::alloc_mapped_stack(stack_per_ap as usize) else {
+            crate::slog_nano!("SMP", "warn", "AP {:#x} sem stack mapeada — skip", dest);
+            continue;
+        };
+        crate::slog_nano!(
+            "SMP",
+            "trace",
+            "AP_STACK dest={:#x} top={:#x} size={:#x}",
+            dest,
+            ap_stack,
+            stack_per_ap
+        );
         let percpu_addr = percpu::ap_percpu_ptr(i);
 
         // Sequencial: apenas 1 AP no trampoline por vez → seguro re-patch o blob
         // (stacks real/32b compartilhadas do trampoline não colidem).
         trampoline::init_trampoline(tramp_phys, cr3_val, ap_stack, percpu_addr, ap_entry);
+        crate::slog_nano!("SMP", "trace", "TRAMPOLINE_PATCHED dest={:#x}", dest);
 
         let before = AP_ENTRY_COUNTER.load(Ordering::Acquire);
         // ADR-0057 WS-F: retry INIT-SIPI-SIPI (até 3x). Firmware real também
@@ -246,21 +267,44 @@ pub unsafe fn wake_aps_sequential(
         let mut last_ready = 0u64;
         'attempts: for attempt in 0..3 {
             trampoline::clear_handshake(tramp_phys);
-            // SESSÃO_262: sequência canônica Linux — INIT assert → ~10ms →
-            // INIT deassert → ~10ms → SIPI → 200µs → SIPI. Sem o deassert,
-            // CPUs reais (Kaby Lake) mantêm o AP em wait-for-SIPI travado.
+            let t_init = crate::tsc::rdtsc();
             send_init_to(dest);
+            crate::slog_nano!("SMP", "trace", "INIT_ASSERT_SENT dest={:#x} try={} tsc={}", dest, attempt, t_init);
             wait_delivery();
             busy_wait_us(10000);
+            let t_deassert = crate::tsc::rdtsc();
             if !apic::USING_X2APIC.load(Ordering::Relaxed) {
                 send_init_deassert_to(dest);
+                crate::slog_nano!("SMP", "trace", "INIT_DEASSERT_SENT dest={:#x} try={} tsc={}", dest, attempt, t_deassert);
                 wait_delivery();
                 busy_wait_us(10000);
+            } else {
+                crate::slog_nano!(
+                    "SMP",
+                    "trace",
+                    "INIT_DEASSERT skipped (x2APIC SDM) dest={:#x} try={} tsc={}",
+                    dest,
+                    attempt,
+                    t_deassert
+                );
             }
+            let t_sipi1 = crate::tsc::rdtsc();
             send_sipi_to(dest, tramp_vector);
+            crate::slog_nano!("SMP", "trace", "SIPI1_SENT dest={:#x} try={} tsc={}", dest, attempt, t_sipi1);
             wait_delivery();
             busy_wait_us(200);
+            let t_sipi2 = crate::tsc::rdtsc();
             send_sipi_to(dest, tramp_vector);
+            crate::slog_nano!(
+                "SMP",
+                "trace",
+                "SIPI2_SENT dest={:#x} try={} tsc={} d_init_sipi1={} d_sipi1_sipi2={}",
+                dest,
+                attempt,
+                t_sipi2,
+                t_sipi1.wrapping_sub(t_init),
+                t_sipi2.wrapping_sub(t_sipi1)
+            );
             wait_delivery();
 
             // ~250 ms/try: spin_loop curto + sleep_us (TSC); handshake via HHDM.
@@ -453,8 +497,7 @@ pub unsafe fn init_smp() {
     // broadcast "all excl self" + stack/PerCpu compartilhados que só acordava
     // 1 AP. Vale inclusive em bare-metal (o hang antigo era do shorthand).
     // Observe = MADT Enabled. Não é teto: é a lista do silício.
-    // Sem cap de “fração do heap”: stack é custo por AP, não política de cores.
-    let heap_top2 = crate::allocator::HEAP_START as u64 + crate::allocator::HEAP_SIZE as u64;
+    // Stack 64-bit: heap mapeado (HEAP_BUFFER), não HEAP_START 0x4000_0000_0000.
     let mut ap_ids: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
     {
         let ids = crate::acpi::BOOT_APIC_IDS.lock();
@@ -475,31 +518,8 @@ pub unsafe fn init_smp() {
         corepools::init_from_boot(bsp_lapic_id, 0);
         return;
     }
-    let mut n_aps = n_madt;
+    let n_aps = n_madt;
     AP_EXPECTED.store(n_aps as u16, Ordering::Release);
-    // Guard: heap_top2 - (n+1)*stack pode colidir com FALCON3 989MB ou estourar (Core 7 hybrid n=16)
-    // Usa checked_sub + fallback BSP-only não-bloqueante; evita wrap para 0x...ffff
-    let needed = ((n_aps as u64) + 1) * stack_per_ap;
-    let region_base = match heap_top2.checked_sub(needed) {
-        Some(v) if v >= crate::allocator::HEAP_START as u64 + 64 * 1024 => v,
-        _ => {
-            crate::slog_nano!("SMP", "warn", "heap colisao: heap_top2={:#x} needed={:#x} n={} — truncando", heap_top2, needed, n_aps);
-            crate::display::fb::boot_ckpt(22, "smp: heap colisao HITL");
-            // tenta reduzir n para caber, senão BSP-only
-            let avail = heap_top2.saturating_sub(crate::allocator::HEAP_START as u64 + 64 * 1024);
-            let max_fit = (avail / stack_per_ap).saturating_sub(1) as usize;
-            if max_fit == 0 || max_fit >= n_aps {
-                crate::slog_nano!("SMP", "warn", "sem espaco para stacks — BSP-only");
-                corepools::init_from_boot(bsp_lapic_id, 0);
-                return;
-            }
-            crate::slog_nano!("SMP", "warn", "reduzindo APs {} -> {} para caber no heap", n_aps, max_fit);
-            ap_ids.truncate(max_fit);
-            n_aps = ap_ids.len();
-            AP_EXPECTED.store(n_aps as u16, Ordering::Release);
-            heap_top2 - ((n_aps as u64) + 1) * stack_per_ap
-        }
-    };
 
     if !percpu::alloc_slots(n_aps) {
         crate::slog_nano!("SMP", "warn", "PerCpu heap fail — BSP-only");
@@ -541,7 +561,6 @@ pub unsafe fn init_smp() {
     let ap_woke = wake_aps_sequential(
         tramp_phys,
         cr3_val,
-        region_base,
         stack_per_ap,
         tramp_vector,
         &ap_ids,

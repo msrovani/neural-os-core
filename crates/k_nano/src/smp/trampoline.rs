@@ -1,6 +1,6 @@
 //! Trampoline SMP 16→32→64 (ADR-0055/0057).
 //! Layout estilo Redox: byte 0 = jmp 16-bit; handshake na página lowmem.
-//! Não é o blob NASM do Redox — GAS próprio, timeout Neural, MADT IDs.
+//! Canário QEMU debugcon 0xE9: 0xAA / '3' / '6'.
 
 use core::arch::global_asm;
 use core::ptr;
@@ -73,6 +73,11 @@ global_asm!(
     "  .word off_sipi_hit",
     "  .long 1",
 
+    // QEMU debugcon (0xE9). Sem COM1: o AP corrompia o log do BSP.
+    "  mov dx, 0xE9",
+    "  mov al, 0xAA",
+    "  out dx, al",
+
     "  .byte 0x2E, 0x0F, 0x01, 0x16",
     "  .word off_gdt_pseudo",
 
@@ -101,10 +106,15 @@ global_asm!(
     "  mov fs, ax",
     "  mov gs, ax",
 
+    "  mov dx, 0xE9",
+    "  mov al, 0x33",
+    "  out dx, al",
+
     "  .byte 0x81, 0xEB",
     "  .4byte trampoline_32 - trampoline_start",
 
-    "  lea esp, [ebx + 0x1000]",
+    // Mesma página SIPI (4KiB). ebx+0x1000 era a página SEGUINTE, sem identity.
+    "  lea esp, [ebx + 0xFF0]",
 
     "  mov eax, cr4",
     "  or eax, 0x20",
@@ -134,6 +144,10 @@ global_asm!(
     "  rdmsr",
     "  or eax, 0x800",
     "  wrmsr",
+
+    "  mov dx, 0xE9",
+    "  mov al, 0x36",
+    "  out dx, al",
 
     "  mov rax, [rbx + off_stack]",
     "  mov rsp, rax",
@@ -260,6 +274,36 @@ pub unsafe fn init_trampoline(
     let tramp_virt = hhdm_u8(phys_addr);
     let size = offset_of(&trampoline_start as *const u8, &trampoline_end as *const u8);
     ptr::copy_nonoverlapping(&trampoline_start as *const u8, tramp_virt, size);
+
+    let link = &trampoline_start as *const u8 as u64;
+    let first_link = ptr::read_volatile(&trampoline_start as *const u8);
+    let first_phys = ptr::read_volatile(tramp_virt);
+    let vec = (phys_addr >> 12) as u8;
+    crate::slog_nano!(
+        "SMP",
+        "trace",
+        "TRAMP_CHAIN link={:#x} load_hhdm={:#x} phys={:#x} size={} vec={:#04x} vec_ok={} first_link={:#04x} first_phys={:#04x} jmp_rel16={}",
+        link,
+        tramp_virt as u64,
+        phys_addr,
+        size,
+        vec,
+        (phys_addr < 0x100000 && phys_addr % 0x1000 == 0 && vec != 0 && (vec as u64) << 12 == phys_addr) as u8,
+        first_link,
+        first_phys,
+        (first_phys == 0xEB) as u8
+    );
+    let id_flags = crate::memory::page_leaf_flags(phys_addr);
+    let hhdm_flags = crate::memory::page_leaf_flags(tramp_virt as u64);
+    crate::slog_nano!(
+        "SMP",
+        "trace",
+        "TRAMP_PTE ident={:#x} hhdm={:#x} nx_ident={} nx_hhdm={}",
+        id_flags.unwrap_or(0),
+        hhdm_flags.unwrap_or(0),
+        id_flags.map(|f| (f >> 63) & 1).unwrap_or(2),
+        hhdm_flags.map(|f| (f >> 63) & 1).unwrap_or(2)
+    );
 
     let patch64 = |sym: *const u8, val: u64| {
         let off = offset_of(&trampoline_start as *const u8, sym);

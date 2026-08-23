@@ -160,12 +160,17 @@ mod tests {
 /// IST por AP: 3 stacks no heap (VA contígua). Frames físicos soltos não servem de stack.
 pub unsafe fn init_ap_ist(_ap_index: usize) -> Option<[u64; 3]> {
     fn one_stack() -> Option<u64> {
-        let layout = alloc::alloc::Layout::from_size_align(IST_STACK_SIZE, 16).ok()?;
-        let p = unsafe { alloc::alloc::alloc(layout) };
-        if p.is_null() {
-            return None;
-        }
-        Some((p as u64) + IST_STACK_SIZE as u64)
+        alloc_mapped_stack(IST_STACK_SIZE)
     }
     Some([one_stack()?, one_stack()?, one_stack()?])
+}
+
+/// Topo (cresce para baixo) de um buffer no bump/TALC — VA mapeada. Não usar HEAP_START fantasma.
+pub fn alloc_mapped_stack(size: usize) -> Option<u64> {
+    let layout = alloc::alloc::Layout::from_size_align(size, 16).ok()?;
+    let p = unsafe { alloc::alloc::alloc_zeroed(layout) };
+    if p.is_null() {
+        return None;
+    }
+    Some((p as u64) + size as u64)
 }

@@ -15,10 +15,53 @@ const IA32_APIC_BASE_MSR: u32 = 0x1B;
 const X2APIC_DELIVERY_INIT: u8 = 5;
 const X2APIC_DELIVERY_SIPI: u8 = 6;
 
+/// Bits 12–19 do ICR x2APIC (SDM §10.12.9). Não confundir com `0x1FF00`
+/// (isso cobre delivery+vector e dá falso positivo).
+pub const X2APIC_ICR_RESERVED_MASK: u64 = 0x0000_0000_000F_F000;
+
 /// ICR x2APIC canônico: dest[63:32] | delivery[10:8] | vector[7:0]. Sem bits reservados.
 #[inline]
 pub const fn x2apic_icr_value(dest: u32, delivery: u8, vector: u8) -> u64 {
     ((dest as u64) << 32) | ((delivery as u64) << 8) | (vector as u64)
+}
+
+fn delivery_name(d: u8) -> &'static str {
+    match d {
+        0 => "Fixed",
+        4 => "NMI",
+        5 => "INIT",
+        6 => "STARTUP",
+        _ => "other",
+    }
+}
+
+/// Evidência arquitectural: ICR bruto + campos. Não mascara bits.
+pub(crate) fn slog_icr_decoded(tag: &str, x2: bool, dest: u32, icr: u64) {
+    let vector = (icr & 0xFF) as u8;
+    let delivery = ((icr >> 8) & 7) as u8;
+    let level = ((icr >> 14) & 1) as u8;
+    let trigger = ((icr >> 15) & 1) as u8;
+    let shorthand = ((icr >> 18) & 3) as u8;
+    let dest_field = if x2 { (icr >> 32) as u32 } else { dest };
+    let reserved = icr & X2APIC_ICR_RESERVED_MASK;
+    crate::slog_nano!(
+        "SMP",
+        "trace",
+        "{} mode={} dest={:#x} dest_field={:#x} icr={:#018x} delivery={}({}) vector={:#04x} level={} trigger={} shorthand={} reserved12_19={:#x} tsc={}",
+        tag,
+        if x2 { "x2APIC" } else { "xAPIC" },
+        dest,
+        dest_field,
+        icr,
+        delivery,
+        delivery_name(delivery),
+        vector,
+        level,
+        trigger,
+        shorthand,
+        reserved,
+        crate::tsc::rdtsc()
+    );
 }
 
 /// x2APIC: MSR base = 0x800 + (LAPIC_offset >> 4)
@@ -203,8 +246,23 @@ unsafe fn read_lapic_base_msr() -> u64 {
     base
 }
 
-unsafe fn read_apic_base_raw() -> u64 {
+pub(crate) unsafe fn read_apic_base_raw() -> u64 {
     x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR).read()
+}
+
+/// Snapshot observacional (não muda modo). Bits 10=EN, 11=EXTD.
+pub unsafe fn smp_trace_apic_mode(bsp_id: u32) {
+    let msr = read_apic_base_raw();
+    crate::slog_nano!(
+        "SMP",
+        "trace",
+        "APIC_BASE={:#x} EN={} EXTD={} USING_X2={} BSP_APIC_ID={:#x}",
+        msr,
+        (msr >> 10) & 1,
+        (msr >> 11) & 1,
+        USING_X2APIC.load(Ordering::Relaxed) as u8,
+        bsp_id
+    );
 }
 
 /// Liga x2APIC **neste** CPU (MSR 0x1B EN+EXTD). EXTD é por-CPU: o BSP
@@ -219,6 +277,19 @@ pub unsafe fn enable_x2apic_this_cpu() -> bool {
 }
 
 unsafe fn x2apic_icr_write(val: u64) {
+    let reserved = val & X2APIC_ICR_RESERVED_MASK;
+    if reserved != 0 {
+        crate::slog_nano!(
+            "SMP",
+            "error",
+            "FATAL ICR x2 reserved12_19={:#x} icr={:#018x} — nao mascara, nao WRMSR",
+            reserved,
+            val
+        );
+        loop {
+            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+        }
+    }
     let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
     msr.write(val);
 }
@@ -606,8 +677,12 @@ pub(crate) unsafe fn icr_wait_idle() {
     if base == 0 {
         return;
     }
-    for _ in 0..2_000_000u32 {
+    crate::slog_nano!("SMP", "trace", "WAIT_IDLE enter (xAPIC bit12)");
+    for n in 0..2_000_000u32 {
         if (read_volatile((base + LAPIC_ICR_LOW) as *const u32) & (1 << 12)) == 0 {
+            if n > 0 {
+                crate::slog_nano!("SMP", "trace", "WAIT_IDLE done spins={}", n);
+            }
             return;
         }
         core::hint::spin_loop();
@@ -665,11 +740,19 @@ pub unsafe fn send_sipi(trampoline_vector: u8) {
 pub unsafe fn send_init_ipi_to(dest_apic: u32) {
     icr_wait_idle();
     if USING_X2APIC.load(Ordering::Relaxed) {
-        x2apic_icr_write(x2apic_icr_value(dest_apic, X2APIC_DELIVERY_INIT, 0));
+        let v = x2apic_icr_value(dest_apic, X2APIC_DELIVERY_INIT, 0);
+        slog_icr_decoded("INIT_ASSERT", true, dest_apic, v);
+        x2apic_icr_write(v);
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
         let icr_val = (5u32 << 8) | (1 << 14) | (1 << 15);
+        slog_icr_decoded(
+            "INIT_ASSERT",
+            false,
+            dest_apic,
+            (dest_apic as u64) << 32 | icr_val as u64,
+        );
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
         write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
     }
 }
@@ -683,6 +766,12 @@ pub unsafe fn send_init_deassert_ipi_to(dest_apic: u32) {
     let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
     write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
     let icr_val = (5u32 << 8) | (1u32 << 15);
+    slog_icr_decoded(
+        "INIT_DEASSERT",
+        false,
+        dest_apic,
+        (dest_apic as u64) << 32 | icr_val as u64,
+    );
     write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
 }
 
@@ -690,15 +779,19 @@ pub unsafe fn send_init_deassert_ipi_to(dest_apic: u32) {
 pub unsafe fn send_sipi_to(dest_apic: u32, trampoline_vector: u8) {
     icr_wait_idle();
     if USING_X2APIC.load(Ordering::Relaxed) {
-        x2apic_icr_write(x2apic_icr_value(
-            dest_apic,
-            X2APIC_DELIVERY_SIPI,
-            trampoline_vector,
-        ));
+        let v = x2apic_icr_value(dest_apic, X2APIC_DELIVERY_SIPI, trampoline_vector);
+        slog_icr_decoded("SIPI", true, dest_apic, v);
+        x2apic_icr_write(v);
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
         let icr_val = (6u32 << 8) | trampoline_vector as u32;
+        slog_icr_decoded(
+            "SIPI",
+            false,
+            dest_apic,
+            (dest_apic as u64) << 32 | icr_val as u64,
+        );
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, dest_apic << 24);
         write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
     }
 }
@@ -836,7 +929,8 @@ mod x2apic_icr_tests {
         assert_eq!((v >> 8) & 7, 5);
         assert_eq!(v & 0xFF, 0);
         // bits 12–19 must be 0 (SDM reserved + no shorthand)
-        assert_eq!(v & 0xFF_000, 0);
+        assert_eq!(v & X2APIC_ICR_RESERVED_MASK, 0);
+        assert_ne!(v & 0x1FF00, 0, "0x1FF00 nao e mascara reserved (entrega INIT=0x500)");
     }
 
     #[test]
@@ -844,6 +938,6 @@ mod x2apic_icr_tests {
         let v = x2apic_icr_value(0x11, X2APIC_DELIVERY_SIPI, 0x08);
         assert_eq!(v & 0xFF, 0x08);
         assert_eq!((v >> 8) & 7, 6);
-        assert_eq!(v & 0xFF_000, 0);
+        assert_eq!(v & X2APIC_ICR_RESERVED_MASK, 0);
     }
 }
