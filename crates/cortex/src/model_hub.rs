@@ -36,11 +36,11 @@ impl ModelSlot {
 
     pub fn from_name(s: &str) -> Option<Self> {
         match s {
-            "active" | "current" | "generator" => Some(Self::Active),
+            "active" | "current" | "generator" | "falcon3" | "falcon3b" | "falcon3-3b" | "tiiuae" => Some(Self::Active),
             "vision" | "siglip" | "vit" | "encoder" => {
                 Some(Self::Vision)
             }
-            "generator_pro" | "pro" | "3b" | "bitnet3b" => Some(Self::GeneratorPro),
+            "generator_pro" | "pro" | "falcon7b" | "falcon3-7b" | "falcon3-10b" | "10b" => Some(Self::GeneratorPro),
             "reranker" | "rerank" | "cross_encoder" | "bge_reranker" => Some(Self::Reranker),
             "rust_coder" | "rustcoder" => Some(Self::RustCoder),
             "hw_identify" | "hwexpert" => Some(Self::HwExpert),
@@ -98,10 +98,23 @@ pub fn register_model(slot: ModelSlot, model: Box<dyn Model>) {
 /// Ponto único de carga por bytes (ADR-0085 §7): load_model_v6 → ModelView
 /// → armazenamento por kind. Active/RustCoder/HwExpert usam os Mutex legados.
 pub fn register_bytes(slot: ModelSlot, data: &[u8]) -> bool {
+    // 1. Tenta v6 .bitnet
     let view = match crate::model::load_model_v6(data) {
+        Some(v) => Some(v),
+        None => {
+            // 2. Tenta GGUF
+            if crate::gguf::load_gguf(data).is_ok() {
+                k_nano::slog_bin!("MODEL", "info", "register_bytes slot={} GGUF", slot.name());
+                mark(slot, true);
+                return true;
+            }
+            None
+        }
+    };
+    let view = match view {
         Some(v) => v,
         None => {
-            k_nano::slog_bin!("MODEL", "warn", "register_bytes: parse falhou slot={}", slot.name());
+            k_nano::slog_bin!("MODEL", "warn", "register_bytes: formato desconhecido slot={}", slot.name());
             return false;
         }
     };
@@ -175,9 +188,19 @@ pub fn is_complex_conversation(prompt: &str) -> bool {
         || contains_ci(prompt, "explain")
         || contains_ci(prompt, "compare")
         || contains_ci(prompt, "porque")
+        || contains_ci(prompt, "por qué")
         || contains_ci(prompt, "why ")
         || contains_ci(prompt, "architect")
-        || (prompt.len() > 80 && (contains_ci(prompt, "como ") || contains_ci(prompt, "how ")))
+        || contains_ci(prompt, "desenhe")
+        || contains_ci(prompt, "design")
+        || contains_ci(prompt, "diseño")
+        || contains_ci(prompt, "implemente")
+        || contains_ci(prompt, "implement")
+        || (prompt.len() > 80 && (
+            contains_ci(prompt, "como ")
+            || contains_ci(prompt, "how ")
+            || contains_ci(prompt, "cómo ")
+        ))
 }
 
 fn contains_ci(hay: &str, needle: &str) -> bool {
@@ -303,7 +326,23 @@ pub fn hub_status() -> String {
     s
 }
 
-pub fn slot_from_bitnet_bytes(len: usize) -> ModelSlot {
+pub fn slot_from_bitnet_bytes(data: &[u8]) -> ModelSlot {
+    // Tenta parse do header v6 (autônomo — zero hardcoded)
+    if let Some(h) = crate::model::parse_model_header(data) {
+        let params = h.estimated_params();
+        k_nano::slog_cortex!("MODEL", "info",
+            "slot_from_header: params={} MB={} hidden={}",
+            params, h.file_size_mb(), h.hidden);
+        return match params {
+            0..=100_000_000 => ModelSlot::Reranker,
+            100_000_000..=600_000_000 => ModelSlot::Learner,
+            600_000_000..=4_000_000_000 => ModelSlot::Active,
+            4_000_000_000..=12_000_000_000 => ModelSlot::GeneratorPro,
+            _ => ModelSlot::GeneratorPro,
+        };
+    }
+    // Fallback: tamanho bruto (legado)
+    let len = data.len();
     const MB: usize = 1024 * 1024;
     if len < 20 * MB {
         ModelSlot::Reranker
@@ -312,10 +351,10 @@ pub fn slot_from_bitnet_bytes(len: usize) -> ModelSlot {
     } else if len < 450 * MB {
         ModelSlot::Vision
     } else if len < 1100 * MB {
-        // Modelos <= 1100MB (medido via v6_file_size) → Agent
+        // Falcon3-3B .BIN legado (~771MB) → Agent
         ModelSlot::Agent
     } else {
-        // Modelos > 1100MB (medido via v6_file_size) → GeneratorPro
+        // Falcon3-3B/7B v6 (~1.74 GB) e maiores (10B ~2.5 GB) → GeneratorPro
         ModelSlot::GeneratorPro
     }
 }
@@ -327,8 +366,8 @@ pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
         ModelSlot::Reranker => &["RERANKER.v6", "RERANKER.BIN", "RERANK.BITNET", "RERANK.BIN"],
         ModelSlot::Vision => &["VISION.v6", "VISION.BIN", "SIGLIP.BIN", "VIT.BIN"],
         ModelSlot::GeneratorPro => &[
-            "PRO.v6",       // Modelo PRO (tamanho detectado do header v6)
-            "PRO.BIN",      // Modelo PRO legado
+            "PRO.v6",       // Falcon3-7B-Instruct-1.58bit v6 (~1.74 GB) — PRO canônico
+            "PRO.BIN",      // Falcon3-7B-Instruct-1.58bit legado
             "FALCON7B.v6",  // alias alternativo
             "FALCON7B.BIN",
             "BITNET3B.BIN",
@@ -339,18 +378,10 @@ pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
         ModelSlot::RustCoder => &["RUSTCDR3.v6", "RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"],
         ModelSlot::HwExpert => &["HWEXPRT.v6", "HWEXPRT.BIN", "HWEXPERT.BIN", "HWEXPRT4.BIN", "HWEXPRT4.bin"],
         ModelSlot::Learner => &["LEARNER.v6", "LEARNER.BIN", "QWEEN05.BIN", "QWEN05B.BIN"],
-        ModelSlot::Agent => &[
-            "FALCON3.V6",
-            "FALCON3.BIN",
-            "AGENT.v6",
-            "AGENT.BIN",
-            "QWEN3B.BIN",
-            "QWEN.BIN",
-        ],
+        ModelSlot::Agent => &["FALCON3B.BIN", "FALCN3B.GGUF", "AGENT.v6", "AGENT.BIN", "QWEN3B.BIN", "QWEN.BIN"],
         ModelSlot::Active => &[
-            // Falcon3 3B é o preset principal (hidden 3072 L22 H12 kv4 vocab 131072 silu rope 1000042 tie false)
-            "FALCON3.V6",
-            "FALCON3.BIN",
+            "FALCON3B.BIN",   // Falcon3-3B-Instruct-1.58bit (tiiuae) — LLM geral padrão
+            "FALCN3B.GGUF",
             "BITNET2B.v6",
             "BITNET2B.BIN",
             "BITNET13.BIN",

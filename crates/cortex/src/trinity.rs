@@ -388,6 +388,9 @@ impl TrinityRouter {
             || has_word("unmute")
             || has_word("brilho")
             || has_word("brightness")
+            || has_word("volumen")
+            || has_word("silencio")
+            || has_word("luminosidad")
             || lower.contains("volume para")
             || lower.contains("vol para")
             || lower.contains("vol=")
@@ -493,6 +496,9 @@ impl TrinityRouter {
                         || has_word("cve")
                         || has_word("attack")
                         || has_word("ataque")
+                        || has_word("seguridad")
+                        || has_word("vulnerabilidade")
+                        || has_word("vulnerability")
                     {
                         return expert;
                     }

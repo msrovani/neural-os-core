@@ -3905,7 +3905,7 @@ pub fn load_models_multi(blobs: &[(&[u8], Option<&str>)]) -> usize {
         };
         let slot = hint
             .and_then(crate::model_hub::ModelSlot::from_name)
-            .unwrap_or_else(|| crate::model_hub::slot_from_bitnet_bytes(data.len()));
+            .unwrap_or_else(|| crate::model_hub::slot_from_bitnet_bytes(*data));
         // Primeiro modelo “grande” ou Active vazio → CURRENT; demais → slots.
         let boxed = alloc::boxed::Box::new(m);
         if !model_is_loaded()
@@ -3917,7 +3917,7 @@ pub fn load_models_multi(blobs: &[(&[u8], Option<&str>)]) -> usize {
             )
         {
             let also_pro = slot == crate::model_hub::ModelSlot::GeneratorPro
-                || crate::model_hub::slot_from_bitnet_bytes(data.len())
+                || crate::model_hub::slot_from_bitnet_bytes(*data)
                     == crate::model_hub::ModelSlot::GeneratorPro;
             set_model(boxed);
             if also_pro {
