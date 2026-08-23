@@ -76,7 +76,7 @@ impl Tensor {
                 return Some(r);
             }
         }
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
         {
             if has_avx2() && k >= 8 && n >= 8 {
                 return Some(self.matmul_avx2_inner(other, m, k, n));
@@ -96,7 +96,7 @@ impl Tensor {
 
     /// AVX2 matmul: broadcast 1 input × 8 weights, soma em j-blocks.
     /// Só executa quando k%8==0 e n%8==0; caso contrário usa scalar.
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
     fn matmul_avx2_inner(&self, other: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
         let mut result = Tensor::new((m, n));
         let avx_cols = if k >= 8 { (n / 8) * 8 } else { 0 };

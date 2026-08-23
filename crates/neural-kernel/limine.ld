@@ -45,11 +45,10 @@ SECTIONS
         *(COMMON)
     } :data
 
-    /* SESSION_233: HEAP_BUFFER (512MB) em secao propria no FIM da imagem.
-       O bump allocator estende alem dele (resize_bump_heap) mapeando frames
-       novos — como nada vem depois no .bss, a extensao NAO corrompe statics
-       adjacentes (GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET, TOTAL_RAM_MB). */
-    .bss.heap : {
+    /* SESSION_233: HEAP_BUFFER no FIM. Nao usar .bss.heap — `*(.bss.*)` acima
+       engolia a secao e o heap misturava com statics. .kheap nao casa .bss.*. */
+    .kheap : {
+        *(.kheap)
         *(.bss.heap)
     } :data
 

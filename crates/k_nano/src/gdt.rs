@@ -1,6 +1,7 @@
 //! GDT do kernel — ADR-0088 / ADR-0100 T-037: 1 TSS por CPU **no MADT**, não 511 no .bss.
 //! Early: 5 segmentos + TSS BSP. Após MADT: tabela no heap + TSS dos APs (Box::leak).
 
+use core::mem::MaybeUninit;
 use core::ptr::addr_of;
 use core::sync::atomic::{AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use x86_64::instructions::tables::{lgdt, DescriptorTablePointer};
@@ -16,14 +17,22 @@ struct KernelGdtEarly {
     table: [u64; EARLY_U64],
 }
 
+/// `.data` (nao .bss): Once/lazy_static gravava Selectors com abs32 truncado.
+#[link_section = ".data"]
 static mut KERNEL_GDT_EARLY: KernelGdtEarly = KernelGdtEarly {
     table: [0; EARLY_U64],
 };
+#[link_section = ".data"]
+static mut EARLY_TSS_SEL: [SegmentSelector; 1] =
+    [SegmentSelector::new(0, PrivilegeLevel::Ring0)];
+#[link_section = ".data"]
+static mut KERNEL_SELECTORS: MaybeUninit<Selectors> = MaybeUninit::uninit();
 static GDT_BASE: AtomicU64 = AtomicU64::new(0);
 static GDT_LIMIT: AtomicU16 = AtomicU16::new(0);
 static TSS_SEL_PTR: AtomicUsize = AtomicUsize::new(0);
 static TSS_SEL_LEN: AtomicUsize = AtomicUsize::new(0);
 
+#[derive(Clone, Copy)]
 pub struct Selectors {
     pub code_selector: SegmentSelector,
     pub data_selector: SegmentSelector,
@@ -70,8 +79,8 @@ pub unsafe fn build_early(bsp_tss: &'static TaskStateSegment) -> Selectors {
     let tss0 = push_desc(table, &mut idx, Descriptor::tss_segment(bsp_tss));
     publish_table(addr_of!(KERNEL_GDT_EARLY.table) as u64, idx);
 
-    let sels = alloc::boxed::Box::leak(alloc::vec![tss0].into_boxed_slice());
-    TSS_SEL_PTR.store(sels.as_ptr() as usize, Ordering::Release);
+    EARLY_TSS_SEL[0] = tss0;
+    TSS_SEL_PTR.store(addr_of!(EARLY_TSS_SEL) as usize, Ordering::Release);
     TSS_SEL_LEN.store(1, Ordering::Release);
 
     crate::slog_nano!(
@@ -81,13 +90,20 @@ pub unsafe fn build_early(bsp_tss: &'static TaskStateSegment) -> Selectors {
         GDT_LIMIT.load(Ordering::Relaxed)
     );
 
-    Selectors {
+    let out = Selectors {
         code_selector,
         data_selector,
         user_code_selector,
         user_data_selector,
         tss_selectors: [tss0],
-    }
+    };
+    KERNEL_SELECTORS.write(out);
+    out
+}
+
+/// Seletores early (apos `build_early`). Sem lazy_static Once.
+pub fn sels() -> &'static Selectors {
+    unsafe { KERNEL_SELECTORS.assume_init_ref() }
 }
 
 /// Compat: mesmo que `build_early` (ignora array BSS legado).

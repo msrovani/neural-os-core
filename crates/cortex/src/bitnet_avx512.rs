@@ -69,7 +69,7 @@ fn unpack_row(weight: &PackedTernaryTensor, row: usize, n: usize, buf: &mut [i8]
 /// - Requer CPU com AVX-512F + AVX-512BW + AVX-512VNNI
 /// - `n` deve ser múltiplo de 4 (pesos packed 4/byte)
 /// - `weight.packed_data` deve ter pelo menos `k * (n/4)` bytes
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 #[target_feature(enable = "avx512f,avx512bw,avx512vnni")]
 unsafe fn avx512_ternary_matmul_impl(
     weight: &PackedTernaryTensor,
@@ -160,11 +160,11 @@ pub fn ternary_matmul_avx512(
         return None;
     }
 
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
     {
         Some(unsafe { avx512_ternary_matmul_impl(weight, input, m, k, n) })
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(any(not(target_arch = "x86_64"), target_os = "none"))]
     {
         None
     }

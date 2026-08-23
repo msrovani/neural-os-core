@@ -18,13 +18,21 @@ pub type HammingFn = fn(&[u64], &[u64]) -> u32;
 
 /// Chamado no boot (após platform_probe). Escolhe o melhor kernel disponível.
 pub fn select_best_hamming_kernel() {
-    let hw = k_nano::platform_probe::hw_info();
-    if hw.avx512_ready() {
-        HAMMING_PATH.store(PATH_AVX512, Ordering::Relaxed);
-    } else if hw.avx2_ready() {
-        HAMMING_PATH.store(PATH_AVX2_XOR, Ordering::Relaxed);
-    } else {
+    #[cfg(target_os = "none")]
+    {
         HAMMING_PATH.store(PATH_SCALAR, Ordering::Relaxed);
+        return;
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        let hw = k_nano::platform_probe::hw_info();
+        if hw.avx512_ready() {
+            HAMMING_PATH.store(PATH_AVX512, Ordering::Relaxed);
+        } else if hw.avx2_ready() {
+            HAMMING_PATH.store(PATH_AVX2_XOR, Ordering::Relaxed);
+        } else {
+            HAMMING_PATH.store(PATH_SCALAR, Ordering::Relaxed);
+        }
     }
 }
 
@@ -37,10 +45,17 @@ pub fn path_name() -> &'static str {
 }
 
 pub fn active_kernel() -> HammingFn {
-    match HAMMING_PATH.load(Ordering::Relaxed) {
-        PATH_AVX512 => hamming_avx512_or_fallback,
-        PATH_AVX2_XOR => hamming_avx2_or_fallback,
-        _ => hamming_scalar,
+    #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
+    {
+        return match HAMMING_PATH.load(Ordering::Relaxed) {
+            PATH_AVX512 => hamming_avx512_or_fallback,
+            PATH_AVX2_XOR => hamming_avx2_or_fallback,
+            _ => hamming_scalar,
+        };
+    }
+    #[cfg(not(all(target_arch = "x86_64", not(target_os = "none"))))]
+    {
+        hamming_scalar
     }
 }
 
@@ -73,7 +88,7 @@ pub fn hamming_scalar(a: &[u64], b: &[u64]) -> u32 {
 // Runtime: só chamado se allow_avx2().
 // fallback → hamming_scalar se cpu sem AVX2.
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 fn hamming_avx2_or_fallback(a: &[u64], b: &[u64]) -> u32 {
     if k_nano::platform_probe::allow_avx2() {
         return unsafe { hamming_avx2_xor(a, b) };
@@ -85,7 +100,7 @@ fn hamming_avx2_or_fallback(a: &[u64], b: &[u64]) -> u32 {
 /// Evita `_mm256_storeu_si256` para stack — extrai cada u64 via
 /// `_mm256_extracti128_si256` + `_mm_extract_epi64`/`_mm_cvtsi128_si64`
 /// diretamente p/ registradores GPR.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 #[target_feature(enable = "avx2")]
 unsafe fn hamming_avx2_xor(a: &[u64], b: &[u64]) -> u32 {
     use core::arch::x86_64::*;
@@ -120,7 +135,7 @@ unsafe fn hamming_avx2_xor(a: &[u64], b: &[u64]) -> u32 {
 // Compilados via #[target_feature] mesmo em build soft-float.
 // Runtime: só chamado se allow_avx512().
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 fn hamming_avx512_or_fallback(a: &[u64], b: &[u64]) -> u32 {
     if k_nano::platform_probe::allow_avx512() {
         return unsafe { hamming_avx512_dispatch(a, b) };
@@ -131,7 +146,7 @@ fn hamming_avx512_or_fallback(a: &[u64], b: &[u64]) -> u32 {
     hamming_scalar(a, b)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 unsafe fn hamming_avx512_dispatch(a: &[u64], b: &[u64]) -> u32 {
     let leaf7 = core::arch::x86_64::__cpuid_count(7, 0);
     let has_vpop = (leaf7.ecx & (1 << 14)) != 0;
@@ -142,7 +157,7 @@ unsafe fn hamming_avx512_dispatch(a: &[u64], b: &[u64]) -> u32 {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 #[target_feature(enable = "avx512f", enable = "avx512vpopcntdq")]
 unsafe fn hamming_avx512_vpopcnt(a: &[u64], b: &[u64]) -> u32 {
     use core::arch::x86_64::*;
@@ -172,7 +187,7 @@ unsafe fn hamming_avx512_vpopcnt(a: &[u64], b: &[u64]) -> u32 {
     d
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 #[target_feature(enable = "avx512f")]
 unsafe fn hamming_avx512_xor(a: &[u64], b: &[u64]) -> u32 {
     use core::arch::x86_64::*;

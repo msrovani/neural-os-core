@@ -23,7 +23,9 @@ pub const IST_STACK_SIZE: usize = 16384; // 16KB per IST
 /// Number of IST stacks per AP (#DF, #PF, #GP).
 pub const IST_COUNT: usize = 3;
 
-pub static BSP_PCPU: PerCpu = PerCpu {
+/// BSP PerCpu — `static mut` (não `static`): `init_bsp_percpu` escreve self_ptr/lapic.
+/// `static` ia para .rodata → #PF err=3 no QEMU TCG (K225).
+pub static mut BSP_PCPU: PerCpu = PerCpu {
     self_ptr: 0,
     cpu_id: 0,
     cpu_type: CPU_TYPE_P_CORE,
@@ -104,8 +106,8 @@ pub fn ap_percpu_ptr(i: usize) -> u64 {
 }
 
 pub fn init_bsp_percpu(lapic_id: u32) {
-    let pcpu = &BSP_PCPU as *const PerCpu as *mut PerCpu;
     unsafe {
+        let pcpu = core::ptr::addr_of_mut!(BSP_PCPU);
         (*pcpu).self_ptr = pcpu as u64;
         (*pcpu).lapic_id = lapic_id;
         set_gs_base(pcpu as u64);

@@ -7,9 +7,12 @@ bindeps = true
 [build]
 jobs = 16
 
+# Small code model: abs32 de statics em 0xffffffff8xxxxxxx → rdi truncado
+# (CR2=0x80759032 vs RIP high-half). Kernel model = RIP-rel ±2GiB.
 [target.x86_64-unknown-none]
 rustflags = [
     "-C", "target-feature=-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2",
+    "-C", "code-model=kernel",
     "-C", "relocation-model=static",
     "-C", "link-arg=-no-pie",
     "-C", "link-arg=--no-dynamic-linker",

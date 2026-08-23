@@ -55,7 +55,7 @@ fn find_child_byte16(keys: &[u8; 16], n: u8, byte: u8) -> Option<usize> {
     if n == 0 {
         return None;
     }
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
     {
         if k_nano::platform_probe::hw_info().avx2_ready() {
             return unsafe { find_child_byte16_sse(keys, n, byte) };
@@ -69,7 +69,7 @@ fn find_child_byte16(keys: &[u8; 16], n: u8, byte: u8) -> Option<usize> {
     None
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 #[target_feature(enable = "sse2")]
 unsafe fn find_child_byte16_sse(keys: &[u8; 16], n: usize, byte: u8) -> Option<usize> {
     use core::arch::x86_64::*;

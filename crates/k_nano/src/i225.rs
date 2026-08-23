@@ -191,7 +191,8 @@ impl I225Driver {
         let base = self.rx_desc_base();
         let d = base.add(idx * RX_DESC_SIZE);
         // clflush before reading DD (belt-and-suspenders vs UC map)
-        core::arch::x86_64::_mm_clflush(d.add(RX_OFF_STATUS) as *const _);
+        let p = d.add(RX_OFF_STATUS);
+        core::arch::asm!("clflush [{}]", in(reg) p, options(nostack, preserves_flags));
         core::arch::asm!("lfence", options(nostack, preserves_flags));
         core::ptr::read_volatile(d.add(RX_OFF_STATUS))
     }

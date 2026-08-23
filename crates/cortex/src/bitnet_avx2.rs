@@ -36,7 +36,7 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
     // ADR-0084 F4 (GATED): W2A8 maddubs — só WHPX/HW real + gaps resolvidos.
     // w2a8_enabled() hoje = false; kernel verificado por self-test de paridade.
     if crate::bitnet_w2a8::w2a8_enabled() && (m == 1 || m >= 8) {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
         unsafe {
             if let Some(r) = crate::bitnet_w2a8::w2a8_ternary_matmul(weight, input) {
                 return Some(r);
@@ -49,7 +49,7 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
     // (src/README bitnet.cpp: activation-parallel 1.85-2.0x at m≥32)
     let big_m = m >= 8;
     if big_m && avx2_available() {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
         unsafe {
             return Some(avx2_bitwise_matmul(weight, input, m, k, n));
         }
@@ -84,7 +84,7 @@ fn scalar_ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor, m: usize,
 /// Processa 4 pesos ternarios de uma vez sem branch (match).
 /// Cada byte = 4 pesos: bits (0,1) = peso0, (2,3)=peso1, (4,5)=peso2, (6,7)=peso3
 /// Codificacao: 00=0, 01=+1, 10=-1
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 unsafe fn process_quad(quad: u8, inputs: &[f32; 4]) -> f32 {
     let mut sum = 0.0f32;
     // peso0
@@ -100,7 +100,7 @@ unsafe fn process_quad(quad: u8, inputs: &[f32; 4]) -> f32 {
 
 /// AVX2 bitwise: processa 16 pesos ternarios por iteracao sem unpack.
 /// Carrega 4 bytes (16 pesos) → expande para 16 f32 → FMA com input.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 unsafe fn avx2_bitwise_matmul(weight: &PackedTernaryTensor, input: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
     use core::arch::x86_64::*;
 
@@ -167,7 +167,7 @@ unsafe fn avx2_bitwise_matmul(weight: &PackedTernaryTensor, input: &Tensor, m: u
 
 // ─── AVX2 Original (fallback para shapes pequenos) ──────────────────────
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 fn unpack_row_into(weight: &PackedTernaryTensor, row: usize, n: usize, buf: &mut [i8]) {
     if n % 4 == 0 {
         let words = n / 4;
@@ -199,7 +199,7 @@ fn unpack_row_into(weight: &PackedTernaryTensor, row: usize, n: usize, buf: &mut
     }
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 pub(super) unsafe fn avx2_ternary_matmul_impl(weight: &PackedTernaryTensor, input: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
     use core::arch::x86_64::*;
 
@@ -237,6 +237,17 @@ pub(super) unsafe fn avx2_ternary_matmul_impl(weight: &PackedTernaryTensor, inpu
         }
     }
     result
+}
+
+#[cfg(any(not(target_arch = "x86_64"), target_os = "none"))]
+pub(super) unsafe fn avx2_ternary_matmul_impl(
+    weight: &PackedTernaryTensor,
+    input: &Tensor,
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Tensor {
+    scalar_ternary_matmul(weight, input, m, k, n)
 }
 
 // ─── Cache-aware dispatch ───────────────────────────────────────────────

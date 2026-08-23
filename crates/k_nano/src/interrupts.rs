@@ -3,7 +3,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 // ponytail: PICS/pic8259 removed — kernel só usa APIC
-use x86_64::instructions::segmentation::Segment;
+use x86_64::instructions::segmentation::{CS, DS, ES, SS, Segment};
 use x86_64::structures::gdt::SegmentSelector;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::structures::tss::TaskStateSegment;
@@ -99,31 +99,23 @@ lazy_static! {
     };
 }
 
-lazy_static! {
-    static ref GDT: crate::gdt::Selectors = {
-        // SESSION_251: &*TSS preenche IST do BSP antes dos descriptors.
-        let _bsp = &*TSS;
-        unsafe { crate::gdt::build_early(_bsp) }
-    };
-}
-
 /// CS Ring3 (RPL=3 embutido).
 pub fn user_code_selector() -> SegmentSelector {
-    GDT.user_code_selector
+    crate::gdt::sels().user_code_selector
 }
 
 /// DS/SS Ring3 (RPL=3 embutido).
 pub fn user_data_selector() -> SegmentSelector {
-    GDT.user_data_selector
+    crate::gdt::sels().user_data_selector
 }
 
 /// DS Ring0.
 pub fn kernel_data_selector() -> SegmentSelector {
-    GDT.data_selector
+    crate::gdt::sels().data_selector
 }
 
 pub fn shared_tss_selector() -> SegmentSelector {
-    GDT.tss_selectors[0]
+    crate::gdt::sels().tss_selectors[0]
 }
 
 // --------------------------------------------------------------------------
@@ -570,7 +562,7 @@ pub fn init_ap_tss(ap_index: usize, ist_tops: [VirtAddr; 3]) -> ApTss {
     tss.interrupt_stack_table[GENERAL_PROTECTION_IST_INDEX as usize] = ist_tops[2];
     tss.interrupt_stack_table[TIMER_IST_INDEX as usize] = ist_tops[0];
 
-    let selector = crate::gdt::tss_selector(ap_index + 1).unwrap_or(GDT.tss_selectors[0]);
+    let selector = crate::gdt::tss_selector(ap_index + 1).unwrap_or(crate::gdt::sels().tss_selectors[0]);
     ApTss { tss, ist_stacks: ist_tops, selector }
 }
 
@@ -591,9 +583,10 @@ pub unsafe fn expand_gdt_aps(n_aps: usize) -> bool {
         return false;
     }
     crate::gdt::load();
-    x86_64::instructions::segmentation::CS::set_reg(GDT.code_selector);
-    x86_64::instructions::segmentation::SS::set_reg(GDT.data_selector);
-    x86_64::instructions::tables::load_tss(GDT.tss_selectors[0]);
+    let s = crate::gdt::sels();
+    x86_64::instructions::segmentation::CS::set_reg(s.code_selector);
+    x86_64::instructions::segmentation::SS::set_reg(s.data_selector);
+    x86_64::instructions::tables::load_tss(s.tss_selectors[0]);
     crate::slog_nano!("GDT", "info", "BSP lgdt+ltr após expand n_aps={}", n_aps);
     true
 }
@@ -601,8 +594,9 @@ pub unsafe fn expand_gdt_aps(n_aps: usize) -> bool {
 /// GDT+IDT deste CPU. `ltr`+`sti` só com TSS próprio (silício, não crate-8).
 pub unsafe fn ap_load_idt_and_tss(tss_selector: Option<SegmentSelector>) {
     crate::gdt::load();
-    x86_64::instructions::segmentation::CS::set_reg(GDT.code_selector);
-    x86_64::instructions::segmentation::SS::set_reg(GDT.data_selector);
+    let s = crate::gdt::sels();
+    x86_64::instructions::segmentation::CS::set_reg(s.code_selector);
+    x86_64::instructions::segmentation::SS::set_reg(s.data_selector);
     #[cfg(not(windows))]
     IDT.load();
     if let Some(sel) = tss_selector {
@@ -615,13 +609,22 @@ pub unsafe fn ap_load_idt_and_tss(tss_selector: Option<SegmentSelector>) {
 
 /// Carrega GDT + TSS + IDT
 pub fn init_idt() {
+    // T-037: `load()` lia GDT_BASE=0 (lazy_static ainda nao rodou) → lgdt no-op;
+    // depois CS::set_reg usava seletores novos contra a GDT do Limine → #GP.
+    // Nao usar lazy_static Once em Selectors: abs32 truncava rdi (CR2 low 32-bit).
+    let _bsp = &*TSS;
+    let sels = unsafe { crate::gdt::build_early(_bsp) };
     crate::gdt::load();
+    puts(b"[GDT] lgdt ok\n");
     unsafe {
-        x86_64::instructions::segmentation::CS::set_reg(GDT.code_selector);
-        x86_64::instructions::tables::load_tss(GDT.tss_selectors[0]); // BSP uses index 0
-        // Recarrega SS com um seletor nulo (evita #GP no iretq quando
-        // o bootloader usa seletor diferente do nosso GDT)
-        core::arch::asm!("mov ss, ax", in("ax") 0u16, options(nostack, preserves_flags));
+        CS::set_reg(sels.code_selector);
+        puts(b"[GDT] CS ok\n");
+        SS::set_reg(sels.data_selector);
+        DS::set_reg(sels.data_selector);
+        ES::set_reg(sels.data_selector);
+        puts(b"[GDT] SS/DS/ES ok\n");
+        x86_64::instructions::tables::load_tss(sels.tss_selectors[0]);
+        puts(b"[GDT] ltr ok\n");
     }
     #[cfg(not(windows))]
     IDT.load();

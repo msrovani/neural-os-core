@@ -146,7 +146,7 @@ pub fn heap_used_bytes() -> usize {
 /// livre — NUNCA corrompe outras statics .bss (GLOBAL_ALLOCATOR, etc).
 /// SESSION_233: sem isso, extender HEAP_LIMIT alem de HEAP_SIZE sobrescrevia
 /// statics adjacentes e zerava total_frames (falsa exaustao de frames).
-#[link_section = ".bss.heap"]
+#[link_section = ".kheap"]
 pub static mut HEAP_BUFFER: [u8; HEAP_SIZE] = [0u8; HEAP_SIZE];
 
 /// TALC allocator usado APÓS o boot para resize_heap (não é o global_allocator).
