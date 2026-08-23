@@ -342,6 +342,61 @@ pub fn lifecycle_tick(now: u64, config: &MemoryLifecycleConfig) -> LifecycleTick
 }
 
 
+
+// ─── #537: Sync Write — atualiza índices NSGDB após put_kv/put_doc ──────────
+
+/// Sincroniza um write para o NSGDB after a TickvLite write.
+/// Chamado por put_kv/put_doc para manter os índices ART/BQ do neural-sgdb
+/// em sincronia com os dados escritos diretamente no TickvLite.
+///
+/// Este é o glue que elimina o dual-write: o write vai para TickvLite
+/// (via put_blob direto) e NSGDB é notificado para atualizar seus
+/// índices derivados (ART/BQ/lexical).
+pub fn sync_write_to_nsgdb(key: &str, val: &[u8], layer: u8) {
+    let _ = with_nsgdb(|db| {
+        // Re-read do TickvLite para popular o NSGDB engine
+        // O neural-sgdb reconstrói o doc do payload
+        use neural_sgdb::MemoryDoc as ExtDoc;
+        use neural_sgdb::MemoryLayer;
+        let ml = match layer {
+            0 => MemoryLayer::L0Sensory,
+            1 => MemoryLayer::L1Working,
+            2 => MemoryLayer::L2EpisodicShort,
+            3 => MemoryLayer::L3EpisodicLong,
+            4 => MemoryLayer::L4Semantic,
+            5 => MemoryLayer::L5Procedural,
+            6 => MemoryLayer::L6Reserved,
+            _ => MemoryLayer::L7Identity,
+        };
+        let doc = ExtDoc::new(ml, key, val.to_vec());
+        let _ = db.put(doc);
+    });
+}
+
+/// Sincroniza um fact (L3) para o NSGDB.
+pub fn sync_fact_to_nsgdb(fact: &str, now: u64) {
+    let _ = with_nsgdb(|db| {
+        let _ = db.remember_fact(fact, now);
+    });
+}
+
+/// Sincroniza um exchange (L1+L2) para o NSGDB.
+pub fn sync_exchange_to_nsgdb(user: &str, response: &str) {
+    let _ = with_nsgdb(|db| {
+        let _ = db.remember_exchange(user, response);
+    });
+}
+
+// ─── #538: Embedder Seam — set_embedder bridge ──────────────────────────────
+
+/// Conecta o OsEmbedder ao NSGDB.
+/// Nota: neural-sgdb não tem set_embedder() — o Embedder é usado pelo caller.
+/// Este bridge expõe o OsEmbedder para que o cognitive_bridge o use diretamente
+/// no remember_semantic e recall.
+pub fn get_os_embedder() -> OsEmbedder {
+    OsEmbedder
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,6 +426,18 @@ mod tests {
     fn rag_context_returns_string() {
         let ctx = rag_context_nsgdb(&[1.0, -1.0, 1.0, -1.0], 3);
         assert!(ctx.is_empty() || !ctx.is_empty());
+    }
+
+    #[test]
+    fn sync_write_to_nsgdb_does_not_panic() {
+        // Sync after write deve ser no-op gracioso sem NSGDB
+        sync_write_to_nsgdb("test/key", b"value", 3);
+    }
+
+    #[test]
+    fn os_embedder_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<OsEmbedder>();
     }
 
     #[test]

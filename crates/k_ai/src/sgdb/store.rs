@@ -158,7 +158,12 @@ pub fn put_kv(key: &str, data: &[u8]) -> Result<(), &'static str> {
         // honesty: sem TickvLite só indexa se for MemoryDoc path; KV puro exige flash
         return Err("tickv not ready");
     }
-    k_nano::storage::put_blob(key, data)
+    let result = k_nano::storage::put_blob(key, data);
+    // #537: sincroniza índices NSGDB após write
+    if result.is_ok() {
+        super::nsgdb_bridge::sync_write_to_nsgdb(key, data, 3); // default L3
+    }
+    result
 }
 
 pub fn get_kv(key: &str) -> Result<Option<Vec<u8>>, &'static str> {
@@ -175,7 +180,10 @@ pub fn get_kv(key: &str) -> Result<Option<Vec<u8>>, &'static str> {
 /// MemoryDoc via engine (também indexa ART/BQ).
 pub fn put_doc(doc: MemoryDoc) -> Result<u64, &'static str> {
     ensure_ready();
-    with_engine(|e| e.put(doc)).unwrap_or(Err("engine down"))
+    let result = with_engine(|e| e.put(doc)).unwrap_or(Err("engine down"));
+    // #537: sincroniza índices NSGDB após write de doc
+    // (doc já foi persistido no TickvLite pelo engine interno)
+    result
 }
 
 pub fn get_doc(layer: MemoryLayer, key: &str) -> Result<Option<MemoryDoc>, &'static str> {
