@@ -90,14 +90,15 @@ fn fp32_dist_u32(query: &[f32], payload: &[u8]) -> Option<u32> {
 /// Recall L4: BQ top-k, depois rescore FP32 nos candidatos (padrão Qdrant).
 /// path = `bq+fp32` | `bq` | `empty`.
 pub fn recall_semantic(query: &[f32], k: usize) -> (Vec<(String, u32)>, &'static str) {
-    #[cfg(not(target_os = "none"))]
+    // P0: nsgdb_bridge gateado por feature "nsgdb"
+    #[cfg(feature = "nsgdb")]
     {
         let (ext_hits, ext_path) = super::nsgdb_bridge::recall_semantic_nsgdb(query, k);
         if !ext_hits.is_empty() {
             return (ext_hits, ext_path);
         }
     }
-    #[cfg(target_os = "none")]
+    #[cfg(not(feature = "nsgdb"))]
     {
         let ext_hits: alloc::vec::Vec<(alloc::string::String, u32)> = alloc::vec::Vec::new();
         let ext_path: &str = "";
@@ -232,14 +233,15 @@ pub fn remember_exchange_full(
 /// RAG context: BQ recall + fetch payload + formato string pro prompt.
 /// path = `recall_semantic`.
 pub fn rag_context(query: &[f32], k: usize) -> String {
-    #[cfg(not(target_os = "none"))]
+    // P0: nsgdb_bridge gateado por feature "nsgdb"
+    #[cfg(feature = "nsgdb")]
     {
         let ext_ctx = super::nsgdb_bridge::rag_context_nsgdb(query, k);
         if !ext_ctx.is_empty() {
             return ext_ctx;
         }
     }
-    #[cfg(target_os = "none")]
+    #[cfg(not(feature = "nsgdb"))]
     {
         let ext_ctx = alloc::string::String::new();
         if !ext_ctx.is_empty() {

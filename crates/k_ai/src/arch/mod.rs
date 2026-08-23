@@ -1,9 +1,4 @@
 //! Architecture-specific optimizations for AI operations.
-//! SIMD (`simd.rs` + cortex avx) nao compila em x86_64-unknown-none soft-float.
-pub mod x86_64;
-#[cfg(not(target_os = "none"))]
+//! x86_64.rs removido (P0): dead code SSE4.2/AVX2 que crashava rustc com soft-float.
+//! Dispatch real: cortex::compute::dispatch_ternary.
 pub mod simd;
-#[cfg(target_os = "none")]
-pub mod simd {
-    pub fn init_dispatch() {}
-}

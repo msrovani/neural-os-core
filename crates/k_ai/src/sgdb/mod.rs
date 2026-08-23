@@ -12,11 +12,13 @@ pub mod layers;
 pub mod memory_doc;
 pub mod metrics;
 pub mod store;
-#[cfg(not(target_os = "none"))]
+// P0: tickv_adapter e nsgdb_bridge requerem neural-sgdb (SSE2 crash em soft-float).
+// Gateados atras de feature "nsgdb" — ativar quando neural-sgdb suportar no_std sem SIMD.
+#[cfg(feature = "nsgdb")]
 pub mod tickv_adapter;
-#[cfg(not(target_os = "none"))]
+#[cfg(feature = "nsgdb")]
 pub mod nsgdb_bridge;
-#[cfg(target_os = "none")]
+#[cfg(not(feature = "nsgdb"))]
 pub mod nsgdb_bridge {
     use alloc::string::String;
     use alloc::vec::Vec;
