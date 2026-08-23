@@ -90,10 +90,20 @@ fn fp32_dist_u32(query: &[f32], payload: &[u8]) -> Option<u32> {
 /// Recall L4: BQ top-k, depois rescore FP32 nos candidatos (padrão Qdrant).
 /// path = `bq+fp32` | `bq` | `empty`.
 pub fn recall_semantic(query: &[f32], k: usize) -> (Vec<(String, u32)>, &'static str) {
-    // Fase 2: tenta neural-sgdb externo (BQ + FP32 com MIHIndex)
-    let (ext_hits, ext_path) = super::nsgdb_bridge::recall_semantic_nsgdb(query, k);
-    if !ext_hits.is_empty() {
-        return (ext_hits, ext_path);
+    #[cfg(not(target_os = "none"))]
+    {
+        let (ext_hits, ext_path) = super::nsgdb_bridge::recall_semantic_nsgdb(query, k);
+        if !ext_hits.is_empty() {
+            return (ext_hits, ext_path);
+        }
+    }
+    #[cfg(target_os = "none")]
+    {
+        let ext_hits: alloc::vec::Vec<(alloc::string::String, u32)> = alloc::vec::Vec::new();
+        let ext_path: &str = "";
+        if !ext_hits.is_empty() {
+            return (ext_hits, ext_path);
+        }
     }
     // Fallback: engine interno
     ensure_ready();
@@ -222,10 +232,19 @@ pub fn remember_exchange_full(
 /// RAG context: BQ recall + fetch payload + formato string pro prompt.
 /// path = `recall_semantic`.
 pub fn rag_context(query: &[f32], k: usize) -> String {
-    // Fase 2: tenta neural-sgdb externo
-    let ext_ctx = super::nsgdb_bridge::rag_context_nsgdb(query, k);
-    if !ext_ctx.is_empty() {
-        return ext_ctx;
+    #[cfg(not(target_os = "none"))]
+    {
+        let ext_ctx = super::nsgdb_bridge::rag_context_nsgdb(query, k);
+        if !ext_ctx.is_empty() {
+            return ext_ctx;
+        }
+    }
+    #[cfg(target_os = "none")]
+    {
+        let ext_ctx = alloc::string::String::new();
+        if !ext_ctx.is_empty() {
+            return ext_ctx;
+        }
     }
     // Fallback: engine interno
     ensure_ready();

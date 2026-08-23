@@ -12,8 +12,39 @@ pub mod layers;
 pub mod memory_doc;
 pub mod metrics;
 pub mod store;
+#[cfg(not(target_os = "none"))]
 pub mod tickv_adapter;
+#[cfg(not(target_os = "none"))]
 pub mod nsgdb_bridge;
+#[cfg(target_os = "none")]
+pub mod nsgdb_bridge {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+    #[derive(Clone, Debug)]
+    pub struct Hit {
+        pub key: String, pub text: String, pub dist: f32,
+        pub provenance: Option<String>,
+        pub path: RecallPath,
+        pub content_type: ContentType,
+        pub payload_type: ContentType,
+        pub score: f32,
+        pub matched_terms: Vec<String>,
+        pub validity: Option<(u64,u64)>,
+        pub rel: Option<String>,
+        pub score_breakdown: Option<String>,
+    }
+    #[derive(Clone, Debug)]
+    pub enum ContentType { Text, Json, Code, Binary, Embedding(u32) }
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum RecallPath { Semantic, Lexical, Entities }
+    pub struct MemoryLifecycleConfig { pub l1_commit_after_ticks: u64, pub l2_to_l3_importance: f32, pub l2_to_l3_min_age_ticks: u64, pub decay_per_tick: f32, pub decayed_below: f32 }
+    impl Default for MemoryLifecycleConfig { fn default() -> Self { Self { l1_commit_after_ticks: 100, l2_to_l3_importance: 0.5, l2_to_l3_min_age_ticks: 500, decay_per_tick: 0.01, decayed_below: 0.1 } } }
+    pub struct LifecycleTickResult { pub committed: usize, pub promoted: usize, pub semanticized: usize, pub archived: usize, pub decayed: usize, pub transitions: u64 }
+    pub fn recall_lexical_bridge(_q: &str, _k: usize) -> Vec<Hit> { Vec::new() }
+    pub fn recall_typed(_q: &[f32], _k: usize) -> Vec<Hit> { Vec::new() }
+    pub fn lifecycle_tick(_now: u64, _cfg: &MemoryLifecycleConfig) -> LifecycleTickResult { LifecycleTickResult { committed:0, promoted:0, semanticized:0, archived:0, decayed:0, transitions:0 } }
+    pub fn nsgdb_health() -> String { String::from("NSGDB stub (soft-float)") }
+}
 
 pub use art::ArtIndex;
 pub use bq::{hamming, hamming_path, quantize_f32, BqFlatIndex};

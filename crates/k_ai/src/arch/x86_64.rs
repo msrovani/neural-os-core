@@ -14,6 +14,7 @@
 #![allow(dead_code)]
 #![allow(unused_unsafe)]
 
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 use core::arch::x86_64::*;
 
 /// 64-byte aligned buffer for SIMD operations
@@ -69,6 +70,7 @@ pub type BitNetKernel = unsafe fn(*const i8, *const i8, *mut i32, usize);
 /// - `a` and `b` must point to arrays of at least `len` i8 elements
 /// - `output` must point to array of at least `len` i32 elements
 /// - CPU must support SSE4.2
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 #[target_feature(enable = "sse4.2")]
 #[inline]
 pub unsafe fn bitwise_add_sse42(a: *const i8, b: *const i8, output: *mut i32, len: usize) {
@@ -143,6 +145,7 @@ pub unsafe fn bitwise_add_sse42(a: *const i8, b: *const i8, output: *mut i32, le
 /// - `a` and `b` must be valid pointers to arrays of at least `len` i8 elements
 /// - `output` must be valid pointer to array of at least `len` i32 elements
 /// - CPU must support AVX2
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 #[target_feature(enable = "avx2")]
 #[inline]
 pub unsafe fn bitwise_add_avx2(a: *const i8, b: *const i8, output: *mut i32, len: usize) {
@@ -204,6 +207,7 @@ pub unsafe fn bitwise_add_avx2(a: *const i8, b: *const i8, output: *mut i32, len
 /// - `a` and `b` must be valid pointers to arrays of at least `len` i8 elements
 /// - `output` must be valid pointer to array of at least `len` i32 elements
 /// - CPU must support AVX-512F, AVX-512BW, and AVX-512VNNI
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 #[target_feature(enable = "avx512f,avx512bw,avx512vnni")]
 #[inline]
 pub unsafe fn bitwise_add_avx512(a: *const i8, b: *const i8, output: *mut i32, len: usize) {
@@ -286,12 +290,12 @@ pub unsafe fn bitwise_add_scalar(a: *const i8, b: *const i8, output: *mut i32, l
 
 /// Check if SSE4.2 is supported at runtime (CPUID leaf 1, ECX bit 20).
 pub fn has_sse42() -> bool {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
     unsafe {
         let cpuid = __cpuid(1);
         (cpuid.ecx & (1 << 20)) != 0
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(any(not(target_arch = "x86_64"), target_os = "none"))]
     {
         false
     }
@@ -300,7 +304,7 @@ pub fn has_sse42() -> bool {
 /// Check if AVX2 is supported at runtime.
 /// Requires AVX (CPUID.1:ECX[28]) + OSXSAVE (CPUID.1:ECX[27]).
 pub fn has_avx2() -> bool {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
     unsafe {
         let cpuid = __cpuid(1);
         let avx = (cpuid.ecx & (1 << 28)) != 0;
@@ -311,7 +315,7 @@ pub fn has_avx2() -> bool {
         let cpuid7 = __cpuid_count(7, 0);
         (cpuid7.ebx & (1 << 5)) != 0
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(any(not(target_arch = "x86_64"), target_os = "none"))]
     {
         false
     }
@@ -319,12 +323,12 @@ pub fn has_avx2() -> bool {
 
 /// Check if AVX-512F is supported at runtime (CPUID leaf 7, EBX bit 16).
 pub fn has_avx512f() -> bool {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
     unsafe {
         let cpuid = __cpuid_count(7, 0);
         (cpuid.ebx & (1 << 16)) != 0
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(any(not(target_arch = "x86_64"), target_os = "none"))]
     {
         false
     }
@@ -332,12 +336,12 @@ pub fn has_avx512f() -> bool {
 
 /// Check if AVX-512BW is supported at runtime (CPUID leaf 7, EBX bit 30).
 pub fn has_avx512bw() -> bool {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
     unsafe {
         let cpuid = __cpuid_count(7, 0);
         (cpuid.ebx & (1 << 30)) != 0
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(any(not(target_arch = "x86_64"), target_os = "none"))]
     {
         false
     }
@@ -345,12 +349,12 @@ pub fn has_avx512bw() -> bool {
 
 /// Check if AVX-512VNNI is supported at runtime (CPUID leaf 7, ECX bit 11).
 pub fn has_avx512vnni() -> bool {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
     unsafe {
         let cpuid = __cpuid_count(7, 0);
         (cpuid.ecx & (1 << 11)) != 0
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(any(not(target_arch = "x86_64"), target_os = "none"))]
     {
         false
     }
@@ -370,6 +374,7 @@ pub fn has_full_avx512() -> bool {
 /// 2. AVX2 — Ryzen/Intel client CPUs
 /// 3. SSE4.2 — Legacy i3/i5 (minimum requirement)
 /// 4. Scalar — Fallback for very old CPUs
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 pub fn dispatch_bitnet_kernel() -> BitNetKernel {
     if has_full_avx512() {
         bitwise_add_avx512
@@ -381,11 +386,16 @@ pub fn dispatch_bitnet_kernel() -> BitNetKernel {
         bitwise_add_scalar
     }
 }
+#[cfg(any(not(target_arch = "x86_64"), target_os = "none"))]
+pub fn dispatch_bitnet_kernel() -> BitNetKernel {
+    bitwise_add_scalar
+}
 
 /// Dispatch based on adaptation policy from Hermes.
 ///
 /// Policy flags are AND-ed with hardware capability: a policy requesting
 /// AVX-512 on a CPU without it falls back to the next available tier.
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 pub fn dispatch_bitnet_kernel_with_policy(
     use_avx512: bool,
     use_avx2: bool,
@@ -400,6 +410,14 @@ pub fn dispatch_bitnet_kernel_with_policy(
     } else {
         bitwise_add_scalar
     }
+}
+#[cfg(any(not(target_arch = "x86_64"), target_os = "none"))]
+pub fn dispatch_bitnet_kernel_with_policy(
+    _use_avx512: bool,
+    _use_avx2: bool,
+    _use_sse42: bool,
+) -> BitNetKernel {
+    bitwise_add_scalar
 }
 
 // ─── Safe Wrappers ──────────────────────────────────────────────────────
