@@ -522,7 +522,16 @@ fn parse_version(v: &str) -> (u64, u64, u64) {
 /// Nunca falha: retorna relatório textual para log/skill.
 /// S13: lock (AtomicBool) — cron + shell + skill podem disparar em paralelo;
 /// só um check por vez (evita double-download e interleave de switch_slot).
+/// T-022 QEMU: TCG skip ATA (T-011) → UPDATE.CFG ilegível. Flag RAM `O` + slirp.
+pub fn check_for_update_qemu_slirp() -> String {
+    check_for_update_ex(Some("http://10.0.2.2:8080/UPDATE.MANIFEST"))
+}
+
 pub fn check_for_update() -> String {
+    check_for_update_ex(None)
+}
+
+fn check_for_update_ex(default_url: Option<&str>) -> String {
     use core::sync::atomic::{AtomicBool, Ordering};
     static IN_PROGRESS: AtomicBool = AtomicBool::new(false);
     if IN_PROGRESS.swap(true, Ordering::SeqCst) {
@@ -536,8 +545,22 @@ pub fn check_for_update() -> String {
     }
     let _guard = Guard;
 
-    let Some(url) = read_update_cfg() else {
-        return String::from("[UPDATE] cfg=missing (UPDATE.CFG na FAT32)");
+    let url = match read_update_cfg() {
+        Some(u) => u,
+        None => match default_url {
+            Some(d) => {
+                k_nano::slog_hermes!(
+                    "UPDATE",
+                    "info",
+                    "cfg=missing (TCG/ATA skip) — QEMU slirp {}",
+                    d
+                );
+                String::from(d)
+            }
+            None => {
+                return String::from("[UPDATE] cfg=missing (UPDATE.CFG na FAT32)");
+            }
+        },
     };
     let body = match crate::tls::fetch_url(&url) {
         Ok(b) if !b.is_empty() => b,

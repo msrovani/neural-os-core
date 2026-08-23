@@ -15,6 +15,16 @@ impl AtaDriver {
     }
 
     pub unsafe fn probe() -> Option<Self> {
+        // T-011: TCG + PIO identify trava o boot (SESSION_243). Skip honesto;
+        // QEMU-loader / NoDisk seguem. Metal/WHPX medem de verdade.
+        if crate::storage_bw::skip_measure() {
+            crate::slog_nano!(
+                "Disk",
+                "ata",
+                "CRITICO ATA probe skip (TCG) — boot sem disco PIO"
+            );
+            return None;
+        }
         let mut best: Option<AtaDriver> = None;
         let mut best_type: u8 = 0;
         // Candidatos com FS de dados; preferir exFAT (QEMU disk_qemu) e maior tamanho.

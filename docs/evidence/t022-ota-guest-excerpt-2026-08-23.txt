@@ -1,0 +1,20 @@
+[T+0] [R3] [hermes] [UPDATE] [info] - step=git_bridge status=OK slot=1 syn_len=35 VERDICT=PARTIAL reason=api_ready
+[T+96] [R3] [hermes] [TLS] [info] - bridge=registered https_get=OK
+[T+96] [R0] [nk] [OTA] [info] - trigger flag encontrado @ 0x160000000
+[T+96] [R3] [hermes] [UPDATE] [info] - cfg=missing (TCG/ATA skip) â QEMU slirp http://10.0.2.2:8080/UPDATE.MANIFEST
+[T+96] [R0] [nk] [Net] [http] - GET 10.0.2.2:8080/UPDATE.MANIFEST Host=10.0.2.2
+[T+118] [R0] [nk] [Net] [http] - GET 10.0.2.2:8080/KERNEL.BIN Host=10.0.2.2
+[T+194] [R3] [hermes] [UPDATE] [error] - fetch=REJECT unsigned_update (manifest sem sig valido) bytes=18610504
+[T+194] [R0] [nk] [OTA] [info] - boot trigger: [UPDATE] apply=fail err=unsigned_update
+[T+195] [R3] [hermes] [UPDATE] [info] - step=git_bridge status=OK slot=1 syn_len=35 VERDICT=PARTIAL reason=api_ready
+[T+667] [R0] [k-nano] [P2P] [info] - sec: unsigned=0 badsig=0 replay=0
+[T+867] [R0] [k-nano] [P2P] [info] - sec: unsigned=0 badsig=0 replay=0
+[T+1297] [R0] [k-nano] [P2P] [info] - sec: unsigned=0 badsig=0 replay=0
+[T+1498] [R0] [k-nano] [P2P] [info] - sec: unsigned=0 badsig=0 replay=0
+[T+1780] [R0] [k-nano] [P2P] [info] - sec: unsigned=0 badsig=0 replay=0
+[T+1980] [R0] [k-nano] [P2P] [info] - sec: unsigned=0 badsig=0 replay=0
+[T+2180] [R0] [k-nano] [P2P] [info] - sec: unsigned=0 badsig=0 replay=0
+[T+2380] [R0] [k-nano] [P2P] [info] - sec: unsigned=0 badsig=0 replay=0
+[T+2580] [R0] [k-nano] [P2P] [info] - sec: unsigned=0 badsig=0 replay=0
+[T+2780] [R0] [k-nano] [P2P] [info] - sec: unsigned=0 badsig=0 replay=0
+[T+2980] [R0] [k-nano] [P2P] [info] - sec: unsigned=0 badsig=0 replay=0

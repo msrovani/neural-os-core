@@ -47,7 +47,8 @@ SECTIONS
 
     /* SESSION_233: HEAP_BUFFER no FIM. Nao usar .bss.heap — `*(.bss.*)` acima
        engolia a secao e o heap misturava com statics. .kheap nao casa .bss.*. */
-    .kheap : {
+    /* NOLOAD: rustc .kheap e PROGBITS (zeros no ELF ~512MB) e nao cabe na ESP 128MB. */
+    .kheap (NOLOAD) : {
         *(.kheap)
         *(.bss.heap)
     } :data

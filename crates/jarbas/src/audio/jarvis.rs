@@ -154,15 +154,19 @@ impl JarbasAgent {
 /// Chamado logo apos `register(JarbasAgent)` no boot HW.
 /// Emite template + tenta BOOT.LOG (MSC/ATA); **nunca soft-reboot** — Runtime segue.
 pub fn emit_hw_greeting_at_register() {
-    if HW_GREET_EMITTED.swap(true, Ordering::SeqCst) {
+    if HW_GREET_EMITTED.load(Ordering::SeqCst) {
         return;
     }
     let bare = matches!(
         k_nano::platform_probe::hypervisor(),
         k_nano::platform_probe::HypervisorKind::None
     );
-            let no_fat = k_nano::globals::USB_MSC.lock().is_none() && k_nano::ATA_DRIVER.lock().is_none();
+    let no_fat = k_nano::globals::USB_MSC.lock().is_none() && k_nano::ATA_DRIVER.lock().is_none();
+    // QEMU com FAT: deixar o flag falso — o tick() emite template/LLM + TTS.
     if !(bare || no_fat) {
+        return;
+    }
+    if HW_GREET_EMITTED.swap(true, Ordering::SeqCst) {
         return;
     }
 
@@ -196,6 +200,17 @@ pub fn emit_hw_greeting_at_register() {
     crate::display::compositor::announce_welcome(&body);
     crate::display::fb::console_print(&line);
     crate::display::fb::boot_ckpt(50, "jarvis greet OK");
+    let pcm = crate::audio::skills::synthesize_tts(&body);
+    if !pcm.is_empty() {
+        let n = pcm.len().min(2560);
+        let _ = PLAYBACK_RING.push(&pcm[..n]);
+        k_nano::slog_jarbas!(
+            "Jarbas",
+            "info",
+            "TTS boot greeting {} frames (QEMU/HDA drain no mixer)",
+            pcm.len()
+        );
+    }
     let _ = k_nano::EVENT_BUS.publish(Event {
         id: 0,
         topic: String::from("HERMES_RESPONSE"),

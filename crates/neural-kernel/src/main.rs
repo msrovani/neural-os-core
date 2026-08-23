@@ -1815,7 +1815,7 @@ pub(crate) fn kernel_boot(
     // UPDATE.CFG → GET manifest → slot inativo → serve_update.py.
     // DEPOIS do probe do ATA: `with_fat_reader` exige ATA_DRIVER populado.
     if crate::net::detect_qemu_ota_trigger() {
-        let report = hermes_crate::self_update::check_for_update();
+        let report = hermes_crate::self_update::check_for_update_qemu_slirp();
         k_nano::slog_bin!("OTA", "info", "boot trigger: {}", report);
     }
 
