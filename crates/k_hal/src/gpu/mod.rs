@@ -28,18 +28,18 @@ pub mod backend;
 pub mod blit;
 pub mod compute_dispatch;
 // cube FE (DoubleBuffer) permanece em jarbas — não MMIO
-pub mod ring;
+#[allow(dead_code)] pub mod ring;
 pub mod firmware;
-pub mod xqueue;
-pub mod kv_dma;
-pub mod direct_storage;
-pub mod xpu;
-pub mod msched;
-pub mod display_coex;
-pub mod bench;
+#[allow(dead_code)] pub mod xqueue;
+#[allow(dead_code)] pub mod kv_dma;
+#[allow(dead_code)] pub mod direct_storage;
+#[allow(dead_code)] pub mod xpu;
+#[allow(dead_code)] pub mod msched;
+#[allow(dead_code)] pub mod display_coex;
+#[allow(dead_code)] pub mod bench;
 pub mod work_queue;
-pub mod sasos;
-pub mod pipeline_g5;
+#[allow(dead_code)] pub mod sasos;
+#[allow(dead_code)] pub mod pipeline_g5;
 pub mod pcie_bypass;
 
 // Seam ADR-0087 Fase 4b — Copy Engine (MHI tier1→tier0). mhi.rs (Fase 5) chama.
