@@ -11,10 +11,20 @@ use spin::Mutex;
 /// Buffer de energia FFT (16 bins espectrais)
 static FFT_BINS: Mutex<[f32; 32]> = Mutex::new([0.0f32; 32]);
 
-/// Le a energia FFT atual (usado pelo compositor para animar o orb)
+/// Le a energia FFT atual (usado pelo compositor para animar o orb).
+/// QEMU stub: se bins = zeros (sem hardware audio), gera energia sintetica
+/// baseada no tick do timer para o orb pulsar visualmente.
 pub fn read_audio_energy() -> f32 {
     let bins = FFT_BINS.lock();
-    bins.iter().sum::<f32>() / bins.len() as f32
+    let real_energy: f32 = bins.iter().sum::<f32>() / bins.len() as f32;
+    if real_energy > 0.01 {
+        return real_energy;
+    }
+    // Synthetic energy for QEMU: gentle sine pulse so the orb breathes
+    drop(bins);
+    let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as f32;
+    let synth = 0.15 + libm::sinf(tick * 0.02) * 0.12 + libm::sinf(tick * 0.007) * 0.08;
+    synth.clamp(0.0, 1.0)
 }
 
 /// Le um bin individual (usado pelo waveform 32 barras)

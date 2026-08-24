@@ -334,6 +334,16 @@ impl Agent for CortexAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         if let Some(event) = self.receiver.try_receive() {
             let user_text = core::str::from_utf8(&event.payload).unwrap_or("");
+            // EmotionAnalyzer: analisa input do usuario e feed no AFFECT_SNAPSHOT
+            {
+                let emo = crate::emotion::EmotionAnalyzer::analyze(user_text);
+                let mut snap = crate::globals::AFFECT_SNAPSHOT.lock();
+                snap.valence = snap.valence * 0.7 + emo.valence * 0.3;
+                snap.arousal = snap.arousal * 0.7 + emo.arousal * 0.3;
+                if emo.confidence > 0.5 {
+                    snap.uncertainty *= 0.8;
+                }
+            }
             let expert = {
                 let t = crate::globals::TRINITY.lock();
                 t.classify_intent(user_text).name

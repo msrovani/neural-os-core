@@ -308,6 +308,8 @@ impl BeiState {
             let affect = self.affect_regulator.lock().affect;
             let _state = SoulMirrorState::from_affect(&affect, 0, None);
             *self.soul_mirror_state.lock() = _state;
+            // 6b. Sync AFFECT_SNAPSHOT for compositor (hermes::globals bridge)
+            hermes_crate::globals::sync_affect_snapshot(&affect, 0);
         }
         
         // 7. DynamicMoE lifecycle (birth/merge/split)

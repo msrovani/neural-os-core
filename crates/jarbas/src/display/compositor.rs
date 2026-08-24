@@ -1338,15 +1338,26 @@ impl JarbasDesktop {
     /// Soul Mirror — orb afetivo (Onda 7) substitui o orb cyan fixo.
     /// Cor/brilho/pulsação/anéis/rotação vêm do AffectVector + LoopPhase.
     fn draw_orb_layer(&mut self, _tick: u64, _w: usize, _h: usize, avatar_state: Option<&str>) {
-        // Tenta puxar affect do ExecutiveSupervisor (se hermes já registrou).
-        if let Some(sup) = hermes::globals::EXECUTIVE_SUPERVISOR.lock().as_ref() {
-            let mirror = SoulMirrorState::from_affect(
-                &sup.affect.affect,
-                sup.phase.rotation_deg(),
-                avatar_state,  // Jarbas palette override per state
-            );
-            self.soul_mirror.update_state(mirror);
-        }
+        // Le AFFECT_SNAPSHOT do BeiInit (sync a cada tick do supervisor).
+        // Converte AffectSnapshot -> AffectVector para SoulMirrorState::from_affect.
+        let snap = hermes::globals::AFFECT_SNAPSHOT.lock();
+        let affect = hermes::affect::AffectVector {
+            valence: snap.valence,
+            arousal: snap.arousal,
+            dominance: snap.dominance,
+            uncertainty: snap.uncertainty,
+            urgency: snap.urgency,
+            fatigue: snap.fatigue,
+            curiosity: snap.curiosity,
+            coherence: snap.coherence,
+        };
+        let mirror = SoulMirrorState::from_affect(
+            &affect,
+            snap.phase_deg,
+            avatar_state,
+        );
+        drop(snap);
+        self.soul_mirror.update_state(mirror);
         let fft_energy = crate::display::avatar::read_audio_energy();
         self.soul_mirror.render(&mut self.fb, fft_energy);
     }
