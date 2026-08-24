@@ -1012,7 +1012,14 @@ fn n3_cortex_gate(gen: Option<bool>) {
     let rustc = crate::cortex::rustcoder_is_loaded();
     let bpe = crate::bpe::is_loaded();
     let dim = crate::cortex::CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
-
+    // F1: header dinâmico (zero hardcoded) — Falcon3-7B/3B hidden=3072 layers=28
+    if let Some(h) = cortex_crate::model::loaded_model_header() {
+        k_nano::slog_cortex!("Gate", "n3", "model=Falcon3 hidden={} layers={} heads={} kv={} intermediate={} vocab={} max_seq={} file={}MB",
+            h.hidden, h.num_layers, h.num_heads, h.kv_heads, h.intermediate, h.vocab, h.max_seq, h.file_size_mb());
+    } else {
+        k_nano::slog_cortex!("Gate", "n3", "model=none (header not loaded) dim={} bpe={}",
+            dim, if bpe { "LOADED" } else { "ABSENT" });
+    }
     k_nano::slog_cortex!("Gate", "n3", "llm={} dim={} bpe={}",
         llm.as_str(),
         dim,
@@ -1378,11 +1385,12 @@ pub(crate) fn kernel_boot(
         k_nano::slog_bin!("Boot", "dbg", "heap init OK (Tier 1 talc)");
         crate::display::fb::boot_ckpt(11, "heap OK");
 
+        let arena_sz = arena::auto_arena_size();
         match arena::init_arena_region(
             &mut mapper,
             &mut frame_allocator,
             arena::CORTEX_ARENA_VIRT,
-            arena::CORTEX_ARENA_DEFAULT_SIZE,
+            arena_sz,
         ) {
             Ok(tensor_arena) => {
                 global_arena::install_global_arena(tensor_arena);

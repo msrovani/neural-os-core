@@ -20,6 +20,14 @@ smoltcp = { version = "0.13", default-features = false, features = ["alloc", "me
 miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 wasmi = { version = "0.47", default-features = false }
 cranelift-codegen = { version = "0.133", default-features = false, features = ["core"], optional = true }
+# C5 TLS (soft-float): embedded-tls 0.19 + p256/rsa — canônico hermes (lesson 241/249)
+embedded-tls = { version = "0.19", default-features = false }
+embedded-io = { version = "0.7", default-features = false }
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
+digest = { version = "0.10", default-features = false }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+rsa = { version = "0.9", default-features = false, features = ["sha2"] }
+rand_core = { version = "0.6", default-features = false }
 
 [features]
 kernel = []

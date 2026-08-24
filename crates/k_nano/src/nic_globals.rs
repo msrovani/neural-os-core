@@ -7,6 +7,12 @@ pub struct NicConfig {
 }
 const fn nic_config_new() -> NicConfig { NicConfig { mac: [0; 6], ip: [0; 4] } }
 
+/// Wall-clock pause via TSC (calibrated sleep_us if available, else rdtsc fixed).
+#[inline]
+pub fn wall_pause_us(us: u64) {
+    crate::tsc::sleep_us(us);
+}
+
 // SESSION_234: statics em `.data` (NÃO .bss) — o bump heap/talc sobrescrevia
 // o .bss entre o setter (T+9) e o p2p_tick (T+167): set_nic_config gravava o
 // MAC, p2p_tick lia zeros → gate ready falhava → zero TX heartbeats. Mesmo
@@ -15,6 +21,8 @@ const fn nic_config_new() -> NicConfig { NicConfig { mac: [0; 6], ip: [0; 4] } }
 pub static RTL8139: Mutex<Option<crate::rtl8139::Rtl8139Driver>> = Mutex::new(None);
 #[link_section = ".data"]
 pub static E1000: Mutex<Option<crate::e1000::E1000Driver>> = Mutex::new(None);
+#[link_section = ".data"]
+pub static I225: Mutex<Option<crate::i225::I225Driver>> = Mutex::new(None);
 #[link_section = ".data"]
 pub static VIRTIO_DEV: Mutex<Option<crate::virtio_net::VirtIoDevice>> = Mutex::new(None);
 #[link_section = ".data"]

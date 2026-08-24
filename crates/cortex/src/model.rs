@@ -6,6 +6,7 @@
 //! Fase 1 (autonomia): ModelHeader lê todos os campos do header v6 em runtime.
 //! Zero hardcoded — o sistema descobre hidden/layers/vocab/kv/q_dim sozinho.
 
+use alloc::string::String;
 use core::sync::atomic::{AtomicBool, Ordering};
 use crate::cortex::{HwExpertV4Model, TransformerModel};
 
@@ -127,6 +128,18 @@ pub fn loaded_model_header() -> Option<ModelHeader> {
         unsafe { Some(LOADED_HEADER) }
     } else {
         None
+    }
+}
+
+/// Human-readable model info from header (zero hardcoded). Used by n3_cortex_gate.
+pub fn model_info() -> String {
+    if let Some(h) = loaded_model_header() {
+        alloc::format!(
+            "Falcon3 hidden={} layers={} heads={} kv={} vocab={} intermediate={} max_seq={} file={}MB",
+            h.hidden, h.num_layers, h.num_heads, h.kv_heads, h.vocab, h.intermediate, h.max_seq, h.file_size_mb()
+        )
+    } else {
+        String::from("no model loaded")
     }
 }
 

@@ -164,15 +164,22 @@ pub fn score_fit(
     }
 }
 
-/// Footprints estáticos por nome de slot / token (MB on-disk + runtime order).
+/// Footprints por slot (MB). Para slots LLM tenta header dinâmico primeiro
+/// (parse_model_header → file_size_mb), fallback para constantes conhecidas.
+/// smoke/hwexpert mantêm fallback pequeno (4/1 MB) quando sem header.
 pub fn slot_footprint_mb(slot_name: &str) -> Option<u64> {
+    // header dinâmico se algum LLM foi carregado
+    let dyn_mb = crate::model::loaded_model_header().map(|h| h.file_size_mb());
     match slot_name.to_ascii_lowercase().as_str() {
-        "generator_fast" | "fast" | "850m" | "850" | "active" | "current" | "generator" => {
-            Some(220)
+        "generator_fast" | "fast" | "850m" | "850" => {
+            dyn_mb.or(Some(220))
         }
-        "generator_pro" | "pro" | "7b" | "3b" | "bitnet3b" => Some(1780),  // Falcon3-7B/3B v6 ~1.74 GB
+        "active" | "current" | "generator" => {
+            dyn_mb.or(Some(989))
+        }
+        "generator_pro" | "pro" | "7b" | "3b" | "bitnet3b" => dyn_mb.or(Some(1780)),  // Falcon3-7B/3B v6 ~1.74 GB
         "falcon3" | "falcon" | "f3" | "falcon3b" | "falcon-3b" => {
-            crate::model::loaded_model_header().map_or(Some(989), |h| Some(h.file_size_mb()))
+            dyn_mb.or(Some(989))
         }
         "tinystories" | "tiny" | "smoke" => Some(4),
         "rust_coder" | "rustcoder" => Some(260),

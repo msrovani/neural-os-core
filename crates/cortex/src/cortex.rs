@@ -34,11 +34,12 @@ const PAD: u16 = 2;
 const CHAR_OFFSET: u16 = 3;
 pub const VOCAB_SIZE: u16 = 99;
 pub const MAX_SEQ: usize = 64;
-/// Demo fallback dims (tiny 64/4). Modelo principal é Falcon3 3B
-/// (hidden 3072, 22 layers, 12 heads, 4 kv_heads, intermediate 9216,
-/// vocab 131072, silu, rope 1000042, tie false, BF16 → v6 Q6_K+ternary).
-/// v6 format é genérico: hidden/layers/heads/vocab lidos do header,
-/// forward já é agnóstico a dims (usa TransformerModel.hidden etc.).
+/// Demo fallback dims (tiny 64/4). Modelo principal é Falcon3 7B/3B
+/// (hidden 3072, 28 layers, 12 heads, 4 kv_heads, intermediate 23040,
+/// vocab 131072, silu, rope 1000042, tie false, 1.58bit → v6 ternary).
+/// 7B e 3B compartilham mesma arquitetura (tiiuae/Falcon3-7B-Instruct-1.58bit);
+/// apenas 10B tem 40L. v6 format é genérico: hidden/layers/heads/vocab
+/// lidos do header em runtime (parse_model_header), forward agnóstico.
 const HIDDEN: usize = 64;
 const NUM_LAYERS: usize = 4;
 const NUM_HEADS: usize = 4;

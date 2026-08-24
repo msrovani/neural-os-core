@@ -121,6 +121,7 @@ pub mod verify;
 pub mod virtio_net;
 pub mod audio;
 pub mod xhci;
+pub mod paging;
 
 // Macros (serial_println!, println!, kjson!, klogc!, slog_bin!) are exported via
 // #[macro_export] from their respective source files.

@@ -29,6 +29,7 @@ ruvix-region = { version = "0.1", default-features = false, features = ["alloc"]
 default = []
 # Apenas bins standalone que não definem seu próprio #[global_allocator].
 global-alloc = []
+ring3 = []
 # Soft-reboot 0xCF9 para flush BOOT.LOG — **OFF em produto** (loop HW sem NEURDONE).
 soft-reboot-bootlog = []
 # Labor 39: PC speaker boot chime — OFF default.
@@ -43,4 +44,4 @@ smp-runqueue = []
 fat-boot-log = []
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "soft-reboot-bootlog", "fat-boot-log", "smp-runqueue"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "soft-reboot-bootlog", "fat-boot-log", "smp-runqueue", "ring3"))'] }

@@ -18,12 +18,9 @@ fn ip_checksum(data: &[u8]) -> u16 {
 }
 
 /// DNS resolve MANUAL — bypassa smoltcp, envia raw UDP/IP via serial tunnel.
-/// Pipelines de ataque: constroi frame IPv4+UDP+DNS e envia via slip::send().
 pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]> {
     let hostname = hostname.trim_end_matches('.');
     if hostname.is_empty() { return None; }
-
-    // 1. DNS name encoding with validation
     let mut qname = Vec::new();
     for part in hostname.split('.') {
         if part.is_empty() || part.len() > 63 { return None; }
@@ -31,21 +28,17 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
         qname.extend_from_slice(part.as_bytes());
     }
     qname.push(0);
-
-    // 2. DNS query payload (header 12B + question)
     let txid: u16 = 0x1234;
     let mut dns = Vec::with_capacity(12 + qname.len() + 4);
-    dns.extend_from_slice(&txid.to_be_bytes());     // TXID
-    dns.extend_from_slice(&[0x01, 0x00]);             // flags: standard query
-    dns.extend_from_slice(&[0x00, 0x01]);             // QDCOUNT: 1 question
-    dns.extend_from_slice(&[0x00, 0x00]);             // ANCOUNT
-    dns.extend_from_slice(&[0x00, 0x00]);             // NSCOUNT
-    dns.extend_from_slice(&[0x00, 0x00]);             // ARCOUNT
-    dns.extend_from_slice(&qname);                     // question name
-    dns.extend_from_slice(&[0x00, 0x01]);             // QTYPE: A
-    dns.extend_from_slice(&[0x00, 0x01]);             // QCLASS: IN
-
-    // 3. UDP header (8B) + DNS payload
+    dns.extend_from_slice(&txid.to_be_bytes());
+    dns.extend_from_slice(&[0x01, 0x00]);
+    dns.extend_from_slice(&[0x00, 0x01]);
+    dns.extend_from_slice(&[0x00, 0x00]);
+    dns.extend_from_slice(&[0x00, 0x00]);
+    dns.extend_from_slice(&[0x00, 0x00]);
+    dns.extend_from_slice(&qname);
+    dns.extend_from_slice(&[0x00, 0x01]);
+    dns.extend_from_slice(&[0x00, 0x01]);
     let src_port: u16 = 54321;
     let dst_port: u16 = 53;
     let udp_len = 8usize.checked_add(dns.len())?;
@@ -54,48 +47,38 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
     udp_data.extend_from_slice(&src_port.to_be_bytes());
     udp_data.extend_from_slice(&dst_port.to_be_bytes());
     udp_data.extend_from_slice(&udp_len_u16.to_be_bytes());
-    udp_data.extend_from_slice(&[0x00, 0x00]); // checksum = 0
+    udp_data.extend_from_slice(&[0x00, 0x00]);
     udp_data.extend_from_slice(&dns);
-
-    // 4. IP header (20B)
     let total_len = 20usize.checked_add(udp_data.len())?;
     let total_len_u16 = u16::try_from(total_len).ok()?;
     let mut ip = [0u8; 20];
     ip[0] = 0x45;
     ip[1] = 0;
     ip[2..4].copy_from_slice(&total_len_u16.to_be_bytes());
-    ip[4..8].copy_from_slice(&[0, 0, 0x40, 0x00]); // ID + flags/frag
-    ip[8] = 64;                                     // TTL
-    ip[9] = 17;                                     // UDP
-    ip[10..12].copy_from_slice(&[0, 0]);            // checksum placeholder
-    ip[12..16].copy_from_slice(&[10, 0, 2, 15]); // src IP
-    ip[16..20].copy_from_slice(&dns_server);       // dst IP
+    ip[4..8].copy_from_slice(&[0, 0, 0x40, 0x00]);
+    ip[8] = 64;
+    ip[9] = 17;
+    ip[10..12].copy_from_slice(&[0, 0]);
+    ip[12..16].copy_from_slice(&[10, 0, 2, 15]);
+    ip[16..20].copy_from_slice(&dns_server);
     let cs = ip_checksum(&ip);
     ip[10..12].copy_from_slice(&cs.to_be_bytes());
-
-    // 5. Serial SLIP tunnel carries raw IP (no Ethernet header)
     let mut frame = Vec::with_capacity(20 + udp_data.len());
     frame.extend_from_slice(&ip);
     frame.extend_from_slice(&udp_data);
-
     k_nano::slog_hermes!("DNS", "MANUAL", "Resolvendo {} -> {}.{}.{}.{} ({} bytes)",
         hostname, dns_server[0], dns_server[1], dns_server[2], dns_server[3], frame.len());
-
     unsafe { slip::send(&frame); }
-
-    // 6. Poll for response (multi-answer parser)
     for i in 0..200 {
         if let Some(resp) = unsafe { slip::recv() } {
             if resp.len() < 42 { continue; }
-            let dns_offset = 20 + 8; // skip IP + UDP
+            let dns_offset = 20 + 8;
             let resp_txid = u16::from_be_bytes([resp[dns_offset], resp[dns_offset + 1]]);
             if resp_txid != txid { continue; }
             let flags = u16::from_be_bytes([resp[dns_offset + 2], resp[dns_offset + 3]]);
             if flags & 0x8000 == 0 { continue; }
             let ancount = u16::from_be_bytes([resp[dns_offset + 6], resp[dns_offset + 7]]);
             if ancount == 0 { continue; }
-
-            // Skip question section
             let mut pos = dns_offset + 12;
             while pos < resp.len() && resp[pos] != 0 {
                 if resp[pos] & 0xC0 == 0xC0 { pos += 2; break; }
@@ -103,12 +86,9 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
                 pos = pos.saturating_add(step);
             }
             if pos >= resp.len() { continue; }
-            pos += 5; // null term + QTYPE + QCLASS
-
-            // Parse answers
+            pos += 5;
             for _ in 0..ancount {
                 if pos >= resp.len() { break; }
-                // Name field (can be pointer or sequence)
                 if resp[pos] & 0xC0 == 0xC0 {
                     pos = pos.saturating_add(2);
                 } else {
@@ -142,12 +122,17 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
     None
 }
 use smoltcp::iface::{Config, Interface, SocketSet, SocketHandle};
-use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
+use smoltcp::phy::{Checksum, ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 
 static NET_TX_COUNT: AtomicU64 = AtomicU64::new(0);
 static NET_RX_COUNT: AtomicU64 = AtomicU64::new(0);
 pub fn net_tx_count() -> u64 { NET_TX_COUNT.load(Ordering::Relaxed) }
 pub fn net_rx_count() -> u64 { NET_RX_COUNT.load(Ordering::Relaxed) }
+
+/// Wall-clock pause (pré-sti / sem TIMER). Delegado ao calibrador TSC.
+pub fn wall_pause_us(us: u64) {
+    k_nano::tsc::sleep_us(us);
+}
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, Ipv4Address, IpCidr};
 use smoltcp::socket::tcp::{self, State as TcpState, Socket as TcpSocket};
@@ -177,11 +162,18 @@ impl TxToken for PhyToken {
 }
 
 unsafe fn nic_send(data: Vec<u8>) {
-    // VirtIO-Net (mais rapido em QEMU)
+    if crate::wifi_softmac::is_enabled() {
+        if crate::wifi_softmac::push_tx_eth(&data) {
+            return;
+        }
+    }
     if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
         nic.send(&data); return;
     }
     if let Some(ref mut nic) = *crate::net::E1000.lock() {
+        nic.send(&data); return;
+    }
+    if let Some(ref mut nic) = *crate::net::I225.lock() {
         nic.send(&data); return;
     }
     if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
@@ -194,17 +186,24 @@ unsafe fn nic_send(data: Vec<u8>) {
 }
 
 unsafe fn nic_recv() -> Option<Vec<u8>> {
-    // VirtIO-Net first (mais rapido em QEMU)
+    if crate::wifi_softmac::is_enabled() {
+        if let Some(pkt) = crate::wifi_softmac::pop_rx_eth() {
+            return Some(pkt);
+        }
+    }
     if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
     if let Some(ref mut nic) = *crate::net::E1000.lock() {
+        nic.kick_rx_lite();
+        if let Some(pkt) = nic.recv() { return Some(pkt); }
+    }
+    if let Some(ref mut nic) = *crate::net::I225.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
     if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
-    // Generic WiFi driver — bridge formal smoltcp::phy::Device via WifiChipset trait
     let mut wifi_pkt: Option<Vec<u8>> = None;
     crate::generic_wifi::ACTIVE_DRIVER.lock(|driver| {
         if let Some(wifi) = driver {
@@ -219,7 +218,6 @@ unsafe fn nic_recv() -> Option<Vec<u8>> {
     if let Some(pkt) = wifi_pkt {
         return Some(pkt);
     }
-    // Serial tunnel (SLIP) — tenta sempre como fallback universal
     if let Some(pkt) = k_nano::slip::recv() {
         return Some(pkt);
     }
@@ -234,16 +232,19 @@ impl Device for NetPhy {
 
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
-        caps.max_transmission_unit = 1500;
+        caps.max_transmission_unit = 1514;
         caps.medium = Medium::Ethernet;
+        let mut csum = ChecksumCapabilities::ignored();
+        csum.ipv4 = Checksum::Both;
+        csum.udp = Checksum::Tx;
+        csum.tcp = Checksum::Both;
+        csum.icmpv4 = Checksum::Tx;
+        caps.checksum = csum;
         caps
     }
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let data = unsafe { nic_recv() };
-        if let Some(ref d) = data {
-            unsafe { k_nano::slog_hermes!("NET", "RX", "{} bytes", d.len()); }
-        }
         data.map(|d| (PhyToken(d), PhyToken(vec![])))
     }
 
@@ -268,6 +269,8 @@ pub struct HttpConn {
     started: bool,
     pub buf: Vec<u8>,
     timeout: u32,
+    pub expect_len: usize,
+    pub header_len: usize,
 }
 
 pub struct NetStack {
@@ -279,12 +282,23 @@ pub struct NetStack {
     pub has_static_ip: bool,
     pub tx_count: u64,
     pub rx_count: u64,
-    /// P2P UDP broadcast socket handle (port 42069)
     udp_handle: SocketHandle,
 }
 
 fn ip_to_u32(ip: [u8; 4]) -> u32 {
     (ip[0] as u32) << 24 | (ip[1] as u32) << 16 | (ip[2] as u32) << 8 | ip[3] as u32
+}
+
+fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    for i in 0..=haystack.len() - needle.len() {
+        if &haystack[i..i + needle.len()] == needle {
+            return Some(i);
+        }
+    }
+    None
 }
 
 impl NetStack {
@@ -296,7 +310,6 @@ impl NetStack {
         let iface = Interface::new(config, &mut phy, now);
         let mut sockets = SocketSet::new(vec![]);
 
-        // DHCP socket — auto-discovery via broadcast
         let dhcp = DhcpSocket::new();
         let dhcp_handle = sockets.add(dhcp);
 
@@ -310,7 +323,6 @@ impl NetStack {
             udp_socket::PacketBuffer::new(udp_meta_tx, udp_buf_tx),
         );
         let udp_handle = sockets.add(udp);
-        // Bind after adding to socket set — bind on 0.0.0.0:42069
         {
             let socket = sockets.get_mut::<udp_socket::Socket>(udp_handle);
             let _ = socket.bind(42069);
@@ -320,22 +332,44 @@ impl NetStack {
         NetStack { iface, sockets, phy, dhcp_handle, dhcp_done: false, has_static_ip: false, tx_count: 0, rx_count: 0, udp_handle }
     }
 
-    /// Configura IP estatico para QEMU user-mode (10.0.2.15/24)
-    pub fn set_static_ip(&mut self) {
-        let ip = Ipv4Address::new(10, 0, 2, 15);
+    pub fn set_static_ip(&mut self, custom_ip: Option<[u8; 4]>) {
+        let (ip_bytes, gw_byte3): ([u8; 4], u8) = match custom_ip {
+            Some(ip) => (ip, ip[2]),
+            None => ([10, 0, 2, 15], 2),
+        };
+        let ip = Ipv4Address::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
         let cidr = IpCidr::new(IpAddress::Ipv4(ip), 24);
         self.iface.update_ip_addrs(|addrs| { addrs.push(cidr).ok(); });
-        let gw = Ipv4Address::new(10, 0, 2, 2);
+        let gw = Ipv4Address::new(ip_bytes[0], ip_bytes[1], gw_byte3, 2);
         self.iface.routes_mut().add_default_ipv4_route(gw.into()).ok();
         self.dhcp_done = true;
         self.has_static_ip = true;
-        k_nano::slog_hermes!("Net", "info", "Static IP: 10.0.2.15/24 gw=10.0.2.2");
+        let dns_ip = [ip_bytes[0], ip_bytes[1], gw_byte3, 3];
+        {
+            let mut cfg = crate::net::NET_CONFIG.lock();
+            cfg.ip = ip_bytes;
+            cfg.gateway_ip = [ip_bytes[0], ip_bytes[1], gw_byte3, 2];
+            cfg.subnet_mask = [255, 255, 255, 0];
+            cfg.dns_ip = dns_ip;
+            cfg.configured = true;
+            cfg.online = true;
+        }
+        k_nano::net::set_nic_config(crate::net::NET_CONFIG.lock().mac, ip_bytes);
+        k_nano::slog_hermes!("Net", "info",
+            "Static IP: {}.{}.{}.{}/24 gw={}.{}.{}.2 dns={}.{}.{}.3",
+            ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3],
+            ip_bytes[0], ip_bytes[1], gw_byte3,
+            ip_bytes[0], ip_bytes[1], gw_byte3);
+    }
+
+    /// Compat shim for old callers without custom IP.
+    pub fn set_static_ip_legacy(&mut self) {
+        self.set_static_ip(None);
     }
 
     pub fn poll(&mut self, now_ms: i64) {
         let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
         let now = Instant::from_millis(now_ms);
-        // Poll in tight loop until no more work — required for DHCP multi-step
         loop {
             let _ = iface.poll(now, phy, sockets);
             match iface.poll_delay(now, sockets) {
@@ -343,18 +377,14 @@ impl NetStack {
                 _ => break,
             }
         }
-        // Fast-path para serial tunnel: se COM2 tem dados, poll novamente imediatamente
-        // Isso evita o delay de 1 tick (~55ms) entre a chegada do dado e o processamento
         if k_nano::env::is_sandbox() && unsafe { k_nano::slip::has_data() } {
             let _ = iface.poll(now, phy, sockets);
         }
     }
 
-    /// Poll DHCP — multi-step DISCOVER→OFFER→REQUEST→ACK
     pub fn dhcp_poll(&mut self, now_ms: i64) -> (bool, [u8; 4], [u8; 4]) {
         let Self { ref mut iface, ref mut phy, ref mut sockets, ref mut dhcp_done, .. } = self;
         let now = Instant::from_millis(now_ms);
-        // Tight poll loop
         loop {
             let _ = iface.poll(now, phy, sockets);
             match iface.poll_delay(now, sockets) {
@@ -367,10 +397,8 @@ impl NetStack {
         if let Some(event) = dhcp.poll() {
             match event {
                 DhcpEvent::Configured(config) => {
-                    // Apply IP address from DHCP
                     let cidr = smoltcp::wire::IpCidr::Ipv4(config.address);
                     iface.update_ip_addrs(|addrs| { addrs.push(cidr).ok(); });
-                    // Apply default route via DHCP router
                     if let Some(router) = config.router {
                         iface.routes_mut().add_default_ipv4_route(router.into()).ok();
                     }
@@ -388,7 +416,40 @@ impl NetStack {
     }
 
     pub fn http_new(&mut self, host: [u8; 4], port: u16, path: &str) -> HttpConn {
-        let tcp_rx = tcp::SocketBuffer::new(vec![0u8; 4096]);
+        self.http_new_host(host, port, path, None)
+    }
+
+    pub fn http_new_host(
+        &mut self,
+        host: [u8; 4],
+        port: u16,
+        path: &str,
+        host_header: Option<&str>,
+    ) -> HttpConn {
+        self.http_new_host_ex(host, port, path, host_header, None)
+    }
+
+    pub fn http_new_host_ranged(
+        &mut self,
+        host: [u8; 4],
+        port: u16,
+        path: &str,
+        host_header: Option<&str>,
+        start: usize,
+        end: usize,
+    ) -> HttpConn {
+        self.http_new_host_ex(host, port, path, host_header, Some((start, end)))
+    }
+
+    fn http_new_host_ex(
+        &mut self,
+        host: [u8; 4],
+        port: u16,
+        path: &str,
+        host_header: Option<&str>,
+        range: Option<(usize, usize)>,
+    ) -> HttpConn {
+        let tcp_rx = tcp::SocketBuffer::new(vec![0u8; 8192]);
         let tcp_tx = tcp::SocketBuffer::new(vec![0u8; 4096]);
         let tcp = TcpSocket::new(tcp_rx, tcp_tx);
         let handle = self.sockets.add(tcp);
@@ -396,12 +457,24 @@ impl NetStack {
         let remote = (IpAddress::v4(host[0], host[1], host[2], host[3]), port);
         let tcp = self.sockets.get_mut::<TcpSocket>(handle);
         let context = self.iface.context();
-        let _ = tcp.connect(context, remote, 54321);
+        let local_port: u16 = 49152u16.wrapping_add((net_tx_count() as u16) & 0x3fff);
+        let _ = tcp.connect(context, remote, local_port);
 
-        let request = alloc::format!(
-            "GET {} HTTP/1.1\r\nHost: {}.{}.{}.{}\r\nConnection: close\r\n\r\n",
-            path, host[0], host[1], host[2], host[3]
-        );
+        let host_line = match host_header {
+            Some(h) if !h.is_empty() => alloc::string::String::from(h),
+            _ => alloc::format!("{}.{}.{}.{}", host[0], host[1], host[2], host[3]),
+        };
+        let request = if let Some((start, end)) = range {
+            alloc::format!(
+                "GET {} HTTP/1.1\r\nHost: {}\r\nRange: bytes={}-{}\r\nConnection: close\r\n\r\n",
+                path, host_line, start, end
+            )
+        } else {
+            alloc::format!(
+                "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                path, host_line
+            )
+        };
 
         HttpConn {
             handle,
@@ -410,15 +483,82 @@ impl NetStack {
             started: false,
             buf: Vec::new(),
             timeout: 0,
+            expect_len: 0,
+            header_len: 0,
         }
+    }
+
+    pub fn tcp_exchange(&mut self, host: [u8; 4], port: u16, payload: &[u8], now: u64) -> Option<Vec<u8>> {
+        let tcp_rx = tcp::SocketBuffer::new(vec![0u8; 8192]);
+        let tcp_tx = tcp::SocketBuffer::new(vec![0u8; 8192]);
+        let tcp = TcpSocket::new(tcp_rx, tcp_tx);
+        let handle = self.sockets.add(tcp);
+        let remote = (IpAddress::v4(host[0], host[1], host[2], host[3]), port);
+        {
+            let tcp = self.sockets.get_mut::<TcpSocket>(handle);
+            let context = self.iface.context();
+            let local_port: u16 = 50000u16.wrapping_add((net_tx_count() as u16) & 0x3fff);
+            let _ = tcp.connect(context, remote, local_port);
+        }
+        let mut sent = false;
+        let mut buf = Vec::new();
+        for _ in 0..8_000 {
+            let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
+            iface.poll(Instant::from_millis(now as i64), phy, sockets);
+            let tcp = sockets.get_mut::<TcpSocket>(handle);
+            match tcp.state() {
+                TcpState::Established => {
+                    if !sent {
+                        let _ = tcp.send_slice(payload);
+                        sent = true;
+                    }
+                    if tcp.can_recv() {
+                        if let Ok(chunk) = tcp.recv(|data| {
+                            let v = Vec::from(&*data);
+                            (data.len(), v)
+                        }) {
+                            buf.extend_from_slice(&chunk);
+                        }
+                    }
+                }
+                TcpState::CloseWait => {
+                    if tcp.can_recv() {
+                        if let Ok(chunk) = tcp.recv(|data| {
+                            let v = Vec::from(&*data);
+                            (data.len(), v)
+                        }) {
+                            buf.extend_from_slice(&chunk);
+                        }
+                    }
+                    tcp.close();
+                    break;
+                }
+                TcpState::Closed | TcpState::Closing => break,
+                TcpState::SynSent | TcpState::SynReceived => {}
+                _ => {
+                    if sent && !buf.is_empty() {
+                        break;
+                    }
+                }
+            }
+            core::hint::spin_loop();
+        }
+        {
+            let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
+            let tcp = sockets.get_mut::<TcpSocket>(handle);
+            tcp.close();
+            iface.poll(Instant::from_millis(now as i64), phy, sockets);
+            sockets.remove(handle);
+        }
+        if buf.is_empty() { None } else { Some(buf) }
     }
 
     pub fn http_poll(&mut self, conn: &mut HttpConn, now: u64) {
         let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
-        iface.poll(Instant::from_millis(now as i64), phy, sockets);
+        iface.poll(Instant::from_millis(now.saturating_mul(55) as i64), phy, sockets);
 
         conn.timeout = conn.timeout.wrapping_add(1);
-        if conn.timeout > 200 {
+        if conn.timeout > 200_000 {
             conn.state = HttpState::Failed;
             return;
         }
@@ -443,6 +583,9 @@ impl NetStack {
                         Ok(data) => {
                             conn.buf.extend_from_slice(&data);
                             conn.state = HttpState::Receiving;
+                            if conn.expect_len == 0 && conn.header_len == 0 {
+                                Self::parse_http_meta(conn);
+                            }
                         }
                         Err(_) => conn.state = HttpState::Failed,
                     }
@@ -451,22 +594,37 @@ impl NetStack {
                 }
             }
             TcpState::CloseWait => {
-                if tcp.can_recv() {
+                while tcp.can_recv() {
                     let result = tcp.recv(|data| {
                         let v = Vec::from(&*data);
                         (data.len(), v)
                     });
-                    if let Ok(data) = result {
-                        conn.buf.extend_from_slice(&data);
+                    match result {
+                        Ok(data) => conn.buf.extend_from_slice(&data),
+                        Err(_) => break,
                     }
                 }
                 tcp.close();
-                let data = core::mem::take(&mut conn.buf);
-                conn.state = HttpState::Done(data);
+                if Self::http_complete(conn) {
+                    let data = core::mem::take(&mut conn.buf);
+                    conn.state = HttpState::Done(data);
+                } else {
+                    conn.state = HttpState::Failed;
+                }
             }
             TcpState::Closed | TcpState::Closing => {
-                let data = core::mem::take(&mut conn.buf);
-                if !data.is_empty() {
+                while tcp.can_recv() {
+                    let result = tcp.recv(|data| {
+                        let v = Vec::from(&*data);
+                        (data.len(), v)
+                    });
+                    match result {
+                        Ok(data) => conn.buf.extend_from_slice(&data),
+                        Err(_) => break,
+                    }
+                }
+                if Self::http_complete(conn) {
+                    let data = core::mem::take(&mut conn.buf);
                     conn.state = HttpState::Done(data);
                 } else {
                     conn.state = HttpState::Failed;
@@ -478,11 +636,52 @@ impl NetStack {
         }
     }
 
-    /// Envia dados brutos via TCP (nao HTTP) — usado por SMTP
+    fn parse_http_meta(conn: &mut HttpConn) {
+        let n = conn.buf.len();
+        let mut header_end = 0usize;
+        for i in 0..n.saturating_sub(3) {
+            if conn.buf[i] == b'\r'
+                && conn.buf[i + 1] == b'\n'
+                && conn.buf[i + 2] == b'\r'
+                && conn.buf[i + 3] == b'\n'
+            {
+                header_end = i + 4;
+                break;
+            }
+        }
+        if header_end == 0 {
+            return;
+        }
+        conn.header_len = header_end;
+        let head = &conn.buf[..header_end];
+        let lower = head.to_ascii_lowercase();
+        let needle = b"content-length:";
+        if let Some(pos) = find_sub(&lower, needle) {
+            let start = pos + needle.len();
+            let mut end = start;
+            // skip whitespace
+            while end < lower.len() && (lower[end] == b' ' || lower[end] == b'\t') { end += 1; }
+            let digits_start = end;
+            while end < lower.len() && (lower[end] as char).is_ascii_digit() {
+                end += 1;
+            }
+            if let Ok(cl) = core::str::from_utf8(&lower[digits_start..end]).unwrap_or("").trim().parse::<usize>() {
+                conn.expect_len = cl;
+            }
+        }
+    }
+
+    fn http_complete(conn: &HttpConn) -> bool {
+        if conn.expect_len == 0 {
+            return !conn.buf.is_empty();
+        }
+        let body = conn.buf.len().saturating_sub(conn.header_len);
+        body >= conn.expect_len
+    }
+
     pub fn http_send_raw(&mut self, conn: &mut HttpConn, data: &[u8]) {
         conn.request = alloc::string::String::from(core::str::from_utf8(data).unwrap_or(""));
     }
-
     pub fn http_close(&mut self, conn: &mut HttpConn) {
         let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
         let tcp = sockets.get_mut::<TcpSocket>(conn.handle);
@@ -492,106 +691,326 @@ impl NetStack {
     }
 
     pub fn dns_resolve(&mut self, hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]> {
+        let tx0 = net_tx_count();
+        let rx0 = net_rx_count();
+        let (sip, smac) = {
+            let cfg = crate::net::NET_CONFIG.lock();
+            let sip = if cfg.ip != [0; 4] { cfg.ip } else { [10, 0, 2, 15] };
+            (sip, cfg.mac)
+        };
+        if smac == [0; 6] {
+            k_nano::slog_hermes!("DNS", "info", "raw SKIP: MAC zero");
+            return None;
+        }
+
+        let dmac = match Self::arp_resolve_raw(sip, dns_server, smac) {
+            Some(m) => m,
+            None => {
+                k_nano::slog_hermes!("DNS", "info", "raw ARP timeout for {}.{}.{}.{}",
+                    dns_server[0], dns_server[1], dns_server[2], dns_server[3]);
+                return None;
+            }
+        };
+
         let txid: u16 = 0x1234;
         let qname = Self::encode_dns_name(hostname);
+        let mut dns = Vec::with_capacity(12 + qname.len() + 4);
+        dns.extend_from_slice(&txid.to_be_bytes());
+        dns.extend_from_slice(&[0x01, 0x00]);
+        dns.extend_from_slice(&[0x00, 0x01]);
+        dns.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        dns.extend_from_slice(&qname);
+        dns.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
 
-        let mut query = Vec::with_capacity(12 + qname.len() + 4);
-        query.extend_from_slice(&txid.to_be_bytes());
-        query.extend_from_slice(&[0x01, 0x00]);
-        query.extend_from_slice(&[0x00, 0x01]);
-        query.extend_from_slice(&[0x00, 0x00]);
-        query.extend_from_slice(&[0x00, 0x00]);
-        query.extend_from_slice(&[0x00, 0x00]);
-        query.extend_from_slice(&qname);
-        query.extend_from_slice(&[0x00, 0x01]);
-        query.extend_from_slice(&[0x00, 0x01]);
+        let src_port: u16 = 54321;
+        let udp_len = (8 + dns.len()) as u16;
+        let mut udp = Vec::with_capacity(udp_len as usize);
+        udp.extend_from_slice(&src_port.to_be_bytes());
+        udp.extend_from_slice(&53u16.to_be_bytes());
+        udp.extend_from_slice(&udp_len.to_be_bytes());
+        udp.extend_from_slice(&[0x00, 0x00]);
+        udp.extend_from_slice(&dns);
 
-        let dns_server_addr = (IpAddress::v4(dns_server[0], dns_server[1], dns_server[2], dns_server[3]), 53u16);
+        let total_len = (20 + udp.len()) as u16;
+        let mut ip = [0u8; 20];
+        ip[0] = 0x45;
+        ip[2..4].copy_from_slice(&total_len.to_be_bytes());
+        ip[8] = 64;
+        ip[9] = 17;
+        ip[12..16].copy_from_slice(&sip);
+        ip[16..20].copy_from_slice(&dns_server);
+        let cs = ip_checksum(&ip);
+        ip[10..12].copy_from_slice(&cs.to_be_bytes());
 
-        let meta = vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 1];
-        let payload = vec![0u8; 512];
-        let buf_rx = udp_socket::PacketBuffer::new(meta, payload);
-        let meta2 = vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 1];
-        let payload2 = vec![0u8; 512];
-        let buf_tx = udp_socket::PacketBuffer::new(meta2, payload2);
-        let socket = udp_socket::Socket::new(buf_rx, buf_tx);
-        let handle = self.sockets.add(socket);
+        let mut frame = Vec::with_capacity(14 + 20 + udp.len());
+        frame.extend_from_slice(&dmac);
+        frame.extend_from_slice(&smac);
+        frame.extend_from_slice(&[0x08, 0x00]);
+        frame.extend_from_slice(&ip);
+        frame.extend_from_slice(&udp);
 
-        {
-            let udp = self.sockets.get_mut::<udp_socket::Socket>(handle);
-            let _ = udp.bind(54321);
-            if udp.send_slice(&query, dns_server_addr).is_err() {
-                k_nano::slog_hermes!("DNS", "info", "send_slice falhou");
-            }
-        }
-
-        for i in 0..500 {
-            let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
-            iface.poll(Instant::from_millis(i as i64 * 5), phy, sockets);
-
-            let payload = {
-                let udp = sockets.get_mut::<udp_socket::Socket>(handle);
-                udp.recv().ok().map(|(data, _)| Vec::from(data))
-            };
-
-            if let Some(ref data) = payload {
-                if data.len() < 12 { break; }
-                let resp_txid = u16::from_be_bytes([data[0], data[1]]);
-                if resp_txid != txid { continue; }
-                let flags = u16::from_be_bytes([data[2], data[3]]);
-                if flags & 0x8000 == 0 { continue; }
-                let ancount = u16::from_be_bytes([data[6], data[7]]);
-                if ancount == 0 { break; }
-
-                let (mut pos, _) = Self::parse_dns_name(data, 12);
-                pos += 4;
-
-                for _ in 0..ancount {
-                    let (new_pos, name_end) = Self::parse_dns_name(data, pos);
-                    pos = new_pos;
-                    let rtype = u16::from_be_bytes([data[pos], data[pos + 1]]);
-                    let rclass = u16::from_be_bytes([data[pos + 2], data[pos + 3]]);
-                    let _ttl = u32::from_be_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
-                    let rdlen = u16::from_be_bytes([data[pos + 8], data[pos + 9]]) as usize;
-                    pos += 10;
-
-                    if rtype == 1 && rclass == 1 && rdlen == 4 {
-                        let ip = [data[pos], data[pos + 1], data[pos + 2], data[pos + 3]];
-                        self.sockets.remove(handle);
-                        return Some(ip);
-                    }
-                    pos = name_end.max(pos + rdlen);
+        for attempt in 0..8u32 {
+            unsafe { nic_send(frame.clone()) };
+            NET_TX_COUNT.fetch_add(1, Ordering::Relaxed);
+            for _ in 0..600u32 {
+                wall_pause_us(500);
+                let pkt = unsafe { nic_recv() };
+                let Some(pkt) = pkt else { continue };
+                NET_RX_COUNT.fetch_add(1, Ordering::Relaxed);
+                if let Some(ip) = Self::parse_dns_udp_reply(&pkt, txid, src_port) {
+                    let _ = self.prime_neighbor_for_http();
+                    k_nano::slog_hermes!(
+                        "DNS",
+                        "info",
+                        "OK raw {}.{}.{}.{} (dtx={} drx={} attempt={})",
+                        ip[0], ip[1], ip[2], ip[3],
+                        net_tx_count().saturating_sub(tx0),
+                        net_rx_count().saturating_sub(rx0),
+                        attempt + 1
+                    );
+                    return Some(ip);
                 }
-                break;
             }
         }
-        self.sockets.remove(handle);
+        k_nano::slog_hermes!(
+            "DNS",
+            "info",
+            "timeout raw dtx={} drx={} tx={} rx={}",
+            net_tx_count().saturating_sub(tx0),
+            net_rx_count().saturating_sub(rx0),
+            net_tx_count(),
+            net_rx_count()
+        );
         None
     }
 
-    // ── P2P UDP broadcast — Brain Mesh discovery ────────────────
+    fn arp_resolve_raw(sip: [u8; 4], tip: [u8; 4], smac: [u8; 6]) -> Option<[u8; 6]> {
+        let mut req = [0u8; 42];
+        req[0..6].copy_from_slice(&[0xff; 6]);
+        req[6..12].copy_from_slice(&smac);
+        req[12] = 0x08;
+        req[13] = 0x06;
+        req[14] = 0x00;
+        req[15] = 0x01;
+        req[16] = 0x08;
+        req[17] = 0x00;
+        req[18] = 6;
+        req[19] = 4;
+        req[20] = 0x00;
+        req[21] = 0x01;
+        req[22..28].copy_from_slice(&smac);
+        req[28..32].copy_from_slice(&sip);
+        req[38..42].copy_from_slice(&tip);
 
-    /// Envia pacote para 255.255.255.255:42069 (broadcast LAN).
-    pub fn udp_broadcast_send(&mut self, data: &[u8]) -> Result<(), ()> {
-        let udp = self.sockets.get_mut::<udp_socket::Socket>(self.udp_handle);
-        let addr = (IpAddress::v4(255, 255, 255, 255), 42069u16);
-        udp.send_slice(data, addr).map_err(|_| ())
-    }
-
-    /// Recebe um pacote UDP broadcast, se disponível.
-    pub fn udp_broadcast_recv(&mut self) -> Option<Vec<u8>> {
-        let udp = self.sockets.get_mut::<udp_socket::Socket>(self.udp_handle);
-        if udp.can_recv() {
-            udp.recv().ok().map(|(data, _meta)| Vec::from(data))
-        } else {
-            None
+        for _ in 0..5u32 {
+            unsafe { nic_send(req.to_vec()) };
+            NET_TX_COUNT.fetch_add(1, Ordering::Relaxed);
+            for _ in 0..400u32 {
+                wall_pause_us(500);
+                let Some(pkt) = (unsafe { nic_recv() }) else { continue };
+                NET_RX_COUNT.fetch_add(1, Ordering::Relaxed);
+                if pkt.len() < 42 {
+                    continue;
+                }
+                if pkt[12] != 0x08 || pkt[13] != 0x06 {
+                    continue;
+                }
+                let oper = u16::from_be_bytes([pkt[20], pkt[21]]);
+                if oper != 2 {
+                    continue;
+                }
+                let spa = [pkt[28], pkt[29], pkt[30], pkt[31]];
+                if spa != tip {
+                    continue;
+                }
+                let mut mac = [0u8; 6];
+                mac.copy_from_slice(&pkt[22..28]);
+                return Some(mac);
+            }
         }
+        None
     }
 
-    /// Verifica se há dados UDP broadcast pendentes.
-    pub fn has_udp_broadcast(&mut self) -> bool {
-        let udp = self.sockets.get_mut::<udp_socket::Socket>(self.udp_handle);
-        udp.can_recv()
+    pub fn udp_exchange_raw(
+        &mut self,
+        dst: [u8; 4],
+        dst_port: u16,
+        payload: &[u8],
+    ) -> Option<Vec<u8>> {
+        let (sip, smac) = {
+            let cfg = crate::net::NET_CONFIG.lock();
+            let sip = if cfg.ip != [0; 4] { cfg.ip } else { [10, 0, 2, 15] };
+            (sip, cfg.mac)
+        };
+        if smac == [0; 6] || payload.is_empty() {
+            return None;
+        }
+        let dmac = Self::arp_resolve_raw(sip, dst, smac)?;
+        let src_port: u16 = 54323;
+        let udp_len = (8 + payload.len()) as u16;
+        let mut udp = Vec::with_capacity(udp_len as usize);
+        udp.extend_from_slice(&src_port.to_be_bytes());
+        udp.extend_from_slice(&dst_port.to_be_bytes());
+        udp.extend_from_slice(&udp_len.to_be_bytes());
+        udp.extend_from_slice(&[0x00, 0x00]);
+        udp.extend_from_slice(payload);
+
+        let total_len = (20 + udp.len()) as u16;
+        let mut ip = [0u8; 20];
+        ip[0] = 0x45;
+        ip[2..4].copy_from_slice(&total_len.to_be_bytes());
+        ip[8] = 64;
+        ip[9] = 17;
+        ip[12..16].copy_from_slice(&sip);
+        ip[16..20].copy_from_slice(&dst);
+        let cs = ip_checksum(&ip);
+        ip[10..12].copy_from_slice(&cs.to_be_bytes());
+
+        let mut frame = Vec::with_capacity(14 + 20 + udp.len());
+        frame.extend_from_slice(&dmac);
+        frame.extend_from_slice(&smac);
+        frame.extend_from_slice(&[0x08, 0x00]);
+        frame.extend_from_slice(&ip);
+        frame.extend_from_slice(&udp);
+
+        for _attempt in 0..6u32 {
+            unsafe { nic_send(frame.clone()) };
+            NET_TX_COUNT.fetch_add(1, Ordering::Relaxed);
+            for _ in 0..800u32 {
+                wall_pause_us(500);
+                let pkt = unsafe { nic_recv() };
+                let Some(pkt) = pkt else { continue };
+                NET_RX_COUNT.fetch_add(1, Ordering::Relaxed);
+                if let Some(pl) = Self::parse_udp_payload(&pkt, src_port, dst_port) {
+                    return Some(pl);
+                }
+            }
+        }
+        None
+    }
+
+    fn parse_udp_payload(pkt: &[u8], local_port: u16, expect_sport: u16) -> Option<Vec<u8>> {
+        if pkt.len() < 14 + 20 + 8 {
+            return None;
+        }
+        if pkt[12] != 0x08 || pkt[13] != 0x00 {
+            return None;
+        }
+        let ihl = (pkt[14] & 0x0f) as usize * 4;
+        if ihl < 20 || pkt.len() < 14 + ihl + 8 {
+            return None;
+        }
+        if pkt[14 + 9] != 17 {
+            return None;
+        }
+        let udp = 14 + ihl;
+        let sport = u16::from_be_bytes([pkt[udp], pkt[udp + 1]]);
+        let dport = u16::from_be_bytes([pkt[udp + 2], pkt[udp + 3]]);
+        if sport != expect_sport || dport != local_port {
+            return None;
+        }
+        let ulen = u16::from_be_bytes([pkt[udp + 4], pkt[udp + 5]]) as usize;
+        if ulen < 8 || pkt.len() < udp + ulen {
+            return None;
+        }
+        Some(pkt[udp + 8..udp + ulen].to_vec())
+    }
+
+    fn parse_dns_udp_reply(pkt: &[u8], txid: u16, local_port: u16) -> Option<[u8; 4]> {
+        if pkt.len() < 14 + 20 + 8 + 12 {
+            return None;
+        }
+        if pkt[12] != 0x08 || pkt[13] != 0x00 {
+            return None;
+        }
+        let ihl = (pkt[14] & 0x0f) as usize * 4;
+        if ihl < 20 || pkt.len() < 14 + ihl + 8 + 12 {
+            return None;
+        }
+        if pkt[14 + 9] != 17 {
+            return None;
+        }
+        let udp = 14 + ihl;
+        let sport = u16::from_be_bytes([pkt[udp], pkt[udp + 1]]);
+        let dport = u16::from_be_bytes([pkt[udp + 2], pkt[udp + 3]]);
+        if sport != 53 || dport != local_port {
+            return None;
+        }
+        let dns_off = udp + 8;
+        let data = &pkt[dns_off..];
+        if data.len() < 12 {
+            return None;
+        }
+        let resp_txid = u16::from_be_bytes([data[0], data[1]]);
+        if resp_txid != txid {
+            return None;
+        }
+        let flags = u16::from_be_bytes([data[2], data[3]]);
+        if flags & 0x8000 == 0 {
+            return None;
+        }
+        let ancount = u16::from_be_bytes([data[6], data[7]]);
+        if ancount == 0 {
+            return None;
+        }
+        let mut pos = Self::skip_dns_name(data, 12);
+        pos += 4;
+        for _ in 0..ancount {
+            if pos + 10 > data.len() {
+                break;
+            }
+            pos = Self::skip_dns_name(data, pos);
+            if pos + 10 > data.len() {
+                break;
+            }
+            let rtype = u16::from_be_bytes([data[pos], data[pos + 1]]);
+            let rclass = u16::from_be_bytes([data[pos + 2], data[pos + 3]]);
+            let rdlen = u16::from_be_bytes([data[pos + 8], data[pos + 9]]) as usize;
+            pos += 10;
+            if rtype == 1 && rclass == 1 && rdlen == 4 && pos + 4 <= data.len() {
+                return Some([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+            }
+            pos = pos.saturating_add(rdlen);
+        }
+        None
+    }
+
+    pub fn prime_neighbor_for_http(&mut self) -> bool {
+        self.prime_neighbor_smoltcp([10, 0, 2, 2])
+    }
+
+    fn prime_neighbor_smoltcp(&mut self, target: [u8; 4]) -> bool {
+        let addr = (IpAddress::v4(target[0], target[1], target[2], target[3]), 9u16);
+        let meta = vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 2];
+        let payload = vec![0u8; 64];
+        let buf_rx = udp_socket::PacketBuffer::new(meta, payload);
+        let meta2 = vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 2];
+        let payload2 = vec![0u8; 64];
+        let buf_tx = udp_socket::PacketBuffer::new(meta2, payload2);
+        let socket = udp_socket::Socket::new(buf_rx, buf_tx);
+        let handle = self.sockets.add(socket);
+        {
+            let udp = self.sockets.get_mut::<udp_socket::Socket>(handle);
+            let _ = udp.bind(54322);
+            let _ = udp.send_slice(&[0u8], addr);
+        }
+        let tx_before = net_tx_count();
+        for i in 0..400u64 {
+            self.poll((i * 5) as i64);
+            wall_pause_us(500);
+            if i > 0 && i % 40 == 0 {
+                let udp = self.sockets.get_mut::<udp_socket::Socket>(handle);
+                if udp.can_send() {
+                    let _ = udp.send_slice(&[0u8], addr);
+                }
+            }
+            if net_tx_count().saturating_sub(tx_before) >= 2 {
+                self.sockets.remove(handle);
+                return true;
+            }
+        }
+        self.sockets.remove(handle);
+        net_tx_count().saturating_sub(tx_before) >= 1
     }
 
     fn encode_dns_name(name: &str) -> Vec<u8> {
@@ -604,29 +1023,177 @@ impl NetStack {
         buf
     }
 
-    fn parse_dns_name(pkt: &[u8], offset: usize) -> (usize, usize) {
+    fn skip_dns_name(pkt: &[u8], offset: usize) -> usize {
         let mut pos = offset;
-        let mut jumped = false;
-        let mut end = 0;
         while pos < pkt.len() {
             let b = pkt[pos];
             if b & 0xC0 == 0xC0 {
-                if !jumped { end = pos + 2; }
-                pos = ((b as usize & 0x3F) << 8) | (pkt[pos + 1] as usize);
-                jumped = true;
+                return pos.saturating_add(2);
             } else if b == 0 {
-                pos += 1;
-                return (pos, if jumped { end } else { pos });
+                return pos.saturating_add(1);
             } else {
-                pos += 1 + b as usize;
+                pos = pos.saturating_add(1 + b as usize);
             }
         }
-        (pos, pos)
+        pos
+    }
+
+    // ── TCP session (TLS N4 / embedded-io) ────────────────────────────
+
+    pub fn tcp_session_connect(
+        &mut self,
+        host: [u8; 4],
+        port: u16,
+        now: u64,
+    ) -> Option<SocketHandle> {
+        let tcp_rx = tcp::SocketBuffer::new(vec![0u8; 16_384]);
+        let tcp_tx = tcp::SocketBuffer::new(vec![0u8; 16_384]);
+        let tcp = TcpSocket::new(tcp_rx, tcp_tx);
+        let handle = self.sockets.add(tcp);
+        let remote = (IpAddress::v4(host[0], host[1], host[2], host[3]), port);
+        {
+            let tcp = self.sockets.get_mut::<TcpSocket>(handle);
+            let context = self.iface.context();
+            let local_port: u16 = 51000u16.wrapping_add((net_tx_count() as u16) & 0x3fff);
+            let _ = tcp.connect(context, remote, local_port);
+        }
+        let mut t = now;
+        for _ in 0..6_000 {
+            t = t.wrapping_add(5);
+            self.tcp_session_poll(t);
+            wall_pause_us(200);
+            let st = self.sockets.get_mut::<TcpSocket>(handle).state();
+            match st {
+                TcpState::Established => return Some(handle),
+                TcpState::Closed | TcpState::Closing | TcpState::TimeWait => break,
+                _ => {}
+            }
+        }
+        k_nano::slog_hermes!("TLS", "info", "tcp_connect timeout state");
+        self.tcp_session_close(handle, t);
+        None
+    }
+
+    pub fn tcp_session_poll(&mut self, now: u64) {
+        let Self {
+            ref mut iface,
+            ref mut phy,
+            ref mut sockets,
+            ..
+        } = self;
+        iface.poll(Instant::from_millis(now as i64), phy, sockets);
+    }
+
+    pub fn tcp_session_send(
+        &mut self,
+        handle: SocketHandle,
+        data: &[u8],
+        now: u64,
+    ) -> Result<usize, ()> {
+        let mut offset = 0usize;
+        let mut t = now;
+        for _ in 0..8_000 {
+            t = t.wrapping_add(5);
+            self.tcp_session_poll(t);
+            wall_pause_us(100);
+            let tcp = self.sockets.get_mut::<TcpSocket>(handle);
+            match tcp.state() {
+                TcpState::Established => {
+                    if offset >= data.len() {
+                        return Ok(offset);
+                    }
+                    if tcp.can_send() {
+                        match tcp.send_slice(&data[offset..]) {
+                            Ok(n) => {
+                                offset = offset.saturating_add(n);
+                                if offset >= data.len() {
+                                    return Ok(offset);
+                                }
+                            }
+                            Err(_) => return Err(()),
+                        }
+                    }
+                }
+                TcpState::Closed | TcpState::Closing | TcpState::TimeWait => {
+                    return if offset > 0 { Ok(offset) } else { Err(()) };
+                }
+                _ => {}
+            }
+        }
+        if offset > 0 {
+            Ok(offset)
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn tcp_session_recv(
+        &mut self,
+        handle: SocketHandle,
+        buf: &mut [u8],
+        now: u64,
+    ) -> Result<usize, ()> {
+        let mut t = now;
+        for _ in 0..8_000 {
+            t = t.wrapping_add(5);
+            self.tcp_session_poll(t);
+            wall_pause_us(100);
+            let tcp = self.sockets.get_mut::<TcpSocket>(handle);
+            if tcp.can_recv() {
+                return tcp
+                    .recv(|data| {
+                        let n = core::cmp::min(buf.len(), data.len());
+                        buf[..n].copy_from_slice(&data[..n]);
+                        (n, n)
+                    })
+                    .map_err(|_| ());
+            }
+            match tcp.state() {
+                TcpState::CloseWait => {
+                    if tcp.can_recv() {
+                        continue;
+                    }
+                    return Ok(0);
+                }
+                TcpState::Closed | TcpState::Closing | TcpState::TimeWait => return Ok(0),
+                _ => {}
+            }
+        }
+        Err(())
+    }
+
+    pub fn tcp_session_close(&mut self, handle: SocketHandle, now: u64) {
+        {
+            let tcp = self.sockets.get_mut::<TcpSocket>(handle);
+            tcp.close();
+        }
+        let mut t = now;
+        for _ in 0..32 {
+            t = t.wrapping_add(5);
+            self.tcp_session_poll(t);
+        }
+        self.sockets.remove(handle);
+    }
+
+    // ── P2P UDP broadcast — Brain Mesh discovery ────────────────
+
+    pub fn udp_broadcast_send(&mut self, data: &[u8]) -> Result<(), ()> {
+        let udp = self.sockets.get_mut::<udp_socket::Socket>(self.udp_handle);
+        let addr = (IpAddress::v4(255, 255, 255, 255), 42069u16);
+        udp.send_slice(data, addr).map_err(|_| ())
+    }
+
+    pub fn udp_broadcast_recv(&mut self) -> Option<Vec<u8>> {
+        let udp = self.sockets.get_mut::<udp_socket::Socket>(self.udp_handle);
+        if udp.can_recv() {
+            udp.recv().ok().map(|(data, _meta)| Vec::from(data))
+        } else {
+            None
+        }
+    }
+
+    pub fn has_udp_broadcast(&mut self) -> bool {
+        let udp = self.sockets.get_mut::<udp_socket::Socket>(self.udp_handle);
+        udp.can_recv()
     }
 }
-
-
-
-
-
-

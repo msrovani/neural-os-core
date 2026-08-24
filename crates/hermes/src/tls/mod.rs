@@ -1,31 +1,30 @@
-//! TLS — HTTPS client bridge to neural-kernel embedded-tls (ADR-0016 N4).
-//! ADR-0062 P1: conexões seguras sem POSIX.
+//! TLS — canônico hermes (C5 emagrecer). Soft-float embedded-tls 0.19.
+//! Re-exporta trust + client; mantém bridge register_https_get (lesson 241).
 //!
-//! Expõe `fetch_url` como dispatcher único: `https://` → kernel TLS (embedded-tls 0.19,
-//! HybridProvider TOFU+pinning, ECDSA/RSA-PSS CertificateVerify); `http://` → net_bridge HTTP.
-//! Nunca strip https→http. Nunca usa fallback HTTP na porta 443.
+//! Bin vira `pub use hermes_crate::tls::*` + wiring via `register_https_get`.
+
+extern crate alloc;
+
+pub mod trust;
+pub mod client;
+
+pub use trust::{
+    ca_chain_boot_smoke, issuer_pinned, last_certverify_ok, last_trust, load_pins_from_fat,
+    persist_pins_to_fat, pin_ca_der, HybridProvider, HybridVerifier, TrustClass,
+};
+pub use client::{
+    alloc_aligned_buf, https_get_on_stack, parse_https_url, KernelRng, NetTcpIo, TlsIoError,
+};
 
 use alloc::vec::Vec;
-
-// ─── Status tracking ───────────────────────────────────────────────
-
-/// Estado do subsistema TLS.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TlsStatus {
-    Uninitialized,
-    Ready,
-    Blocked { reason: &'static str },
-}
-
-static TLS_READY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 // ─── Bridge: function pointer registrada pelo kernel no boot ───────
 
 /// HTTPS GET retornando body (headers stripped).
-/// Assinatura compatível com `neural-kernel::net::https_get`.
 pub type HttpsGetBodyFn = fn(&str) -> Result<Vec<u8>, &'static str>;
 
 static HTTPS_GET_BODY: spin::Mutex<Option<HttpsGetBodyFn>> = spin::Mutex::new(None);
+static TLS_READY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// Registra a função de HTTPS GET do kernel.
 /// Chamado no boot pelo `neural-kernel::main` (Phase 7).
@@ -35,15 +34,18 @@ pub fn register_https_get(f: HttpsGetBodyFn) {
     k_nano::slog_hermes!("TLS", "info", "bridge=registered https_get=OK");
 }
 
-// ─── API pública ───────────────────────────────────────────────────
+// Compat alias — lesson 241 wiring `register_tls` existe em docs.
+pub fn register_tls(f: HttpsGetBodyFn) {
+    register_https_get(f);
+}
 
 /// Inicializa o subsistema TLS.
 pub fn init_tls() {
     TLS_READY.store(true, core::sync::atomic::Ordering::Relaxed);
-    k_nano::slog_hermes!("TLS", "info", "init_tls() — bridge to kernel embedded-tls 0.19");
+    k_nano::slog_hermes!("TLS", "info", "init_tls() — hermes embedded-tls 0.19 soft-float");
 }
 
-/// Verifica se TLS está pronto para uso.
+/// Verifica se TLS está pronto.
 pub fn tls_ready() -> bool {
     TLS_READY.load(core::sync::atomic::Ordering::Relaxed)
 }
@@ -51,24 +53,15 @@ pub fn tls_ready() -> bool {
 /// Dispatcher único para qualquer URL.
 /// `https://` → kernel TLS via bridge (embedded-tls 0.19).
 /// `http://` → net_bridge HTTP (netstack smoltcp).
-/// Retorna body (headers HTTP stripped).
-///
-/// # Uso nos consumers
-/// ```ignore
-/// let body = crate::tls::fetch_url("https://example.com/api")?;
-/// ```
 pub fn fetch_url(url: &str) -> Result<Vec<u8>, &'static str> {
     let u = url.trim();
     if u.starts_with("https://") || u.starts_with("HTTPS://") {
         fetch_https(u)
     } else {
-        // HTTP via net_bridge (netstack smoltcp)
         crate::net_bridge::resolve_and_http_get_safe(u)
     }
 }
 
-/// HTTPS GET via bridge do kernel (embedded-tls 0.19).
-/// Nunca fallback HTTP na porta 443.
 fn fetch_https(url: &str) -> Result<Vec<u8>, &'static str> {
     match *HTTPS_GET_BODY.lock() {
         Some(f) => {
@@ -83,9 +76,8 @@ fn fetch_https(url: &str) -> Result<Vec<u8>, &'static str> {
             k_nano::slog_hermes!(
                 "TLS",
                 "warn",
-                "fetch_https: bridge not registered, delegating to net_bridge (kernel https_get)"
+                "fetch_https: bridge not registered, delegating to net_bridge"
             );
-            // Fallback: net_bridge já roteia https:// para kernel TLS
             crate::net_bridge::resolve_and_http_get_safe(url)
         }
     }
