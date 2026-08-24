@@ -183,7 +183,7 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - VGA address: `0xB8000 + physical_memory_offset` (runtime)
 - Heap: `0x_4000_0000_0000` (512MB, talc — fora do range kernel/bootloader)
 - BitNet ternário: ADD/SUB apenas, zero FPU em matmul. 2-bit packing (4 pesos/byte)
-- Trinity MoE: LLM + 6 experts + router_weight treinável
+- Trinity MoE: LLM + 7 kind (HwIdentify, HwControl, RustCoder, DiskDiag, Security, Generator, SpeechSynth — 2 wired HWEXPRT/RUSTCDR, 4 keyword→Generator) + router_weight treinável (ROUTER.BITNET VOCAB=99 HIDDEN=64; moe_router=LOADED vs ABSENT keyword+FALLBACK_GENERATOR)
 - SDIO MoE: 95.812 entradas .inf/.sys reais + análise pefile
 - HardwareRegisterMap: gerado por IA (3 níveis: HWID→família→heurística)
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.

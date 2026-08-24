@@ -219,7 +219,7 @@ and Rust-subset paths exist but are gated behind the isolation ring.
 - **Falcon3-3B-Instruct-1.58bit** — 3B ternary params (`FALCON3.V6`, ~989MB, loaded via
   QEMU loader or FAT32), 30 layers, hidden 2560, GQA, Medusa speculative decode,
   AVX2/SSE4.2 kernels with runtime dispatch
-- **Trinity MoE** — router + 6 experts (hardware ID, code generation, disk
+- **Trinity MoE** — router + 7 kind (HwIdentify, HwControl, RustCoder, DiskDiag, Security, Generator, SpeechSynth — 2 wired HWEXPRT/RUSTCDR, 4 keyword→Generator) (hardware ID, code generation, disk
   diagnostics, security, speech, text completion); router weights trained offline,
   on-device AutoLearn training experimental
 - **HW Expert v3** — 61,453 PCI/USB VID/DID pairs recognized by a 259KB ternary

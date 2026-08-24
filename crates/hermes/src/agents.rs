@@ -3,6 +3,7 @@
 
 pub mod mouse_agent;
 pub mod log_analyst_agent;
+pub mod sysinfo_agent;
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -214,6 +215,24 @@ impl InputAgent {
         });
         if !pressed { return; }
         if scancode >= 0x80 { return; }
+        // ADR-0100 T-028: ~5s pós-boot, [L]ive / [I]nstall
+        {
+            let ticks = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            let hz = k_nano::interrupts::TIMER_HZ.load(core::sync::atomic::Ordering::Relaxed).max(1);
+            if ticks < hz.saturating_mul(5) {
+                match scancode {
+                    0x17 => {
+                        k_nano::boot_mode::set_boot_mode(k_nano::boot_mode::BootMode::Install);
+                        k_nano::slog_hermes!("BOOT", "menu", "tecla I -> Install (nao formata sozinho)");
+                    }
+                    0x26 => {
+                        k_nano::boot_mode::set_boot_mode(k_nano::boot_mode::BootMode::Live);
+                        k_nano::slog_hermes!("BOOT", "menu", "tecla L -> Live");
+                    }
+                    _ => {}
+                }
+            }
+        }
         match scancode {
             0x1C => {
                 let text = core::mem::take(&mut self.buffer);
@@ -491,6 +510,18 @@ impl HermesAgent {
     fn execute_skill(&mut self, name: &str, payload: &[u8], token: &CapabilityToken) -> Result<Vec<u8>, &'static str> {
         let token_val = token.as_legacy();
         let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        // C2 Cap gate: skills de rede exigem Cap::RING_OP (ADR-0041)
+        let held = if matches!(token, CapabilityToken::Legacy(1)) {
+            k_hal::cap_gate::Cap::RING_OP.union(k_hal::cap_gate::Cap::PING)
+        } else {
+            k_hal::cap_gate::Cap::EMPTY
+        };
+        let lower = name.to_ascii_lowercase();
+        if lower.contains("net") || lower.contains("http") || lower.contains("tcp")
+            || lower.contains("wifi") || name == "aios_send_tcp"
+        {
+            k_hal::cap_gate::check(k_hal::cap_gate::HOST_FN_SEND_TCP, held)?;
+        }
         // Sprint 78: OutputCache — skills idempotentes usam cache
         if let Some(cached) = self.output_cache.get(name, payload, now) {
             return Ok(cached.to_vec());
@@ -1369,7 +1400,6 @@ impl Agent for HermesAgent {
                                 as u64;
                             let intent = self.cortex.think(msg);
                             let structured_skill = match intent {
-                                // Conversa fluente → LLM (generator). Volume → skill HW.
                                 cortex::cortex::Intent::Greeting
                                 | cortex::cortex::Intent::Chat => None,
                                 cortex::cortex::Intent::AudioVolume => {
@@ -1377,10 +1407,29 @@ impl Agent for HermesAgent {
                                 }
                                 _ => Some(intent.skill_name()),
                             };
-                            let route = crate::cognitive_bridge::route_user_intent(
+                            // Single Trinity classify — pending_route for Cortex (SESSION_273)
+                            let classified = cortex::global_arena::with_arena(|arena| {
+                                let trinity = crate::globals::TRINITY.lock();
+                                let (expert, trace) = trinity.classify_intent_with_trace(msg, arena);
+                                (expert.name, trinity.moe_router_loaded(), trace)
+                            });
+                            let (expert, moe_loaded) = if let Some((expert, loaded, trace)) = classified {
+                                cortex::global_arena::set_pending_route(expert, Some(trace));
+                                (expert, loaded)
+                            } else {
+                                let trinity = crate::globals::TRINITY.lock();
+                                let expert = trinity.classify_intent(msg).name;
+                                let loaded = trinity.moe_router_loaded();
+                                drop(trinity);
+                                cortex::global_arena::set_pending_route(expert, None);
+                                (expert, loaded)
+                            };
+                            let route = crate::cognitive_bridge::route_classified_user_intent(
                                 msg,
                                 token_val,
                                 tick_now,
+                                expert,
+                                moe_loaded,
                                 structured_skill,
                             );
                             crate::cognitive_bridge::note_route(&route);
@@ -2177,18 +2226,55 @@ impl AutoLearnAgent {
             return;
         }
 
-        k_nano::slog_hermes!("TRINITY", "Learn", "{}: {} bytes carregados. Iniciando fine-tuning on-device...", topic, knowledge.len());
+        k_nano::slog_hermes!("TRINITY", "Learn", "{}: {} bytes carregados. R3 replay com rotas congeladas...", topic, knowledge.len());
 
-        // Fine-tuning on-device via BitNetTrainer (ADR-0033, ~2 segundos)
-        let mut trainer = BITNET_TRAINER.lock();
-        let mut weights = alloc::vec![0i8; 64]; // pesos do expert (pequeno)
-        let inputs = alloc::vec![1.0f32; 64];
-        let targets = alloc::vec![1.0f32; 64];
-        let loss = trainer.train_step(&mut weights, &inputs, &targets);
-        k_nano::slog_hermes!("TRINITY", "Learn", "{}: fine-tuning concluido (loss={:.4}, steps={})", topic, loss, trainer.trained);
-        k_nano::slog_hermes!("TRINITY", "Learn", "{}: TRINITY APRENDEU!", topic);
-        // Nova skill ou expert → invalida cache R3 (MoE routing) para forçar re-avaliação
+        // R3: atualiza router com logits congelados (sem re-rotear / sem dummy train_step)
+        let mut traces = [cortex::r3::RouteTrace {
+            embedding_addr: 0,
+            logits_addr: 0,
+            num_experts: 0,
+            selected_expert: 0,
+            old_log_prob: 0.0,
+            token_ids_addr: 0,
+            token_count: 0,
+        }; 64];
+        let n = cortex::global_arena::snapshot_route_traces(&mut traces);
+        let mut weights = alloc::vec![0i8; 64 * 6];
+        let mut loss = 0.0f32;
+        let mut steps = 0u32;
+        if n > 0 {
+            let trinity = crate::globals::TRINITY.lock();
+            for t in traces.iter().take(n) {
+                loss += cortex::r3::update_with_replay(&trinity, t, 1.0, &mut weights, 0.05, 0.0);
+                steps += 1;
+            }
+            drop(trinity);
+            let mut trainer = crate::globals::BITNET_TRAINER.lock();
+            trainer.trained += steps as u64;
+            drop(trainer);
+            cortex::r3::persist_trained_router(&weights);
+            k_nano::slog_hermes!("TRINITY", "Learn", "{}: R3 replay {} traces loss={:.4} (arena tokens={})", topic, n, loss, cortex::global_arena::token_steps());
+        } else {
+            let mut dummy_trace = cortex::r3::RouteTrace {
+                embedding_addr: 0,
+                logits_addr: 0,
+                num_experts: 6,
+                selected_expert: 0,
+                old_log_prob: libm::logf(0.2),
+                token_ids_addr: 0,
+                token_count: 0,
+            };
+            let trinity = crate::globals::TRINITY.lock();
+            loss = cortex::r3::update_with_replay(&trinity, &dummy_trace, 0.5, &mut weights, 0.01, 0.0);
+            drop(trinity);
+            let _ = &mut dummy_trace;
+            let mut trainer = crate::globals::BITNET_TRAINER.lock();
+            trainer.trained += 1;
+            cortex::r3::persist_trained_router(&weights);
+            k_nano::slog_hermes!("TRINITY", "Learn", "{}: bootstrap R3 (sem cache) loss={:.4} steps={}", topic, loss, trainer.trained);
+        }
         cortex::global_arena::reset_moe_cache();
+        k_nano::slog_hermes!("TRINITY", "Learn", "{}: TRINITY APRENDEU! (R3 reset O(1))", topic);
     }
 
     fn load_knowledge(&self, topic: &str) -> Vec<u8> {
@@ -2860,7 +2946,120 @@ impl Skill for DiagnosticSkill {
     }
 }
 
+// ---------------------------------------------------------------------------
+// GpuDriverAgent — init VirtIO-GPU (boot phase, canônico hermes)
+// ---------------------------------------------------------------------------
 
+pub struct GpuDriverAgent;
+
+const GPUDRIVER_MANIFEST: AgentManifest = AgentManifest {
+    name: "gpu_driver",
+    kind: AgentKind::Driver,
+    schedule: ScheduleKind::Oneshot,
+    auto_start: true,
+    persist: false,
+};
+
+impl Agent for GpuDriverAgent {
+    fn manifest(&self) -> &AgentManifest { &GPUDRIVER_MANIFEST }
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        // GPU detect/DriverInit ja rodou em k_hal (Phase 5).
+        // Apenas reporta estado - virtio_gpu removido no emagrecer.
+        k_nano::slog_hermes!("GPU", "info", "GpuDriverAgent: probe done (k_hal backend)");
+        AgentTickResult::Done
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SelfEvolveAgent — Sprint 108: observe→generate→verify→improve→reflect
+// ---------------------------------------------------------------------------
+
+const SELF_EVOLVE_MANIFEST: AgentManifest = AgentManifest {
+    name: "self_evolve",
+    kind: AgentKind::System,
+    schedule: ScheduleKind::PollEvery(100),
+    auto_start: true,
+    persist: true,
+};
+
+pub struct SelfEvolveAgent {
+    receiver: Receiver,
+    change_receiver: Receiver,
+    last_reflect: u64,
+    cycles: u64,
+}
+
+impl SelfEvolveAgent {
+    pub fn new() -> Self {
+        SelfEvolveAgent {
+            receiver: EVENT_BUS.subscribe(crate::self_evolve::TOPIC_SELF_EVOLVE),
+            change_receiver: EVENT_BUS.subscribe(crate::self_evolve::TOPIC_CHANGE),
+            last_reflect: 0,
+            cycles: 0,
+        }
+    }
+}
+
+impl Agent for SelfEvolveAgent {
+    fn manifest(&self) -> &AgentManifest { &SELF_EVOLVE_MANIFEST }
+
+    fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
+        while let Some(ev) = self.receiver.try_receive() {
+            let msg = core::str::from_utf8(&ev.payload).unwrap_or("");
+            k_nano::slog_hermes!("S108", "info", "event: {}", msg);
+            if msg == "skill_review" || msg.starts_with("intents=") {
+                let mut storage = SKILL_STORAGE.lock();
+                let n = crate::self_evolve::tick_cycle(&mut storage, tick);
+                drop(storage);
+                if n > 0 {
+                    k_nano::slog_hermes!("S108", "info", "tick_cycle registered/improved={}", n);
+                }
+            }
+        }
+        while let Some(ev) = self.change_receiver.try_receive() {
+            k_nano::slog_hermes!("CHANGE", "info", "{}", core::str::from_utf8(&ev.payload).unwrap_or("?"));
+            crate::skill_loader::invalidate_skill_index();
+        }
+        self.cycles = self.cycles.wrapping_add(1);
+        if self.cycles % 5 == 0 {
+            let mut storage = SKILL_STORAGE.lock();
+            let n = crate::self_evolve::tick_cycle(&mut storage, tick);
+            drop(storage);
+            if n > 0 {
+                k_nano::slog_hermes!("S108", "info", "periodic work={}", n);
+            }
+        }
+        if tick.saturating_sub(self.last_reflect) >= 2000 {
+            self.last_reflect = tick;
+            let detail = crate::self_evolve::reflect(tick);
+            let _ = EVENT_BUS.publish(Event {
+                id: 0,
+                topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
+                payload: alloc::format!("[S108-REFLECT] {}", detail).into_bytes(),
+                token: CapabilityToken::Legacy(1),
+            });
+        }
+        if tick > 0 && tick % 5000 == 0 {
+            k_nano::slog_hermes!("Log", "msg", "{}", crate::self_evolve::status_line());
+        }
+        AgentTickResult::Pending
+    }
+}
+
+/// Sync init_platform — idempotente se PlatformAgent já rodou
+pub unsafe fn init_platform_sync() {
+    unsafe { k_nano::pci::init_pci(); }
+    let phys_off = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    let acpi_info = unsafe { k_nano::acpi::init_acpi(phys_off) };
+    if let Some(ref info) = acpi_info {
+        unsafe { k_nano::apic::init_apic(info); }
+        let lapic_count = info.lapic_count;
+        if lapic_count > 1 {
+            k_nano::smp::AP_COUNT.store(lapic_count - 1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    unsafe { k_nano::smp::init_smp(); }
+}
 
 
 

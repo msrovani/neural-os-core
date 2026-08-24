@@ -716,6 +716,16 @@ def main():
     verify_roundtrip(bitnet_path, res["embed"], Wq, res["test"][:6])
     print(f"\nExported {bitnet_path} ({bitnet_path.stat().st_size} bytes) "
           f"— round-trip OK")
+    # Canonical locations: target/ is the FAT source (mkfat32 find_file), target1 is v6 canonical.
+    # Keep tools/target for backwards compat + copy to target/target1 so builds find it without --curated.
+    for dest in [Path(__file__).resolve().parents[1] / "target" / "ROUTER.BITNET",
+                 Path(__file__).resolve().parents[1] / "target1" / "ROUTER.BITNET"]:
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(bitnet_path.read_bytes())
+            print(f"  -> copied to {dest}")
+        except Exception as e:
+            print(f"  [warn] copy to {dest} failed: {e}")
 
     write_report(res, cm, prec, rec, f1, report_path)
     print(f"Report: {report_path}")

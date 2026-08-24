@@ -25,7 +25,7 @@ pub struct LogAnalystAgent;
 
 impl LogAnalystAgent {
     pub fn new() -> Self {
-        k_nano::slog_bin!("LOG", "ANALYST", "/logs/ analyst ativo.");
+        k_nano::slog_hermes!("LOG", "ANALYST", "/logs/ analyst ativo.");
         LogAnalystAgent
     }
 

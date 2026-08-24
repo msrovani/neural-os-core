@@ -111,7 +111,7 @@ TrinityRouter::classify_intent_with_trace():
 
 **Problemas:**
 - Keyword matching é frágil: "write a poem" → rust_coder (erro)
-- 6 experts only: não cobre math, logic, planning, governance
+- 7 kind only: não cobre math, logic, planning, governance (2 wired HWEXPRT/RUSTCDR, 4 keyword→Generator)
 - Sem scores de confiança: decisão binária, sem threshold tuning
 - Router treinável raramente usado (pesos ternários subótimos)
 

@@ -19,7 +19,7 @@
 | 20. Memory + Tick | 76 | 0.76.x | Adaptive heap, Dynamic tick, Hermes event-driven | ✅ |
 | 21. Foundation Quick Wins | 77 | 0.77.x | Prompt >, Pre-Flight, FanOut, TaskSchema | ✅ |
 | 22. Agentic Evolution | 78 | 0.78.x | Crew/Flow, Cache, Workflow, GGUF, WASM | ✅ |
-| 23. LLM Infrastructure | 79-80 | 0.79-0.80 | AVX2 BitNet, Trinity MoE, BPE, KV Cache | ✅ |
+| 23. LLM Infrastructure | 79-80 | 0.79-0.80 | AVX2 BitNet (2B LOADED soft-float gated, W2A8 gated HW), Trinity MoE (7 kind, ROUTER.BITNET LOADED vs ABSENT keyword+R3), BPE, KV Cache — Falcon3-7B hidden=3072 28L 12H kv4 intermediate=23040 | ✅ |
 | 21a. SMP Foundation | 81 | 0.81.x | SPSC ring, IPI, PerCpu, x2APIC | ✅ |
 | 21b. Work-Stealing + Matmul | 82 | 0.82.x | Chase-Lev, parallel-for, CFS | ✅ |
 | 21e. Polimento | 83 | 0.83.x | CFS, bugfixes, integração | ✅ |

@@ -63,12 +63,17 @@ def pack_llm_set() -> set[str]:
 
 
 def find_file(name: str):
+    import platform as _plat
+    ext_model_dir = r"D:\modelos" if _plat.system() == "Windows" else "/mnt/d/modelos"
     for d in [
+        os.path.join(ROOT, "target1"),
+        os.path.join(ROOT, "models"),
         ROOT,
         os.path.join(ROOT, "target"),
         os.path.join(ROOT, "firmware"),
         os.path.join(ROOT, "crates/neural-kernel"),
         os.path.join(ROOT, "tools/target"),
+        ext_model_dir,
     ]:
         p = os.path.join(d, name)
         if os.path.exists(p):

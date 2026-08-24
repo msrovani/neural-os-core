@@ -99,7 +99,7 @@ Os pilares rodam **em paralelo** com ADR-0042 N2→N5. Nenhum bloqueia v2.0.0.
 │  Cadeia K³CHJ: k_nano → k_ai → cortex → hermes → jarbas     │
 │                                                              │
 │  IPC: EventBus (66 linhas) — pub/sub tópico com Vec<u8>      │
-│  Inferência: BitNet ternário 2B, Trinity MoE (6 experts)     │
+│  Inferência: BitNet ternário 2B/Falcon3-7B (3072 28L), Trinity MoE (7 kind)     │
 │  Memória: 512MB heap, FAT32 256MB, GGUF streaming (ADR-46)  │
 │  SleepCycle: REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT          │
 │  SelfHeal: firmware pipeline I3/I4, HEALTH_ISSUE             │

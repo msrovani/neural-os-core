@@ -1107,9 +1107,9 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 ### N3 CLOSED (2026-07-16) — cortex cérebro ✅
 | Item | Onde | Serial / aceite |
 |------|------|-----------------|
-| N3.1 llm LOADED | QEMU-loader BitNet 2B + `[STATUS]` | `llm=LOADED dim=2560 bpe=LOADED` |
+| N3.1 llm LOADED | QEMU-loader BitNet 2B/Falcon3-7B (hidden=3072 28L 12H kv4 intermediate=23040 — corrige 22L/9216) + `[STATUS]` | `llm=LOADED dim=3072 Falcon3-7B 28L / dim=2560 2B 30L soft-float gated, W2A8 gated HW` |
 | N3.2 MAP_WEIGHTS | P5 `cortex_mmap` + gate | `MAP_WEIGHTS pages>0 (P5 Cap OK)` |
-| N3.3 Trinity MoE | experts + HWEXPERT/RustCoder | `experts=6 generator=OK moe_router=ABSENT(keyword)` |
+| N3.3 Trinity MoE | 7 kind (HwIdentify, HwControl, RustCoder, DiskDiag, Security, Generator, SpeechSynth — 2 wired HWEXPRT/RUSTCDR, 4 keyword→Generator) + ROUTER.BITNET (VOCAB=99 HIDDEN=64) | `experts=7 generator=OK moe_router=LOADED (vs ABSENT keyword+R3 + FALLBACK_GENERATOR)` |
 | N3.4 prompt→texto | path + prior weather-e2e | boot `generate=GATED soft-float`; prior `decoded_len=12 'O tempo esta'` |
 | N3.5 crate link | `cortex-crate` wired; residuals integração bin | ✅ v1.7.9 |
 | Gate | `n3_cortex_gate()` em `main.rs` | `[N3-CORTEX] gate complete … criteria=MET` |

@@ -432,6 +432,55 @@ pub fn console_print(text: &str) {
     draw_console_line(addr, w, h, stride, bpp, rgb, line, text);
 }
 
+// ─── C5: print routing — canônico jarbas (lesson 261 avoid double-paint) ───
+// `fb_print` formata 160B sem alloc e delega a console_print; `_print` é o
+// entry usado pelo macro `print!`/`println!` — se FB/compositor ativo, dropa VGA.
+pub fn fb_print(args: core::fmt::Arguments) -> bool {
+    let has_fb = {
+        let gpu = GPU.lock();
+        matches!(gpu.as_ref(), Some(g) if g.present && g.fb_addr != 0 && g.fb_width > 0 && g.fb_height > 0)
+    };
+    if !has_fb {
+        return false;
+    }
+    use core::fmt::Write;
+    struct LogBuf<'a>(&'a mut [u8], usize);
+    impl<'a> Write for LogBuf<'a> {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            let n = s.as_bytes().len().min(self.0.len().saturating_sub(self.1));
+            self.0[self.1..self.1 + n].copy_from_slice(&s.as_bytes()[..n]);
+            self.1 += n;
+            Ok(())
+        }
+    }
+    let mut buf = [0u8; 160];
+    let _ = core::fmt::write(&mut LogBuf(&mut buf, 0), args);
+    let n = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    if n == 0 {
+        return false;
+    }
+    let text = core::str::from_utf8(&buf[..n]).unwrap_or("");
+    console_print(text);
+    true
+}
+
+pub fn _print(args: core::fmt::Arguments) {
+    if GRAPHICS_OWNED.load(Ordering::Relaxed) {
+        return;
+    }
+    let fb_active = GPU.lock().as_ref().map(|g| g.present).unwrap_or(false);
+    if fb_active {
+        return;
+    }
+    // COMPOSITOR check — sem dependência circular via GPU/GRAPHICS_OWNED já cobre
+    // o caso compositor ativo (claim_graphics seta GRAPHICS_OWNED). Fallback VGA.
+    use core::fmt::Write;
+    let mut w = k_nano::vga_buffer::WRITER.lock();
+    if let Some(ref mut w) = *w {
+        let _ = w.write_fmt(args);
+    }
+}
+
 fn clear_fb_pixels(addr: usize, h: usize, stride: usize, bpp: usize, rgb: bool) {
     let (tr, tg, tb) = (8u8, 8u8, 12u8);
     let (c0, c1, c2) = if rgb { (tr, tg, tb) } else { (tb, tg, tr) };

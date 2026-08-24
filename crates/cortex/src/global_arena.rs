@@ -123,3 +123,12 @@ pub fn record_token_step(token_id: u16) {
 pub fn token_steps() -> usize {
     TOKEN_STEPS.load(Ordering::SeqCst)
 }
+
+/// HUD/mesh seam — delega ao r3 sem duplicar estado.
+pub fn trained_router_changed() -> bool {
+    crate::r3::trained_router_changed()
+}
+
+pub fn router_delta_vs_seed(seed: &[i8], trained: &[i8]) -> alloc::vec::Vec<u8> {
+    crate::r3::router_delta_vs_seed(seed, trained)
+}

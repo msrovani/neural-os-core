@@ -64,7 +64,7 @@ genéticos para auto-evolução), structured decode, compute dispatch.
 |--------|--------|---------|
  | `tensor.rs` | Tensor, PackedTernaryTensor (2-bit packing: 4 pesos/byte) | ADD/SUB apenas (BitNet ternário). Sem FPU em matmul. |
  | `nn.rs` | BitLinear, silu, rms_norm | Camadas transformer com pesos ternários |
- | `trinity.rs` | Trinity MoE: LLM + router + experts | Router_weight treinável, 6 experts |
+  | `trinity.rs` | Trinity MoE: LLM + router + experts | Router_weight treinável, 7 kind (2 wired HWEXPRT/RUSTCDR, 4 keyword→Generator) VOCAB=99 HIDDEN=64 |
  | `moe.rs` | Int8Router, expert forwarding | Router i8 com scores f32 |
  | `decode.rs` | Autoregressive decode loop | Cache KV, speculative decoding |
  | `bpe.rs` | Tokenização BPE | Vocab 99 tokens (pequeno, otimizado) |

@@ -29,13 +29,41 @@ impl Int8Router {
         let d = self.in_features;
         let mut scores = vec![0.0f32; n];
         for e in 0..n {
-            let mut dot = 0i32;
+            let mut acc = 0i32;
             for j in 0..d {
-                dot += self.weight[j * n + e] as i32 * (x[j] as i32);
+                let w = self.weight[j * n + e] as i32;
+                let xq = (x[j] * 127.0) as i32;
+                acc += w * xq;
             }
-            scores[e] = (dot + self.bias[e]) as f32;
+            acc += self.bias[e];
+            scores[e] = acc as f32 / (127.0 * 127.0);
         }
+        Self::softmax(&mut scores);
         scores
+    }
+
+    /// Softmax in-place (fidelity-aligned with `k_ai::router`).
+    pub fn softmax(scores: &mut [f32]) {
+        let n = scores.len();
+        if n == 0 {
+            return;
+        }
+        let mut max_val = scores[0];
+        for &s in scores.iter() {
+            if s > max_val {
+                max_val = s;
+            }
+        }
+        let mut sum = 0.0f32;
+        for s in scores.iter_mut() {
+            *s = libm::expf(*s - max_val);
+            sum += *s;
+        }
+        if sum > 0.0 {
+            for s in scores.iter_mut() {
+                *s /= sum;
+            }
+        }
     }
 
     pub fn top_k(scores: &[f32], k: usize) -> Vec<usize> {
@@ -424,11 +452,34 @@ impl DynamicMoE {
         BitLinear::new(weights, bias)
     }
 
-    fn clone_with_noise(original: &BitLinear, _noise: f32) -> BitLinear {
-        let weights = PackedTernaryTensor {
-            shape: original.weights.shape,
-            packed_data: original.weights.packed_data.clone(),
-        };
+    fn clone_with_noise(original: &BitLinear, noise: f32) -> BitLinear {
+        let shape = original.weights.shape;
+        let n = shape.0 * shape.1;
+        let mut w = Vec::with_capacity(n);
+        for i in 0..n {
+            w.push(original.weights.get_weight(i));
+        }
+        if noise != 0.0 {
+            // ponytail: strided deterministic ternary noise without RNG dep; O(n) scan, 5% ≈ step 20 for noise=0.05
+            // covers birth/merge/split diversification; upgrade to PRNG per-weight if finer distribution needed
+            // spec: clamp(w + (noise*2) as i16, -1,1) or sign=noise>0 → +1/-1; scalar noise→sign+stride so 0.05 actually diversifies
+            let mag = libm::fabsf(noise);
+            let step = if mag < 1e-6 {
+                usize::MAX
+            } else {
+                libm::roundf(1.0 / mag) as usize
+            }
+            .max(1);
+            let delta: i16 = if noise > 0.0 { 1 } else { -1 };
+            for (idx, v) in w.iter_mut().enumerate() {
+                if idx % step == 0 {
+                    *v = (*v as i16 + delta).clamp(-1, 1) as i8;
+                }
+            }
+        }
+        let packed = PackedTernaryTensor::pack_weights(&w);
+        let weights = PackedTernaryTensor { shape, packed_data: packed };
+        // ponytail: bias kept zero; perturb only if noise.len()>experts equivalent (scalar noise never triggers)
         let bias = match original.bias {
             Some(ref t) => Some(Tensor::new(t.shape)),
             None => None,
