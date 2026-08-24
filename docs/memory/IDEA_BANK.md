@@ -1,6 +1,6 @@
 ﻿# 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-08-22 — SESSION_282 (ADR-0100 backlog custo×anel).
+**Última atualização:** 2026-08-24 — SESSION_288 (Trinity 7 kind + Falcon3-7B PRO.v6).
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -568,13 +568,13 @@ Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.
 ### 1.26. Trinity Model Hub — Mixture of Experts (IDEA #311)
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 311a | **Router BitNet (68KB)** — classifica intenção e roteia para expert correto | 🟡 Sprint 77 | Sprint 77 | 5-10 classes de intenção |
+| 311a | **Router BitNet (68KB)** — classifica intenção e roteia para expert correto | ✅ SESSION_288 | v1.9.99 | ROUTER.BITNET 25.8KB header 0xBE11BE11 ver6 vocab99 hidden64 n7 93.5% LOADED |
 | 311b | **hw_identify (68KB, ✅ existente)** — 66K pares PCI/USB, 99% precisão | ✅ v0.30 | Sprint 30 | Kernel mode |
 | 311c | **rust_coder (444KB)** — gera código Rust no_std. "crie funcao rust para" → expert gera resposta direta sem LLM principal | ✅ Sprint 97 | Sprint 97 | Hidden=128, 6L, 1.6M params, loss 0.34 |
 | 311d | **disk_diag (50KB)** — padrões SMART + erros de disco. Diagnóstico + ação sugerida | 🟡 Sprint 78 | Sprint 78 | Self-heal logs |
 | 311e | **security (50KB)** — assinaturas de ataque + CVE patterns | 🟡 Sprint 78 | Sprint 78 | CVE + InnerWarden |
 | 311f | **On-demand training** — "quero pilotar helicóptero" → manual → .bitnet → skill | ⏳ Pós-MVP | v0.80+ | Pipeline treino |
-| 311g | **Generator 1.5B (375MB)** — tool-use: expert classifica, generator explica | 🟡 Sprint 77 | Sprint 77 | GGUF loader |
+| 311g | **Generator 1.5B (375MB)** — tool-use: expert classifica, generator explica | ✅ parcial SESSION_288 | v1.9.99 | PRO.v6 1.78GB Falcon3-7B hidden3072 28L 12H kv4 23040 vocab131080 (Generator wired, PRO.v6 shipped) |
 
 ### 1.27. TrainingAgent — On-Device + GPU Learning (IDEA #312)
 | # | Item | Destino | Target | Motivação |
@@ -1799,7 +1799,7 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-08-04 | **488** | **bitnet_fwd_parity.py como gate** - paridade host vs kernel p/ todo item numérico (fidelidade M1-M3, F1/F2); política ADR-0084: sem mudança de formato que quebre arquivos legados sem bump de versão. | 🟡 | ADR-0084 | SESSION_247 | `tools/bitnet_fwd_parity.py` |
 | 2026-08-04 | **489** | **HW Expert v6 (receita 1-bit)** - próximo treino do HW Expert com a receita ADR-0084 §4 (tanh scaling, LR cooldown, LRs separados, QAT suave). Escopo host PyTorch. | 🟡 | ADR-0084 | SESSION_247 | `tools/train_hw_expert_v*.py` |
 | 2026-08-04 | **490** | **NVMe layout 64B spec** - `SubmissionEntry`/`NvmeRegisters` atuais 72B (spec 64B): `rsvd1: [u64;2]` (DW2-5 vs DW2-3) desloca mptr/dptr; `_reserved1: [u32;3]` desloca csts/aqa. Fix do STRUCT (não do teste) quando driver for exercitado em HW real. | ▶️ AWAITING_HW | ADR-0062 | SESSION_247 | `crates/k_nano/src/storage/nvme.rs` |
-| 2026-08-04 | **491** | **Formato canônico `.bitnet v6` + registro K³CHJ** - padronizar o pipeline inteiro (requisito do dono): header autodescritivo (act_type p/ M1, embed_type p/ M4, feat computado do escrito, num_params u64 único, tie_flag, reserved=0), body por model_type (llm/hwexpert/router), scales SEMPRE presentes, rms_ffn_norm canônico = intermediate, tied ⇒ sem unembed, writer único `tools/bitnet_writer.py` + paridade byte-exact vs `save_model` (golden), loader v6 estrito + legado v3/v4 com WARN + `migrate_bitnet_v6.py` (re-conversão, não cirurgia), registro `cortex::model` (ModelView) + ModelHub `register_bytes`. STT/Piper/BGE/ViT ficam como exceções. Fases F0-F4. Auditoria de layout que destrava ADR-0084 Fase 3. | 🟡 | ADR-0085 | SESSION_247 | `tools/bitnet_writer.py`, `cortex.rs`, `cortex::model`, 8 conversores |
+| 2026-08-04 | **491** | **Formato canônico `.bitnet v6` + registro K³CHJ** - padronizar o pipeline inteiro (requisito do dono): header autodescritivo (act_type p/ M1, embed_type p/ M4, feat computado do escrito, num_params u64 único, tie_flag, reserved=0), body por model_type (llm/hwexpert/router), scales SEMPRE presentes, rms_ffn_norm canônico = intermediate, tied ⇒ sem unembed, writer único `tools/bitnet_writer.py` + paridade byte-exact vs `save_model` (golden), loader v6 estrito + legado v3/v4 com WARN + `migrate_bitnet_v6.py` (re-conversão, não cirurgia), registro `cortex::model` (ModelView) + ModelHub `register_bytes`. STT/Piper/BGE/ViT ficam como exceções. Fases F0-F4. Auditoria de layout que destrava ADR-0084 Fase 3. PRO.v6 Falcon3-7B shipped 1.78GB. | ✅ SESSION_288 | ADR-0085 | SESSION_247+288 | `tools/bitnet_writer.py`, `cortex.rs`, `cortex::model`, 8 conversores, target1/PRO.v6 |
 
 | 2026-08-04 | **492** | **Re-habilitação da NN no build_card** — restaurar branch HW Expert v4 em uild_card + provar ≥65% específico no protocolo honesto (split 90/10 por device seed 42 + sweep QEMU). Dependências: modelo futuro que prove o gate. | ⏳ gated | ADR-0082 + SESSION_248 | SESSION_248 | crates/k_ai/src/hw_capability.rs:build_card |
 | 2026-08-04 | **493** | **MLP como alternativa ao transformer** — MLP contínuo pequeno (~130-260KB f32, embed+2×fc) como classificador de família de driver p/ devices nunca vistos; teto medido 63.27% (stage-2 sem imbalance). Só com modelo que prove ≥65% específico. | ⏳ gated | SESSION_248 | SESSION_248 | 	ools/probe_mlp_vendor*.py |

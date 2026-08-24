@@ -230,10 +230,11 @@ def populate(path):
         ("BITNET3B.BIN", find_bitnet_3b() if "3b" in llm else None),
         ("FALCON3.V6", find_falcon3() if "falcon3" in llm else None),
         ("FALCON3.BIN", find_falcon3() if "falcon3" in llm else None),
+        ("PRO.V6", (find_falcon3() if "falcon3" in llm else None) or find_file("PRO.v6") or find_file("PRO.V6")),
         ("MICRO.BITNET", None if ("850" in llm or "13" in llm) else find_file("MICRO.BITNET")),
         # ADR-0078/0079: todos os slots ModelHub (fat_names_for em cortex::model_hub)
         ("VISION.BIN", find_file("VISION.v6") or find_file("VISION.BIN")),
-        ("LLAMA8B.BIN", find_file("PRO.v6") or find_file("LLAMA8B.BIN") or find_file("LLAMA8B.BITNET")),
+        ("LLAMA8B.BIN", (find_falcon3() if "falcon3" in llm else None) or find_file("PRO.v6") or find_file("LLAMA8B.BIN") or find_file("LLAMA8B.BITNET")),
         ("RUSTCDR3.BIN", find_file("RUSTCDR3.v6") or find_file("RUSTCDR3.BIN") or find_file("RUSTCDR3.BITNET")),
         ("RERANKER.BIN", find_file("RERANKER.v6") or find_file("RERANKER.BIN") or find_file("RERANKER.BITNET")),
         ("LEARNER.BIN", find_file("LEARNER.v6") or find_file("LEARNER.BIN") or find_file("LEARNER.BITNET")),
@@ -439,7 +440,67 @@ def populate(path):
         data_sectors = part_sectors - reserved - fat_count * fat_sectors
         total_clusters = data_sectors // spc
 
+        seen = {}  # src_path -> (start_cluster, file_len) for alias dedup (same bytes, no double alloc)
         for name, src in files:
+            # Alias dedup: same src path already written -> reuse clusters (FAT alias, no double space)
+            if isinstance(src, str) and src in seen:
+                alias_start, alias_len = seen[src]
+                # Create dir entry pointing to same start cluster
+                if "." in name:
+                    base, _, ext = name.rpartition(".")
+                    name_bytes = (base[:8].ljust(8) + ext[:3].ljust(3)).upper().encode("ascii", "replace")
+                else:
+                    name_bytes = name[:11].ljust(11).upper().encode("ascii", "replace")
+                entry_data = bytearray(32)
+                entry_data[0:11] = name_bytes
+                entry_data[11] = 0x20
+                struct.pack_into("<I", entry_data, 28, alias_len)
+                struct.pack_into("<H", entry_data, 26, alias_start & 0xFFFF)
+                struct.pack_into("<H", entry_data, 20, (alias_start >> 16) & 0xFFFF)
+                def fat_get_a(cl):
+                    fat_sec_offset = (cl * 4) // bps
+                    if fat_sec_offset >= fat_sectors * fat_count:
+                        return 0x0FFFFFFF
+                    f.seek(fat_lba * 512 + cl * 4)
+                    return struct.unpack("<I", f.read(4))[0] & 0x0FFFFFFF
+                def fat_set_a(cl, val):
+                    f.seek(fat_lba * 512 + cl * 4)
+                    f.write(struct.pack("<I", val & 0x0FFFFFFF))
+                def find_any_free_cluster_a():
+                    # find any free for root extension if needed
+                    for cl2 in range(3, total_clusters + 2):
+                        if fat_get_a(cl2) == 0:
+                            return cl2
+                    return None
+                placed = False
+                dir_cl = root_cluster
+                while not placed and dir_cl >= 2 and dir_cl < 0x0FFFFFF8:
+                    root_lba = data_lba + (dir_cl - 2) * spc
+                    for offs in range(0, spc * bps, 32):
+                        f.seek(root_lba * 512 + offs)
+                        first = f.read(1)
+                        if first in (b"\x00", b"\xE5"):
+                            f.seek(root_lba * 512 + offs)
+                            f.write(entry_data)
+                            placed = True
+                            break
+                    if placed:
+                        break
+                    nxt = fat_get_a(dir_cl)
+                    if nxt >= 0x0FFFFFF8 or nxt < 2:
+                        new_cl = find_any_free_cluster_a()
+                        if new_cl is None:
+                            break
+                        fat_set_a(dir_cl, new_cl)
+                        fat_set_a(new_cl, 0x0FFFFFFF)
+                        f.seek((data_lba + (new_cl - 2) * spc) * 512)
+                        f.write(b"\x00" * spc * bps)
+                        dir_cl = new_cl
+                    else:
+                        dir_cl = nxt
+                status = "OK" if placed else "sem slot dir"
+                print(f"  [{status}] {name} ({alias_len//1024}K, alias -> {alias_start})")
+                continue
             data = src if isinstance(src, bytes) else (open(src, "rb").read() if src else None)
             if data is None:
                 print(f"  [--] {name} — nao encontrado")
@@ -473,6 +534,8 @@ def populate(path):
                 next_cl = free[idx + 1] if idx + 1 < len(free) else 0x0FFFFFFF
                 f.seek(fat_lba * 512 + cl * 4)
                 f.write(struct.pack("<I", next_cl & 0x0FFFFFFF))
+            if isinstance(src, str):
+                seen[src] = (free[0], len(data))
             # Write directory entry into root (extend cluster chain if needed)
             name83 = name.upper().replace(".", "").ljust(11) if False else None
             # 8.3: split name/ext

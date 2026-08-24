@@ -7,6 +7,10 @@
 ## Sessões Mantidas (107+)
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
+| 288 | Trinity | F1+P0-P3 + Falcon3-7B | 7 kind LOADED + PRO.v6 1.86GB + ROUTER 25KB 93.5% | Auditoria 15 ADRs/52 ideias; F1 ModelHeader 3072/28L/12H kv4 + auto_arena 50% [512MB,4GB]; P0 ROUTER.BITNET 25818B ver6 99/64/n7 93.5% + mkfat32 alias dedup; P1 global_arena + classify_with_trace + AutoLearn R3; P2 noise strided + x*127; PRO.v6 1864557403B 0xBE11BE11. |
+| 287 | Heap | Budget cap | Budget 1536MB cap OOM 2453→768MB + QEMU 4c TCG 7/8 | HEAP_BUDGET_MB cap + virtio_gpu stale fix + Falcon3 lm_head fallback; TCG 6G 4c 902 linhas 7/8 phases, HW Expert v6 loaded, TTS greeting; WHPX hang FAT walk, 8G Limine no-start. |
+| 286 | Emagrecer | C1-C5 | Bin vira facade 9k LOC | C1 dead 197L + C2 cap/paging 1941L + C4 net 2714L + C5 tls/fb 1360L + C3 agents 2200L; 19.3k→13k; cargo build 13s OK; check_duplication 52→42; QEMU GDT loop fix. |
+| 285 | SMP | T-044 | Per-core load bars HUD | gauges::runqueue load + compositor barras verde/amarelo/vermelho; feature-gated runqueue. |
 | 283 | ADR-0100 | Onda 0–1 | BOOT_AI + measure TSC/TCG skip | T-001–T-016 no código; T-017 metal. |
 | 282 | Plano | ADR-0100 | Backlog unificado custo×anel T-001–T-075 | Lacuna 0090–0099 intencional. 0078 só Fase 1 no plano; Ring3 TCG ≠ produção; metal K23 = Onda 2. |
 | 281 | SMP | K22 metal ADR-0088 | ICR x2APIC canônico + GDT 1 TSS/CPU | i5 7ª reboot = #GP ICR bits 14/15 reservados; 240H freeze = N×retry + deassert ilegal. GDT crate 8 slots ≠ silício. Testes icr 2/2; check k-nano none 0 erros. Aceite = K23 + online==madt-1 no metal. |

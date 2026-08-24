@@ -1,5 +1,17 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s288] - 2026-08-24 — Trinity 7 kind + Falcon3-7B PRO.v6 (F1+P0-P3) — router LOADED 25KB 93.5%, arena auto, MoE noise
+
+**Auditoria Trinity 15 ADRs/52 ideias → 7 kind LOADED; Falcon3-7B como inteligência embarcada**
+
+- **F1 Falcon3-7B ModelHeader dinâmico:** `hidden 3072 28L 12H kv4 23040 vocab131080` lido do header v6 em runtime (`parse_model_header`/`LOADED_HEADER`/`v6_file_size` dinâmico); corrige hardcoded `FALCON3_NUM_LAYERS=22`/`FALCON3_FILE_SIZE=1.03GB`/`FALCON3_MAX_SEQ=4096`; `auto_arena_size()` 50% RAM [512MB,4GB] (4GB suporta Falcon3-10B 2.5GB); `slot_footprint_mb()` dinâmico via header.
+- **P0 Router neural:** `tools/train_router.py` 202 curadas 93.5% acc (31 holdout seed7, 84.8% nonzero) → `target/ROUTER.BITNET` 25.8KB header 0xBE11BE11 ver6 vocab99 hidden64 n7; `tools/mkfat32.py` alias dedup (`seen{}` reuse cluster — FALCON3.V6/PRO.V6/LLAMA8B.BIN sem double alloc); `moe_router=LOADED` vs `ABSENT(keyword)+FALLBACK_GENERATOR`.
+- **P1 Wiring R3:** `global_arena` wrappers + hermes single `classify_with_trace` neural + AutoLearn `update_with_replay()` via RouteTrace congelados (R3).
+- **P2 DynamicMoE:** `clone_with_noise` fix ternário strided (4 pesos/byte) + `Int8Router` align `x*127`.
+- **P3 Docs honestidade:** 7 kind (HwIdentify, HwControl, RustCoder, DiskDiag, Security, Generator, SpeechSynth — 2 wired HWEXPRT/RUSTCDR, 4 keyword→Generator) + Falcon3 dims dinâmicas — AGENTS.md + TECNOLOGIAS.md.
+- **Falcon3-7B download:** `tiiuae/Falcon3-7B-Instruct-1.58bit` 3.27GB → `target1/PRO.v6` 1.864.557.403 B (1778.2MB) header 0xBE11BE11 ver6 num_params 2468048068; aliases FAT `FALCON3.V6`/`PRO.V6` + `tools/convert_falcon3_bitnet.py` lm_head fallback + per-projection weight_scale (7e2c52e).
+- **Verificação:** `cargo check --release` 0 erros; `validate_router_v6.py` PASS (29/31 93.5%); header PRO.v6 0xBE11BE11 ver6 hidden3072 layers28.
+
 ## [Unreleased]
 ### SESSION_281: K22 metal — ICR x2APIC + GDT por CPU (2026-08-22)
 

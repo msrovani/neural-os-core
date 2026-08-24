@@ -1,4 +1,8 @@
-﻿# STATE — neural-os-core v1.9.99-s284 — neural-sgdb migration completa (ADR-0091)
+﻿# STATE — neural-os-core v1.9.99-s288 — Trinity 7 kind + Falcon3-7B PRO.v6 (F1+P0-P3)
+#   SESSION_288: Trinity auditoria 15 ADRs/52 ideias → 7 kind LOADED (2 wired HWEXPRT/RUSTCDR, 4 keyword→Generator), HEALTH I5 honesto; F1 ModelHeader hidden3072 28L 12H kv4 23040 vocab131080 + auto_arena 50% RAM [512MB,4GB] + slot_footprint dinâmico; P0 ROUTER.BITNET 25.8KB ver6 vocab99 hidden64 n7 93.5% (202 curadas, 84.8% nonzero) + mkfat32 alias dedup PRO.V6/FALCON3.V6; P1 global_arena wrappers + hermes classify_with_trace + AutoLearn replay R3; P2 clone_with_noise fix ternário strided + Int8Router x*127; P3 docs honestidade; PRO.v6 1.86GB (1864557403 B) header 0xBE11BE11 ver6. 0 erros.
+#   SESSION_287: Budget Cap Heap + QEMU 4-core display — HEAP_BUDGET_MB 1536 cap (OOM 2453→768MB eliminado), virtio_gpu stale fix, Falcon3 lm_head fallback. TCG 6G 4c 7/8 phases, HW Expert v6 loaded, TTS greeting.
+#   SESSION_286: Emagrecer C1-C5 bin vira facade (9k LOC movidos, 19.3k→13k) — paging/cap/net/tls/fb/agents.
+#   SESSION_285: T-044 per-core load bars no HUD (SMP telemetry).
 #   SESSION_284: neural-sgdb v1.1.11 migration completa (ADR-0091): TickvStorageAdapter, NSGDB Bridge,
 #     Hits tipados 12 campos, recall_lexical, lifecycle, memory-aware route. 9 commits, ~1150 LOC, 0 regressão.
 #   SESSION_283: BOOT_AI + storage_bw TSC; TCG skip ATA/medida. Próximo T-017 metal K23.
