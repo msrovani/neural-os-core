@@ -145,6 +145,7 @@ impl BlockDevice for CachedDisk<'_> {
             }
         }
         if all_hit {
+            crate::mhi::record_block_access(lba);
             return true;
         }
         // Miss: lê do disco e popula a cache por setor.
@@ -155,6 +156,7 @@ impl BlockDevice for CachedDisk<'_> {
             let s = &buf[i * 512..(i + 1) * 512];
             self.cache.insert(lba + i as u64, s);
         }
+        crate::mhi::record_block_access(lba);
         true
     }
 

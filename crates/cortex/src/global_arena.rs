@@ -25,6 +25,11 @@ static PENDING_TRACE: Mutex<Option<RouteTrace>> = Mutex::new(None);
 static TOKEN_STEPS: AtomicUsize = AtomicUsize::new(0);
 
 pub fn install_global_arena(arena: TensorArena) {
+    k_nano::mhi::register_virt_region(
+        arena.virt_base() as u64,
+        arena.capacity_bytes(),
+        "tensor_arena",
+    );
     *CORTEX_ARENA.lock() = Some(arena);
 }
 
@@ -36,6 +41,7 @@ pub fn with_arena<R>(f: impl FnOnce(&mut TensorArena) -> R) -> Option<R> {
 pub fn reset_moe_cache() {
     if let Some(arena) = CORTEX_ARENA.lock().as_mut() {
         arena.reset_moe_cache();
+        k_nano::mhi::record_access(arena.virt_base() as u64, 0);
         k_nano::slog_cortex!(
             "R3",
             "info",

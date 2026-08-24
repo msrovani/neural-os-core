@@ -254,10 +254,7 @@ impl Agent for OptimizerAgent {
             k_nano::slog_hermes!("Log", "msg", "{}", self.analyzer.report());
         }
 
-        // MHI Scheduler: promove/demove tiers por padrao de acesso
-        k_ai::fs::mhi_scheduler::mhi_scheduler_tick(_tick);
-
-        // MHI Ativo: soft-migrate (metadata + DRAM memcpy; DMA disk/VRAM deferred)
+        // Unique MHI brain: k_nano::mhi::mhi_tick (logging-only mhi_scheduler_tick removed)
         k_nano::mhi::mhi_tick(_tick);
 
         // #163: Snapshot de config a cada 1000 ticks

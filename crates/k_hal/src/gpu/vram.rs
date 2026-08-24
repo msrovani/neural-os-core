@@ -177,6 +177,9 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
     // acessível por identidade phys+pmoff).
     let _ = crate::gpu::sasos::init_sasos_vram(vram_phys, vram_size, pmoff);
 
+    // MHI 1.5: hook para alloc_by_tier(Vram) + tier0 promote no mhi_tick.
+    k_nano::mhi::register_vram_allocator(vram_alloc);
+
     k_nano::slog_hal!("VRAM", "info", "{} buddy allocator ativo: {} MB", gpu.name, vram_size / (1024*1024));
     true
 }

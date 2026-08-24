@@ -307,6 +307,7 @@ pub unsafe fn mount_partitions(ata: &AtaDriver) {
         if let Some(ref mut vfs) = *crate::vfs::VFS.lock() {
             vfs.mount(Box::leak(mount_point.clone().into_boxed_str()), fs_name);
         }
+        // ResidentKind::Block (tier Hdd): chave LBA, nunca memcpy CPU.
         crate::mhi::MHI_REGISTRY.lock().register(
             x86_64::PhysAddr::new(part.lba_start as u64 * 512),
             part.sector_count as usize * 512, crate::mhi::AllocTier::Hdd, &mount_point);

@@ -1,60 +1,7 @@
-//! MhiScheduler — varre periodicamente os AllocProfiles e promove/demove
-//! arquivos entre tiers MHI baseado em padroes de acesso.
-//!
-//! Aquecimento (promocao): access_count > 5 em 500 ticks → HDD→DRAM
-//! Resfriamento (democao): sem acesso por 5000 ticks → DRAM→HDD
-//!
-//! CFS-like fairness: rastreia runtime por tier para evitar starvation
+//! MhiScheduler — stub. Unique brain is `k_nano::mhi::mhi_tick`.
+//! Logging-only scanner deleted to avoid dual policy.
 
-use core::sync::atomic::{AtomicU64, Ordering};
-
-const PROMOTE_ACCESS_THRESHOLD: u64 = 5;
-const PROMOTE_TICK_WINDOW: u64 = 500;
-const DEMOTE_IDLE_TICKS: u64 = 5000;
-const SCAN_INTERVAL: u64 = 1000;
-
-static LAST_SCAN_TICK: AtomicU64 = AtomicU64::new(0);
-static TOTAL_PROMOTIONS: AtomicU64 = AtomicU64::new(0);
-static TOTAL_DEMOTIONS: AtomicU64 = AtomicU64::new(0);
-
-/// Deve ser chamado a cada tick do OptimizerAgent
-pub fn mhi_scheduler_tick(tick: u64) {
-    let last = LAST_SCAN_TICK.load(Ordering::Relaxed);
-    if tick < last + SCAN_INTERVAL { return; }
-    LAST_SCAN_TICK.store(tick, Ordering::Relaxed);
-
-    let reg = k_nano::mhi::MHI_REGISTRY.lock();
-    let mut promotions = 0u64;
-    let mut demotions = 0u64;
-
-    for (_addr, profile) in reg.allocations.iter() {
-        let freq = profile.access_count;
-        let idle = tick.saturating_sub(profile.last_access_tick);
-        let (_cpu_w, gpu_w, _io_w) = crate::profile::ProfileManager::get().resource_weights();
-        let profile_weight = gpu_w;
-        let suggested = k_nano::mhi::arc_suggest_tier(profile, tick, profile_weight);
-
-        if suggested != profile.tier {
-            if freq > PROMOTE_ACCESS_THRESHOLD && idle < PROMOTE_TICK_WINDOW {
-                // Promocao: tier mais quente
-                k_nano::slog_kai!("MHI", "info", "Promover {:?} {}H{}.tier {:?}→{:?} (freq={} idle={})",
-                    profile.phys_addr, profile.owner, freq, profile.tier, suggested, freq, idle);
-                promotions += 1;
-            } else if idle > DEMOTE_IDLE_TICKS {
-                // Democao: tier mais frio
-                k_nano::slog_kai!("MHI", "info", "Demover {:?} (freq={} idle={})", profile.phys_addr, freq, idle);
-                demotions += 1;
-            }
-        }
-    }
-
-    // Atualiza contadores globais (CFS-like fairness tracking)
-    if promotions > 0 {
-        TOTAL_PROMOTIONS.fetch_add(promotions, Ordering::Relaxed);
-    }
-    if demotions > 0 {
-        TOTAL_DEMOTIONS.fetch_add(demotions, Ordering::Relaxed);
-    }
+/// Kept so other crates compiling against this symbol do not break.
+pub fn mhi_scheduler_tick(_tick: u64) {
+    // unique brain is mhi_tick; logging-only scanner deleted to avoid dual policy
 }
-
-// ponytail: scheduler_stats removed (dead code, preserved in LEGACY/v1.5-neural-kernel-src/)

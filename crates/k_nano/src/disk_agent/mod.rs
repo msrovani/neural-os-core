@@ -156,9 +156,8 @@ impl DiskIntelligenceAgent {
         for (ctrl_idx, disk, lba, data) in batch {
             if (ctrl_idx as usize) < self.controllers.len() {
                 self.controllers[ctrl_idx as usize].write_blocks(disk, lba, &data, (data.len() + 511) / 512);
-                // ADR-0087 Fase 2: wiring record_access no caminho de escrita
-                // (convenção dos stubs = lba * 512).
-                crate::mhi::record_access(lba * 512, 0);
+                // Anti-#PF: LBA não é PhysAddr. Hits de bloco numa tabela à parte.
+                crate::mhi::record_block_access(lba);
             }
         }
     }

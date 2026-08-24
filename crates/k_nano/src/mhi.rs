@@ -67,6 +67,112 @@ impl AllocTier {
     }
 }
 
+/// Onde o objeto vive de verdade. LBA/BAR nunca são PhysAddr de RAM (anti-#PF).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResidentKind {
+    CpuRam,
+    VramBar,
+    Block,
+    /// VA de working set (TensorArena 0x48..). Frames DRAM, mas a chave NÃO é
+    /// PhysAddr HHDM — memcpy/CE com esse u64 seria #PF. Só índice + telemetria.
+    VirtMapped,
+}
+
+pub fn resident_kind(tier: AllocTier) -> ResidentKind {
+    match tier {
+        AllocTier::Dram => ResidentKind::CpuRam,
+        AllocTier::Vram => ResidentKind::VramBar,
+        AllocTier::Nvme | AllocTier::Hdd | AllocTier::UsbMsc => ResidentKind::Block,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopySkip {
+    NoHhdm,
+    BadLen,
+    NotPresent,
+}
+
+/// VA HHDM para um PA, ou None se o offset ainda não existe.
+pub fn hhdm_ptr(pa: u64) -> Option<*mut u8> {
+    let off = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+    if off == 0 {
+        return None;
+    }
+    Some((pa.wrapping_add(off)) as *mut u8)
+}
+
+fn hhdm_range_present(pa: u64, len: usize) -> bool {
+    let off = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+    if off == 0 || len == 0 {
+        return false;
+    }
+    let start = pa & !0xfff;
+    let last = match pa.checked_add((len as u64).saturating_sub(1)) {
+        Some(x) => x & !0xfff,
+        None => return false,
+    };
+    let mut p = start;
+    loop {
+        if !crate::memory::is_page_present(p.wrapping_add(off)) {
+            return false;
+        }
+        if p >= last {
+            return true;
+        }
+        p = match p.checked_add(4096) {
+            Some(n) => n,
+            None => return false,
+        };
+    }
+}
+
+/// Max bytes for DRAM→DRAM soft copy (avoid huge partition stubs).
+pub const SOFT_COPY_MAX: usize = 4 * 1024 * 1024;
+
+/// Cópia CPU só via HHDM já mapeado. Falhou o gate → Err, nunca memcpy.
+pub fn hhdm_copy_checked(src_pa: u64, dst_pa: u64, len: usize) -> Result<(), CopySkip> {
+    if crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed) == 0 {
+        return Err(CopySkip::NoHhdm);
+    }
+    if len == 0 || len > SOFT_COPY_MAX {
+        return Err(CopySkip::BadLen);
+    }
+    if !hhdm_range_present(src_pa, len) || !hhdm_range_present(dst_pa, len) {
+        return Err(CopySkip::NotPresent);
+    }
+    let src = hhdm_ptr(src_pa).ok_or(CopySkip::NoHhdm)? as *const u8;
+    let dst = hhdm_ptr(dst_pa).ok_or(CopySkip::NoHhdm)?;
+    unsafe {
+        core::ptr::copy_nonoverlapping(src, dst, len);
+    }
+    Ok(())
+}
+
+const BLOCK_SLOTS: usize = 32;
+static BLOCK_LBA: [AtomicU64; BLOCK_SLOTS] = [const { AtomicU64::new(u64::MAX) }; BLOCK_SLOTS];
+static BLOCK_HITS: [AtomicU64; BLOCK_SLOTS] = [const { AtomicU64::new(0) }; BLOCK_SLOTS];
+
+/// Telemetria de disco: LBA não é PhysAddr. Tabela fixa, sem alloc no hot path.
+pub fn record_block_access(lba: u64) {
+    for i in 0..BLOCK_SLOTS {
+        let cur = BLOCK_LBA[i].load(Ordering::Relaxed);
+        if cur == lba {
+            BLOCK_HITS[i].fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if cur == u64::MAX
+            && BLOCK_LBA[i]
+                .compare_exchange(u64::MAX, lba, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            BLOCK_HITS[i].store(1, Ordering::Relaxed);
+            return;
+        }
+    }
+    BLOCK_HITS[0].fetch_add(1, Ordering::Relaxed);
+}
+
 /// Janela "quente" em ticks: acessos dentro desta janela contam para o streak
 /// de histerese (mesma ordem dos thresholds de recency da escada).
 const HOT_WINDOW_TICKS: u64 = 500;
@@ -77,6 +183,7 @@ pub struct AllocProfile {
     pub phys_addr: PhysAddr,
     pub size_bytes: usize,
     pub tier: AllocTier,
+    pub kind: ResidentKind,
     pub access_count: u64,
     pub last_access_tick: u64,
     /// Streak de acessos dentro da janela quente (histerese — zera no frio).
@@ -90,6 +197,7 @@ impl AllocProfile {
             phys_addr: addr,
             size_bytes: size,
             tier,
+            kind: resident_kind(tier),
             access_count: 0,
             last_access_tick: 0,
             hot_hits: 0,
@@ -166,12 +274,16 @@ fn migration_rate_ok(tick: u64, size: usize) -> bool {
 /// ZFS-ARC-style tier suggestion (ADR-0087 §3: VRAM na escada + histerese).
 /// Promoção (sugerir tier mais quente que o atual) só quando o padrão de acesso
 /// está ESTÁVEL (hot_hits >= 2 na janela quente) — evita thrash (LWN 898766).
-pub fn arc_suggest_tier(profile: &AllocProfile, now: u64, _weight: f32) -> AllocTier {
+pub fn arc_suggest_tier(profile: &AllocProfile, now: u64, weight: f32) -> AllocTier {
     let freq = profile.access_count;
     let recency = now.saturating_sub(profile.last_access_tick);
     let stable_hot = profile.hot_hits >= HOT_HITS_PROMOTE;
     if stable_hot && freq > 10 && recency < 500 {
-        return AllocTier::Vram; // working set quente → VRAM (peer DMA = Fase 4a HW)
+        // weight: GPU-bound (≥0.5) prefere VRAM; senão DRAM. Não é ML.
+        if weight >= 0.5 {
+            return AllocTier::Vram;
+        }
+        return AllocTier::Dram;
     }
     if stable_hot && recency < 1000 {
         return AllocTier::Dram;
@@ -201,6 +313,13 @@ impl MhiRegistry {
             .insert(addr.as_u64(), AllocProfile::new(addr, size, tier, owner));
     }
 
+    /// Índice de VA mapeado (arena Cortex). kind=VirtMapped — mhi_tick nunca memcpy.
+    pub fn register_virt(&mut self, virt: u64, size: usize, owner: &str) {
+        let mut p = AllocProfile::new(PhysAddr::new(virt), size, AllocTier::Dram, owner);
+        p.kind = ResidentKind::VirtMapped;
+        self.allocations.insert(virt, p);
+    }
+
     /// Remove alocação do registry (ex: vram_free) — evita crescimento infinito.
     pub fn unregister(&mut self, addr: u64) {
         self.allocations.remove(&addr);
@@ -213,8 +332,14 @@ impl MhiRegistry {
     }
 
     /// Update tier in-place (soft migrate metadata).
+    /// Block never becomes Dram/Vram — that would make a later memcpy treat LBA as RAM.
     pub fn set_tier(&mut self, addr: PhysAddr, tier: AllocTier) -> bool {
         if let Some(p) = self.allocations.get_mut(&addr.as_u64()) {
+            if p.kind != ResidentKind::CpuRam
+                && matches!(tier, AllocTier::Dram | AllocTier::Vram)
+            {
+                return false;
+            }
             p.tier = tier;
             true
         } else {
@@ -226,6 +351,9 @@ impl MhiRegistry {
     pub fn suggest_migration(&self, tick: u64) -> Vec<(PhysAddr, AllocTier, AllocTier)> {
         let mut migrations = Vec::new();
         for (_key, p) in &self.allocations {
+            if p.kind != ResidentKind::CpuRam {
+                continue;
+            }
             let suggested = arc_suggest_tier(p, tick, 0.5);
             if suggested != p.tier {
                 migrations.push((p.phys_addr, p.tier, suggested));
@@ -278,6 +406,14 @@ pub fn unregister(addr: u64) {
     MHI_REGISTRY.lock().unregister(addr);
 }
 
+/// Working set em VA própria (TensorArena). Não é LBA nem PA HHDM.
+pub fn register_virt_region(virt: u64, size: usize, owner: &str) {
+    if size == 0 {
+        return;
+    }
+    MHI_REGISTRY.lock().register_virt(virt, size, owner);
+}
+
 /// Soft-migrate counters (honest MVP — not full DMA).
 pub static MHI_SOFT_META: AtomicU64 = AtomicU64::new(0);
 pub static MHI_SOFT_COPY: AtomicU64 = AtomicU64::new(0);
@@ -298,10 +434,16 @@ pub struct MemoryHierarchy {
 
 impl MemoryHierarchy {
     pub fn new() -> Self {
+        Self::from_detected()
+    }
+
+    /// Capacidades do boot (RAM real). NVMe/VRAM são números, não mapping HHDM.
+    pub fn from_detected() -> Self {
+        let ram_mb = crate::memory::TOTAL_RAM_MB.load(Ordering::Relaxed).max(1);
         MemoryHierarchy {
             tiers: alloc::vec![MemoryTier {
                 kind: AllocTier::Dram,
-                capacity_bytes: 4_000_000_000,
+                capacity_bytes: ram_mb.saturating_mul(1024 * 1024),
                 bandwidth_mbs: 20000,
                 latency_ns: 100,
                 name: String::from("DRAM"),
@@ -356,9 +498,6 @@ pub fn alloc_by_tier(tier: AllocTier, size: usize) -> Option<x86_64::PhysAddr> {
 pub fn megatrain_tick() {
     mhi_tick(0);
 }
-
-/// Max bytes for DRAM→DRAM soft copy (avoid huge partition stubs).
-const SOFT_COPY_MAX: usize = 4 * 1024 * 1024;
 
 /// Executa 1 migracao por tick.
 /// - Dram↔Dram (paginas reais, size limitado): memcpy + re-register
@@ -441,8 +580,15 @@ fn try_tier0_promote(req: &MigrationRequest) -> bool {
 }
 
 fn execute_soft_migrate(req: MigrationRequest) {
+    let is_cpu_ram = MHI_REGISTRY
+        .lock()
+        .allocations
+        .get(&req.phys_addr)
+        .map(|p| p.kind == ResidentKind::CpuRam)
+        .unwrap_or(false);
     // Partition stubs register LBA*sector as "phys" — never memcpy those.
-    let looks_like_ram_page = req.from == AllocTier::Dram
+    let looks_like_ram_page = is_cpu_ram
+        && req.from == AllocTier::Dram
         && req.size > 0
         && req.size <= SOFT_COPY_MAX
         && (req.phys_addr % 4096 == 0);
@@ -480,7 +626,7 @@ fn execute_soft_migrate(req: MigrationRequest) {
         return;
     }
 
-    if req.to == AllocTier::Dram && req.from == AllocTier::Dram {
+    if is_cpu_ram && req.to == AllocTier::Dram && req.from == AllocTier::Dram {
         // Promote within DRAM working set: allocate + memcpy (proves path non-destructive)
         if req.size == 0 || req.size > SOFT_COPY_MAX {
             MHI_SKIPPED.fetch_add(1, Ordering::Relaxed);
@@ -492,11 +638,11 @@ fn execute_soft_migrate(req: MigrationRequest) {
             return;
         }
         if let Some(new_pa) = alloc_by_tier(AllocTier::Dram, req.size) {
-            let src = (req.phys_addr + pmoff) as *const u8;
-            let dst = (new_pa.as_u64() + pmoff) as *mut u8;
-            unsafe {
-                core::ptr::copy_nonoverlapping(src, dst, req.size);
+            if hhdm_copy_checked(req.phys_addr, new_pa.as_u64(), req.size).is_err() {
+                MHI_SKIPPED.fetch_add(1, Ordering::Relaxed);
+                return;
             }
+            let _ = pmoff;
             let mut reg = MHI_REGISTRY.lock();
             reg.allocations.remove(&req.phys_addr);
             reg.register(new_pa, req.size, AllocTier::Dram, &req.owner);
@@ -651,6 +797,46 @@ mod tests {
         false
     }
     fn fake_vram_free(_addr: u64, _size: usize) {}
+
+    #[test]
+    fn hhdm_copy_no_hhdm_returns_err() {
+        use core::sync::atomic::Ordering;
+        let saved = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+        crate::memory::PHYS_MEM_OFFSET.store(0, Ordering::Relaxed);
+        let r = hhdm_copy_checked(0x1000, 0x2000, 4096);
+        crate::memory::PHYS_MEM_OFFSET.store(saved, Ordering::Relaxed);
+        assert_eq!(r, Err(CopySkip::NoHhdm));
+    }
+
+    #[test]
+    fn virt_mapped_arena_never_memcpy_or_promote() {
+        let mut reg = MhiRegistry::new();
+        let va = 0x4800_0000_0000u64;
+        reg.register_virt(va, 64 * 1024 * 1024, "tensor_arena");
+        assert_eq!(
+            reg.allocations.get(&va).unwrap().kind,
+            ResidentKind::VirtMapped
+        );
+        assert!(!reg.set_tier(PhysAddr::new(va), AllocTier::Vram));
+        assert!(!reg.set_tier(PhysAddr::new(va), AllocTier::Dram));
+        assert!(reg.suggest_migration(10_000).is_empty());
+    }
+
+    #[test]
+    fn block_profile_set_tier_dram_rejected() {
+        let mut reg = MhiRegistry::new();
+        let lba_key = PhysAddr::new(2048 * 512); // partition stub key — not CPU RAM
+        reg.register(lba_key, 512, AllocTier::Hdd, "fat_stub");
+        assert_eq!(
+            reg.allocations.get(&lba_key.as_u64()).unwrap().kind,
+            ResidentKind::Block
+        );
+        assert!(!reg.set_tier(lba_key, AllocTier::Dram));
+        assert_eq!(
+            reg.allocations.get(&lba_key.as_u64()).unwrap().tier,
+            AllocTier::Hdd
+        );
+    }
 
     #[test]
     fn tier0_promote_requires_hook_and_moves_registry() {

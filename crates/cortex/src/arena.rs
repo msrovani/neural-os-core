@@ -47,6 +47,10 @@ impl TensorArena {
         self.end > self.start
     }
 
+    pub fn virt_base(&self) -> usize {
+        self.start
+    }
+
     /// Alocação bruta alinhada — retorna endereço virtual.
     pub fn alloc_bytes(&mut self, size: usize, align: usize) -> Option<usize> {
         if size == 0 {
@@ -126,6 +130,8 @@ pub fn init_arena_region(
     k_nano::slog_cortex!("CORTEX", "ARENA", "Tier 2 mapped: virt={:#x} size={} MB",
         virt_start,
         size / (1024 * 1024));
+    // MHI índice: VA ≠ PhysAddr HHDM. kind=VirtMapped — tick não memcpy.
+    k_nano::mhi::register_virt_region(virt_start as u64, size, "tensor_arena");
     Ok(TensorArena::from_region(virt_start, size))
 }
 

@@ -1721,8 +1721,7 @@ impl Agent for MemoryAgent {
                 AgentTickResult::Pending
             }
             1 => {
-                // TODO: MemoryHierarchy::from_detected() when parent lands it in k_nano::mhi
-                let mhi = k_nano::mhi::MemoryHierarchy::new();
+                let mhi = k_nano::mhi::MemoryHierarchy::from_detected();
                 k_nano::slog_hermes!("MHI", "info", "{} tier(s). Best: {:?} ({} bytes avail)",
                     mhi.tiers.len(), mhi.best_tier(), mhi.tiers[0].capacity_bytes);
                 // ponytail: skip heap-allocated mhi.clone() to avoid stack overflow
@@ -2868,17 +2867,13 @@ impl FsBridgeAgent {
     pub fn new() -> Self { FsBridgeAgent { last_scan: 0 } }
 
     fn execute_migration(&mut self, _tick: u64) {
+        use k_nano::mhi::ResidentKind;
         let suggestions: Vec<(u64, u64)> = {
             let reg = k_nano::mhi::MHI_REGISTRY.lock();
             reg.allocations.iter()
                 .filter(|(_, p)| {
-                    // Block keys (LBA) are not identity-mapped — skip Hdd/Nvme/UsbMsc.
-                    if matches!(
-                        p.tier,
-                        k_nano::mhi::AllocTier::Hdd
-                            | k_nano::mhi::AllocTier::Nvme
-                            | k_nano::mhi::AllocTier::UsbMsc
-                    ) {
+                    // Anti-#PF: só CpuRam — Block (LBA) e VramBar nunca entram em memcpy CPU.
+                    if p.kind != ResidentKind::CpuRam {
                         return false;
                     }
                     let idle = _tick.saturating_sub(p.last_access_tick);
@@ -2893,20 +2888,39 @@ impl FsBridgeAgent {
             match crate::globals::read_vfs(&path) {
                 Ok(data) => {
                     let size = data.len();
-                    if let Some(dram_addr) = k_nano::mhi::alloc_by_tier(k_nano::mhi::AllocTier::Dram, size) {
-                        let off = k_nano::memory::PHYS_MEM_OFFSET
-                            .load(core::sync::atomic::Ordering::Relaxed);
-                        if off == 0 {
-                            continue;
-                        }
-                        let dst = (dram_addr.as_u64() + off) as *mut u8;
-                        unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), dst, size); }
-                        let mut reg = k_nano::mhi::MHI_REGISTRY.lock();
-                        // Register the NEW Dram phys — never the Block/LBA key.
-                        reg.register(dram_addr, size, k_nano::mhi::AllocTier::Dram, "fs_bridge");
-                        reg.record_access(dram_addr, _tick, 0);
-                        k_nano::slog_hermes!("FS", "BRIDGE", "Migrado {:x} → DRAM {:?} ({} bytes, idle={})", addr, dram_addr, size, _tick.saturating_sub(*last_access));
+                    if size == 0 {
+                        continue;
                     }
+                    if k_nano::memory::PHYS_MEM_OFFSET
+                        .load(core::sync::atomic::Ordering::Relaxed)
+                        == 0
+                    {
+                        continue;
+                    }
+                    let Some(dram_addr) =
+                        k_nano::mhi::alloc_by_tier(k_nano::mhi::AllocTier::Dram, size)
+                    else {
+                        continue;
+                    };
+                    let Some(dst) = k_nano::mhi::hhdm_ptr(dram_addr.as_u64()) else {
+                        continue;
+                    };
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(data.as_ptr(), dst, size);
+                    }
+                    k_nano::mhi::unregister(*addr);
+                    let mut reg = k_nano::mhi::MHI_REGISTRY.lock();
+                    reg.register(dram_addr, size, k_nano::mhi::AllocTier::Dram, "fs_bridge");
+                    reg.record_access(dram_addr, _tick, 0);
+                    k_nano::slog_hermes!(
+                        "FS",
+                        "BRIDGE",
+                        "Migrado {:x} → DRAM {:?} ({} bytes, idle={})",
+                        addr,
+                        dram_addr,
+                        size,
+                        _tick.saturating_sub(*last_access)
+                    );
                 }
                 Err(_) => {}
             }
