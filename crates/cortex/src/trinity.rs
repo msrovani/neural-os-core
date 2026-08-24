@@ -605,6 +605,20 @@ impl TrinityRouter {
     }
 }
 
+/// Nome canônico de cada ExpertKind (para logging/telemetria).
+pub fn expert_kind_name(kind: ExpertKind) -> &'static str {
+    match kind {
+        ExpertKind::HwIdentify => "hw_identify",
+        ExpertKind::HwControl => "hw_control",
+        ExpertKind::RustCoder => "rust_coder",
+        ExpertKind::DiskDiag => "disk_diag",
+        ExpertKind::Security => "security",
+        ExpertKind::SpeechSynth => "speech_synth",
+        ExpertKind::Generator => "generator",
+        ExpertKind::Unknown => "unknown",
+    }
+}
+
 /// Generate RANDOM (UNTRAINED) router weights using LCG with seed 42.
 /// Embedding table: VOCAB×HIDDEN random f32 in [-0.1, 0.1].
 /// Weight matrix: HIDDEN×num_experts PackedTernaryTensor (-1/0/1).

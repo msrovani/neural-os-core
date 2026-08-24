@@ -23,6 +23,9 @@ pub enum SkillPattern {
     /// Ecoa mensagem: "echo hello" → WASM _start retorna 42
     Echo,
     /// Qualquer outra descrição → WASM dummy _start retorna 42
+    /// Card JSON: LLM gera UiDeclaration (ADR-0058)
+    Card,
+    /// Qualquer outra descrição → WASM dummy _start retorna 42
     Default,
 }
 
@@ -34,6 +37,8 @@ pub fn recognize(description: &str) -> SkillPattern {
         SkillPattern::Add
     } else if trimmed.starts_with("echo") || trimmed.starts_with("print") || trimmed.starts_with("say") {
         SkillPattern::Echo
+    } else if trimmed.contains("card") || trimmed.contains("display") || trimmed.contains("render") || trimmed.contains("mostrar") || trimmed.contains("show") {
+        SkillPattern::Card
     } else {
         SkillPattern::Default
     }
@@ -44,6 +49,7 @@ pub fn generate_from_pattern(pattern: SkillPattern, _description: &str) -> Vec<u
     match pattern {
         SkillPattern::Add => generate_add_wasm(),
         SkillPattern::Echo | SkillPattern::Default => wasmi_rt::generate_wasm_module(),
+        SkillPattern::Card => wasmi_rt::generate_wasm_module(), // card WASM placeholder
     }
 }
 

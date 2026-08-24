@@ -385,6 +385,23 @@ impl Agent for CortexAgent {
                     let mut dec = StructuredDecoder::new(DecodeMode::Alpha);
                     cortex::cortex::generate_via_model_with_decoder(&prompt, &mut dec)
                 }
+                crate::decode_harness::SkillPattern::Card => {
+                    // ADR-0058: card JSON grammar - LLM gera UiDeclaration
+                    const CARD_SCHEMA: &str = concat!(
+                        "Responda SO com um card JSON: {\"id\":N,\"title\":\"..\",\"w\":N,\"h\":N,\"body\":[",
+                        "{\"t\":\"text\",\"s\":\"..\"}|{\"t\":\"kv\",\"k\":\"..\",\"v\":\"..\"}|",
+                        "{\"t\":\"gauge\",\"label\":\"..\",\"value\":N,\"max\":N,\"unit\":\"..\"}|",
+                        "{\"t\":\"bars\",\"label\":\"..\",\"v\":[N,..]}|{\"t\":\"list\",\"items\":[\"..\"]}|",
+                        "{\"t\":\"panel\",\"label\":\"..\",\"h\":N}|{\"t\":\"btn\",\"label\":\"..\"}|{\"t\":\"div\"}]}"
+                    );
+                    let card_prompt = alloc::format!(
+                        "{}\n{}",
+                        prompt,
+                        CARD_SCHEMA
+                    );
+                    let mut dec = StructuredDecoder::new(DecodeMode::Json);
+                    cortex::cortex::generate_via_model_with_decoder(&card_prompt, &mut dec)
+                }
                 crate::decode_harness::SkillPattern::Default => {
                     cortex::cortex::generate_via_model(&prompt)
                 }
@@ -400,8 +417,20 @@ impl Agent for CortexAgent {
             k_nano::slog_cortex!("LLM", "info", "Generated: \"{}\"", output);
             let _ = EVENT_BUS.publish(Event {
                 id: 0, topic: alloc::string::String::from(cortex::cortex::TOPIC_LLM_RESPONSE),
-                payload: output.into_bytes(), token: CapabilityToken::Legacy(1),
+                payload: output.clone().into_bytes(), token: CapabilityToken::Legacy(1),
             });
+            // ADR-0058: se output e JSON de card valido, publica em UI_SPEC
+            if pattern == crate::decode_harness::SkillPattern::Card
+                && output.contains("\"body\"")
+            {
+                let _ = EVENT_BUS.publish(Event {
+                    id: 0,
+                    topic: alloc::string::String::from("UI_SPEC"),
+                    payload: output.into_bytes(),
+                    token: CapabilityToken::Legacy(1),
+                });
+                k_nano::slog_cortex!("LLM", "info", "Card JSON published to UI_SPEC");
+            }
         }
         AgentTickResult::Pending
     }

@@ -996,6 +996,22 @@ fn adr0047_mvp_gates() {
     {
         crate::display::ui_spec::mark_ui_ok();
     }
+    // ADR-0058 S4: 3 demo cards (Sistema/Clima/Video) via TOPIC_UI_SPEC
+    let demo_cards = [
+        r#"{"id":1,"title":"Sistema","w":300,"h":200,"body":[{"t":"kv","k":"RAM","v":"7168MB"},{"t":"kv","k":"Cores","v":"4"},{"t":"gauge","label":"CPU","value":12,"max":100,"unit":"%"}]}"#,
+        r#"{"id":2,"title":"Clima","w":250,"h":150,"body":[{"t":"kv","k":"Temp","v":"22C"},{"t":"text","s":"Parcialmente nublado"},{"t":"bars","label":"Umidade","v":[65]}]}"#,
+        r#"{"id":3,"title":"Video","w":320,"h":240,"body":[{"t":"text","s":"Chamada de Video"},{"t":"btn","label":"Ligar"},{"t":"btn","label":"Encerrar"}]}"#,
+    ];
+    for card_json in demo_cards.iter() {
+        let _ = crate::EVENT_BUS.publish(Event {
+            id: 0,
+            topic: alloc::string::String::from(crate::display::ui_spec::TOPIC_UI_SPEC),
+            payload: card_json.as_bytes().to_vec(),
+            token: CapabilityToken::Legacy(1),
+        });
+    }
+    k_nano::slog_bin!("HMI", "info", "3 demo cards publicados no TOPIC_UI_SPEC");
+
     let (ui, av) = crate::display::ui_spec::gate_status();
     let (h2, h5) = crate::display::embed_viz::gate_status();
     k_nano::slog_bin!("ADR", "0047-H", "ui_spec={} avatar_telem={} h2={} h5={}", ui, av, h2, h5);
