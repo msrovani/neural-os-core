@@ -27,22 +27,14 @@ pub fn set_status(s: AudioPortStatus) {
     AUDIO_STATUS.store(s as u8, Ordering::Relaxed);
 }
 
-/// FE R3: Cap FeAudio obrigatória + HDA status real.
-/// Verifica CapGate E se o HDA está bound (corn buffer + SD1 ativo).
+/// FE R3: Cap FeAudio obrigatória.
 pub fn fe_stream() -> AudioPortStatus {
     match cap_gate::check_fe_bound(HalCap::FeAudio) {
         CapResult::Allow => {
             let s = status();
             if matches!(s, AudioPortStatus::Bound | AudioPortStatus::Streaming) {
-                // Verifica se HDA está realmente bound (corn_buffer_ok)
-                if crate::audio::is_hda_bound() {
-                    set_status(AudioPortStatus::Streaming);
-                    AudioPortStatus::Streaming
-                } else {
-                    // Cap OK mas HDA não bound — Bound mas não streaming
-                    set_status(AudioPortStatus::Bound);
-                    AudioPortStatus::Bound
-                }
+                set_status(AudioPortStatus::Streaming);
+                AudioPortStatus::Streaming
             } else {
                 s
             }
@@ -52,12 +44,4 @@ pub fn fe_stream() -> AudioPortStatus {
             AudioPortStatus::Denied
         }
     }
-}
-
-/// Retorna status detalhado do áudio (para HUD/telemetria).
-pub fn detailed_status() -> (AudioPortStatus, bool, bool) {
-    let st = status();
-    let hda_bound = crate::audio::is_hda_bound();
-    let streaming = matches!(st, AudioPortStatus::Streaming);
-    (st, hda_bound, streaming)
 }

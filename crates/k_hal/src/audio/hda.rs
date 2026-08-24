@@ -15,7 +15,6 @@ const HDA_CORB_RP: u64 = 0x4A;
 const HDA_CORB_CTL: u64 = 0x4C;
 const HDA_RIRB_BASE: u64 = 0x50;
 const HDA_RIRB_WP: u64 = 0x58;
-const HDA_RIRB_RP: u64 = 0x5A;
 const HDA_RIRB_CTL: u64 = 0x5C;
 const HDA_ICW: u64 = 0x60;
 const HDA_ICR: u64 = 0x64;
@@ -106,12 +105,6 @@ unsafe fn init_hda() -> bool {
             w32(bar, HDA_RIRB_BASE + 4, 0u32);
             w32(bar, HDA_RIRB_CTL, 0x8002);
 
-            // CORB/RIRB based codec probe (real HDA verb path)
-            for cad in 0..4u32 {
-                probe_full_codec(bar, cad);
-            }
-
-            // ICW fallback for codec presence check
             for cad in 0..8u32 {
                 w32(bar, HDA_ICW, (cad << 28) | (0x0F << 20) | 0xF00);
                 for _ in 0..5000 { core::hint::spin_loop(); if r32(bar, HDA_ICW) & 0x80000000 != 0 { break; } }
@@ -187,153 +180,6 @@ pub fn write_hda_playback(samples: &[i16]) {
         let buf_ptr = (PLAYBACK_BUF + k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut i16;
         for i in 0..count {
             unsafe { core::ptr::write_volatile(buf_ptr.add(i), samples[i]); }
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// HDA Verb Commands (HDA 1.0a §7.1)
-// ═══════════════════════════════════════════════════════════════════
-
-/// Verb 4-bit (get/set parameter) — HDA 1.0a §7.1.1
-const VERB_GET_PARAM: u32 = 0xF00;
-const VERB_SET_STREAM_FORMAT: u32 = 0x200;
-const VERB_SET_PIN_WIDGET_CONTROL: u32 = 0x707;
-const VERB_SET_PIN_SENSE: u32 = 0x709;
-const VERB_GET_PIN_SENSE: u32 = 0xF09;
-const VERB_SET_CONNECT_SEL: u32 = 0x701;
-const VERB_GET_CONNECT_LIST: u32 = 0xF02;
-
-/// Widget types — HDA 1.0a §7.1.2
-const WIDGET_TYPE_AUDIO_OUTPUT: u8 = 0x0;
-const WIDGET_TYPE_AUDIO_INPUT: u8 = 0x1;
-const WIDGET_TYPE_AUDIO_MIXER: u8 = 0x2;
-const WIDGET_TYPE_AUDIO_SELECTOR: u8 = 0x3;
-const WIDGET_TYPE_PIN_COMPLEX: u8 = 0x4;
-const WIDGET_TYPE_POWER: u8 = 0x5;
-const WIDGET_TYPE_VOLUME_KNOB: u8 = 0xF;
-
-/// Parameter IDs — HDA 1.0a §7.1.3
-const PARAM_VENDOR_ID: u32 = 0x00;
-const PARAM_REVISION_ID: u32 = 0x02;
-const PARAM_NODE_COUNT: u32 = 0x04;
-const PARAM_WIDGET_CAP: u32 = 0x05;
-const PARAM_PIN_CAP: u32 = 0x0D;
-const PARAM_PIN_WIDGET_CTRL: u32 = 0x07;
-
-/// Send a verb via CORB/RIRB (async, non-blocking).
-/// Returns the 32-bit response from RIRB, or None on timeout.
-unsafe fn send_verb_corb(bar: u64, nid: u32, verb: u32, payload: u32) -> Option<u32> {
-    let verb_data = (nid << 28) | (verb << 20) | payload;
-
-    // CORB: write verb to next slot
-    let wp = r32(bar, HDA_CORB_WP) as usize;
-    let next_wp = (wp + 1) & 0xFF; // CORB is 256 entries
-    let corb_ptr = (bar + HDA_CORB_BASE) as *mut u32;
-    core::ptr::write_volatile(corb_ptr.add(wp), verb_data);
-    w32(bar, HDA_CORB_WP, next_wp as u32);
-
-    // Wait for RIRB response (poll RIRB_WP)
-    let rirb_base = bar + HDA_RIRB_BASE;
-    let mut prev_rp = r32(bar, HDA_RIRB_RP);
-    for _ in 0..10000 {
-        let cur_rp = r32(bar, HDA_RIRB_RP);
-        if cur_rp != prev_rp {
-            let rirb_ptr = (rirb_base) as *const u32;
-            let resp = core::ptr::read_volatile(rirb_ptr.add((cur_rp as usize) & 0xFF));
-            return Some(resp);
-        }
-        core::hint::spin_loop();
-    }
-    None // timeout
-}
-
-/// Read a parameter from a codec node.
-unsafe fn get_param(bar: u64, nid: u32, param: u32) -> Option<u32> {
-    send_verb_corb(bar, nid, VERB_GET_PARAM, param)
-}
-
-/// Probe codec widgets and discover pin complexes.
-/// Returns (num_nodes, num_pin_widgets).
-unsafe fn probe_codec_widgets(bar: u64, start_nid: u32, num_nodes: u32) -> (u32, u32) {
-    let mut pin_count = 0u32;
-    let mut audio_out_count = 0u32;
-
-    for nid in start_nid..(start_nid + num_nodes) {
-        if let Some(cap) = get_param(bar, nid, PARAM_WIDGET_CAP) {
-            let widget_type = ((cap >> 20) & 0x0F) as u8;
-            match widget_type {
-                WIDGET_TYPE_PIN_COMPLEX => {
-                    pin_count += 1;
-                    // Read pin capabilities
-                    let pin_cap = get_param(bar, nid, PARAM_PIN_CAP).unwrap_or(0);
-                    let pin_ctrl = (nid << 8) | VERB_SET_PIN_WIDGET_CONTROL;
-                    // Enable output (bit 6) if pin supports output
-                    if pin_cap & 0x00000010 != 0 { // OUT capable
-                        w32(bar, HDA_CORB_BASE as u64, 0); // placeholder
-                        k_nano::slog_hal!("HDA", "pin", "NID={:#x} type=PIN OUT-capable cap={:#x}", nid, pin_cap);
-                    }
-                    let _ = pin_ctrl; // will use for real pin config
-                }
-                WIDGET_TYPE_AUDIO_OUTPUT => {
-                    audio_out_count += 1;
-                    // Configure stream format: 16-bit, 48kHz, mono
-                    let fmt_verb = (nid << 8) as u64 | VERB_SET_STREAM_FORMAT as u64;
-                    // Format: 16-bit (bits 3:0=0x1), 48kHz (bits 14:11=0xB), mono (bit 15=0)
-                    let fmt_val: u32 = 0x0011; // 16-bit, 48kHz
-                    let _ = fmt_val;
-                    k_nano::slog_hal!("HDA", "output", "NID={:#x} type=AUDIO_OUT", nid);
-                }
-                WIDGET_TYPE_AUDIO_MIXER => {
-                    k_nano::slog_hal!("HDA", "mixer", "NID={:#x} type=MIXER", nid);
-                }
-                WIDGET_TYPE_AUDIO_SELECTOR => {
-                    k_nano::slog_hal!("HDA", "selector", "NID={:#x} type=SELECTOR", nid);
-                }
-                _ => {}
-            }
-        }
-    }
-    (num_nodes, pin_count)
-}
-
-/// Full codec probe: reads vendor ID, revision, node count, and walks widgets.
-/// Chamado após CORB/RIRB setup bem-sucedido.
-unsafe fn probe_full_codec(bar: u64, cad: u32) {
-    let start_nid = if cad == 0 { 0x01 } else { 0x20 }; // HDA 1.0a §7.1
-
-    // Vendor + Revision
-    let vendor = get_param(bar, start_nid, PARAM_VENDOR_ID).unwrap_or(0);
-    let revision = get_param(bar, start_nid, PARAM_REVISION_ID).unwrap_or(0);
-    let vendor_name = match (vendor >> 16) & 0xFFFF {
-        0x8086 => "Intel",
-        0x10EC => "Realtek",
-        0x1002 => "ATI/AMD",
-        0x10DE => "NVIDIA",
-        _ => "Unknown",
-    };
-
-    // Node count (root nodes at bits 15:0, function group at bits 31:16)
-    let node_count = get_param(bar, start_nid, PARAM_NODE_COUNT).unwrap_or(0);
-    let root_start = (node_count & 0xFFFF) as u32;
-    let root_count = ((node_count >> 16) & 0xFFFF) as u32;
-
-    k_nano::slog_hal!("HDA", "codec", "CAD={} vendor={} ({:#06x}:{:#04x}) nodes={}",
-        cad, vendor_name, vendor >> 16, vendor & 0xFFFF, root_count);
-
-    // Probe root nodes (usually 1 function group node)
-    let _ = probe_codec_widgets(bar, root_start, root_count);
-
-    // Sub-nodes: starting after root, count from starting NID
-    if root_count > 0 {
-        let sub_start = root_start + root_count;
-        let sub_count = get_param(bar, sub_start, PARAM_NODE_COUNT)
-            .map(|v| v & 0xFFFF)
-            .unwrap_or(0);
-        if sub_count > 0 {
-            k_nano::slog_hal!("HDA", "subnodes", "start={:#x} count={}", sub_start, sub_count);
-            let (_, pins) = probe_codec_widgets(bar, sub_start, sub_count);
-            k_nano::slog_hal!("HDA", "probe", "CAD={} pins_found={} vendor={}", cad, pins, vendor_name);
         }
     }
 }

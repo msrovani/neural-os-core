@@ -21,11 +21,3 @@ pub fn set_streaming(on: bool) {
 pub fn poll() {
     hda::poll_hda_audio();
 }
-
-/// Verifica se o HDA está bound (corn buffer + SD1 ativo).
-pub fn is_hda_bound() -> bool {
-    matches!(
-        audio_port::status(),
-        AudioPortStatus::Bound | AudioPortStatus::Streaming
-    )
-}
