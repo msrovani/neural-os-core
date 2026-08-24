@@ -334,6 +334,33 @@ pub fn emotion_hint(text: &str) -> &'static str {
     }
 }
 
+/// Enriquece o prompt com o estado emocional real do sistema (AFFECT_SNAPSHOT).
+/// Inclui valence do sistema + persona do Jarbas para o LLM modular tom.
+pub fn system_affect_context() -> String {
+    let snap = crate::globals::AFFECT_SNAPSHOT.lock();
+    let mood = if snap.valence > 0.3 {
+        "positive"
+    } else if snap.valence < -0.3 {
+        "negative"
+    } else {
+        "neutral"
+    };
+    let energy = if snap.arousal > 0.7 {
+        "high"
+    } else if snap.arousal < 0.3 {
+        "low"
+    } else {
+        "moderate"
+    };
+    let persona = crate::memory_store::persona_slice();
+    alloc::format!(
+        "[SYSTEM_AFFECT] mood={} energy={} curiosity={:.1} coherence={:.1}
+[PERSONA] {}
+",
+        mood, energy, snap.curiosity, snap.coherence, persona
+    )
+}
+
 /// Skill nativa preferida pelo expert Trinity (antes de cair no LLM).
 /// Sem fallback genérico para system_status — skills reais disk_diag/security.
 pub fn prefer_expert_skill(expert: &str) -> Option<&'static [&'static str]> {
