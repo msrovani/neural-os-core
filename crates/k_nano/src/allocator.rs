@@ -157,6 +157,16 @@ pub const HEAP_START: usize = 0x_4000_0000_0000;
 pub const HEAP_SIZE: usize = 512 * 1024 * 1024; // 512MB .bss
 pub static CURRENT_HEAP_MB: AtomicUsize = AtomicUsize::new(512);
 
+/// Budget máximo do heap em MB. grow_bump_auto para ao atingir este limite.
+/// Definido em main.rs baseado na RAM detectada (min(75% RAM, 1536MB)).
+pub static HEAP_BUDGET_MB: AtomicUsize = AtomicUsize::new(1536);
+
+/// Define o budget máximo do heap (chamado de main.rs no boot).
+pub fn set_heap_budget_mb(mb: usize) {
+    HEAP_BUDGET_MB.store(mb, Ordering::Release);
+    crate::slog_nano!("HEAP", "BUDGET", "budget={}MB", mb);
+}
+
 /// Limite do LazyBumpAllocator — o array HEAP_BUFFER tem 512MB (todo seguro).
 /// Nunca estender alem de HEAP_SIZE: alem do array .bss ha outras statics
 /// (GLOBAL_ALLOCATOR, etc.) — corrompe total_frames (SESSION_233).

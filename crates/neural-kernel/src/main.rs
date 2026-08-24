@@ -1606,6 +1606,7 @@ pub(crate) fn kernel_boot(
     // garante o piso mínimo; acima disso cresce sob demanda (menos frames no
     // T+0 → menor watermark → menor janela do crash de stack do Limine).
     allocator::resize_bump_heap(heap_initial_mb.min(512));
+    k_nano::allocator::set_heap_budget_mb(heap_initial_mb);
     k_nano::slog_bin!("HEAP", "AIOS", "heap piso={}MB (RAM={}MB; grow_bump_auto sob demanda até budget {}MB)",
         heap_initial_mb.min(512), detected_ram_mb, heap_initial_mb);
     // TALC init — APÓS init_global_allocator (alloc_physical_frame disponível)

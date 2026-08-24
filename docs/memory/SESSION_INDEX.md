@@ -252,6 +252,9 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 | 106-10 | ✅ | SkillOpt: Tradução Python→Rust no_std |
 
 | 284 | ✅ | Migração neural-sgdb externo — substrato de memória cognitiva (ADR-0091); Hits tipados 12 campos, recall_lexical, lifecycle, memory-aware route |
+| 285 | ✅ | Per-core load bars no HUD (SMP telemetry) — GaugeSnapshot + compositor |
+| 286 | ✅ | Boot QEMU matrix (TCG 1093 linhas / WHPX ATA hang) + virtio_gpu stale fix + Falcon3 converter |
+| 287 | ✅ | Budget cap heap auto-grow (OOM eliminado) + QEMU 4-core 6G display + AGENTS.md lições |
 
 **Status v2.0:** ✅ Sprint 106 concluída (10/10). ✅ Sprint 107 Voice FECHADA (PASS parcial forte+).  
 **Pista ativa:** gate `v2.0.0` review + residual soft-float/VITS. Sprint Sound ✅ (`SESSION_122.md`). ADR-0042 **N1–N5 + wire N2.5–N5.7 ✅** no marco v1.8.0.
