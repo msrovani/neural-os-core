@@ -88,13 +88,18 @@ fn mark_uc_or_warn(phys: u64, pages: usize, who: &str) {
     let pm = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     let mut failed = 0usize;
     for i in 0..pages {
-        if !unsafe { crate::apic::set_page_uc(phys + i as u64 * 4096, pm) } {
+        let addr = phys + i as u64 * 4096;
+        // Primeiro garante que a página está mapeada via HHDM (map_page_uc cria
+        // o mapeamento se não existir). Depois marca como UC.
+        // Sem map_page_uc, set_page_uc retorna false → cache stale silencioso.
+        unsafe { crate::apic::map_page_uc(addr, pm); }
+        if !unsafe { crate::apic::set_page_uc(addr, pm) } {
             failed += 1;
         }
     }
     if failed > 0 {
         crate::slog_nano!("DMA", "warn",
-            "{}: {}/{} paginas nao ficaram UC (HHDM nao mapeado) phys={:#x} - risco de cache stale",
+            "{}: {}/{} paginas nao ficaram UC phys={:#x} - risco de cache stale",
             who, failed, pages, phys);
     }
 }

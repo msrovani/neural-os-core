@@ -25,21 +25,26 @@ pub trait BlockDevice {
 
 impl BlockDevice for AtaDriver {
     fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> bool {
-        if lba > 0x0FFFFFFF { return false; } // LBA48 not yet implemented
-        if buf.len() % 512 != 0 || buf.is_empty() { return false; } // tamanho nao alinhado a setor
-        let sectors = buf.len() / 512;
+        if lba > 0x0FFFFFFF { return false; } // LBA28 only
+        let bps = self.sector_size() as usize;
+        if bps == 0 || buf.len() % bps != 0 || buf.is_empty() { return false; }
+        let sectors = buf.len() / bps;
         if sectors > 255 { return false; } // LBA28 PIO: max 255 setores por comando
         unsafe { crate::ata::AtaDriver::read_sectors(self, lba as u32, buf, sectors as u8) }
     }
     fn write_sectors(&mut self, lba: u64, buf: &[u8]) -> bool {
-        if lba > 0x0FFFFFFF { return false; } // LBA48 not yet implemented
-        if buf.len() % 512 != 0 || buf.is_empty() { return false; } // tamanho nao alinhado a setor
-        let sectors = buf.len() / 512;
+        if lba > 0x0FFFFFFF { return false; } // LBA28 only
+        let bps = self.sector_size() as usize;
+        if bps == 0 || buf.len() % bps != 0 || buf.is_empty() { return false; }
+        let sectors = buf.len() / bps;
         if sectors > 255 { return false; } // LBA28 PIO: max 255 setores por comando
         unsafe { crate::ata::AtaDriver::write_sectors(self, lba as u32, buf, sectors as u8) }
     }
     fn total_sectors(&self) -> u64 {
-        unsafe { AtaDriver::total_sectors(self).unwrap_or(0) }
+        unsafe { self.total_sectors_512() }
+    }
+    fn sector_size(&self) -> u16 {
+        self.lba_size as u16
     }
     fn name(&self) -> &str {
         "ata0"

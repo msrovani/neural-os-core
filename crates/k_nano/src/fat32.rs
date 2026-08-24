@@ -343,10 +343,30 @@ pub trait Fat32Io {
 
 impl Fat32Io for AtaDriver {
     fn io_read_sectors(&self, lba: u32, buf: &mut [u8], count: u8) -> bool {
-        unsafe { AtaDriver::read_sectors(self, lba, buf, count) }
+        // Fat32Io count é sempre em unidades de 512B.
+        // ATA driver agora usa setores lógicos (512 ou 4096).
+        // Traduz: 512B_count → logical_count (arredondando para cima).
+        let bps = self.lba_size;
+        if bps <= 512 {
+            unsafe { AtaDriver::read_sectors(self, lba, buf, count) }
+        } else {
+            let bytes = count as u64 * 512;
+            let log_sectors = ((bytes + bps as u64 - 1) / bps as u64) as u32;
+            // LBA 512B → LBA lógico: lba_512 / (bps/512)
+            let log_lba = lba / (bps / 512);
+            unsafe { AtaDriver::read_sectors(self, log_lba, buf, log_sectors as u8) }
+        }
     }
     fn io_write_sectors(&self, lba: u32, buf: &[u8], count: u8) -> bool {
-        unsafe { AtaDriver::write_sectors(self, lba, buf, count) }
+        let bps = self.lba_size;
+        if bps <= 512 {
+            unsafe { AtaDriver::write_sectors(self, lba, buf, count) }
+        } else {
+            let bytes = count as u64 * 512;
+            let log_sectors = ((bytes + bps as u64 - 1) / bps as u64) as u32;
+            let log_lba = lba / (bps / 512);
+            unsafe { AtaDriver::write_sectors(self, log_lba, buf, log_sectors as u8) }
+        }
     }
 }
 

@@ -59,9 +59,9 @@ pub mod gdt;
 pub mod hal;
 pub mod hardware;
 pub mod hw_profiler;
-pub mod hw_change;
+// hw_change: removido (dead code, 0 callers — audit k_nano 2026-08-24)
 pub mod hnsw;
-pub mod kernel_hnsw;
+// kernel_hnsw: removido (dead code, 0 callers — audit k_nano 2026-08-24)
 pub mod hw_rng;
 pub mod identity;
 pub mod interrupts;
@@ -88,7 +88,7 @@ pub mod ntfs_reader;
 pub mod pci;
 pub mod pci_aer;
 pub mod platform_probe;
-pub mod proof_gate;
+// proof_gate: removido (dead code, 0 callers — audit k_nano 2026-08-24)
 pub mod rtc;
 pub mod rtl8139;
 pub mod scancode_to_ascii;
@@ -96,7 +96,7 @@ pub mod serial;
 pub mod slog;
 pub mod simd;
 pub mod slab;
-pub mod slab_buddy;
+// slab_buddy: removido (dead code, 0 callers — audit k_nano 2026-08-24)
 pub mod slip;
 pub mod sys_installer;
 pub mod installer_agent;
