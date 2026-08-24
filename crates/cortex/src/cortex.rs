@@ -3732,6 +3732,14 @@ pub trait Model: Send {
 }
 
 pub static CURRENT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
+/// AirLLM: modelo streaming ativo (layer-by-layer do disco).
+/// Se Some, generate_via_model() usa este em vez do CURRENT_MODEL residente.
+pub static CURRENT_STREAMING_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
+/// Registra modelo streaming (chamado pelo bin quando needs_airllm()=true).
+pub fn set_streaming_model(model: Box<dyn Model>) {
+    *CURRENT_STREAMING_MODEL.lock() = Some(model);
+    k_nano::slog_bin!("GGUF", "info", "AirLLM streaming model registered");
+}
 pub static RUSTCODER_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
 /// Gate do W2A8 (ADR-0084 §3 F4): true só quando soft_stride=1, MAX_SEQ
 /// adequado e geração ≥ algo útil. Hoje false — gaps pendentes.
@@ -3852,6 +3860,17 @@ impl Drop for InferGuard {
 /// Called by hermes (crate dependency) — bin's version adds Trinity routing.
 pub fn generate_via_model(prompt: &str) -> String {
     let _busy = infer_guard();
+    // AirLLM path: se ha modelo streaming ativo, usa layer-by-layer
+    {
+        
+        let stream_guard = CURRENT_STREAMING_MODEL.lock();
+        if let Some(ref sm) = *stream_guard {
+            let result = sm.generate(prompt);
+            drop(stream_guard);
+            return result;
+        }
+    }
+    // Residente path (default)
     let guard = CURRENT_MODEL.lock();
     match guard.as_ref() {
         Some(m) => m.generate(prompt),

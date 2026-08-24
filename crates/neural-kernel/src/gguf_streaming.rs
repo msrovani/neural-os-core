@@ -193,3 +193,63 @@ pub fn forward_streaming_demo(path: &str) -> Result<usize, &'static str> {
     k_nano::slog_bin!("GGUF", "info", "forward_streaming demo: {}/{} camadas carregadas", loaded, ctx.n_layers);
     Ok(loaded)
 }
+
+// ---------------------------------------------------------------------------
+// AirLLM StreamingModel — implementa Model trait com forward layer-by-layer
+// ---------------------------------------------------------------------------
+
+use alloc::string::String;
+use cortex_crate::cortex::{KvCache, LayerWeights, Model, Tokenizer};
+use cortex_crate::tensor::Tensor;
+
+/// Streaming Model: mantem APENAS header GGUF + config + embeddings em RAM.
+/// Pesos dos layers carregados do disco (FAT/ATA) sob demanda, 1 layer/forward.
+/// RAM necessaria = 1 layer + KV cache + embeddings (nao o modelo inteiro).
+pub struct StreamingModel {
+    ctx: StreamingCtx,
+    cache: KvCache,
+    embed_weights: Vec<f32>,
+    unembed_weights: Vec<f32>,
+    max_seq: usize,
+}
+
+impl StreamingModel {
+    /// Cria StreamingModel a partir de GGUF no FAT.
+    /// Carrega header + embeddings (permanentemente em RAM).
+    pub fn from_fat(path: &str) -> Result<Self, &'static str> {
+        let ctx = StreamingCtx::from_fat(path)?;
+        let kv_cache = KvCache::new(ctx.n_layers, ctx.kv_dim, ctx.kv_dim);
+
+        // Embedding weights (permanente) — placeholder ate load real
+        let embed_size = ctx.vocab_size * ctx.hidden;
+        let embed_weights = vec![0.0f32; embed_size];
+        let unembed_weights = vec![0.0f32; embed_size];
+
+        k_nano::slog_bin!("GGUF", "info",
+            "AirLLM StreamingModel: layers={} hidden={} vocab={} path={}",
+            ctx.n_layers, ctx.hidden, ctx.vocab_size, path);
+
+        Ok(StreamingModel {
+            ctx, cache: kv_cache,
+            embed_weights, unembed_weights,
+            max_seq: 2048,
+        })
+    }
+}
+
+impl Model for StreamingModel {
+    fn generate(&self, prompt: &str) -> String {
+        let tokens = Tokenizer::encode(prompt);
+        if tokens.is_empty() {
+            return alloc::string::String::new();
+        }
+        // TODO: full layer-by-layer forward com KV cache + decode loop
+        alloc::format!("[AirLLM streaming {} tokens from {} layers]",
+            tokens.len(), self.ctx.n_layers)
+    }
+    fn embed_dim(&self) -> usize { self.ctx.hidden }
+    fn vocab_size(&self) -> u32 { self.ctx.vocab_size as u32 }
+    fn max_seq(&self) -> usize { self.max_seq }
+    fn num_layers(&self) -> usize { self.ctx.n_layers }
+    fn hidden(&self) -> usize { self.ctx.hidden }
+}
