@@ -410,6 +410,10 @@ pub fn try_load_from_qemu_loader() -> bool {
 
 /// FAT32 `STT.BIN` — path HW real (sem QEMU-loader).
 pub fn try_load_from_fat() -> bool {
+    if k_nano::platform_probe::hypervisor().is_sandbox() {
+        k_nano::slog_bin!("Audio", "stt", "skip FAT STT.BIN PIO no hypervisor");
+        return false;
+    }
     unsafe {
         let ata_guard = k_nano::ATA_DRIVER.lock();
         if let Some(ref ata) = *ata_guard {
@@ -419,6 +423,12 @@ pub fn try_load_from_fat() -> bool {
                     continue;
                 }
                 if let Some(fs) = k_nano::fat32::Fat32Reader::new(ata, p) {
+                    if let Some(sz) = fs.lookup_file_size("STT.BIN") {
+                        if sz > 2 * 1024 * 1024 {
+                            k_nano::slog_bin!("Audio", "stt", "skip STT.BIN {}KB (cap 2MB)", sz / 1024);
+                            return false;
+                        }
+                    }
                     if let Some(data) = fs.read_file("STT.BIN") {
                         let mut eng = SttEngine::new();
                         if eng.load(&data) {

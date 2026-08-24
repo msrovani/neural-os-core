@@ -55,6 +55,16 @@ unsafe fn probe_usb_msc() {
     if USB_MSC.lock().is_some() {
         return;
     }
+    // Early path ja tentou; QEMU Enable Slot timeout nao muda no retry.
+    let qemu = crate::platform_probe::probe_done()
+        && !matches!(
+            crate::platform_probe::hypervisor(),
+            crate::platform_probe::HypervisorKind::None
+        );
+    if qemu {
+        crate::slog_nano!("USB", "msc", "plan probe skip (qemu, early ja tentou)");
+        return;
+    }
     let msc = crate::usb_msc::UsbMassStorage::probe();
     let ok = msc.is_some();
     *USB_MSC.lock() = msc;

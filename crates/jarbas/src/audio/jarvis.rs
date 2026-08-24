@@ -15,6 +15,11 @@ use crate::audio::voice::PLAYBACK_RING;
 /// Saudacao HW emitida no register (K44) — evita depender do scheduler (hang pos-K44).
 static HW_GREET_EMITTED: AtomicBool = AtomicBool::new(false);
 
+/// True se a saudacao de boot (template) ja foi emitida — nao chamar LLM no mesmo boot.
+pub fn hw_greet_emitted() -> bool {
+    HW_GREET_EMITTED.load(Ordering::Relaxed)
+}
+
 const JARVIS_MANIFEST: AgentManifest = AgentManifest {
     name: "JARBAS",
     kind: AgentKind::Console,

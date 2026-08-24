@@ -240,7 +240,9 @@ power_armed_until: 0,
             let Some(ev) = rx.try_receive() else { break; };
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             if let Some(ref mut desktop) = *COMPOSITOR.lock() {
-                desktop.show_app(AppId::HermesChat);
+                if crate::display::chat_window::chat_ui_enabled() {
+                    desktop.show_app(AppId::HermesChat);
+                }
                 if let Some(chat) = desktop.windows.iter_mut().find(|w| w.app_id == Some(AppId::HermesChat)) {
                     match mode {
                         OverlayMode::HitlConfirm => {
@@ -266,6 +268,7 @@ power_armed_until: 0,
                 }
             }
             {
+                if crate::display::chat_window::chat_ui_enabled() {
                 let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
                 if cw.is_none() {
                     *cw = Some(crate::display::chat_window::ChatWindow::new(0));
@@ -274,6 +277,7 @@ power_armed_until: 0,
                     chat.process_packet(hermes::stream_packet::StreamPacket::UserMessage {
                         content: alloc::format!("[{}] {}", overlay_tag(mode), text),
                     });
+                }
                 }
             }
             if matches!(mode, OverlayMode::HitlConfirm | OverlayMode::MemoryNudge) {
@@ -541,7 +545,9 @@ impl Agent for DisplayAgent {
             };
             if let Some((fb, av, fw, fh)) = built {
                 let mut desktop = JarbasDesktop::new(fb);
-                desktop.register_app(AppId::HermesChat, "Jarbas Chat", Layer::AppWindows);
+                if crate::display::chat_window::chat_ui_enabled() {
+                    desktop.register_app(AppId::HermesChat, "Jarbas Chat", Layer::AppWindows);
+                }
                 k_nano::slog_jarbas!("UI", "info", "Desktop limpo — orb + HUD");
                 *COMPOSITOR.lock() = Some(desktop);
                 self.avatar = Some(av);
@@ -637,11 +643,13 @@ impl Agent for DisplayAgent {
                     _ => {}
                 }
                 let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
+                if crate::display::chat_window::chat_ui_enabled() {
                 if cw.is_none() {
                     *cw = Some(crate::display::chat_window::ChatWindow::new(0));
                 }
                 if let Some(ref mut chat) = *cw {
                     chat.process_packet(pkt);
+                }
                 }
             }
         }
@@ -649,7 +657,7 @@ impl Agent for DisplayAgent {
         // ── USER_INTENT: registra mensagem do usuário no ChatWindow ──
         while let Some(ev) = self.user_intent_receiver.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
-            if !text.is_empty() {
+            if !text.is_empty() && crate::display::chat_window::chat_ui_enabled() {
                 let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
                 if cw.is_none() {
                     *cw = Some(crate::display::chat_window::ChatWindow::new(0));
@@ -665,7 +673,7 @@ impl Agent for DisplayAgent {
         // ── STT_TEXT: transcrição de voz → input buffer do ChatWindow ──
         while let Some(ev) = self.stt_text_receiver.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
-            if !text.is_empty() {
+            if !text.is_empty() && crate::display::chat_window::chat_ui_enabled() {
                 let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
                 if cw.is_none() {
                     *cw = Some(crate::display::chat_window::ChatWindow::new(0));
@@ -734,6 +742,9 @@ impl Agent for DisplayAgent {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             crate::display::console::set_llm_busy(false);
             if text.is_empty() { continue; }
+            if !crate::display::chat_window::chat_ui_enabled() {
+                continue;
+            }
             if let Some(ref mut desktop) = *COMPOSITOR.lock() {
                 desktop.show_app(AppId::HermesChat);
             }
@@ -862,11 +873,13 @@ impl Agent for DisplayAgent {
         while let Some(ev) = self.echo_receiver.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             self.input_buffer = alloc::string::String::from(text);
+            if crate::display::chat_window::chat_ui_enabled() {
             let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
             if let Some(ref mut chat) = *cw {
                 chat.input_buffer = alloc::string::String::from(text);
                 chat.input_cursor = text.len();
                 chat.dirty = true;
+            }
             }
         }
 

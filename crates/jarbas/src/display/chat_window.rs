@@ -24,6 +24,14 @@ use crate::display::compositor::draw_text;
 /// Lida pelo JarbasVoiceAgent em voice.rs.
 pub static MIC_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// Chat UI off: EventBus de HW (PCI/FAT/xHCI) ia parar no overlay e poluir.
+/// Super+Enter / dock / HERMES_RESPONSE nao abrem janela ate reabilitar.
+pub const CHAT_UI_ENABLED: bool = false;
+
+pub fn chat_ui_enabled() -> bool {
+    CHAT_UI_ENABLED
+}
+
 // ── Constantes visuais ──────────────────────────────────────────────
 
 /// Altura da barra de título

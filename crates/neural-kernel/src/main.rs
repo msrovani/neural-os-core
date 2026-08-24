@@ -1878,7 +1878,18 @@ pub(crate) fn kernel_boot(
     {
         if want_usb {
             // Se early path já tem MSC, não re-probe (Address Device de novo quebra BOT).
+            // QEMU: Enable Slot em tablet/kbd já timeoutou no early path — retry
+            // + HID P24a/b = gap K184→K24 (7× wait_cmd).
+            let qemu_usb = k_nano::platform_probe::probe_done()
+                && !matches!(
+                    k_nano::platform_probe::hypervisor(),
+                    k_nano::platform_probe::HypervisorKind::None
+                );
             if crate::USB_MSC.lock().is_none() {
+                if qemu_usb {
+                    crate::display::fb::boot_ckpt(16, "USB-MSC skip retry (qemu)");
+                    k_nano::slog_nano!("USB", "msc", "QEMU skip re-probe apos early FAIL");
+                } else {
                 let msc = unsafe { k_nano::usb_msc::UsbMassStorage::probe() };
                 if msc.is_some() {
                     k_nano::slog_nano!("USB", "msc", "stored for FAT model load (unified USB)");
@@ -1892,6 +1903,7 @@ pub(crate) fn kernel_boot(
                     );
                 }
                 *crate::USB_MSC.lock() = msc;
+                }
             } else {
                 crate::display::fb::boot_ckpt(16, "USB-MSC OK (early)");
                 k_nano::slog_nano!("USB", "msc", "reuse early MSC — skip re-probe");
@@ -1902,7 +1914,12 @@ pub(crate) fn kernel_boot(
         crate::display::fb::boot_ckpt(25, "antes BOOT.LOG flush");
         crate::boot_logger::init_after_usb();
         crate::display::fb::boot_ckpt(17, "BOOT.LOG flush tentado");
-        if want_usb {
+        let qemu_hid = k_nano::platform_probe::probe_done()
+            && !matches!(
+                k_nano::platform_probe::hypervisor(),
+                k_nano::platform_probe::HypervisorKind::None
+            );
+        if want_usb && !qemu_hid {
             // ADR-0062 P24a: HID boot keyboard (porta ≠ MSC)
             if unsafe { crate::xhci::bringup_hid_keyboard() } {
                 crate::boot_logger::log("BOOT: P24a HID keyboard ready");
@@ -1913,6 +1930,8 @@ pub(crate) fn kernel_boot(
             } else {
                 crate::boot_logger::log("BOOT: P24b HID mouse SKIP");
             }
+        } else if want_usb {
+            k_nano::slog_nano!("USB", "hid", "QEMU skip P24a/P24b (tablet/kbd Enable Slot timeout)");
         }
     }
 
@@ -3208,9 +3227,15 @@ pub(crate) fn kernel_boot(
                                 unsafe { core::ptr::read_volatile(va) == 0xBE11BE11 }
                             }
                         };
-                        const PIO_QEMU: usize = 48 * 1024 * 1024;
+                        const PIO_QEMU: usize = 8 * 1024 * 1024;
                         const PIO_HW: usize = 700 * 1024 * 1024;
-                        let pio_cap = if qemu_loader_2b { PIO_QEMU } else { PIO_HW };
+                        let pio_cap = if qemu_loader_2b
+                            || k_nano::platform_probe::hypervisor().is_sandbox()
+                        {
+                            PIO_QEMU
+                        } else {
+                            PIO_HW
+                        };
                         // Preferência chat: 1.3B → 850 → 2B/3B. Stub MICRO.BITNET por último.
                         // Degrau: PACK_LLM=850 só empacota 850; depois 13, 2b, 3b.
                         // Modelos GGUF grandes: /model (AirLLM ATA) em vez de PIO full-RAM.
@@ -3292,7 +3317,7 @@ pub(crate) fn kernel_boot(
             }
         }
         // USB-MSC: mesmo stick unificado (boot ESP + dados) quando nao ha ATA/IDE
-        if !model_loaded {
+        if !model_loaded && !k_nano::platform_probe::hypervisor().is_sandbox() {
             unsafe {
                 let mut usb_guard = crate::USB_MSC.lock();
                 if let Some(ref mut msc) = *usb_guard {
@@ -3453,6 +3478,19 @@ pub(crate) fn kernel_boot(
         let mut rust_ok = try_expert_qemu_scan(0x129000000, 0x129200000, scan_sz, "RUSTCODER", false);
         let mut hw_ok = try_expert_qemu_scan(0x129200000, 0x180000000, scan_sz, "HWEXPERT", true);
 
+        // SESSION llama8b-unificado: estes loops faziam read_file("llama8b.bin")
+        // (~1.8GB ATA PIO) apos K49 — FB congela. Experts so via QEMU-loader
+        // no hypervisor; no metal, nomes reais + teto 8MB.
+        const EXPERT_PIO_CAP: usize = 8 * 1024 * 1024;
+        let qemu_hv = k_nano::platform_probe::hypervisor().is_sandbox();
+        crate::display::fb::boot_ckpt(50, "experts pos QEMU-scan");
+        if qemu_hv {
+            k_nano::slog_bin!(
+                "FAT",
+                "info",
+                "skip expert FAT/USB PIO no hypervisor (nao ler llama8b.bin 1.8GB)"
+            );
+        } else {
         unsafe {
             let ata_guard = crate::ATA_DRIVER.lock();
             if let Some(ref ata) = *ata_guard {
@@ -3463,7 +3501,18 @@ pub(crate) fn kernel_boot(
                     }
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                         if !rust_ok {
-                            for rname in &["llama8b.bin", "llama8b.bin", "llama8b.bin", "llama8b.bin"] {
+                            for rname in &[
+                                "RUSTCDR3.v6",
+                                "RUSTCDR3.BIN",
+                                "RUSTCDR2.BIN",
+                                "RUSTCDR.BITNET",
+                                "RUSTCDR.BIN",
+                            ] {
+                                let Some(sz) = fs.lookup_file_size(rname) else { continue };
+                                if sz > EXPERT_PIO_CAP {
+                                    k_nano::slog_bin!("FAT", "info", "{} {}KB > expert cap — skip PIO", rname, sz / 1024);
+                                    continue;
+                                }
                                 if let Some(rust_data) = fs.read_file(rname) {
                                     if let Some(rust_model) = crate::cortex::load_model(&rust_data) {
                                         crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(
@@ -3484,14 +3533,21 @@ pub(crate) fn kernel_boot(
                             }
                         }
                         if !hw_ok {
-                            if let Some(hw_data) = fs.read_file("llama8b.bin") {
-                                if let Some(hw_model) = crate::cortex::load_model(&hw_data) {
-                                    crate::cortex::set_hwexpert_model(alloc::boxed::Box::new(
-                                        hw_model,
-                                    ));
-                                    k_nano::slog_bin!("FAT", "info", "HW Expert model loaded (213K HWIDs)!");
-                                    crate::boot_logger::log("BOOT: HW Expert loaded");
-                                    hw_ok = true;
+                            for hname in &["HWEXPRT.v6", "HWEXPRT.BIN", "HWEXPERT.BIN"] {
+                                let Some(sz) = fs.lookup_file_size(hname) else { continue };
+                                if sz > EXPERT_PIO_CAP {
+                                    continue;
+                                }
+                                if let Some(hw_data) = fs.read_file(hname) {
+                                    if let Some(hw_model) = crate::cortex::load_model(&hw_data) {
+                                        crate::cortex::set_hwexpert_model(alloc::boxed::Box::new(
+                                            hw_model,
+                                        ));
+                                        k_nano::slog_bin!("FAT", "info", "HW Expert model loaded (213K HWIDs)!");
+                                        crate::boot_logger::log("BOOT: HW Expert loaded");
+                                        hw_ok = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -3505,8 +3561,11 @@ pub(crate) fn kernel_boot(
                 let mut usb_guard = crate::USB_MSC.lock();
                 if let Some(ref mut msc) = *usb_guard {
                     if !rust_ok {
-                        for rname in &["llama8b.bin", "llama8b.bin", "llama8b.bin", "llama8b.bin"] {
+                        for rname in &["RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"] {
                             if let Some(rust_data) = read_file_from_dev(msc, rname) {
+                                if rust_data.len() > EXPERT_PIO_CAP {
+                                    continue;
+                                }
                                 if let Some(rust_model) = crate::cortex::load_model(&rust_data) {
                                     crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(rust_model));
                                     k_nano::slog_bin!("FAT", "info", "RustCoder expert loaded (USB {})!", rname);
@@ -3517,17 +3576,20 @@ pub(crate) fn kernel_boot(
                         }
                     }
                     if !hw_ok {
-                        if let Some(hw_data) = read_file_from_dev(msc, "llama8b.bin") {
-                            if let Some(hw_model) = crate::cortex::load_model(&hw_data) {
-                                crate::cortex::set_hwexpert_model(alloc::boxed::Box::new(hw_model));
-                                k_nano::slog_bin!("FAT", "info", "HW Expert loaded (USB-MSC)!");
-                                hw_ok = true;
+                        if let Some(hw_data) = read_file_from_dev(msc, "HWEXPRT.BIN") {
+                            if hw_data.len() <= EXPERT_PIO_CAP {
+                                if let Some(hw_model) = crate::cortex::load_model(&hw_data) {
+                                    crate::cortex::set_hwexpert_model(alloc::boxed::Box::new(hw_model));
+                                    k_nano::slog_bin!("FAT", "info", "HW Expert loaded (USB-MSC)!");
+                                    hw_ok = true;
+                                }
                             }
                         }
                     }
                 }
             }
         }
+        } // !qemu_hv expert FAT/USB
         if hw_ok {
             crate::boot_logger::log("BOOT: HW Expert loaded");
         }
@@ -3570,7 +3632,7 @@ pub(crate) fn kernel_boot(
                 }
             }
             // FAT32 fallback
-            if !v4_ok {
+            if !v4_ok && !k_nano::platform_probe::hypervisor().is_sandbox() {
                 unsafe {
                     let ata_guard = crate::ATA_DRIVER.lock();
                     if let Some(ref ata) = *ata_guard {
@@ -3580,7 +3642,15 @@ pub(crate) fn kernel_boot(
                                 continue;
                             }
                             if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
-                                if let Some(v4data) = fs.read_file("llama8b.bin") {
+                                let v4name = "HWEXPRT4.BIN";
+                                let too_big = fs
+                                    .lookup_file_size(v4name)
+                                    .map(|s| s > 8 * 1024 * 1024)
+                                    .unwrap_or(true);
+                                if too_big {
+                                    continue;
+                                }
+                                if let Some(v4data) = fs.read_file(v4name) {
                                     if let Some(v4model) = crate::cortex::load_hwexpert_v6(&v4data)
                                         .or_else(|| crate::cortex::load_hwexpert_v5(&v4data))
                                     {
@@ -3678,10 +3748,11 @@ pub(crate) fn kernel_boot(
             // (antes PIO_FAST=400MB relia BITNET850 e travava o boot por minutos/horas).
             const PIO_FAST: usize = 400 * 1024 * 1024;
             const PIO_HW: usize = 700 * 1024 * 1024;
-            const PIO_QEMU: usize = 48 * 1024 * 1024;
-            let pio_cap = if qemu_loader_2b {
+            const PIO_QEMU: usize = 8 * 1024 * 1024;
+            let qemu_hv = qemu_loader_2b || k_nano::platform_probe::hypervisor().is_sandbox();
+            let pio_cap = if qemu_hv {
                 match slot {
-                    crate::model_hub::ModelSlot::Reranker => 32 * 1024 * 1024,
+                    crate::model_hub::ModelSlot::Reranker => PIO_QEMU,
                     _ => PIO_QEMU,
                 }
             } else {
@@ -3871,8 +3942,21 @@ pub(crate) fn kernel_boot(
 
     let model_ok = crate::cortex::model_is_loaded();
     let bpe_ok = crate::bpe::is_loaded();
+    let already_greeted = audio::jarvis::hw_greet_emitted();
+    let qemu = k_nano::platform_probe::hypervisor().is_sandbox();
 
-    if model_ok && bpe_ok {
+    // K49 hang: generate_via_model no boot (CPU QEMU / header lixo) apos AudioMixer.
+    // Template ja foi falado em emit_hw_greeting_at_register.
+    if already_greeted || qemu {
+        crate::display::fb::boot_ckpt(50, "saudacao LLM skip (template/QEMU)");
+        k_nano::slog_bin!(
+            "JARBAS",
+            "GREETING",
+            "skip generate_via_model (emitted={} qemu={}) — segue Runtime",
+            already_greeted,
+            qemu
+        );
+    } else if model_ok && bpe_ok {
         crate::display::fb::boot_ckpt(49, "Gerando saudacao LLM...");
         k_nano::slog_bin!("JARBAS", "GREETING",
             "model LOADED + BPE LOADED — gerando saudacao via LLM");

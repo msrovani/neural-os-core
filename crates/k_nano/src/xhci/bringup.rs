@@ -645,7 +645,13 @@ unsafe fn cmd_enable_slot() -> Option<u8> {
 }
 
 unsafe fn wait_cmd_completion() -> Option<(u8, u8)> {
-    for _ in 0..500_000 {
+    // 500_000 spin_loop no WHPX = segundos por comando. QEMU Enable Slot
+    // em tablet/kbd (nao MSC) nunca completa → gap K184/K134 → K24.
+    let hz = crate::tsc::tsc_hz();
+    let budget = if hz > 1_000_000 { hz / 20 } else { 0 }; // 50ms
+    let t0 = crate::tsc::rdtsc();
+    let mut spins = 0u32;
+    loop {
         let mut g = XHCI_STATE.lock();
         let Some(st) = g.as_mut() else { return None };
         let evt = st.er_va as *const u32;
@@ -673,9 +679,16 @@ unsafe fn wait_cmd_completion() -> Option<(u8, u8)> {
         }
         drop(g);
         core::hint::spin_loop();
+        spins = spins.saturating_add(1);
+        if budget > 0 && crate::tsc::rdtsc().wrapping_sub(t0) > budget {
+            crate::slog_nano!("USB", "xhci", "cmd completion timeout");
+            return None;
+        }
+        if budget == 0 && spins >= 80_000 {
+            crate::slog_nano!("USB", "xhci", "cmd completion timeout");
+            return None;
+        }
     }
-    crate::slog_nano!("USB", "xhci", "cmd completion timeout");
-    None
 }
 
 unsafe fn issue_address_or_config_cmd(input_ctx_pa: u64, slot: u8, trb_type: u32) -> bool {

@@ -1675,6 +1675,7 @@ impl Agent for PlatformAgent {
                 AgentTickResult::Pending
             }
             2 => {
+                // Idempotente: init_platform_sync ja acordou os APs no T+0.
                 unsafe { k_nano::smp::init_smp(); }
                 AgentTickResult::Done
             }
@@ -3114,7 +3115,8 @@ impl Agent for SelfEvolveAgent {
     }
 }
 
-/// Sync init_platform — idempotente se PlatformAgent já rodou
+/// Sync init_platform — PCI/ACPI/APIC + SMP. `init_smp` e idempotente
+/// (PlatformAgent fase 2 nao re-SIPI).
 pub unsafe fn init_platform_sync() {
     unsafe { k_nano::pci::init_pci(); }
     let phys_off = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);

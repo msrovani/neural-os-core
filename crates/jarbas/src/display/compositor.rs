@@ -217,7 +217,9 @@ impl JarbasDesktop {
         let w = fb.info.width; let h = fb.info.height;
         let mut dock = Dock::new(w as u32, h as u32);
         // Launchers essenciais (stubs Ide/Camera/Audio removidos do dock)
-        dock.add_launcher(AppId::HermesChat, "Chat");
+        if crate::display::chat_window::chat_ui_enabled() {
+            dock.add_launcher(AppId::HermesChat, "Chat");
+        }
         dock.add_launcher(AppId::Power, "Power");
 
         JarbasDesktop { 
@@ -988,6 +990,9 @@ impl JarbasDesktop {
 
     /// Garante janela no que `render()` itera (floating da workspace).
     pub fn show_app(&mut self, app_id: AppId) {
+        if app_id == AppId::HermesChat && !crate::display::chat_window::chat_ui_enabled() {
+            return;
+        }
         if !self.windows.iter().any(|w| w.app_id == Some(app_id)) {
             let title = match app_id {
                 AppId::HermesChat => "Jarbas Chat",
@@ -1073,6 +1078,9 @@ impl JarbasDesktop {
 
     /// Overlay Hermes = janela floating real (SESSION_261). Não pinta no tick.
     pub fn ensure_hermes_overlay(&mut self) {
+        if !crate::display::chat_window::chat_ui_enabled() {
+            return;
+        }
         self.show_app(AppId::HermesChat);
     }
 

@@ -77,6 +77,18 @@ fn try_load_piper() -> Option<PiperEngine> {
                             k_nano::slog_jarbas!("Audio", "piper", "{} presente ({} KB) — carregando via PIO (read_file)…",
                                 name,
                                 sz / 1024);
+                            // PACK_LLM: PIPER ~61MB ATA PIO congela apos K50 (greet).
+                            // Formant ja falou; Piper fica para runtime/loader.
+                            if sz > 8 * 1024 * 1024 {
+                                k_nano::slog_jarbas!(
+                                    "Audio",
+                                    "piper",
+                                    "skip ATA PIO {} {}KB (boot; formant TTS)",
+                                    name,
+                                    sz / 1024
+                                );
+                                continue;
+                            }
                             let data = match fs.read_file(name) {
                                 Some(d) => d,
                                 None => {

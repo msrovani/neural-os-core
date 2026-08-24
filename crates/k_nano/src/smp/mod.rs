@@ -17,6 +17,9 @@ use spin::Mutex;
 
 static AP_BOOT_LOCK: Mutex<()> = Mutex::new(());
 static AP_ENTRY_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// init_platform_sync (T+0) e PlatformAgent (T+21) ambos chamavam init_smp:
+/// 2ª onda re-SIPI + CorePools total=1 + panic TSS (ap_index >= n).
+static SMP_INIT_DONE: AtomicBool = AtomicBool::new(false);
 
 /// Set by PlatformAgent before calling init_smp().
 pub static AP_COUNT: AtomicU16 = AtomicU16::new(0);
@@ -373,7 +376,22 @@ pub unsafe fn wake_aps_sequential(
     woke
 }
 
+pub fn smp_init_done() -> bool {
+    SMP_INIT_DONE.load(Ordering::Acquire)
+}
+
 pub unsafe fn init_smp() {
+    if SMP_INIT_DONE.swap(true, Ordering::SeqCst) {
+        crate::slog_nano!(
+            "SMP",
+            "info",
+            "init_smp skip (ja rodou) APs_counter={} ONLINE={} cores={}",
+            AP_ENTRY_COUNTER.load(Ordering::Acquire),
+            percpu::AP_ONLINE.load(Ordering::Acquire),
+            percpu::CPU_COUNT.load(Ordering::Acquire)
+        );
+        return;
+    }
     crate::display::fb::boot_ckpt(220, "smp: enter");
     crate::slog_nano!("SMP", "info", "Inicializando SMP...");
     println!("[SMP] Inicializando SMP...");

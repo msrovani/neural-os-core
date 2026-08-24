@@ -1830,6 +1830,22 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         };
         let cur_mb = k_nano::allocator::CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::Relaxed);
         k_nano::slog_cortex!("LLM", "info", "load_model ver={} h={} L={} file={}MB est={}MB heap={}MB", version, hidden, num_layers, file_mb, estimated, cur_mb);
+        // Header lixo (ex. FAT 64MB sem v6 valido): h=0/L=0 ou vocab gigante
+        // aloca Vec no heap e congela o FB em K49 (AudioMixer ja passou).
+        if hidden == 0
+            || num_layers == 0
+            || hidden > 16_384
+            || num_layers > 256
+        {
+            k_nano::slog_cortex!(
+                "LLM",
+                "info",
+                "load_model REJECT header invalido h={} L={} — skip (evita hang K49)",
+                hidden,
+                num_layers
+            );
+            return None;
+        }
         // estimated = quanto load_model precisa alocar (tensors). Mas o arquivo
         // ja esta no heap (file_mb). Total real = file_mb + estimated.
         let total_needed = file_mb + estimated + 64;
