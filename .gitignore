@@ -1,4 +1,6 @@
 target/
+.freebuff/
+models/hw_expert/hw_expert_v4.bitnet
 # Builds isolados: usar target/agent-*, target/check-*, target/s106 (sob target/).
 # Rede de segurança para leftovers legados na raiz (não criar novos):
 target-*/
