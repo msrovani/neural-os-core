@@ -182,12 +182,12 @@ pub fn ensure_defaults() {
     }
     if read_persona().trim().is_empty() {
         let _ = write_persona(
-            "name: Hermes\n\
-             tone: precise\n\
-             humor: 0.35\n\
-             formality: 0.4\n\
-             empathy: 0.75\n\
-             # PERSONA — só Jarbas (voz/FB/avatar). Não é política de orquestração.\n",
+            "name: JARBAS\n\
+             tone: witty\n\
+             humor: 0.5\n\
+             formality: 0.3\n\
+             empathy: 0.8\n\
+             # PERSONA — só Jarbas (voz/FB/avatar). Tom adaptativo via AFFECT_SNAPSHOT.\n",
         );
     }
     if read_user().trim().is_empty() {

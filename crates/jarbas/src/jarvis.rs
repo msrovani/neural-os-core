@@ -32,7 +32,7 @@ impl SoulProfile {
     /// Carrega SoulProfile do SOUL.md via memory_store (ADR-0047-HMI H4).
     /// Se SOUL.md vazio ou ausente, mantem defaults do Jarbas.
     pub fn from_soul_md() -> Self {
-        let text = hermes::memory_store::read_soul();
+        let text = hermes::memory_store::read_persona();
         if text.trim().is_empty() {
             return Self::default_jarbas();
         }
@@ -60,7 +60,15 @@ impl SoulProfile {
     }
 
     /// Ajusta tom baseado no AFFECT_SNAPSHOT atual (emoção em tempo real).
+    /// Decai suavemente para os defaults do SOUL.md (não acumula infinitamente).
     pub fn adapt_to_affect(&mut self, snap: &hermes::globals::AffectSnapshot) {
+        // Decay: puxa valores de volta para os defaults (0.05/tick)
+        let decay = 0.05f32;
+        self.empathy += (0.8 - self.empathy) * decay;    // default empathy=0.8
+        self.humor_level += (0.5 - self.humor_level) * decay;  // default humor=0.5
+        self.formality += (0.3 - self.formality) * decay; // default formality=0.3
+
+        // Modulação por emoção (sobre o decay)
         if snap.valence < -0.5 {
             self.tone = String::from("empathetic");
             self.empathy = (self.empathy + 0.1).min(1.0);
