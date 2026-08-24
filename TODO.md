@@ -34,7 +34,20 @@ Fonte canônica: `docs/architecture/0100-k3chj-backlog-custo-anel.md`. Fila anti
 | 9 | M | R3 jarbas | 0058 S5 um widget; A/V | T-070–T-072 | `[ ]` |
 | 10 | L ▶️ | R2 | AirLLM DMA/e2e | T-073–T-075 | ▶️ |
 
-**Próximo:** T-018 metal K23. T-022 guest OTA. T-037 BSS 511. T-044 HUD. T-045 mesh 2c.
+## ▶️ ADR-0092 — Observabilidade de boot (#539)
+
+Fonte: `docs/architecture/0092-boot-observability.md`. **Não** entra nas ondas T-xxx do 0100.
+
+| Onda | Custo | Anel | Tema | Aceite | Status |
+|------|-------|------|------|--------|--------|
+| O0 | S | R0 slog/serial | `sev` ok\|warn\|fail\|trace + filtro consola | teste host + check 0 erros | `[x]` |
+| O1 | S | bin + k_nano | Banner `=== PHASE n= ===` + fase 8 PostRuntime | 9 banners no log QEMU | `[x]` código |
+| O2 | S–M | k_nano + bin + jarbas | Mudos BPB/INIT1/e1000/SIPI/scan/PnP | serial curto até Runtime | `[x]` código |
+| O3 | S | `boot_report` | `BOOT SCORE` + `tools/parse_boot_score.py` | parser honesto | `[x]` |
+| O4 | S | jarbas | Sem K* no ecrã; HUD produto | screendump | `[x]` código |
+| O5 | S | evidência | Profile qemu vs hw no placar | mesmo parser | `[x]` `qemu=` no SCORE |
+
+**Próximo:** T-018 metal K23. T-022 guest OTA. T-037 BSS 511. T-044 HUD. T-045 mesh 2c. **O0 slog sev (0092).**
 
 **Fora:** BitTorrent/merkle; NTFS write; 0078 Fase 2–4; 0076 F1–F17 (já ✅); WireGuard; Vulkan.
 

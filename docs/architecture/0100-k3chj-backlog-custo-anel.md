@@ -8,7 +8,7 @@
 - **Depende de:** ADR-0088 (premissa máxima — analisar **primeiro**), INDEX 2026-08-22
 - **Não substitui:** 0055, 0057, 0077, 0078, 0081–0089. Esta ADR **ordena e filtra** o que ainda tem valor.
 
-**Lacuna 0090–0099:** IDs não alocados. Salto para **0100** é deliberado (plano-mestre), não um buraco de decisão. Não criar 0090–0099 só para preencher tabela.
+**Lacuna 0090–0099:** IDs não alocados. Salto para **0100** é deliberado (plano-mestre), não um buraco de decisão. Não criar 0090–0099 só para preencher tabela. **Exceção 2026-08-24:** ADR-0092 (`0092-boot-observability.md`, IDEA #539) — contrato de observabilidade de boot. 0090/0091/0093–0099 continuam vazios.
 
 ---
 

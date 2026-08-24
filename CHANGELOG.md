@@ -1,4 +1,16 @@
-﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
+﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
+
+## [1.9.99-s289] - 2026-08-24 — ADR-0092 observabilidade de boot (O0–O5)
+
+**dmesg Neural: severidade, fases, placar, HUD de produto**
+
+- **O0 slog:** `ok|warn|fail|trace`; sub desconhecido = TRACE (mudo na consola); feature `boot-trace` para ficheiro.
+- **O1:** banner `=== PHASE n= name= status= ===` (0–8 PostRuntime); DriverInit extra = TRACE.
+- **O2:** BPB FAT uma vez; INIT1 só timeout; SMP `Brought up N APs`; e1000 MMIO TRACE; PnP sem TTS/`HERMES_RESPONSE`.
+- **O3:** `BOOT SCORE` + `tools/parse_boot_score.py`.
+- **O4:** `boot_ckpt` não pinta FB; HUD sem `no-llm`/`MoE`.
+- **O5:** `qemu=` no placar; LLM ausente no sandbox = `degraded expected`.
+- **Check:** `cargo check --release -p neural-kernel` 0 erros; slog tests 3/3.
 
 ## [1.9.99-s288] - 2026-08-24 — Trinity 7 kind + Falcon3-7B PRO.v6 (F1+P0-P3) — router LOADED 25KB 93.5%, arena auto, MoE noise
 

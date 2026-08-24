@@ -136,7 +136,7 @@ impl E1000Driver {
         let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         let mmio_virt = mmio_base + pmoff;
 
-        crate::slog_nano!("Net", "e1000", "Detectado vendor={:#06x} device={:#06x} MMIO={:#010x} virt={:#010x}", dev.vendor_id, dev.device_id, mmio_base, mmio_virt);
+        crate::slog_nano!("Net", "ok", "e1000 vendor={:#06x} device={:#06x}", dev.vendor_id, dev.device_id);
 
         // Garantir PCI Bus Master + Memory Space habilitados para DMA
         crate::pci::enable_pci_bus_master(dev);
@@ -350,7 +350,7 @@ impl E1000Driver {
 
         self.rx_cur = 0;
         self.tx_cur = 0;
-        crate::slog_nano!("Net", "e1000", "Init OK. TX descs={} RX descs={} RCTL={:#010x}", TX_DESC_COUNT, RX_DESC_COUNT, rctl);
+        crate::slog_nano!("Net", "ok", "e1000 init TX={} RX={} RCTL={:#010x}", TX_DESC_COUNT, RX_DESC_COUNT, rctl);
 
         true
     }

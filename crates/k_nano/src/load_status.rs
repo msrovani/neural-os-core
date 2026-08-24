@@ -78,7 +78,7 @@ pub fn set_if_upgrade(kind: AssetKind, status: LoadStatus) {
 
 /// Banner serial coerente com LLM-TEST / FAT load.
 pub fn print_status_banner() {
-    crate::slog_bin!("Status", "info", "llm={} bge={} piper={} fw_gpu={}",
+    crate::slog_bin!("Status", "ok", "llm={} bge={} piper={} fw_gpu={}",
         get(AssetKind::Llm).as_str(),
         get(AssetKind::Bge).as_str(),
         get(AssetKind::Piper).as_str(),

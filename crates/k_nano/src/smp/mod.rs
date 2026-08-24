@@ -11,7 +11,6 @@ pub mod runqueue;
 
 use crate::apic;
 use crate::memory;
-use crate::println;
 use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
@@ -41,8 +40,7 @@ pub extern "C" fn ap_entry(_cpu_id: u64) -> ! {
     let cpu_id = percpu::CPU_COUNT.fetch_add(1, Ordering::SeqCst);
     percpu::AP_ONLINE.fetch_add(1, Ordering::SeqCst);
     crate::slog_nano!("SMP", "trace", "AP_READY rust cpu={}", cpu_id);
-    crate::slog_nano!("SMP", "info", "AP {} entrou em modo 64-bit Rust!", cpu_id);
-    println!("[SMP] AP {} entrou em modo 64-bit Rust!", cpu_id);
+    crate::slog_nano!("SMP", "ok", "AP {} entrou em modo 64-bit Rust!", cpu_id);
 
     unsafe {
         if apic::USING_X2APIC.load(Ordering::Relaxed) {
@@ -384,7 +382,7 @@ pub unsafe fn init_smp() {
     if SMP_INIT_DONE.swap(true, Ordering::SeqCst) {
         crate::slog_nano!(
             "SMP",
-            "info",
+            "ok",
             "init_smp skip (ja rodou) APs_counter={} ONLINE={} cores={}",
             AP_ENTRY_COUNTER.load(Ordering::Acquire),
             percpu::AP_ONLINE.load(Ordering::Acquire),
@@ -393,18 +391,16 @@ pub unsafe fn init_smp() {
         return;
     }
     crate::display::fb::boot_ckpt(220, "smp: enter");
-    crate::slog_nano!("SMP", "info", "Inicializando SMP...");
-    println!("[SMP] Inicializando SMP...");
+    crate::slog_nano!("SMP", "trace", "Inicializando SMP...");
     crate::display::fb::boot_ckpt(221, "smp: allow check");
 
     if !crate::platform_probe::allow_smp() {
         crate::slog_nano!(
             "SMP",
-            "info",
+            "ok",
             "BSP-only (FeatureGate allow_smp=false hv={})",
             crate::platform_probe::hypervisor().name()
         );
-        println!("[SMP] FeatureGate: SMP disabled for this environment.");
         let bsp = apic::lapic_id();
         percpu::init_bsp_percpu(bsp);
         corepools::init_from_boot(bsp, 0);
@@ -413,8 +409,7 @@ pub unsafe fn init_smp() {
 
     crate::display::fb::boot_ckpt(222, "smp: apic ok");
     if !apic::USING_APIC.load(Ordering::Relaxed) {
-        crate::slog_nano!("SMP", "info", "APIC nao disponivel — SMP ignorado.");
-        println!("[SMP] APIC nao disponivel — SMP ignorado.");
+        crate::slog_nano!("SMP", "warn", "APIC nao disponivel — SMP ignorado.");
         crate::display::fb::boot_ckpt(222, "smp: no apic bsp-only");
         return;
     }
@@ -431,11 +426,10 @@ pub unsafe fn init_smp() {
     percpu::init_bsp_percpu(bsp_lapic_id);
     crate::slog_nano!(
         "SMP",
-        "info",
+        "trace",
         "BSP PerCpu inicializado. LAPIC ID: {}",
         bsp_lapic_id
     );
-    println!("[SMP] BSP PerCpu inicializado.");
     crate::display::fb::boot_ckpt(226, "smp: bsp done");
 
     crate::display::fb::boot_ckpt(227, "smp: ap_expected");
@@ -456,10 +450,9 @@ pub unsafe fn init_smp() {
     if ap_expected == 0 {
         crate::slog_nano!(
             "SMP",
-            "info",
+            "ok",
             "Nenhum AP detectado (MADT). SMP single-core."
         );
-        println!("[SMP] Sem APs — modo single-core.");
         corepools::init_from_boot(bsp_lapic_id, 0);
         return;
     }
@@ -552,7 +545,7 @@ pub unsafe fn init_smp() {
 
     crate::slog_nano!(
         "SMP",
-        "info",
+        "trace",
         "INIT-SIPI-SIPI sequencial (vetor={:#04x}, APs={})...",
         tramp_vector,
         n_aps
@@ -572,7 +565,7 @@ pub unsafe fn init_smp() {
         }
         s.push(']');
         crate::boot_logger::log(&s);
-        crate::slog_nano!("SMP", "info", "{}", s);
+        crate::slog_nano!("SMP", "trace", "{}", s);
     }
 
     crate::display::fb::boot_ckpt(22, "smp: antes wake");
@@ -588,8 +581,7 @@ pub unsafe fn init_smp() {
         apic::wait_for_ipi_delivery,
     );
 
-    crate::slog_nano!("SMP", "info", "APs acordados: {}", ap_woke);
-    println!("[SMP] INIT-SIPI-SIPI concluido. APs={}", ap_woke);
+    crate::slog_nano!("SMP", "ok", "Brought up {} APs", ap_woke);
 
     corepools::init_from_boot(bsp_lapic_id, ap_woke as u16);
     let workers = (ap_woke as usize).saturating_add(1);

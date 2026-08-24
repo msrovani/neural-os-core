@@ -103,7 +103,8 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0088-aios-first-premissa-maxima.md` | Accepted | `fazendo` | **#512** #513 | Premissa contínua. s271–274 boot; s281 SMP sem bypass crate-8. Residual #513 measure_bandwidth; metal K23 |
 | `0089-novo-hermes-malha-cognitiva-global.md` | Proposed | `pesquisa` | Whitepaper | **Canônico 0089 pesquisa.** Malha cognitiva v4; pós-v2.0 fases A–E |
 | `0089-smp-per-cpu-runqueue.md` | Proposed | `por_fazer` | #492 | **Conflito 0089.** Runqueue agents no AP; feature `smp-runqueue`; não wired no boot. Ordem de execução → **0100 Onda 4** |
-| `0100-k3chj-backlog-custo-anel.md` | Proposed | `fazendo` | **#538** | **Plano-mestre.** Filtra residuals 0077–0089; ondas 0–10 por custo×anel K³CHJ; TODOs T-001–T-075. Lacuna 0090–0099 intencional. Não substitui ADRs temáticas |
+| `0092-boot-observability.md` | Accepted | `fazendo` | **#539** | **Canônico 0092.** O0–O5 no código (slog sev, PHASE banner, mutes, BOOT SCORE, HUD, profile qemu). Aceite QEMU boot log + `tools/parse_boot_score.py` residual até evidência serial nova. |
+| `0100-k3chj-backlog-custo-anel.md` | Proposed | `fazendo` | **#538** | **Plano-mestre.** Filtra residuals 0077–0089; ondas 0–10 por custo×anel K³CHJ; TODOs T-001–T-075. Lacuna 0090–0099 intencional **exceto ADR-0092**. Não substitui ADRs temáticas |
 | `0081-malha-cognitiva-distribuida-p2p.md` | Accepted | `completa (parcial)` | #189/#312f/#315.26/#315.27 | Fase A–C + HMAC s238–241. **Abertos:** SemanticRouter, merge CRDT, merkle piece. SESSION_280: 1c mesh PASS; 2c TCG hang SIPI |
 | `0077-ring3-isolation-ring.md` | Proposed | `fazendo` | ADR-0059 F6; #426 | **Canônico Ring3.** SESSION_278 TCG iretq+CPL3. B/C gated. WHPX/HW + `register_native_ring` abertos |
 | `0078-multi-slot-multimodal-learner.md` | Proposed | `por_fazer` | GGUF→ternário, 6 slots, visão, learner | Fases 1-4 não iniciadas como sprint |
@@ -138,7 +139,7 @@ Os conflitos são preservados; nenhum arquivo deve ser renomeado sem migração 
 - **0060:** `0060-bitnet-cognitivo-bei.md` é o canônico (BEI). `0060-ring3-isolation-ring.md` é cópia histórica → **0077**.
 - **0082:** `0082-hardware-info-registry.md` é o canônico (HardwareInfo). `0082-ring3-isolation-registry.md` e `0082-ring3-isolation-production.md` são checklist Ring3 → **0077**.
 - **0089:** `0089-novo-hermes-malha-cognitiva-global.md` é pesquisa/whitepaper. `0089-smp-per-cpu-runqueue.md` é runqueue SMP (`por_fazer`). Não fundir.
-- **0090–0099:** lacuna; plano-mestre é **0100** (não preencher IDs vazios).
+- **0090–0099:** lacuna intencional para não colidir com **0100**; **não** preencher IDs vazios. **Exceção:** `0092-boot-observability.md` (contrato de log de boot, maintainer 2026-08-24). 0090/0091/0093–0099 continuam vazios.
 
 ## Substituições explícitas
 

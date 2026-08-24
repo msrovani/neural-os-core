@@ -7,6 +7,7 @@
 ## Sessões Mantidas (107+)
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
+| 289 | Boot | ADR-0092 O0–O5 | dmesg Neural: sev + PHASE + SCORE + HUD | slog desconhecido=TRACE; 9 banners 0–8; INIT1/BPB/PnP mudos; `parse_boot_score.py`; qemu= no placar. Residual: serial QEMU real. |
 | 288 | Trinity | F1+P0-P3 + Falcon3-7B | 7 kind LOADED + PRO.v6 1.86GB + ROUTER 25KB 93.5% | Auditoria 15 ADRs/52 ideias; F1 ModelHeader 3072/28L/12H kv4 + auto_arena 50% [512MB,4GB]; P0 ROUTER.BITNET 25818B ver6 99/64/n7 93.5% + mkfat32 alias dedup; P1 global_arena + classify_with_trace + AutoLearn R3; P2 noise strided + x*127; PRO.v6 1864557403B 0xBE11BE11. |
 | 287 | Heap | Budget cap | Budget 1536MB cap OOM 2453→768MB + QEMU 4c TCG 7/8 | HEAP_BUDGET_MB cap + virtio_gpu stale fix + Falcon3 lm_head fallback; TCG 6G 4c 902 linhas 7/8 phases, HW Expert v6 loaded, TTS greeting; WHPX hang FAT walk, 8G Limine no-start. |
 | 286 | Emagrecer | C1-C5 | Bin vira facade 9k LOC | C1 dead 197L + C2 cap/paging 1941L + C4 net 2714L + C5 tls/fb 1360L + C3 agents 2200L; 19.3k→13k; cargo build 13s OK; check_duplication 52→42; QEMU GDT loop fix. |

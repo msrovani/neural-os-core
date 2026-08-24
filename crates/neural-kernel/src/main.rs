@@ -863,11 +863,9 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     // SESSÃO_260: trace do init_phase — loga cada Oneshot ANTES do tick no
     // ramlog (dump ">>> BOOT.LOG (RAM) <<<" no FB). HW real travou no K51.
     registry.init_trace = Some(|name, round| {
-        let line = alloc::format!("INIT1: r{} poll {}", round, name);
-        k_nano::boot_logger::log(&line);
-        // Imprime no FB também — o dump do ramlog roda ANTES do init_phase,
-        // então no freeze o último nome na tela é o alvo.
-        crate::display::fb::console_print(&line);
+        if round >= 10_000 {
+            k_nano::slog_bin!("BOOT", "warn", "INIT1 timeout poll {} r={}", name, round);
+        }
     });
     registry.init_phase();
     crate::display::fb::boot_ckpt(52, "init_phase done");
@@ -882,11 +880,7 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
         name: "s260_trace",
         callback: |agent_name, tick| {
             if tick <= 2 {
-                k_nano::boot_logger::log(&alloc::format!("SCHED1: poll {}", agent_name));
-                // SESSÃO_260: imprime no FB também — o dump do ramlog acontece
-                // ANTES do init_phase, então quando o HW trava num agente o
-                // último nome na tela revela o alvo.
-                crate::display::fb::console_print(&alloc::format!("SCHED1: poll {}", agent_name));
+                k_nano::slog_bin!("SCHED", "trace", "poll {}", agent_name);
             }
             agent_core::hooks::HookResult::Allow
         },
@@ -3059,15 +3053,7 @@ pub(crate) fn kernel_boot(
                     }
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                         // Ordem = degrau ladder; com PACK_LLM=um so, so esse existe.
-                        for name in &[
-                            "llama8b.bin",
-                            "llama8b.bin",
-                            "llama8b.bin",
-                            "llama8b.bin",
-                            "llama8b.bin",
-                            "llama8b.bin",
-                            "llama8b.bin",
-                        ] {
+                        for name in &["llama8b.bin"] {
                             if let Some(sz) = fs.lookup_file_size(name) {
                                 if sz >= 1_000_000 {
                                     return (Some(*name), Some(sz));
@@ -3239,18 +3225,7 @@ pub(crate) fn kernel_boot(
                         // Preferência chat: 1.3B → 850 → 2B/3B. Stub MICRO.BITNET por último.
                         // Degrau: PACK_LLM=850 só empacota 850; depois 13, 2b, 3b.
                         // Modelos GGUF grandes: /model (AirLLM ATA) em vez de PIO full-RAM.
-                        for name in &[
-                            "llama8b.bin",
-                            "llama8b.bin",
-                            "llama8b.bin",
-                            "llama8b.bin",
-                            "llama8b.bin",
-                            "llama8b.bin",
-                            "llama8b.bin",
-                            "llama8b.bin",
-                            "llama8b.bin",
-                            "llama8b.bin",
-                        ] {
+                        for name in &["llama8b.bin"] {
                             let Some(sz) = fs.lookup_file_size(name) else { continue; };
                             // Stub ~13KB não serve para chat fluente
                             if *name == "llama8b.bin" && sz < 1_000_000 {
@@ -3322,18 +3297,7 @@ pub(crate) fn kernel_boot(
                 let mut usb_guard = crate::USB_MSC.lock();
                 if let Some(ref mut msc) = *usb_guard {
                     const PIO_HW: usize = 700 * 1024 * 1024;
-                    for name in &[
-                        "llama8b.bin",
-                        "llama8b.bin",
-                        "llama8b.bin",
-                        "llama8b.bin",
-                        "llama8b.bin",
-                        "llama8b.bin",
-                        "llama8b.bin",
-                        "llama8b.bin",
-                        "llama8b.bin",
-                        "llama8b.bin",
-                    ] {
+                    for name in &["llama8b.bin"] {
                         let Some(fat_data) = read_file_from_dev(msc, name) else { continue; };
                         if *name == "llama8b.bin" && fat_data.len() < 1_000_000 {
                             continue;
@@ -4309,32 +4273,11 @@ pub(crate) fn kernel_boot(
     );
 
     unsafe {
-        // ── BootReport: publica resumo do boot no EventBus ──
+        publish_boot_phase(BootPhase::PostRuntime, "BOOT SCORE");
         let report = k_nano::boot_report::finalize_and_publish();
-        k_nano::slog_bin!(
-            "BOOT",
-            "REPORT",
-            "storage={} usb_msc={} log_written={} ckpt=K{} {}",
-            report.storage_ok,
-            report.usb_msc,
-            report.boot_log_written,
-            report.last_ckpt,
-            report.ai.line()
-        );
+        let _ = report.ai.line();
 
-        // ── Dump boot_ramlog no FB antes do Runtime ──
-        // Última tentativa de persistir BOOT.LOG (ATA agora retorna false sem travar)
         crate::boot_logger::flush();
-        // Mostra o log completo no FB pra foto
-        let session = k_nano::boot_logger::build_session_bytes();
-        let session_str = core::str::from_utf8(&session).unwrap_or("");
-        if !session_str.is_empty() {
-            crate::display::fb::console_print(">>> BOOT.LOG (RAM) <<<");
-            for line in session_str.lines().take(40) {
-                crate::display::fb::console_print(line);
-            }
-            crate::display::fb::console_print(">>> FIM BOOT.LOG <<<");
-        }
 
         let reg = registry as *mut agent_core::AgentRegistry;
         core::arch::asm!(
@@ -4370,7 +4313,7 @@ pub fn ensure_boot_phase_consumer() {
     let mut g = BOOT_PHASE_RX.lock();
     if g.is_none() {
         *g = Some(EVENT_BUS.subscribe(TOPIC_BOOT_PHASE));
-        k_nano::slog_bin!("BOOT", "info", "Consumer BOOT_PHASE inscrito no EventBus");
+        k_nano::slog_bin!("BOOT", "ok", "Consumer BOOT_PHASE inscrito no EventBus");
     }
 }
 
@@ -4429,6 +4372,8 @@ pub enum BootPhase {
 
     Runtime,             // AgentScheduler::run()
 
+    PostRuntime,         // ADR-0092: models/BPE/greeting/BOOT SCORE (após Runtime)
+
     Panic,               // Boot falhou
 
 }
@@ -4437,8 +4382,32 @@ pub enum BootPhase {
 
 pub fn publish_boot_phase(phase: BootPhase, msg: &str) {
     ensure_boot_phase_consumer();
+    let (n, name) = match phase {
+        BootPhase::SafeHarbor => (0u8, "SafeHarbor"),
+        BootPhase::MemoryCore => (1, "MemoryCore"),
+        BootPhase::SystemBringup => (2, "SystemBringup"),
+        BootPhase::Diagnostics => (3, "Diagnostics"),
+        BootPhase::HardwareDiscovery => (4, "HardwareDiscovery"),
+        BootPhase::DriverInit => (5, "DriverInit"),
+        BootPhase::AgentFleet => (6, "AgentFleet"),
+        BootPhase::Runtime => (7, "Runtime"),
+        BootPhase::PostRuntime => (8, "PostRuntime"),
+        BootPhase::Panic => (99, "Panic"),
+    };
+    let status = if msg.contains("FAIL") || msg.contains("fail") {
+        "fail"
+    } else if msg.contains("DEGRADED") || msg.contains("degraded") {
+        "warn"
+    } else {
+        "ok"
+    };
+    if n <= 8 && k_nano::boot_report::first_phase(n) {
+        k_nano::boot_report::emit_phase_banner(n, name, status);
+        crate::display::fb::phase_line(&alloc::format!("PHASE {} {}", n, name));
+    } else {
+        k_nano::slog_bin!("BOOT", "trace", "phase={} step={}", name, msg);
+    }
     let payload = alloc::format!("[BOOT:{:?}] {}", phase, msg);
-    k_nano::slog_bin!("Log", "msg", "{}", payload);
     // Disco/buffer só — sem segundo serial_println ([LOG] duplicava no FB).
     crate::boot_logger::log_quiet(&payload);
     let _ = EVENT_BUS.publish(crate::Event {

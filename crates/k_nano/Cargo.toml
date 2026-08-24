@@ -34,6 +34,8 @@ ring3 = []
 soft-reboot-bootlog = []
 # Labor 39: PC speaker boot chime — OFF default.
 boot-chime = []
+# ADR-0092: TRACE vai para BOOT.LOG (ainda mudo na consola default).
+boot-trace = []
 # Labor 53: AP workers vivos (`ap_pollable`) — OFF default (deadlock sem IDT/IPI pleno).
 ap-pollable = []
 # ADR-0089: Per-CPU run-queues para agents + work-stealing entre cores (default OFF).
@@ -44,4 +46,4 @@ smp-runqueue = []
 fat-boot-log = []
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "soft-reboot-bootlog", "fat-boot-log", "smp-runqueue", "ring3"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "soft-reboot-bootlog", "fat-boot-log", "smp-runqueue", "ring3", "boot-trace"))'] }

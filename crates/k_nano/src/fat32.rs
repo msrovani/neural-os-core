@@ -4,8 +4,11 @@
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 use crate::ata::AtaDriver;
 use crate::block_dev::BlockDevice;
+
+static FAT32_BPB_LOGGED: AtomicBool = AtomicBool::new(false);
 /// Converte "NAME.EXT" para entrada FAT 8.3 (11 bytes, espaços).
 fn encode_83(name: &str) -> [u8; 11] {
     let mut out = [b' '; 11];
@@ -445,9 +448,13 @@ impl<'a> Fat32Reader<'a> {
         let fat_lba = part.lba_start as u64 + reserved_sectors as u64;
         let data_lba = fat_lba + fat_count as u64 * sectors_per_fat32 as u64;
 
-        crate::slog_nano!("FAT32", "info", "BPB: bps={} spc={} fats={} spf={} root_cluster={}",
+        if !FAT32_BPB_LOGGED.swap(true, Ordering::Relaxed) {
+            crate::slog_nano!("FAT32", "ok", "mount bps={} spc={} root={}",
+                bytes_per_sector, sectors_per_cluster, root_cluster);
+        }
+        crate::slog_nano!("FAT32", "trace", "BPB: bps={} spc={} fats={} spf={} root_cluster={}",
             bytes_per_sector, sectors_per_cluster, fat_count, sectors_per_fat32, root_cluster);
-        crate::slog_nano!("FAT32", "info", "fat_lba={} data_lba={}", fat_lba, data_lba);
+        crate::slog_nano!("FAT32", "trace", "fat_lba={} data_lba={}", fat_lba, data_lba);
 
         Some(Fat32Reader { ata, lba_start: part.lba_start, sectors_per_cluster, bytes_per_sector,
             reserved_sectors, fat_count, sectors_per_fat32, root_cluster, fat_lba, data_lba })

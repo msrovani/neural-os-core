@@ -582,8 +582,7 @@ fn draw_console_line(
     }
 }
 
-/// Checkpoint de boot — uma linha no FB (sem serial duplicado no k_nano).
-/// Ponytail: oportunista flush para pendrive (USB-MSC ou ATA fallback) sem hang.
+/// Checkpoint de boot — ramlog + slog TRACE (ADR-0092: nunca pintar K* no FB).
 pub fn boot_ckpt(n: u8, msg: &str) {
     let mut buf = [0u8; 100];
     let mut pos = 0usize;
@@ -611,15 +610,17 @@ pub fn boot_ckpt(n: u8, msg: &str) {
         pos += 1;
     }
     let s = core::str::from_utf8(&buf[..pos]).unwrap_or("K?");
-    // Após claim_graphics: só ramlog/serial — não pinta K* por cima do orb.
+    k_nano::slog_jarbas!("BOOT", "trace", "{}", s);
+    k_nano::boot_ramlog::set_last_ckpt(n);
+    k_nano::boot_ramlog::append(s);
+    let _ = k_nano::boot_logger::try_flush_ramlog();
+}
+
+/// Canal B (ADR-0092): uma linha de fase no FB só antes do compositor.
+pub fn phase_line(s: &str) {
     if !GRAPHICS_OWNED.load(Ordering::Relaxed) {
         console_print(s);
     }
-    k_nano::boot_ramlog::set_last_ckpt(n);
-    k_nano::boot_ramlog::append(s);
-    // Ponytail: tenta pendrive se já houver backend (USB-MSC ou ATA) sem bloquear.
-    // try_lock + backoff → nunca hang em K22 (SMP) nem K137 (TSC).
-    let _ = k_nano::boot_logger::try_flush_ramlog();
 }
 
 fn splash_draw_text(

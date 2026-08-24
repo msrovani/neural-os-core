@@ -93,38 +93,65 @@ impl<'a> fmt::Write for LogBuf<'a> {
 }
 
 pub fn _print(args: fmt::Arguments) {
-    use fmt::Write;
-    let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    emit_raw(args, true, true);
+}
 
-    // 1. Formata para buffer (sem locks)
+/// slog filtrado (ADR-0092): consola e/ou ficheiro, sem pintar FB se COM1 existe.
+pub fn emit_tagged(
+    ring: &str,
+    krate: &str,
+    item: &str,
+    sev: &str,
+    args: fmt::Arguments,
+    to_console: bool,
+    to_file: bool,
+) {
+    use fmt::Write;
+    let mut buf = [0u8; 256];
+    let n = {
+        let mut w = LogBuf(&mut buf, 0);
+        let _ = write!(&mut w, "[{}] [{}] [{}] [{}] - {}\n", ring, krate, item, sev, args);
+        w.1
+    };
+    let msg = &buf[..n];
+    dispatch_bytes(msg, to_console, to_file, None);
+}
+
+fn emit_raw(args: fmt::Arguments, to_console: bool, to_file: bool) {
     let mut buf = [0u8; 256];
     let _ = fmt::write(&mut LogBuf(&mut buf, 0), args);
     let n = buf.iter().position(|&b| b == 0).unwrap_or(256);
-    let msg = &buf[..n];
+    dispatch_bytes(&buf[..n], to_console, to_file, Some(args));
+}
 
-    // 2. Serial port (lock, escreve, unlock) — nunca segura lock ao chamar outros destinos
-    let serial_avail = {
+fn dispatch_bytes(msg: &[u8], to_console: bool, to_file: bool, fb_args: Option<fmt::Arguments>) {
+    use fmt::Write;
+    let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+
+    let mut serial_avail = false;
+    if to_console {
         let mut serial = SERIAL.lock();
         if let Some(ref mut s) = *serial {
             let mut ts_buf = [0u8; 24];
             let ts_len = format_timestamp_into(&mut ts_buf, tick);
             let _ = s.write_str(core::str::from_utf8(&ts_buf[..ts_len]).unwrap_or("[T+?] "));
             let _ = s.write_str(core::str::from_utf8(msg).unwrap_or("(invalid utf8)"));
-            true
-        } else { false }
-    }; // SERIAL lock dropped aqui
+            serial_avail = true;
+        }
+    }
 
-    // 3. Boot log (lock, escreve, unlock) — SERIAL já liberado
-    {
+    if to_file {
         let mut log = BOOT_LOG.lock();
-        if log.start_tick == 0 { log.start_tick = tick; }
+        if log.start_tick == 0 {
+            log.start_tick = tick;
+        }
         log.write(msg, tick);
-    } // BOOT_LOG lock dropped aqui
+    }
 
-    if !serial_avail {
-        // Sem serial (HW real): fallback framebuffer + disco
-        // Nenhum lock retido — write_to_disk_journal pega seus próprios locks sem cadeia
-        let _ = crate::vga_buffer::fb_print(args);
+    if to_console && !serial_avail {
+        if let Some(a) = fb_args {
+            let _ = crate::vga_buffer::fb_print(a);
+        }
         write_to_disk_journal(msg, tick);
     }
 }

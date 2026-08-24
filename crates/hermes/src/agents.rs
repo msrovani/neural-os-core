@@ -2092,17 +2092,10 @@ impl Agent for HwDetectAgent {
             cards_n = cards_n.saturating_add(1);
         }
 
-        k_nano::slog_hermes!("HW", "PnP", "published {} capability cards", cards_n);
-        k_nano::slog_hermes!("HW", "AI", "Arvore PnP:\n{}", device_tree);
+        k_nano::slog_hermes!("HW", "ok", "published {} capability cards", cards_n);
+        k_nano::slog_hermes!("HW", "trace", "Arvore PnP:\n{}", device_tree);
 
-        // Hermes decide via HW_CAPABILITY (agentico) — sem dump free-text → LLM.
-        let _ = EVENT_BUS.publish(Event {
-            id: 0,
-            topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
-            payload: alloc::format!("[HW-PnP] {} cards published — Hermes decide", cards_n)
-                .into_bytes(),
-            token: CapabilityToken::Legacy(1),
-        });
+        // EventBus HW only — não HERMES_RESPONSE (evita TTS/chat).
 
         AgentTickResult::Done
     }

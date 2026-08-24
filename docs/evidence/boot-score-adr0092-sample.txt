@@ -1,0 +1,11 @@
+=== BOOT SCORE qemu=true ram_mb=6144 smp_online=8 ===
+phase_0_7     ok
+cpu           warn  online=8  pollable=false
+net           ok  nic=e1000  rx=bound
+storage       ok  bus=ata
+llm           degraded expected
+audio_stt_tts degraded expected
+gpu           await
+wifi          await
+attention     none
+===
