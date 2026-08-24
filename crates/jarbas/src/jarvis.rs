@@ -28,6 +28,54 @@ pub struct SoulProfile {
 
 impl SoulProfile {
     pub fn default_jarbas() -> Self { SoulProfile { name: String::from("JARBAS"), tone: String::from("witty"), humor_level: 0.5, formality: 0.3, empathy: 0.8 } }
+
+    /// Carrega SoulProfile do SOUL.md via memory_store (ADR-0047-HMI H4).
+    /// Se SOUL.md vazio ou ausente, mantem defaults do Jarbas.
+    pub fn from_soul_md() -> Self {
+        let text = hermes::memory_store::read_soul();
+        if text.trim().is_empty() {
+            return Self::default_jarbas();
+        }
+        let mut profile = Self::default_jarbas();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') { continue; }
+            if let Some((key, value)) = line.split_once(':') {
+                let key = key.trim();
+                let value = value.trim();
+                match key {
+                    "name" => profile.name = String::from(value),
+                    "tone" => profile.tone = String::from(value),
+                    "formality" => profile.formality = value.parse().unwrap_or(0.3),
+                    "empathy" => profile.empathy = value.parse().unwrap_or(0.8),
+                    "humor" => profile.humor_level = value.parse().unwrap_or(0.5),
+                    _ => {}
+                }
+            }
+        }
+        k_nano::slog_jarbas!("SOUL", "info",
+            "SoulProfile loaded from SOUL.md: name={} tone={} formality={:.1} empathy={:.1}",
+            profile.name, profile.tone, profile.formality, profile.empathy);
+        profile
+    }
+
+    /// Ajusta tom baseado no AFFECT_SNAPSHOT atual (emoção em tempo real).
+    pub fn adapt_to_affect(&mut self, snap: &hermes::globals::AffectSnapshot) {
+        if snap.valence < -0.5 {
+            self.tone = String::from("empathetic");
+            self.empathy = (self.empathy + 0.1).min(1.0);
+        } else if snap.valence > 0.5 {
+            self.tone = String::from("witty");
+            self.humor_level = (self.humor_level + 0.05).min(1.0);
+        }
+        if snap.urgency > 0.7 {
+            self.tone = String::from("precise");
+            self.humor_level = 0.1;
+        }
+        if snap.fatigue > 0.7 {
+            self.formality = (self.formality + 0.1).min(1.0);
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -549,7 +597,7 @@ impl JarbasEngine {
         consent.register("exec", ConsentLevel::Dangerous, "execute system commands");
         consent.register("network", ConsentLevel::Moderate, "network access");
         JarbasEngine {
-            soul: SoulProfile::default_jarbas(),
+            soul: SoulProfile::from_soul_md(),
             session: SessionHistory::new(256), notifications: NotificationGate::new(),
             thread: SessionlessThread::new(500), emotion: EmotionAnalysis::analyze(""),
             consent, discovery: SkillDiscovery::new(), cache: SemanticCache::new(),
@@ -600,6 +648,11 @@ impl JarbasEngine {
     }
 
     pub fn tick(&mut self, tick: u64) {
+        // ADR-0047-HMI H4: adapta tom ao affect em tempo real
+        {
+            let snap = hermes::globals::AFFECT_SNAPSHOT.lock();
+            self.soul.adapt_to_affect(&snap);
+        }
         self.persona_tick();
         if tick % 100 == 0 { self.session.compress("drop_lowest"); }
         // Sprint 90 ticks — dream gate primeiro: evita clonar até 256 strings/tick
