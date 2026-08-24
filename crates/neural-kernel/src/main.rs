@@ -1974,8 +1974,8 @@ pub(crate) fn kernel_boot(
     crate::boot_logger::log("BOOT: FS agents OK");
 
     {
-        let (meta, copy, skip) = crate::mhi::migration_stats();
-        k_nano::slog_bin!("ADR", "0040", "MVP wired: BlockDevice+write | exFAT FilesystemDriver | EXT2/NTFS detect | NeuralFS /mnt/neural | MHI soft-migrate (meta={} copy={} skip={})", meta, copy, skip);
+        let (meta, copy, skip, demoted, promoted) = crate::mhi::migration_stats();
+        k_nano::slog_bin!("ADR", "0040", "MVP wired: BlockDevice+write | exFAT FilesystemDriver | EXT2/NTFS detect | NeuralFS /mnt/neural | MHI soft-migrate (meta={} copy={} skip={} freed={} loaded={})", meta, copy, skip, demoted, promoted);
         crate::boot_logger::log("BOOT: ADR-0040 FS MVP markers");
     }
 

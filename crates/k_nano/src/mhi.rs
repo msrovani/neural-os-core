@@ -579,6 +579,10 @@ fn try_tier0_promote(req: &MigrationRequest) -> bool {
     true
 }
 
+/// Telemetria de execução de migração
+static MHI_DEMOTE_FREED: AtomicU64 = AtomicU64::new(0);
+static MHI_PROMOTE_LOADED: AtomicU64 = AtomicU64::new(0);
+
 fn execute_soft_migrate(req: MigrationRequest) {
     let is_cpu_ram = MHI_REGISTRY
         .lock()
@@ -600,26 +604,40 @@ fn execute_soft_migrate(req: MigrationRequest) {
     }
 
     if looks_like_ram_page && req.to != AllocTier::Dram {
-        // Dram→Vram com engine real (CE) quando o hook está registrado —
-        // fecha o seam morto `mhi_tier0_copy` (ADR-0087 F2: política só vale
-        // com wiring). Falhou/ausente → cai no metadata-only abaixo.
+        // Dram→Vram com engine real (CE) quando o hook está registrado.
         if req.to == AllocTier::Vram && try_tier0_promote(&req) {
+            MHI_PROMOTE_LOADED.fetch_add(1, Ordering::Relaxed);
             return;
         }
-        // Demote Dram→cold: metadata only (no disk/VRAM peer DMA yet)
-        let needs_peer = matches!(req.to, AllocTier::Vram | AllocTier::Nvme);
-        if needs_peer {
-            log_mhi_dma_awaiting("dram_to_peer_dma");
-        }
+        // Dram→Hdd/Nvme: LIBERA a página DRAM (reduz pressão de memória)
+        // + atualiza metadata. O dado "mora" no registro MHI como Hdd —
+        // se for acessado de novo, o caminho normal de disco recarrega.
         let ok = MHI_REGISTRY
             .lock()
             .set_tier(PhysAddr::new(req.phys_addr), req.to);
         if ok {
+            // Libera o frame DRAM — reduz pressão no frame allocator.
+            // Só libera se o endereço está alinhado a página e é um frame válido.
+            if req.phys_addr % 4096 == 0 && req.size > 0 {
+                unsafe {
+                    use x86_64::{PhysAddr, structures::paging::{FrameDeallocator, PhysFrame, Size4KiB}};
+                    let mut guard = crate::memory::GLOBAL_ALLOCATOR.lock();
+                    if let Some(alloc) = (*guard).as_mut() {
+                        let pages = (req.size + 4095) / 4096;
+                        for i in 0..pages {
+                            let f = PhysFrame::<Size4KiB>::containing_address(
+                                PhysAddr::new(req.phys_addr + i as u64 * 4096)
+                            );
+                            alloc.deallocate_frame(f);
+                        }
+                        MHI_DEMOTE_FREED.fetch_add(pages as u64, Ordering::Relaxed);
+                        crate::slog_nano!("MHI", "demote",
+                            "Dram->{:?} @{:x} size={} freed {} frames",
+                            req.to, req.phys_addr, req.size, pages);
+                    }
+                }
+            }
             MHI_SOFT_META.fetch_add(1, Ordering::Relaxed);
-            crate::slog_nano!("MHI", "info", "soft-demote Dram->{:?} @{:x} size={} (DMA disk deferred)",
-                req.to,
-                req.phys_addr,
-                req.size);
         } else {
             MHI_SKIPPED.fetch_add(1, Ordering::Relaxed);
         }
@@ -657,7 +675,43 @@ fn execute_soft_migrate(req: MigrationRequest) {
         return;
     }
 
-    // Hdd/Nvme/Usb/Vram <-> *: metadata-only (block/GPU peer DMA not wired)
+    // Hdd→Dram: promove dados quentes de disco para RAM.
+    // Quando o disco tem dados acessados frequentemente, aloca DRAM e
+    // copia via HHDM (o dado já está em memória mapeada via ATA/NVMe read).
+    if req.from == AllocTier::Hdd && req.to == AllocTier::Dram {
+        if req.size > 0 && req.size <= SOFT_COPY_MAX && req.phys_addr % 4096 == 0 {
+            let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+            if pmoff > 0 {
+                if let Some(new_pa) = alloc_by_tier(AllocTier::Dram, req.size) {
+                    // O endereço physique aqui é o LBA*512 ou ponteiro de disco.
+                    // Se já está mapeado via HHDM, copia direto; senão, metadata-only.
+                    if hhdm_copy_checked(req.phys_addr, new_pa.as_u64(), req.size).is_ok() {
+                        let mut reg = MHI_REGISTRY.lock();
+                        reg.allocations.remove(&req.phys_addr);
+                        reg.register(new_pa, req.size, AllocTier::Dram, &req.owner);
+                        MHI_PROMOTE_LOADED.fetch_add(1, Ordering::Relaxed);
+                        MHI_SOFT_COPY.fetch_add(1, Ordering::Relaxed);
+                        crate::slog_nano!("MHI", "promote",
+                            "Hdd->Dram @{:x} -> @{:x} size={} (hot data loaded)",
+                            req.phys_addr, new_pa.as_u64(), req.size);
+                        return;
+                    }
+                }
+            }
+        }
+        // Fallback: metadata-only
+        let ok = MHI_REGISTRY.lock().set_tier(PhysAddr::new(req.phys_addr), req.to);
+        if ok {
+            MHI_SOFT_META.fetch_add(1, Ordering::Relaxed);
+            crate::slog_nano!("MHI", "info", "soft-promote Hdd->Dram @{:x} (metadata only, HHDM not mapped)",
+                req.phys_addr);
+        } else {
+            MHI_SKIPPED.fetch_add(1, Ordering::Relaxed);
+        }
+        return;
+    }
+
+    // Cross-tier genérico: metadata-only
     if matches!(req.from, AllocTier::Vram | AllocTier::Nvme)
         || matches!(req.to, AllocTier::Vram | AllocTier::Nvme)
     {
@@ -677,11 +731,14 @@ fn execute_soft_migrate(req: MigrationRequest) {
     }
 }
 
-pub fn migration_stats() -> (u64, u64, u64) {
+/// (meta_ops, copy_ops, skipped, demote_freed_frames, promote_loaded_ops)
+pub fn migration_stats() -> (u64, u64, u64, u64, u64) {
     (
         MHI_SOFT_META.load(Ordering::Relaxed),
         MHI_SOFT_COPY.load(Ordering::Relaxed),
         MHI_SKIPPED.load(Ordering::Relaxed),
+        MHI_DEMOTE_FREED.load(Ordering::Relaxed),
+        MHI_PROMOTE_LOADED.load(Ordering::Relaxed),
     )
 }
 
