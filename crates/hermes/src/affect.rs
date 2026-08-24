@@ -51,60 +51,6 @@ pub enum AffectEvent {
     UserSatisfaction(f32),
 }
 
-pub enum EmotionState {
-    Joy, Sadness, Anger, Fear, Surprise, Disgust, Neutral,
-}
-
-impl EmotionState {
-    pub fn from_text(text: &str) -> Self {
-        let t = text.to_lowercase();
-        if t.contains("joy") || t.contains("happy") || t.contains("love") { EmotionState::Joy }
-        else if t.contains("sad") || t.contains("cry") { EmotionState::Sadness }
-        else if t.contains("anger") || t.contains("fury") { EmotionState::Anger }
-        else if t.contains("fear") || t.contains("scared") { EmotionState::Fear }
-        else if t.contains("surprise") || t.contains("wow") { EmotionState::Surprise }
-        else if t.contains("disgust") || t.contains("hate") { EmotionState::Disgust }
-        else { EmotionState::Neutral }
-    }
-}
-
-impl From<EmotionState> for AffectVector {
-    fn from(e: EmotionState) -> Self {
-        match e {
-            EmotionState::Joy => AffectVector {
-                valence: 0.8, arousal: 0.6, dominance: 0.6,
-                uncertainty: 0.1, urgency: 0.2, fatigue: 0.0,
-                curiosity: 0.6, coherence: 0.9,
-            },
-            EmotionState::Sadness => AffectVector {
-                valence: -0.7, arousal: 0.2, dominance: 0.2,
-                uncertainty: 0.3, urgency: 0.0, fatigue: 0.8,
-                curiosity: 0.0, coherence: 0.5,
-            },
-            EmotionState::Anger => AffectVector {
-                valence: -0.8, arousal: 0.9, dominance: 0.7,
-                uncertainty: 0.1, urgency: 0.9, fatigue: 0.3,
-                curiosity: 0.1, coherence: 0.2,
-            },
-            EmotionState::Fear => AffectVector {
-                valence: -0.6, arousal: 0.8, dominance: 0.1,
-                uncertainty: 0.8, urgency: 0.7, fatigue: 0.2,
-                curiosity: 0.2, coherence: 0.4,
-            },
-            EmotionState::Surprise => AffectVector {
-                valence: 0.3, arousal: 0.9, dominance: 0.3,
-                uncertainty: 0.6, urgency: 0.5, fatigue: 0.0,
-                curiosity: 0.9, coherence: 0.3,
-            },
-            EmotionState::Disgust => AffectVector {
-                valence: -0.5, arousal: 0.3, dominance: 0.2,
-                uncertainty: 0.2, urgency: 0.1, fatigue: 0.1,
-                curiosity: 0.0, coherence: 0.6,
-            },
-            EmotionState::Neutral => AffectVector::neutral(),
-        }
-    }
-}
 
 pub struct AffectRegulator {
     pub affect: AffectVector,

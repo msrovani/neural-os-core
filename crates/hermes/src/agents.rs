@@ -1721,6 +1721,7 @@ impl Agent for MemoryAgent {
                 AgentTickResult::Pending
             }
             1 => {
+                // TODO: MemoryHierarchy::from_detected() when parent lands it in k_nano::mhi
                 let mhi = k_nano::mhi::MemoryHierarchy::new();
                 k_nano::slog_hermes!("MHI", "info", "{} tier(s). Best: {:?} ({} bytes avail)",
                     mhi.tiers.len(), mhi.best_tier(), mhi.tiers[0].capacity_bytes);
@@ -2871,6 +2872,15 @@ impl FsBridgeAgent {
             let reg = k_nano::mhi::MHI_REGISTRY.lock();
             reg.allocations.iter()
                 .filter(|(_, p)| {
+                    // Block keys (LBA) are not identity-mapped — skip Hdd/Nvme/UsbMsc.
+                    if matches!(
+                        p.tier,
+                        k_nano::mhi::AllocTier::Hdd
+                            | k_nano::mhi::AllocTier::Nvme
+                            | k_nano::mhi::AllocTier::UsbMsc
+                    ) {
+                        return false;
+                    }
                     let idle = _tick.saturating_sub(p.last_access_tick);
                     p.access_count > 5 && idle < 500
                         && p.tier != k_nano::mhi::AllocTier::Dram
@@ -2882,15 +2892,20 @@ impl FsBridgeAgent {
             let path = alloc::format!("/mhi/{:x}", addr);
             match crate::globals::read_vfs(&path) {
                 Ok(data) => {
-                    let phys = x86_64::PhysAddr::new(*addr);
                     let size = data.len();
                     if let Some(dram_addr) = k_nano::mhi::alloc_by_tier(k_nano::mhi::AllocTier::Dram, size) {
-                        let dst = dram_addr.as_u64() as *mut u8;
+                        let off = k_nano::memory::PHYS_MEM_OFFSET
+                            .load(core::sync::atomic::Ordering::Relaxed);
+                        if off == 0 {
+                            continue;
+                        }
+                        let dst = (dram_addr.as_u64() + off) as *mut u8;
                         unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), dst, size); }
                         let mut reg = k_nano::mhi::MHI_REGISTRY.lock();
-                        reg.register(phys, size, k_nano::mhi::AllocTier::Dram, "fs_bridge");
-                        reg.record_access(phys, _tick, 0);
-                        k_nano::slog_hermes!("FS", "BRIDGE", "Migrado {:?} → DRAM ({} bytes, idle={})", phys, size, _tick.saturating_sub(*last_access));
+                        // Register the NEW Dram phys — never the Block/LBA key.
+                        reg.register(dram_addr, size, k_nano::mhi::AllocTier::Dram, "fs_bridge");
+                        reg.record_access(dram_addr, _tick, 0);
+                        k_nano::slog_hermes!("FS", "BRIDGE", "Migrado {:x} → DRAM {:?} ({} bytes, idle={})", addr, dram_addr, size, _tick.saturating_sub(*last_access));
                     }
                 }
                 Err(_) => {}

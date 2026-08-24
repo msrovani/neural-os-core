@@ -253,6 +253,7 @@ impl BeiState {
             affect.decay();
         }
         
+        let mut phase_deg: u32 = 0;
         // 5. ExecutiveSupervisor tick (7-phase loop)
         {
             let mut supervisor = self.executive_supervisor.lock();
@@ -301,15 +302,17 @@ impl BeiState {
                     }
                 }
             }
+            // Capture phase before supervisor lock is dropped
+            phase_deg = supervisor.phase.rotation_deg();
         }
         
         // 6. Sync SoulMirrorState with AffectVector
         {
             let affect = self.affect_regulator.lock().affect;
-            let _state = SoulMirrorState::from_affect(&affect, 0, None);
+            let _state = SoulMirrorState::from_affect(&affect, phase_deg, None);
             *self.soul_mirror_state.lock() = _state;
             // 6b. Sync AFFECT_SNAPSHOT for compositor (hermes::globals bridge)
-            hermes_crate::globals::sync_affect_snapshot(&affect, 0);
+            hermes_crate::globals::sync_affect_snapshot(&affect, phase_deg);
         }
         
         // 7. DynamicMoE lifecycle (birth/merge/split)

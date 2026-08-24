@@ -138,7 +138,14 @@ impl JarbasAgent {
     }
 
     fn publish_greeting(&self, body: &str) {
-        let greeting = alloc::format!("[JARBAS] {}: {}", self.engine.soul.name, body);
+        // Prefixo baseado no tom da persona (ADR-0047-HMI H4)
+        let prefix = match self.engine.soul.mode() {
+            crate::jarvis::PersonaMode::Coach => "* ",
+            crate::jarvis::PersonaMode::Tutor => "+ ",
+            crate::jarvis::PersonaMode::Tool => "",
+            crate::jarvis::PersonaMode::Auto | _ => "~ ",
+        };
+        let greeting = alloc::format!("[JARBAS] {}{}: {}", prefix, self.engine.soul.name, body);
         k_nano::slog_bin!("Log", "msg", "{}", greeting);
         crate::display::compositor::announce_welcome(body);
         crate::display::console::set_llm_busy(false);
