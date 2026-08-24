@@ -146,7 +146,7 @@ def convert(hf_repo: str, output_path: str, cache_dir: str | None = None):
     # 3. Index tensors by role
     print(f"  [IDX] Indexando tensores...")
     embed_arr = state.get("model.embed_tokens.weight")
-    lm_head_arr = state.get("model.lm_head.weight")
+    lm_head_arr = state.get("model.lm_head.weight") or state.get("lm_head.weight")
     rms_final_arr = state.get("model.norm.weight")
 
     # 4. Write .bitnet v6 (ADR-0085)
@@ -213,7 +213,9 @@ def convert(hf_repo: str, output_path: str, cache_dir: str | None = None):
 
             for hf_name, rows, cols, role in proj_map:
                 key = f"{prefix}.{hf_name}.weight"
+                scale_key = f"{prefix}.{hf_name}.weight_scale"
                 arr = state.get(key)
+                scale_arr = state.get(scale_key)
                 if arr is None:
                     print(f"    [WARN] layer {li} missing {key} — zeros")
                     q, wscale = absmean_quantize(np.zeros((rows, cols), dtype=np.float32))
@@ -227,7 +229,13 @@ def convert(hf_repo: str, output_path: str, cache_dir: str | None = None):
                     else:
                         u8 = arr
                     q = unpack_hf_oi(u8)
-                    wscale = 1.0
+                    if scale_arr is not None:
+                        try:
+                            wscale = float(scale_arr.astype(np.float32).reshape(-1)[0])
+                        except Exception:
+                            wscale = 1.0
+                    else:
+                        wscale = 1.0
                 else:
                     # Fallback
                     q, wscale = absmean_quantize(arr.astype(np.float32))
