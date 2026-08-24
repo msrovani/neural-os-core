@@ -3213,6 +3213,22 @@ pub(crate) fn kernel_boot(
                                     sz / 1024,
                                     pio_cap / (1024 * 1024));
                                 continue;
+
+                                // AirLLM: modelo grande demais para PIO — streaming layer-by-layer
+                                let fat_mb = sz / (1024 * 1024);
+                                let params_est = (fat_mb as u64) * 8_000_000;
+                                if cortex_crate::model_fit::needs_airllm(params_est, fat_mb as u64) {
+                                    k_nano::slog_nano!("FAT", "info",
+                                        "AirLLM: {} ({}MB) > PIO cap - activating streaming", name, fat_mb);
+                                    if let Ok(sm) = crate::gguf_streaming::StreamingModel::from_fat(name) {
+                                        cortex_crate::cortex::set_streaming_model(
+                                            alloc::boxed::Box::new(sm));
+                                        k_nano::slog_nano!("FAT", "info",
+                                            "AirLLM: streaming registered for {} (layers from disk)", name);
+                                        model_loaded = true;
+                                        break;
+                                    }
+                                }
                             }
                             if sz > PIO_QEMU {
                                 k_nano::slog_nano!("FAT", "info", "{} size={}MB — baremetal FAT PIO (pode demorar minutos)",
