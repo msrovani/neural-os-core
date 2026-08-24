@@ -2406,6 +2406,10 @@ pub(crate) fn kernel_boot(
             }
         }
         crate::display::fb::boot_ckpt(41, "QEMU loader scan done");
+        // Saudacao ANTES do PIO BGE/LLM: FAT PACK_LLM=all (BGE 138MB) senão
+        // o register K44 nunca corre e o serial fica mudo.
+        k_nano::slog_bin!("JARBAS", "GREETING", "pre-BGE emit_hw_greeting_at_register");
+        audio::jarvis::emit_hw_greeting_at_register();
         // FAT policy: NVMe > AHCI > ATA > USB-MSC (ADR-0062 P3)
         if has_fat_block {
             if !loaded {
@@ -2449,6 +2453,17 @@ pub(crate) fn kernel_boot(
                             if let Some(sz) = fs.lookup_file_size("BGE.BIN") {
                                 found = true;
                                 k_nano::slog_bin!("BGE", "info", "BGE.BIN presente FAT ({} KB) — lendo…", sz / 1024);
+                                // ATA PIO 138MB trava o boot (QEMU WHPX hv pode ainda ser None).
+                                // Embeddings ficam para runtime / NVMe.
+                                if sz > 8 * 1024 * 1024 {
+                                    k_nano::slog_bin!(
+                                        "BGE",
+                                        "info",
+                                        "skip ATA PIO BGE {}KB no hypervisor (saudacao/runtime primeiro)",
+                                        sz / 1024
+                                    );
+                                    continue;
+                                }
                             }
                             if let Some(bge_data) = fs.read_file("BGE.BIN") {
                                 found = true;

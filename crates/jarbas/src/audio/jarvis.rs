@@ -169,10 +169,8 @@ pub fn emit_hw_greeting_at_register() {
         k_nano::platform_probe::HypervisorKind::None
     );
     let no_fat = k_nano::globals::USB_MSC.lock().is_none() && k_nano::ATA_DRIVER.lock().is_none();
-    // QEMU com FAT: deixar o flag falso — o tick() emite template/LLM + TTS.
-    if !(bare || no_fat) {
-        return;
-    }
+    // QEMU+FAT tambem: template agora. LLM no tick era morto se o boot
+    // travasse no PIO FAT (PACK_LLM=all) antes do scheduler.
     if HW_GREET_EMITTED.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -200,7 +198,7 @@ pub fn emit_hw_greeting_at_register() {
     k_nano::slog_jarbas!(
         "Jarbas",
         "info",
-        "saudacao suit-boot @register K44 (bare={} no_fat={})",
+        "saudacao suit-boot @register K44 (qemu_or_hw bare={} no_fat={})",
         bare,
         no_fat
     );

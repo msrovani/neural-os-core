@@ -480,8 +480,16 @@ impl<'a> Fat32Reader<'a> {
     pub unsafe fn list_root(&self) -> alloc::string::String {
         let mut out = alloc::string::String::from("FAT32 Root:\n");
         let mut cluster = self.root_cluster;
+        let mut walked = 0u32;
+        let mut prev = 0u32;
 
-        while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+        // PACK_LLM=all: root grande; chain corrompida nao pode PIO-hangar o boot.
+        while cluster < 0x0FFF_FFF8 && cluster >= 2 && walked < Self::MAX_ROOT_DIR_CLUSTERS {
+            if cluster == prev {
+                break;
+            }
+            prev = cluster;
+            walked += 1;
             let lba = self.cluster_lba(cluster);
             let mut buf = vec![0u8; self.sectors_per_cluster as usize * self.bytes_per_sector as usize];
             for i in 0..self.sectors_per_cluster as u32 {
