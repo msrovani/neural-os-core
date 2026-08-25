@@ -3,11 +3,7 @@ use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, OffsetPageTab
 use x86_64::PhysAddr;
 use x86_64::VirtAddr;
 
-/// Piso de produto (SESSION_290): abaixo disto o OS sobe em degradado (3B se couber).
-pub const RAM_FLOOR_MB: u64 = 8192;
-/// A partir daqui tenta pack residente 3B+7B+experts (cabe-tudo).
-pub const RAM_FULL_PACK_MB: u64 = 16384;
-/// Bitmap: 2MiB × 8 × 4KiB = 64GiB. Sem teto de política — só o array.
+/// Bitmap: 2MiB × 8 × 4KiB = 64GiB de endereçamento PMM (limite do array, não SKU).
 /// O struct vive no static GLOBAL_ALLOCATOR (não na stack do boot).
 pub const BITMAP_SIZE: usize = 2 * 1024 * 1024;
 const BITS_PER_BYTE: usize = 8;
@@ -133,13 +129,6 @@ impl BitmapFrameAllocator {
             crate::slog_nano!("MEM", "info", "RAM detectada {} MB; frames gerenciados {} (bitmap {}B cap={}GiB)",
                 ram_mb, self.total_frames, BITMAP_SIZE,
                 (BITMAP_SIZE as u64) * 8 * 4096 / (1024 * 1024 * 1024));
-            if ram_mb < RAM_FLOOR_MB {
-                crate::slog_nano!("MEM", "warn", "RAM {}MB < piso {}MB — degradado (Daily 3B; sem pack 7B)",
-                    ram_mb, RAM_FLOOR_MB);
-            } else if ram_mb >= RAM_FULL_PACK_MB {
-                crate::slog_nano!("MEM", "ok", "RAM {}MB ≥ {}MB — FullPack residente se os blobs couberem",
-                    ram_mb, RAM_FULL_PACK_MB);
-            }
         }
     }
 
@@ -465,19 +454,16 @@ impl FrameDeallocator<Size4KiB> for BitmapFrameAllocator {
     }
 }
 
-/// Heap budget AIOS: 75% da RAM, reserva 2GB p/ kernel/FB/DMA se ≥ piso.
-/// Sem teto 1536MB (SESSION_287 era QEMU; metal 16GB+ precisa do resto).
+/// Heap = min(75% RAM, RAM − 12.5% kernel/FB/DMA). Frações medidas, sem SKU 8/16GB.
 pub fn heap_budget_mb(ram_mb: u64) -> usize {
     if ram_mb == 0 {
         return 512;
     }
-    let pct = ram_mb.saturating_mul(3) / 4;
-    if ram_mb < RAM_FLOOR_MB {
-        pct.clamp(256, ram_mb.saturating_sub(128).max(256)) as usize
-    } else {
-        let keep = 2048u64;
-        pct.min(ram_mb.saturating_sub(keep)).max(512) as usize
-    }
+    let pct75 = ram_mb.saturating_mul(3) / 4;
+    let kernel_keep = (ram_mb / 8).max(128);
+    pct75
+        .min(ram_mb.saturating_sub(kernel_keep))
+        .max(256) as usize
 }
 
 pub fn with_pmm<F, R>(f: F) -> R

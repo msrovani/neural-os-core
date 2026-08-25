@@ -1,5 +1,5 @@
-﻿# STATE — neural-os-core v1.9.99-s290 — Falcon3 3B daily / 7B FullPack + piso 8GB
-#   SESSION_290: RAM_FLOOR=8GB, FULL_PACK=16GB, PMM bitmap 64GiB no static, heap_budget 75%-2GB sem cap 1536, llm_boot_plan no FAT. HITL metal pendente.
+﻿# STATE — neural-os-core v1.9.99-s291 — Falcon3 7B alvo + AirLLM
+#   SESSION_291: sem SKU 8/16GB; fit + GGUF streaming. SESSION_290 PMM 64GiB permanece.
 #   SESSION_289: slog sev + PHASE 0–8 + BOOT SCORE + HUD produto. IDEA #539. Residual: parse no serial QEMU real.
 #   SESSION_288: Trinity auditoria 15 ADRs/52 ideias → 7 kind LOADED (2 wired HWEXPRT/RUSTCDR, 4 keyword→Generator), HEALTH I5 honesto; F1 ModelHeader hidden3072 28L 12H kv4 23040 vocab131080 + auto_arena 50% RAM [512MB,4GB] + slot_footprint dinâmico; P0 ROUTER.BITNET 25.8KB ver6 vocab99 hidden64 n7 93.5% (202 curadas, 84.8% nonzero) + mkfat32 alias dedup PRO.V6/FALCON3.V6; P1 global_arena wrappers + hermes classify_with_trace + AutoLearn replay R3; P2 clone_with_noise fix ternário strided + Int8Router x*127; P3 docs honestidade; PRO.v6 1.86GB (1864557403 B) header 0xBE11BE11 ver6. 0 erros.
 #   SESSION_287: Budget Cap Heap + QEMU 4-core display — HEAP_BUDGET_MB 1536 cap (OOM 2453→768MB eliminado), virtio_gpu stale fix, Falcon3 lm_head fallback. TCG 6G 4c 7/8 phases, HW Expert v6 loaded, TTS greeting.

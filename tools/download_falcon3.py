@@ -17,6 +17,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = ROOT / "target" / "falcon3"
 
 REPOS = {
+    "1b": "tiiuae/Falcon3-1B-Instruct-1.58bit",
+    "3b": "tiiuae/Falcon3-3B-Instruct-1.58bit",
+    "7b": "tiiuae/Falcon3-7B-Instruct-1.58bit",
+    "10b": "tiiuae/Falcon3-10B-Instruct-1.58bit",
     "base": "tiiuae/Falcon3-3B-Base",
     "1.58bit": "tiiuae/Falcon3-3B-Instruct-1.58bit",
     "instruct": "tiiuae/Falcon3-3B-Instruct",
@@ -32,8 +36,9 @@ LICENSE_NOTE = """\
 
 def main():
     ap = argparse.ArgumentParser(description="Baixa Falcon3 3B via huggingface_hub")
-    ap.add_argument("--variant", default="base", choices=["base", "1.58bit", "instruct", "1_58bit", "158"],
-                    help="variante HF (default base)")
+    ap.add_argument("--variant", default="7b",
+                    choices=["1b", "3b", "7b", "10b", "base", "1.58bit", "instruct", "1_58bit", "158"],
+                    help="Falcon3 size (default 7b = alvo Neural OS)")
     ap.add_argument("--output", type=Path, default=DEFAULT_OUT, help="dir destino (target/falcon3)")
     ap.add_argument("--revision", default="main", help="branch/revision HF")
     ap.add_argument("--token", default=None, help="HF token se repo gated (ou env HF_TOKEN)")

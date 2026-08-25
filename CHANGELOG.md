@@ -1,5 +1,11 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s291] - 2026-08-25 — Falcon3 7B alvo + AirLLM/GGUF (sem SKU)
+
+- Escada **1B / 3B / 7B (goal) / 10B**. Residente se `needs_airllm_at` for false; senão GGUF `StreamingModel`.
+- FAT: `falcon3_boot_names()` (PRO primeiro). Hub não aborta GeneratorPro.
+- `download_falcon3.py --variant 7b|1b|3b|10b`.
+
 ## [1.9.99-s290] - 2026-08-25 — Falcon3 3B daily / 7B FullPack (piso 8GB)
 
 **LLM auto-adaptativo à RAM (sem teto de política)**

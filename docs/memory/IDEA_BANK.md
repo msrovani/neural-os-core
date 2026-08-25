@@ -75,7 +75,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#536** KernelPack W2A8 via cuda-oxide/kaio (PTX em Rust puro, offline) | ADR-0057 WS-D + ADR-0048 | ⏳ Layer S | SESSION_274: cuda-oxide (NVlabs, rustc→PTX) e kaio (PTX zero-dep) geram o kernel W2A8 no HOST; bare-metal continua QMD próprio + pack assinado + golden GTX 1050. Nenhuma crate roda compute no_std. |
 | **#537** MHI tier0 real: Dram→Vram via CE no mhi_tick | ADR-0087 F4b/F5 | ✅ implementado (HW-gated) | SESSION_274: `register_tier0_copier` + `try_tier0_promote` (dados + rollback CoW); hook só com canário CE golden; QEMU = metadata/AWAITING inalterado. Falta evidência HW real (GTX 1050). |
 | **#538** Backlog unificado K³CHJ por custo e anel | ADR-0100 | 🟡 fazendo | SESSION_282: filtra 0077–0089; ondas 0–10; TODOs T-001–T-075. Lacuna 0090–0099 (exc. **#539**/0092). Não substitui ADRs temáticas. |
-| **#540** Falcon3 3B daily / 7B Pro + piso RAM 8GB / FullPack 16GB | SESSION_290 | ✅ implementado | Auto `llm_boot_plan`; sem teto de heap; bitmap 64GiB. Aceite metal pendente. |
+| **#540** Falcon3 7B alvo; 1B/3B/10B por fit + AirLLM/GGUF | SESSION_291 | ✅ | Sem SKU 8/16GB. `llm_boot_plan` + `needs_airllm_at`. |
 | **#539** Observabilidade de boot (dmesg / 3 canais / placar) | **ADR-0092** | 🟡 fazendo | O0–O5 no código 2026-08-24. Serial QEMU de aceite + parse_boot_score no log real ainda. |
 
 | **#479** TLS 1.3 via embedded-tls no neural-os-core | ADR-0062 P1 / SESSION_157–158 | ✅ MVP (residual CertVerify/FAT) |

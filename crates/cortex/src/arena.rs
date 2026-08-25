@@ -22,13 +22,9 @@ pub fn auto_arena_size() -> usize {
     if ram_mb == 0 {
         return 256 * 1024 * 1024;
     }
+    // T+0: 12.5% da RAM, teto 256MB = limite do map_page no boot (não SKU).
     let size = (ram_mb / 8) * 1024 * 1024;
-    let cap = if ram_mb as u64 >= k_nano::memory::RAM_FULL_PACK_MB {
-        1024 * 1024 * 1024
-    } else {
-        256 * 1024 * 1024
-    };
-    size.clamp(64 * 1024 * 1024, cap)
+    size.clamp(64 * 1024 * 1024, 256 * 1024 * 1024)
 }
 
 /// Bump allocator O(1) alloc / O(1) reset — zero fragmentação.

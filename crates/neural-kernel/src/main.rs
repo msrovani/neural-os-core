@@ -1612,8 +1612,8 @@ pub(crate) fn kernel_boot(
     let heap_budget = k_nano::memory::heap_budget_mb(detected_ram_mb);
     allocator::resize_bump_heap(heap_budget.min(512));
     k_nano::allocator::set_heap_budget_mb(heap_budget);
-    k_nano::slog_bin!("HEAP", "AIOS", "heap piso=512MB RAM={}MB budget={}MB floor={} fullpack={}",
-        detected_ram_mb, heap_budget, k_nano::memory::RAM_FLOOR_MB, k_nano::memory::RAM_FULL_PACK_MB);
+    k_nano::slog_bin!("HEAP", "AIOS", "heap piso_t0=512MB RAM={}MB budget={}MB (75%-keep)",
+        detected_ram_mb, heap_budget);
     // TALC init — APÓS init_global_allocator (alloc_physical_frame disponível)
     allocator::talc_init_post_memory().expect("talc post-init failed");
 
@@ -3216,8 +3216,9 @@ pub(crate) fn kernel_boot(
                         };
                         let ram_now = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
                         let llm_plan = cortex_crate::model_fit::llm_boot_plan(ram_now);
-                        k_nano::slog_nano!("LLM", "AIOS", "plan={} ram={}MB max_res={}MB pro={}",
-                            llm_plan.as_str(), ram_now, llm_plan.max_resident_mb, llm_plan.load_pro_7b_resident);
+                        k_nano::slog_nano!("LLM", "AIOS", "plan={} ram={}MB max_res={}MB 7b_res={} 7b_air={}",
+                            llm_plan.as_str(), ram_now, llm_plan.max_resident_mb,
+                            llm_plan.load_pro_7b_resident, llm_plan.try_7b_airllm);
                         const PIO_QEMU: usize = 8 * 1024 * 1024;
                         let pio_cap = if qemu_loader_2b
                             || k_nano::platform_probe::hypervisor().is_sandbox()
@@ -3226,29 +3227,63 @@ pub(crate) fn kernel_boot(
                         } else {
                             (llm_plan.max_resident_mb as usize).saturating_mul(1024 * 1024)
                         };
-                        // Daily = Falcon3 3B; PRO.v6 só no FullPack (≥16GB) ou se 3B ausente.
-                        let llm_names: &[&str] = if llm_plan.load_pro_7b_resident {
-                            &[
-                                "FALCON3B.BIN", "BITNET2B.v6", "BITNET2B.BIN", "BITNET13.BIN",
-                                "BITNET850.BIN", "MICRO.BITNET", "LLAMA8B.BIN",
-                                "PRO.v6", "PRO.BIN", "FALCON3.V6",
-                            ]
-                        } else {
-                            &[
-                                "FALCON3B.BIN", "BITNET2B.v6", "BITNET2B.BIN", "BITNET13.BIN",
-                                "BITNET850.BIN", "MICRO.BITNET", "LLAMA8B.BIN",
-                            ]
-                        };
+                        let llm_names = cortex_crate::model_fit::falcon3_boot_names();
+                        let mut pack_used_mb: u64 = 0;
+                        let mut kinds_have: u8 = 0;
                         for name in llm_names {
                             let Some(sz) = fs.lookup_file_size(name) else { continue; };
                             if sz < 1_000_000 && (*name == "LLAMA8B.BIN" || *name == "MICRO.BITNET") {
-                                k_nano::slog_nano!(
-                                    "FAT",
-                                    "info",
-                                    "{} size={}B — stub smoke, skip Active chat",
-                                    name,
-                                    sz
-                                );
+                                continue;
+                            }
+                            let kind = cortex_crate::model_fit::falcon3_kind_of_name(name);
+                            if let Some(k) = kind {
+                                if kinds_have & cortex_crate::model_fit::kind_mask_bit(k) != 0 {
+                                    continue;
+                                }
+                            } else if kinds_have != 0 {
+                                continue;
+                            }
+                            let file_mb = (sz / (1024 * 1024)) as u64;
+                            if model_loaded {
+                                let Some(k) = kind else { continue };
+                                if sz > pio_cap
+                                    || !cortex_crate::model_fit::pack_resident_ok(
+                                        ram_now, pack_used_mb, file_mb,
+                                    )
+                                {
+                                    k_nano::slog_nano!(
+                                        "LLM",
+                                        "AIOS",
+                                        "pack skip {} (budget used={}MB file={}MB)",
+                                        name,
+                                        pack_used_mb,
+                                        file_mb
+                                    );
+                                    continue;
+                                }
+                                k_nano::slog_nano!("FAT", "info", "pack extra {} ({}KB)", name, sz / 1024);
+                                if let Some(fat_data) = fs.read_file(name) {
+                                    let llm_v6 = cortex_crate::model::load_model_v6(&fat_data).and_then(|v| match v {
+                                        cortex_crate::model::ModelView::Llm(m) => Some(m),
+                                        _ => None,
+                                    });
+                                    if let Some(m) = llm_v6.or_else(|| crate::cortex::load_model(&fat_data)) {
+                                        let slot = cortex_crate::model_fit::hub_slot_for_kind(k);
+                                        crate::cortex::register_model_slot(slot, alloc::boxed::Box::new(m));
+                                        pack_used_mb = pack_used_mb.saturating_add(
+                                            cortex_crate::model_fit::resident_footprint_mb(file_mb),
+                                        );
+                                        kinds_have |= cortex_crate::model_fit::kind_mask_bit(k);
+                                        k_nano::slog_nano!(
+                                            "LLM",
+                                            "AIOS",
+                                            "pack LOADED {} slot={} used={}MB",
+                                            name,
+                                            slot.name(),
+                                            pack_used_mb
+                                        );
+                                    }
+                                }
                                 continue;
                             }
                             if sz > pio_cap {
@@ -3256,20 +3291,20 @@ pub(crate) fn kernel_boot(
                                     name,
                                     sz / 1024,
                                     pio_cap / (1024 * 1024));
-                                let fat_mb = sz / (1024 * 1024);
-                                let params_est = (fat_mb as u64) * 8_000_000;
-                                if cortex_crate::model_fit::needs_airllm(params_est, fat_mb as u64) {
+                                if let Ok(sm) = crate::gguf_streaming::StreamingModel::from_fat(name) {
+                                    cortex_crate::cortex::set_streaming_model(
+                                        alloc::boxed::Box::new(sm));
                                     k_nano::slog_nano!("FAT", "info",
-                                        "AirLLM: {} ({}MB) > PIO cap - activating streaming", name, fat_mb);
-                                    if let Ok(sm) = crate::gguf_streaming::StreamingModel::from_fat(name) {
-                                        cortex_crate::cortex::set_streaming_model(
-                                            alloc::boxed::Box::new(sm));
-                                        k_nano::slog_nano!("FAT", "info",
-                                            "AirLLM: streaming registered for {} (layers from disk)", name);
-                                        model_loaded = true;
-                                        break;
+                                        "AirLLM/GGUF: streaming {} (layer-wise)", name);
+                                    model_loaded = true;
+                                    pack_used_mb = pack_used_mb.saturating_add(256);
+                                    if let Some(k) = kind {
+                                        kinds_have |= cortex_crate::model_fit::kind_mask_bit(k);
                                     }
+                                    continue;
                                 }
+                                k_nano::slog_nano!("FAT", "info",
+                                    "{} grande e não-GGUF — próximo candidato (v6 AirLLM = residual)", name);
                                 continue;
                             }
                             if sz > PIO_QEMU {
@@ -3285,10 +3320,20 @@ pub(crate) fn kernel_boot(
                                 });
                                 if let Some(big_model) = llm_v6.or_else(|| crate::cortex::load_model(&fat_data)) {
                                     crate::cortex::set_model(alloc::boxed::Box::new(big_model));
+                                    if matches!(kind, Some(cortex_crate::model_fit::Falcon3Kind::Goal7B)) {
+                                        crate::model_hub::mark_pro_alias(true);
+                                    }
                                     k_nano::slog_nano!("FAT", "info", "LLM LOADED file={} size={}KB — CortexAgent upgraded.", name, fat_data.len() / 1024);
                                     crate::boot_logger::log("BOOT: FAT BitNet model loaded");
                                     model_loaded = true;
-                                    break;
+                                    pack_used_mb = pack_used_mb.saturating_add(
+                                        cortex_crate::model_fit::resident_footprint_mb(file_mb),
+                                    );
+                                    if let Some(k) = kind {
+                                        kinds_have |= cortex_crate::model_fit::kind_mask_bit(k);
+                                    } else {
+                                        kinds_have |= 0x80;
+                                    }
                                 } else {
                                     k_nano::slog_nano!("FAT", "info", "{} presente mas load_model FAILED", name);
                                     crate::load_status::set(
@@ -3310,27 +3355,59 @@ pub(crate) fn kernel_boot(
                     let ram_now = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
                     let llm_plan = cortex_crate::model_fit::llm_boot_plan(ram_now);
                     let pio_cap = (llm_plan.max_resident_mb as usize).saturating_mul(1024 * 1024);
-                    let llm_names: &[&str] = if llm_plan.load_pro_7b_resident {
-                        &[
-                            "FALCON3B.BIN", "BITNET2B.v6", "BITNET2B.BIN", "BITNET13.BIN",
-                            "BITNET850.BIN", "MICRO.BITNET", "LLAMA8B.BIN",
-                            "PRO.v6", "PRO.BIN",
-                        ]
-                    } else {
-                        &[
-                            "FALCON3B.BIN", "BITNET2B.v6", "BITNET2B.BIN", "BITNET13.BIN",
-                            "BITNET850.BIN", "MICRO.BITNET", "LLAMA8B.BIN",
-                        ]
-                    };
+                    let llm_names = cortex_crate::model_fit::falcon3_boot_names();
+                    let mut pack_used_mb: u64 = 0;
+                    let mut kinds_have: u8 = 0;
                     for name in llm_names {
                         let Some(fat_data) = read_file_from_dev(msc, name) else { continue; };
                         if fat_data.len() < 1_000_000 && (*name == "LLAMA8B.BIN" || *name == "MICRO.BITNET") {
                             continue;
                         }
+                        let kind = cortex_crate::model_fit::falcon3_kind_of_name(name);
+                        if let Some(k) = kind {
+                            if kinds_have & cortex_crate::model_fit::kind_mask_bit(k) != 0 {
+                                continue;
+                            }
+                        } else if kinds_have != 0 {
+                            continue;
+                        }
+                        let file_mb = (fat_data.len() / (1024 * 1024)) as u64;
+                        if model_loaded {
+                            let Some(k) = kind else { continue };
+                            if fat_data.len() > pio_cap
+                                || !cortex_crate::model_fit::pack_resident_ok(ram_now, pack_used_mb, file_mb)
+                            {
+                                continue;
+                            }
+                            let llm_v6 = cortex_crate::model::load_model_v6(&fat_data).and_then(|v| match v {
+                                cortex_crate::model::ModelView::Llm(m) => Some(m),
+                                _ => None,
+                            });
+                            if let Some(m) = llm_v6.or_else(|| crate::cortex::load_model(&fat_data)) {
+                                let slot = cortex_crate::model_fit::hub_slot_for_kind(k);
+                                crate::cortex::register_model_slot(slot, alloc::boxed::Box::new(m));
+                                pack_used_mb = pack_used_mb.saturating_add(
+                                    cortex_crate::model_fit::resident_footprint_mb(file_mb),
+                                );
+                                kinds_have |= cortex_crate::model_fit::kind_mask_bit(k);
+                            }
+                            continue;
+                        }
                         if fat_data.len() > pio_cap {
-                            k_nano::slog_nano!("FAT", "info", "USB {} PRESENT size={}KB — skip PIO",
+                            k_nano::slog_nano!("FAT", "info", "USB {} PRESENT size={}KB — skip full PIO",
                                 name,
                                 fat_data.len() / 1024);
+                            if let Ok(sm) = crate::gguf_streaming::StreamingModel::from_fat(name) {
+                                cortex_crate::cortex::set_streaming_model(
+                                    alloc::boxed::Box::new(sm));
+                                k_nano::slog_nano!("FAT", "info",
+                                    "AirLLM USB: streaming {}", name);
+                                model_loaded = true;
+                                pack_used_mb = pack_used_mb.saturating_add(256);
+                                if let Some(k) = kind {
+                                    kinds_have |= cortex_crate::model_fit::kind_mask_bit(k);
+                                }
+                            }
                             continue;
                         }
                         k_nano::slog_nano!("FAT", "info", "USB lendo {} ({}KB) — candidato LLM...",
@@ -3347,7 +3424,12 @@ pub(crate) fn kernel_boot(
                                 fat_data.len() / 1024);
                             crate::boot_logger::log("BOOT: FAT BitNet model loaded (USB)");
                             model_loaded = true;
-                            break;
+                            pack_used_mb = pack_used_mb.saturating_add(
+                                cortex_crate::model_fit::resident_footprint_mb(file_mb),
+                            );
+                            if let Some(k) = kind {
+                                kinds_have |= cortex_crate::model_fit::kind_mask_bit(k);
+                            }
                         }
                     }
                 }
@@ -3740,9 +3822,8 @@ pub(crate) fn kernel_boot(
             let ram_now = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
             let llm_plan = cortex_crate::model_fit::llm_boot_plan(ram_now);
             if slot == crate::model_hub::ModelSlot::GeneratorPro && !llm_plan.load_pro_7b_resident {
-                k_nano::slog_bin!("MODEL", "info", "hub skip generator_pro — plan={} (7B só FullPack ≥16GB)",
+                k_nano::slog_bin!("MODEL", "info", "hub generator_pro via AirLLM/GGUF plan={}",
                     llm_plan.as_str());
-                return;
             }
             let qemu_hv = qemu_loader_2b || k_nano::platform_probe::hypervisor().is_sandbox();
             let pio_hw = (llm_plan.max_resident_mb as usize).saturating_mul(1024 * 1024);

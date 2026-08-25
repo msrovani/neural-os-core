@@ -80,26 +80,29 @@ pub fn estimate_kv_mb(params: u64) -> u64 {
 }
 
 pub fn estimate_heap_mb(params: u64) -> u64 {
+    let detected = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    estimate_heap_mb_at(params, detected)
+}
+
+pub fn estimate_heap_mb_at(params: u64, ram_mb: u64) -> u64 {
     let model_gb = params as f64 / 1_000_000_000.0;
     let heap = (model_gb * 100.0) as u64;
-    // AIOS na veia (premissa 4): clamp derivado da RAM física detectada, não
-    // hardcoded (128..2048). Heap cabe se ≤ 75% da RAM usável (mesma política
-    // do boot resize_bump_heap) — acima disso o modelo requer AirLLM.
-    let detected = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) as u64;
-    let ram_cap = k_nano::memory::heap_budget_mb(detected) as u64;
+    let ram_cap = k_nano::memory::heap_budget_mb(ram_mb) as u64;
     heap.clamp(128, ram_cap.max(128))
 }
 
-/// AIOS: decide se o modelo cabe em RAM residente ou precisa de AirLLM
-/// (layer streaming — carregar 1 layer por vez do storage). Gate honesto:
-/// modelo + heap estimado > 75% da RAM física ⇒ AirLLM.
+/// AIOS: residente vs AirLLM (GGUF layer-wise). Usa RAM passada (testável).
 pub fn needs_airllm(params: u64, model_file_mb: u64) -> bool {
     let ram = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) as u64;
-    if ram == 0 {
-        return false; // sem detecção → assume residente (comportamento legado)
+    needs_airllm_at(ram, params, model_file_mb)
+}
+
+pub fn needs_airllm_at(ram_mb: u64, params: u64, model_file_mb: u64) -> bool {
+    if ram_mb == 0 {
+        return false;
     }
-    let budget = k_nano::memory::heap_budget_mb(ram) as u64;
-    let need = model_file_mb.saturating_add(estimate_heap_mb(params));
+    let budget = k_nano::memory::heap_budget_mb(ram_mb) as u64;
+    let need = model_file_mb.saturating_add(estimate_heap_mb_at(params, ram_mb));
     need > budget
 }
 
@@ -226,57 +229,177 @@ pub fn slot_too_tight(slot_name: &str) -> bool {
     }
 }
 
-/// Plano de boot LLM (SESSION_290): 3B daily, 7B Pro; FullPack se RAM ≥ 16GB.
+/// Família Falcon3 Instruct 1.58bit (tiiuae): 1B / 3B / 7B (alvo) / 10B.
+/// Carga: residente se couber; senão AirLLM/GGUF (ADR-0046). Sem SKU 8/16GB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Falcon3Kind {
+    Tiny1B,
+    Daily3B,
+    Goal7B,
+    Large10B,
+}
+
+impl Falcon3Kind {
+    pub fn params(self) -> u64 {
+        match self {
+            Self::Tiny1B => 1_000_000_000,
+            Self::Daily3B => 3_000_000_000,
+            Self::Goal7B => 7_000_000_000,
+            Self::Large10B => 10_000_000_000,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tiny1B => "falcon3-1b",
+            Self::Daily3B => "falcon3-3b",
+            Self::Goal7B => "falcon3-7b",
+            Self::Large10B => "falcon3-10b",
+        }
+    }
+
+    pub fn file_mb_hint(self) -> u64 {
+        estimate_bitnet_mb(self.params()).max(1)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LlmTier {
-    BelowFloor,
+    Tight,
     Daily,
-    FullPack,
+    Goal,
+    Large,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct LlmBootPlan {
     pub tier: LlmTier,
+    pub pick: Falcon3Kind,
     pub load_daily_3b: bool,
     pub load_pro_7b_resident: bool,
+    pub try_7b_airllm: bool,
+    pub try_10b: bool,
     pub max_resident_mb: u64,
 }
 
 impl LlmBootPlan {
     pub fn as_str(self) -> &'static str {
-        match self.tier {
-            LlmTier::BelowFloor => "degraded-3b",
-            LlmTier::Daily => "daily-3b",
-            LlmTier::FullPack => "fullpack-3b+7b",
+        match (self.load_pro_7b_resident, self.try_7b_airllm, self.pick) {
+            (true, _, _) => "resident-7b",
+            (false, true, _) => "airllm-7b",
+            (_, _, Falcon3Kind::Large10B) => "resident-10b",
+            (_, _, Falcon3Kind::Daily3B) => "resident-3b",
+            (_, _, Falcon3Kind::Tiny1B) => "resident-1b",
+            _ => "falcon3-fit",
         }
     }
 }
 
-pub fn llm_boot_plan(ram_mb: u64) -> LlmBootPlan {
-    use k_nano::memory::{RAM_FLOOR_MB, RAM_FULL_PACK_MB};
+/// Ordem FAT: 7B primeiro (alvo), GGUF p/ AirLLM, depois 10B / 3B / 1B.
+pub fn falcon3_boot_names() -> &'static [&'static str] {
+    &[
+        "PRO.v6", "PRO.BIN", "FALCON7B.v6", "FALCON7B.BIN",
+        "PRO.GGUF", "FALCN7B.GGUF",
+        "FALCON10.v6", "FALCON10.BIN", "F10B.v6", "FALCN10.GGUF",
+        "FALCON3B.BIN", "FALCON3.V6", "FALCN3B.GGUF",
+        "FALCON1B.BIN", "F1B.v6", "FALCN1B.GGUF",
+        "BITNET2B.v6", "BITNET2B.BIN", "BITNET13.BIN", "BITNET850.BIN",
+        "MICRO.BITNET", "LLAMA8B.BIN",
+    ]
+}
+
+pub fn falcon3_kind_of_name(name: &str) -> Option<Falcon3Kind> {
+    let u = name.to_ascii_uppercase();
+    if u.contains("10B") || u.contains("FALCON10") || u.contains("F10B") || u.contains("FALCN10") {
+        return Some(Falcon3Kind::Large10B);
+    }
+    if u.contains("PRO") || u.contains("7B") || u.contains("FALCON7") || u.contains("FALCN7") {
+        return Some(Falcon3Kind::Goal7B);
+    }
+    if u.contains("1B") || u.contains("F1B") || u.contains("FALCN1") {
+        return Some(Falcon3Kind::Tiny1B);
+    }
+    if u.contains("3B") || u.contains("FALCON3") || u.contains("FALCN3") {
+        return Some(Falcon3Kind::Daily3B);
+    }
+    None
+}
+
+pub fn kind_mask_bit(k: Falcon3Kind) -> u8 {
+    match k {
+        Falcon3Kind::Tiny1B => 1,
+        Falcon3Kind::Daily3B => 2,
+        Falcon3Kind::Goal7B => 4,
+        Falcon3Kind::Large10B => 8,
+    }
+}
+
+pub fn resident_footprint_mb(file_mb: u64) -> u64 {
+    file_mb.saturating_add((file_mb / 6).max(8)).saturating_add(128)
+}
+
+/// Ainda cabe mais um blob residente no budget (pack, não “só o primeiro”).
+pub fn pack_resident_ok(ram_mb: u64, already_mb: u64, file_mb: u64) -> bool {
     let budget = k_nano::memory::heap_budget_mb(ram_mb) as u64;
-    let max_resident_mb = budget.saturating_sub(256).max(64);
-    if ram_mb < RAM_FLOOR_MB {
-        LlmBootPlan {
-            tier: LlmTier::BelowFloor,
-            load_daily_3b: true,
-            load_pro_7b_resident: false,
-            max_resident_mb: max_resident_mb.min(1100),
-        }
-    } else if ram_mb < RAM_FULL_PACK_MB {
-        LlmBootPlan {
-            tier: LlmTier::Daily,
-            load_daily_3b: true,
-            load_pro_7b_resident: false,
-            max_resident_mb,
-        }
+    let need = already_mb.saturating_add(resident_footprint_mb(file_mb));
+    need <= budget
+}
+
+pub fn hub_slot_for_kind(k: Falcon3Kind) -> crate::model_hub::ModelSlot {
+    match k {
+        Falcon3Kind::Goal7B | Falcon3Kind::Large10B => crate::model_hub::ModelSlot::GeneratorPro,
+        Falcon3Kind::Daily3B => crate::model_hub::ModelSlot::Agent,
+        Falcon3Kind::Tiny1B => crate::model_hub::ModelSlot::Learner,
+    }
+}
+
+pub fn llm_boot_plan(ram_mb: u64) -> LlmBootPlan {
+    let budget = k_nano::memory::heap_budget_mb(ram_mb) as u64;
+    let slack = (budget / 16).max(64);
+    let max_resident_mb = budget.saturating_sub(slack).max(64);
+    let mb7 = Falcon3Kind::Goal7B.file_mb_hint();
+    let air7 = needs_airllm_at(ram_mb, Falcon3Kind::Goal7B.params(), mb7);
+    let res7 = !air7 && ram_mb > 0;
+    let res10 = !needs_airllm_at(
+        ram_mb,
+        Falcon3Kind::Large10B.params(),
+        Falcon3Kind::Large10B.file_mb_hint(),
+    ) && ram_mb > 0;
+    let res3 = !needs_airllm_at(
+        ram_mb,
+        Falcon3Kind::Daily3B.params(),
+        Falcon3Kind::Daily3B.file_mb_hint(),
+    ) && ram_mb > 0;
+    let pick = if res10 && res7 {
+        Falcon3Kind::Goal7B
+    } else if res7 {
+        Falcon3Kind::Goal7B
+    } else if res3 {
+        Falcon3Kind::Daily3B
     } else {
-        LlmBootPlan {
-            tier: LlmTier::FullPack,
-            load_daily_3b: true,
-            load_pro_7b_resident: true,
-            max_resident_mb,
-        }
+        Falcon3Kind::Tiny1B
+    };
+    let tier = if res7 {
+        LlmTier::Goal
+    } else if res10 {
+        LlmTier::Large
+    } else if res3 {
+        LlmTier::Daily
+    } else {
+        LlmTier::Tight
+    };
+    LlmBootPlan {
+        tier,
+        pick,
+        load_daily_3b: res3 || !res7,
+        load_pro_7b_resident: res7,
+        try_7b_airllm: air7,
+        try_10b: res10 || needs_airllm_at(
+            ram_mb,
+            Falcon3Kind::Large10B.params(),
+            Falcon3Kind::Large10B.file_mb_hint(),
+        ),
+        max_resident_mb,
     }
 }
 
@@ -285,22 +408,32 @@ mod ram_policy_tests {
     use super::*;
 
     #[test]
-    fn llm_plan_floor_daily_fullpack() {
-        let d = llm_boot_plan(4096);
-        assert_eq!(d.tier, LlmTier::BelowFloor);
+    fn llm_plan_7b_airllm_when_tight_resident_when_room() {
+        let d = llm_boot_plan(2048);
         assert!(!d.load_pro_7b_resident);
-        let m = llm_boot_plan(8192);
-        assert_eq!(m.tier, LlmTier::Daily);
-        assert!(!m.load_pro_7b_resident);
-        let f = llm_boot_plan(16384);
-        assert_eq!(f.tier, LlmTier::FullPack);
+        assert!(d.try_7b_airllm);
+        let f = llm_boot_plan(32768);
         assert!(f.load_pro_7b_resident);
+        assert!(!f.try_7b_airllm);
         assert!(f.max_resident_mb > 2000);
     }
 
     #[test]
-    fn heap_budget_no_1536_cap_on_16g() {
+    fn heap_budget_scales_with_ram() {
         let b = k_nano::memory::heap_budget_mb(16384);
         assert!(b > 1536, "16GB deve orçar heap >> 1536MB, got {b}");
+    }
+
+    #[test]
+    fn pack_ok_on_32g_two_models() {
+        assert!(pack_resident_ok(32768, 2000, 989));
+        assert!(!pack_resident_ok(2048, 1500, 1750));
+    }
+
+    #[test]
+    fn kind_from_fat_name() {
+        assert_eq!(falcon3_kind_of_name("PRO.v6"), Some(Falcon3Kind::Goal7B));
+        assert_eq!(falcon3_kind_of_name("FALCON3B.BIN"), Some(Falcon3Kind::Daily3B));
+        assert_eq!(falcon3_kind_of_name("FALCON10.v6"), Some(Falcon3Kind::Large10B));
     }
 }

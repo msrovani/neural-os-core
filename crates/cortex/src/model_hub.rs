@@ -366,22 +366,28 @@ pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
         ModelSlot::Reranker => &["RERANKER.v6", "RERANKER.BIN", "RERANK.BITNET", "RERANK.BIN"],
         ModelSlot::Vision => &["VISION.v6", "VISION.BIN", "SIGLIP.BIN", "VIT.BIN"],
         ModelSlot::GeneratorPro => &[
-            "PRO.v6",       // Falcon3-7B-Instruct-1.58bit v6 (~1.74 GB) — PRO canônico
-            "PRO.BIN",      // Falcon3-7B-Instruct-1.58bit legado
-            "FALCON7B.v6",  // alias alternativo
+            "PRO.v6",
+            "PRO.BIN",
+            "FALCON7B.v6",
             "FALCON7B.BIN",
+            "PRO.GGUF",
+            "FALCN7B.GGUF",
+            "FALCON10.v6",
+            "FALCON10.BIN",
+            "FALCN10.GGUF",
             "BITNET3B.BIN",
-            "BITN3B.BIN",
             "LLAMA8B.BIN",
-            "BITNET2B.BIN",
         ],
         ModelSlot::RustCoder => &["RUSTCDR3.v6", "RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"],
         ModelSlot::HwExpert => &["HWEXPRT.v6", "HWEXPRT.BIN", "HWEXPERT.BIN", "HWEXPRT4.BIN", "HWEXPRT4.bin"],
         ModelSlot::Learner => &["LEARNER.v6", "LEARNER.BIN", "QWEEN05.BIN", "QWEN05B.BIN"],
         ModelSlot::Agent => &["FALCON3B.BIN", "FALCN3B.GGUF", "AGENT.v6", "AGENT.BIN", "QWEN3B.BIN", "QWEN.BIN"],
         ModelSlot::Active => &[
-            "FALCON3B.BIN",   // Falcon3-3B-Instruct-1.58bit (tiiuae) — LLM geral padrão
+            "FALCON3B.BIN",
+            "FALCON3.V6",
             "FALCN3B.GGUF",
+            "FALCON1B.BIN",
+            "F1B.v6",
             "BITNET2B.v6",
             "BITNET2B.BIN",
             "BITNET13.BIN",
