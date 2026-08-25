@@ -93,6 +93,7 @@ pub use hermes_crate::{
     fs, vfs, neural_fs,
 };
 pub use k_ai::{self_heal, trust};
+pub use hermes_crate::globals::TRUST_CACHE;
 pub use k_nano::globals::EVENT_BUS;
 pub use k_nano::globals::LATENT_BUS;
 // Macros re-exported from k_nano (drift cleanup — bin delegates serial to k_nano)
@@ -609,8 +610,6 @@ lazy_static! {
     // P001: SKILL_REGISTRY canônico agora em k_nano::globals (cross-crate).
     // Skills builtin registrados via register_builtin_skills() no boot.
 
-    static ref TRUST_CACHE: ticket_lock::TicketLock<trust::TrustCache> = ticket_lock::TicketLock::new(trust::TrustCache::new());
-
     static ref SYSTEM_ARCH: spin::Mutex<Option<inventory::SystemArchitecture>> = spin::Mutex::new(None);
 
     static ref MEMORY_HIERARCHY: spin::Mutex<Option<mhi::MemoryHierarchy>> = spin::Mutex::new(None);
@@ -863,8 +862,8 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     // SESSÃO_260: trace do init_phase — loga cada Oneshot ANTES do tick no
     // ramlog (dump ">>> BOOT.LOG (RAM) <<<" no FB). HW real travou no K51.
     registry.init_trace = Some(|name, round| {
-        if round >= 10_000 {
-            k_nano::slog_bin!("BOOT", "warn", "INIT1 timeout poll {} r={}", name, round);
+        if round <= 3 || round >= 10_000 {
+            k_nano::slog_bin!("BOOT", "trace", "INIT1 r={} poll {}", round, name);
         }
     });
     registry.init_phase();
@@ -4359,7 +4358,7 @@ pub(crate) fn kernel_boot(
     // alocado ANTES da stack, overflow de 2MB esmagava Vec/BTree (#PF CR2=0x18 /
     // index OOB len=0) — visto após self_heal no init_phase (SESSION matriz).
     const SCHED_STACK_SIZE: usize = 8 * 1024 * 1024;
-    const SCHED_STACK_GUARD: usize = 64 * 1024;
+    const SCHED_STACK_GUARD: usize = 256 * 1024;
 
     let (sp, registry): (u64, &'static mut agent_core::AgentRegistry) = {
         let heap_stack = alloc::vec![0u8; SCHED_STACK_SIZE].into_boxed_slice();

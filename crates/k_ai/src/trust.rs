@@ -161,10 +161,14 @@ impl TrustCache {
     }
 
     pub fn is_trusted(&self, token: u64, skill: &str, now: u64) -> bool {
-        let key = &(token, String::from(skill));
-        if self.denylist.contains_key(key) { return false; }
-        if self.global_policy == PolicyState::Enforce && !self.is_exempt(token) { return false; }
-        if let Some(entry) = self.entries.get(key) {
+        let key = (token, String::from(skill));
+        if self.denylist.contains_key(&key) {
+            return false;
+        }
+        if self.global_policy == PolicyState::Enforce && !self.is_exempt(token) {
+            return false;
+        }
+        if let Some(entry) = self.entries.get(&key) {
             if now.saturating_sub(entry.granted_at_ticks) <= entry.ttl_ticks {
                 return entry.state != PolicyState::Enforce;
             }
@@ -248,8 +252,8 @@ impl TrustCache {
     }
 
     pub fn check_path(&self, token: u64, skill: &str, path: &str) -> bool {
-        let key = &(token, String::from(skill));
-        if let Some(entry) = self.entries.get(key) {
+        let key = (token, String::from(skill));
+        if let Some(entry) = self.entries.get(&key) {
             if let Some(ref rule) = entry.path_rule {
                 let allowed = rule.allowed_prefixes.iter().any(|p| path.starts_with(p));
                 if !allowed {

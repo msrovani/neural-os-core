@@ -1807,13 +1807,27 @@ impl Agent for BootSelfHealAgent {
             if !trusted {
                 k_nano::slog_kai!("Gate", "n2", "trust DENY (token,agent,skill)=(1,self_heal,recover) — skip scan");
             } else {
-                let devices = unsafe { k_nano::pci::scan_pci() };
-                let inv = inventory::HardwareInventory::collect(devices, None);
-                let triples = inv.vid_class_triples();
-                let fw_n = inv.fw_gated_devices().len();
-                k_nano::slog_kai!("Gate", "n2", "inventory pci={} fw_gated={} trust=OK",
+                // SESSION_262: sem ATA no metal/QEMU-NoDisk, pci::scan_pci + FAT walk
+                // pode travar ou corromper heap adjacente (BTree panic pós-trust).
+                let has_ata = k_nano::globals::ATA_DRIVER.lock().is_some();
+                let triples = if has_ata {
+                    let devices = unsafe { k_nano::pci::scan_pci() };
+                    let inv = inventory::HardwareInventory::collect(devices, None);
+                    inv.vid_class_triples()
+                } else {
+                    k_nano::slog_kai!("Gate", "n2", "skip PCI rescan (no ATA) — DeviceTree triples");
+                    k_ai::boot_observe::heal_triples_from_tree()
+                };
+                let fw_n = triples
+                    .iter()
+                    .filter(|&&(vid, did, class, subclass)| {
+                        k_ai::self_heal::SelfHeal::device_needs_fw(vid, did, class, subclass)
+                    })
+                    .count();
+                k_nano::slog_kai!("Gate", "n2", "inventory triples={} fw_gated={} trust=OK ata={}",
                     triples.len(),
-                    fw_n);
+                    fw_n,
+                    has_ata);
                 if fw_n == 0 {
                     k_nano::slog_kai!("Gate", "n2", "HEALTH_ISSUE: honest noop (fw_gated=0 — no known VID needs FW)");
                 }
