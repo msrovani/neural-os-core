@@ -10,7 +10,7 @@ use crate::block_dev::BlockDevice;
 
 static FAT32_BPB_LOGGED: AtomicBool = AtomicBool::new(false);
 /// Converte "NAME.EXT" para entrada FAT 8.3 (11 bytes, espaços).
-fn encode_83(name: &str) -> [u8; 11] {
+pub fn encode_83(name: &str) -> [u8; 11] {
     let mut out = [b' '; 11];
     let upper = name.to_ascii_uppercase();
     let (base, ext) = match upper.rsplit_once('.') {
@@ -677,8 +677,13 @@ impl<'a> Fat32Reader<'a> {
                     buf[entry_off+28], buf[entry_off+29],
                     buf[entry_off+30], buf[entry_off+31],
                 ]) as usize;
-                // Cap defensivo: arquivos >64MB via read_file completo nao sao esperados no boot path
-                let file_size = file_size.min(64 * 1024 * 1024);
+                // Não truncar: modelo >256MB precisa AirLLM/range, não Vec mentiroso.
+                const MAX_INLINE: usize = 256 * 1024 * 1024;
+                if file_size > MAX_INLINE {
+                    crate::slog_nano!("FAT", "warn", "{} size={}MB > inline cap — recusa read_file",
+                        name, file_size / (1024 * 1024));
+                    return None;
+                }
                 let start_cluster_lo = u16::from_le_bytes([buf[entry_off+26], buf[entry_off+27]]);
                 let start_cluster_hi = u16::from_le_bytes([buf[entry_off+20], buf[entry_off+21]]);
                 let start_cluster = ((start_cluster_hi as u32) << 16) | start_cluster_lo as u32;

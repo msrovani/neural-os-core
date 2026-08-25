@@ -15,16 +15,20 @@ pub const CORTEX_ARENA_DEFAULT_SIZE: usize = 2 * 1024 * 1024 * 1024;
 
 static ARENA_SIZE_BYTES: AtomicUsize = AtomicUsize::new(CORTEX_ARENA_DEFAULT_SIZE);
 
-/// Auto-size arena based on detected RAM: 50% of RAM, clamped to [512MB, 4GB].
-/// Called at boot after memory detection. Returns the size to use.
+/// Auto-size arena: 12.5% da RAM, clamp [64MB, 256MB] no T+0.
+/// 50%/4GB mapeava ~1M páginas no boot (freeze i5/240H) e comia frames do modelo.
 pub fn auto_arena_size() -> usize {
     let ram_mb = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) as usize;
     if ram_mb == 0 {
-        return CORTEX_ARENA_DEFAULT_SIZE; // RAM not detected yet
+        return 256 * 1024 * 1024;
     }
-    // 50% of RAM for arena, minimum 512 MB, maximum 4 GB
-    let size = (ram_mb / 2) * 1024 * 1024;
-    size.clamp(512 * 1024 * 1024, CORTEX_ARENA_MAX_SIZE)
+    let size = (ram_mb / 8) * 1024 * 1024;
+    let cap = if ram_mb as u64 >= k_nano::memory::RAM_FULL_PACK_MB {
+        1024 * 1024 * 1024
+    } else {
+        256 * 1024 * 1024
+    };
+    size.clamp(64 * 1024 * 1024, cap)
 }
 
 /// Bump allocator O(1) alloc / O(1) reset — zero fragmentação.

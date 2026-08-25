@@ -161,6 +161,11 @@ impl UsbMassStorage {
     }
 
     pub unsafe fn read_sector(&mut self, lba: u64, data: &mut [u8; 512]) -> bool {
+        if self.sector_size != 0 && self.sector_size != 512 {
+            crate::slog_nano!("USB", "warn", "MSC 4Kn sector_size={} — recusa LBA 512 (honest)",
+                self.sector_size);
+            return false;
+        }
         let mut cmd = [0u8; 16];
         cmd[0] = SCSI_READ10;
         cmd[2..6].copy_from_slice(&(lba as u32).to_be_bytes());
@@ -224,7 +229,11 @@ impl UsbMassStorage {
         cmd[1] = 0; // IMMED=0 (return after cache flush completes)
         cmd[2..6].copy_from_slice(&0u32.to_be_bytes()); // LBA=0 (entire device)
         cmd[6] = 0; // reserved
-        cmd[7..10].copy_from_slice(&0u32.to_be_bytes()); // count=0 (all LBAs)
+        // Number of Logical Blocks is 16-bit at bytes 7–8; byte 9 reserved.
+        // copy_from_slice(&u32) em [7..10] (3 bytes) PANIC no flush do BOOT.LOG.
+        cmd[7] = 0;
+        cmd[8] = 0;
+        cmd[9] = 0;
         let mut empty = [0u8; 0];
         self.bot_transfer(&cmd, false, &mut empty)
     }

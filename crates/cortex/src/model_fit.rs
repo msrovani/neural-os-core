@@ -85,11 +85,9 @@ pub fn estimate_heap_mb(params: u64) -> u64 {
     // AIOS na veia (premissa 4): clamp derivado da RAM física detectada, não
     // hardcoded (128..2048). Heap cabe se ≤ 75% da RAM usável (mesma política
     // do boot resize_bump_heap) — acima disso o modelo requer AirLLM.
-    let ram_cap = {
-        let detected = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) as u64;
-        (detected * 3 / 4).clamp(128, 6 * 1024)
-    };
-    heap.clamp(128, ram_cap as u64)
+    let detected = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    let ram_cap = k_nano::memory::heap_budget_mb(detected) as u64;
+    heap.clamp(128, ram_cap.max(128))
 }
 
 /// AIOS: decide se o modelo cabe em RAM residente ou precisa de AirLLM
@@ -100,7 +98,7 @@ pub fn needs_airllm(params: u64, model_file_mb: u64) -> bool {
     if ram == 0 {
         return false; // sem detecção → assume residente (comportamento legado)
     }
-    let budget = (ram * 3) / 4;
+    let budget = k_nano::memory::heap_budget_mb(ram) as u64;
     let need = model_file_mb.saturating_add(estimate_heap_mb(params));
     need > budget
 }
@@ -175,9 +173,10 @@ pub fn slot_footprint_mb(slot_name: &str) -> Option<u64> {
             dyn_mb.or(Some(220))
         }
         "active" | "current" | "generator" => {
-            dyn_mb.or(Some(989))
+            dyn_mb.or(Some(989)) // Falcon3-3B daily ~989MB
         }
-        "generator_pro" | "pro" | "7b" | "3b" | "bitnet3b" => dyn_mb.or(Some(1780)),  // Falcon3-7B/3B v6 ~1.74 GB
+        "generator_pro" | "pro" | "7b" | "falcon7b" => dyn_mb.or(Some(1780)), // Falcon3-7B PRO.v6
+        "3b" | "bitnet3b" => dyn_mb.or(Some(989)),
         "falcon3" | "falcon" | "f3" | "falcon3b" | "falcon-3b" => {
             dyn_mb.or(Some(989))
         }
@@ -224,5 +223,84 @@ pub fn slot_too_tight(slot_name: &str) -> bool {
     match score_slot(slot_name) {
         Some(r) => matches!(r.class, FitClass::TooTight | FitClass::Deny),
         None => false,
+    }
+}
+
+/// Plano de boot LLM (SESSION_290): 3B daily, 7B Pro; FullPack se RAM ≥ 16GB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmTier {
+    BelowFloor,
+    Daily,
+    FullPack,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LlmBootPlan {
+    pub tier: LlmTier,
+    pub load_daily_3b: bool,
+    pub load_pro_7b_resident: bool,
+    pub max_resident_mb: u64,
+}
+
+impl LlmBootPlan {
+    pub fn as_str(self) -> &'static str {
+        match self.tier {
+            LlmTier::BelowFloor => "degraded-3b",
+            LlmTier::Daily => "daily-3b",
+            LlmTier::FullPack => "fullpack-3b+7b",
+        }
+    }
+}
+
+pub fn llm_boot_plan(ram_mb: u64) -> LlmBootPlan {
+    use k_nano::memory::{RAM_FLOOR_MB, RAM_FULL_PACK_MB};
+    let budget = k_nano::memory::heap_budget_mb(ram_mb) as u64;
+    let max_resident_mb = budget.saturating_sub(256).max(64);
+    if ram_mb < RAM_FLOOR_MB {
+        LlmBootPlan {
+            tier: LlmTier::BelowFloor,
+            load_daily_3b: true,
+            load_pro_7b_resident: false,
+            max_resident_mb: max_resident_mb.min(1100),
+        }
+    } else if ram_mb < RAM_FULL_PACK_MB {
+        LlmBootPlan {
+            tier: LlmTier::Daily,
+            load_daily_3b: true,
+            load_pro_7b_resident: false,
+            max_resident_mb,
+        }
+    } else {
+        LlmBootPlan {
+            tier: LlmTier::FullPack,
+            load_daily_3b: true,
+            load_pro_7b_resident: true,
+            max_resident_mb,
+        }
+    }
+}
+
+#[cfg(test)]
+mod ram_policy_tests {
+    use super::*;
+
+    #[test]
+    fn llm_plan_floor_daily_fullpack() {
+        let d = llm_boot_plan(4096);
+        assert_eq!(d.tier, LlmTier::BelowFloor);
+        assert!(!d.load_pro_7b_resident);
+        let m = llm_boot_plan(8192);
+        assert_eq!(m.tier, LlmTier::Daily);
+        assert!(!m.load_pro_7b_resident);
+        let f = llm_boot_plan(16384);
+        assert_eq!(f.tier, LlmTier::FullPack);
+        assert!(f.load_pro_7b_resident);
+        assert!(f.max_resident_mb > 2000);
+    }
+
+    #[test]
+    fn heap_budget_no_1536_cap_on_16g() {
+        let b = k_nano::memory::heap_budget_mb(16384);
+        assert!(b > 1536, "16GB deve orçar heap >> 1536MB, got {b}");
     }
 }

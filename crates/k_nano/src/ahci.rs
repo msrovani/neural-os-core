@@ -315,10 +315,10 @@ impl AhciDriver {
 /// Unifica a lógica usada por `read()` e `write()`: buffers alocados no heap
 /// Tier 1 (talc, base em `allocator::HEAP_START`) sao VA = PA + pmoff; buffers
 /// identity-mapped (primeiros 4GB, ex: stack ou frames do bootloader) sao VA == PA.
+/// HHDM: PA = VA − pmoff. HEAP_BUFFER (bump) vive no HHDM; o ramo antigo
+/// só cobria TALC em HEAP_START e entregava VA canónica como PA no metal.
 fn dma_va_to_pa(va: u64, pmoff: u64) -> u64 {
-    let heap_start = crate::allocator::HEAP_START as u64;
-    let heap_end = heap_start + crate::allocator::HEAP_SIZE as u64;
-    if va >= heap_start && va < heap_end {
+    if pmoff != 0 && va >= pmoff {
         va - pmoff
     } else {
         va

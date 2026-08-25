@@ -959,8 +959,10 @@ pub unsafe fn bulk_transfer(
     trb.add(1).write_volatile((data_pa >> 32) as u32);
     // IOC=1 (bit 5), TD size=1 (bits 17-31), chain=0
     trb.add(2).write_volatile(len | (1u32 << 5) | (1u32 << 17));
-    // Normal TRB (type=1), cycle=ep.cycle
-    trb.add(3).write_volatile(if ep.cycle { 0x0000_0001u32 } else { 0x0000_0000u32 });
+    // Normal TRB: type=1 nos bits 10–15, Cycle no bit 0 (xHCI 6.4.1).
+    // 0x1 só setava Cycle — Intel xHCI no metal ignora TRB sem tipo.
+    let c = if ep.cycle { 1u32 } else { 0 };
+    trb.add(3).write_volatile((1u32 << 10) | c);
 
     // Fence write before doorbell
     core::arch::asm!("sfence", options(nostack, preserves_flags));
@@ -973,8 +975,9 @@ pub unsafe fn bulk_transfer(
         link.add(0).write_volatile(ep.trb_pa as u32);
         link.add(1).write_volatile((ep.trb_pa >> 32) as u32);
         link.add(2).write_volatile(0);
-        // Link TRB (type=6), cycle=ep.cycle, Toggle Cycle=1
-        link.add(3).write_volatile(if ep.cycle { 0x0000_0026u32 } else { 0x0000_0006u32 });
+        // Link TRB type=6 bits 10–15, Toggle Cycle bit 1, Cycle bit 0
+        let c = if ep.cycle { 1u32 } else { 0 };
+        link.add(3).write_volatile((6u32 << 10) | (1u32 << 1) | c);
     }
     ep.enqueue_idx = if next == max - 1 { 0 } else { next as u16 };
     if next == max - 1 { ep.cycle = !ep.cycle; }

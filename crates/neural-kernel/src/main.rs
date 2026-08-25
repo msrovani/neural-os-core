@@ -1333,8 +1333,7 @@ pub(crate) fn kernel_boot(
 
     // SafeHarbor / MemoryCore publicados após heap (publish precisa de alloc)
 
-    let mut frame_allocator = memory::BitmapFrameAllocator::empty();
-    {
+    k_nano::memory::with_pmm(|frame_allocator| {
         let usable = handoff.usable_regions();
         let mut buf = [(0u64, 0u64); 64];
         let n = core::cmp::min(usable.len(), 64);
@@ -1383,7 +1382,7 @@ pub(crate) fn kernel_boot(
         frame_allocator.reserve_range(stack_base, 8 * 1024 * 1024);
         k_nano::slog_bin!("MEM", "info", "reserva stack via RSP {:#x} len=8MB (rsp_phys={:#x})", stack_base, rsp_phys);
         kjson!("DBG", "MEM", "usable_regions", "n", n as u64, "boot", boot_tag);
-    }
+    });
     crate::display::fb::boot_ckpt(7, "frame_allocator ok");
 
     {
@@ -1402,12 +1401,15 @@ pub(crate) fn kernel_boot(
         crate::display::fb::boot_ckpt(11, "heap OK");
 
         let arena_sz = arena::auto_arena_size();
-        match arena::init_arena_region(
-            &mut mapper,
-            &mut frame_allocator,
-            arena::CORTEX_ARENA_VIRT,
-            arena_sz,
-        ) {
+        let arena_res = k_nano::memory::with_pmm(|fa| {
+            arena::init_arena_region(
+                &mut mapper,
+                fa,
+                arena::CORTEX_ARENA_VIRT,
+                arena_sz,
+            )
+        });
+        match arena_res {
             Ok(tensor_arena) => {
                 global_arena::install_global_arena(tensor_arena);
                 k_nano::slog_bin!("Boot", "dbg", "cortex arena init OK (Tier 2 bump)");
@@ -1600,25 +1602,18 @@ pub(crate) fn kernel_boot(
 
     // Box/Vec/Tensor/SiLU/RMSNorm/BitNet MLP agora sao DiagnosticSkill
 
-    memory::init_global_allocator(frame_allocator);
+    memory::init_global_allocator();
     // AIOS na veia (premissa 4): heap se auto-adapta à RAM física detectada em
     // runtime. PISO INICIAL modesto (min(75% RAM, 1536MB)) — o grow_bump_auto
     // estende sob demanda até o budget (evita mapear 6GB eager em TCG, que
     // exaure frames e reinicia). O 2B v6 (755MB + Q6_K 269MB ≈ 2.3GB) estende
     // automaticamente; acima do budget o modelo cai para AirLLM (model_fit).
     let detected_ram_mb = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
-    let heap_initial_mb = {
-        let pct = (detected_ram_mb as u64 * 3) / 4;
-        pct.clamp(512, 1536) as usize
-    };
-    // ponytail/AIOS: não mapeia eager o teto — LazyBumpAllocator já chama
-    // grow_bump_auto (256MB/passo) no OOM (allocator.rs:46). O resize aqui só
-    // garante o piso mínimo; acima disso cresce sob demanda (menos frames no
-    // T+0 → menor watermark → menor janela do crash de stack do Limine).
-    allocator::resize_bump_heap(heap_initial_mb.min(512));
-    k_nano::allocator::set_heap_budget_mb(heap_initial_mb);
-    k_nano::slog_bin!("HEAP", "AIOS", "heap piso={}MB (RAM={}MB; grow_bump_auto sob demanda até budget {}MB)",
-        heap_initial_mb.min(512), detected_ram_mb, heap_initial_mb);
+    let heap_budget = k_nano::memory::heap_budget_mb(detected_ram_mb);
+    allocator::resize_bump_heap(heap_budget.min(512));
+    k_nano::allocator::set_heap_budget_mb(heap_budget);
+    k_nano::slog_bin!("HEAP", "AIOS", "heap piso=512MB RAM={}MB budget={}MB floor={} fullpack={}",
+        detected_ram_mb, heap_budget, k_nano::memory::RAM_FLOOR_MB, k_nano::memory::RAM_FULL_PACK_MB);
     // TALC init — APÓS init_global_allocator (alloc_physical_frame disponível)
     allocator::talc_init_post_memory().expect("talc post-init failed");
 
@@ -2316,14 +2311,20 @@ pub(crate) fn kernel_boot(
                     let first = buf[entry];
                     if first == 0 || first == 0xE5 { continue; }
                     if buf[entry + 11] & 0x08 != 0 { continue; }
-                    let fname = core::str::from_utf8(&buf[entry..entry+11]).unwrap_or("").trim_end();
-                    if !fname.eq_ignore_ascii_case(name_upper.as_str()) { continue; }
+                    if buf[entry + 11] & 0x0F == 0x0F { continue; } // LFN
+                    let want = crate::fat32::encode_83(name);
+                    if buf[entry..entry+11] != want { continue; }
                     let fsize = u32::from_le_bytes([buf[entry+28], buf[entry+29], buf[entry+30], buf[entry+31]]) as usize;
                     let fc_lo = u16::from_le_bytes([buf[entry+26], buf[entry+27]]);
                     let fc_hi = u16::from_le_bytes([buf[entry+20], buf[entry+21]]);
                     let start_cluster = ((fc_hi as u32) << 16) | fc_lo as u32;
-                    // fsize e u32 do disco (ate 4GB) — cap contra OOM em boot.
-                    if fsize > 16 << 20 { continue; }
+                    // BGE ~138MB precisa passar; PRO ~1.8GB não cabe em Vec (AirLLM).
+                    const MAX_INLINE: usize = 256 * 1024 * 1024;
+                    if fsize > MAX_INLINE {
+                        k_nano::slog_bin!("FAT", "warn", "{} size={}MB > 256MB inline — skip Vec",
+                            name, fsize / (1024 * 1024));
+                        continue;
+                    }
                     let mut data = Vec::with_capacity(fsize);
                     let mut fc = start_cluster;
                     while fc < 0x0FFF_FFF8 && fc >= 2 && data.len() < fsize {
@@ -3213,22 +3214,34 @@ pub(crate) fn kernel_boot(
                                 unsafe { core::ptr::read_volatile(va) == 0xBE11BE11 }
                             }
                         };
+                        let ram_now = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
+                        let llm_plan = cortex_crate::model_fit::llm_boot_plan(ram_now);
+                        k_nano::slog_nano!("LLM", "AIOS", "plan={} ram={}MB max_res={}MB pro={}",
+                            llm_plan.as_str(), ram_now, llm_plan.max_resident_mb, llm_plan.load_pro_7b_resident);
                         const PIO_QEMU: usize = 8 * 1024 * 1024;
-                        const PIO_HW: usize = 700 * 1024 * 1024;
                         let pio_cap = if qemu_loader_2b
                             || k_nano::platform_probe::hypervisor().is_sandbox()
                         {
                             PIO_QEMU
                         } else {
-                            PIO_HW
+                            (llm_plan.max_resident_mb as usize).saturating_mul(1024 * 1024)
                         };
-                        // Preferência chat: 1.3B → 850 → 2B/3B. Stub MICRO.BITNET por último.
-                        // Degrau: PACK_LLM=850 só empacota 850; depois 13, 2b, 3b.
-                        // Modelos GGUF grandes: /model (AirLLM ATA) em vez de PIO full-RAM.
-                        for name in &["llama8b.bin"] {
+                        // Daily = Falcon3 3B; PRO.v6 só no FullPack (≥16GB) ou se 3B ausente.
+                        let llm_names: &[&str] = if llm_plan.load_pro_7b_resident {
+                            &[
+                                "FALCON3B.BIN", "BITNET2B.v6", "BITNET2B.BIN", "BITNET13.BIN",
+                                "BITNET850.BIN", "MICRO.BITNET", "LLAMA8B.BIN",
+                                "PRO.v6", "PRO.BIN", "FALCON3.V6",
+                            ]
+                        } else {
+                            &[
+                                "FALCON3B.BIN", "BITNET2B.v6", "BITNET2B.BIN", "BITNET13.BIN",
+                                "BITNET850.BIN", "MICRO.BITNET", "LLAMA8B.BIN",
+                            ]
+                        };
+                        for name in llm_names {
                             let Some(sz) = fs.lookup_file_size(name) else { continue; };
-                            // Stub ~13KB não serve para chat fluente
-                            if *name == "llama8b.bin" && sz < 1_000_000 {
+                            if sz < 1_000_000 && (*name == "LLAMA8B.BIN" || *name == "MICRO.BITNET") {
                                 k_nano::slog_nano!(
                                     "FAT",
                                     "info",
@@ -3239,13 +3252,10 @@ pub(crate) fn kernel_boot(
                                 continue;
                             }
                             if sz > pio_cap {
-                                k_nano::slog_nano!("FAT", "info", "{} PRESENT size={}KB — skip full PIO (cap={}MB; QEMU-loader ou --features hw)",
+                                k_nano::slog_nano!("FAT", "info", "{} PRESENT size={}KB — skip full PIO (cap={}MB)",
                                     name,
                                     sz / 1024,
                                     pio_cap / (1024 * 1024));
-                                continue;
-
-                                // AirLLM: modelo grande demais para PIO — streaming layer-by-layer
                                 let fat_mb = sz / (1024 * 1024);
                                 let params_est = (fat_mb as u64) * 8_000_000;
                                 if cortex_crate::model_fit::needs_airllm(params_est, fat_mb as u64) {
@@ -3260,6 +3270,7 @@ pub(crate) fn kernel_boot(
                                         break;
                                     }
                                 }
+                                continue;
                             }
                             if sz > PIO_QEMU {
                                 k_nano::slog_nano!("FAT", "info", "{} size={}MB — baremetal FAT PIO (pode demorar minutos)",
@@ -3296,13 +3307,27 @@ pub(crate) fn kernel_boot(
             unsafe {
                 let mut usb_guard = crate::USB_MSC.lock();
                 if let Some(ref mut msc) = *usb_guard {
-                    const PIO_HW: usize = 700 * 1024 * 1024;
-                    for name in &["llama8b.bin"] {
+                    let ram_now = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
+                    let llm_plan = cortex_crate::model_fit::llm_boot_plan(ram_now);
+                    let pio_cap = (llm_plan.max_resident_mb as usize).saturating_mul(1024 * 1024);
+                    let llm_names: &[&str] = if llm_plan.load_pro_7b_resident {
+                        &[
+                            "FALCON3B.BIN", "BITNET2B.v6", "BITNET2B.BIN", "BITNET13.BIN",
+                            "BITNET850.BIN", "MICRO.BITNET", "LLAMA8B.BIN",
+                            "PRO.v6", "PRO.BIN",
+                        ]
+                    } else {
+                        &[
+                            "FALCON3B.BIN", "BITNET2B.v6", "BITNET2B.BIN", "BITNET13.BIN",
+                            "BITNET850.BIN", "MICRO.BITNET", "LLAMA8B.BIN",
+                        ]
+                    };
+                    for name in llm_names {
                         let Some(fat_data) = read_file_from_dev(msc, name) else { continue; };
-                        if *name == "llama8b.bin" && fat_data.len() < 1_000_000 {
+                        if fat_data.len() < 1_000_000 && (*name == "LLAMA8B.BIN" || *name == "MICRO.BITNET") {
                             continue;
                         }
-                        if fat_data.len() > PIO_HW {
+                        if fat_data.len() > pio_cap {
                             k_nano::slog_nano!("FAT", "info", "USB {} PRESENT size={}KB — skip PIO",
                                 name,
                                 fat_data.len() / 1024);
@@ -3697,7 +3722,7 @@ pub(crate) fn kernel_boot(
             {
                 // Pode estar só marcado (pro-alias); ainda tenta blob dedicado
             }
-            // QEMU+loader 2B: cap 48MB no hub. HW / sem loader: até 700MB (850/2B/3B).
+            // QEMU+loader: cap 8MB. Metal: cap = plano RAM (FullPack cabe 7B).
             let qemu_loader_2b = {
                 let pm = crate::memory::PHYS_MEM_OFFSET
                     .load(core::sync::atomic::Ordering::Relaxed);
@@ -3711,19 +3736,23 @@ pub(crate) fn kernel_boot(
             // Com QEMU-loader Active ja em RAM: NUNCA PIO do chat grande no hub
             // (antes PIO_FAST=400MB relia BITNET850 e travava o boot por minutos/horas).
             const PIO_FAST: usize = 400 * 1024 * 1024;
-            const PIO_HW: usize = 700 * 1024 * 1024;
             const PIO_QEMU: usize = 8 * 1024 * 1024;
+            let ram_now = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
+            let llm_plan = cortex_crate::model_fit::llm_boot_plan(ram_now);
+            if slot == crate::model_hub::ModelSlot::GeneratorPro && !llm_plan.load_pro_7b_resident {
+                k_nano::slog_bin!("MODEL", "info", "hub skip generator_pro — plan={} (7B só FullPack ≥16GB)",
+                    llm_plan.as_str());
+                return;
+            }
             let qemu_hv = qemu_loader_2b || k_nano::platform_probe::hypervisor().is_sandbox();
+            let pio_hw = (llm_plan.max_resident_mb as usize).saturating_mul(1024 * 1024);
             let pio_cap = if qemu_hv {
-                match slot {
-                    crate::model_hub::ModelSlot::Reranker => PIO_QEMU,
-                    _ => PIO_QEMU,
-                }
+                PIO_QEMU
             } else {
                 match slot {
-                    crate::model_hub::ModelSlot::Vision => PIO_FAST,
+                    crate::model_hub::ModelSlot::Vision => PIO_FAST.min(pio_hw),
                     crate::model_hub::ModelSlot::Reranker => 32 * 1024 * 1024,
-                    _ => PIO_HW,
+                    _ => pio_hw,
                 }
             };
             // Active ja veio do loader — nao duplicar GeneratorFast/Pro via FAT

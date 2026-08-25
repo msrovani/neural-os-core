@@ -35,9 +35,12 @@ unsafe impl GlobalAlloc for LazyBumpAllocator {
         let mut current_offset = self.offset.load(Ordering::Relaxed);
         loop {
             let real_offset = if current_offset < 0 { 0 } else { current_offset as usize };
-            let current_ptr = heap_start + real_offset;
+            let current_ptr = match heap_start.checked_add(real_offset) {
+                Some(p) => p,
+                None => return core::ptr::null_mut(),
+            };
             let aligned_ptr = (current_ptr + align - 1) & !(align - 1);
-            let next_offset = (aligned_ptr - heap_start) + size;
+            let next_offset = aligned_ptr.wrapping_sub(heap_start).saturating_add(size);
 
             if next_offset > HEAP_LIMIT.load(Ordering::Relaxed) {
                 // AIOS na veia (premissa 2): heap se auto-adapta à necessidade.
@@ -78,13 +81,27 @@ fn grow_bump_auto(need: usize) -> bool {
     if need <= current_limit {
         return true; // já coberto
     }
+    // SESSION_287: HEAP_BUDGET_MB era escrito e nunca lido — grow ia até OOM.
+    let budget_bytes = HEAP_BUDGET_MB
+        .load(Ordering::Relaxed)
+        .saturating_mul(1024 * 1024)
+        .max(HEAP_SIZE);
+    if current_limit >= budget_bytes {
+        crate::slog_nano!("HEAP", "BUMP", "budget cap {}MB — recusa grow (need={}MB)",
+            budget_bytes / (1024 * 1024), need / (1024 * 1024));
+        return false;
+    }
     let heap_start = unsafe { HEAP_BUFFER.as_mut_ptr() as usize };
     let base = VirtAddr::new(crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed));
     if base.as_u64() == 0 {
         return false;
     }
 
-    let want = need.saturating_add(HEAP_GROW_STEP - 1) / HEAP_GROW_STEP * HEAP_GROW_STEP;
+    let want_raw = need.saturating_add(HEAP_GROW_STEP - 1) / HEAP_GROW_STEP * HEAP_GROW_STEP;
+    let want = want_raw.min(budget_bytes);
+    if want <= current_limit {
+        return false;
+    }
     let extra = want.saturating_sub(current_limit);
     let diff_pages = extra.div_ceil(4096);
 
@@ -99,7 +116,14 @@ fn grow_bump_auto(need: usize) -> bool {
                 None => break,
             }
         };
-        let virt = VirtAddr::new((heap_start + current_limit + allocated * 4096) as u64);
+        let virt_usize = match heap_start.checked_add(current_limit + allocated * 4096) {
+            Some(v) => v,
+            None => {
+                crate::slog_nano!("HEAP", "fail", "grow wrap 2^64 — abort");
+                break;
+            }
+        };
+        let virt = VirtAddr::new(virt_usize as u64);
         // SESSION_252 diagnóstico (ora-1): loga o 1º frame físico alocado ao
         // heap — para comparar com os RX buffers do e1000 (corrupção OTA).
         if allocated < 4 || allocated % 512 == 0 {

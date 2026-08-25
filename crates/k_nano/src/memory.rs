@@ -3,12 +3,13 @@ use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, OffsetPageTab
 use x86_64::PhysAddr;
 use x86_64::VirtAddr;
 
-/// Número de bytes no bitmap de frames físicos.
-/// SESSÃO_260 (AIOS auto-adaptar): o buffer cobre o pior caso de RAM comum
-/// (512KB × 8 bits × 4096 = 16GiB). O kernel NÃO usa tudo — o `total_frames`
-/// é derivado da RAM REAL detectada (`last_end` do memory map) em
-/// `init_from_usable_ranges`. Aumentar o buffer se máquinas >16GB aparecerem.
-pub const BITMAP_SIZE: usize = 524288; // 512KB cobre 16GiB fisicos
+/// Piso de produto (SESSION_290): abaixo disto o OS sobe em degradado (3B se couber).
+pub const RAM_FLOOR_MB: u64 = 8192;
+/// A partir daqui tenta pack residente 3B+7B+experts (cabe-tudo).
+pub const RAM_FULL_PACK_MB: u64 = 16384;
+/// Bitmap: 2MiB × 8 × 4KiB = 64GiB. Sem teto de política — só o array.
+/// O struct vive no static GLOBAL_ALLOCATOR (não na stack do boot).
+pub const BITMAP_SIZE: usize = 2 * 1024 * 1024;
 const BITS_PER_BYTE: usize = 8;
 const FRAME_SIZE: u64 = 4096;
 
@@ -16,7 +17,8 @@ const FRAME_SIZE: u64 = 4096;
 // sobrescreva estas statics — HEAP_BUFFER (512MB) em .bss é seguido por
 // outras statics; estender HEAP_LIMIT alem de HEAP_SIZE corrompe total_frames.
 #[link_section = ".data"]
-pub static GLOBAL_ALLOCATOR: TicketLock<Option<BitmapFrameAllocator>> = TicketLock::new(None);
+pub static GLOBAL_ALLOCATOR: TicketLock<Option<BitmapFrameAllocator>> =
+    TicketLock::new(Some(BitmapFrameAllocator::empty()));
 // Fix: section .data para evitar que resize_bump_heap(2048) sobrescreva
 // esta página com uma frame zerada (HEAP_BUFFER de 512MB em .bss).
 #[link_section = ".data"]
@@ -128,8 +130,16 @@ impl BitmapFrameAllocator {
             TOTAL_RAM_MB.store(ram_mb, core::sync::atomic::Ordering::Relaxed);
             // SESSÃO_260 (AIOS): loga a RAM real detectada — o dump do BOOT.LOG
             // mostra quanto o kernel viu, separado do que gerencia.
-            crate::slog_nano!("MEM", "info", "RAM detectada {} MB; frames gerenciados {} (bitmap {})",
-                ram_mb, self.total_frames, BITMAP_SIZE);
+            crate::slog_nano!("MEM", "info", "RAM detectada {} MB; frames gerenciados {} (bitmap {}B cap={}GiB)",
+                ram_mb, self.total_frames, BITMAP_SIZE,
+                (BITMAP_SIZE as u64) * 8 * 4096 / (1024 * 1024 * 1024));
+            if ram_mb < RAM_FLOOR_MB {
+                crate::slog_nano!("MEM", "warn", "RAM {}MB < piso {}MB — degradado (Daily 3B; sem pack 7B)",
+                    ram_mb, RAM_FLOOR_MB);
+            } else if ram_mb >= RAM_FULL_PACK_MB {
+                crate::slog_nano!("MEM", "ok", "RAM {}MB ≥ {}MB — FullPack residente se os blobs couberem",
+                    ram_mb, RAM_FULL_PACK_MB);
+            }
         }
     }
 
@@ -455,8 +465,34 @@ impl FrameDeallocator<Size4KiB> for BitmapFrameAllocator {
     }
 }
 
-pub fn init_global_allocator(alloc: BitmapFrameAllocator) {
-    *GLOBAL_ALLOCATOR.lock() = Some(alloc);
+/// Heap budget AIOS: 75% da RAM, reserva 2GB p/ kernel/FB/DMA se ≥ piso.
+/// Sem teto 1536MB (SESSION_287 era QEMU; metal 16GB+ precisa do resto).
+pub fn heap_budget_mb(ram_mb: u64) -> usize {
+    if ram_mb == 0 {
+        return 512;
+    }
+    let pct = ram_mb.saturating_mul(3) / 4;
+    if ram_mb < RAM_FLOOR_MB {
+        pct.clamp(256, ram_mb.saturating_sub(128).max(256)) as usize
+    } else {
+        let keep = 2048u64;
+        pct.min(ram_mb.saturating_sub(keep)).max(512) as usize
+    }
+}
+
+pub fn with_pmm<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut BitmapFrameAllocator) -> R,
+{
+    let mut g = GLOBAL_ALLOCATOR.lock();
+    let fa = g.as_mut().expect("PMM static");
+    f(fa)
+}
+
+/// Boot antigo movia um PMM da stack para o static — com bitmap 64GiB isso
+/// estoura a stack Limine. O PMM já nasce no static (`Some(empty())`).
+pub fn init_global_allocator() {
+    // PMM já está no static (`Some(empty())`) e foi preenchido por with_pmm.
 }
 
 #[allow(dead_code)]
@@ -603,12 +639,11 @@ pub unsafe fn init_memory(physical_memory_offset: u64) -> OffsetPageTable<'stati
 mod tests {
     use super::*;
 
-    /// O struct tem 1MB (2 bitmaps de 512KB) e `empty()` (const fn) o materializa
-    /// na pilha do caller antes do move — thread de teste padrão estoura
-    /// (STATUS_STACK_OVERFLOW). Roda o corpo numa thread com 16MB de stack.
+    /// O struct tem 4MB (2 bitmaps de 2MB / 64GiB) e `empty()` materializa
+    /// na pilha do caller — thread de teste padrão estoura. 32MB de stack.
     fn run_with_big_stack(body: impl FnOnce() + Send + 'static) {
         std::thread::Builder::new()
-            .stack_size(16 * 1024 * 1024)
+            .stack_size(32 * 1024 * 1024)
             .spawn(body)
             .expect("spawn big-stack test")
             .join()

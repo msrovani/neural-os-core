@@ -439,10 +439,9 @@ impl NvmeDriver {
         } else {
             lba
         };
-        // ponytail: bounce path inalterado (ADR-0087 — o fix é o path direto).
-        // Buffer bounce = alloc_dma contíguo; transfer multi-página segue com PRP2=0,
-        // como antes (comportamento preservado; callers MHI usam *_direct).
-        if !self.io_nvm(IO_READ, start_lba, pa, 0, nlb.max(1)) {
+        let pages = ((sectors as usize * 512) + 4095) / 4096;
+        let xfer = pages * 4096;
+        if !self.io_nvm_prp(IO_READ, start_lba, pa, xfer, nlb.max(1)) {
             return false;
         }
         let src = if self.lba_size == 4096 {
@@ -475,7 +474,7 @@ impl NvmeDriver {
             self.io_nvm(IO_WRITE, start_lba, pa, 0, 1)
         } else {
             core::ptr::copy_nonoverlapping(buf.as_ptr(), va, buf.len());
-            self.io_nvm(IO_WRITE, lba, pa, 0, sectors)
+            self.io_nvm_prp(IO_WRITE, lba, pa, pages * 4096, sectors)
         }
     }
 

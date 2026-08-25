@@ -3,6 +3,7 @@
 //! Provides per-NUMA-node frame allocation using the ACPI SRAT topology.
 //! Each NUMA node gets its own BitmapFrameAllocator instance for local allocation.
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use ticket_lock::TicketLock;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size4KiB};
@@ -15,8 +16,8 @@ pub const MAX_NUMA_NODES: usize = 16;
 
 /// Per-NUMA-node frame allocator
 pub struct NumaFrameAllocator {
-    /// Bitmap allocator for this NUMA node
-    allocator: BitmapFrameAllocator,
+    /// Bitmap allocator for this NUMA node (Box: struct ~4MB, não na stack)
+    allocator: Box<BitmapFrameAllocator>,
     /// NUMA node ID (proximity domain)
     node_id: u32,
     /// Memory ranges belonging to this node
@@ -29,7 +30,7 @@ impl NumaFrameAllocator {
     /// Create a new NUMA frame allocator for a specific node
     pub fn new(node_id: u32, ranges: Vec<NumaMemoryRange>, apic_ids: Vec<u32>) -> Self {
         Self {
-            allocator: BitmapFrameAllocator::empty(),
+            allocator: Box::new(BitmapFrameAllocator::empty()),
             node_id,
             ranges,
             apic_ids,

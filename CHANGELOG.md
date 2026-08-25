@@ -1,5 +1,15 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s290] - 2026-08-25 — Falcon3 3B daily / 7B FullPack (piso 8GB)
+
+**LLM auto-adaptativo à RAM (sem teto de política)**
+
+- Piso produto **8GB** (`RAM_FLOOR_MB`); FullPack **≥16GB** carrega 3B+7B residentes.
+- Daily: só Falcon3-3B; skip `GeneratorPro` / `PRO.v6` fora FullPack.
+- PMM: bitmap **64GiB** no static (não na stack); NUMA via `Box`.
+- `heap_budget_mb`: 75% RAM − 2GB reserva, **sem** cap 1536MB.
+- Check: `cargo check --release` (s290). Aceite metal: aguardar teste real.
+
 ## [1.9.99-s289] - 2026-08-24 — ADR-0092 observabilidade de boot (O0–O5)
 
 **dmesg Neural: severidade, fases, placar, HUD de produto**

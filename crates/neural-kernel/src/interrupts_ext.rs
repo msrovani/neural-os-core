@@ -338,8 +338,9 @@ pub unsafe fn init_pic_fallback_and_sti() {
     // ICW4: 8086 mode
     core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0x01u8, options(nostack, preserves_flags));
     core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0x01u8, options(nostack, preserves_flags));
-    // Mask: IRQ0 (PIT) + IRQ2 (cascade) abertos; resto mascarado
-    core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0xFAu8, options(nostack, preserves_flags));
+    // Mask: IRQ0 (PIT) + IRQ1 (teclado) + IRQ2 (cascade). 0xFA mascarava IRQ1
+    // (SESSION_252) — o overlay do bin ainda usava 0xFA; k_nano já está em 0xF8.
+    core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0xF8u8, options(nostack, preserves_flags));
     core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0xFFu8, options(nostack, preserves_flags));
 
     crate::apic::pit_init();
