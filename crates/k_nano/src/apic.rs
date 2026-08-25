@@ -270,6 +270,15 @@ pub unsafe fn smp_trace_apic_mode(bsp_id: u32) {
 pub unsafe fn enable_x2apic_this_cpu() -> bool {
     let apic_base = read_apic_base_raw();
     let was_x2 = (apic_base & (1 << 11)) != 0;
+    // SESSION_281: TCG/WHPX nao emulam x2APIC via MSR 0x1B como writeable.
+    // wrmsr EN+EXTD da #GP no QEMU (mesmo sendo "bare-metal" reporta None).
+    // Consistente com init_syscall_fast_path (paging.rs) e cpufreq (gate hv).
+    let hv = crate::platform_probe::detect_hypervisor();
+    if !matches!(hv, crate::platform_probe::HypervisorKind::None | crate::platform_probe::HypervisorKind::Kvm) {
+        crate::slog_nano!("APIC", "warn", "x2APIC gated off (hv={:?}) — fica xAPIC MMIO", hv);
+        USING_X2APIC.store(false, Ordering::Release);
+        return was_x2;
+    }
     x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR)
         .write(apic_base | (1 << 10) | (1 << 11));
     USING_X2APIC.store(true, Ordering::Release);
@@ -289,6 +298,12 @@ unsafe fn x2apic_icr_write(val: u64) {
         loop {
             core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
         }
+    }
+    // SESSION_281: x2APIC ICR via MSR 0x830 nao emulado em TCG/WHPX -> #GP.
+    let hv = crate::platform_probe::detect_hypervisor();
+    if !matches!(hv, crate::platform_probe::HypervisorKind::None | crate::platform_probe::HypervisorKind::Kvm) {
+        crate::slog_nano!("SMP", "warn", "x2APIC ICR gated off (hv={:?}) — fallback MMIO", hv);
+        return;
     }
     let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
     msr.write(val);
@@ -599,10 +614,19 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
 
     let apic_base_now = read_apic_base_raw();
     let firmware_x2 = (apic_base_now & (1 << 11)) != 0;
+    // SESSION_281: sob hypervisor (TCG/WHPX) o MSR x2APIC não é emulado como
+    // writeable — se o firmware reporta EXTD=1 mas o QEMU não suporta, wrmsr daria
+    // #GP. Sempre checar hypervisor mesmo quando firmware_x2 (detect via CPUID direto).
+    let hv = crate::platform_probe::detect_hypervisor();
+    let hv_allows_x2 = matches!(hv, crate::platform_probe::HypervisorKind::None | crate::platform_probe::HypervisorKind::Kvm);
     // MMIO 0xFEE00000 é #GP se o firmware já deixou EXTD=1 (240H comum).
-    if firmware_x2 {
+    if firmware_x2 && hv_allows_x2 {
         USING_X2APIC.store(true, Ordering::Release);
         crate::slog_nano!("APIC", "info", "firmware já em x2APIC — skip SVR MMIO");
+    } else if firmware_x2 && !hv_allows_x2 {
+        // fica xAPIC MMIO apesar do firmware ter EXTD — evita #GP no wrmsr.
+        USING_X2APIC.store(false, Ordering::Release);
+        crate::slog_nano!("APIC", "warn", "firmware x2APIC mas hv={:?} — forca xAPIC MMIO (sem #GP)", hv);
     } else {
         let svr_early = read_volatile((lapic_virt_base + LAPIC_SVR) as *const u32);
         let svr_fixed_early = (svr_early & 0xFFFFFF00) | 0xFF | 0x100;
@@ -610,7 +634,7 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
         crate::slog_nano!("APIC", "info", "SVR set early: {:#x}", svr_fixed_early);
     }
 
-    let mut x2apic_supported = firmware_x2;
+    let mut x2apic_supported = firmware_x2 && hv_allows_x2;
     #[cfg(target_arch = "x86_64")]
     {
         let result = core::arch::x86_64::__cpuid(0x0000_0001);
@@ -618,6 +642,7 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
             x2apic_supported = true;
         }
     }
+    x2apic_supported &= hv_allows_x2; // SESSION_281: gate hypervisor tambem no CPUID.
 
     let lapic = Lapic::new(if x2apic_supported { 0 } else { lapic_virt_base });
     if x2apic_supported {

@@ -166,6 +166,15 @@ pub fn actual_ratio() -> u8 {
 ///
 /// Returns (p0, pn, has_pstate).
 pub fn probe_and_init() -> (u8, u8, bool) {
+    // SESSION_243: wrmsr IA32_PERF_CTL/ENERGY_PERF_BIAS da #GP em TCG/WHPX quando o
+    // MSR não é emulado como writeable. Comentário antigo "writes are no-ops" era falso.
+    // Mesma lição do init_syscall_fast_path (paging.rs): gate por hypervisor real.
+    let hv = crate::platform_probe::detect_hypervisor();
+    if !matches!(hv, crate::platform_probe::HypervisorKind::None | crate::platform_probe::HypervisorKind::Kvm) {
+        crate::slog_nano!("CPUFREQ", "info", "P-state gated off (hv={:?}) — MSR PERF_CTL nao emulado", hv);
+        HAS_PSTATE.store(0, Ordering::Release);
+        return (16, MIN_RATIO, false);
+    }
     let current = current_ratio();
     if current == 0 {
         // No valid ratio — P-state not available (very old CPU or hypervisor hiding it)
