@@ -87,3 +87,5 @@ models/tokenizer/PIPER_PT_BR.BIN
 models/tokenizer/E5_MULTI.BIN
 .slim/deepwork/
 docs/memory/.preflight_cache/
+# neural-sgdb local memory DB
+.nsgdb/

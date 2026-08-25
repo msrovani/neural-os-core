@@ -8,6 +8,22 @@
       "type": "remote",
       "url": "https://huggingbay.xyz/api/mcp",
       "enabled": true
+    },
+    "neural-sgdb": {
+      "type": "local",
+      "command": [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\DEV\\neural-sgdb\\scripts\\mcp-server.ps1"
+      ],
+      "enabled": true,
+      "environment": {
+        "NEURAL_SGDB_DEFAULT_SCOPE": "project/neural-os-core",
+        "NEURAL_SGDB_DB": "C:\\DEV\\neural-os-core-latest\\.nsgdb\\sgdb_memory.db"
+      }
     }
   }
 }
