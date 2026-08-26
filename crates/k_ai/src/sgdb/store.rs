@@ -44,11 +44,7 @@ pub fn boot_init() {
         let n = with_engine(|e| e.rebuild_indices_from_tickv()).unwrap_or(0);
         let _ = n;
         // Fase 2: inicializa neural-sgdb global (ART/BQ externos)
-        // P0: nsgdb_bridge gateado por feature "nsgdb"
-        #[cfg(feature = "nsgdb")]
-        {
-            let _nsgdb_n = super::nsgdb_bridge::nsgdb_init();
-        }
+        let _nsgdb_n = super::nsgdb_bridge::nsgdb_init();
         populate_hw_namespace();
     }
     crate::boot_observe::hydrate_memory();
@@ -163,14 +159,8 @@ pub fn put_kv(key: &str, data: &[u8]) -> Result<(), &'static str> {
         return Err("tickv not ready");
     }
     let result = k_nano::storage::put_blob(key, data);
-    // P0: nsgdb_bridge gateado por feature "nsgdb"
-    #[cfg(feature = "nsgdb")]
     if result.is_ok() {
         super::nsgdb_bridge::sync_write_to_nsgdb(key, data, 3); // default L3
-    }
-    #[cfg(not(feature = "nsgdb"))]
-    if result.is_ok() {
-        // bare-metal: no sync, engine only
     }
     result
 }

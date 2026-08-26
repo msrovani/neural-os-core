@@ -14,7 +14,6 @@
 
 use alloc::format;
 use alloc::string::String;
-use alloc::string::ToString;
 use alloc::vec::Vec;
 use lazy_static::lazy_static;
 use ticket_lock::TicketLock;
@@ -31,7 +30,7 @@ struct SafeSgdb(neural_sgdb::Sgdb);
 unsafe impl Send for SafeSgdb {}
 unsafe impl Sync for SafeSgdb {}
 
-/// Global neural-sgdb instance — `Sgdb::open(TickvStorageAdapter)`.
+// Global neural-sgdb instance — `Sgdb::open(TickvStorageAdapter)`.
 lazy_static! {
     static ref NSGDB: TicketLock<Option<SafeSgdb>> = TicketLock::new(None);
 }

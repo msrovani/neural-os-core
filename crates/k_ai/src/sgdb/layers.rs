@@ -90,21 +90,10 @@ fn fp32_dist_u32(query: &[f32], payload: &[u8]) -> Option<u32> {
 /// Recall L4: BQ top-k, depois rescore FP32 nos candidatos (padrão Qdrant).
 /// path = `bq+fp32` | `bq` | `empty`.
 pub fn recall_semantic(query: &[f32], k: usize) -> (Vec<(String, u32)>, &'static str) {
-    // P0: nsgdb_bridge gateado por feature "nsgdb"
-    #[cfg(feature = "nsgdb")]
-    {
-        let (ext_hits, ext_path) = super::nsgdb_bridge::recall_semantic_nsgdb(query, k);
-        if !ext_hits.is_empty() {
-            return (ext_hits, ext_path);
-        }
-    }
-    #[cfg(not(feature = "nsgdb"))]
-    {
-        let ext_hits: alloc::vec::Vec<(alloc::string::String, u32)> = alloc::vec::Vec::new();
-        let ext_path: &str = "";
-        if !ext_hits.is_empty() {
-            return (ext_hits, ext_path);
-        }
+    // Externo primeiro (neural-sgdb ART/BQ); vazio → fallback engine interno
+    let (ext_hits, ext_path) = super::nsgdb_bridge::recall_semantic_nsgdb(query, k);
+    if !ext_hits.is_empty() {
+        return (ext_hits, ext_path);
     }
     // Fallback: engine interno
     ensure_ready();
@@ -233,20 +222,10 @@ pub fn remember_exchange_full(
 /// RAG context: BQ recall + fetch payload + formato string pro prompt.
 /// path = `recall_semantic`.
 pub fn rag_context(query: &[f32], k: usize) -> String {
-    // P0: nsgdb_bridge gateado por feature "nsgdb"
-    #[cfg(feature = "nsgdb")]
-    {
-        let ext_ctx = super::nsgdb_bridge::rag_context_nsgdb(query, k);
-        if !ext_ctx.is_empty() {
-            return ext_ctx;
-        }
-    }
-    #[cfg(not(feature = "nsgdb"))]
-    {
-        let ext_ctx = alloc::string::String::new();
-        if !ext_ctx.is_empty() {
-            return ext_ctx;
-        }
+    // Externo primeiro (neural-sgdb, content_type aware); vazio → fallback interno
+    let ext_ctx = super::nsgdb_bridge::rag_context_nsgdb(query, k);
+    if !ext_ctx.is_empty() {
+        return ext_ctx;
     }
     // Fallback: engine interno
     ensure_ready();
