@@ -40,6 +40,13 @@ pub trait BootHandoff {
         (0, 0)
     }
 
+    /// VA higher-half onde o Limine carregou o kernel (KASLR). Sem isto a
+    /// reserva `KERNEL_END - 0xffffffff80000000` mente e o PMM entrega
+    /// frames do `.kheap` (NOLOAD 512MB) como page tables.
+    fn kernel_virt(&self) -> u64 {
+        0xffff_ffff_8000_0000
+    }
+
     /// Verdadeiro se `addr` físico cai em alguma região de memória.
     /// Usado para verificar se o QEMU loader depositou dados em 4GB.
     fn has_addr_in_any_region(&self, addr: u64) -> bool {

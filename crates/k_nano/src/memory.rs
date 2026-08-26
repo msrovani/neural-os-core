@@ -677,6 +677,24 @@ mod tests {
     }
 
     #[test]
+    fn reserved_heap_range_never_handed_out() {
+        run_with_big_stack(|| {
+            let mut a = make_allocator();
+            // Simula .kheap @ 16MB, 1MB — o PMM NÃO pode entregar estes frames.
+            a.reserve_range(0x0100_0000, 1024 * 1024);
+            for _ in 0..64 {
+                let f = a.allocate_frame().expect("frame");
+                let pa = f.start_address().as_u64();
+                assert!(
+                    !(0x0100_0000..0x0110_0000).contains(&pa),
+                    "PMM entregou frame do heap reservado {:#x}",
+                    pa
+                );
+            }
+        });
+    }
+
+    #[test]
     fn pt_pool_isolated_from_general() {
         run_with_big_stack(|| {
             let mut a = make_allocator();

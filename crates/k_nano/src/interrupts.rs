@@ -151,6 +151,24 @@ fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Opt
     puts(b" fl="); puthex(stack_frame.cpu_flags as u64);
     puts(b" sp="); puthex(stack_frame.stack_pointer.as_u64());
     if let Some(code) = error_code { puts(b" err="); puthex(code); }
+    // CR3 real para walk offline das page tables (diagnóstico #PF-storm).
+    let cr3: u64;
+    unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags)); }
+    puts(b" cr3="); puthex(cr3);
+    putc(b'\n');
+    // Diagnóstico de crash: 24 qwords do stack interrompido (endereços crescentes).
+    // Os valores 0xffffffff80xxxxxx são return addresses/locals resolvíveis
+    // offline contra o kernel.elf (.symtab). Para no limite da página p/ não
+    // tocar memória não-mapeada e cascata em #DF.
+    let sp = stack_frame.stack_pointer.as_u64();
+    puts(b"[EXC] stk:");
+    let page_end = (sp | 0xFFF) + 1;
+    for i in 0..24u64 {
+        let a = sp + i * 8;
+        if a + 8 > page_end { break; }
+        let v = unsafe { core::ptr::read_volatile(a as *const u64) };
+        putc(b' '); puthex(v);
+    }
     putc(b'\n');
 }
 

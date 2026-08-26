@@ -165,8 +165,19 @@ fn merge_parts(mbr: Vec<Partition>, gpt: Vec<Partition>) -> Vec<Partition> {
 /// Le MBR (+ GPT se protective 0xEE / header EFI PART) via ATA.
 /// USB unificado: MBR hibrido expoe 0x0C; GPT tambem lista Basic Data como 0x0C.
 pub fn read_mbr(ata: &AtaDriver) -> Vec<Partition> {
+    parse_mbr_with(&mut |lba, buf| unsafe { ata.read_sectors(lba as u32, buf, 1) })
+}
+
+/// MBR/GPT sobre QUALQUER BlockDevice (USB-MSC boot, NVMe, AHCI) — paridade
+/// total com `read_mbr` (mesmos logs e gates).
+pub fn read_mbr_dev(dev: &mut dyn crate::block_dev::BlockDevice) -> Vec<Partition> {
+    parse_mbr_with(&mut |lba, buf| dev.read_sectors(lba, buf))
+}
+
+/// Núcleo comum de `read_mbr`/`read_mbr_dev`: setor 0 + GPT opcional.
+fn parse_mbr_with(read_sector: &mut dyn FnMut(u64, &mut [u8]) -> bool) -> Vec<Partition> {
     let mut mbr = [0u8; 512];
-    if !unsafe { ata.read_sectors(0, &mut mbr, 1) } {
+    if !read_sector(0, &mut mbr) {
         crate::slog_nano!("MBR", "info", "Falha ao ler setor 0");
         return Vec::new();
     }
@@ -188,7 +199,7 @@ pub fn read_mbr(ata: &AtaDriver) -> Vec<Partition> {
         .any(|p| p.type_code == 0x0B || p.type_code == 0x0C || p.type_code == 0x1C);
     // Sempre tenta GPT se protective EE, ou se nao ha FAT no MBR (firmware GPT-only)
     if has_ee || !has_fat {
-        let gpt = parse_gpt_partitions(|lba, buf| unsafe { ata.read_sectors(lba as u32, buf, 1) });
+        let gpt = parse_gpt_partitions(|lba, buf| read_sector(lba, buf));
         if !gpt.is_empty() {
             crate::slog_nano!("GPT", "info", "{} particoes", gpt.len());
             for (i, p) in gpt.iter().enumerate() {
@@ -198,29 +209,6 @@ pub fn read_mbr(ata: &AtaDriver) -> Vec<Partition> {
                     p.lba_start,
                     p.sector_count as u64 * 512 / (1024 * 1024));
             }
-            parts = merge_parts(parts, gpt);
-        }
-    }
-    parts
-}
-
-/// Le MBR (+ GPT) via qualquer BlockDevice (ATA, USB-MSC, MemoryDisk).
-pub fn read_mbr_dev(dev: &mut dyn crate::block_dev::BlockDevice) -> Vec<Partition> {
-    let mut mbr = [0u8; 512];
-    if !dev.read_sectors(0, &mut mbr) {
-        return Vec::new();
-    }
-    if mbr[0x1FE] != 0x55 || mbr[0x1FF] != 0xAA {
-        return Vec::new();
-    }
-    let mut parts = parse_mbr_sector(&mbr);
-    let has_ee = parts.iter().any(|p| p.type_code == 0xEE);
-    let has_fat = parts
-        .iter()
-        .any(|p| p.type_code == 0x0B || p.type_code == 0x0C || p.type_code == 0x1C);
-    if has_ee || !has_fat {
-        let gpt = parse_gpt_partitions(|lba, buf| dev.read_sectors(lba, buf));
-        if !gpt.is_empty() {
             parts = merge_parts(parts, gpt);
         }
     }

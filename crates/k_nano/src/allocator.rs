@@ -5,7 +5,7 @@
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::fmt::Write;
-use core::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicIsize, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 use talc::{Span, Talc, Talck, ErrOnOom};
 use x86_64::structures::paging::{FrameAllocator, PageTable, PageTableFlags};
@@ -196,6 +196,23 @@ pub fn set_heap_budget_mb(mb: usize) {
 /// (GLOBAL_ALLOCATOR, etc.) — corrompe total_frames (SESSION_233).
 pub static HEAP_LIMIT: AtomicUsize = AtomicUsize::new(HEAP_SIZE);
 
+/// Phys do `HEAP_BUFFER` (bump). 0 = ainda não reservado no PMM.
+/// `alloc_pt_frame` recusa zerar um frame nesta faixa — alias HHDM sobre o
+/// bump heap era o #PF-storm (PT escrita em nós BTree, CR2=0x16a).
+static BUMP_HEAP_PHYS: AtomicU64 = AtomicU64::new(0);
+
+/// Grava o phys do bump heap após `reserve_range` no boot. Idempotente.
+pub fn set_bump_heap_phys(phys: u64) {
+    BUMP_HEAP_PHYS.store(phys, Ordering::Release);
+    crate::slog_nano!("HEAP", "info", "bump heap phys={:#x} len={}MB", phys, HEAP_SIZE / (1024 * 1024));
+}
+
+/// VA do `HEAP_BUFFER` (higher-half). O boot traduz para phys com virt_base
+/// do Limine e reserva no PMM — não vazar `static mut` para o bin.
+pub fn bump_heap_virt() -> u64 {
+    core::ptr::addr_of!(HEAP_BUFFER) as u64
+}
+
 /// Slab zone: usa HEAP_BUFFER (em .bss, já identity-mapped pelo bootloader).
 /// Não usa HEAP_START (0x4000_0000_0000) porque essa região não está mapeada
 /// nas page tables durante o boot inicial — causava #PF → triple fault → boot loop.
@@ -354,16 +371,30 @@ unsafe fn heap_pte_present(base: VirtAddr, virt: VirtAddr) -> bool {
 }
 
 unsafe fn alloc_pt_frame(base: VirtAddr) -> u64 {
-    use x86_64::structures::paging::FrameAllocator;
-    let mut g = crate::memory::GLOBAL_ALLOCATOR.lock();
-    if let Some(alloc) = g.as_mut() {
-        if let Some(frame) = alloc.allocate_frame() {
-            let pa = frame.start_address().as_u64();
-            core::ptr::write_bytes((base + pa).as_mut_ptr::<u8>(), 0, 4096);
-            return pa;
-        }
+    // Pool dedicada (se o boot chamou init_pt_pool). Fallback no geral.
+    // NUNCA allocate_frame cru aqui: o geral pode devolver um frame do
+    // `.kheap` se a reserva falhou — write_bytes via HHDM zera nós BTree.
+    let pa = match crate::memory::alloc_pt_frame() {
+        Some(f) => f.start_address().as_u64(),
+        None => return 0,
+    };
+    let heap_phys = BUMP_HEAP_PHYS.load(Ordering::Relaxed);
+    if heap_phys != 0
+        && pa >= heap_phys
+        && pa < heap_phys.saturating_add(HEAP_SIZE as u64)
+    {
+        crate::slog_nano!(
+            "HEAP",
+            "fail",
+            "recusa PT frame {:#x} — alias do bump heap [{:#x}..{:#x}]",
+            pa,
+            heap_phys,
+            heap_phys.saturating_add(HEAP_SIZE as u64)
+        );
+        return 0;
     }
-    0
+    core::ptr::write_bytes((base + pa).as_mut_ptr::<u8>(), 0, 4096);
+    pa
 }
 
 pub fn heap_stats() -> (usize, usize) {

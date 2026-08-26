@@ -581,6 +581,10 @@ fn try_tier0_promote(req: &MigrationRequest) -> bool {
 
 /// Telemetria de execução de migração
 static MHI_DEMOTE_FREED: AtomicU64 = AtomicU64::new(0);
+/// Ownership tracking ainda não existe no PMM (bughunt s258 MED). Enquanto
+/// false, demote atualiza metadata mas NÃO devolve frames ao PMM — evita
+/// aliasing PT/heap (forense #PF-storm: PT escrita sobre nós BTree vivos).
+static DEMOTE_FREES_FRAMES: AtomicBool = AtomicBool::new(false);
 static MHI_PROMOTE_LOADED: AtomicU64 = AtomicU64::new(0);
 
 fn execute_soft_migrate(req: MigrationRequest) {
@@ -617,24 +621,36 @@ fn execute_soft_migrate(req: MigrationRequest) {
             .set_tier(PhysAddr::new(req.phys_addr), req.to);
         if ok {
             // Libera o frame DRAM — reduz pressão no frame allocator.
-            // Só libera se o endereço está alinhado a página e é um frame válido.
+            // ⚠️ GATED (forense #PF-storm + bughunt s258 MED "dealloc sem
+            // ownership check"): o dealloc devolvia frames ainda referenciados
+            // por VAs vivos do heap — o PMM re-entregava-os e page tables
+            // passavam a ser escritas DENTRO da região do heap (achado: PT
+            // @0xB4CD000 mapeando 0xB4CC000..0xB6CC000, intercalada entre nós
+            // BTree vivos) → nós zerados → #PF find_key_index CR2=0x16a pós-
+            // SelfHeal, determinístico. Re-habilitar só com frame→owner no PMM.
             if req.phys_addr % 4096 == 0 && req.size > 0 {
-                unsafe {
-                    use x86_64::{PhysAddr, structures::paging::{FrameDeallocator, PhysFrame, Size4KiB}};
-                    let mut guard = crate::memory::GLOBAL_ALLOCATOR.lock();
-                    if let Some(alloc) = (*guard).as_mut() {
-                        let pages = (req.size + 4095) / 4096;
-                        for i in 0..pages {
-                            let f = PhysFrame::<Size4KiB>::containing_address(
-                                PhysAddr::new(req.phys_addr + i as u64 * 4096)
-                            );
-                            alloc.deallocate_frame(f);
+                let pages = (req.size + 4095) / 4096;
+                if DEMOTE_FREES_FRAMES.load(Ordering::Relaxed) {
+                    unsafe {
+                        use x86_64::{PhysAddr, structures::paging::{FrameDeallocator, PhysFrame, Size4KiB}};
+                        let mut guard = crate::memory::GLOBAL_ALLOCATOR.lock();
+                        if let Some(alloc) = (*guard).as_mut() {
+                            for i in 0..pages {
+                                let f = PhysFrame::<Size4KiB>::containing_address(
+                                    PhysAddr::new(req.phys_addr + i as u64 * 4096)
+                                );
+                                alloc.deallocate_frame(f);
+                            }
+                            MHI_DEMOTE_FREED.fetch_add(pages as u64, Ordering::Relaxed);
+                            crate::slog_nano!("MHI", "demote",
+                                "Dram->{:?} @{:x} size={} freed {} frames",
+                                req.to, req.phys_addr, req.size, pages);
                         }
-                        MHI_DEMOTE_FREED.fetch_add(pages as u64, Ordering::Relaxed);
-                        crate::slog_nano!("MHI", "demote",
-                            "Dram->{:?} @{:x} size={} freed {} frames",
-                            req.to, req.phys_addr, req.size, pages);
                     }
+                } else {
+                    crate::slog_nano!("MHI", "demote",
+                        "Dram->{:?} @{:x} size={} — {} frames retidos (dealloc gated, sem ownership)",
+                        req.to, req.phys_addr, req.size, pages);
                 }
             }
             MHI_SOFT_META.fetch_add(1, Ordering::Relaxed);

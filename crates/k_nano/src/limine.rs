@@ -317,6 +317,9 @@ pub struct LimineHandoff {
     /// frame allocator — SESSION_252/ora-1: sem isso o allocator pode entregar
     /// frames do kernel para DMA (e1000 RX) e o NIC sobrescreve o heap.
     pub kernel_phys: u64,
+    /// VA higher-half real (KernelAddressResponse.virtual_base). 0 = usar
+    /// o default do linker `0xffffffff80000000`.
+    pub kernel_virt: u64,
     /// Região KernelAndModules (tipo 1 do memmap) — fallback quando o
     /// KernelAddressRequest não é processado (response null nesta build).
     /// SESSION_252: o memmap SEMPRE reporta o kernel como tipo 1; sem este
@@ -332,6 +335,7 @@ impl LimineHandoff {
             regions: [MemRegion { base: 0, len: 0 }; 64],
             region_count: 0,
             kernel_phys: 0,
+            kernel_virt: 0,
             kernel_region: (0, 0),
         }
     }
@@ -430,6 +434,7 @@ impl LimineHandoff {
                 r.revision
             );
             h.kernel_phys = r.physical_base;
+            h.kernel_virt = r.virtual_base;
         }
 
         h
@@ -454,6 +459,13 @@ impl BootHandoff for LimineHandoff {
             Some(self.kernel_phys)
         } else {
             None
+        }
+    }
+    fn kernel_virt(&self) -> u64 {
+        if self.kernel_virt != 0 {
+            self.kernel_virt
+        } else {
+            0xffff_ffff_8000_0000
         }
     }
     fn kernel_region(&self) -> (u64, u64) {

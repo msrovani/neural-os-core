@@ -1342,25 +1342,38 @@ pub(crate) fn kernel_boot(
         }
         frame_allocator.init_from_usable_ranges(&buf[..n]);
 
-        // SESSION_252/ora-1: marca a RAM do kernel (image + .bss.heap) como
-        // OCUPADA — o Limine pode reportá-la como USABLE e o frame allocator
-        // entregaria frames do kernel/heap para DMA (e1000 RX buffer) → o NIC
-        // sobrescrevia o heap (conn.buf do download OTA) → hash_mismatch com
-        // tamanho exato. KERNEL_END é definido no limine.ld (fim da imagem).
+        // SESSION_252/ora-1: marca a RAM do kernel (image + .kheap NOLOAD) como
+        // OCUPADA. `.kheap` é NOLOAD 512MB — o Limine pode reportar
+        // KERNEL_AND_MODULES só com o ELF (sem BSS) e deixar o bump heap
+        // USABLE. O PMM re-entrega esses frames; `alloc_pt_frame` zera 4K
+        // via HHDM → nós BTree viram 0 → #PF find_key_index CR2=0x16a.
+        // Reserva pelo VA vivo (virt_base do Limine, não 0xffffffff80000000
+        // hardcoded — KASLR mente o tamanho).
         extern "C" {
             static KERNEL_END: u8;
         }
+        let virt_base = handoff.kernel_virt();
+        let heap_va = k_nano::allocator::bump_heap_virt();
+        let reserve_heap = |fa: &mut k_nano::memory::BitmapFrameAllocator, phys_base: u64| {
+            if heap_va >= virt_base {
+                let heap_phys = phys_base.saturating_add(heap_va - virt_base);
+                fa.reserve_range(heap_phys, k_nano::allocator::HEAP_SIZE as u64);
+                k_nano::allocator::set_bump_heap_phys(heap_phys);
+            }
+        };
         if let Some(kp) = handoff.kernel_phys() {
             let virt_end = unsafe { &KERNEL_END as *const u8 as u64 };
-            let image_len = virt_end.saturating_sub(0xffff_ffff_8000_0000);
+            let image_len = virt_end.saturating_sub(virt_base);
             frame_allocator.reserve_range(kp, image_len);
+            reserve_heap(frame_allocator, kp);
         } else {
             // SESSION_252: KernelAddressRequest não processado por esta build
             // do Limine (response null) — usa a região KernelAndModules (tipo 1)
             // do memmap, que SEMPRE existe. Marca a imagem do kernel como OCUPADA.
             let (kb, kl) = handoff.kernel_region();
             frame_allocator.reserve_range(kb, kl);
-            k_nano::slog_bin!("MEM", "info", "kernel_region fallback: reserva {:#x} len={:#x}", kb, kl);
+            reserve_heap(frame_allocator, kb);
+            k_nano::slog_bin!("MEM", "info", "kernel_region fallback: reserva {:#x} len={:#x} virt_base={:#x}", kb, kl, virt_base);
         }
 
         // SESSION_254/258: o frame allocator não conhece a stack de 2MB que o
@@ -1383,6 +1396,13 @@ pub(crate) fn kernel_boot(
         k_nano::slog_bin!("MEM", "info", "reserva stack via RSP {:#x} len=8MB (rsp_phys={:#x})", stack_base, rsp_phys);
         kjson!("DBG", "MEM", "usable_regions", "n", n as u64, "boot", boot_tag);
     });
+    // Pool de page tables DEPOIS das reservas (kernel/heap/stack ocupados).
+    // Sem isto, map_page_direct pega frames do PMM geral — e se o .kheap
+    // ainda estava USABLE, a PT era escrita em cima de nós BTree.
+    {
+        let n = k_nano::memory::init_pt_pool(k_nano::memory::PT_POOL_FRAMES);
+        k_nano::slog_bin!("MEM", "info", "PT pool {} frames ({} KB)", n, n * 4);
+    }
     crate::display::fb::boot_ckpt(7, "frame_allocator ok");
 
     {
@@ -3811,8 +3831,15 @@ pub(crate) fn kernel_boot(
                 if pm == 0 {
                     false
                 } else {
-                    let va = (0x100000000u64 + pm) as *const u32;
-                    unsafe { core::ptr::read_volatile(va) == 0xBE11BE11 }
+                    let va = 0x100000000u64 + pm;
+                    // SESSION_262: phys 4GB pode não existir (RAM < 4GB) — o
+                    // read_volatile cru aqui deu #PF storm em -m 2G (CR2=
+                    // 0xffff800100000000). Guard canônico is_page_present.
+                    if !k_nano::memory::is_page_present(va) {
+                        false
+                    } else {
+                        unsafe { core::ptr::read_volatile(va as *const u32) == 0xBE11BE11 }
+                    }
                 }
             };
             // Com QEMU-loader Active ja em RAM: NUNCA PIO do chat grande no hub
