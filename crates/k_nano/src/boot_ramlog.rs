@@ -281,6 +281,23 @@ pub fn dump() {
     }
 }
 
+/// Snapshot do conteúdo como String (leitura pública p/ SGDB ingest — IDEA #539c).
+/// None se PHYS_MEM_OFFSET ainda 0, buffer vazio ou payload não-UTF8.
+pub fn snapshot() -> Option<alloc::string::String> {
+    if crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed) == 0 {
+        return None;
+    }
+    unsafe {
+        let h = &*hdr_mut();
+        let len = (h.len as usize).min(data_cap());
+        if len == 0 {
+            return None;
+        }
+        let slice = core::slice::from_raw_parts(data_ptr(), len);
+        core::str::from_utf8(slice).ok().map(alloc::string::String::from)
+    }
+}
+
 /// Soft-reboot opt-in. Sem feature: no-op (produto).
 pub fn maybe_flush_reboot(reason: &str) {
     if SKIP_FLUSH_REBOOT.load(Ordering::Relaxed) {

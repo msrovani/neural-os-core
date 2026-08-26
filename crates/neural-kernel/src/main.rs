@@ -868,6 +868,7 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     });
     registry.init_phase();
     crate::display::fb::boot_ckpt(52, "init_phase done");
+    k_ai::boot_observe::ingest_bootlog(); // IDEA #539c: ramlog → memória L3 episódica (Remember entre boots)
     agent_core::set_sched_metrics_hook(Some(sched_metrics_hook));
     // ADR-0060: BEI tick hook — runs every scheduler tick
     agent_core::set_bei_tick_hook(Some(bei_init::bei_tick));
