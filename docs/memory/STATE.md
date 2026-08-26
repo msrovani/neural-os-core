@@ -1,4 +1,5 @@
-﻿# STATE — neural-os-core v1.9.99-s291 — Falcon3 7B alvo + AirLLM
+﻿# STATE — neural-os-core v1.9.99-s292 — Instalador pendrive→HD + NeuralFS FAT32
+#   SESSION_292: instalador ADR-0079 boot USB (source fallback ATA→USB_MSC + guarda target≠source por endereço); fat32::read_root_file_dev (BlockDevice dinâmico); CONFIG.TXT FAT32 (NEURALFS_USB_FORMAT viva na unified); tools/write_usb_hd.ps1. Residual: USB_MSC single-device; índices UI sem ATA.
 #   SESSION_291: sem SKU 8/16GB; fit + GGUF streaming. SESSION_290 PMM 64GiB permanece.
 #   SESSION_289: slog sev + PHASE 0–8 + BOOT SCORE + HUD produto. IDEA #539. Residual: parse no serial QEMU real.
 #   SESSION_288: Trinity auditoria 15 ADRs/52 ideias → 7 kind LOADED (2 wired HWEXPRT/RUSTCDR, 4 keyword→Generator), HEALTH I5 honesto; F1 ModelHeader hidden3072 28L 12H kv4 23040 vocab131080 + auto_arena 50% RAM [512MB,4GB] + slot_footprint dinâmico; P0 ROUTER.BITNET 25.8KB ver6 vocab99 hidden64 n7 93.5% (202 curadas, 84.8% nonzero) + mkfat32 alias dedup PRO.V6/FALCON3.V6; P1 global_arena wrappers + hermes classify_with_trace + AutoLearn replay R3; P2 clone_with_noise fix ternário strided + Int8Router x*127; P3 docs honestidade; PRO.v6 1.86GB (1864557403 B) header 0xBE11BE11 ver6. 0 erros.

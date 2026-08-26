@@ -1,5 +1,16 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s292] - 2026-08-25 — Instalador pendrive→HD externo + NeuralFS opt-in FAT32
+
+**ADR-0079 completo no metal: AIOS instala de pendrive USB para HD (interno ou externo)**
+
+- **Source fallback ATA→USB_MSC:** `read_kernel_from_boot()` lê kernel.elf do boot device real; cópia da ESP também aceita source USB — antes: `"sem ATA (boot device ausente)"` em todo boot por pendrive.
+- **Guarda anti-self-format:** target ≠ source comparado **por endereço** (`ptr::eq` sobre `*const u8`) — o auto-pick (AHCI→NVMe→USB) não formata mais o próprio boot device.
+- **`fat32::read_root_file_dev()`:** leitura de arquivo na raiz FAT32 sobre qualquer `BlockDevice` (USB-MSC/CachedDisk), mesmos gates do `Fat32Reader::read_file` (anti-OOB BPB, teto 256MB, bounds de chain). `Fat32Reader` é `&AtaDriver` concreto (`&self` I/O); generalizar quebraria 45 callers em 7 crates.
+- **CONFIG.TXT em FAT32:** `peek_config_txt` lê `0x0B/0x0C/0x1C/0xEF` além de exFAT — `NEURALFS_USB_FORMAT=1` agora é vista na imagem unified (dados em `0x0C`); antes o NeuralFS USB ficava preso em RAM 4MB no release.
+- **Tool:** `tools/write_usb_hd.ps1` — grava `usb_hw.img` direto num HD externo USB (DD via .NET stream; recusa enclosure 4K-native; alternativa ao Rufus "List USB Hard Drives").
+- **Check:** `cargo check --release` 0 erros; host tests 166/168 (2 falhas `hermes::wasm_build` pré-existentes de outra sessão).
+
 ## [1.9.99-s291] - 2026-08-25 — Falcon3 7B alvo + AirLLM/GGUF (sem SKU)
 
 - Escada **1B / 3B / 7B (goal) / 10B**. Residente se `needs_airllm_at` for false; senão GGUF `StreamingModel`.

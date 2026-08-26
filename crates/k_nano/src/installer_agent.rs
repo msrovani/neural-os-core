@@ -156,7 +156,8 @@ impl Agent for AutoInstallerAgent {
             return AgentTickResult::Pending;
         }
         // SYS_INSTALL recebido (shell `install` / intent) → executa a instalação:
-        // source = boot device (ATA), target = 1º disco da StorageBus (ADR-0086 I2/I3).
+        // source = boot device (ATA ou USB-MSC), target = disco da StorageBus
+        // (ADR-0086 I2/I3).
         while let Some(ev) = self.receiver.try_receive() {
             crate::slog_nano!("INSTALL", "info", "SYS_INSTALL event received: {:?}", ev.topic);
             let result = self.run_install_from_bus();
@@ -172,30 +173,13 @@ impl Agent for AutoInstallerAgent {
 }
 
 impl AutoInstallerAgent {
-    /// Dispara a instalação com source=boot (ATA) e target=disco selecionado.
+    /// Dispara a instalação com source=boot device (ATA ou USB-MSC) e
+    /// target=disco selecionado.
     /// Se DISK_SELECTION >= 0, usa o disco escolhido pela UI (validando target ≠ source).
     /// Senão, usa 1º disco não-boot (AHCI → NVMe → USB) automaticamente.
     fn run_install_from_bus(&self) -> Result<String, &'static str> {
-        // source: boot device (ATA) — lê o kernel.elf da ESP
-        let mut ata_guard = crate::globals::ATA_DRIVER.lock();
-        let Some(ata) = ata_guard.as_mut() else {
-            return Err("sem ATA (boot device ausente)");
-        };
-        let parts = unsafe { crate::fat32::read_mbr(ata) };
-        let mut kernel_elf: Option<alloc::vec::Vec<u8>> = None;
-        for p in &parts {
-            if matches!(p.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
-                if let Some(fs) = unsafe { crate::fat32::Fat32Reader::new(ata, p) } {
-                    if let Some(k) = unsafe { fs.read_file("kernel.elf") } {
-                        kernel_elf = Some(k);
-                        break;
-                    }
-                }
-            }
-        }
-        let kernel = kernel_elf.ok_or("kernel.elf nao encontrado no boot")?;
+        let kernel = Self::read_kernel_from_boot()?;
         crate::slog_nano!("INSTALL", "info", "kernel.elf lido: {} bytes", kernel.len());
-        drop(ata_guard);
 
         // target: disco selecionado pela UI (DISK_SELECTION) ou 1º não-boot
         let sel = crate::installer_agent::DISK_SELECTION.load(Ordering::Relaxed);
@@ -207,28 +191,74 @@ impl AutoInstallerAgent {
         self.install_on_disk(target_idx, &kernel)
     }
 
+    /// Lê kernel.elf da ESP/FAT do boot device.
+    /// Boot por pendrive/HD externo em HW real popula USB_MSC, não ATA —
+    /// tenta ATA primeiro (QEMU/SATA), depois USB-MSC.
+    fn read_kernel_from_boot() -> Result<alloc::vec::Vec<u8>, &'static str> {
+        {
+            let mut g = crate::globals::ATA_DRIVER.lock();
+            if let Some(ata) = g.as_mut() {
+                if let Some(k) = Self::read_kernel_elf(ata) {
+                    return Ok(k);
+                }
+            }
+        }
+        {
+            let mut g = crate::globals::USB_MSC.lock();
+            if let Some(msc) = g.as_mut() {
+                if let Some(k) = Self::read_kernel_elf(msc) {
+                    return Ok(k);
+                }
+            }
+        }
+        Err("kernel.elf nao encontrado no boot (ATA/USB)")
+    }
+
+    fn read_kernel_elf(dev: &mut dyn BlockDevice) -> Option<alloc::vec::Vec<u8>> {
+        let parts = crate::fat32::read_mbr_dev(dev);
+        for p in &parts {
+            if matches!(p.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
+                if let Some(k) = unsafe { crate::fat32::read_root_file_dev(dev, p, "kernel.elf") } {
+                    return Some(k);
+                }
+            }
+        }
+        None
+    }
+
     /// Instala no disco de índice `target_idx`.
     /// Se target_idx == 0 (auto), tenta 1, 2, 3... até achar um device válido.
-    /// Valida target ≠ source (índice 0).
+    /// Valida target ≠ source por endereço (nunca formatar o próprio boot device).
     fn install_on_disk(&self, target_idx: usize, kernel: &[u8]) -> Result<String, &'static str> {
-        // Source = boot ATA (índice 0)
-        let mut source = crate::globals::ATA_DRIVER.lock();
-        let Some(src) = source.as_mut() else {
-            return Err("sem ATA (boot device ausente)");
-        };
-        let src_ptr = src as *mut dyn BlockDevice;
-        drop(source); // libera lock antes de obter target
+        // Source = boot device: ATA (índice 0) ou USB-MSC (boot pendrive/HD externo)
+        let src_ptr: *mut dyn BlockDevice;
+        let mut ata_guard = crate::globals::ATA_DRIVER.lock();
+        if let Some(src) = ata_guard.as_mut() {
+            src_ptr = src as *mut dyn BlockDevice;
+        } else {
+            drop(ata_guard); // libera lock antes de obter o fallback
+            let mut usb_guard = crate::globals::USB_MSC.lock();
+            let src = usb_guard.as_mut().ok_or("sem boot device (ATA/USB)")?;
+            src_ptr = src as *mut dyn BlockDevice;
+        }
 
         // Target: índice específico ou auto (1, 2, 3...)
         let start = if target_idx > 0 { target_idx } else { 1 };
         for idx in start..=3 {
-            // Valida target ≠ source: fonte é sempre índice 0 (boot ATA)
+            // Valida target ≠ source: fonte é sempre o boot device
             if idx == 0 { continue; }
             let target = SysInstaller::device_for_index(idx);
             let Some(tgt) = target else { continue; };
+            // Nunca instalar no próprio boot device (destruiria a fonte)
+            let tgt_ptr: *mut dyn BlockDevice = tgt;
+            if core::ptr::eq(src_ptr as *const u8, tgt_ptr as *const u8) {
+                crate::slog_nano!("INSTALL", "warn",
+                    "disco #{} e o proprio boot device, skip", idx);
+                continue;
+            }
             let mut inst = SysInstaller::new();
-            // SAFETY: source (ATA) e target (AHCI/NVMe/USB) são dispositivos distintos
-            // em locks diferentes — não há aliasing.
+            // SAFETY: source e target são dispositivos distintos (endereços
+            // comparados acima) em locks diferentes — não há aliasing.
             let src = unsafe { &mut *src_ptr };
             match inst.install(src, tgt, kernel) {
                 Ok(()) => {

@@ -32,7 +32,7 @@ fn usb_format_allowed(dev: &mut dyn BlockDevice) -> bool {
     false
 }
 
-/// Le CONFIG.TXT (exFAT ou FAT32) e procura `KEY=1` / `KEY=true`.
+/// Le CONFIG.TXT (exFAT ou FAT32, incl. ESP 0xEF) e procura `KEY=1` / `KEY=true`.
 fn config_flag_true(dev: &mut dyn BlockDevice, key: &str) -> bool {
     let Some(data) = peek_config_txt(dev) else {
         return false;
@@ -63,18 +63,23 @@ fn peek_config_txt(dev: &mut dyn BlockDevice) -> Option<Vec<u8>> {
         if !dev.read_sectors(start, &mut vbr) {
             continue;
         }
-        if &vbr[3..11] != b"EXFAT   " {
-            continue;
-        }
-        let Some(mut ex) = crate::exfat::ExfatReader::new(dev, start) else {
-            continue;
-        };
-        for (fname, is_dir, cluster, size) in ex.list_root() {
-            if is_dir {
+        if &vbr[3..11] == b"EXFAT   " {
+            let Some(mut ex) = crate::exfat::ExfatReader::new(dev, start) else {
                 continue;
+            };
+            for (fname, is_dir, cluster, size) in ex.list_root() {
+                if is_dir {
+                    continue;
+                }
+                if fname.eq_ignore_ascii_case("CONFIG.TXT") {
+                    return ex.read_file(cluster, size.min(4096) as usize);
+                }
             }
-            if fname.eq_ignore_ascii_case("CONFIG.TXT") {
-                return ex.read_file(cluster, size.min(4096) as usize);
+        } else if matches!(p.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
+            // FAT32 — a imagem unified (--hw --unified) tem dados em 0x0C e
+            // ESP em 0xEF; sem este ramo NEURALFS_USB_FORMAT nunca era lida.
+            if let Some(data) = unsafe { crate::fat32::read_root_file_dev(dev, p, "CONFIG.TXT") } {
+                return Some(data.into_iter().take(4096).collect());
             }
         }
     }
