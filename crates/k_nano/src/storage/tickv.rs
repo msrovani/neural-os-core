@@ -236,6 +236,7 @@ impl TickvLite {
                 self.backend = match g.as_ref() {
                     Some(ActiveFlash::Ram(_)) => "ram",
                     Some(ActiveFlash::Nvme(_)) => "nvme",
+                    Some(ActiveFlash::File(_)) => "file",
                     None => "none",
                 };
             } else {
@@ -708,6 +709,7 @@ pub fn is_ready() -> bool {
 pub fn backend_name() -> &'static str {
     let g = TICKV.lock();
     match g.as_ref().map(|k| k.backend) {
+        Some("file") => "file",
         Some("nvme") => "nvme",
         Some("ram") => "ram",
         Some(_) => "unknown",

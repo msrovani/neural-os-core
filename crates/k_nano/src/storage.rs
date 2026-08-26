@@ -6,7 +6,7 @@ pub mod flash;
 pub mod nvme;
 pub mod tickv;
 
-pub use flash::{init_flash, ActiveFlash, FlashController, FLASH};
+pub use flash::{init_flash, ActiveFlash, FileFlash, FlashController, FLASH};
 pub use tickv::{
     backend_name, corrupt_smoke, crc32, dump_flash, encode_record, gc_smoke, get_blob,
     install_ram_flash, is_ready, power_loss_smoke, put_blob, record_size, scan_volume,

@@ -423,6 +423,10 @@ def populate(path):
         + b"\x00" * (256 * 1024 - 180)
     )
     files.append(("BOOT.LOG", boot_log[: 256 * 1024]))
+    # NSGDB.BIN pre-alocado (8 MiB, zeros): volume TickvLite/SGDB persistente
+    # via FileFlash (k_nano::storage::flash) quando nao ha NVMe. Zeros puros =
+    # scan_volume para no EOF limpo; primeiro put real escreve header TKLV.
+    files.append(("NSGDB.BIN", b"\x00" * (8 * 1024 * 1024)))
 
     with open(path, "r+b") as f:
         f.seek(2048 * 512)  # skip MBR + partition start
