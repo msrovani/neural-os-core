@@ -71,7 +71,11 @@ impl SilentFailureDetector {
 #[derive(Clone, Debug)]
 pub struct Checkpoint {
     pub valid: bool,
-    pub bitmap: [u8; k_nano::memory::BITMAP_SIZE],
+    /// Bitmap PMM no heap — NUNCA `[u8; BITMAP_SIZE]` (2MiB). Materializar
+    /// esse array na stack (SelfHeal::new / deserialize / assign) corrompe
+    /// BTree adjacente → panic `btree/navigate` unreachable (mesmo padrão
+    /// que `BitmapFrameAllocator::empty` no teste host, SESSION_290).
+    pub bitmap: Vec<u8>,
     pub next_free_bit: usize,
     pub total_frames: usize,
     pub usable_frames: usize,
@@ -87,16 +91,28 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
-    pub const fn empty() -> Self {
+    pub fn empty() -> Self {
         Checkpoint {
-            valid: false, bitmap: [0; k_nano::memory::BITMAP_SIZE],
-            next_free_bit: 0, total_frames: 0,
-            usable_frames: 0, allocated_count: 0,
-            mhi_dram_bytes: 0, tick: 0,
-            heap_start: 0, heap_size: 0,
-            page_table_pml4_addr: 0, driver_state_hash: 0,
+            valid: false,
+            bitmap: Vec::new(),
+            next_free_bit: 0,
+            total_frames: 0,
+            usable_frames: 0,
+            allocated_count: 0,
+            mhi_dram_bytes: 0,
+            tick: 0,
+            heap_start: 0,
+            heap_size: 0,
+            page_table_pml4_addr: 0,
+            driver_state_hash: 0,
             checkpoint_version: 0,
             save_count: 0,
+        }
+    }
+
+    fn ensure_bitmap_buf(&mut self) {
+        if self.bitmap.len() != BITMAP_SIZE {
+            self.bitmap = alloc::vec![0u8; BITMAP_SIZE];
         }
     }
 
@@ -104,7 +120,11 @@ impl Checkpoint {
     fn serialize(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(1 + BITMAP_SIZE + 11 * 8 + 1);
         buf.push(if self.valid { 1 } else { 0 });
-        buf.extend_from_slice(&self.bitmap);
+        if self.bitmap.len() == BITMAP_SIZE {
+            buf.extend_from_slice(&self.bitmap);
+        } else {
+            buf.resize(buf.len() + BITMAP_SIZE, 0);
+        }
         buf.extend_from_slice(&(self.next_free_bit as u64).to_le_bytes());
         buf.extend_from_slice(&(self.total_frames as u64).to_le_bytes());
         buf.extend_from_slice(&(self.usable_frames as u64).to_le_bytes());
@@ -131,7 +151,8 @@ impl Checkpoint {
         let mut off = 0;
         let valid = data[off] != 0;
         off += 1;
-        let mut bitmap = [0u8; BITMAP_SIZE];
+        // Heap alloc — nunca `[u8; BITMAP_SIZE]` na stack do caller.
+        let mut bitmap = alloc::vec![0u8; BITMAP_SIZE];
         bitmap.copy_from_slice(&data[off..off + BITMAP_SIZE]);
         off += BITMAP_SIZE;
         let next_free_bit = u64::from_le_bytes(data[off..off + 8].try_into().ok()?) as usize;
@@ -273,8 +294,12 @@ pub struct VidGateReport {
 }
 
 impl SelfHeal {
-    pub const fn new() -> Self {
-        SelfHeal { pending_fixes: Vec::new(), lessons: Vec::new(), checkpoint: Checkpoint::empty() }
+    pub fn new() -> Self {
+        SelfHeal {
+            pending_fixes: Vec::new(),
+            lessons: Vec::new(),
+            checkpoint: Checkpoint::empty(),
+        }
     }
 
     /// True se (VID, class) está na tabela de FW conhecidos (gate N2).
@@ -386,7 +411,8 @@ impl SelfHeal {
         k_nano::slog_kai!("CHECKPOINT", "info", "Salvando estado do kernel...");
         let guard = GLOBAL_ALLOCATOR.lock();
         if let Some(ref alloc) = *guard {
-            self.checkpoint.bitmap = alloc.bitmap;
+            self.checkpoint.ensure_bitmap_buf();
+            self.checkpoint.bitmap.copy_from_slice(&alloc.bitmap);
             self.checkpoint.next_free_bit = alloc.next_free_bit;
             self.checkpoint.total_frames = alloc.total_frames;
             self.checkpoint.usable_frames = alloc.usable_frames;
@@ -507,7 +533,9 @@ impl SelfHeal {
             self.checkpoint.save_count, self.checkpoint.checkpoint_version, self.checkpoint.tick);
         let mut guard = GLOBAL_ALLOCATOR.lock();
         if let Some(ref mut alloc) = *guard {
-            alloc.bitmap = self.checkpoint.bitmap;
+            if self.checkpoint.bitmap.len() == BITMAP_SIZE {
+                alloc.bitmap.copy_from_slice(&self.checkpoint.bitmap);
+            }
             alloc.next_free_bit = self.checkpoint.next_free_bit;
             alloc.total_frames = self.checkpoint.total_frames;
             alloc.usable_frames = self.checkpoint.usable_frames;

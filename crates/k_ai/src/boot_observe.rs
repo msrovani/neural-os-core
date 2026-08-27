@@ -310,19 +310,19 @@ pub fn ingest_bootlog_text(text: &str, tick: u64) -> Result<String, &'static str
 /// Ramlog vazio/off → skip honesto (sem pânico).
 pub fn ingest_bootlog() {
     let Some(text) = k_nano::boot_ramlog::snapshot() else {
-        k_nano::slog_kai!("Boot", "ingest", "ramlog vazio — skip honesto");
+        k_nano::slog_kai!("Boot", "ok", "ramlog vazio — skip honesto (ingest)");
         return;
     };
     let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
     match ingest_bootlog_text(&text, tick) {
         Ok(key) => k_nano::slog_kai!(
             "Boot",
-            "ingest",
-            "ramlog → SGDB L3 {} ({} bytes)",
+            "ok",
+            "ingest ramlog → SGDB L3 {} ({} bytes)",
             key,
             text.len()
         ),
-        Err(e) => k_nano::slog_kai!("Boot", "ingest", "warn: {}", e),
+        Err(e) => k_nano::slog_kai!("Boot", "warn", "ingest: {}", e),
     }
 }
 

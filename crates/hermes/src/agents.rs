@@ -1807,16 +1807,26 @@ impl Agent for BootSelfHealAgent {
             if !trusted {
                 k_nano::slog_kai!("Gate", "n2", "trust DENY (token,agent,skill)=(1,self_heal,recover) — skip scan");
             } else {
-                // SESSION_262: sem ATA no metal/QEMU-NoDisk, pci::scan_pci + FAT walk
-                // pode travar ou corromper heap adjacente (BTree panic pós-trust).
+                // AIOS: DeviceTree já observado no boot_bind — não re-scan PCI.
+                // SESSION_262: scan_pci+FAT com ATA podia corromper heap (BTree
+                // panic pós-trust). Preferir árvore; fallback ATA só se vazia.
+                let tree = k_ai::boot_observe::heal_triples_from_tree();
                 let has_ata = k_nano::globals::ATA_DRIVER.lock().is_some();
-                let triples = if has_ata {
+                let triples = if !tree.is_empty() {
+                    k_nano::slog_kai!(
+                        "Gate",
+                        "ok",
+                        "DeviceTree triples={} (no PCI rescan)",
+                        tree.len()
+                    );
+                    tree
+                } else if has_ata {
                     let devices = unsafe { k_nano::pci::scan_pci() };
                     let inv = inventory::HardwareInventory::collect(devices, None);
                     inv.vid_class_triples()
                 } else {
-                    k_nano::slog_kai!("Gate", "n2", "skip PCI rescan (no ATA) — DeviceTree triples");
-                    k_ai::boot_observe::heal_triples_from_tree()
+                    k_nano::slog_kai!("Gate", "n2", "skip PCI rescan (no ATA, tree empty)");
+                    tree
                 };
                 let fw_n = triples
                     .iter()
@@ -1833,15 +1843,30 @@ impl Agent for BootSelfHealAgent {
                 }
                 let mut heal = SELF_HEAL.lock();
                 let report = heal.run_vid_gated_scan(&triples);
-                k_nano::slog_kai!("Gate", "n2", "gate complete heal={} noop={} HEALTH_ISSUE={} (k_ai)",
+                k_nano::slog_kai!("Gate", "ok", "gate complete heal={} noop={} HEALTH_ISSUE={} (k_ai)",
                     report.heal_issues,
                     report.noop,
                     report.health_published);
             }
         }
 
-        // Verifica causa do ultimo desligamento
-        let last_cause = k_ai::shutdown::read_last_shutdown_from_boot_log();
+        // Verifica causa do ultimo desligamento.
+        // QEMU/HV: NÃO caminhar o root FAT à procura de B*.LOG (PIO em disco
+        // grande congela o init_phase após DeviceTree — serial para em Gate ok).
+        // HW real (hv=None) mantém a análise persistente.
+        let last_cause = {
+            use k_nano::platform_probe::{hypervisor, HypervisorKind, probe_done};
+            if probe_done() && !matches!(hypervisor(), HypervisorKind::None) {
+                k_nano::slog_hermes!(
+                    "SELF",
+                    "ok",
+                    "skip FAT boot_log walk (hv) — init_phase"
+                );
+                None
+            } else {
+                k_ai::shutdown::read_last_shutdown_from_boot_log()
+            }
+        };
         match last_cause {
             Some(k_ai::shutdown::ShutdownCause::Unexpected) => {
                 k_nano::slog_hermes!("SELF", "HEAL", "*** ULTIMO DESLIGAMENTO FOI INESPERADO! ***");
