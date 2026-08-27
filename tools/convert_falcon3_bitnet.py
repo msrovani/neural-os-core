@@ -45,30 +45,45 @@ def unpack_hf_oi(u8: np.ndarray) -> np.ndarray:
     return trits.reshape(out4, 4, inn).transpose(0, 2, 1).reshape(out4 * 4, inn)
 
 def absmean_quantize(mat_f: np.ndarray) -> tuple[np.ndarray, float]:
-    """BF16/f32 → ternary {-1,0,+1} via absmean quantization.
+    """BF16/f16/f32 → ternary {-1,0,+1} via absmean quantization.
     
-    Retorna (int8 array, scale_factor).
+    Returns (int8 array, scale_factor). Works in-place to save RAM.
     """
-    x = mat_f.astype(np.float32)
+    import gc
+    x = mat_f.astype(np.float32, copy=True)
+    del mat_f
+    gc.collect()
     abs_mean = float(np.mean(np.abs(x))) + 1e-10
     scale = 1.0 / abs_mean
-    q = np.round(x / abs_mean)
-    q = np.clip(q, -1, 1).astype(np.int8)
+    # Quantize in-place to avoid intermediate arrays
+    np.divide(x, abs_mean, out=x)
+    np.round(x, out=x)
+    np.clip(x, -1, 1, out=x)
+    q = x.astype(np.int8)
+    del x
+    gc.collect()
     return q, scale
 
 # ─── SafeTensors loading ─────────────────────────────────────────────────
 
 def read_safetensors(path: str) -> dict:
     from safetensors.torch import load_file
+    import gc
     state = load_file(str(path))
     tensors = {}
     for key, t in state.items():
         if t.dtype == torch.bfloat16:
-            tensors[key] = t.float().cpu().numpy()
+            # float16 instead of float32 saves 50% RAM
+            tensors[key] = t.half().cpu().numpy()
         elif t.dtype == torch.uint8:
             tensors[key] = t.cpu().numpy().astype(np.uint8)
+        elif t.dtype == torch.float32:
+            tensors[key] = t.half().cpu().numpy()
         else:
             tensors[key] = t.cpu().numpy()
+        del t
+    del state
+    gc.collect()
     return tensors
 
 def download_hf(repo_id: str, filename: str, cache_dir: str | None = None) -> str:
