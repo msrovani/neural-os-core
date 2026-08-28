@@ -68,7 +68,30 @@ O script PS1 tem UTF-8 com em-dashes (`—`) que PowerShell pode mal interpretar
 5. **float16 converter** reduz RAM 50% — viabiliza 3B em 8GB, 7B precisa 16GB+
 6. **neural-sgdb** é repo externo, precisa clone manual em `crates/`
 
+## Novos findings (s293+)
+
+### 7. ATA probe skip em TCG (CRÍTICO)
+`storage_bw::skip_measure()` retorna true em TCG → `probe_storage_drivers()` não executa ATA probe. O kernel NÃO lê o disco FAT32 no QEMU TCG. FALCON3.V6 no disco é inútil sem ATA.
+
+**Impacto:** FAT32 model loading só funciona em WHPX ou HW real. TCG = QEMU loader only.
+
+### 8. QEMU loader scan limitado a 2 endereços
+Kernel procura BitNet magic (`0xBE11BE11`) apenas em `0x100000000` e `0x120000000`. Modelos carregados em outros endereços (ex: hw_expert @0x108400000) são ignorados.
+
+**Fix necessário:** scan iterativo de `[0x100000000..0x180000000)` step=1MB, ou reordenar QEMU loaders para BitNet primeiro.
+
+### 9. QEMU pflash dual-file obrigatório
+`-bios ovmf.fd` (combinado) não funciona com pflash. Usar:
+```
+-drive if=pflash,format=raw,file=ovmf_code.fd,readonly=on
+-drive if=pflash,format=raw,file=ovmf_vars.fd
+```
+### 10. QEMU launcher Python (tools/qemu_boot_stdio.py)
+Launcher funcional com: pflash OVMF, chardev serial file, model auto-discovery, timeout, status detection. Corrige bugs: addr sem `0x`, SIGALRM no Windows, smp override.
+
 ## Failures
 - QEMU 4 cores serial 0 bytes (OVMF pflash issue)
 - Falcon3-7B OOM no host (7.5GB insuficiente)
 - GGUF i2_s not supported in kernel loader
+- ATA probe skip em TCG — modelo não carrega via FAT32
+- QEMU loader scan limitado — BitNet em endereços não-probed
