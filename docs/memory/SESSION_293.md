@@ -105,16 +105,16 @@ Launcher funcional com: pflash OVMF, chardev serial file, model auto-discovery, 
 ### 12. Model dedup: FALCON3.V6 == FALCON3B.v6 (same 807MB)
 Both in `target/`, same size. Added size-based dedup in launcher.
 
-### 13. QEMU loader model never loads — is_page_present() fails (BLOCKER)
+### 13. QEMU loader model loads — `if false &&` blocked status tracking (FIXED)
 FALCON3.V6 (770MB) placed at `0x100000000` via `-device loader`. Kernel probe:
-- `has_addr_in_any_region(0x100000000)` → likely true (8GB RAM)
-- `is_page_present(0x100000000 + HHDM)` → returns **false** for ALL addresses
-- Result: silent skip → `llm=ABSENT`
-- Tested: 1C, 4C, 8GB — always ABSENT
-- 0x1000000 (16MB) → QEMU crashes (overlaps kernel)
-- **Root cause:** Kernel page tables (HHDM) don't map physical addresses ≥ ~2GB.
-  The Limine HHDM sets `offset=0xffff800000000000` but `is_page_present()` walks
-  the kernel's own page tables which only map a subset of the HHDM range.
+- `has_addr_in_any_region(0x100000000)` → **true** (8GB RAM)
+- `is_page_present(0x100000000 + HHDM)` → works for BGE scan (all addresses)
+- Model copies 770MB to heap via `to_vec()` → `load_model_v6()` → **SUCCESS**
+- `set_model()` called → `model_is_loaded()` returns true
+- **But `load_status::set(Llm, Loaded)` never fired** because it was inside
+  `if false && (model_loaded || model_is_loaded())` — hardcoded disabled block
+- Fix: removed `false &&`, set status unconditionally when model loaded
+- **Result:** `llm=LOADED`, BOOT SCORE `llm=ok`, 770MB Falcon3 active
 
 ### 14. slog messages all Sev::Trace — model probe invisible
 All slog_bin! calls in the model probe use subs "bge", "ramdisk", "info", "loader"
@@ -137,8 +137,12 @@ Despite LLM=ABSENT, SGDB `ingest ramlog → SGDB L3 boot/0000017 (7640 bytes)` s
 Boot completes through Phase 8 + BOOT SCORE with 4 cores. System is functional,
 just without LLM inference (formant fallback for voice).
 
-## Model Loading Fix Roadmap
-1. **Fix HHDM page table mapping** — ensure `is_page_present()` works for full 8GB
-2. **Change slog subs** — model probe messages to "ok" severity for visibility
-3. **Consider: stream model from disk** — load Falcon3 from FAT32 ATA (fix ATA in TCG)
-4. **Or: smaller model** — use 3B variant (~200MB v6) instead of 7B (770MB)
+## Model Loading — RESOLVED ✅
+Falcon3-3B-Instruct-1.58bit (770MB) loads successfully via QEMU loader at 0x100000000.
+`llm=LOADED` in Status + BOOT SCORE. 4 cores online. NSGDB ingest works.
+
+## Cross-boot NSGDB — BLOCKER
+TICKV is RAM-only → SGDB doesn't persist between QEMU instances.
+BOOT.LOG persistence requires ATA disk I/O → blocked by `storage_bw::skip_measure()` in TCG.
+**Fix needed:** Remove TCG ATA skip or implement BOOT.LOG write via alternative path.
+Test on WHPX or HW real where ATA works.
