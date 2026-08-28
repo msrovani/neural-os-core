@@ -95,3 +95,50 @@ Launcher funcional com: pflash OVMF, chardev serial file, model auto-discovery, 
 - GGUF i2_s not supported in kernel loader
 - ATA probe skip em TCG — modelo não carrega via FAT32
 - QEMU loader scan limitado — BitNet em endereços não-probed
+
+## Round 2 — Model Loading Deep Debug (s293+R2)
+
+### 11. PS1 model scan: .v6 extension excluded (FIXED)
+`run-qemu-uefi.ps1` only scanned `.bitnet`/`.BIN`/`.bin` — FALCON3.V6 (770MB) was invisible.
+**Fix:** Added `*.v6` filter + changed 70MB cap to 2GB. Commit `dd8e5fe`.
+
+### 12. Model dedup: FALCON3.V6 == FALCON3B.v6 (same 807MB)
+Both in `target/`, same size. Added size-based dedup in launcher.
+
+### 13. QEMU loader model never loads — is_page_present() fails (BLOCKER)
+FALCON3.V6 (770MB) placed at `0x100000000` via `-device loader`. Kernel probe:
+- `has_addr_in_any_region(0x100000000)` → likely true (8GB RAM)
+- `is_page_present(0x100000000 + HHDM)` → returns **false** for ALL addresses
+- Result: silent skip → `llm=ABSENT`
+- Tested: 1C, 4C, 8GB — always ABSENT
+- 0x1000000 (16MB) → QEMU crashes (overlaps kernel)
+- **Root cause:** Kernel page tables (HHDM) don't map physical addresses ≥ ~2GB.
+  The Limine HHDM sets `offset=0xffff800000000000` but `is_page_present()` walks
+  the kernel's own page tables which only map a subset of the HHDM range.
+
+### 14. slog messages all Sev::Trace — model probe invisible
+All slog_bin! calls in the model probe use subs "bge", "ramdisk", "info", "loader"
+which map to `Sev::Trace`. Default console filter = `CONSOLE_OK` (sev≥1).
+→ All model loading diagnostic messages are **completely hidden** from serial/file.
+**Fix needed:** Change key probe messages to sub="ok" or add boot-trace feature.
+
+### 15. TCG 770MB copy timeout
+Even if probe found the model, `to_vec()` of 770MB in TCG would take minutes.
+With 10 models (1GB total), boot stalls at Phase 5 for >120s then finishes with ABSENT.
+**Implication:** Model loading via QEMU loader in TCG is fundamentally impractical >100MB.
+
+### 16. WHPX ATA PIO hang on this machine
+WHPX without QEMU loader: ATA probe hangs (PIO too slow in WHPX on this HW).
+WHPX + QEMU loader: immediate crash (0 bytes, WHPX SMP issue documented in AGENTS.md).
+**Conclusion:** Neither TCG nor WHPX can reliably load Falcon3 770MB model.
+
+### 17. NSGDB ingest WORKS
+Despite LLM=ABSENT, SGDB `ingest ramlog → SGDB L3 boot/0000017 (7640 bytes)` succeeds.
+Boot completes through Phase 8 + BOOT SCORE with 4 cores. System is functional,
+just without LLM inference (formant fallback for voice).
+
+## Model Loading Fix Roadmap
+1. **Fix HHDM page table mapping** — ensure `is_page_present()` works for full 8GB
+2. **Change slog subs** — model probe messages to "ok" severity for visibility
+3. **Consider: stream model from disk** — load Falcon3 from FAT32 ATA (fix ATA in TCG)
+4. **Or: smaller model** — use 3B variant (~200MB v6) instead of 7B (770MB)
