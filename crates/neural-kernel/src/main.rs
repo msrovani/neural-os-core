@@ -2422,20 +2422,20 @@ pub(crate) fn kernel_boot(
                             if size_hint > max_read { size_hint = max_read; }
                         }
                         let data = core::slice::from_raw_parts(ptr, size_hint);
-                        k_nano::slog_bin!("Asset", "bge", "magic 0xBE11BE11 found @{:#x} — parse {} KB…", addr, size_hint / 1024);
+                        k_nano::slog_bin!("Asset", "ok", "BGE magic 0xBE11BE11 found @{:#x} — parse {} KB", addr, size_hint / 1024);
                         if crate::memory_systems::load_bge(data) {
-                            k_nano::slog_bin!("Asset", "bge", "Embedding model LOADED (QEMU-loader @{:#x}) size={}KB", addr, size_hint / 1024);
+                            k_nano::slog_bin!("Asset", "ok", "BGE LOADED (QEMU-loader @{:#x}) size={}KB", addr, size_hint / 1024);
                             crate::boot_logger::log("BOOT: BGE embedding loaded (QEMU)");
                             loaded = true;
                             break;
                         } else {
-                            k_nano::slog_bin!("Asset", "bge", "@{:#x} parse FAILED — fallback FAT", addr);
+                            k_nano::slog_bin!("Asset", "warn", "@{:#x} BGE parse FAILED — fallback FAT", addr);
                         }
                     }
                     addr = addr.saturating_add(0x100000); // 1MB steps
                 }
                 if !found {
-                    k_nano::slog_bin!("Asset", "bge", "QEMU-loader scan [0x100000000..0x180000000) — 0xBE11BE11 ausente");
+                    k_nano::slog_bin!("Asset", "warn", "QEMU-loader BGE scan [0x100000000..0x180000000) — 0xBE11BE11 ausente");
                 }
             }
         }
@@ -3088,6 +3088,7 @@ pub(crate) fn kernel_boot(
             .unwrap_or((None, None))
         };
         if mem_has_4gb {
+            k_nano::slog_bin!("Asset", "ok", "LLM probe: mem_has_4gb=true, probing @0x{load_addr:x}…");
             let probe_ptr = (load_addr + pm_offset) as *const u8;
             let raw0 = unsafe { core::ptr::read_volatile(probe_ptr) };
             let raw1 = unsafe { core::ptr::read_volatile(probe_ptr.add(1)) };
@@ -3113,14 +3114,9 @@ pub(crate) fn kernel_boot(
                         k_nano::slog_bin!("Asset", "ramdisk", "region {}MB < model {}MB — truncando", region / (1024*1024), model_len / (1024*1024));
                         model_len = region;
                     }
-                }
-                k_nano::slog_bin!(
-                    "Asset",
-                    "ramdisk",
-                    "QEMU loader: magic OK @0x100000000 exact={}KB fat={:?} name={:?}",
+                }                    k_nano::slog_bin!("Asset", "ok", "LLM magic 0xBE11BE11 @0x100000000 — model {}KB fat={:?}",
                     model_len / 1024,
-                    fat_sz.map(|s| s / 1024),
-                    fat_name
+                    fat_sz.map(|s| s / 1024)
                 );
                 if model_len > 1024 {
                     let model_data = unsafe { core::slice::from_raw_parts(probe_ptr, model_len) };
@@ -3128,8 +3124,8 @@ pub(crate) fn kernel_boot(
                     // apos set_model deixava dangling → #PF no FWD (CR2 heap liberado).
                     k_nano::slog_bin!(
                         "Asset",
-                        "ramdisk",
-                        "QEMU loader: copying {}KB -> heap (leak backing) then load_model...",
+                        "ok",
+                        "LLM copying {}KB -> heap (leak) then load_model_v6…",
                         model_len / 1024
                     );
                     let owned: alloc::vec::Vec<u8> = model_data.to_vec();
@@ -3152,8 +3148,8 @@ pub(crate) fn kernel_boot(
                         let airllm = cortex_crate::model_fit::needs_airllm(params, model_mb);
                         k_nano::slog_bin!(
                             "Asset",
-                            "ramdisk",
-                            "LLM LOADED file={} (QEMU-loader@4G->heap-leak) size={}KB RAM={}MB airllm={}",
+                            "ok",
+                            "LLM LOADED {} (QEMU@4G->heap) size={}KB RAM={}MB airllm={}",
                             tag,
                             leaked.len() / 1024,
                             fit_ram,
@@ -3175,7 +3171,7 @@ pub(crate) fn kernel_boot(
                     }
                 }
             } else {
-                k_nano::slog_bin!("RAMDISK", "info", "No model at 0x100000000 — trying 0x120000000...");
+                k_nano::slog_bin!("Asset", "warn", "LLM: no magic 0xBE11BE11 at 0x100000000 — trying 0x120000000…");
                 let load_addr2: u64 = 0x120000000;
                 let has_addr2 = handoff.has_addr_in_any_region(load_addr2);
                 if has_addr2 {
@@ -3208,7 +3204,7 @@ pub(crate) fn kernel_boot(
                 }
             }
         } else {
-            k_nano::slog_bin!("RAMDISK", "info", "4GB not in memory map (use -m 6G) — fallback FAT.");
+            k_nano::slog_bin!("Asset", "warn", "LLM probe: mem_has_4gb=FALSE — 0x{load_addr:x} NOT in any usable region! RAM may be <4GB or regions fragmented.");
         }
     }
 
@@ -3986,40 +3982,41 @@ pub(crate) fn kernel_boot(
     }
 
     // LLM test + telemetria N1.1 — ladder prompts (coerencia/tempo) no boot serial
-    // ponytail: skip — forward pass soft-float ~2s; trava no WHPX. Testar manual via serial.
-    if false && (model_loaded || crate::cortex::model_is_loaded()) {
-        let prompts: &[&str] = &[
-            "ola",
-            "quanto e 2 mais 2",
-            "o que e neural os",
-        ];
-        // Ladder: 1 token-ish curto — soft-float WHPX em h=1536+ e lento; 3 prompts completos
-        // podem levar dezenas de min. Loga ticks por prompt para custo/tempo.
-        for (i, p) in prompts.iter().enumerate() {
-            let t0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let r = crate::cortex::generate_via_model(p);
-            let t1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let ticks = t1.saturating_sub(t0);
-            k_nano::slog_bin!(
-                "LLM-TEST",
-                "info",
-                "#{}/{} prompt='{}' ticks={} (~{}s) response='{}'",
-                i + 1,
-                prompts.len(),
-                p,
-                ticks,
-                ticks / 100,
-                r
-            );
-        }
+    // ponytail: forward pass soft-float ~2s; skip test if no model or TCG slow.
+    if model_loaded || crate::cortex::model_is_loaded() {
         crate::load_status::set(
             crate::load_status::AssetKind::Llm,
             crate::load_status::LoadStatus::Loaded,
         );
+        k_nano::slog_bin!("LLM", "ok", "LOADED — model active in ModelHub");
+        // Forward test: skip in TCG (too slow), run on WHPX/HW
+        if !k_nano::platform_probe::hypervisor().is_sandbox() {
+            let prompts: &[&str] = &[
+                "ola",
+                "quanto e 2 mais 2",
+                "o que e neural os",
+            ];
+            for (i, p) in prompts.iter().enumerate() {
+                let t0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+                let r = crate::cortex::generate_via_model(p);
+                let t1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+                let ticks = t1.saturating_sub(t0);
+                k_nano::slog_bin!(
+                    "LLM-TEST",
+                    "ok",
+                    "#{}/{} prompt='{}' ticks={} (~{}s) response='{}'",
+                    i + 1,
+                    prompts.len(),
+                    p,
+                    ticks,
+                    ticks / 100,
+                    r
+                );
+            }
+        }
     } else {
-        k_nano::slog_bin!("LLM-TEST", "info", "no model — ABSENT");
+        k_nano::slog_bin!("LLM", "warn", "ABSENT — no model loaded (FAT/ramdisk)");
         crate::boot_logger::log("BOOT: LLM ABSENT — sem ramdisk/loader/FAT modelo utilizavel");
-        k_nano::slog_bin!("LLM", "info", "ABSENT — BitNet 2B nao carregado (FAT/ramdisk)");
         crate::load_status::set_if_upgrade(
             crate::load_status::AssetKind::Llm,
             crate::load_status::LoadStatus::Absent,
