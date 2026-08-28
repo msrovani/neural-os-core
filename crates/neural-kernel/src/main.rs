@@ -3074,7 +3074,7 @@ pub(crate) fn kernel_boot(
                     }
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                         // Ordem = degrau ladder; com PACK_LLM=um so, so esse existe.
-                        for name in &["llama8b.bin"] {
+                        for name in &["falcon3.v6", "llama8b.bin"] {
                             if let Some(sz) = fs.lookup_file_size(name) {
                                 if sz >= 1_000_000 {
                                     return (Some(*name), Some(sz));
