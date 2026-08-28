@@ -7,6 +7,7 @@
 ## Sessões Mantidas (107+)
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
+| 293 | QEMU | OVMF+GGUF debug | UEFI boot pflash, Falcon3 GGUF/1.58-bit, RAM fix | OVMF dual-file (code+vars) obrigatório p/ boot fresh; paths MSYS→Windows causa serial 0 bytes (Python subprocess fix); Falcon3 1.58-bit = safetensors TII → `.v6` BitNet (NÃO GGUF); GGUF i2_s type=25 não suportado no loader kernel; float16 converter reduz RAM 50% (commit `ac3d3ef`); neural-sgdb repo externo `msrovani/neural-sgdb`. |
 | 292 | Install | ADR-0079 USB | Instalador pendrive→HD + NeuralFS opt-in FAT32 | Source fallback ATA→USB_MSC + guarda target≠source por endereço (auto-pick não formata o boot device); `fat32::read_root_file_dev` p/ BlockDevice dinâmico (Fat32Reader é &AtaDriver; 45 callers intocados); CONFIG.TXT FAT32 (`NEURALFS_USB_FORMAT` era flag morta na unified); `tools/write_usb_hd.ps1` DD c/ recusa 4K-native. Residual: USB_MSC single-device; índices UI≠device_for_index sem ATA. |
 | 291 | LLM | Falcon3 ladder | 7B alvo; 1B/3B/10B; AirLLM/GGUF se não cabe | Sem SKU RAM. v6 stream = residual. |
 | 290 | LLM | RAM policy | PMM 64GiB static + heap_budget frações | 8/16GB SKU **revertido** na 291. |
