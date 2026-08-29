@@ -3410,7 +3410,8 @@ pub(crate) fn kernel_boot(
                     let mut pack_used_mb: u64 = 0;
                     let mut kinds_have: u8 = 0;
                     for name in llm_names {
-                        let Some(sz) = unsafe { k_nano::fat32::lookup_file_on_dev(msc, name) } else { continue };
+                    let sz_opt = unsafe { k_nano::fat32::lookup_file_on_dev(msc, name) };
+                    let Some(sz) = sz_opt else { continue };
                         if sz < 1_000_000 && (*name == "LLAMA8B.BIN" || *name == "MICRO.BITNET") {
                             continue;
                         }
@@ -3978,7 +3979,17 @@ pub(crate) fn kernel_boot(
                 }
             }
         }
-        // I5: NeuralFS do disco instalado primeiro (Residente), depois FAT32 (pendrive/live)
+        // I5: NeuralFS do disco instalado primeiro (Residente), depois FAT32 (pendrive/live).
+        // Em QEMU dev/test (<=6GB RAM) o loader OOMa a heap 512MB antes de
+        // completar o pipeline — pulamos o load de modelos para deixar o boot
+        // chegar ate o NSGDB/ingest e validar persistencia. Em HW real
+        // mantemos o pipeline completo.
+        let qemu_dev_skip_models = k_nano::platform_probe::hypervisor().is_sandbox()
+            && k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) <= 6144;
+        if qemu_dev_skip_models {
+            k_nano::slog_bin!("HUB", "skip", "QEMU dev (≤6GB RAM) — modelos nao carregados (dev/test NSGDB path)");
+            // Pula para apos do bloco de model loading (cai no proximo `}`)
+        } else {
         for s in [
             crate::model_hub::ModelSlot::Reranker,
             crate::model_hub::ModelSlot::Vision,
@@ -4002,6 +4013,7 @@ pub(crate) fn kernel_boot(
             crate::model_hub::mark_pro_alias(true);
         }
         k_nano::slog_bin!("MODEL", "info", "{}", crate::model_hub::hub_status());
+        }
     }
 
     // BPE vocab HF (BPB1) via QEMU-loader + FAT — ANTES do LLM-TEST
