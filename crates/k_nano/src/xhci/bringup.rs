@@ -3,6 +3,7 @@
 //! Sem isto, `usb_msc::probe` usava slot=2 fantasma e BOOT.LOG nunca gravava.
 
 use super::{alloc_phys, portsc_addr, r32, w32, BulkEndpoint, XHCI_STATE};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Espera um Transfer Event (type 32) no anel de eventos, varrendo a partir de
 /// `er_dequeue` (padrão wait_cmd_completion) e avançando o ERDP. O poll antigo
@@ -146,6 +147,28 @@ pub unsafe fn bringup_hid_keyboard() -> bool {
 /// ADR-0062 P24b: HID boot mouse em porta CCS ≠ MSC e ≠ kb.
 pub unsafe fn bringup_hid_mouse() -> bool {
     bringup_hid_boot(HidBootKind::Mouse)
+}
+
+static HID_DEFER_DONE: AtomicBool = AtomicBool::new(false);
+
+/// Boot USB unificado: HID adiado no DriverInit (MSC no mesmo xHCI).
+pub unsafe fn try_deferred_hid_bringup() -> bool {
+    if HID_DEFER_DONE.swap(true, Ordering::AcqRel) {
+        return false;
+    }
+    if crate::globals::USB_MSC.lock().is_none() {
+        return false;
+    }
+    let kb = bringup_hid_keyboard();
+    let ms = bringup_hid_mouse();
+    crate::slog_nano!(
+        "USB",
+        "hid",
+        "deferred P24a/P24b kb={} mouse={}",
+        kb,
+        ms
+    );
+    kb || ms
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

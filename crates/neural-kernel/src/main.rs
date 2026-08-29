@@ -1450,7 +1450,26 @@ pub(crate) fn kernel_boot(
     publish_boot_phase(BootPhase::SafeHarbor, "Serial+Display+IDT prontos");
     publish_boot_phase(BootPhase::MemoryCore, "Frame allocator + page tables + heap");
     crate::display::fb::boot_ckpt(13, "SafeHarbor+MemoryCore");
+    // ADR-0055: probe cedo — gate smokes pesados em HW real (SESSION_268/292).
+    crate::display::fb::boot_ckpt(129, "platform_probe:detect");
+    k_nano::platform_probe::detect();
+    k_nano::platform_probe::log_itd_probe();
+    let hw_real = matches!(
+        k_nano::platform_probe::hypervisor(),
+        k_nano::platform_probe::HypervisorKind::None
+    );
     crate::display::fb::boot_ckpt(130, "pre-smokes");
+
+    if hw_real {
+        // Alienware/240H: bloco K130–K134 completo parecia hang (minutos).
+        crate::display::fb::boot_ckpt(130, "hw-lite smokes");
+        k_hal::hw_gate::mark_boot_smoke(boot_tag);
+        k_hal::hw_gate::emit_all();
+        let _ = hermes_crate::ipc_bus::boot_smoke();
+        let _ = hermes_crate::async_io::boot_smoke();
+        k_nano::async_rt::init_async_rt();
+        crate::display::fb::boot_ckpt(135, "smokes hw-lite ok");
+    } else {
 
     // Labor 8: smoke = MemoryCore → BootSmokeOk; HW-GATE early (Limine pode #PF antes WifiAgent)
     crate::display::fb::boot_ckpt(130, "hw_gate:mark_boot_smoke");
@@ -1554,11 +1573,8 @@ pub(crate) fn kernel_boot(
     labor_smokes::gsp_conditional_smoke();
     crate::display::fb::boot_ckpt(135, "smokes5 ok");
 
-    // ADR-0055: probe HV/ISA/cache → FeatureGate antes de SIMD/SMP
-    crate::display::fb::boot_ckpt(135, "platform_probe:detect");
-    // ADR-0055: probe HV/ISA/cache → FeatureGate antes de SIMD/SMP
-    k_nano::platform_probe::detect();
-    k_nano::platform_probe::log_itd_probe();
+    } // fim smokes QEMU/HV
+
     crate::display::fb::boot_ckpt(136, "probe ok");
     simd::enable_simd();
     crate::display::fb::boot_ckpt(137, "SIMD ok2");
@@ -1929,15 +1945,20 @@ pub(crate) fn kernel_boot(
                 k_nano::platform_probe::HypervisorKind::None
             );
         if want_usb && !qemu_hid {
-            // ADR-0062 P24a: HID boot keyboard (porta ≠ MSC)
-            if unsafe { crate::xhci::bringup_hid_keyboard() } {
-                crate::boot_logger::log("BOOT: P24a HID keyboard ready");
-            }
-            // ADR-0062 P24b: HID boot mouse (porta ≠ MSC/kb); hub=AWAITING se class 09h
-            if unsafe { crate::xhci::bringup_hid_mouse() } {
-                crate::boot_logger::log("BOOT: P24b HID mouse ready");
+            // Boot USB unificado: HID no mesmo xHCI que MSC — defer p/ Runtime.
+            let usb_msc_boot = crate::USB_MSC.lock().is_some();
+            if usb_msc_boot {
+                crate::boot_logger::log("BOOT: P24a/P24b HID defer (USB-MSC boot → InputAgent T+50)");
+                k_nano::slog_nano!("USB", "hid", "skip P24a/P24b — deferred after init_phase");
             } else {
-                crate::boot_logger::log("BOOT: P24b HID mouse SKIP");
+                if unsafe { crate::xhci::bringup_hid_keyboard() } {
+                    crate::boot_logger::log("BOOT: P24a HID keyboard ready");
+                }
+                if unsafe { crate::xhci::bringup_hid_mouse() } {
+                    crate::boot_logger::log("BOOT: P24b HID mouse ready");
+                } else {
+                    crate::boot_logger::log("BOOT: P24b HID mouse SKIP");
+                }
             }
         } else if want_usb {
             k_nano::slog_nano!("USB", "hid", "QEMU skip P24a/P24b (tablet/kbd Enable Slot timeout)");
@@ -2318,7 +2339,12 @@ pub(crate) fn kernel_boot(
             let data_lba = fat_lba + fat_count as u32 * spf;
 
             let mut cluster = root_cluster;
-            while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+            let mut root_walked = 0u32;
+            while cluster < 0x0FFF_FFF8
+                && cluster >= 2
+                && root_walked < 8
+            {
+                root_walked += 1;
                 let clba = data_lba + (cluster - 2) as u32 * spc as u32;
                 let mut buf = vec![0u8; spc as usize * bps as usize];
                 for s in 0..spc as u32 {
@@ -2517,15 +2543,24 @@ pub(crate) fn kernel_boot(
             if !loaded {
                 let mut usb_guard = crate::USB_MSC.lock();
                 if let Some(ref mut msc) = *usb_guard {
-                    if let Some(bge_data) = read_file_from_dev(msc, "BGE.BIN") {
+                    if let Some(sz) = unsafe { k_nano::fat32::lookup_file_on_dev(msc, "BGE.BIN") } {
                         found = true;
-                        k_nano::slog_bin!("BGE", "info", "BGE.BIN lido USB-MSC ({} KB) — parse…", bge_data.len() / 1024);
-                        if crate::memory_systems::load_bge(&bge_data) {
-                            k_nano::slog_bin!("Asset", "bge", "Embedding model LOADED from USB-MSC FAT!");
-                            crate::boot_logger::log("BOOT: BGE embedding loaded (USB)");
-                            loaded = true;
-                        } else {
-                            k_nano::slog_bin!("Asset", "bge", "BGE.BIN present but parse FAILED (USB-MSC)");
+                        if sz > 8 * 1024 * 1024 {
+                            k_nano::slog_bin!(
+                                "BGE",
+                                "info",
+                                "skip USB PIO BGE {}KB no boot (runtime/HW)",
+                                sz / 1024
+                            );
+                        } else if let Some(bge_data) = read_file_from_dev(msc, "BGE.BIN") {
+                            k_nano::slog_bin!("BGE", "info", "BGE.BIN lido USB-MSC ({} KB) — parse…", bge_data.len() / 1024);
+                            if crate::memory_systems::load_bge(&bge_data) {
+                                k_nano::slog_bin!("Asset", "bge", "Embedding model LOADED from USB-MSC FAT!");
+                                crate::boot_logger::log("BOOT: BGE embedding loaded (USB)");
+                                loaded = true;
+                            } else {
+                                k_nano::slog_bin!("Asset", "bge", "BGE.BIN present but parse FAILED (USB-MSC)");
+                            }
                         }
                     }
                 }
@@ -3364,7 +3399,7 @@ pub(crate) fn kernel_boot(
             }
         }
         // USB-MSC: mesmo stick unificado (boot ESP + dados) quando nao ha ATA/IDE
-        if !model_loaded && !k_nano::platform_probe::hypervisor().is_sandbox() {
+        if !k_nano::platform_probe::hypervisor().is_sandbox() {
             unsafe {
                 let mut usb_guard = crate::USB_MSC.lock();
                 if let Some(ref mut msc) = *usb_guard {
@@ -3375,8 +3410,8 @@ pub(crate) fn kernel_boot(
                     let mut pack_used_mb: u64 = 0;
                     let mut kinds_have: u8 = 0;
                     for name in llm_names {
-                        let Some(fat_data) = read_file_from_dev(msc, name) else { continue; };
-                        if fat_data.len() < 1_000_000 && (*name == "LLAMA8B.BIN" || *name == "MICRO.BITNET") {
+                        let Some(sz) = unsafe { k_nano::fat32::lookup_file_on_dev(msc, name) } else { continue };
+                        if sz < 1_000_000 && (*name == "LLAMA8B.BIN" || *name == "MICRO.BITNET") {
                             continue;
                         }
                         let kind = cortex_crate::model_fit::falcon3_kind_of_name(name);
@@ -3387,14 +3422,17 @@ pub(crate) fn kernel_boot(
                         } else if kinds_have != 0 {
                             continue;
                         }
-                        let file_mb = (fat_data.len() / (1024 * 1024)) as u64;
+                        let file_mb = (sz / (1024 * 1024)) as u64;
                         if model_loaded {
                             let Some(k) = kind else { continue };
-                            if fat_data.len() > pio_cap
-                                || !cortex_crate::model_fit::pack_resident_ok(ram_now, pack_used_mb, file_mb)
+                            if sz > pio_cap
+                                || !cortex_crate::model_fit::pack_resident_ok(
+                                    ram_now, pack_used_mb, file_mb,
+                                )
                             {
                                 continue;
                             }
+                            let Some(fat_data) = read_file_from_dev(msc, name) else { continue };
                             let llm_v6 = cortex_crate::model::load_model_v6(&fat_data).and_then(|v| match v {
                                 cortex_crate::model::ModelView::Llm(m) => Some(m),
                                 _ => None,
@@ -3409,10 +3447,10 @@ pub(crate) fn kernel_boot(
                             }
                             continue;
                         }
-                        if fat_data.len() > pio_cap {
+                        if sz > pio_cap {
                             k_nano::slog_nano!("FAT", "info", "USB {} PRESENT size={}KB — skip full PIO",
                                 name,
-                                fat_data.len() / 1024);
+                                sz / 1024);
                             if let Ok(sm) = crate::gguf_streaming::StreamingModel::from_fat(name) {
                                 cortex_crate::cortex::set_streaming_model(
                                     alloc::boxed::Box::new(sm));
@@ -3426,6 +3464,7 @@ pub(crate) fn kernel_boot(
                             }
                             continue;
                         }
+                        let Some(fat_data) = read_file_from_dev(msc, name) else { continue; };
                         k_nano::slog_nano!("FAT", "info", "USB lendo {} ({}KB) — candidato LLM...",
                             name,
                             fat_data.len() / 1024);

@@ -7,6 +7,9 @@ const MANIFEST: AgentManifest = AgentManifest {
     persist: true,
 };
 
+const MAX_ROOT_CLUSTERS: u32 = 8;
+const MAX_BOOT_LOG_BYTES: usize = 64 * 1024;
+
 pub struct BootLogAgent;
 
 impl BootLogAgent {
@@ -15,6 +18,10 @@ impl BootLogAgent {
     /// Le o ultimo log de boot e retorna como string para o Cortex
     /// Suporta FAT32 (B<TICK>.LOG) e LogFsAgent (memoria)
     pub fn read_last_boot_log() -> Option<alloc::string::String> {
+        // Boot USB unificado: MSC no mesmo stick — walk FAT via BOT trava init_phase.
+        if k_nano::globals::USB_MSC.lock().is_some() {
+            k_nano::slog_kai!("BOOTLOG", "info", "skip FAT walk (USB-MSC boot)");
+        } else {
         // Tenta ler do disco ATA primeiro
         let ata_guard = k_nano::ATA_DRIVER.lock();
         let ata = (*ata_guard).as_ref()?;
@@ -27,7 +34,9 @@ impl BootLogAgent {
                         let mut best_name = alloc::string::String::new();
                         let mut best_tick = 0u64;
                         let mut cluster = fat32.get_root_cluster();
-                        while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+                        let mut walked = 0u32;
+                        while cluster < 0x0FFF_FFF8 && cluster >= 2 && walked < MAX_ROOT_CLUSTERS {
+                            walked += 1;
                             let lba = fat32.cluster_lba(cluster);
                             let cs = fat32.sectors_per_cluster as usize * fat32.bytes_per_sector as usize;
                             let mut buf = alloc::vec![0u8; cs];
@@ -53,7 +62,9 @@ impl BootLogAgent {
                             cluster = unsafe { fat32.read_fat_entry(cluster) }
                         }
                         if !best_name.is_empty() {
-                            if let Some(data) = unsafe { fat32.read_file(best_name.trim_end()) } {
+                            if let Some(data) = unsafe {
+                                fat32.read_file_range(&best_name, 0, MAX_BOOT_LOG_BYTES)
+                            } {
                                 return core::str::from_utf8(&data).ok().map(|s| alloc::string::String::from(s));
                             }
                         }
@@ -61,6 +72,7 @@ impl BootLogAgent {
                 }
                 _ => {}
             }
+        }
         }
         // Fallback: VFS /logs via k_nano (sem acoplar hermes Ring 2)
         if let Ok(entries) = k_nano::fs::list_vfs("/logs") {

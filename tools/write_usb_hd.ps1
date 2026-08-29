@@ -3,10 +3,11 @@
 #
 # Uso (PowerShell COMO ADMIN):
 #   .\tools\write_usb_hd.ps1                          # usa target\usb_hw.img
-#   .\tools\write_usb_hd.ps1 -Image target\usb_hw.img -DiskNumber 2
+#   .\tools\write_usb_hd.ps1 -Image target\usb_hw_fixed.img -DiskNumber 2
 #
 # Requisito: gerar a imagem antes ->
-#   python tools\build_image.py --hw --unified [--size 6144]
+#   HD externo USB (fixed-disk): python tools\build_image.py --hw --unified --size 6144 --fixed-disk
+#   Pendrive (removable):        python tools\build_image.py --hw --unified --size 6144
 param(
     [string]$Image = "target\usb_hw.img",
     [int]$DiskNumber = -1
@@ -88,4 +89,5 @@ try {
 Update-HostStorageCache
 Write-Host ""
 Write-Host "OK. Imagem gravada em PhysicalDrive$DiskNumber." -ForegroundColor Green
-Write-Host "Boot: conecte o HD, F2/F12 -> escolha a entrada USB do HD. Secure Boot OFF."
+Write-Host "Boot: conecte o HD, F2/F12 -> UEFI: <marca do HD> (nao so Removable). Secure Boot OFF."
+Write-Host "      Imagem fixed-disk: firmware le ESP da GPT; Windows monta volume NEURAL-OS."

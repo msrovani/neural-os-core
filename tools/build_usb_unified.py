@@ -5,7 +5,7 @@ Layout (GPT + MBR com dados+ESP — empirico no notebook real, SESSÃO_258/260):
   Part GPT 0 — ESP (conteudo de target/uefi.img / bootloader 0.11) — FAT
   Part GPT 1 — dados (FAT32 default — monta no Explorer; --exfat opcional)
   MBR slot0 — dados 0x0C/0x07 (Windows monta E:; FAT32/exFAT)
-  MBR slot1 — ESP 0xEF SEM flag ativa (firmware UEFI acha \EFI\BOOT\BOOTX64.EFI
+  MBR slot1 — ESP 0xEF SEM flag ativa (firmware UEFI acha \\EFI\\BOOT\\BOOTX64.EFI
     pelo tipo no MBR; 0x80 era o que fazia o Windows tratar como disco de sistema
     e nao montar; 0xEE-only/sem-ESP fizeram firmware real nao listar)
 
@@ -381,6 +381,12 @@ def main() -> None:
         action="store_true",
         help="Particao FAT32 (default; redundante, so documenta)",
     )
+    p.add_argument(
+        "--fixed-disk",
+        action="store_true",
+        help="MBR protetor GPT 0xEE (HD externo USB tratado como disco fixo — Aurora/Dell); "
+        "default = MBR removable dados+ESP (pendrive)",
+    )
     args = p.parse_args()
     use_fat32 = not args.exfat  # default FAT32 — Explorer monta; --exfat opt-in
 
@@ -445,16 +451,23 @@ def main() -> None:
         data_guid = uuid.uuid4().bytes
 
         with open(out, "r+b") as f:
-            # Pendrive = removable: Windows ignora GPT se MBR for so 0xEE.
-            # Dados na slot0 → Explorer ganha letra; GPT permanece para UEFI.
-            write_removable_mbr(
-                f,
-                esp_start=esp_start,
-                esp_sectors=esp_sectors,
-                data_start=data_start,
-                data_sectors=data_sectors,
-                data_mbr_type=data_mbr_type,
-            )
+            if args.fixed_disk:
+                # HD externo USB (fixed): firmware UEFI le GPT via MBR 0xEE protetor.
+                # Pendrive/removable usa write_removable_mbr (ESP visivel no MBR slot1).
+                write_protective_mbr(f, total_sectors=total_sectors)
+                print("[INFO] MBR fixed-disk: protetor 0xEE + GPT (ESP em EFI System)")
+            else:
+                # Pendrive = removable: Windows ignora GPT se MBR for so 0xEE.
+                # Dados na slot0 → Explorer ganha letra; GPT permanece para UEFI.
+                write_removable_mbr(
+                    f,
+                    esp_start=esp_start,
+                    esp_sectors=esp_sectors,
+                    data_start=data_start,
+                    data_sectors=data_sectors,
+                    data_mbr_type=data_mbr_type,
+                )
+                print("[INFO] MBR removable: dados 0x0C + ESP 0xEF (pendrive)")
             write_gpt(
                 f,
                 total_sectors=total_sectors,
@@ -490,7 +503,11 @@ def main() -> None:
         print(f"[OK] alias {alias}")
 
     print(f"\n[OK] {out}: {final // (1024 * 1024)} MB (ESP FAT + dados {fs_name})")
-    print("Rufus: modo Imagem DD -> grave no pendrive (Secure Boot OFF).")
+    if args.fixed_disk:
+        print("Rufus: Advanced -> List USB Hard Drives -> DD -> HD externo (Secure Boot OFF).")
+        print("F12: procure UEFI: <marca do HD> (nao 'Removable Drive').")
+    else:
+        print("Rufus: modo Imagem DD -> grave no pendrive (Secure Boot OFF).")
     print("Windows: deve aparecer volume NEURAL-OS (FAT32/exFAT) com BOOT.LOG.")
     print("QEMU dois discos: continue com uefi.img + disk_qemu.raw (nao use este como unico).")
 

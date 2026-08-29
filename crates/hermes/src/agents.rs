@@ -166,6 +166,9 @@ impl InputAgent {
 impl Agent for InputAgent {
     fn manifest(&self) -> &AgentManifest { &INPUT_MANIFEST }
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
+        if tick == 50 {
+            unsafe { k_nano::xhci::try_deferred_hid_bringup(); }
+        }
         // PS/2 keyboard (IRQ-driven)
         if let Some(event) = self.receiver.try_receive() {
             self.process_scancode(event.payload.first().copied().unwrap_or(0));
@@ -1851,16 +1854,20 @@ impl Agent for BootSelfHealAgent {
         }
 
         // Verifica causa do ultimo desligamento.
-        // QEMU/HV: NÃO caminhar o root FAT à procura de B*.LOG (PIO em disco
-        // grande congela o init_phase após DeviceTree — serial para em Gate ok).
-        // HW real (hv=None) mantém a análise persistente.
+        // QEMU/HV + boot USB unificado: NÃO caminhar FAT (PIO USB/ATA grande
+        // congela init_phase — Alienware/240H SESSION_268/292).
+        let usb_boot = k_nano::globals::USB_MSC.lock().is_some();
         let last_cause = {
             use k_nano::platform_probe::{hypervisor, HypervisorKind, probe_done};
-            if probe_done() && !matches!(hypervisor(), HypervisorKind::None) {
+            let hv_skip =
+                probe_done() && !matches!(hypervisor(), HypervisorKind::None);
+            if hv_skip || usb_boot {
                 k_nano::slog_hermes!(
                     "SELF",
                     "ok",
-                    "skip FAT boot_log walk (hv) — init_phase"
+                    "skip FAT boot_log walk (hv={} usb={}) — init_phase",
+                    !hv_skip,
+                    usb_boot
                 );
                 None
             } else {
@@ -1873,7 +1880,9 @@ impl Agent for BootSelfHealAgent {
                 k_nano::slog_hermes!("SELF", "HEAL", "Analisando boot log para possiveis erros...");
                 let _ = log_analyst_agent::write_log("self_heal",
                     "Ultimo desligamento foi INESPERADO. Iniciando analise de erros.");
-                if let Some(log) = boot_log_agent::BootLogAgent::read_last_boot_log() {
+                if usb_boot {
+                    k_nano::slog_hermes!("SELF", "HEAL", "skip boot_log analyze (USB-MSC boot)");
+                } else if let Some(log) = boot_log_agent::BootLogAgent::read_last_boot_log() {
                     let diagnostics = boot_log_agent::BootLogAgent::analyze_log(&log);
                     for (kind, msg) in &diagnostics {
                         k_nano::slog_hermes!("SELF", "HEAL", "Diagnostico: {} — {}", kind, msg);

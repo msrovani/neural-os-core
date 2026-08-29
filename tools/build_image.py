@@ -69,6 +69,11 @@ def parse_args():
         help="Imagem instalavel FIXA (ADR-0086 s3.6A): so kernel+HwExpert+firmware+UPDATE.CFG, "
         "sem modelos grandes — o alvo baixa o brain no 1o boot (PACK_LLM=none + MODELS_SOURCE=network)",
     )
+    p.add_argument(
+        "--fixed-disk",
+        action="store_true",
+        help="Com --unified: MBR 0xEE protetor GPT p/ HD externo USB (Dell/Aurora); default = pendrive",
+    )
     return p.parse_args()
 
 
@@ -98,7 +103,10 @@ def main():
             sys.exit(2)
         out = args.output
         if out is None:
-            out = os.path.join(target_dir, "usb_hw.img")
+            out = os.path.join(
+                target_dir,
+                "usb_hw_fixed.img" if args.fixed_disk else "usb_hw.img",
+            )
         elif not os.path.isabs(out):
             out = os.path.join(ROOT, out)
         cmd = [
@@ -111,6 +119,8 @@ def main():
         ]
         if args.build_boot:
             cmd.append("--build-boot")
+        if args.fixed_disk:
+            cmd.append("--fixed-disk")
         print(f"=== USB unificado (BOOT_MODE=hw) -> {out} ===")
         r = subprocess.run(cmd, cwd=ROOT)
         sys.exit(r.returncode)
