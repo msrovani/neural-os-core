@@ -21,6 +21,10 @@ MOUSE_X/Y/BUTTONS, POWER_STATE, TOPIC_CARD_ACTION}`;
 `card::{UiDeclaration, Widget, parse_card, render_card}`; `eg::FbTarget`;
 `agent::DisplayAgent` (EventBus-driven Continuous; `has_pending`; HITL card 8001).
 
+**Hot path (SESSION_294):** `fill_rect` = `fill_rect_fast` (bpp=4 `0..aw`, doubling memcpy se aw≥16);
+`fill_circle_glow` scanline+`isqrt_u64` (não `sqrtf`/pixel); `TARGET_FRAME_TICKS=1` (PIT ~18 Hz);
+orb ambient 1.35× max 2 rings; dock pinta uma vez. Grid/partículas saíram do frame.
+
 **Integration**: bin calls `probe_raw_framebuffer` (limine_boot.rs) and
 `fb_remap_uc` (main.rs:2537), registers `DisplayAgent` (main.rs:2540); cards
 are spawned from `UI_SPEC` JSON (LLM/skill); hit-test canónico dock → cards →

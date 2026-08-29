@@ -10,10 +10,13 @@
 
 ## 1. Contexto
 
-O desktop JARVIS (Jarbas) atingiu Fase 1+2 de otimização: `fill_circle_glow` integer-only,
-dirty tracking por-layer, `fill_rect_fast` bulk, LUT alpha blending. Porém, comparação com
-Redox OS (Orbital), COSMIC, e macOS revela gaps significativos em performance, qualidade
-visual, e funcionalidade. Este ADR define o roadmap completo para elevar o desktop a
+O desktop JARVIS (Jarbas) atingiu Fase 1+2 de otimização **no papel** (`fill_circle_glow` integer-only,
+dirty tracking por-layer, `fill_rect_fast` bulk, LUT alpha blending). **SESSION_294 mediu o contrário:**
+`fill_rect` ainda era `set_pixel`/pixel; `fill_rect_fast` bpp=4 loopava `aw/4` (25% do rect);
+`fill_circle_glow` ainda era O(r²) `sqrtf`. Isso foi corrigido (scanline + isqrt + doubling memcpy;
+`TARGET_FRAME_TICKS=1`; grid/partículas removidos do hot path; dock 1×). Tier 1 restante:
+glyph blit, dirty-region swap. Comparação com Redox OS (Orbital), COSMIC, e macOS revela gaps
+em qualidade visual e funcionalidade. Este ADR define o roadmap completo para elevar o desktop a
 qualidade "production-grade".
 
 **Estado atual (v1.9.9):** ~7.200 LOC em `jarbas/src/display/`, orb Soul Mirror, WM Cosmic

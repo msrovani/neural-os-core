@@ -150,7 +150,7 @@ pub static MOUSE_BUTTONS: IrqSafeLock<u8> = IrqSafeLock::new(0);
 
 // Timing de frame para FPS control
 pub static LAST_FRAME_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-pub const TARGET_FRAME_TICKS: u64 = 3; // ~60 FPS (assumindo ~5ms/tick)
+pub const TARGET_FRAME_TICKS: u64 = 1; // 1 frame / tick PIT (~18 Hz). 3 era ~6 FPS.
 
 pub struct JarbasDesktop {
     // Compositor base
@@ -501,18 +501,7 @@ impl JarbasDesktop {
         // ═════════════════════════════════════════════════════════════
         self.fb.fill_rect(0, 0, w, h, theme.bg.0, theme.bg.1, theme.bg.2);
 
-        // Subtle neural grid (ambient animation)
-        // ponytail: grid dots at intersections, very subtle
-        let grid_spacing = 64usize;
-        for x in (grid_spacing..w).step_by(grid_spacing) {
-            for y in (grid_spacing..h).step_by(grid_spacing) {
-                self.fb.fill_rect(x, y, 2, 2,
-                    (theme.accent.0 as u16 * 5 / 255) as u8,
-                    (theme.accent.1 as u16 * 5 / 255) as u8,
-                    (theme.accent.2 as u16 * 5 / 255) as u8);
-            }
-        }
-        self.draw_ambient_particles(tick, w, h);
+        // Grid/partículas de fundo eram custo puro (quase invisíveis) no hot path.
 
         // Herói visual: Soul Mirror (brand). Avatar8 só alimenta cor via
         // avatar_state — partículas legado não competem com o orb.
@@ -662,11 +651,7 @@ impl JarbasDesktop {
             }
         }
 
-        // ═════════════════════════════════════════════════════════════
-        // CAMADA 2.5: Dock (bottom panel) -- FASE 3.4
-        if self.dock.visible {
-            self.dock.render(&mut self.fb, theme);
-        }
+        // Dock pinta uma vez, depois das janelas (Z-order: dock por cima).
 
         // CAMADA 3: Workspace — ChatWindow (esquerdo, opaco, com gap)
         // ═════════════════════════════════════════════════════════════
@@ -1354,21 +1339,6 @@ impl JarbasDesktop {
         self.soul_mirror.update_state(mirror);
         let fft_energy = crate::display::avatar::read_audio_energy();
         self.soul_mirror.render(&mut self.fb, fft_energy);
-    }
-
-    /// Subtle ambient particles floating across the background
-    fn draw_ambient_particles(&mut self, tick: u64, _w: usize, _h: usize) {
-        use libm::{sinf, cosf};
-        for i in 0..12 {
-            let seed = (tick.wrapping_add(i as u64 * 137)) as f32;
-            let px = (sinf(seed * 0.01) * 0.5 + 0.5) * _w as f32;
-            let py = (cosf(seed * 0.013 + i as f32) * 0.5 + 0.5) * _h as f32;
-            let alpha = (sinf(seed * 0.007) * 0.5 + 0.5) * 8.0; // 0-8 alpha
-            if alpha as u8 > 1 {
-                self.fb.set_pixel(px as usize, py as usize, 
-                    80, 60, 120);  // subtle purple
-            }
-        }
     }
 }
 

@@ -611,7 +611,7 @@ impl Agent for DisplayAgent {
         }
         static STATUS_LOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
         let sn = STATUS_LOG.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        if sn < 5 || sn % 120 == 0 {
+        if sn < 2 {
             k_nano::interrupts::mouse_log_status("display_tick");
         }
 

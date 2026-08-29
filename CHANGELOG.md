@@ -1,5 +1,16 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s294] - 2026-08-29 — Compositor Jarbas: hot path do desktop
+
+**Desktop no QEMU estava lento porque cada frame pintava o FB pixel a pixel e o orb fazia ~280k `sqrtf`.**
+
+- **`fill_rect` → `fill_rect_fast`:** fill sólido por linha (u32); bpp=4 loopava `aw/4` (25% do rect) — agora `0..aw`; linhas ≥16 usam doubling memcpy.
+- **`fill_circle_glow`:** scanline + `isqrt_u64` (antes O(r²) `sqrtf`+`set_pixel`). Soul Mirror: ambient 1.35×, max 2 rings, sem disco 1.5× extra.
+- **FPS honesto:** `TARGET_FRAME_TICKS = 1` (PIT ~18 Hz). O 3 com comentário “60 FPS” era ~6 FPS e faminto o scheduler.
+- **Hot path:** sem grid/partículas; dock pintado uma vez; `mouse_log_status` só 2 ticks.
+- **`swap`:** `copy_nonoverlapping` back→GOP.
+- **Check:** `cargo check --release -p jarbas --target x86_64-unknown-none` 0 erros. Residual: mouse USB tablet QEMU (`aux=0`).
+
 ## [1.9.99-s292] - 2026-08-25 — Instalador pendrive→HD externo + NeuralFS opt-in FAT32
 
 **ADR-0079 completo no metal: AIOS instala de pendrive USB para HD (interno ou externo)**

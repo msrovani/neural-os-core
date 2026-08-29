@@ -12,7 +12,7 @@
 **Residuals por onda:** 0–7 ✅ · Pós-LAN ✅ (NetFs PASS) · **ADR-0086 núcleo ✅ (U1/U2/U4/U6 + I3–I12 SESSION_252; A1–A9 residual)** · WiFi AWAITING · **TLS parcial ✅ (s156 smoke PASS; PKI real pendente)** · R soft-float defer.
 **Fora do gate (não atracar):** SmileyOS 279a–b/e, Cube 283a, XDNA 💰, SKYNET 315.26–27, Mach-O/APK, wasmi-USB #8/#11.
 
-**Feito recente (SESSION_274):** GPU compute honesto — vendor matmuls → `None`; `boot_report.gpu_ok` real; MHI tier0 CE wired; msched/sasos acessos. SESSION_273: Trinity único + `runtime_observe` + HUD no render. SESSION_272: storage NVMe-first + Trust/HITL no boot.
+**Feito recente (SESSION_294):** compositor hot path — fill scanline + glow isqrt; FPS=1 tick PIT. Residual mouse tablet #542. SESSION_274: GPU compute honesto.
 
 ---
 

@@ -1,3 +1,4 @@
+//! Orb afetivo (Soul Mirror) — discos scanline, sem sqrtf por pixel.
 use core::f32::consts::PI;
 use libm::{sinf, cosf};
 use crate::display::fb::DoubleBuffer;
@@ -102,7 +103,7 @@ impl SoulMirrorRenderer {
         let cy = self.cy;
 
         let r = self.base_r * self.state.size_scale;
-        let pulse_offset = sinf(tick as f32 * 0.05 * self.state.pulse_speed) * (r * 0.35);
+        let pulse_offset = sinf(tick as f32 * 0.05 * self.state.pulse_speed) * (r * 0.18);
         let pulse_r = r + pulse_offset;
         let bri = if fft_energy > 0.0 {
             (130.0 + fft_energy.min(1.0) * 125.0) * self.state.brightness
@@ -111,16 +112,15 @@ impl SoulMirrorRenderer {
         };
         let bri_u8 = bri.clamp(30.0, 255.0) as u8;
 
-        // Ambient glow — weak, proportional to brightness
-        let ambient_r = (pulse_r * 2.2) as isize;
-        let amb_alpha = (15.0 * self.state.brightness) as u8;
+        // Ambient — 1.35x (antes 2.2x ≈ r=264 e ~280k sqrts/frame)
+        let ambient_r = (pulse_r * 1.35) as isize;
+        let amb_alpha = (18.0 * self.state.brightness) as u8;
         fb.fill_circle_glow(cx, cy, ambient_r, cr.saturating_sub(40), cg.saturating_sub(40), cb.saturating_sub(40), amb_alpha);
 
-        // Concentric rings from curiosity
-        let ring_count = self.state.ring_count.min(6);
+        let ring_count = self.state.ring_count.min(2);
         for i in 0..ring_count {
-            let ring_r = (pulse_r * (1.0 + (i + 1) as f32 * 0.35)) as isize;
-            let ring_alpha = (20 + 10 * (ring_count as i32 - i as i32)) as u8;
+            let ring_r = (pulse_r * (1.0 + (i + 1) as f32 * 0.22)) as isize;
+            let ring_alpha = (18 + 8 * (ring_count as i32 - i as i32)) as u8;
             let fade = (ring_count as f32 - i as f32) / ring_count as f32;
             let rr = (cr as f32 * fade) as u8;
             let gg = (cg as f32 * fade) as u8;
@@ -128,11 +128,9 @@ impl SoulMirrorRenderer {
             fb.fill_circle_glow(cx, cy, ring_r, rr, gg, bb, ring_alpha);
         }
 
-        // Main orb body — use avatar_override color if set
+        // Corpo: um disco (halo já veio do ambient/rings — glow 1.5x era o 2º maior fill).
         let (body_r, body_g, body_b) = self.state.avatar_override.unwrap_or((cr, cg, cb));
-        let glow_r = (pulse_r * 1.5) as isize;
         let core_r = pulse_r as isize;
-        fb.fill_circle_glow(cx, cy, glow_r, body_r, body_g, body_b, 40);
         fb.fill_circle_glow(cx, cy, core_r, body_r, body_g, body_b, bri_u8 / 3);
 
         // Hot core
@@ -146,7 +144,7 @@ impl SoulMirrorRenderer {
         let rot_r = (pulse_r + 6.0) as isize;
         let rot_rad = (self.state.rotation_deg as f32) * PI / 180.0;
         let arc_len = pulse_r * 0.3;
-        let arc_steps = (arc_len * 2.0) as u32;
+        let arc_steps = ((arc_len * 2.0) as u32).clamp(4, 16);
         for i in 0..=arc_steps {
             let t = rot_rad + (i as f32 / arc_steps as f32) * 0.8;
             let px = cx + (cosf(t) * rot_r as f32) as isize;

@@ -1,4 +1,8 @@
-﻿# STATE — neural-os-core v1.9.99-s293 — QEMU OVMF debug + Falcon3 GGUF/1.58-bit + RAM fix
+﻿# STATE — neural-os-core v1.9.99-s294 — Compositor Jarbas hot path (desktop lento)
+#   SESSION_294: fill_rect=fill_rect_fast (bpp=4 0..aw + doubling); glow scanline+isqrt (não sqrtf/pixel);
+#     TARGET_FRAME_TICKS=1 (PIT ~18 Hz; 3 era ~6 FPS); orb ambient 1.35× max 2 rings; dock 1×; mouse_log 2×.
+#     Residual: USB tablet QEMU aux=0 (#542). ESP: python (não python3). Guest aberto não recarrega ELF.
+# STATE — neural-os-core v1.9.99-s293 — QEMU OVMF debug + Falcon3 GGUF/1.58-bit + RAM fix
 #   SESSION_293: OVMF dual-file pflash (code+vars) p/ boot fresh; paths MSYS→Windows serial fix; Falcon3 1.58-bit safetensors→v6 BitNet (NÃO GGUF i2_s); float16 converter RAM 50% (commit ac3d3ef); neural-sgdb repo externo.
 #   SESSION_292: instalador ADR-0079 boot USB (source fallback ATA→USB_MSC + guarda target≠source por endereço); fat32::read_root_file_dev (BlockDevice dinâmico); CONFIG.TXT FAT32 (NEURALFS_USB_FORMAT viva na unified); tools/write_usb_hd.ps1. Residual: USB_MSC single-device; índices UI sem ATA.
 #   SESSION_291: sem SKU 8/16GB; fit + GGUF streaming. SESSION_290 PMM 64GiB permanece.

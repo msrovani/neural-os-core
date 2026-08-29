@@ -3,7 +3,7 @@
 //! Contrato: bpp/stride/rgb_order vêm da leitura do bootloader/GOP (ou do
 //! protocolo VirtIO). Consumidores NÃO devem hardcodar 3 nem 4 — leem GpuDevice.
 
-use core::ptr::write_volatile;
+use core::ptr::{copy_nonoverlapping, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use alloc::vec::Vec;
 
@@ -685,9 +685,23 @@ pub struct FramebufferInfo {
     pub rgb_order: bool, // true = R em offset+0 (PixelFormat::Rgb), false = B em offset+0 (Bgr)
 }
 
+fn isqrt_u64(n: u64) -> u64 {
+    if n < 2 {
+        return n;
+    }
+    let mut x0 = n / 2;
+    loop {
+        let x1 = (x0 + n / x0) / 2;
+        if x1 >= x0 {
+            return x0;
+        }
+        x0 = x1;
+    }
+}
+
 /// Framebuffer com double buffering interno.
 /// Todas as operacoes de pixel vao para o back buffer (Vec<u8> em heap).
-/// swap() copia back → front em um unico loop, eliminando cintilacao.
+/// swap() copia back → front (memcpy), eliminando cintilacao.
 pub struct DoubleBuffer {
     pub info: FramebufferInfo,
     back: Vec<u8>,
@@ -731,35 +745,14 @@ impl DoubleBuffer {
     }
 
     pub fn clear(&mut self, r: u8, g: u8, b: u8) {
-        let bpp = self.info.bpp;
-        let stride = self.info.stride;
-        for y in 0..self.info.height {
-            for x in 0..self.info.width {
-                let offset = y * stride + x * bpp;
-                if offset + (bpp - 1) >= self.back.len() { continue; }
-                if self.info.rgb_order {
-                    self.back[offset + 0] = r;
-                    self.back[offset + 1] = g;
-                    self.back[offset + 2] = b;
-                } else {
-                    self.back[offset + 0] = b;
-                    self.back[offset + 1] = g;
-                    self.back[offset + 2] = r;
-                }
-                if bpp > 3 { self.back[offset + 3] = 0xFF; }
-            }
-        }
+        self.fill_rect_fast(0, 0, self.info.width, self.info.height, r, g, b);
     }
 
     pub fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, r: u8, g: u8, b: u8) {
-        for dy in 0..h {
-            for dx in 0..w {
-                self.set_pixel(x + dx, y + dy, r, g, b);
-            }
-        }
+        self.fill_rect_fast(x, y, w, h, r, g, b);
     }
 
-    /// Bresenham line (set_pixel already bounds-checks).
+    /// Fill sólido por linha (u32). O loop `aw/4` antigo pintava só 25% do rect.
     pub fn fill_rect_fast(&mut self, x: usize, y: usize, w: usize, h: usize, r: u8, g: u8, b: u8) {
         if x >= self.info.width || y >= self.info.height { return; }
         let x2 = (x + w).min(self.info.width);
@@ -777,7 +770,20 @@ impl DoubleBuffer {
                 for dy in 0..ah {
                     let off = (y+dy)*stride + x*bpp;
                     let row = ptr.add(off) as *mut u32;
-                    for dx in 0..(aw/4) { row.add(dx).write(pix); }
+                    if aw < 16 {
+                        for dx in 0..aw {
+                            row.add(dx).write(pix);
+                        }
+                    } else {
+                        // Doubling memcpy: 1 → 2 → 4 … cobre a linha em log2(aw) copies.
+                        row.write(pix);
+                        let mut filled = 1usize;
+                        while filled < aw {
+                            let n = filled.min(aw - filled);
+                            copy_nonoverlapping(row, row.add(filled), n);
+                            filled += n;
+                        }
+                    }
                 }
             } else {
                 for dy in 0..ah {
@@ -812,7 +818,8 @@ impl DoubleBuffer {
         }
     }
 
-    /// Disco com falloff radial (orb JARVIS) — resolução nativa do FB, sem texto.
+    /// Disco sólido scanline (camadas empilhadas no Soul Mirror fazem o glow).
+    /// Evita O(r²) `sqrtf`+`set_pixel` — o orb r≈260 era ~280k sqrts/frame.
     pub fn fill_circle_glow(
         &mut self,
         cx: isize,
@@ -826,32 +833,49 @@ impl DoubleBuffer {
         if radius <= 0 {
             return;
         }
-        let r2 = (radius * radius) as i64;
-        let alpha = (alpha_pct as f32 / 100.0).clamp(0.0, 1.0);
+        let scale = (alpha_pct as u16).min(100);
+        if scale == 0 {
+            return;
+        }
+        let rr = ((r as u16 * scale) / 100) as u8;
+        let gg = ((g as u16 * scale) / 100) as u8;
+        let bb = ((b as u16 * scale) / 100) as u8;
+        let r2 = radius as i64 * radius as i64;
+        let fw = self.info.width as isize;
+        let fh = self.info.height as isize;
         for dy in -radius..=radius {
-            for dx in -radius..=radius {
-                let d2 = (dx as i64) * (dx as i64) + (dy as i64) * (dy as i64);
-                if d2 > r2 {
-                    continue;
-                }
-                let dist = libm::sqrtf(d2 as f32);
-                let falloff = (1.0 - dist / radius as f32) * alpha;
-                if falloff <= 0.01 {
-                    continue;
-                }
-                let px = cx + dx;
-                let py = cy + dy;
-                if px < 0 || py < 0 {
-                    continue;
-                }
-                self.set_pixel(
-                    px as usize,
-                    py as usize,
-                    (r as f32 * falloff) as u8,
-                    (g as f32 * falloff) as u8,
-                    (b as f32 * falloff) as u8,
-                );
+            let yy = dy as i64 * dy as i64;
+            if yy > r2 {
+                continue;
             }
+            let dx = isqrt_u64((r2 - yy) as u64) as isize;
+            let py = cy + dy;
+            if py < 0 || py >= fh {
+                continue;
+            }
+            let mut x0 = cx - dx;
+            let mut x1 = cx + dx;
+            if x1 < 0 || x0 >= fw {
+                continue;
+            }
+            if x0 < 0 {
+                x0 = 0;
+            }
+            if x1 >= fw {
+                x1 = fw - 1;
+            }
+            if x1 < x0 {
+                continue;
+            }
+            self.fill_rect_fast(
+                x0 as usize,
+                py as usize,
+                (x1 - x0 + 1) as usize,
+                1,
+                rr,
+                gg,
+                bb,
+            );
         }
     }
 
@@ -927,25 +951,7 @@ impl DoubleBuffer {
         let addr = self.info.addr;
         let len = self.back.len();
         unsafe {
-            let src = self.back.as_ptr();
-            let dst = addr as *mut u8;
-            let mut i = 0usize;
-            // Align destination pointer to 8 bytes
-            while i < len && (dst.add(i) as usize) & 7 != 0 {
-                write_volatile(dst.add(i), src.add(i).read());
-                i += 1;
-            }
-            // Copy 8 bytes at a time
-            while i + 8 <= len {
-                let val = (src.add(i) as *const u64).read_unaligned();
-                write_volatile(dst.add(i) as *mut u64, val);
-                i += 8;
-            }
-            // Remaining bytes
-            while i < len {
-                write_volatile(dst.add(i), src.add(i).read());
-                i += 1;
-            }
+            copy_nonoverlapping(self.back.as_ptr(), addr as *mut u8, len);
         }
         self.dirty = false;
         k_nano::interrupts::CURSOR_LOCK.store(false, Ordering::Release);
