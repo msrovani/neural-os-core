@@ -2,6 +2,7 @@
 //! Hot-swap via /theme <nome>. Persiste via BootTrustAgent.
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use spin::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,8 +110,8 @@ pub static THEMES: [Theme; 5] = [
     Theme::new("hermes-light", (230,230,240), (240,240,250), (30,30,50), (60,60,80), (0,120,180), (0,100,160), (80,100,180), (240,240,250), (80,100,180), (200,40,40), (0,150,80), (255,180,0), (240,240,250)),
 ];
 
-pub static ACTIVE_THEME: Mutex<usize> = Mutex::new(0);
-pub static THEME_MODE: Mutex<ThemeMode> = Mutex::new(ThemeMode::Dark);
+pub static ACTIVE_THEME: AtomicUsize = AtomicUsize::new(0);
+static THEME_MODE_ATOMIC: AtomicU8 = AtomicU8::new(0); // 0=Dark, 1=Light, 2=HighContrast
 
 // Static theme constants for cosmic modes (used by current_theme).
 const COSMIC_DARK: Theme = Theme::new(
@@ -145,26 +146,31 @@ const HIGH_CONTRAST: Theme = Theme::new(
 );
 
 pub fn current() -> &'static Theme {
-    &THEMES[*ACTIVE_THEME.lock()]
+    &THEMES[ACTIVE_THEME.load(Ordering::Relaxed)]
 }
 
 pub fn current_mode() -> ThemeMode {
-    *THEME_MODE.lock()
+    match THEME_MODE_ATOMIC.load(Ordering::Relaxed) {
+        1 => ThemeMode::Light,
+        2 => ThemeMode::HighContrast,
+        _ => ThemeMode::Dark,
+    }
 }
 
+/// Lock-free theme lookup — called ~30x/frame no render loop.
+#[inline(always)]
 pub fn current_theme() -> &'static Theme {
-    let mode = *THEME_MODE.lock();
-    match mode {
-        ThemeMode::Dark => &COSMIC_DARK,
-        ThemeMode::Light => &COSMIC_LIGHT,
-        ThemeMode::HighContrast => &HIGH_CONTRAST,
+    match THEME_MODE_ATOMIC.load(Ordering::Relaxed) {
+        1 => &COSMIC_LIGHT,
+        2 => &HIGH_CONTRAST,
+        _ => &COSMIC_DARK,
     }
 }
 
 pub fn apply(name: &str) -> Result<(), &'static str> {
     for (i, t) in THEMES.iter().enumerate() {
         if t.name == name {
-            *ACTIVE_THEME.lock() = i;
+            ACTIVE_THEME.store(i, Ordering::Relaxed);
             k_nano::slog_jarbas!("THEME", "info", "Aplicado: {}", name);
             return Ok(());
         }
@@ -173,16 +179,17 @@ pub fn apply(name: &str) -> Result<(), &'static str> {
 }
 
 pub fn set_mode(mode: ThemeMode) {
-    *THEME_MODE.lock() = mode;
+    THEME_MODE_ATOMIC.store(mode as u8, Ordering::Relaxed);
 }
 
 pub fn toggle_mode() {
-    let mut mode = THEME_MODE.lock();
-    *mode = match *mode {
-        ThemeMode::Dark => ThemeMode::Light,
-        ThemeMode::Light => ThemeMode::HighContrast,
-        ThemeMode::HighContrast => ThemeMode::Dark,
+    let prev = THEME_MODE_ATOMIC.load(Ordering::Relaxed);
+    let next = match prev {
+        0 => 1u8, // Dark → Light
+        1 => 2,   // Light → HighContrast
+        _ => 0,   // HighContrast → Dark
     };
+    THEME_MODE_ATOMIC.store(next, Ordering::Relaxed);
 }
 
 pub fn list_names() -> Vec<&'static str> {
