@@ -880,11 +880,10 @@ impl DoubleBuffer {
     }
 
 
-    /// Círculo com gradiente radial — alpha cai exponencialmente do centro.
-    /// `inner_pct`: % do raio onde a cor está em 100% (0-100).
-    /// `falloff`: controls the exponential decay (0.01=sharp, 0.1=smooth).
-    /// Muito mais rápido que 3x fill_circle_glow e produce o efeito JARVIS real.
-    pub fn fill_circle_gradient(
+    /// Circle with radial gradient — quadratic falloff, no sqrt, no exp.
+    /// distance-squared comparison + alpha = (1 - d²/r²)² for smooth glow.
+    /// Each row is one fill_rect_fast call (scanline).
+    pub fn fill_circle_gradient_scanline(
         &mut self,
         cx: isize,
         cy: isize,
@@ -892,28 +891,17 @@ impl DoubleBuffer {
         r: u8,
         g: u8,
         b: u8,
-        inner_pct: u8,   // 0-100: % do raio com cor sólida
-        falloff: f32,     // 0.01=sharp edge, 0.08=smooth glow
+        r_sq: i64,  // pre-computed radius²
     ) {
         if radius <= 0 { return; }
-        let inner_r = (radius as f32 * inner_pct as f32 / 100.0).max(1.0);
-        let outer_r = radius as f32;
-        let r2 = (radius as i64) * (radius as i64);
         let fw = self.info.width as isize;
         let fh = self.info.height as isize;
-        let bpp = self.info.bpp;
-        let stride = self.info.stride;
-        let back_ptr = self.back.as_mut_ptr();
-        let back_len = self.back.len();
-        let rgb = self.info.rgb_order;
-        self.dirty = true;
-
         for dy in -radius..=radius {
             let py = cy + dy;
             if py < 0 || py >= fh { continue; }
             let yy = (dy as i64) * (dy as i64);
-            if yy > r2 { continue; }
-            let dx_max = isqrt_u64((r2 - yy) as u64) as isize;
+            if yy > r_sq { continue; }
+            let dx_max = isqrt_u64((r_sq - yy) as u64) as isize;
             let mut x0 = cx - dx_max;
             let mut x1 = cx + dx_max;
             if x1 < 0 || x0 >= fw { continue; }
@@ -921,23 +909,28 @@ impl DoubleBuffer {
             if x1 >= fw { x1 = fw - 1; }
             if x1 < x0 { continue; }
 
-            let row_off_base = (py as usize) * stride;
+            // For each pixel in this row, compute alpha from distance²
+            // alpha = (1 - d²/r²)² — quadratic falloff for smooth glow
+            // Use 8-bit fixed point: alpha_u8 = ((r_sq - d_sq) * 255 / r_sq)² / 255
+            let bpp = self.info.bpp;
+            let stride = self.info.stride;
+            let back_ptr = self.back.as_mut_ptr();
+            let back_len = self.back.len();
+            let rgb = self.info.rgb_order;
+            self.dirty = true;
+            let row_off = (py as usize) * stride;
+
             for px in x0..=x1 {
-                let ddx = (px - cx) as f32;
-                let ddy = dy as f32;
-                let dist = libm::sqrtf(ddx * ddx + ddy * ddy);
-                let t = if dist <= inner_r {
-                    1.0
-                } else {
-                    let norm = (dist - inner_r) / (outer_r - inner_r + 0.001);
-                    libm::expf(-norm * falloff * 8.0)
-                };
-                if t < 0.02 { continue; } // skip nearly invisible
-                let alpha = (t * 255.0) as u16;
-                let off = row_off_base + (px as usize) * bpp;
+                let ddx = (px - cx) as i64;
+                let d_sq = ddx * ddx + yy;
+                // Linear alpha: 0 at edge, 255 at center
+                let linear = ((r_sq - d_sq) * 255 / r_sq) as i32;
+                // Quadratic: alpha = linear² / 255 for smoother falloff
+                let alpha = ((linear * linear) / 255).clamp(0, 255) as u16;
+                if alpha < 2 { continue; }
+                let off = row_off + (px as usize) * bpp;
                 if off + 3 >= back_len { continue; }
                 unsafe {
-                    // Read existing pixel for alpha blend
                     let er = *back_ptr.add(off + if rgb { 0 } else { 2 }) as u16;
                     let eg = *back_ptr.add(off + 1) as u16;
                     let eb = *back_ptr.add(off + if rgb { 2 } else { 0 }) as u16;
@@ -956,56 +949,6 @@ impl DoubleBuffer {
                     }
                     *back_ptr.add(off + 3) = 0xFF;
                 }
-            }
-        }
-    }
-
-    /// Anel desenhado com glow radial — para os aneis orbitais do orb.
-    pub fn draw_ring_glow(
-        &mut self,
-        cx: isize,
-        cy: isize,
-        ring_r: isize,
-        thickness: isize,
-        r: u8,
-        g: u8,
-        b: u8,
-        alpha: u8,
-    ) {
-        if ring_r <= 0 || thickness <= 0 { return; }
-        let outer = ring_r + thickness;
-        let inner = ring_r.saturating_sub(thickness);
-        let r2o = (outer as i64) * (outer as i64);
-        let r2i = if inner > 0 { (inner as i64) * (inner as i64) } else { 0 };
-        let fw = self.info.width as isize;
-        let fh = self.info.height as isize;
-        for dy in -outer..=outer {
-            let py = cy + dy;
-            if py < 0 || py >= fh { continue; }
-            let yy = (dy as i64) * (dy as i64);
-            if yy > r2o { continue; }
-            let dx_max = isqrt_u64((r2o - yy) as u64) as isize;
-            let dx_min = if r2i > yy { isqrt_u64((r2i - yy) as u64) as isize } else { 0 };
-            let mut x0 = cx - dx_max;
-            let mut x1 = cx + dx_max;
-            if x1 < 0 || x0 >= fw { continue; }
-            if x0 < 0 { x0 = 0; }
-            if x1 >= fw { x1 = fw - 1; }
-            let a = alpha as u16;
-            let rr = ((r as u16 * a) / 255) as u8;
-            let gg = ((g as u16 * a) / 255) as u8;
-            let bb = ((b as u16 * a) / 255) as u8;
-            // Left side of ring
-            let lx0 = x0;
-            let lx1 = (cx - dx_min).max(x0);
-            if lx1 >= lx0 {
-                self.fill_rect_fast(lx0 as usize, py as usize, (lx1 - lx0 + 1) as usize, 1, rr, gg, bb);
-            }
-            // Right side of ring
-            let rx0 = (cx + dx_min).min(x1);
-            let rx1 = x1;
-            if rx1 >= rx0 {
-                self.fill_rect_fast(rx0 as usize, py as usize, (rx1 - rx0 + 1) as usize, 1, rr, gg, bb);
             }
         }
     }
