@@ -31,10 +31,13 @@ pub fn run_process(pid: u64) -> Result<(), &'static str> {
     }
     result
 }
-pub fn run_elf(data: &[u8]) -> Result<(), &'static str> {
-    let loaded = crate::elf_loader::load_and_spawn(data, "ring3-elf")?;
-    run_process(loaded)
-}
+
+// DEAD CODE: elf_loader excluded (HERMES_AUDIT.md)
+// pub fn run_elf(data: &[u8]) -> Result<(), &'static str> {
+//     let loaded = crate::elf_loader::load_and_spawn(data, "ring3-elf")?;
+//     run_process(loaded)
+// }
+
 fn write_stub(_code: x86_64::structures::paging::PhysFrame<x86_64::structures::paging::Size4KiB>) {}
 fn write_capgate_stub(_code: x86_64::structures::paging::PhysFrame<x86_64::structures::paging::Size4KiB>) {}
 fn write_sse_stub(_code: x86_64::structures::paging::PhysFrame<x86_64::structures::paging::Size4KiB>) {}

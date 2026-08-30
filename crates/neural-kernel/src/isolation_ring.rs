@@ -10,7 +10,7 @@ pub use k_hal::cap_gate::ring3_is_safe as ring3_is_safe_pub;
 pub fn init_connectors() {
     if ring3_is_safe() {
         k_nano::slog_bin!("ISO-RING", "info", "Ring3 SAFE — registering native ring (B/C gated by HITL)");
-        hermes_crate::app_factory::register_native_ring(ring3_run_native);
+        // DEAD CODE: hermes_crate::app_factory::register_native_ring(ring3_run_native); // (HERMES_AUDIT.md)
     } else {
         k_nano::slog_bin!("ISO-RING", "info", "Ring3 UNSAFE — native ring NOT registered; wasmi (A) active");
     }
@@ -18,10 +18,10 @@ pub fn init_connectors() {
 
 /// Native execution entry — delegates to R0 paging for blob, ELF via bin loader.
 pub fn ring3_run_native(code: &[u8], _caps: u32) -> Result<i64, &'static str> {
-    if crate::elf_loader::ElfLoader::is_valid_elf(code) {
-        let pid = crate::elf_loader::load_and_spawn(code, "sandbox")?;
-        k_nano::slog_bin!("ISO-RING", "info", "ring3_run_native: ELF pid={}", pid);
-        return match crate::user_mode::run_process(pid) { Ok(()) => Ok(0), Err(e) => Err(e) };
-    }
+    // DEAD CODE: elf_loader excluded (HERMES_AUDIT.md)
+    // if crate::elf_loader::ElfLoader::is_valid_elf(code) {
+    //     let pid = crate::elf_loader::load_and_spawn(code, "sandbox")?;
+    //     return match crate::user_mode::run_process(pid) { Ok(()) => Ok(0), Err(e) => Err(e) };
+    // }
     hal_run(code, _caps)
 }

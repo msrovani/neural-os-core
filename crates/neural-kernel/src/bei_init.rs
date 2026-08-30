@@ -454,16 +454,16 @@ pub fn bei_tick(_tick: u64) {
             core::sync::atomic::AtomicBool::new(false);
         if !WAS_SETTLED.swap(true, core::sync::atomic::Ordering::AcqRel) {
             // GOAL3: skill nova só no Master, antes do re-push (Worker não a tem).
-            hermes_crate::skill_sync::register_mesh_g3_probe_on_master();
-            hermes_crate::skill_sync::clear_synced_for_resync();
+            // DEAD CODE: hermes_crate::skill_sync::register_mesh_g3_probe_on_master(); // (HERMES_AUDIT.md)
+            // DEAD CODE: hermes_crate::skill_sync::clear_synced_for_resync(); // (HERMES_AUDIT.md)
             k_nano::slog_bin!("P2P", "info", "TOFU settled — SkillSync/MKTP liberados");
         }
-        hermes_crate::skill_sync::activate_global();
-        hermes_crate::skill_marketplace::activate_global();
+        // DEAD CODE: hermes_crate::skill_sync::activate_global(); // (HERMES_AUDIT.md)
+        // DEAD CODE: hermes_crate::skill_marketplace::activate_global(); // (HERMES_AUDIT.md)
     }
     // Consumo dos pacotes P2P não-heartbeat (EventBus) — lazy subscribe + dreno.
-    hermes_crate::skill_sync::poll_p2p();
-    hermes_crate::skill_marketplace::poll_p2p();
+    // DEAD CODE: hermes_crate::skill_sync::poll_p2p(); // (HERMES_AUDIT.md)
+    // DEAD CODE: hermes_crate::skill_marketplace::poll_p2p(); // (HERMES_AUDIT.md)
     // RX de requests mesh (Master responde só se settled + Master — ver gates).
     cortex_crate::compute::poll_mesh_requests();
     cortex_crate::mesh_distrib::poll_expert_requests();
@@ -477,8 +477,8 @@ pub fn bei_tick(_tick: u64) {
 
     // Sync de skills (Master push / diff) + marketplace broadcast periódico.
     let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-    hermes_crate::skill_sync::sync_skills(now);
-    hermes_crate::skill_marketplace::marketplace_tick(k_nano::net::mesh::node_id());
+    // DEAD CODE: hermes_crate::skill_sync::sync_skills(now); // (HERMES_AUDIT.md)
+    // DEAD CODE: hermes_crate::skill_marketplace::marketplace_tick(k_nano::net::mesh::node_id()); // (HERMES_AUDIT.md)
     // Memória coletiva L4: difunde os pares do SelfLearningAgent (k_ai) como
     // MemoryDocs (throttled ~500 ticks interno). RX "MEM\0" de qualquer layer
     // já é aplicado via put_doc no mesh_knowledge::poll_p2p.

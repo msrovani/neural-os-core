@@ -81,15 +81,15 @@ mod smp;
 mod sync;
 
 pub use hermes_crate::{
-    actor_registry, app_store, approval, apps, browser_agent, cron, evolve, generic_wifi, sgdb_agent,
-    gguf_wasm, globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, ipc_bus, marketplace, mcp,
-    memory_store, net_bridge, ntp, optimizer, package_hub, plugin_hub, safety,
-    search_agent, security, self_evolve, self_update, skill_gen, skill_loader, skill_market,
-    skill_observer, skill_opt, structured_decode, voice_skill, wifi_agent,
+    // DEAD CODE excluded: actor_registry, app_store, cron, sgdb_agent, gguf_wasm,
+    // ipc_bus, optimizer, safety, search_agent, voice_skill, wifi_agent (HERMES_AUDIT.md)
+    approval, apps, browser_agent, evolve, generic_wifi,
+    globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, marketplace, mcp,
+    memory_store, net_bridge, ntp, package_hub, plugin_hub,
+    security, self_evolve, self_update, skill_gen, skill_loader, skill_market,
+    skill_observer, skill_opt, structured_decode,
     wifi_compat, wifi_iwlwifi, wifi_msix, wifi_protocol,
-    // ADR-0062 E3 — SoftMAC BE via hermes re-export
     wifi_softmac,
-    // E1b: fs, vfs, neural_fs moved to hermes crate
     fs, vfs, neural_fs,
 };
 pub use k_ai::{self_heal, trust};
@@ -912,11 +912,11 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
                 "hermes_console" => Some(Box::new(display::agent::DisplayAgent::new())),
                 "display" => Some(Box::new(display::agent::DisplayAgent::new())),
                 "sys_metrics" => Some(Box::new(display::metrics_agent::MetricsAgent::new())),
-                "cron" => Some(Box::new(cron::CronAgent::new())),
+                // DEAD CODE: "cron" => Some(Box::new(cron::CronAgent::new())), // (HERMES_AUDIT.md)
                 "mcp" => Some(Box::new(mcp::McpAgent::new())),
                 "security" => Some(Box::new(security::SecurityAgent::new())),
-                "safety" => Some(Box::new(safety::SafetyAgent::new())),
-                "optimizer" => Some(Box::new(optimizer::OptimizerAgent::new())),
+                // DEAD CODE: "safety" => Some(Box::new(safety::SafetyAgent::new())), // (HERMES_AUDIT.md)
+                // DEAD CODE: "optimizer" => Some(Box::new(optimizer::OptimizerAgent::new())), // (HERMES_AUDIT.md)
                 "mouse" => Some(Box::new(agents::mouse_agent::MouseAgent::new())),
                 "self_heal" => Some(Box::new(k_ai::self_heal_agent::SelfHealAgent::new())),
                 _ => None,
@@ -1465,7 +1465,7 @@ pub(crate) fn kernel_boot(
         crate::display::fb::boot_ckpt(130, "hw-lite smokes");
         k_hal::hw_gate::mark_boot_smoke(boot_tag);
         k_hal::hw_gate::emit_all();
-        let _ = hermes_crate::ipc_bus::boot_smoke();
+        // DEAD CODE: let _ = hermes_crate::ipc_bus::boot_smoke(); // (HERMES_AUDIT.md)
         let _ = hermes_crate::async_io::boot_smoke();
         k_nano::async_rt::init_async_rt();
         crate::display::fb::boot_ckpt(135, "smokes hw-lite ok");
@@ -1478,24 +1478,24 @@ pub(crate) fn kernel_boot(
     k_hal::hw_gate::emit_all();
 
     // Labor 9: MessageBus A→B smoke (ADR-0068) — pós-heap
-    crate::display::fb::boot_ckpt(130, "ipc_bus:boot_smoke");
-    let _ = hermes_crate::ipc_bus::boot_smoke();
+    // DEAD CODE: 130, "ipc_bus:boot_smoke" (HERMES_AUDIT.md)
+    // DEAD CODE: let _ = hermes_crate::ipc_bus::boot_smoke(); // (HERMES_AUDIT.md)
 
     // Labor 11: async I/O híbrido smoke (ADR-0070) — pós-heap
     crate::display::fb::boot_ckpt(130, "async_io:boot_smoke");
     let _ = hermes_crate::async_io::boot_smoke();
 
     // Labor 16: Git thin parse smoke (ADR-0074) — net opcional
-    crate::display::fb::boot_ckpt(130, "git_thin:boot_smoke");
-    let _ = hermes_crate::git_thin::boot_smoke();
+    // DEAD CODE: 130, "git_thin:boot_smoke" (HERMES_AUDIT.md)
+    // DEAD CODE: let _ = hermes_crate::git_thin::boot_smoke(); // (HERMES_AUDIT.md)
     crate::display::fb::boot_ckpt(131, "smokes1 ok");
 
     // Labor 22 SoftMAC
     crate::display::fb::boot_ckpt(131, "wifi_softmac:boot_smoke");
     crate::wifi_softmac::boot_smoke();
     // Labor 30 WPA2 + Labor 31 wifi net path
-    crate::display::fb::boot_ckpt(131, "wpa2_hs:boot_smoke");
-    hermes_crate::wpa2_hs::boot_smoke();
+    // DEAD CODE: 131, "wpa2_hs:boot_smoke" (HERMES_AUDIT.md)
+    // DEAD CODE: hermes_crate::wpa2_hs::boot_smoke(); // (HERMES_AUDIT.md)
     crate::display::fb::boot_ckpt(131, "wifi_softmac:dhcp_http_path_smoke");
     crate::wifi_softmac::dhcp_http_path_smoke();
     crate::display::fb::boot_ckpt(132, "smokes2 ok");
@@ -1541,8 +1541,8 @@ pub(crate) fn kernel_boot(
     // Initialize async runtime (P16)
     crate::display::fb::boot_ckpt(134, "async_rt:init_async_rt");
     k_nano::async_rt::init_async_rt();
-    crate::display::fb::boot_ckpt(134, "cf_challenge:boot_smoke");
-    hermes_crate::cf_challenge::boot_smoke();
+    // DEAD CODE: 134, "cf_challenge:boot_smoke" (HERMES_AUDIT.md)
+    // DEAD CODE: hermes_crate::cf_challenge::boot_smoke(); // (HERMES_AUDIT.md)
     crate::display::fb::boot_ckpt(134, "xhci:hub_address_boot_smoke");
     k_nano::xhci::hub_address_boot_smoke();
     crate::display::fb::boot_ckpt(134, "btrfs_reader:boot_smoke");
@@ -1563,12 +1563,12 @@ pub(crate) fn kernel_boot(
     labor_smokes::acpi_s3_smoke();
     crate::display::fb::boot_ckpt(134, "firewall:boot_smoke");
     let _ = k_nano::firewall::boot_smoke();
-    crate::display::fb::boot_ckpt(134, "ipc_bus:capgate_boot_smoke");
-    let _ = hermes_crate::ipc_bus::capgate_boot_smoke();
+    // DEAD CODE: 134, "ipc_bus:capgate_boot_smoke" (HERMES_AUDIT.md)
+    // DEAD CODE: let _ = hermes_crate::ipc_bus::capgate_boot_smoke(); // (HERMES_AUDIT.md)
     crate::display::fb::boot_ckpt(134, "bt_hci_smoke");
     labor_smokes::bt_hci_smoke();
-    crate::display::fb::boot_ckpt(134, "elf_loader:elf_thin_boot_smoke");
-    let _ = hermes_crate::elf_loader::elf_thin_boot_smoke();
+    // DEAD CODE: 134, "elf_loader:elf_thin_boot_smoke" (HERMES_AUDIT.md)
+    // DEAD CODE: let _ = hermes_crate::elf_loader::elf_thin_boot_smoke(); // (HERMES_AUDIT.md)
     crate::display::fb::boot_ckpt(134, "gsp_conditional_smoke");
     labor_smokes::gsp_conditional_smoke();
     crate::display::fb::boot_ckpt(135, "smokes5 ok");
@@ -2170,7 +2170,7 @@ pub(crate) fn kernel_boot(
     k33_step!("wasmi");
     let _ = hermes_crate::wasm_build::self_test(); // F4: op-IR→wasm→wasmi
     k33_step!("wasm_build");
-    let _ = hermes_crate::app_factory::self_test(); // F3: gera→monta→sandbox
+    // DEAD CODE: let _ = hermes_crate::app_factory::self_test(); // F3: gera→monta→sandbox // (HERMES_AUDIT.md)
     k33_step!("app_factory");
     // ADR-0059 F7: arena W^X — execução de código nativo gerado on-device (base JIT).
     let _ = crate::exec_arena::self_test();
@@ -2859,11 +2859,12 @@ pub(crate) fn kernel_boot(
     crate::display::fb::boot_ckpt(45, "P6 ring3");
 
     // ADR-0082 F2.1: ELF64 loader self-test (parse + sandbox + RX/RW + BSS) — non-fatal
-    if crate::elf_loader::elf_boot_self_test() {
-        crate::boot_logger::log("BOOT: ELF loader self-test OK");
-    } else {
-        crate::boot_logger::log("BOOT: ELF loader self-test WARN (non-fatal)");
-    }
+    // DEAD CODE: elf_loader excluded (HERMES_AUDIT.md)
+    // if crate::elf_loader::elf_boot_self_test() {
+    //     crate::boot_logger::log("BOOT: ELF loader self-test OK");
+    // } else {
+    //     crate::boot_logger::log("BOOT: ELF loader self-test WARN (non-fatal)");
+    // }
     crate::display::fb::boot_ckpt(45, "P6 elf");
 
     // ADR-0082 F3.1: arena W^X USER no sandbox AS (base p/ Cranelift B/C) — non-fatal
@@ -3067,19 +3068,19 @@ pub(crate) fn kernel_boot(
     registry.register(Box::new(audio::mixer::AudioMixerAgent::new()));
     crate::display::fb::boot_ckpt(49, "AudioMixer OK");
 
-    let mut cron = cron::CronAgent::new();
+    // DEAD CODE: let mut cron = cron::CronAgent::new(); // (HERMES_AUDIT.md)
 
-    cron.init_defaults();
+    // DEAD CODE: cron.init_defaults(); // (HERMES_AUDIT.md)
 
-    registry.register(Box::new(cron));
+    // DEAD CODE: registry.register(Box::new(cron)); // (HERMES_AUDIT.md)
 
     registry.register(Box::new(mcp::McpAgent::new()));
     registry.register(Box::new(security::SecurityAgent::new()));
-    registry.register(Box::new(safety::SafetyAgent::new()));
-    registry.register(Box::new(optimizer::OptimizerAgent::new()));
+    // DEAD CODE: registry.register(Box::new(safety::SafetyAgent::new())); // (HERMES_AUDIT.md)
+    // DEAD CODE: registry.register(Box::new(optimizer::OptimizerAgent::new())); // (HERMES_AUDIT.md)
     registry.register(Box::new(browser_agent::BrowserAgent::new()));
-    registry.register(Box::new(sgdb_agent::SgdbAgent::new()));
-    registry.register(Box::new(wifi_agent::WifiAgent::new()));
+    // DEAD CODE: registry.register(Box::new(sgdb_agent::SgdbAgent::new())); // (HERMES_AUDIT.md)
+    // DEAD CODE: registry.register(Box::new(wifi_agent::WifiAgent::new())); // (HERMES_AUDIT.md)
     // ADR-0086 I6: AutoInstallerAgent — EventDriven no tópico SYS_INSTALL
     // (mensageiro: instala o sistema no HD alvo; orquestra HwProfiler+SysInstaller).
     registry.register(Box::new(k_nano::installer_agent::AutoInstallerAgent::new()));
@@ -4545,8 +4546,8 @@ pub fn register_builtin_skills() {
     reg.register(alloc::boxed::Box::new(HardwareInfoSkill));
     reg.register(alloc::boxed::Box::new(net::NetDiagnosticSkill));
     reg.register(alloc::boxed::Box::new(HwIdentifySkill));
-    reg.register(alloc::boxed::Box::new(hermes_crate::expert_skills::DiskDiagSkill));
-    reg.register(alloc::boxed::Box::new(hermes_crate::expert_skills::SecuritySkill));
+    // DEAD CODE: reg.register(alloc::boxed::Box::new(hermes_crate::expert_skills::DiskDiagSkill)); // (HERMES_AUDIT.md)
+    // DEAD CODE: reg.register(alloc::boxed::Box::new(hermes_crate::expert_skills::SecuritySkill)); // (HERMES_AUDIT.md)
     reg.register(alloc::boxed::Box::new(hermes_crate::self_update::UpdateCheckSkill));
     reg.register(alloc::boxed::Box::new(audio::skills::TtsSkill));
     reg.register(alloc::boxed::Box::new(audio::skills::SttSkill));

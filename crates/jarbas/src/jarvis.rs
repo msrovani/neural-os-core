@@ -472,19 +472,10 @@ impl AutoSkillGen {
             // Build simple op-IR: return acknowledgement constant (42)
             let ops = [Op::I32Const(42)];
             let desc = alloc::format!("Auto-skill for intent '{}'", task);
-            match hermes::app_factory::generate_and_run(&ops, 0, 0) {
-                hermes::app_factory::FactoryOutcome::RanWasm(v) => {
-                    k_nano::slog_hermes!("JARBAS", "autoskill", "generated skill '{}' via AppFactory (ret={})", name, v);
-                    if let Err(e) = promote_skill_to_wasm(&name, &desc) {
-                        k_nano::slog_hermes!("JARBAS", "autoskill", "promote failed for '{}': {}, fallback", name, e);
-                        self.generated.push(name);
-                    }
-                }
-                _ => {
-                    k_nano::slog_hermes!("JARBAS", "autoskill", "AppFactory fallback for '{}'", name);
-                    self.generated.push(name);
-                }
-            }
+            // DEAD CODE: app_factory excluded from compilation (HERMES_AUDIT.md)
+            // Fallback: skill registered without WASM compilation
+            k_nano::slog_hermes!("JARBAS", "autoskill", "skill '{}' registered (app_factory disabled)", name);
+            self.generated.push(name);
             self.patterns.insert(String::from(task), 0);
         }
     }

@@ -152,8 +152,9 @@ fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> 
     ).map_err(|_| "linker aios_gpu::submit")?;
 
     // ── wasi_snapshot_preview1 ──────────────────────────────────────────────
-    super::wasi_host::register_wasi_host_functions(linker)
-        .map_err(|_| "linker wasi_snapshot_preview1")?;
+    // DEAD CODE: wasi_host excluded from compilation (HERMES_AUDIT.md)
+    // super::wasi_host::register_wasi_host_functions(linker)
+    //     .map_err(|_| "linker wasi_snapshot_preview1")?;
 
     Ok(())
 }
