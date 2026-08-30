@@ -635,3 +635,7 @@ For deep work on a specific folder, also read that folder's `codemap.md`.
 - **snapshot vs clone persistente (SESSION_291+):** ferramentas de edicao (write_file, str_replace) apontam para o SNAPSHOT, NAO para o clone. Apos editar, SEMPRE copiar do snapshot para o clone. SEMPRE testar com git rev-parse --is-inside-work-tree antes de assumir qual e qual.
 
 - **pre-existing broken changes em working tree (SESSION_291):** sessoes anteriores deixaram virtio_blk.rs (457 LOC, erros de build) e storage_bus.rs (VirtioBlk variant sem match) no working tree. Revertidos com git checkout -- para desbloquear build. Regra: NUNCA commitar codigo que nao compila; se esta WIP, stash ou branch separada.
+
+- **TTS streaming por frases (SESSION_292):** split_into_sentences() divide texto por pontuação (. ! ? ;). StreamingTtsState simplificado de 4 variantes para 2 (Idle/Streaming com queue). Síntese incremental: primeira frase em ~50-200ms vs ~500-2000ms bloqueio completo. Borrow-checker: core::mem::replace para ownership seguro no tick (evita conflito ref mut + reassign).
+
+- **StreamingTtsState ownership (SESSION_292):** match self.stream_tts { ref mut ... } impede self.stream_tts = ... dentro do match. Solução: let prev = core::mem::replace(&mut self.stream_tts, Idle); match prev { ... } — take ownership, process, reassign. Padrão Rust idiomático para state machines com reassign.

@@ -1,5 +1,14 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s292] - 2026-08-30 — TTS streaming por frases + sentence-level synthesis
+
+**TTS bloqueava toda a resposta do LLM antes de começar a reproduzir (~500-2000ms).**
+
+- **split\_into\_sentences():** divide texto por pontuação (. ! ? ;), sintetiza cada frase separadamente via Piper TTS.
+- **StreamingTtsState simplificado:** 4 variantes → 2 (Idle/Streaming com queue de frases restantes).
+- **Latência percebida:** primeira frase em ~50-200ms vs ~500-2000ms (bloqueio completo).
+- **Ownership-safe tick:** core::mem::replace para evitar borrow-checker conflict (ref mut + reassign).
+- **Commit:** 6b99128.
 ## [1.9.99-s296] - 2026-08-30 — HW splash freeze: 1º frame compositor
 
 **Pendrive parava no splash; `E:\BOOT.LOG`/`NSGDB.BIN` intactos (sem MSC write).**
