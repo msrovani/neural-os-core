@@ -56,6 +56,36 @@ fn is_fluent_boot_text(text: &str) -> bool {
 
 /// Template suit-boot (fallback honesto quando LLM mash / soft-float).
 /// Tom: upload confirmado + HUD + fleet + serviço — original Neural OS.
+
+/// Divide texto em frases para TTS streaming.
+fn split_into_sentences(text: &str) -> alloc::vec::Vec<alloc::string::String> {
+    let mut sentences = alloc::vec::Vec::new();
+    let mut current = alloc::string::String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        current.push(c);
+        if matches!(c, '.' | '!' | '?' | ';') {
+            if chars.peek() == Some(&' ') || chars.peek().is_none() {
+                let trimmed = current.trim();
+                if !trimmed.is_empty() {
+                    sentences.push(alloc::string::String::from(trimmed));
+                }
+                current = alloc::string::String::new();
+                if chars.peek() == Some(&' ') {
+                    chars.next();
+                }
+            }
+        }
+    }
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        sentences.push(alloc::string::String::from(trimmed));
+    }
+    if sentences.is_empty() && !text.trim().is_empty() {
+        sentences.push(alloc::string::String::from(text.trim()));
+    }
+    sentences
+}
 fn compose_boot_greeting(mem_mb: u64, cpu_count: u16, agent_count: usize) -> String {
     let fleet = if agent_count > 200 {
         "full agent fleet online"
@@ -98,10 +128,11 @@ fn compose_boot_llm_prompt(mem_mb: u64, cpu_count: u16, agent_count: usize) -> S
 }
 
 /// Estado da síntese TTS em streaming.
-/// Gera o buffer completo em uma chamada e drena em chunks de ~50ms no tick().
+/// Suporta fila de frases: cada frase é sintetizada e reproduzida separadamente.
 enum StreamingTtsState {
     Idle,
-    Streaming { buffer: alloc::vec::Vec<i16>, pos: usize },
+    /// Drenando buffer PCM + queue de frases restantes.
+    Streaming { buffer: alloc::vec::Vec<i16>, pos: usize, queue: alloc::vec::Vec<alloc::string::String> },
 }
 
 pub struct JarbasAgent {
@@ -308,17 +339,43 @@ impl Agent for JarbasAgent {
             });
         }
 
-        // --- Streaming TTS: push next chunk to PLAYBACK_RING ---
-        if let StreamingTtsState::Streaming { ref buffer, ref mut pos } = self.stream_tts {
-            const CHUNK: usize = 2560;
-            let n = buffer.len().saturating_sub(*pos).min(CHUNK);
-            if n > 0 {
-                let pushed = PLAYBACK_RING.push(&buffer[*pos..*pos + n]);
-                *pos += pushed;
+        // --- Streaming TTS: drenar chunks + frase seguinte da queue ---
+        // Take ownership to avoid borrow-checker conflict on self.stream_tts
+        let prev = core::mem::replace(&mut self.stream_tts, StreamingTtsState::Idle);
+        match prev {
+            StreamingTtsState::Streaming { buffer, mut pos, mut queue } => {
+                const CHUNK: usize = 2560;
+                let n = buffer.len().saturating_sub(pos).min(CHUNK);
+                if n > 0 {
+                    let pushed = PLAYBACK_RING.push(&buffer[pos..pos + n]);
+                    pos += pushed;
+                }
+                if pos >= buffer.len() {
+                    // Buffer drenado — pega próxima frase da queue
+                    if !queue.is_empty() {
+                        let next = queue.remove(0);
+                        let pcm = crate::audio::skills::synthesize_tts(&next);
+                        let total = pcm.len();
+                        if total > 0 {
+                            let cn = total.min(CHUNK);
+                            let _ = PLAYBACK_RING.push(&pcm[..cn]);
+                            self.stream_tts = StreamingTtsState::Streaming {
+                                buffer: pcm, pos: cn, queue,
+                            };
+                        } else {
+                            self.stream_tts = StreamingTtsState::Streaming {
+                                buffer: alloc::vec::Vec::new(), pos: 0, queue,
+                            };
+                        }
+                    }
+                    // else: queue empty → Idle (already set by replace)
+                } else {
+                    self.stream_tts = StreamingTtsState::Streaming {
+                        buffer, pos, queue,
+                    };
+                }
             }
-            if *pos >= buffer.len() {
-                self.stream_tts = StreamingTtsState::Idle;
-            }
+            StreamingTtsState::Idle => {}
         }
 
         while let Some(ev) = self.llm_response.try_receive() {
@@ -359,7 +416,7 @@ impl Agent for JarbasAgent {
             });
         }
 
-        // --- HERMES_RESPONSE → streaming TTS ---
+        // --- HERMES_RESPONSE → streaming TTS por frases ---
         while let Some(ev) = self.hermes_response.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             if text.is_empty()
@@ -373,20 +430,63 @@ impl Agent for JarbasAgent {
                 .trim_start_matches("[JARBAS] ")
                 .trim_start_matches("JARVIS: ");
 
-            // Gera buffer TTS completo (uma chamada bloqueante), depois drena em chunks.
-            let pcm = crate::audio::skills::synthesize_tts(clean);
+            // Divide em frases para síntese incremental
+            let sentences = split_into_sentences(clean);
+            if sentences.is_empty() {
+                continue;
+            }
+            k_nano::slog_jarbas!("Jarbas", "tts",
+                "TTS streaming: {} frases: {}",
+                sentences.len(),
+                clean.chars().take(60).collect::<alloc::string::String>());
+
+            // Sintetiza a primeira frase imediatamente (curta ~50-200ms)
+            let first = &sentences[0];
+            let rest: alloc::vec::Vec<alloc::string::String> = sentences[1..].iter()
+                .map(|s| alloc::string::String::from(s.as_str()))
+                .collect();
+            let pcm = crate::audio::skills::synthesize_tts(first);
             let total = pcm.len();
             if total > 0 {
                 const CHUNK: usize = 2560;
                 let n = total.min(CHUNK);
                 let _ = PLAYBACK_RING.push(&pcm[..n]);
                 if total > n {
-                    self.stream_tts = StreamingTtsState::Streaming {
-                        buffer: pcm,
-                        pos: n,
-                    };
+                    if rest.is_empty() {
+                        self.stream_tts = StreamingTtsState::Streaming {
+                            buffer: pcm,
+                            pos: n,
+                            queue: alloc::vec::Vec::new(),
+                        };
+                    } else {
+                        self.stream_tts = StreamingTtsState::Streaming {
+                            buffer: pcm,
+                            pos: n,
+                            queue: rest,
+                        };
+                    }
+                } else if !rest.is_empty() {
+                    // Primeira frase cabe num chunk — sintetiza a próxima
+                    let next = &rest[0];
+                    let next_rest: alloc::vec::Vec<alloc::string::String> = rest[1..].iter()
+                        .map(|s| alloc::string::String::from(s.as_str()))
+                        .collect();
+                    let pcm2 = crate::audio::skills::synthesize_tts(next);
+                    if pcm2.is_empty() && next_rest.is_empty() {
+                        self.stream_tts = StreamingTtsState::Idle;
+                    } else {
+                        self.stream_tts = StreamingTtsState::Streaming {
+                            buffer: pcm2,
+                            pos: 0,
+                            queue: next_rest,
+                        };
+                    }
+                } else {
+                    self.stream_tts = StreamingTtsState::Idle;
                 }
-                k_nano::slog_jarbas!("Jarbas", "info", "TTS streaming: {} frames, chunk {}", total, CHUNK);
+                k_nano::slog_jarbas!("Jarbas", "tts",
+                    "Frase 1/{}: {} samples",
+                    sentences.len(), total);
             }
         }
 
