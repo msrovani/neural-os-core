@@ -1,4 +1,4 @@
-﻿# ════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════
 #   PLANO DIRETOR — neural-os-core v2.0 "K³CHJ Core" 🏆
 #   ~26.000 LOC, 180+ arquivos Rust, ~50 agentes nativos, 0 erros
 #   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício ✅
@@ -622,3 +622,4 @@ For deep work on a specific folder, also read that folder's `codemap.md`.
 
 - **Piper smoke test (SESSION_286):**  valida que pesos geram audio com amplitude > 100. Detecta pesos corrompidos no boot. Chamar após .
 
+- **xHCI HID QEMU: event ring all zeros — controller ignores command doorbell (SESSION_290):** `qemu-xhci` em TCG mode aceita MMIO reads (PORTSC funciona, CCS=1 nos ports P5/P6) mas NÃO processa command ring — `cmd_enable_slot()` sempre dá timeout com event ring todo zero (`evt=0x0 0x0 0x0 0x0`). Port Reset funciona (escreve PR no PORTSC), mas EnableSlot nunca completa. Guard `qemu_hid` foi removido (estava bloqueando o bringup inteiro). Odiagnostic agora é: PORTSC dump + reset FAIL/OK + EnableSlot FAIL com event ring peek. Funciona em HW real. **AWAITING_HW** para validação completa do mouse USB.
