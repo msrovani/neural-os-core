@@ -58,6 +58,15 @@ const PHONEMES: &[(&str, Phoneme)] = &[
     ("hh", Phoneme { duration_ms: 80, f0: 0.0, f1: 500.0, bw1: 150.0, f2: 2000.0, bw2: 200.0, f3: 3500.0, bw3: 300.0, f4: 4500.0, bw4: 400.0, amplitude: 0.3, voiced: false }),
     ("th", Phoneme { duration_ms: 100, f0: 0.0, f1: 400.0, bw1: 150.0, f2: 1500.0, bw2: 200.0, f3: 3000.0, bw3: 300.0, f4: 4000.0, bw4: 400.0, amplitude: 0.3, voiced: false }),
     ("dh", Phoneme { duration_ms: 80, f0: 120.0, f1: 350.0, bw1: 80.0, f2: 1400.0, bw2: 100.0, f3: 2500.0, bw3: 120.0, f4: 3400.0, bw4: 150.0, amplitude: 0.3, voiced: true }),
+    // ── PT-BR fonemas extras ──
+    ("lh", Phoneme { duration_ms: 70, f0: 120.0, f1: 380.0, bw1: 60.0, f2: 2000.0, bw2: 90.0, f3: 2600.0, bw3: 110.0, f4: 3400.0, bw4: 150.0, amplitude: 0.6, voiced: true }),   // palatal lateral (DINHEIRO)
+    ("nh", Phoneme { duration_ms: 80, f0: 120.0, f1: 360.0, bw1: 60.0, f2: 2000.0, bw2: 90.0, f3: 2500.0, bw3: 110.0, f4: 3400.0, bw4: 150.0, amplitude: 0.6, voiced: true }),   // palatal nasal (NHOQUE)
+    ("ao", Phoneme { duration_ms: 120, f0: 120.0, f1: 570.0, bw1: 80.0, f2: 840.0, bw2: 100.0, f3: 2410.0, bw3: 120.0, f4: 3400.0, bw4: 150.0, amplitude: 0.8, voiced: true }),  // PT-BR "ão" nasal (MÃO)
+    ("rx", Phoneme { duration_ms: 40, f0: 120.0, f1: 420.0, bw1: 60.0, f2: 1300.0, bw2: 80.0, f3: 1600.0, bw3: 100.0, f4: 3400.0, bw4: 150.0, amplitude: 0.5, voiced: true }),   // tap/flap R (CARO)
+    ("rj", Phoneme { duration_ms: 90, f0: 120.0, f1: 420.0, bw1: 70.0, f2: 1400.0, bw2: 90.0, f3: 1800.0, bw3: 110.0, f4: 3400.0, bw4: 150.0, amplitude: 0.5, voiced: true }),   // R before consonant (PORTA)
+    ("gn", Phoneme { duration_ms: 80, f0: 120.0, f1: 300.0, bw1: 60.0, f2: 2000.0, bw2: 90.0, f3: 2500.0, bw3: 110.0, f4: 3400.0, bw4: 150.0, amplitude: 0.6, voiced: true }),   // "gn" (CONTAGEM)
+    ("sx", Phoneme { duration_ms: 100, f0: 0.0, f1: 500.0, bw1: 180.0, f2: 2000.0, bw2: 280.0, f3: 3500.0, bw3: 380.0, f4: 4500.0, bw4: 480.0, amplitude: 0.3, voiced: false }), // "x" como /s/ (EXAME)
+    ("zx", Phoneme { duration_ms: 90, f0: 120.0, f1: 300.0, bw1: 80.0, f2: 1800.0, bw2: 100.0, f3: 2600.0, bw3: 120.0, f4: 3400.0, bw4: 150.0, amplitude: 0.3, voiced: true }),   // "x" como /z/ (EXEMPLO)
     ("sil", Phoneme { duration_ms: 40, f0: 0.0, f1: 500.0, bw1: 100.0, f2: 1500.0, bw2: 100.0, f3: 2500.0, bw3: 100.0, f4: 3400.0, bw4: 100.0, amplitude: 0.0, voiced: false }),
 ];
 
@@ -118,7 +127,7 @@ impl NoiseGen {
 
 fn text_to_phonemes(text: &str) -> Vec<(&'static str, &'static Phoneme)> {
     let mut result = Vec::new();
-    let lower: String = text.chars().filter(|&c| c.is_alphabetic() || c == ' ').flat_map(|c| c.to_lowercase()).collect();
+    let lower: String = text.chars().filter(|&c| c.is_alphabetic() || c == ' ' || c == 'ã' || c == 'õ' || c == 'á' || c == 'é' || c == 'í' || c == 'ó' || c == 'ú' || c == 'ê' || c == 'ô').collect();
     let words: Vec<&str> = lower.split_whitespace().collect();
 
     for word in words {
@@ -126,23 +135,42 @@ fn text_to_phonemes(text: &str) -> Vec<(&'static str, &'static Phoneme)> {
         let mut i = 0;
         while i < chars.len() {
             let mut matched = false;
+
+            // PT-BR: detectar nasal antes de m/n (ão, im, etc.)
+            let is_nasal_context = i + 1 < chars.len()
+                && matches!(chars[i], 'a' | 'o' | 'e' | 'i' | 'u')
+                && matches!(chars[i + 1], 'm' | 'n');
+
+            // Tri-graph match
             if i + 2 < chars.len() {
                 let tri: String = chars[i..=i+2].iter().collect();
                 if let Some(p) = PHONEMES.iter().find(|(name, _)| *name == tri.as_str()) {
                     result.push((p.0, &p.1)); i += 3; matched = true;
                 }
             }
+            // Di-graph match
             if !matched && i + 1 < chars.len() {
                 let di: String = chars[i..=i+1].iter().collect();
                 if let Some(p) = PHONEMES.iter().find(|(name, _)| *name == di.as_str()) {
                     result.push((p.0, &p.1)); i += 2; matched = true;
                 }
             }
+            // PT-BR: nasal vowels (a+M → "ao" nasal, o+M → "ao" nasal)
+            if !matched && is_nasal_context {
+                let c = chars[i];
+                if c == 'a' || c == 'o' {
+                    if let Some(p) = PHONEMES.iter().find(|(name, _)| *name == "ao") {
+                        result.push((p.0, &p.1)); i += 1; matched = true;
+                    }
+                }
+            }
+            // Single character match
             if !matched {
                 if let Some(p) = PHONEMES.iter().find(|(name, _)| name.chars().next() == Some(chars[i])) {
                     result.push((p.0, &p.1)); i += 1; matched = true;
                 }
             }
+            // Fallback to "ah"
             if !matched {
                 if let Some(p) = PHONEMES.iter().find(|(name, _)| *name == "ah") {
                     result.push((p.0, &p.1));
