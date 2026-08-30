@@ -855,6 +855,7 @@ impl Agent for HermesAgent {
                 hermes::Command::Mcp(_) => "Mcp",
                 hermes::Command::UiMode(_) => "UiMode",
                 hermes::Command::Commands => "Commands",
+                hermes::Command::Install => "Install",
                 hermes::Command::Chat(_) => "Chat",
                 hermes::Command::ModelSwap(_) => "ModelSwap",
             };
@@ -1309,6 +1310,17 @@ impl Agent for HermesAgent {
                     } else {
                         crate::mcp::handle_mcp_line(line)
                     }
+                }
+                hermes::Command::Install => {
+                    // ADR-0079: instala em outro disco. Pub SYS_INSTALL_UI →
+                    // DisplayAgent spawna card 7902 → clique dispara SYS_INSTALL.
+                    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+                        id: 0,
+                        topic: alloc::string::String::from(k_nano::installer_agent::TOPIC_SYS_INSTALL_UI),
+                        payload: alloc::vec::Vec::new(),
+                        token: event_bus::CapabilityToken::Legacy(1),
+                    });
+                    String::from("Install: selecione o disco de destino na UI\n")
                 }
                 hermes::Command::AddSkill(ref name, ref desc) => {
                     let prompt = alloc::format!(

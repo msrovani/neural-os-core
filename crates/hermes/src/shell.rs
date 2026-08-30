@@ -107,16 +107,19 @@ pub fn execute(cmd: &str) -> String {
         "irq" => String::from("IRQ: 0-15 PIC, 32-255 APIC\n"),
         "gpio" => String::from("GPIO: not available on x86\n"),
         // Novos comandos SmileyOS
-                "install" => {
+        "install" => {
             if k_nano::installer_agent::INSTALLER_BUSY.load(core::sync::atomic::Ordering::Relaxed) {
                 String::from("Installer busy — already running\n")
             } else {
-                let profile = k_nano::hw_profiler::profile_hardware();
-                if profile.device_count() == 0 {
-                    String::from("No PCI devices found — cannot install\n")
-                } else {
-                    alloc::format!("install: run via AutoInstallerAgent\nHW profile: {}\nTarget disks available. Use `install <dev>` to start.\n", profile.summary())
-                }
+                // ADR-0086 A5: publica SYS_INSTALL_UI → DisplayAgent spawna card 7902
+                // (clique → DISK_SELECTION + SYS_INSTALL → AutoInstallerAgent executa).
+                let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+                    id: 0,
+                    topic: alloc::string::String::from(k_nano::installer_agent::TOPIC_SYS_INSTALL_UI),
+                    payload: args.as_bytes().to_vec(),
+                    token: event_bus::CapabilityToken::Legacy(1),
+                });
+                String::from("Install: selecione o disco de destino na UI\n")
             }
         }
         "touch" => touch_cmd(args),

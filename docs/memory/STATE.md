@@ -1,4 +1,6 @@
-﻿# STATE — neural-os-core v1.9.99-s296 — HW splash freeze + 1º frame compositor
+﻿# STATE — neural-os-core v1.9.99-s293 — Card install sai da casca (Hermes → SYS_INSTALL_UI)
+#   SESSION_293: Command::Install em hermes.rs; parse /install + bare install; HermesAgent dispatch pub TOPIC_SYS_INSTALL_UI → DisplayAgent spawna card 7902; hermes::shell::execute install handler = stub quebrado → agora publica parity. Antes: install caia em Command::Chat → LLM, shell::execute nunca era chamado. Check 0 erros.
+# STATE — neural-os-core v1.9.99-s296 — HW splash freeze + 1º frame compositor
 #   SESSION_296: E:\BOOT.LOG/NSGDB zeros = sem MSC write; splash = Runtime tick 1;
 #     fix render imediato pos claim_graphics (agent.rs); usb_hw.img 22:22. Residual: MSC self-enumeration stick.
 # STATE — neural-os-core v1.9.99-s295 — HW pendrive boot regressão (BOOT.LOG skip + ESP sync)

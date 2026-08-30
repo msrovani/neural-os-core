@@ -345,6 +345,9 @@ pub enum Command {
     UiMode(String),
     /// Catálogo slash HANR-style
     Commands,
+    /// Instalador do sistema (ADR-0079): abre card de seleção de disco.
+    /// Pub SYS_INSTALL_UI → DisplayAgent spawna card 7902 → clique dispara SYS_INSTALL.
+    Install,
 }
 
 // ---------------------------------------------------------------------------
@@ -573,6 +576,9 @@ pub fn parse_command(line: &str) -> Command {
             // Remainder may be "PATH" or "http://ip:port/path [DEST.GGUF]"
             return Command::ModelSwap(parts.next().unwrap_or("").trim().to_string());
         }
+        if name.eq_ignore_ascii_case("install") || name.eq_ignore_ascii_case("instalar") {
+            return Command::Install;
+        }
         if name.eq_ignore_ascii_case("fetch") || name.eq_ignore_ascii_case("get") {
             return Command::Fetch(parts.next().unwrap_or("").trim().to_string());
         }
@@ -740,6 +746,11 @@ pub fn parse_command(line: &str) -> Command {
             }
             return Command::PkgCatalog;
         }
+    }
+    // Comando bare (sem `/`): reconhecidos como intent de sistema.
+    let lower = trimmed.to_ascii_lowercase();
+    if lower == "install" || lower.starts_with("install ") || lower == "instalar" {
+        return Command::Install;
     }
     Command::Chat(trimmed.to_string())
 }

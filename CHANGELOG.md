@@ -31,6 +31,16 @@
 - **`swap`:** `copy_nonoverlapping` back→GOP.
 - **Check:** `cargo check --release -p jarbas --target x86_64-unknown-none` 0 erros. Residual: mouse USB tablet QEMU (`aux=0`).
 
+## [1.9.99-s293] - 2026-08-25 — Card de seleção de disco (install) sai da casca
+
+**HermesChat → SYS_INSTALL_UI end-to-end (ADR-0079 alcançável pelo usuário)**
+
+- **`Command::Install`** em `hermes::hermes::Command`; `parse_command` reconhece `/install`, `/instalar`, e bare `install`.
+- **Dispatch em HermesAgent:** publica `TOPIC_SYS_INSTALL_UI` no EventBus → `DisplayAgent` (já tem `install_ui_receiver` lazy) spawna card 7902 → clique define `DISK_SELECTION` + `SYS_INSTALL` → `AutoInstallerAgent` executa.
+- **`hermes::shell::execute` install handler:** era um stub que só imprimia texto; agora publica o mesmo `TOPIC_SYS_INSTALL_UI` (parity com `neural-kernel::shell::execute`).
+- Antes: input `install` no HermesChat caía em `Command::Chat("install")` → LLM → nada acontece; o `shell::execute` em qualquer crate era código morto (nenhum caller do input).
+- Check: `cargo check --release` 0 erros.
+
 ## [1.9.99-s292] - 2026-08-25 — Instalador pendrive→HD externo + NeuralFS opt-in FAT32
 
 **ADR-0079 completo no metal: AIOS instala de pendrive USB para HD (interno ou externo)**
