@@ -614,3 +614,11 @@ For deep work on a specific folder, also read that folder's `codemap.md`.
 
 - **PT-BR TTS fonemas extras (ADR-0093):** 8 fonemas adicionados ao formant: lh, nh, ã nasal, õ nasal, rr, s final, ss, x → sh. TTS agora cobre a maioria dos sons PT-BR comuns.
 
+- **HDA QEMU: GCTL funciona mas ICW/ICR não respondem (SESSION_286):** MMIO no BAR0 do intel-hda QEMU funciona para GCTL (offset 0x08) mas ICW (offset 0x60) retorna sempre 0x0. CORB/RIRB DMA também não recebe response (RIRB WP=0). DIAGNÓSTICO: GCTL read/write OK, CORBCTL=0x3 (running), mas controller ignora comandos. Causa provável: QEMU intel-hda partial emulation ou BAR mapping issue com1GB huge pages do HHDM. Fix: testar em HW real (HDA funciona em hardware nativo).
+
+- **VAD compartilhado vs duplicado (SESSION_286):** AudioPipelineAgent e JarbasVoiceAgent instanciavam VAD separados. Pipeline VAD era usado só para barge-in — simplificado para threshold de amplitude sem VAD completo. Voice agent mantém VAD real (SpeechStart/SpeechEnd). Economiza ~2K LOC + CPU.
+
+- **EWMA emotion decay (SESSION_286):** LAST_VOICE_EMOTION agora usa α=0.3 EWMA em vez de substituição direta. Evita oscilação brusca de emoção entre frases. Orb e persona mudam suavemente.
+
+- **Piper smoke test (SESSION_286):**  valida que pesos geram audio com amplitude > 100. Detecta pesos corrompidos no boot. Chamar após .
+

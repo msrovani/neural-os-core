@@ -49,6 +49,30 @@ pub fn piper_is_loaded() -> bool {
         .unwrap_or(false)
 }
 
+/// Smoke test: valida que Piper gera audio com amplitude > 0.
+/// Chamar após load() para detectar pesos corrompidos.
+pub fn piper_smoke_test() -> bool {
+    let guard = TTS_ENGINE.lock();
+    if let Some(ref engine) = *guard {
+        if !engine.is_loaded() { return false; }
+        let pcm = engine.generate("hello");
+        if pcm.is_empty() {
+            k_nano::slog_jarbas!("Audio", "piper", "SMOKE FAIL: empty output");
+            return false;
+        }
+        // Verificar amplitude máxima > 100 (não silêncio)
+        let max_amp = pcm.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
+        if max_amp < 100 {
+            k_nano::slog_jarbas!("Audio", "piper", "SMOKE FAIL: max amplitude={} (< 100, pesos corrompidos?)", max_amp);
+            return false;
+        }
+        k_nano::slog_jarbas!("Audio", "piper", "SMOKE OK: {} samples, max_amp={}", pcm.len(), max_amp);
+        true
+    } else {
+        false
+    }
+}
+
 fn try_load_piper() -> Option<PiperEngine> {
     // 1) QEMU -device loader @0x124200000 (WHPX rápido; evita PIO ~61MB)
     if let Some(eng) = try_load_piper_from_loader() {

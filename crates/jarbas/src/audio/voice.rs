@@ -134,7 +134,11 @@ impl Agent for JarbasVoiceAgent {
                         let features = extract_features(&self.emotion_samples);
                         if features.energy_rms > 50.0 {
                             let emotion = classify_emotion(&features);
-                            LAST_VOICE_EMOTION.store(emotion as u8, Ordering::Relaxed);
+                            // EWMA decay: suaviza transições de emoção (α=0.3)
+                            let prev = LAST_VOICE_EMOTION.load(Ordering::Relaxed) as f32;
+                            let new_val = emotion as u8 as f32;
+                            let smoothed = prev * 0.7 + new_val * 0.3;
+                            LAST_VOICE_EMOTION.store(smoothed as u8, Ordering::Relaxed);
                             k_nano::slog_jarbas!("Jarbas", "info", "Emocao: {:?} (pitch={:.0}Hz, energy={:.0})",
                                 emotion,
                                 features.pitch_hz,
@@ -152,7 +156,7 @@ impl Agent for JarbasVoiceAgent {
 
                         let enhanced = if !self.conversation.is_empty() {
                             let mut ctx = alloc::string::String::new();
-                            let start = self.conversation.len().saturating_sub(3);
+                            let start = self.conversation.len().saturating_sub(6);
                             for (u, a) in &self.conversation[start..] {
                                 ctx.push_str(&alloc::format!("User: {}\nAssistant: {}\n", u, a));
                             }

@@ -474,9 +474,12 @@ pub unsafe fn map_page_uc_at(virt_addr: u64, phys_addr: u64, phys_mem_offset: u6
         let frame = alloc_mmio_frame(base);
         l3_entry.set_addr(PhysAddr::new(frame), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
     } else if l3_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+        // 1GB huge page: add NO_CACHE to the entire 1GB region
         let mut f = l3_entry.flags(); f.insert(PageTableFlags::NO_CACHE); f.insert(PageTableFlags::WRITE_THROUGH); l3_entry.set_flags(f);
         x86_64::instructions::tlb::flush(virt); return;
     }
+    // Also: if L3 is present but NOT huge page, check if L2 will be huge
+    // This is the normal 4KB page walk path — continue to L2
     let l3_virt = base + l3_entry.addr().as_u64();
     let l3_table = &mut *(l3_virt.as_mut_ptr::<PageTable>());
 

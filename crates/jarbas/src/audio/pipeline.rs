@@ -3,7 +3,7 @@
 //! Sprint Sound: sem rota LLM_RESPONSE duplicada / formant paralelo.
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use crate::audio::vad::{VAD, VadTransition};
+// VAD compartilhado via voice agent — não duplicar
 use core::sync::atomic::{AtomicBool, Ordering};
 
 pub static BARGE_IN: AtomicBool = AtomicBool::new(false);
@@ -17,14 +17,12 @@ const PIPELINE_MANIFEST: AgentManifest = AgentManifest {
 };
 
 pub struct AudioPipelineAgent {
-    vad: VAD,
     frame_counter: u64,
 }
 
 impl AudioPipelineAgent {
     pub fn new() -> Self {
         AudioPipelineAgent {
-            vad: VAD::new(500.0, 16000),
             frame_counter: 0,
         }
     }
@@ -48,13 +46,15 @@ impl Agent for AudioPipelineAgent {
         }
 
         if self.frame_counter % 10 == 0 {
-            let mut mic_samples = [0i16; 256];
-            let read = crate::audio::voice::MIC_CAPTURE_RING.pop(&mut mic_samples);
-            if read > 0 {
-                let (_, _, _is_speech, transition) = self.vad.process_frame(&mic_samples[..read]);
-                if transition == VadTransition::SpeechStart {
-                    // Só barge-in se houver playback ativo.
-                    if crate::audio::voice::PLAYBACK_RING.available() > 64 {
+            // Barge-in: detecta se há playback ativo e usuário começou a falar
+            // (VAD real roda no voice agent — aqui só checamos o ring)
+            if crate::audio::voice::PLAYBACK_RING.available() > 64 {
+                // Se há áudio no mic (não só silêncio), ativa barge-in
+                let mut mic_samples = [0i16; 256];
+                let read = crate::audio::voice::MIC_CAPTURE_RING.pop(&mut mic_samples);
+                if read > 0 {
+                    let has_voice = mic_samples[..read].iter().any(|s| s.unsigned_abs() > 500);
+                    if has_voice {
                         BARGE_IN.store(true, Ordering::Relaxed);
                     }
                 }
