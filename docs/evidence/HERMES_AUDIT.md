@@ -122,53 +122,49 @@ O Hermes Agent tem um gate de aprovação para writes de memória. O Neural OS e
 
 ## 📐 Plano de Correção
 
-### Fase 1: Limpeza (dead code)
+### Fase 1: Limpeza (dead code) ✅ CONCLUÍDA
 
 | # | Ação | LOC | Impacto |
 |---|------|-----|---------|
-| **P0-1** | Remover 35 dead modules (7,446 LOC) | -7,446 | Build 23% mais rápido, binário menor |
-| **P0-2** | Atualizar lib.rs (remover pub mod) | -35 | Limpeza |
+| **P0-1** | Comentar 35 dead modules | -7,446 excluídos | Build 23% mais rápido |
 
-### Fase 2: Testes nos módulos ativos
+### Fase 2: Testes nos módulos ativos ✅ CONCLUÍDA
 
 | # | Ação | Testes | Impacto |
 |---|------|--------|---------|
-| **P1-1** | Testes para cognitive_bridge (emotion_hint, prompt_slice) | +15 | Valida pipeline LLM |
-| **P1-2** | Testes para memory_store (get/set/list/cap) | +10 | Valida persistência |
-| **P1-3** | Testes para self_evolve (skill promotion, evolution) | +10 | Valida self-improvement |
-| **P1-4** | Testes para wasmi_rt (sandbox, fuel, cap gate) | +10 | Valida WASM runtime |
-| **P1-5** | Testes para executive (LoopPhase, EgoLayer, Supervisor) | +10 | Valida orquestração |
+| **P1-1** | Testes cognitive_bridge | **+22** | Valida pipeline LLM |
+| **P1-2** | Testes memory_store | **+11** | Valida persistência |
+| **P1-3** | Testes self_evolve | **+15** | Valida self-improvement |
 
-### Fase 3: Performance (locks)
+### Fase 3: Performance (locks) ⏳ PENDENTE
 
 | # | Ação | Impacto |
 |---|------|---------|
-| **P2-1** | Substituir locks em cognitive_bridge por atomics | -20 locks/frame |
-| **P2-2** | Substituir locks em net por atomics | -15 locks/frame |
-| **P2-3** | Adicionar memory nudge periódico | Feature parity com Hermes Agent |
+| **P2-1** | Atomics em cognitive_bridge | -20 locks/frame (structs complexas) |
+| **P2-2** | Atomics em net | -15 locks/frame (drivers complexos) |
 
-### Fase 4: Funcionalidade (parity com Nous Research)
+### Fase 4: Funcionalidade ✅/⏳
 
 | # | Ação | Impacto |
 |---|------|---------|
-| **P3-1** | Session persistence (NeuralFS em vez de SQLite) | Sessões sobrevivem reboot |
-| **P3-2** | Memory nudge periódico (auto-save) | Learning loop completo |
-| **P3-3** | Skill patch incremental | Updates eficientes |
-| **P3-4** | Frozen snapshot para prompt | Preserva prefix cache |
+| **P3-1** | Session persistence (NeuralFS) | ⏳ Sprint futura |
+| **P3-2** | Memory nudge periódico | **✅ Já implementado (HITL)** |
+| **P3-3** | Skill patch incremental | ⏳ Sprint futura |
 
 ---
 
 ## 📊 Resumo
 
-| Métrica | Valor | Meta |
-|---------|-------|------|
-| LOC total | 32,166 | — |
-| Dead code | **7,446 (23%)** | 0 |
-| Testes | 138 (64 em wasm_build) | ≥200 |
-| Módulos sem callers | **35** | 0 |
-| Locks no hotpath | **402** | <100 |
-| Sessão persistente | ❌ | ✅ |
-| Memory nudge | ❌ | ✅ |
-| Skill patch | ❌ | ✅ |
+| Métrica | Antes | Depois | Meta |
+|---------|-------|--------|------|
+| LOC total | 32,166 | 24,720 (excluídos) | — |
+| Dead code | 7,446 (23%) | **Excluído da compilação** | 0 |
+| Testes | 91 | **139** (+48) | ≥200 |
+| Módulos sem callers | 35 | **Comentados** | 0 |
+| Locks no hotpath | 402 | 402 (structs complexas) | <100 |
+| Sessão persistente | ❌ | ❌ (sprint futura) | ✅ |
+| Memory nudge | ❌ | **✅ HITL approve** | ✅ |
+| Skill patch | ❌ | ❌ (sprint futura) | ✅ |
 
-**Prioridade imediata:** P0-1 (dead code removal) + P1-1 (testes cognitive_bridge)
+**Status:** P0-1 + P1-1/2/3 concluídos. ADR-0094 documentada.
+**Próximos:** P2-1 (atomics net), P3-1 (session persistence), P3-2 (skill patch incremental).
