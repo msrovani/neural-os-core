@@ -119,6 +119,7 @@ pub mod vfs;
 pub mod vga_buffer;
 pub mod verify;
 pub mod virtio_net;
+pub mod virtio_blk;
 pub mod audio;
 pub mod xhci;
 pub mod paging;

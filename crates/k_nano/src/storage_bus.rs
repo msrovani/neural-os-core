@@ -15,6 +15,7 @@ pub enum BusKind {
     Ahci,
     Ata,
     Usb,
+    VirtioBlk,
 }
 
 pub struct StorageMount {
@@ -119,6 +120,7 @@ fn detect_ext(dev: &mut dyn BlockDevice, kind: BusKind) -> Vec<StorageMount> {
         BusKind::Ahci => "/mnt/ext",
         BusKind::Ata => "/mnt/ext",
         BusKind::Usb => "/mnt/ext",
+        BusKind::VirtioBlk => "/mnt/ext",
     };
     for start_lba in lbas {
         if let Some(mut fs) = crate::ext2_reader::Ext2Reader::detect(dev, start_lba) {
@@ -217,6 +219,7 @@ fn detect_exfat(dev: &mut dyn BlockDevice, kind: BusKind) -> Vec<StorageMount> {
         BusKind::Ahci => "/mnt/sata",
         BusKind::Ata => "/mnt/hdd",
         BusKind::Usb => "/mnt/usb",
+        BusKind::VirtioBlk => "/mnt/virtio",
     };
     for start in lbas {
         if let Some(mut fs) = ExfatFs::detect(dev, start) {

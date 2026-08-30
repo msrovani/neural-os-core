@@ -121,6 +121,7 @@ impl SysInstaller {
                 crate::storage_bus::BusKind::Ahci => "ahci",
                 crate::storage_bus::BusKind::Ata => "ata",
                 crate::storage_bus::BusKind::Usb => "usb",
+                crate::storage_bus::BusKind::VirtioBlk => "virtio-blk",
             };
             self.disks.push(DiskInfo {
                 index: next_idx,

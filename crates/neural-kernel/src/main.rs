@@ -1859,6 +1859,17 @@ pub(crate) fn kernel_boot(
     unsafe { k_nano::storage_probe::probe_storage_drivers(); }
     let ata_found = crate::ATA_DRIVER.lock().is_some();
 
+    // VirtIO-blk (QEMU dev/test): -drive if=virtio apresenta disk_qemu.raw
+    // como block device — FileFlash resolve /NSGDB.BIN persistente (IDEA #539).
+    if unsafe { k_nano::virtio_blk::init_driver_virtio_blk() } {
+        let mut bus = k_nano::storage_bus::STORAGE_BUS.lock();
+        if let Some(dev) = k_nano::virtio_blk::VIRTIO_BLK_DEV.lock().as_mut() {
+            bus.register_probe(k_nano::storage_bus::BusKind::VirtioBlk, "virtio-blk", dev);
+        }
+        drop(bus);
+        publish_boot_phase(BootPhase::DriverInit, "VirtIO-blk found");
+    }
+
     // Labor 12: pins FAT após ATA (smoke HTTPS pode ter aprendido em RAM antes).
     crate::tls_trust::load_pins_from_fat();
     crate::tls_trust::persist_pins_to_fat();
@@ -2042,7 +2053,6 @@ pub(crate) fn kernel_boot(
         labor_smokes::run_deferred(boot_tag);
     }
     crate::display::fb::boot_ckpt(72, "labor smokes ok");
-
     crate::display::fb::boot_ckpt(28, "VFS init");
     {
         use crate::vfs::VfsRegistry;
@@ -2061,7 +2071,6 @@ pub(crate) fn kernel_boot(
 
     crate::display::fb::boot_ckpt(29, "FS agents");
     crate::fs::init_fs_agents();
-
     hermes_crate::globals::install_vfs_bridge(hermes_crate::globals::VfsBridge {
         read: crate::fs::read_vfs,
         write: crate::fs::write_vfs,

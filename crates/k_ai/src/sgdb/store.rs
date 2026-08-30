@@ -102,6 +102,7 @@ fn populate_hw_rest() {
                 k_nano::storage_bus::BusKind::Ahci => "ahci",
                 k_nano::storage_bus::BusKind::Ata => "ata",
                 k_nano::storage_bus::BusKind::Usb => "usb",
+                k_nano::storage_bus::BusKind::VirtioBlk => "virtio-blk",
             };
             write(&format!("{}storage/{}/kind", ns::HW, i), kind);
             write(
