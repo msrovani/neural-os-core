@@ -50,6 +50,11 @@ pub static POWER_STATE: IrqSafeLock<PowerState> = IrqSafeLock::new(PowerState::N
 pub static WELCOME_BANNER: IrqSafeLock<Option<String>> = IrqSafeLock::new(None);
 static WELCOME_UNTIL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
+/// Cached HUD status line — recomputed only when values change.
+/// Elimina alloc de String por frame no render loop (60Hz).
+static HUD_CACHE_MEM: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(u64::MAX);
+static HUD_CACHE_STR: spin::Mutex<alloc::string::String> = spin::Mutex::new(alloc::string::String::new());
+
 /// Publica a fala de boas-vindas no HUD (~8s a 60Hz ≈ 480 ticks).
 pub fn announce_welcome(body: &str) {
     let clean = body.trim();
@@ -534,14 +539,21 @@ impl JarbasDesktop {
 
         let mem_mb = {
             let real = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
-            if real > 0 {
-                real
-            } else {
-                0
-            }
+            if real > 0 { real } else { 0 }
         };
         let net = k_nano::env::net_hud_label();
-        let right = k_nano::boot_report::hud_line(mem_mb, net);
+        // Cache HUD string: recompute only when mem_mb changes
+        let right = {
+            let prev = HUD_CACHE_MEM.load(core::sync::atomic::Ordering::Relaxed);
+            if prev != mem_mb {
+                HUD_CACHE_MEM.store(mem_mb, core::sync::atomic::Ordering::Relaxed);
+                let s = k_nano::boot_report::hud_line(mem_mb, net);
+                *HUD_CACHE_STR.lock() = s.clone();
+                s
+            } else {
+                HUD_CACHE_STR.lock().clone()
+            }
+        };
         let right_x = w.saturating_sub(right.len() * 8 + POWER_BTN_W + 24);
         draw_text(
             &mut self.fb,
