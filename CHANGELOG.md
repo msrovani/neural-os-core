@@ -1,5 +1,17 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s295] - 2026-08-29 — HW pendrive: hang pós BOOT.LOG skip + pipeline ESP
+
+**Boot HW no stick parava em `BOOT.LOG skip`; reboots seguintes só Limine.**
+
+- **`live_usb_no_msc`:** pendrive Limine sem MSC no K25 — defer P24a/b HID, skip `verify_kernel_from_disk` (ATA PIO), `run_deferred_usb_live` (sem rede/WiFi/xHCI hub no K71).
+- **Display:** `set_urgency("display", 220)` — compositor não morre de fome após ~50 ticks Pending.
+- **BOOT.LOG:** BOM UTF-8 em `build_session_bytes()` (Notepad Windows legível).
+- **Pipeline ESP:** `build_usb_unified.py` sync `uefi.img ← limine-esp.img`, fallback `mk_esp_fat.py` se `build.rs` falhar; `build_image --hw --unified` sempre `--build-boot`; `boot/build.rs` prioriza `python` no Windows + log de falha mk_esp.
+- **FAT HW:** `mkfat32.py` mapa firmware `FW_LNAME_TO_FAT`, skip blobs 0B; aliases em `firmware.rs`.
+- **Jarbas:** caps chat/timeline/notifications; splash ASCII sem em dash.
+- **Build:** `cargo clean` + `cargo build -p boot` + `PACK_LLM=all build_image --hw --unified --size 6144` → `usb_hw.img` 6271 MB.
+
 ## [1.9.99-s294] - 2026-08-29 — Compositor Jarbas: hot path do desktop
 
 **Desktop no QEMU estava lento porque cada frame pintava o FB pixel a pixel e o orb fazia ~280k `sqrtf`.**

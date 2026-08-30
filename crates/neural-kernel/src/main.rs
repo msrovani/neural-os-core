@@ -1939,6 +1939,10 @@ pub(crate) fn kernel_boot(
         crate::display::fb::boot_ckpt(25, "antes BOOT.LOG flush");
         crate::boot_logger::init_after_usb();
         crate::display::fb::boot_ckpt(17, "BOOT.LOG flush tentado");
+        // Pendrive Limine sem MSC: xHCI HID (P24a/b) pode travar minutos — defer p/ Runtime.
+        let live_usb_no_msc = hw_real
+            && boot_tag.contains("limine")
+            && crate::USB_MSC.lock().is_none();
         let qemu_hid = k_nano::platform_probe::probe_done()
             && !matches!(
                 k_nano::platform_probe::hypervisor(),
@@ -1947,9 +1951,16 @@ pub(crate) fn kernel_boot(
         if want_usb && !qemu_hid {
             // Boot USB unificado: HID no mesmo xHCI que MSC — defer p/ Runtime.
             let usb_msc_boot = crate::USB_MSC.lock().is_some();
-            if usb_msc_boot {
-                crate::boot_logger::log("BOOT: P24a/P24b HID defer (USB-MSC boot → InputAgent T+50)");
-                k_nano::slog_nano!("USB", "hid", "skip P24a/P24b — deferred after init_phase");
+            if usb_msc_boot || live_usb_no_msc {
+                let why = if usb_msc_boot {
+                    "USB-MSC boot"
+                } else {
+                    "live USB sem MSC"
+                };
+                crate::boot_logger::log(&alloc::format!(
+                    "BOOT: P24a/P24b HID defer ({why} -> InputAgent T+50)"
+                ));
+                k_nano::slog_nano!("USB", "hid", "skip P24a/P24b — deferred ({why})");
             } else {
                 if unsafe { crate::xhci::bringup_hid_keyboard() } {
                     crate::boot_logger::log("BOOT: P24a HID keyboard ready");
@@ -1971,6 +1982,10 @@ pub(crate) fn kernel_boot(
     // Boot log: reforço ATA (se houver) + flush checkpoint
     crate::display::fb::boot_ckpt(27, "ATA boot_log/verify");
     {
+        // live_usb_no_msc: definido no bloco USB acima; recompute se MSC apareceu tarde.
+        let live_usb_no_msc = hw_real
+            && boot_tag.contains("limine")
+            && crate::USB_MSC.lock().is_none();
         // NÃO segurar ATA_DRIVER.lock() durante boot_logger::init/persist_now —
         // persist_now faz ATA_DRIVER.lock() de novo → deadlock (parava em K27).
         let parts = {
@@ -1980,19 +1995,26 @@ pub(crate) fn kernel_boot(
                 .map(|ata| crate::fat32::read_mbr(ata))
                 .unwrap_or_default()
         };
-        if !parts.is_empty() {
+        if !parts.is_empty() && !live_usb_no_msc {
             let ata_guard = crate::ATA_DRIVER.lock();
             if let Some(ref ata) = *ata_guard {
                 verify_kernel_from_disk(ata, &parts);
             }
+        } else if live_usb_no_msc {
+            k_nano::slog_bin!("Sec", "info", "skip ATA KERNEL~1 verify (live USB sem MSC)");
+            crate::display::fb::console_print("SEC: skip ATA verify (USB live)");
         }
         crate::boot_logger::init(None, &[]);
         crate::boot_logger::log("BOOT: ATA+FAT init OK");
     }
 
-    // Honesty smokes adiados (SESSION_265) — agora com net/storage bridges vivos.
+    // Honesty smokes adiados (SESSION_265) — USB live sem MSC: lite only (evita hang K71).
     crate::display::fb::boot_ckpt(71, "labor smokes");
-    labor_smokes::run_deferred(boot_tag);
+    if hw_real && crate::USB_MSC.lock().is_none() {
+        labor_smokes::run_deferred_usb_live(boot_tag);
+    } else {
+        labor_smokes::run_deferred(boot_tag);
+    }
     crate::display::fb::boot_ckpt(72, "labor smokes ok");
 
     crate::display::fb::boot_ckpt(28, "VFS init");
@@ -2990,7 +3012,10 @@ pub(crate) fn kernel_boot(
     registry.set_urgency("network_agent", 180);
     registry.set_urgency("input", 200);
     registry.set_urgency("mouse", 150);
-    k_nano::slog_bin!("Sched", "info", "urgency aplicada p/ interativos (hw_bridge/network_agent/input/mouse) — isentos de rate-limit");
+    // Display: splash no 1º tick; sem urgency vira Pending eterno → rate-limit 80%
+    // após 50 ticks e o compositor nunca substitui "Inicializando..." (HW real).
+    registry.set_urgency("display", 220);
+    k_nano::slog_bin!("Sched", "info", "urgency aplicada p/ interativos (hw_bridge/network_agent/input/mouse/display) — isentos de rate-limit");
 
     // SysInfoAgent — painel de debug com CPU/memória/agentes na tela
     registry.register(Box::new(agents::sysinfo_agent::SysInfoAgent::new()));

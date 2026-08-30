@@ -331,7 +331,7 @@ def build_data_volume(size_mb: int, tmp_path: str, *, use_fat32: bool) -> int:
         "NEURAL-OS",
     ]
     print(f"=== Dados {fs_name} {size_mb}MB (BOOT_MODE=hw) + Device LEGO ===")
-    r = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=1200)
+    r = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=3600)
     if r.stdout:
         sys.stdout.write(r.stdout)
         if not r.stdout.endswith("\n"):
@@ -340,6 +340,51 @@ def build_data_volume(size_mb: int, tmp_path: str, *, use_fat32: bool) -> int:
         print(f"[ERRO] {maker} exit={r.returncode}: {(r.stderr or '')[:500]}")
         sys.exit(r.returncode)
     return 2048
+
+
+def sync_uefi_from_limine_esp(uefi_path: str) -> None:
+    """build.rs pode falhar silenciosamente no Windows — limine-esp.img é a fonte."""
+    esp = os.path.join(ROOT, "target", "limine-esp.img")
+    if not os.path.isfile(esp):
+        return
+    if (not os.path.isfile(uefi_path)
+            or os.path.getmtime(esp) > os.path.getmtime(uefi_path)):
+        shutil.copy2(esp, uefi_path)
+        print(f"[OK] uefi.img <- limine-esp.img (sync pos-build)")
+
+
+def force_mk_esp_if_stale(uefi_path: str) -> None:
+    """Se cargo build -p boot nao gerou uefi.img, roda mk_esp_fat na arvore ESP."""
+    esp_tree = os.path.join(ROOT, "target", "limine-esp-tree")
+    kernel_elf = os.path.join(esp_tree, "kernel.elf")
+    esp_img = os.path.join(ROOT, "target", "limine-esp.img")
+    mk = os.path.join(ROOT, "tools", "limine", "mk_esp_fat.py")
+    if not os.path.isfile(kernel_elf) or not os.path.isfile(mk):
+        return
+    stale = (
+        not os.path.isfile(uefi_path)
+        or os.path.getmtime(kernel_elf) > os.path.getmtime(uefi_path)
+    )
+    if not stale:
+        return
+    print("=== mk_esp_fat.py (fallback — build.rs nao sincronizou uefi.img) ===")
+    r = subprocess.run(
+        [
+            sys.executable,
+            mk,
+            "--esp-dir",
+            esp_tree,
+            "--output",
+            esp_img,
+            "--size-mb",
+            "128",
+        ],
+        cwd=ROOT,
+        timeout=600,
+    )
+    if r.returncode != 0:
+        raise SystemExit(f"[ERRO] mk_esp_fat exit={r.returncode}")
+    sync_uefi_from_limine_esp(uefi_path)
 
 
 def ensure_uefi_img(uefi_path: str, build_boot: bool) -> None:
@@ -354,6 +399,8 @@ def ensure_uefi_img(uefi_path: str, build_boot: bool) -> None:
             env=env,
             timeout=3600,
         )
+        sync_uefi_from_limine_esp(uefi_path)
+        force_mk_esp_if_stale(uefi_path)
         if r.returncode != 0 or not os.path.exists(uefi_path):
             raise SystemExit("[ERRO] falha ao gerar uefi.img via cargo build -p boot")
         return

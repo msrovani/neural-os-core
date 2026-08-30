@@ -64,7 +64,11 @@ impl NotificationQueue {
         }
     }
 
+    /// Limite duro de notificações em memória. Evita OOM.
+    const MAX_QUEUE: usize = 32;
+
     /// Adiciona notificação com cálculo automático de expires_at baseado em urgência.
+    /// Respeita cap duro (MAX_QUEUE) — notificações mais antigas são descartadas.
     pub fn push(
         &mut self,
         message: &str,
@@ -73,6 +77,10 @@ impl NotificationQueue {
         click_action: Option<String>,
         now: u64,
     ) {
+        // Cap duro: descarta a mais antiga se cheio
+        if self.notifications.len() >= Self::MAX_QUEUE {
+            self.notifications.remove(0);
+        }
         let id = self.next_id;
         self.next_id += 1;
         // ponytail: Critical usa u64::MAX (nunca expira). Adicionar hard cap se memória for preocupação.

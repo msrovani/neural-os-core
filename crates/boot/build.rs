@@ -19,9 +19,8 @@ fn main() {
     let limine_dir = workspace.join("tools").join("limine");
     let efi_bin = limine_dir.join("vendor").join("BOOTX64.EFI");
 
-    // Monta ESP tree no target/
+    // Monta ESP tree no target/ (não apaga árvore inteira — Windows pode lockar dirs).
     let esp_root = target_dir.join("limine-esp-tree");
-    if esp_root.exists() { fs::remove_dir_all(&esp_root).ok(); }
     let efi_dir = esp_root.join("EFI").join("BOOT");
     let boot_dir = esp_root.join("boot");
     fs::create_dir_all(&efi_dir).unwrap();
@@ -50,21 +49,33 @@ fn main() {
     // Gera imagem FAT32 (ESP)
     let mk_esp = limine_dir.join("mk_esp_fat.py");
     let esp_img = target_dir.join("limine-esp.img");
-    // Windows tem `python`; Linux/macOS têm `python3` (às vezes sem `python`).
-    let python = ["python3", "python"].iter().find(|p|
+    // Windows: `python` primeiro; Linux/macOS: python3.
+    #[cfg(windows)]
+    let python_candidates = ["python", "python3"];
+    #[cfg(not(windows))]
+    let python_candidates = ["python3", "python"];
+    let python = python_candidates.iter().find(|p|
         std::process::Command::new(p).arg("--version").output().is_ok())
-        .expect("python3 or python required");
-    let status = std::process::Command::new(python)
+        .expect("python or python3 required");
+    let output = std::process::Command::new(python)
         .args([&mk_esp.to_string_lossy(), "--esp-dir",
                &esp_root.to_string_lossy(), "--output", &esp_img.to_string_lossy(), "--size-mb", "128"])
-        .status().expect("mk_esp_fat failed");
+        .output().expect("mk_esp_fat failed");
 
-    if status.success() && esp_img.exists() {
+    if output.status.success() && esp_img.exists() {
         fs::copy(&esp_img, target_dir.join("uefi.img")).unwrap();
         println!("cargo:warning=Limine boot image: {} ({} MB)", esp_img.display(),
             (esp_img.metadata().unwrap().len() / (1024*1024)));
         println!("cargo:rustc-env=LIMINE_IMG={}", esp_img.display());
     } else {
-        println!("cargo:warning=ESP image creation failed");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        println!("cargo:warning=ESP image creation failed exit={:?}", output.status.code());
+        if !stdout.is_empty() {
+            println!("cargo:warning=mk_esp stdout: {}", stdout.trim());
+        }
+        if !stderr.is_empty() {
+            println!("cargo:warning=mk_esp stderr: {}", stderr.trim());
+        }
     }
 }

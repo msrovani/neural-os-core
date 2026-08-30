@@ -96,6 +96,20 @@ pub fn vfs_storage_bridge_smoke() {
     );
 }
 
+/// Live USB sem MSC enumerado: smokes mínimos pós-K25 (evita hang ATA PIO / rede / xHCI).
+/// HW real pendrive: MSC costuma aparecer tarde; labor completo trava antes do Runtime.
+pub fn run_deferred_usb_live(boot_tag: &str) {
+    k_hal::hw_gate::emit_all();
+    let _ = hermes_crate::ipc_bus::boot_smoke();
+    let _ = hermes_crate::async_io::boot_smoke();
+    limine_esp_evidence_smoke(boot_tag);
+    k_nano::slog_bin!(
+        "BOOT",
+        "info",
+        "step=usb_live_smokes status=OK VERDICT=PARTIAL reason=sem_MSC_no_K25"
+    );
+}
+
 /// Catálogo honesty pós-DriverInit (SESSION_265). Sem rede live no smoke.
 pub fn run_deferred(boot_tag: &str) {
     k_hal::hw_gate::emit_all();

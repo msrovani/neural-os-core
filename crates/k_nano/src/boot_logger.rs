@@ -447,11 +447,15 @@ pub fn build_session_bytes() -> Vec<u8> {
     } else {
         "timestamped"
     };
-    let mut content = alloc::format!(
-        "[S] neural-os-core {} session={} channel={} tick={} fat-boot-log=1\n",
-        ver, session, channel, tick
-    )
-    .into_bytes();
+    // BOM UTF-8: Notepad Windows (ANSI/GBK) sem BOM mostra mojibake/"chinês".
+    let mut content: alloc::vec::Vec<u8> = alloc::vec![0xEF, 0xBB, 0xBF];
+    content.extend_from_slice(
+        alloc::format!(
+            "[S] neural-os-core {} session={} channel={} tick={} fat-boot-log=1\n",
+            ver, session, channel, tick
+        )
+        .as_bytes(),
+    );
     let buf = PRE_FAT_BUF.lock();
     for line in buf.iter() {
         content.extend_from_slice(line);

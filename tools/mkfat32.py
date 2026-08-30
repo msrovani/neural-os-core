@@ -14,6 +14,88 @@ import os, struct, sys, argparse
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_SIZE_MB = 3072  # 3GB dados — cabe 850+1.3B+2B; arquivo FAT32 máx ~4GB-1
 
+# Nomes 8.3 no FAT — espelham k_hal/src/gpu/firmware.rs::load_firmware_file + WiFi.
+# Sem ponto no nome longo → colisão/truncamento no encode_83 do kernel.
+FW_LNAME_TO_FAT = {
+    # NVIDIA GP108 (ACR + GR + sw)
+    "fecs_bl.bin": "FECS_BL.BIN",
+    "fecs_data.bin": "FECS_DAT.BIN",
+    "fecs_inst.bin": "FECS_INS.BIN",
+    "fecs_sig.bin": "FECS_SIG.BIN",
+    "gpccs_bl.bin": "GPCCS_BL.BIN",
+    "gpccs_data.bin": "GPCCS_DA.BIN",
+    "gpccs_inst.bin": "GPCCS_IN.BIN",
+    "gpccs_sig.bin": "GPCCS_SI.BIN",
+    "sw_ctx.bin": "SW_CTX.BIN",
+    "sw_bundle_init.bin": "SW_BNDL.BIN",
+    "sw_method_init.bin": "SW_MTHD.BIN",
+    "sw_nonctx.bin": "SW_NONC.BIN",
+    "bl.bin": "ACR_BL.BIN",
+    "ucode_load.bin": "ACRLOAD.BIN",
+    "ucode_unload.bin": "ACRUNLD.BIN",
+    "unload_bl.bin": "ACR_UBL.BIN",
+    # AMD — PSP / SDMA / MEC (loaders) + bring-up residual
+    "green_sardine_asd.bin": "GS_ASD.BIN",
+    "green_sardine_ta.bin": "GS_TA.BIN",
+    "green_sardine_sdma.bin": "GS_SDMA.BIN",
+    "green_sardine_mec.bin": "GS_MEC.BIN",
+    "green_sardine_mec2.bin": "GS_MEC2.BIN",
+    "green_sardine_ce.bin": "GS_CE.BIN",
+    "green_sardine_dmcub.bin": "GS_DMCB.BIN",
+    "green_sardine_me.bin": "GS_ME.BIN",
+    "green_sardine_pfp.bin": "GS_PFP.BIN",
+    "green_sardine_rlc.bin": "GS_RLC.BIN",
+    "green_sardine_vcn.bin": "GS_VCN.BIN",
+    "psp_13_0_5_asd.bin": "PSPASD.BIN",
+    "psp_13_0_5_ta.bin": "PSPTA.BIN",
+    "psp_13_0_5_toc.bin": "PSPTOC.BIN",
+    "sdma_5_2_6.bin": "SDMA526.BIN",
+    "gc_10_3_6_mec.bin": "GC103MEC.BIN",
+    "gc_10_3_6_mec2.bin": "GC103ME2.BIN",
+    "gc_10_3_6_ce.bin": "GC103CE.BIN",
+    "gc_10_3_6_me.bin": "GC103ME.BIN",
+    "gc_10_3_6_pfp.bin": "GC103PFP.BIN",
+    "gc_10_3_6_rlc.bin": "GC103RLC.BIN",
+    "gc_11_5_0_mec.bin": "GC115MEC.BIN",
+    "gc_11_5_0_mes_2.bin": "GC115MS2.BIN",
+    "gc_11_5_0_mes1.bin": "GC115MS1.BIN",
+    "gc_11_5_0_imu.bin": "GC115IMU.BIN",
+    "gc_11_5_0_me.bin": "GC115ME.BIN",
+    "gc_11_5_0_pfp.bin": "GC115PFP.BIN",
+    "gc_11_5_0_rlc.bin": "GC115RLC.BIN",
+    # Intel i915 GuC / DMC / HuC
+    "skl_guc_70.1.1.bin": "SKLGUC70.BIN",
+    "skl_guc_69.0.3.bin": "SKLGUC69.BIN",
+    "kbl_guc_70.1.1.bin": "KBLGUC70.BIN",
+    "skl_dmc_ver1_27.bin": "SKLDMC27.BIN",
+    "kbl_dmc_ver1_04.bin": "KBLDMC04.BIN",
+    "skl_huc_2.0.0.bin": "SKLHUC20.BIN",
+    "kbl_huc_4.0.0.bin": "KBLHUC40.BIN",
+    "dg2_guc_70.bin": "DG2GUC70.BIN",
+    "dg2_guc_70.4.1.bin": "DG2GUC704.BIN",
+    "dg2_dmc_ver2_08.bin": "DG2DMC08.BIN",
+    "dg2_huc_gsc.bin": "DG2HUGSC.BIN",
+    # Intel xe (Arc novo)
+    "bmg_guc_70.bin": "BMGGUC70.BIN",
+    "bmg_huc.bin": "BMGHUC70.BIN",
+    "lnl_guc_70.bin": "LNLGUC70.BIN",
+    "lnl_huc.bin": "LNLHUC70.BIN",
+    "lnl_gsc_1.bin": "LNLGSC01.BIN",
+    "ptl_guc_70.bin": "PTLGUC70.BIN",
+    "ptl_huc.bin": "PTLHUC70.BIN",
+    "ptl_gsc_1.bin": "PTLGSC01.BIN",
+    # ath10k QCA6174
+    "firmware-6.bin": "AT10K_F6.BIN",
+    "board-2.bin": "AT10K_B2.BIN",
+    "board.bin": "AT10K_BD.BIN",
+    # Intel iwlwifi API77
+    "iwlwifi-cc-a0-77.ucode": "FW_CC77.BIN",
+    "iwlwifi-so-a0-gf-a0-77.ucode": "FW_SOGF.BIN",
+    "iwlwifi-so-a0-hr-b0-77.ucode": "FW_SOHR.BIN",
+    "iwlwifi-ty-a0-gf-a0-77.ucode": "FW_TYGF.BIN",
+    "iwlwifi-qu-b0-hr-b0-77.ucode": "FW_QUHR.BIN",
+}
+
 
 def _apply_fit_gate_if_enabled() -> None:
     """FIT_GATE=1 → reescreve PACK_LLM com degraus que cabem na RAM host."""
@@ -207,6 +289,7 @@ def populate(path):
     print(f"[PACK_LLM] {sorted(llm) or 'none'} (env PACK_LLM; default=falcon3)")
     files = [
         ("BGE.BIN", find_file("BGE_M3.BIN") or find_file("bge-small.bitnet") or find_file("bge.bin") or find_file("BGE.BIN")),
+        ("E5_MULTI.BIN", find_file("E5_MULTI.BIN") or find_file("E5.BIN")),
         # ADR-0083 §5.3: roteador MoE treinado (tools/train_router.py). Opcional —
         # sem ele o boot usa fallback determinístico com log honesto.
         ("ROUTER.BITNET", find_file("ROUTER.BITNET")),
@@ -311,59 +394,12 @@ def populate(path):
                     continue
                 prefix = "" if rel == "." else rel.upper().replace("\\", "_").replace("/", "_")
                 fw_path = os.path.join(root, name)
-                # NVIDIA GP108: nomes 8.3 reais (kernel Fat32Reader usa encode_83).
-                # Sem isso FW_FECS_BL_BIN vira "FW_FECS_BL_" e o ACR nunca acha o blob.
-                gp108_short = {
-                    "fecs_bl.bin": "FECS_BL.BIN",
-                    "fecs_data.bin": "FECS_DAT.BIN",
-                    "fecs_inst.bin": "FECS_INS.BIN",
-                    "fecs_sig.bin": "FECS_SIG.BIN",
-                    "gpccs_bl.bin": "GPCCS_BL.BIN",
-                    "gpccs_data.bin": "GPCCS_DA.BIN",
-                    "gpccs_inst.bin": "GPCCS_IN.BIN",
-                    "gpccs_sig.bin": "GPCCS_SI.BIN",
-                    "sw_ctx.bin": "SW_CTX.BIN",
-                    "sw_bundle_init.bin": "SW_BNDL.BIN",
-                    "sw_method_init.bin": "SW_MTHD.BIN",
-                    "sw_nonctx.bin": "SW_NONC.BIN",
-                    "bl.bin": "ACR_BL.BIN",
-                    "ucode_load.bin": "ACRLOAD.BIN",
-                    "ucode_unload.bin": "ACRUNLD.BIN",
-                    "unload_bl.bin": "ACR_UBL.BIN",
-                }
                 lname = name.lower()
-                # Intel iwlwifi API77 — short 8.3 (SESSION_154 / S1 prep).
-                iwlwifi_short = {
-                    "iwlwifi-cc-a0-77.ucode": "FW_CC77.BIN",
-                    "iwlwifi-so-a0-gf-a0-77.ucode": "FW_SOGF.BIN",
-                    "iwlwifi-so-a0-hr-b0-77.ucode": "FW_SOHR.BIN",
-                    "iwlwifi-ty-a0-gf-a0-77.ucode": "FW_TYGF.BIN",
-                    "iwlwifi-qu-b0-hr-b0-77.ucode": "FW_QUHR.BIN",
-                }
-                # ath10k QCA6174 hw3.0 — short 8.3 (SESSION_160 / Note 1050).
-                ath10k_short = {
-                    "firmware-6.bin": "AT10K_F6.BIN",
-                    "board-2.bin": "AT10K_B2.BIN",
-                    "board.bin": "AT10K_BD.BIN",
-                }
-                if "iwlwifi" in prefix.lower() and lname in iwlwifi_short:
-                    fw_name = iwlwifi_short[lname]
-                elif "ath10k" in prefix.lower() and lname in ath10k_short:
-                    fw_name = ath10k_short[lname]
-                elif ("nvidia" in prefix.lower() and "gp108" in prefix.lower()) or prefix in (
-                    "NVIDIA_GP108",
-                    "NVIDIA_GP108_GR",
-                    "NVIDIA_GP108_ACR",
+                if lname in FW_LNAME_TO_FAT:
+                    fw_name = FW_LNAME_TO_FAT[lname]
+                elif ("nvidia" in prefix.lower() and "gp108" in prefix.lower()) or prefix.startswith(
+                    "NVIDIA_GP108"
                 ):
-                    if lname in gp108_short:
-                        fw_name = gp108_short[lname]
-                    elif prefix in ("NVIDIA_GP108",):
-                        fw_name = "FW_" + name.upper().replace(".", "_")
-                    else:
-                        fw_name = "FW_GP108_" + name.upper().replace(".", "_")
-                elif prefix in ("NVIDIA_GP108",):
-                    fw_name = "FW_" + name.upper().replace(".", "_")
-                elif prefix.startswith("NVIDIA_GP108"):
                     fw_name = "FW_GP108_" + name.upper().replace(".", "_")
                 else:
                     fw_name = (
@@ -446,6 +482,9 @@ def populate(path):
 
         seen = {}  # src_path -> (start_cluster, file_len) for alias dedup (same bytes, no double alloc)
         for name, src in files:
+            if isinstance(src, str) and os.path.isfile(src) and os.path.getsize(src) == 0:
+                print(f"  [--] {name} — vazio (skip)")
+                continue
             # Alias dedup: same src path already written -> reuse clusters (FAT alias, no double space)
             if isinstance(src, str) and src in seen:
                 alias_start, alias_len = seen[src]

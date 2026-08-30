@@ -67,7 +67,7 @@ pub fn claim_graphics() {
                 gpu.rgb_order,
             );
             // Splash persistente ate o compositor assumir (LLM pode levar 6K+ ticks)
-            let msg = "Neural OS Core — Inicializando...";
+            let msg = "Neural OS Core - Inicializando...";
             let x0 = (gpu.fb_width as usize).saturating_sub(msg.len() * 8) / 2;
             let y0 = gpu.fb_height as usize / 2 - 8;
             splash_draw_text(

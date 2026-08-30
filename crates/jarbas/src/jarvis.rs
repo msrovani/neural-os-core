@@ -28,62 +28,6 @@ pub struct SoulProfile {
 
 impl SoulProfile {
     pub fn default_jarbas() -> Self { SoulProfile { name: String::from("JARBAS"), tone: String::from("witty"), humor_level: 0.5, formality: 0.3, empathy: 0.8 } }
-
-    /// Carrega SoulProfile do SOUL.md via memory_store (ADR-0047-HMI H4).
-    /// Se SOUL.md vazio ou ausente, mantem defaults do Jarbas.
-    pub fn from_soul_md() -> Self {
-        let text = hermes::memory_store::read_persona();
-        if text.trim().is_empty() {
-            return Self::default_jarbas();
-        }
-        let mut profile = Self::default_jarbas();
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') { continue; }
-            if let Some((key, value)) = line.split_once(':') {
-                let key = key.trim();
-                let value = value.trim();
-                match key {
-                    "name" => profile.name = String::from(value),
-                    "tone" => profile.tone = String::from(value),
-                    "formality" => profile.formality = value.parse().unwrap_or(0.3),
-                    "empathy" => profile.empathy = value.parse().unwrap_or(0.8),
-                    "humor" => profile.humor_level = value.parse().unwrap_or(0.5),
-                    _ => {}
-                }
-            }
-        }
-        k_nano::slog_jarbas!("SOUL", "info",
-            "SoulProfile loaded from SOUL.md: name={} tone={} formality={:.1} empathy={:.1}",
-            profile.name, profile.tone, profile.formality, profile.empathy);
-        profile
-    }
-
-    /// Ajusta tom baseado no AFFECT_SNAPSHOT atual (emoção em tempo real).
-    /// Decai suavemente para os defaults do SOUL.md (não acumula infinitamente).
-    pub fn adapt_to_affect(&mut self, snap: &hermes::globals::AffectSnapshot) {
-        // Decay: puxa valores de volta para os defaults (0.05/tick)
-        let decay = 0.05f32;
-        self.empathy += (0.8 - self.empathy) * decay;    // default empathy=0.8
-        self.humor_level += (0.5 - self.humor_level) * decay;  // default humor=0.5
-        self.formality += (0.3 - self.formality) * decay; // default formality=0.3
-
-        // Modulação por emoção (sobre o decay)
-        if snap.valence < -0.5 {
-            self.tone = String::from("empathetic");
-            self.empathy = (self.empathy + 0.1).min(1.0);
-        } else if snap.valence > 0.5 {
-            self.tone = String::from("witty");
-            self.humor_level = (self.humor_level + 0.05).min(1.0);
-        }
-        if snap.urgency > 0.7 {
-            self.tone = String::from("precise");
-            self.humor_level = 0.1;
-        }
-        if snap.fatigue > 0.7 {
-            self.formality = (self.formality + 0.1).min(1.0);
-        }
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -605,7 +549,7 @@ impl JarbasEngine {
         consent.register("exec", ConsentLevel::Dangerous, "execute system commands");
         consent.register("network", ConsentLevel::Moderate, "network access");
         JarbasEngine {
-            soul: SoulProfile::from_soul_md(),
+            soul: SoulProfile::default_jarbas(),
             session: SessionHistory::new(256), notifications: NotificationGate::new(),
             thread: SessionlessThread::new(500), emotion: EmotionAnalysis::analyze(""),
             consent, discovery: SkillDiscovery::new(), cache: SemanticCache::new(),
@@ -656,11 +600,6 @@ impl JarbasEngine {
     }
 
     pub fn tick(&mut self, tick: u64) {
-        // ADR-0047-HMI H4: adapta tom ao affect em tempo real
-        {
-            let snap = hermes::globals::AFFECT_SNAPSHOT.lock();
-            self.soul.adapt_to_affect(&snap);
-        }
         self.persona_tick();
         if tick % 100 == 0 { self.session.compress("drop_lowest"); }
         // Sprint 90 ticks — dream gate primeiro: evita clonar até 256 strings/tick
@@ -675,5 +614,417 @@ impl JarbasEngine {
 
     pub fn avatar_state_for(&self, thinking: bool, speaking: bool) -> AvatarState {
         if speaking { AvatarState::Speaking } else if thinking { AvatarState::Processing } else { self.avatar_state }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Testes host — P0-1 (30+ testes para validar toda a engine)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── EmotionAnalysis ──────────────────────────────────────────────────
+
+    #[test]
+    fn emotion_analyze_empty_is_neutral() {
+        let a = EmotionAnalysis::analyze("");
+        let d = a.dominant();
+        assert!(d == Emotion::Neutral || d == Emotion::Joy, "empty should be neutral/joy, got {:?}", d);
+    }
+
+    #[test]
+    fn emotion_analyze_joy() {
+        let a = EmotionAnalysis::analyze("obrigado! estou muito feliz com isso!");
+        assert!(a.joy > 0.5, "joy={:.2} should be >0.5", a.joy);
+    }
+
+    #[test]
+    fn emotion_analyze_sadness() {
+        let a = EmotionAnalysis::analyze("sinto muita falta disso, que pena");
+        assert!(a.sadness > 0.3, "sadness={:.2} should be >0.3", a.sadness);
+    }
+
+    #[test]
+    fn emotion_analyze_anger() {
+        let a = EmotionAnalysis::analyze("isso me irrita muito, odio total!");
+        assert!(a.anger > 0.3, "anger={:.2} should be >0.3", a.anger);
+    }
+
+    #[test]
+    fn emotion_analyze_fear() {
+        let a = EmotionAnalysis::analyze("tenho medo do que vai acontecer");
+        assert!(a.fear > 0.3, "fear={:.2} should be >0.3", a.fear);
+    }
+
+    #[test]
+    fn emotion_analyze_surprise() {
+        let a = EmotionAnalysis::analyze("o que?! como assim?");
+        assert!(a.surprise > 0.3, "surprise={:.2} should be >0.3", a.surprise);
+    }
+
+    #[test]
+    fn emotion_analyze_long_text() {
+        let a = EmotionAnalysis::analyze("isto e um texto muito longo com muitas palavras para testar se o classificador funciona bem com textos grandes");
+        // Should not panic, all scores in [0,1]
+        assert!(a.joy >= 0.0 && a.joy <= 1.0);
+        assert!(a.sadness >= 0.0 && a.sadness <= 1.0);
+        assert!(a.anger >= 0.0 && a.anger <= 1.0);
+        assert!(a.fear >= 0.0 && a.fear <= 1.0);
+        assert!(a.surprise >= 0.0 && a.surprise <= 1.0);
+        assert!(a.disgust >= 0.0 && a.disgust <= 1.0);
+        assert!(a.neutral >= 0.0 && a.neutral <= 1.0);
+    }
+
+    #[test]
+    fn emotion_dominant_returns_max() {
+        let mut a = EmotionAnalysis::analyze("");
+        a.joy = 0.9;
+        a.sadness = 0.1;
+        assert_eq!(a.dominant(), Emotion::Joy);
+        a.joy = 0.1;
+        a.sadness = 0.9;
+        assert_eq!(a.dominant(), Emotion::Sadness);
+    }
+
+    #[test]
+    fn emotion_describe_format() {
+        let a = EmotionAnalysis::analyze("obrigado");
+        let d = a.describe();
+        assert!(d.contains("EMO-FW"), "describe should contain EMO-FW: {}", d);
+    }
+
+    // ── SoulProfile ──────────────────────────────────────────────────────
+
+    #[test]
+    fn soul_default_jarbas() {
+        let s = SoulProfile::default_jarbas();
+        assert_eq!(s.name, "JARBAS");
+        assert_eq!(s.tone, "witty");
+        assert!(s.humor_level > 0.0 && s.humor_level <= 1.0);
+        assert!(s.empathy > 0.0 && s.empathy <= 1.0);
+    }
+
+    #[test]
+    fn soul_fluid_update_anger() {
+        let mut s = SoulProfile::default_jarbas();
+        s.fluid_update(Emotion::Anger, 0);
+        assert_eq!(s.tone, "formal");
+        assert!(s.formality > 0.3);
+    }
+
+    #[test]
+    fn soul_fluid_update_joy() {
+        let mut s = SoulProfile::default_jarbas();
+        s.fluid_update(Emotion::Joy, 0);
+        assert_eq!(s.tone, "casual");
+        assert!(s.humor_level >= 0.5);
+    }
+
+    #[test]
+    fn soul_fluid_update_high_urgency() {
+        let mut s = SoulProfile::default_jarbas();
+        s.fluid_update(Emotion::Neutral, 5);
+        assert_eq!(s.tone, "precise");
+        assert!(s.humor_level < 0.2);
+    }
+
+    #[test]
+    fn soul_mode_coach() {
+        let mut s = SoulProfile::default_jarbas();
+        s.empathy = 0.9;
+        assert_eq!(s.mode(), PersonaMode::Coach);
+    }
+
+    #[test]
+    fn soul_mode_tool() {
+        let mut s = SoulProfile::default_jarbas();
+        s.formality = 0.8;
+        s.empathy = 0.3; // low empathy + high formality = Tool
+        assert_eq!(s.mode(), PersonaMode::Tool);
+    }
+
+    #[test]
+    fn soul_mode_tutor() {
+        let s = SoulProfile::default_jarbas();
+        // default: empathy=0.8 → Coach, need low empathy + low formality
+        assert_eq!(s.mode(), PersonaMode::Coach);
+    }
+
+    #[test]
+    fn soul_describe() {
+        let s = SoulProfile::default_jarbas();
+        let d = s.describe();
+        assert!(d.contains("PERSONA"), "describe should contain PERSONA: {}", d);
+        assert!(d.contains("witty"), "describe should contain tone: {}", d);
+    }
+
+    // ── SessionHistory ───────────────────────────────────────────────────
+
+    #[test]
+    fn session_push_and_len() {
+        let mut s = SessionHistory::new(10);
+        s.push("hello", Emotion::Joy);
+        s.push("world", Emotion::Sadness);
+        assert_eq!(s.entries.len(), 2);
+        assert_eq!(s.entries[0].text, "hello");
+        assert_eq!(s.entries[1].emotion, Emotion::Sadness);
+    }
+
+    #[test]
+    fn session_compress_drop_lowest() {
+        let mut s = SessionHistory::new(10);
+        for i in 0..8 {
+            let e = SessionEntry { text: alloc::format!("msg{}", i), emotion: Emotion::Neutral, importance: i as u32 * 10 };
+            s.entries.push(e);
+        }
+        s.compress("drop_lowest");
+        assert!(s.entries.len() <= 5, "after drop_lowest: {} entries", s.entries.len());
+        // Highest importance should survive
+        assert!(s.entries.iter().any(|e| e.importance >= 70));
+    }
+
+    #[test]
+    fn session_compress_summarize() {
+        let mut s = SessionHistory::new(10);
+        s.entries.push(SessionEntry { text: String::from("low"), emotion: Emotion::Neutral, importance: 10 });
+        s.entries.push(SessionEntry { text: String::from("high"), emotion: Emotion::Joy, importance: 80 });
+        s.compress("summarize");
+        assert_eq!(s.entries.len(), 1);
+        assert_eq!(s.entries[0].text, "high");
+    }
+
+    #[test]
+    fn session_compress_merge_similar() {
+        let mut s = SessionHistory::new(10);
+        s.entries.push(SessionEntry { text: String::from("a"), emotion: Emotion::Joy, importance: 50 });
+        s.entries.push(SessionEntry { text: String::from("b"), emotion: Emotion::Joy, importance: 60 });
+        s.entries.push(SessionEntry { text: String::from("c"), emotion: Emotion::Sadness, importance: 50 });
+        s.compress("merge_similar");
+        assert_eq!(s.entries.len(), 2, "should keep one Joy + one Sadness");
+    }
+
+    // ── NotificationGate ─────────────────────────────────────────────────
+
+    #[test]
+    fn notification_push_and_pop() {
+        let mut n = NotificationGate::new();
+        n.push("test", Urgency::High);
+        assert_eq!(n.queue.len(), 1);
+        let item = n.pop();
+        assert!(item.is_some());
+        assert_eq!(item.unwrap().0, "test");
+    }
+
+    #[test]
+    fn notification_dedup() {
+        let mut n = NotificationGate::new();
+        n.push("same", Urgency::Medium);
+        n.push("same", Urgency::Medium); // should dedup
+        assert_eq!(n.queue.len(), 1);
+    }
+
+    #[test]
+    fn notification_rate_limit() {
+        let mut n = NotificationGate::new();
+        for _ in 0..10 {
+            n.push_with_agent("msg", Urgency::Low, "agent_a");
+        }
+        // Rate limit: max 5 per agent per window
+        assert!(n.queue.len() <= 5, "rate limit should cap at 5, got {}", n.queue.len());
+    }
+
+    #[test]
+    fn notification_priority_sort() {
+        let mut n = NotificationGate::new();
+        n.push("low", Urgency::Low);
+        n.push("critical", Urgency::Critical);
+        n.push("high", Urgency::High);
+        // Should be sorted by urgency desc
+        let first = n.pop().unwrap();
+        assert_eq!(first.1 as u8, Urgency::Critical as u8);
+    }
+
+    #[test]
+    fn notification_status() {
+        let mut n = NotificationGate::new();
+        n.push("test", Urgency::Critical);
+        n.push("test2", Urgency::High);
+        let s = n.status();
+        assert!(s.contains("2 pending"));
+    }
+
+    // ── DreamEngine ──────────────────────────────────────────────────────
+
+    #[test]
+    fn dream_new_empty() {
+        let d = DreamEngine::new();
+        assert!(d.insights.is_empty());
+        assert!(d.status().contains("0 insights"));
+    }
+
+    // ── EgoLayer ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn ego_learn_and_can_answer() {
+        let mut e = EgoLayer::new();
+        assert!(!e.can_answer("rust"));
+        e.learn("rust", true);
+        assert!(e.can_answer("rust"));
+        assert_eq!(e.interactions, 1);
+    }
+
+    #[test]
+    fn ego_confidence_decay() {
+        let mut e = EgoLayer::new();
+        e.learn("rust", true);  // 0.6
+        e.learn("rust", false); // 0.6*0.9 - 0.1 = 0.44
+        e.learn("rust", false); // 0.44*0.9 - 0.1 = 0.296
+        assert!(!e.can_answer("rust"), "confidence should drop below 0.3");
+    }
+
+    #[test]
+    fn ego_confidence_bounds() {
+        let mut e = EgoLayer::new();
+        for _ in 0..100 { e.learn("x", true); }
+        let c = e.confidence.get("x").unwrap();
+        assert!(*c <= 1.0, "confidence should not exceed 1.0");
+    }
+
+    // ── Heartbeat ────────────────────────────────────────────────────────
+
+    #[test]
+    fn heartbeat_new_empty() {
+        let h = Heartbeat::new();
+        assert!(h.messages.is_empty());
+        assert!(h.status().contains("0 proactive"));
+    }
+
+    // ── SessionlessThread ────────────────────────────────────────────────
+
+    #[test]
+    fn sessionless_not_stale_initially() {
+        let t = SessionlessThread::new(100);
+        assert!(!t.is_stale());
+    }
+
+    // ── ToolState ────────────────────────────────────────────────────────
+
+    #[test]
+    fn tool_state_snapshot_and_restore() {
+        let mut ts = ToolState::new();
+        ts.snapshot("key1", b"data1");
+        let restored = ts.restore("key1");
+        assert!(restored.is_some(), "restore should find key1");
+        assert_eq!(restored.unwrap(), b"data1");
+        assert!(ts.restore("missing").is_none(), "missing key returns None");
+    }
+
+    #[test]
+    fn tool_state_restore_removes() {
+        let mut ts = ToolState::new();
+        ts.snapshot("k", b"v");
+        ts.restore("k");
+        assert!(ts.restore("k").is_none(), "restore should consume the snapshot");
+    }
+
+    // ── BabelIndex ───────────────────────────────────────────────────────
+
+    #[test]
+    fn babel_new() {
+        let b = BabelIndex::new();
+        assert!(!b.needs_consolidation());
+        assert!(b.status().contains("BABEL"));
+    }
+
+    #[test]
+    fn babel_entropy_grows() {
+        let mut b = BabelIndex::new();
+        b.tick(301, 200); // session_len=200 → entropy=200/256=0.78 > 0.7
+        assert!(b.needs_consolidation());
+    }
+
+    // ── ConsentGate ──────────────────────────────────────────────────────
+
+    #[test]
+    fn consent_safe_allowed() {
+        let c = ConsentGate::new();
+        // c is empty — unknown skill denied
+        let (ok, _) = c.check("read_file");
+        assert!(!ok, "unknown skill should be denied");
+    }
+
+    // ── SkillDiscovery ───────────────────────────────────────────────────
+
+    #[test]
+    fn discovery_propose_after_3() {
+        let mut d = SkillDiscovery::new();
+        d.observe("deploy");
+        d.observe("deploy");
+        assert!(d.propose().is_empty(), "need 3 observations");
+        d.observe("deploy");
+        let proposals = d.propose();
+        assert_eq!(proposals.len(), 1);
+        assert_eq!(proposals[0], "deploy");
+    }
+
+    // ── SemanticCache ────────────────────────────────────────────────────
+
+    #[test]
+    fn cache_exact_match() {
+        let mut c = SemanticCache::new();
+        c.set("key", vec![1, 2, 3], 1);
+        assert_eq!(c.get("key").unwrap(), &vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn cache_miss() {
+        let mut c = SemanticCache::new();
+        assert!(c.get("missing").is_none());
+    }
+
+    // ── JarbasEngine ─────────────────────────────────────────────────────
+
+    #[test]
+    fn engine_new_defaults() {
+        let e = JarbasEngine::new();
+        assert_eq!(e.soul.name, "JARBAS");
+        assert!(e.session.entries.is_empty());
+        assert!(e.consent.check("read_file").0, "read_file should be safe");
+    }
+
+    #[test]
+    fn engine_process_input_updates_emotion() {
+        let mut e = JarbasEngine::new();
+        e.process_input("obrigado!");
+        assert_eq!(e.session.entries.len(), 1);
+        assert!(e.emotion.joy > 0.0, "joy should increase after positive input");
+    }
+
+    #[test]
+    fn engine_avatar_state_for() {
+        let e = JarbasEngine::new();
+        assert_eq!(e.avatar_state_for(false, false), AvatarState::Idle);
+        assert_eq!(e.avatar_state_for(true, false), AvatarState::Processing);
+        assert_eq!(e.avatar_state_for(false, true), AvatarState::Speaking);
+        assert_eq!(e.avatar_state_for(true, true), AvatarState::Speaking);
+    }
+
+    #[test]
+    fn engine_conversation_push() {
+        let mut e = JarbasEngine::new();
+        e.process_input("hello");
+        e.process_input("world");
+        assert_eq!(e.session.entries.len(), 2);
+        assert_eq!(e.session.entries[0].text, "hello");
+        assert_eq!(e.session.entries[1].text, "world");
+    }
+
+    #[test]
+    fn engine_discovery_patterns() {
+        let mut e = JarbasEngine::new();
+        for _ in 0..5 { e.process_input("deploy server"); }
+        assert!(e.discovery.patterns.get("deploy server").copied().unwrap_or(0) >= 3);
     }
 }

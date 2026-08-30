@@ -117,8 +117,7 @@ def main():
             "--output",
             out,
         ]
-        if args.build_boot:
-            cmd.append("--build-boot")
+        cmd.append("--build-boot")
         if args.fixed_disk:
             cmd.append("--fixed-disk")
         print(f"=== USB unificado (BOOT_MODE=hw) -> {out} ===")

@@ -1,4 +1,9 @@
-﻿# STATE — neural-os-core v1.9.99-s294 — Compositor Jarbas hot path (desktop lento)
+﻿# STATE — neural-os-core v1.9.99-s295 — HW pendrive boot regressão (BOOT.LOG skip + ESP sync)
+#   SESSION_295: hang pós K25 = P24a/b HID + verify ATA K27 + labor K71 sem MSC no pendrive;
+#     `live_usb_no_msc` + `run_deferred_usb_live`; `set_urgency(display,220)`; BOM UTF-8 BOOT.LOG;
+#     pipeline ESP sync uefi.img←limine-esp.img + fallback mk_esp_fat; build_image --build-boot sempre.
+#     `usb_hw.img` 6271MB PACK_LLM=all (cargo clean + build from scratch 29/08). Residual: aceite metal pós-reflash.
+# STATE — neural-os-core v1.9.99-s294 — Compositor Jarbas hot path (desktop lento)
 #   SESSION_294: fill_rect=fill_rect_fast (bpp=4 0..aw + doubling); glow scanline+isqrt (não sqrtf/pixel);
 #     TARGET_FRAME_TICKS=1 (PIT ~18 Hz; 3 era ~6 FPS); orb ambient 1.35× max 2 rings; dock 1×; mouse_log 2×.
 #     Residual: USB tablet QEMU aux=0 (#542). ESP: python (não python3). Guest aberto não recarrega ELF.

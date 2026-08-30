@@ -83,6 +83,11 @@ pub enum DisplayMsg {
 
 pub static CHAT_WINDOW: Mutex<Option<ChatWindow>> = Mutex::new(None);
 
+/// Limite maximo de mensagens no historico. Evita crescimento infinito.
+const MAX_MESSAGES: usize = 100;
+/// Limite maximo de timeline steps.
+const MAX_TIMELINE: usize = 64;
+
 pub struct ChatWindow {
     /// ID da sessão atual
     pub session_id: u32,
@@ -250,6 +255,16 @@ impl ChatWindow {
                     });
                 }
             }
+        }
+        self.trim_caps();
+    }
+
+    fn trim_caps(&mut self) {
+        while self.messages.len() > MAX_MESSAGES {
+            self.messages.pop_front();
+        }
+        while self.timeline_steps.len() > MAX_TIMELINE {
+            self.timeline_steps.remove(0);
         }
     }
 

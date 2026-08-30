@@ -5,4 +5,5 @@ GSP_PIN=535.113.01
 GSP_LOCATION=target/firmware/nvidia/{tu102,ad102,ga102}/gsp/
 FAT_DEFAULT_CHIPS=gp108,skl,kbl,green_sardine
 FAT_GSP_CHIPS=tu102,ad102,ga102
-NOTE=GSP pin ABI 535.113.01; WHENCE MIT/redistrib; 570=opt-in bring-up
+GIT_COMMIT=458e40fdbb4dad5134ec230a42df21aea1b5baf8
+NOTE=GSP pin ABI 535.113.01; WHENCE MIT/redistrib; 570=opt-in bring-up; integridade via SHA256SUMS
