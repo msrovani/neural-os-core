@@ -110,6 +110,7 @@ enum FlashDev {
     Ata,
     Ahci,
     Nvme,
+    VirtioBlk,
 }
 
 impl FlashDev {
@@ -119,6 +120,7 @@ impl FlashDev {
             FlashDev::Ata => "ata",
             FlashDev::Ahci => "ahci",
             FlashDev::Nvme => "nvme",
+            FlashDev::VirtioBlk => "virtio",
         }
     }
 }
@@ -148,6 +150,11 @@ fn with_flash_dev<R>(
         FlashDev::Nvme => {
             let mut g = NVME_DRIVER.lock();
             let d = g.as_mut().ok_or("no nvme")?;
+            Ok(f(d))
+        }
+        FlashDev::VirtioBlk => {
+            let mut g = crate::virtio_blk::VIRTIO_BLK_DEV.lock();
+            let d = g.as_mut().ok_or("no virtio_blk")?;
             Ok(f(d))
         }
     }
@@ -373,11 +380,12 @@ impl FileFlash {
     /// TODO(follow-up): re-probe FileFlash pÃ³s-enumeraÃ§Ã£o MSC (hoje um stick
     /// que aparece depois fica sem SGDB persistente atÃ© o prÃ³ximo boot).
     pub fn probe() -> Option<FileFlash> {
-        const ORDER: [FlashDev; 4] = [
+        const ORDER: [FlashDev; 5] = [
             FlashDev::Usb,
             FlashDev::Ata,
             FlashDev::Ahci,
             FlashDev::Nvme,
+            FlashDev::VirtioBlk,
         ];
         let want = crate::fat32::encode_83(FILE_FLASH_NAME);
         for dev in ORDER {

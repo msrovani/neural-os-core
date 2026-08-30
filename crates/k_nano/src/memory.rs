@@ -598,6 +598,49 @@ pub fn page_leaf_flags(virt: u64) -> Option<u64> {
     Some(l1e.flags().bits())
 }
 
+/// Phys frame da folha (ou huge) que mapeia `virt`. None se não PRESENT.
+/// Diagnóstico #PF-storm / virtio-blk: verifica se a VA HHDM do driver aponta
+/// para o frame físico que o device DMA lê. Alias HHDM → frame errado = device
+/// vê zeros → "virtio-blk missing headers" / nós BTree zerados (Bug #2).
+pub fn page_leaf_phys(virt: u64) -> Option<u64> {
+    use x86_64::structures::paging::PageTable;
+    use x86_64::VirtAddr;
+    let pm = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    if pm == 0 {
+        return None;
+    }
+    let v = VirtAddr::new(virt);
+    let (l4_frame, _) = x86_64::registers::control::Cr3::read();
+    let base = VirtAddr::new(pm);
+    let l4 = unsafe { &*(base + l4_frame.start_address().as_u64()).as_ptr::<PageTable>() };
+    let l4e = &l4[v.p4_index()];
+    if !l4e.flags().contains(x86_64::structures::paging::PageTableFlags::PRESENT) {
+        return None;
+    }
+    let l3 = unsafe { &*(base + l4e.addr().as_u64()).as_ptr::<PageTable>() };
+    let l3e = &l3[v.p3_index()];
+    if !l3e.flags().contains(x86_64::structures::paging::PageTableFlags::PRESENT) {
+        return None;
+    }
+    if l3e.flags().contains(x86_64::structures::paging::PageTableFlags::HUGE_PAGE) {
+        return Some(l3e.addr().as_u64() + (virt & 0x3FFF_FFFF));
+    }
+    let l2 = unsafe { &*(base + l3e.addr().as_u64()).as_ptr::<PageTable>() };
+    let l2e = &l2[v.p2_index()];
+    if !l2e.flags().contains(x86_64::structures::paging::PageTableFlags::PRESENT) {
+        return None;
+    }
+    if l2e.flags().contains(x86_64::structures::paging::PageTableFlags::HUGE_PAGE) {
+        return Some(l2e.addr().as_u64() + (virt & 0x1F_FFFF));
+    }
+    let l1 = unsafe { &*(base + l2e.addr().as_u64()).as_ptr::<PageTable>() };
+    let l1e = &l1[v.p1_index()];
+    if !l1e.flags().contains(x86_64::structures::paging::PageTableFlags::PRESENT) {
+        return None;
+    }
+    Some(l1e.addr().as_u64() + (virt & 0xFFF))
+}
+
 #[allow(dead_code)]
 pub unsafe fn dealloc_physical_frame(frame: PhysFrame<Size4KiB>) {
     let mut guard = GLOBAL_ALLOCATOR.lock();

@@ -60,6 +60,7 @@ pub const BLK_S_IOERR: u8 = 1;
 pub const BLK_S_UNSUPP: u8 = 2;
 
 const DESC_F_WRITE: u16 = 2; // device-writable
+const DESC_F_NEXT: u16 = 1;   // continue via next field (VRING_DESC_F_NEXT)
 
 const SECTOR: usize = 512;
 /// Setores por request (página de dados do scratch = 4096B).
@@ -242,10 +243,13 @@ impl VirtIoBlk {
             (p.add(12) as *mut u16).write_volatile(flags);
             (p.add(14) as *mut u16).write_volatile(next);
         };
-        // Chain: hdr → data → status (next encadeia; último = 0)
-        set_desc(0, self.scratch_pa, 16, 0, 1); // header: device-read → next=1
+        // Chain: hdr → data → status. VRING_DESC_F_NEXT (0x1) no flag de desc[0]
+        // e desc[1] é OBRIGATÓRIO — QEMU só segue `next` se esse bit estiver setado
+        // (virtqueue_split_read_next_desc). Sem ele, QEMU lê só o header → in_num=0
+        // → "virtio-blk missing headers". virtio_net nunca acertou porque não encadeia.
+        set_desc(0, self.scratch_pa, 16, DESC_F_NEXT, 1); // header: device-read → next=1
         set_desc(1, self.scratch_pa + 4096, len as u32,
-                 if is_write { 0 } else { DESC_F_WRITE }, 2); // dados → next=2
+                 if is_write { DESC_F_NEXT } else { DESC_F_NEXT | DESC_F_WRITE }, 2); // dados → next=2
         set_desc(2, self.scratch_pa + 16, 1, DESC_F_WRITE, 0); // status: device-write, fim
 
         // Publica no avail ring (head = desc 0)
@@ -298,6 +302,13 @@ impl VirtIoBlk {
                 crate::slog_nano!("VBLK", "fail",
                     "  used: flags={:#x} idx={} ring[0].id={} (used_last={})",
                     uflags, uidx, uid, self.used_last);
+                // PTE check (Bug #2): a VA HHDM aponta para o frame que o
+                // device DMA lê? Alias → frame errado = device vê zeros.
+                let q_phys = crate::memory::page_leaf_phys(self.queue_pa + offset);
+                let s_phys = crate::memory::page_leaf_phys(self.scratch_pa + offset);
+                crate::slog_nano!("VBLK", "fail",
+                    "  PTE: queue_va->phys={:#x} (esperado {:#x}) scratch_va->phys={:#x} (esperado {:#x})",
+                    q_phys.unwrap_or(0), self.queue_pa, s_phys.unwrap_or(0), self.scratch_pa);
                 return false;
             }
             core::hint::spin_loop();
