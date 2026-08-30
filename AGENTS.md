@@ -626,3 +626,12 @@ For deep work on a specific folder, also read that folder's `codemap.md`.
 - **Piper smoke test (SESSION_286):**  valida que pesos geram audio com amplitude > 100. Detecta pesos corrompidos no boot. Chamar após .
 
 - **xHCI HID QEMU: event ring all zeros — controller ignores command doorbell (SESSION_290):** `qemu-xhci` em TCG mode aceita MMIO reads (PORTSC funciona, CCS=1 nos ports P5/P6) mas NÃO processa command ring — `cmd_enable_slot()` sempre dá timeout com event ring todo zero (`evt=0x0 0x0 0x0 0x0`). Port Reset funciona (escreve PR no PORTSC), mas EnableSlot nunca completa. Guard `qemu_hid` foi removido (estava bloqueando o bringup inteiro). Odiagnostic agora é: PORTSC dump + reset FAIL/OK + EnableSlot FAIL com event ring peek. Funciona em HW real. **AWAITING_HW** para validação completa do mouse USB.
+- **Orb JARVIS MCU rendering (SESSION_291):** hex grid (dots nas intersecoes, 48px spacing, pulse por distancia), 5 camadas de glow (outer 2.8r -> body -> inner ring 0.7r -> core 0.18r -> specular), 24 particulas deterministicas, aneis rotativos com perspectiva eliptica (flatten Y x0.3), scanlines a cada 4px. Paleta: cyan #00D4FF em navy #080C18. Distance2 + quadratic falloff (zero sqrtf/expf). sinf/cosf so para ~24 posicoes/frame.
+
+- **Anti-flicker compositor (SESSION_291):** o root cause do flicker era fill_rect(0,0,w,h) a CADA frame (limpa tela inteira). Fix: bounding box do orb apenas (+16px margin para particulas). dirty_hud NAO cascata mais apos orb/mesh redraw. dirty_orb = true a cada 2 ticks para manter animacao.
+
+- **Theme JARVIS navy (SESSION_291):** Dark theme bg atualizado de (15,15,18) cinza para (8,12,24) navy. Consiste com o background do orb. fill_rect_fast para HUD bar em vez de fill_rect (8x mais rapido).
+
+- **snapshot vs clone persistente (SESSION_291+):** ferramentas de edicao (write_file, str_replace) apontam para o SNAPSHOT, NAO para o clone. Apos editar, SEMPRE copiar do snapshot para o clone. SEMPRE testar com git rev-parse --is-inside-work-tree antes de assumir qual e qual.
+
+- **pre-existing broken changes em working tree (SESSION_291):** sessoes anteriores deixaram virtio_blk.rs (457 LOC, erros de build) e storage_bus.rs (VirtioBlk variant sem match) no working tree. Revertidos com git checkout -- para desbloquear build. Regra: NUNCA commitar codigo que nao compila; se esta WIP, stash ou branch separada.
