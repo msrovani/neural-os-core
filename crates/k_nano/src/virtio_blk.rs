@@ -269,7 +269,35 @@ impl VirtIoBlk {
             }
             polls += 1;
             if polls > POLL_LIMIT {
-                crate::slog_nano!("VBLK", "fail", "timeout used ring lba={}", lba);
+                // DIAGNÓSTICO #PF-storm: dump do estado da virtqueue no timeout
+                let pfn = self.queue_pa >> 12;
+                crate::slog_nano!("VBLK", "fail",
+                    "timeout lba={} qpa={:#x} pfn={:#x} avail_off={} used_off={} qsize={}",
+                    lba, self.queue_pa, pfn, self.avail_off, self.used_off, self.qsize);
+                // Descritores 0-2 (o device deveria ler isto)
+                for i in 0..3usize {
+                    let p = desc.add(i * 16);
+                    let daddr = (p as *const u64).read_volatile();
+                    let dlen = (p.add(8) as *const u32).read_volatile();
+                    let dflags = (p.add(12) as *const u16).read_volatile();
+                    let dnext = (p.add(14) as *const u16).read_volatile();
+                    crate::slog_nano!("VBLK", "fail",
+                        "  desc[{}] addr={:#x} len={} flags={:#x} next={}",
+                        i, daddr, dlen, dflags, dnext);
+                }
+                // Avail ring: flags, idx, ring[0]
+                let aflags = (avail as *const u16).read_volatile();
+                let aidx = (avail.add(2) as *const u16).read_volatile();
+                let a0 = (avail.add(4) as *const u16).read_volatile();
+                crate::slog_nano!("VBLK", "fail",
+                    "  avail: flags={:#x} idx={} ring[0]={}", aflags, aidx, a0);
+                // Used ring: flags, idx, ring[0]
+                let uflags = (used as *const u16).read_volatile();
+                let uidx = (used.add(2) as *const u16).read_volatile();
+                let uid = (used.add(4) as *const u32).read_volatile();
+                crate::slog_nano!("VBLK", "fail",
+                    "  used: flags={:#x} idx={} ring[0].id={} (used_last={})",
+                    uflags, uidx, uid, self.used_last);
                 return false;
             }
             core::hint::spin_loop();
