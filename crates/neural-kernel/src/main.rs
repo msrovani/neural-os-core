@@ -1715,6 +1715,7 @@ pub(crate) fn kernel_boot(
     crate::display::fb::boot_ckpt(18, "early USB BOOT.LOG");
     {
         let want_usb = k_nano::boot_bind::should_probe_usb_host();
+        k_nano::slog_nano!("USB", "warn", "want_usb={}", want_usb);
         if !want_usb {
             crate::display::fb::boot_ckpt(18, "early USB skip (sem UsbHost no plano)");
             k_nano::slog_nano!("USB", "msc", "EARLY skip — DeviceTree sem xHCI");
@@ -1891,6 +1892,7 @@ pub(crate) fn kernel_boot(
     // AHCI/NVMe/ATA ja probed em storage_probe::probe_storage_drivers (plano k_ai).
 
     let want_usb = k_nano::boot_bind::should_probe_usb_host();
+    k_nano::slog_nano!("USB", "warn", "want_usb={}", want_usb);
     if want_usb {
         unsafe { crate::xhci::init_xhci(); } // idempotente se early path já subiu
         crate::display::fb::boot_ckpt(15, "xhci init done");
@@ -1943,36 +1945,29 @@ pub(crate) fn kernel_boot(
         let live_usb_no_msc = hw_real
             && boot_tag.contains("limine")
             && crate::USB_MSC.lock().is_none();
-        let qemu_hid = k_nano::platform_probe::probe_done()
-            && !matches!(
-                k_nano::platform_probe::hypervisor(),
-                k_nano::platform_probe::HypervisorKind::None
-            );
-        if want_usb && !qemu_hid {
-            // Boot USB unificado: HID no mesmo xHCI que MSC — defer p/ Runtime.
-            let usb_msc_boot = crate::USB_MSC.lock().is_some();
-            if usb_msc_boot || live_usb_no_msc {
-                let why = if usb_msc_boot {
-                    "USB-MSC boot"
-                } else {
-                    "live USB sem MSC"
-                };
-                crate::boot_logger::log(&alloc::format!(
-                    "BOOT: P24a/P24b HID defer ({why} -> InputAgent T+50)"
-                ));
-                k_nano::slog_nano!("USB", "hid", "skip P24a/P24b — deferred ({why})");
-            } else {
-                if unsafe { crate::xhci::bringup_hid_keyboard() } {
-                    crate::boot_logger::log("BOOT: P24a HID keyboard ready");
-                }
-                if unsafe { crate::xhci::bringup_hid_mouse() } {
-                    crate::boot_logger::log("BOOT: P24b HID mouse ready");
-                } else {
-                    crate::boot_logger::log("BOOT: P24b HID mouse SKIP");
-                }
-            }
+        // FIX: removido qemu_hid skip — cmd_enable_slot funciona em WHPX/TCG moderno.
+        let usb_msc_boot = crate::USB_MSC.lock().is_some();
+        if usb_msc_boot || live_usb_no_msc {
+            let why = if usb_msc_boot { "USB-MSC boot" } else { "live USB sem MSC" };
+            crate::boot_logger::log(&alloc::format!(
+                "BOOT: P24a/P24b HID defer ({why} -> InputAgent T+50)"
+            ));
+            k_nano::slog_nano!("USB", "warn", "skip P24a/P24b — deferred ({why})");
         } else if want_usb {
-            k_nano::slog_nano!("USB", "hid", "QEMU skip P24a/P24b (tablet/kbd Enable Slot timeout)");
+            if unsafe { crate::xhci::bringup_hid_keyboard() } {
+                crate::boot_logger::log("BOOT: P24a HID keyboard ready");
+                k_nano::slog_nano!("USB", "warn", "P24a HID keyboard OK");
+            } else {
+                crate::boot_logger::log("BOOT: P24a HID keyboard SKIP");
+                k_nano::slog_nano!("USB", "warn", "P24a HID keyboard SKIP (nenhum device)");
+            }
+            if unsafe { crate::xhci::bringup_hid_mouse() } {
+                crate::boot_logger::log("BOOT: P24b HID mouse ready");
+                k_nano::slog_nano!("USB", "warn", "P24b HID mouse OK");
+            } else {
+                crate::boot_logger::log("BOOT: P24b HID mouse SKIP");
+                k_nano::slog_nano!("USB", "warn", "P24b HID mouse SKIP (nenhum device)");
+            }
         }
     }
 

@@ -192,6 +192,23 @@ unsafe fn bringup_hid_boot(kind: HidBootKind) -> bool {
         HidBootKind::Mouse => "P24b",
     };
 
+    // PORTSC dump: read ALL port status before scanning
+    {
+        let g = XHCI_STATE.lock();
+        if let Some(st) = g.as_ref() {
+            let mut pcs = alloc::string::String::new();
+            for p in 1..=max_ports {
+                if let Some(addr) = portsc_addr(st, p) {
+                    let v = r32(st.base, addr - st.base);
+                    pcs.push_str(alloc::format!("P{}:{:#x} ", p, v).as_str());
+                }
+            }
+            crate::slog_nano!("USB", "warn", "{} PORTSC: {} max={}", tag, pcs.as_str(), max_ports);
+        }
+    }
+
+    // Pass 1: ports with CCS=1. Pass 2: Port Reset fallback for CCS=0.
+    let mut reset_done = false;
     for port in 1..=max_ports {
         if port == msc_port || port == hid_port || port == mouse_port {
             continue;
@@ -204,7 +221,27 @@ unsafe fn bringup_hid_boot(kind: HidBootKind) -> bool {
             v & 1 != 0
         };
         if !ccs {
-            continue;
+            if !reset_done {
+                // QEMU: ports show CCS=0 until Port Reset triggers detection
+                for _ in 0..500_000 { core::hint::spin_loop(); }
+                for p in 1..=max_ports {
+                    if p == msc_port || p == hid_port || p == mouse_port { continue; }
+                    let _ = reset_port(p);
+                }
+                reset_done = true;
+                // Re-read CCS for this port
+                let ccs2 = {
+                    let g = XHCI_STATE.lock();
+                    let Some(st) = g.as_ref() else { return false };
+                    let Some(addr) = portsc_addr(st, port) else { continue };
+                    let v = r32(st.base, addr - st.base);
+                    v & 1 != 0
+                };
+                if !ccs2 { continue; }
+                crate::slog_nano!("USB", "warn", "{} port {} CCS=0->1 after Port Reset", tag, port);
+            } else {
+                continue;
+            }
         }
         let speed = {
             let g = XHCI_STATE.lock();
@@ -217,11 +254,16 @@ unsafe fn bringup_hid_boot(kind: HidBootKind) -> bool {
         crate::slog_nano!("USB", "hid", "{} tentando porta {} speed={}", tag, port, speed);
 
         if !reset_port(port) {
+            crate::slog_nano!("USB", "warn", "{} port {} reset FAIL (skip)", tag, port);
             continue;
         }
+        crate::slog_nano!("USB", "warn", "{} port {} reset OK, EnableSlot...", tag, port);
         let slot = match cmd_enable_slot() {
             Some(s) if s > 0 => s,
-            _ => continue,
+            _ => {
+                crate::slog_nano!("USB", "warn", "{} port {} EnableSlot FAIL", tag, port);
+                continue;
+            }
         };
         let max_packet: u16 = match speed {
             2 => 8, // Low-speed
@@ -696,7 +738,7 @@ unsafe fn wait_cmd_completion() -> Option<(u8, u8)> {
                 if cc == 1 {
                     return Some((slot, cc));
                 }
-                crate::slog_nano!("USB", "xhci", "cmd CC={} slot={}", cc, slot);
+                crate::slog_nano!("USB", "warn", "cmd CC={} slot={}", cc, slot);
                 return None;
             }
         }
@@ -704,11 +746,31 @@ unsafe fn wait_cmd_completion() -> Option<(u8, u8)> {
         core::hint::spin_loop();
         spins = spins.saturating_add(1);
         if budget > 0 && crate::tsc::rdtsc().wrapping_sub(t0) > budget {
-            crate::slog_nano!("USB", "xhci", "cmd completion timeout");
+            {
+                let g2 = XHCI_STATE.lock();
+                if let Some(st2) = g2.as_ref() {
+                    let evt2 = st2.er_va as *const u32;
+                    let p0 = evt2.add((st2.er_dequeue as usize) * 4 + 0).read_volatile();
+                    let p1 = evt2.add((st2.er_dequeue as usize) * 4 + 1).read_volatile();
+                    let p2 = evt2.add((st2.er_dequeue as usize) * 4 + 2).read_volatile();
+                    let p3 = evt2.add((st2.er_dequeue as usize) * 4 + 3).read_volatile();
+                    crate::slog_nano!("USB", "warn", "cmd TIMEOUT edq={} evt={:#x} {:#x} {:#x} {:#x}", st2.er_dequeue, p0, p1, p2, p3);
+                }
+            }
             return None;
         }
         if budget == 0 && spins >= 80_000 {
-            crate::slog_nano!("USB", "xhci", "cmd completion timeout");
+            {
+                let g2 = XHCI_STATE.lock();
+                if let Some(st2) = g2.as_ref() {
+                    let evt2 = st2.er_va as *const u32;
+                    let p0 = evt2.add((st2.er_dequeue as usize) * 4 + 0).read_volatile();
+                    let p1 = evt2.add((st2.er_dequeue as usize) * 4 + 1).read_volatile();
+                    let p2 = evt2.add((st2.er_dequeue as usize) * 4 + 2).read_volatile();
+                    let p3 = evt2.add((st2.er_dequeue as usize) * 4 + 3).read_volatile();
+                    crate::slog_nano!("USB", "warn", "cmd TIMEOUT spins edq={} evt={:#x} {:#x} {:#x} {:#x}", st2.er_dequeue, p0, p1, p2, p3);
+                }
+            }
             return None;
         }
     }
