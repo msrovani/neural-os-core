@@ -26,6 +26,11 @@ pub struct GaugeSnapshot {
     /// Load por core (0.0-1.0).
     pub per_core_load: [f32; 16],
     pub core_count: u8,
+    /// Trinity MoE routing telemetry.
+    pub trinity_neural: u64,
+    pub trinity_keyword: u64,
+    pub trinity_fallback: u64,
+    pub expert_resident_kb: usize,
 }
 
 impl GaugeSnapshot {
@@ -42,6 +47,10 @@ impl GaugeSnapshot {
             timer_at: 0,
             per_core_load: [0.0; 16],
             core_count: 0,
+            trinity_neural: 0,
+            trinity_keyword: 0,
+            trinity_fallback: 0,
+            expert_resident_kb: 0,
         }
     }
 }
@@ -58,6 +67,10 @@ static SNAPSHOT: Mutex<GaugeSnapshot> = Mutex::new(GaugeSnapshot {
     timer_at: 0,
     per_core_load: [0.0; 16],
     core_count: 0,
+    trinity_neural: 0,
+    trinity_keyword: 0,
+    trinity_fallback: 0,
+    expert_resident_kb: 0,
 });
 static SNAPSHOT_READY: AtomicBool = AtomicBool::new(false);
 static CACHED_HD_SECTORS: AtomicU64 = AtomicU64::new(u64::MAX);
@@ -164,6 +177,16 @@ pub fn refresh_snapshot(log_serial: bool) {
         timer_at: now,
         per_core_load: sample_per_core_load().0,
         core_count: sample_per_core_load().1,
+        trinity_neural: 0,
+        trinity_keyword: 0,
+        trinity_fallback: 0,
+        expert_resident_kb: {
+            let mut total = 0usize;
+            for kind in &[cortex::trinity::ExpertKind::HwIdentify, cortex::trinity::ExpertKind::RustCoder] {
+                total += cortex::trinity::expert_resident_bytes_kind(*kind);
+            }
+            total / 1024
+        },
     };
     *SNAPSHOT.lock() = snap;
     SNAPSHOT_READY.store(true, Ordering::Release);
@@ -171,11 +194,18 @@ pub fn refresh_snapshot(log_serial: bool) {
         k_nano::slog_jarbas!(
             "Metrics",
             "info",
-            "snapshot cpu={}% mem={}% gpu={} hd={}",
+            "snapshot cpu={}% mem={}% gpu={} hd={} tri={}KB",
             (cpu_pct * 100.0) as u32,
             (mem_pct * 100.0) as u32,
             gpu_val,
-            hd_val
+            hd_val,
+            {
+                let mut total = 0usize;
+                for kind in &[cortex::trinity::ExpertKind::HwIdentify, cortex::trinity::ExpertKind::RustCoder] {
+                    total += cortex::trinity::expert_resident_bytes_kind(*kind);
+                }
+                total / 1024
+            }
         );
     }
 }
@@ -196,6 +226,13 @@ pub fn draw_status_gauges(fb: &mut DoubleBuffer, screen_w: usize) {
         ("GPU", snap.gpu_pct, snap.gpu_val.as_str()),
         ("HD", snap.hd_pct, snap.hd_val.as_str()),
     ];
+
+    // Trinity info (após gauges, à direita)
+    if snap.expert_resident_kb > 0 {
+        let trinity_text = alloc::format!("TRI {}KB", snap.expert_resident_kb);
+        let tx = screen_w.saturating_sub(trinity_text.len() * 6 + 8);
+        draw_text(fb, tx, 0, &trinity_text, screen_w, 0, 255, 200);
+    }
 
     let n = readings.len();
     let slot = screen_w / n.max(1);

@@ -615,10 +615,12 @@ impl TrinityRouter {
     /// Define os pesos de um expert diretamente (usado pelo injection pipeline).
     pub fn set_expert_weight(&mut self, kind: ExpertKind, weight: PackedTernaryTensor) {
         if let Some(e) = self.experts.iter_mut().find(|e| e.kind == kind) {
+            let nbytes = weight.packed_data.len();
             k_nano::slog_cortex!("TRINITY", "info",
                 "Expert {:?} pesos injetados: {}KB (Efeito Matrix)",
-                kind, weight.packed_data.len() / 1024);
+                kind, nbytes / 1024);
             e.weight = Some(weight);
+            track_expert_bytes(kind, nbytes);
         }
     }
 
@@ -633,6 +635,36 @@ impl TrinityRouter {
             .filter_map(|e| e.weight.as_ref())
             .map(|w| w.packed_data.len())
             .sum()
+    }
+}
+
+/// Bytes de pesos residentes por ExpertKind (telemetria HUD — lock-free).
+/// Atualizado por set_expert_weight(); lido por expert_resident_bytes_kind().
+static mut EXPERT_BYTES: [(ExpertKind, usize); 8] = [
+    (ExpertKind::Generator, 0), (ExpertKind::HwControl, 0),
+    (ExpertKind::HwIdentify, 0), (ExpertKind::RustCoder, 0),
+    (ExpertKind::DiskDiag, 0), (ExpertKind::Security, 0),
+    (ExpertKind::SpeechSynth, 0), (ExpertKind::Unknown, 0),
+];
+
+/// Bytes de pesos residentes para um expert (free function — acessível sem instância).
+pub fn expert_resident_bytes_kind(kind: ExpertKind) -> usize {
+    unsafe {
+        EXPERT_BYTES.iter().find(|(k, _)| *k == kind).map(|(_, n)| *n).unwrap_or(0)
+    }
+}
+
+/// Total de bytes residentes de todos os experts.
+pub fn total_expert_resident_bytes() -> usize {
+    unsafe { EXPERT_BYTES.iter().map(|(_, n)| *n).sum() }
+}
+
+/// Registra bytes de um expert (chamado por set_expert_weight).
+fn track_expert_bytes(kind: ExpertKind, bytes: usize) {
+    unsafe {
+        if let Some(entry) = EXPERT_BYTES.iter_mut().find(|(k, _)| *k == kind) {
+            entry.1 = bytes;
+        }
     }
 }
 
