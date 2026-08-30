@@ -639,3 +639,11 @@ For deep work on a specific folder, also read that folder's `codemap.md`.
 - **TTS streaming por frases (SESSION_292):** split_into_sentences() divide texto por pontuação (. ! ? ;). StreamingTtsState simplificado de 4 variantes para 2 (Idle/Streaming com queue). Síntese incremental: primeira frase em ~50-200ms vs ~500-2000ms bloqueio completo. Borrow-checker: core::mem::replace para ownership seguro no tick (evita conflito ref mut + reassign).
 
 - **StreamingTtsState ownership (SESSION_292):** match self.stream_tts { ref mut ... } impede self.stream_tts = ... dentro do match. Solução: let prev = core::mem::replace(&mut self.stream_tts, Idle); match prev { ... } — take ownership, process, reassign. Padrão Rust idiomático para state machines com reassign.
+
+- **Trinity MoE Fase 1 (SESSION_293):** hermes::globals::TRINITY era vazio (nunca populado). Populate_trinity_from_bin() copia experts do bin para hermes no boot. Bridge TRINITY_MMAP_BRIDGE agora instalado corretamente. trinity_inject foi reabilitado (estava comentado como dead code pelo HERMES_AUDIT). 168 testes (+22 novos).
+
+- **Int8Router vs TrinityRouter não são duplicatas (SESSION_293):** MoELayer/Int8Router (moe.rs) = computação neural MoE (shared_expert + top_k inference). TrinityRouter (trinity.rs) = classificador de intents (keyword + neural routing). Servem propósitos diferentes — não unificar.
+
+- **TrinityRouter experts() getter (SESSION_293):** campo experts era privado sem getter público. Adicionado pub fn experts() -> &[Expert] para permitir que o boot copie expert info para hermes.
+
+- **Routing telemetry AtomicU64 (SESSION_293):** contadores stats_neural/stats_keyword/stats_fallback no TrinityRouter. Lock-free, zero overhead. neural_route_ratio() dá 0.0-1.0 de rotas neurais. Base para MonitorAgent/SelfHeal detectarem degradação.
