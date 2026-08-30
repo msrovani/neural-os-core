@@ -111,7 +111,7 @@ pub use k_hal::net::wifi_softmac;
 // pub mod proactive; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 // pub mod net_fallback; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod stream_packet;
-// pub mod chat_tree; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
+pub mod chat_tree;
 // pub mod graph_engine; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod matrix_learn;
 pub mod tls;
