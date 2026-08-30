@@ -503,20 +503,28 @@ impl JarbasDesktop {
 
         // ═════════════════════════════════════════════════════════════
         // CAMADA 0: Fundo escuro + Orb responsivo (tela inteira)
+        // Só redesenha fundo+orb+mesh quando dirty_orb ou dirty_mesh.
+        // Quando só cursor muda, pula 1M+ pixels de fill.
         // ═════════════════════════════════════════════════════════════
-        self.fb.fill_rect(0, 0, w, h, theme.bg.0, theme.bg.1, theme.bg.2);
-
-        // Grid/partículas de fundo eram custo puro (quase invisíveis) no hot path.
-
-        // Herói visual: Soul Mirror (brand). Avatar8 só alimenta cor via
-        // avatar_state — partículas legado não competem com o orb.
-        let _ = avatar;
-        if self.avatar_visible {
-            self.draw_orb_layer(tick, w, h, avatar_state);
+        let need_bg = self.dirty_orb || self.dirty_mesh || self.dirty_windows || self.dirty_hud;
+        if need_bg {
+            self.fb.fill_rect(0, 0, w, h, theme.bg.0, theme.bg.1, theme.bg.2);
         }
 
-        // Mesh P2P — satélites só com peers; hub duplicado evitado (orb = brand).
-        self.draw_mesh_graph(tick);
+        // Herói visual: Soul Mirror (brand).
+        let _ = avatar;
+        if self.avatar_visible && self.dirty_orb {
+            self.draw_orb_layer(tick, w, h, avatar_state);
+            self.dirty_orb = false;
+            self.dirty_hud = true; // orb draws over HUD area
+        }
+
+        // Mesh P2P
+        if self.dirty_mesh {
+            self.draw_mesh_graph(tick);
+            self.dirty_mesh = false;
+            self.dirty_hud = true;
+        }
 
         // ═════════════════════════════════════════════════════════════
         // CAMADA 1: HUD mínimo — marca JARBAS + status compacto
