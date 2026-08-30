@@ -7,6 +7,7 @@
 ## Sessões Mantidas (107+)
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
+| 296 | Boot/UI | HW splash freeze | E: sem write + 1º frame compositor | `E:\BOOT.LOG` placeholder + `NSGDB.BIN` zeros = sem MSC; splash = Runtime tick 1. Fix: `render()` imediato pós-`claim_graphics()` (SESSION_168). `usb_hw.img` 22:22. |
 | 295 | Boot | HW pendrive regressão | Hang pós BOOT.LOG skip + Limine-only | `BOOT.LOG skip` honesto; hang real = P24a/b HID + verify ATA K27 + labor K71 sem MSC. `live_usb_no_msc` + `run_deferred_usb_live`. ESP stale (`uefi.img`≠kernel) → só Limine; sync `limine-esp.img` + fallback mk_esp. BOM UTF-8 BOOT.LOG. `set_urgency(display,220)`. `usb_hw.img` 6271MB PACK_LLM=all cargo clean build. |
 | 294 | UI | Compositor hot path | Desktop lento → fill_rect/glow/FPS | `fill_rect` era set_pixel/pixel; `fill_rect_fast` bpp=4 pintava 25% (`aw/4`); glow O(r²) sqrtf (~280k/frame); `TARGET_FRAME_TICKS=3` + PIT 18 Hz ≈ 6 FPS e frame caro faminto o scheduler. Fix: scanline + doubling memcpy, glow isqrt, 1 frame/tick, orb menor, dock 1×. ESP: `python` não `python3`. Mouse tablet `aux=0` = residual #542. |
 | 293 | QEMU | OVMF+GGUF debug | UEFI boot pflash, Falcon3 GGUF/1.58-bit, RAM fix | OVMF dual-file (code+vars) obrigatório p/ boot fresh; paths MSYS→Windows causa serial 0 bytes (Python subprocess fix); Falcon3 1.58-bit = safetensors TII → `.v6` BitNet (NÃO GGUF); GGUF i2_s type=25 não suportado no loader kernel; float16 converter reduz RAM 50% (commit `ac3d3ef`); neural-sgdb repo externo `msrovani/neural-sgdb`. |

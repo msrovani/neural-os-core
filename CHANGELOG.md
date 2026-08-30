@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s296] - 2026-08-30 — HW splash freeze: 1º frame compositor
+
+**Pendrive parava no splash; `E:\BOOT.LOG`/`NSGDB.BIN` intactos (sem MSC write).**
+
+- **`DisplayAgent`:** `render()+swap()` imediato após `claim_graphics()` no tick 1 (SESSION_168).
+- **Evidência:** placeholder BOOT.LOG + NSGDB 8MB zeros confirmam Runtime sem persist FAT.
+- **Imagem:** `usb_hw.img` 6271 MB regerada 22:22.
+
 ## [1.9.99-s295] - 2026-08-29 — HW pendrive: hang pós BOOT.LOG skip + pipeline ESP
 
 **Boot HW no stick parava em `BOOT.LOG skip`; reboots seguintes só Limine.**

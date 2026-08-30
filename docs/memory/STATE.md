@@ -1,4 +1,7 @@
-﻿# STATE — neural-os-core v1.9.99-s295 — HW pendrive boot regressão (BOOT.LOG skip + ESP sync)
+﻿# STATE — neural-os-core v1.9.99-s296 — HW splash freeze + 1º frame compositor
+#   SESSION_296: E:\BOOT.LOG/NSGDB zeros = sem MSC write; splash = Runtime tick 1;
+#     fix render imediato pos claim_graphics (agent.rs); usb_hw.img 22:22. Residual: MSC self-enumeration stick.
+# STATE — neural-os-core v1.9.99-s295 — HW pendrive boot regressão (BOOT.LOG skip + ESP sync)
 #   SESSION_295: hang pós K25 = P24a/b HID + verify ATA K27 + labor K71 sem MSC no pendrive;
 #     `live_usb_no_msc` + `run_deferred_usb_live`; `set_urgency(display,220)`; BOM UTF-8 BOOT.LOG;
 #     pipeline ESP sync uefi.img←limine-esp.img + fallback mk_esp_fat; build_image --build-boot sempre.
