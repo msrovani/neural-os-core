@@ -57,6 +57,8 @@ impl Agent for AudioMixerAgent {
         let mut buf = [0i16; 1024];
         let n = self.out_ring.pop(&mut buf);
         if n > 0 {
+            // Alimenta orb FFT com playback (não só mic) — orb reage a voz do assistant
+            crate::display::avatar::process_audio_fft(&buf[..n]);
             k_hal::audio::hda::write_hda_playback(&buf[..n]);
             crate::audio::usb::write_uac_playback(&buf[..n]);
         }

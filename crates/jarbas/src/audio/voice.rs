@@ -74,7 +74,8 @@ impl Agent for JarbasVoiceAgent {
         k_hal::audio::hda::poll_hda_audio();
         crate::audio::usb::poll_uac_audio();
 
-        if self.wake_window > 0 {
+        // Pausar decremento da wake window enquanto aguarda resposta do assistente
+        if self.wake_window > 0 && self.pending_user_text.is_none() {
             self.wake_window -= 1;
             if self.wake_window == 0 {
                 k_nano::slog_jarbas!("Jarbas", "info", "wake window expirada — dormindo");
@@ -200,6 +201,12 @@ impl Agent for JarbasVoiceAgent {
             if text.is_empty() || text.starts_with("[JARBAS] Escutando") || text.starts_with("[JARBAS] 🎤")
             {
                 continue;
+            }
+
+            // Resposta recebida: reabre wake window para continuar conversando
+            if self.wake_window == 0 && !settings::wake_gate_bypassed() {
+                self.wake_window = settings::wake_listen_ticks();
+                k_nano::slog_jarbas!("Jarbas", "info", "resposta recebida — wake window reaberta");
             }
 
             if let Some(user_text) = self.pending_user_text.take() {

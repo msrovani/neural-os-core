@@ -51,6 +51,11 @@ pub fn wake_gate_bypassed() -> bool {
     cfg!(feature = "weather-e2e")
 }
 
+/// Forca wake window aberta (chamado por barge-in para voltar a escutar).
+pub fn force_wake_open() {
+    WAKE_LISTEN_TICKS.store(800, Ordering::Relaxed);
+}
+
 pub struct AudioGetSettingsSkill;
 
 impl Skill for AudioGetSettingsSkill {

@@ -41,8 +41,10 @@ impl Agent for AudioPipelineAgent {
         if BARGE_IN.load(Ordering::Relaxed) {
             // Limpa playback para interromper TTS em curso.
             crate::audio::voice::PLAYBACK_RING.clear();
-            k_nano::slog_bin!("PIPELINE", "info", "Barge-in: playback limpo");
+            k_nano::slog_bin!("PIPELINE", "info", "Barge-in: playback limpo — voltando a escutar");
             BARGE_IN.store(false, Ordering::Relaxed);
+            // Reativa wake window para escutar imediatamente o próximo comando
+            crate::audio::settings::force_wake_open();
         }
 
         if self.frame_counter % 10 == 0 {
