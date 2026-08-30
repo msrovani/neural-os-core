@@ -47,7 +47,7 @@ impl Theme {
     pub fn cosmic_dark() -> Self {
         Self {
             name: "cosmic-dark",
-            bg: (0x0F, 0x0F, 0x12),
+            bg: (8, 12, 24),
             bg_alt: (0x18, 0x18, 0x1C),
             fg: (0xE8, 0xE8, 0xE8),
             fg_muted: (0x88, 0x88, 0x88),
@@ -59,7 +59,7 @@ impl Theme {
             error: (0xF4, 0x43, 0x36),
             success: (0x4C, 0xAF, 0x50),
             warning: (0xFF, 0xB3, 0x00),
-            terminal_bg: (0x0F, 0x0F, 0x12),
+            terminal_bg: (8, 12, 24),
         }
     }
 

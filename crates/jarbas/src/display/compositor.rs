@@ -18,6 +18,12 @@ use crate::display::theme::Theme;
 use crate::display::tiling::{Rect, SplitDirection, WindowId};
 use crate::display::notifications::NotificationQueue;
 
+// JARVIS palette constants for compositor
+const JARVIS_CYAN_R: u8 = 0;
+const JARVIS_CYAN_G: u8 = 212;
+const JARVIS_CYAN_B: u8 = 255;
+
+
 /// Tópico EventBus — botão de card (FeedbackAgent: `"id:idx"`).
 pub const TOPIC_CARD_ACTION: &str = "CARD_ACTION";
 
@@ -511,21 +517,18 @@ impl JarbasDesktop {
             self.dirty_orb = true;
         }
         
-        // Only full-screen clear for mesh/windows/HUD. Orb: clear bounding box only.
-        let need_full_bg = self.dirty_mesh || self.dirty_windows;
-        if need_full_bg {
-            self.fb.fill_rect(0, 0, w, h, theme.bg.0, theme.bg.1, theme.bg.2);
-        } else if self.dirty_orb {
-            // Clear only the orb region to avoid full-screen flicker
-            let orb_cr = (self.soul_mirror.base_r * self.soul_mirror.state.size_scale * 3.0) as usize;
+        // Only clear orb bounding box — NEVER full screen (anti-flicker).
+        // Background + grid are drawn once and persist across frames.
+        if self.dirty_orb || self.dirty_mesh {
+            let orb_cr = (self.soul_mirror.base_r * self.soul_mirror.state.size_scale * 3.5) as usize;
             let ox = self.soul_mirror.cx as usize;
             let oy = self.soul_mirror.cy as usize;
             let x0 = ox.saturating_sub(orb_cr).min(w);
             let y0 = oy.saturating_sub(orb_cr).min(h);
-            let cw = (orb_cr * 2).min(w.saturating_sub(x0));
-            let ch = (orb_cr * 2).min(h.saturating_sub(y0));
+            let cw = (orb_cr * 2 + 16).min(w.saturating_sub(x0));  // +16 for particles
+            let ch = (orb_cr * 2 + 16).min(h.saturating_sub(y0));
             if cw > 0 && ch > 0 {
-                self.fb.fill_rect(x0, y0, cw, ch, theme.bg.0, theme.bg.1, theme.bg.2);
+                self.fb.fill_rect(x0, y0, cw, ch, 8, 12, 24);  // JARVIS_BG
             }
         }
 
@@ -534,22 +537,20 @@ impl JarbasDesktop {
         if self.avatar_visible && self.dirty_orb {
             self.draw_orb_layer(tick, w, h, avatar_state);
             self.dirty_orb = false;
-            self.dirty_hud = true; // orb draws over HUD area
         }
 
         // Mesh P2P
         if self.dirty_mesh {
             self.draw_mesh_graph(tick);
             self.dirty_mesh = false;
-            self.dirty_hud = true;
         }
 
         // ═════════════════════════════════════════════════════════════
         // CAMADA 1: HUD mínimo — marca JARBAS + status compacto
         // ═════════════════════════════════════════════════════════════
         let sb_h = 28usize;
-        self.fb.fill_rect(0, 0, w, sb_h, 8, 10, 16);
-        self.fb.fill_rect(0, sb_h - 1, w, 1, theme.accent.0, theme.accent.1, theme.accent.2);
+        self.fb.fill_rect_fast(0, 0, w, sb_h, 8, 12, 24);  // JARVIS_BG
+        self.fb.fill_rect_fast(0, sb_h - 1, w, 1, JARVIS_CYAN_R, JARVIS_CYAN_G, JARVIS_CYAN_B);
 
         // Brand first (hero signal na barra)
         draw_text(
