@@ -1214,6 +1214,7 @@ pub fn init_package_hub() {
     // Lock solto ANTES de ensure_defaults/rebuild_index —
     // rebuild_index faz PACKAGE_HUB.lock() de novo (TicketLock não-reentrante → hang pós-K33).
     memory_store::ensure_defaults();
+    crate::cognitive_bridge::session_load();
     let _ = crate::marketplace::rebuild_index();
     k_nano::slog_hermes!("Log", "msg", "{}", crate::globals::AUDIT_TRAIL.lock().status());
 }
