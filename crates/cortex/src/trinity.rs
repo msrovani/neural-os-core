@@ -101,6 +101,10 @@ pub struct TrinityRouter {
     router_embed: Option<Vec<f32>>,
     /// Só true se veio de ROUTER.BITNET (não LCG).
     router_trained: bool,
+    /// Telemetria de routing (AtomicU64 para contadores lock-free).
+    pub stats_neural: core::sync::atomic::AtomicU64,
+    pub stats_keyword: core::sync::atomic::AtomicU64,
+    pub stats_fallback: core::sync::atomic::AtomicU64,
 }
 
 const VOCAB: usize = 99;
@@ -137,6 +141,9 @@ impl TrinityRouter {
             router_weight: None,
             router_embed: None,
             router_trained: false,
+            stats_neural: core::sync::atomic::AtomicU64::new(0),
+            stats_keyword: core::sync::atomic::AtomicU64::new(0),
+            stats_fallback: core::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -342,6 +349,7 @@ impl TrinityRouter {
                         }
                     }
                     if best_score > 0.15 {
+                        self.stats_neural.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                         k_nano::slog_cortex!(
                             "TRINITY",
                             "info",
@@ -355,6 +363,7 @@ impl TrinityRouter {
             }
             }
         }
+        self.stats_keyword.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         self.classify_keywords(text)
     }
 
@@ -533,6 +542,7 @@ impl TrinityRouter {
                 ExpertKind::Unknown => {}
             }
         }
+        self.stats_fallback.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         self.experts
             .iter()
             .find(|e| e.kind == ExpertKind::Generator)
@@ -557,6 +567,23 @@ impl TrinityRouter {
     /// Tem expert generator registrado (rota default segura).
     pub fn has_generator(&self) -> bool {
         self.experts.iter().any(|e| e.kind == ExpertKind::Generator)
+    }
+
+    /// Telemetria de routing: (neural, keyword, fallback) chamadas.
+    pub fn routing_stats(&self) -> (u64, u64, u64) {
+        use core::sync::atomic::Ordering;
+        (
+            self.stats_neural.load(Ordering::Relaxed),
+            self.stats_keyword.load(Ordering::Relaxed),
+            self.stats_fallback.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Porcentagem de rotas neurais (0.0-1.0).
+    pub fn neural_route_ratio(&self) -> f32 {
+        let (n, k, f) = self.routing_stats();
+        let total = n + k + f;
+        if total == 0 { 0.0 } else { n as f32 / total as f32 }
     }
 
     /// Carrega pesos de um expert na Cortex Arena sob demanda (Efeito Matrix).
