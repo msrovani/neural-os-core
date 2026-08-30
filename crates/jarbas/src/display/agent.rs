@@ -556,9 +556,17 @@ impl Agent for DisplayAgent {
                 k_nano::interrupts::MOUSE_MAX_Y.store(fh.saturating_sub(1), core::sync::atomic::Ordering::Release);
                 k_nano::interrupts::MOUSE_ABS_X.store(fw / 2, core::sync::atomic::Ordering::Release);
                 k_nano::interrupts::MOUSE_ABS_Y.store(fh / 2, core::sync::atomic::Ordering::Release);
-                *MOUSE_X.lock() = (fw / 2) as usize;
-                *MOUSE_Y.lock() = (fh / 2) as usize;
+                MOUSE_X.store((fw / 2) as usize, core::sync::atomic::Ordering::Relaxed);
+                MOUSE_Y.store((fh / 2) as usize, core::sync::atomic::Ordering::Relaxed);
                 crate::display::fb::claim_graphics();
+                // 1º frame imediato: splash no tick 1; sem render+swap aqui depende do tick 2
+                // (Hermes/LLM pode bloquear minutos — SESSION_168 / HW real freeze no splash).
+                if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                    desktop.invalidate_all();
+                    let now = k_nano::interrupts::TIMER_TICKS
+                        .load(core::sync::atomic::Ordering::Relaxed) as u64;
+                    desktop.render(now, self.avatar.as_mut(), self.avatar_state_label);
+                }
                 k_nano::slog_jarbas!("Jarbas", "info", "Desktop iniciado @ {}x{}", fw, fh);
                 k_nano::interrupts::mouse_log_status("desktop_ready");
             }
@@ -584,9 +592,9 @@ impl Agent for DisplayAgent {
             let mx = k_nano::interrupts::MOUSE_ABS_X.load(Ordering::Acquire) as usize;
             let my = k_nano::interrupts::MOUSE_ABS_Y.load(Ordering::Acquire) as usize;
             let btn = k_nano::interrupts::MOUSE_ABS_BTN.load(Ordering::Acquire);
-            *MOUSE_X.lock() = mx;
-            *MOUSE_Y.lock() = my;
-            *MOUSE_BUTTONS.lock() = btn;
+            MOUSE_X.store(mx, core::sync::atomic::Ordering::Relaxed);
+            MOUSE_Y.store(my, core::sync::atomic::Ordering::Relaxed);
+            MOUSE_BUTTONS.store(btn, core::sync::atomic::Ordering::Relaxed);
             (mx, my, btn)
         };
         // Clique confiável: edge no Display (nao so EventBus — pacotes intermediários
@@ -888,8 +896,8 @@ impl Agent for DisplayAgent {
             if ev.payload.len() >= 4 {
                 let mx = u16::from_le_bytes([ev.payload[0], ev.payload[1]]) as usize;
                 let my = u16::from_le_bytes([ev.payload[2], ev.payload[3]]) as usize;
-                *MOUSE_X.lock() = mx;
-                *MOUSE_Y.lock() = my;
+                MOUSE_X.store(mx, core::sync::atomic::Ordering::Relaxed);
+                MOUSE_Y.store(my, core::sync::atomic::Ordering::Relaxed);
             }
         }
         // EventBus MOUSE_CLICK: drenar só (UI já tratada no edge MOUSE_ABS_BTN).

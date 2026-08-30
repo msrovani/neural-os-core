@@ -144,9 +144,9 @@ pub enum Layer { OrbBackground, HermesOverlay, AppWindows, DockBar }
 
 
 // Estado global do mouse para o compositor
-pub static MOUSE_X: IrqSafeLock<usize> = IrqSafeLock::new(640);
-pub static MOUSE_Y: IrqSafeLock<usize> = IrqSafeLock::new(360);
-pub static MOUSE_BUTTONS: IrqSafeLock<u8> = IrqSafeLock::new(0);
+pub static MOUSE_X: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(640);
+pub static MOUSE_Y: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(360);
+pub static MOUSE_BUTTONS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 // Timing de frame para FPS control
 pub static LAST_FRAME_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -490,7 +490,7 @@ impl JarbasDesktop {
                     let tx = w.saturating_sub(tw) / 2;
                     draw_text(&mut self.fb, tx, h / 2 - 8, msg, w, 255, 200, 80);
                 }
-                draw_mouse_cursor(&mut self.fb, *MOUSE_X.lock(), *MOUSE_Y.lock(), w, h);
+                draw_mouse_cursor(&mut self.fb, MOUSE_X.load(core::sync::atomic::Ordering::Relaxed), MOUSE_Y.load(core::sync::atomic::Ordering::Relaxed), w, h);
                 self.fb.swap();
                 return;
             }
@@ -777,8 +777,8 @@ impl JarbasDesktop {
         }
 
         // Cursor do mouse
-        let mx = *MOUSE_X.lock();
-        let my = *MOUSE_Y.lock();
+        let mx = MOUSE_X.load(core::sync::atomic::Ordering::Relaxed);
+        let my = MOUSE_Y.load(core::sync::atomic::Ordering::Relaxed);
         draw_mouse_cursor(&mut self.fb, mx, my, self.w, self.h);
         self.fb.swap();
     }
