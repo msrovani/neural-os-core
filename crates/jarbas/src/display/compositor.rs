@@ -506,6 +506,11 @@ impl JarbasDesktop {
         // Só redesenha fundo+orb+mesh quando dirty_orb ou dirty_mesh.
         // Quando só cursor muda, pula 1M+ pixels de fill.
         // ═════════════════════════════════════════════════════════════
+        // Orb animation: invalidar a cada 2 ticks para manter pulsacao (audio FFT)
+        if tick % 2 == 0 {
+            self.dirty_orb = true;
+        }
+        
         let need_bg = self.dirty_orb || self.dirty_mesh || self.dirty_windows || self.dirty_hud;
         if need_bg {
             self.fb.fill_rect(0, 0, w, h, theme.bg.0, theme.bg.1, theme.bg.2);
