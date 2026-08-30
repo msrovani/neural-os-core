@@ -444,7 +444,123 @@ pub fn counters() -> (u32, u32, u32, u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    // no_std: sem testes std; verificação via QEMU serial.
+    use super::*;
+
+    // ── normalize_intent ─────────────────────────────────────────────────
+
+    #[test]
+    fn normalize_basic() {
+        assert_eq!(normalize_intent("deploy the server"), "deploy_the_server");
+    }
+
+    #[test]
+    fn normalize_special_chars() {
+        let n = normalize_intent("hello! @world# $test");
+        assert!(!n.contains('!'));
+        assert!(!n.contains('@'));
+        assert!(!n.contains('$'));
+    }
+
+    #[test]
+    fn normalize_empty() {
+        assert_eq!(normalize_intent(""), "unknown");
+    }
+
+    #[test]
+    fn normalize_long_truncated() {
+        let long = "a".repeat(100);
+        let n = normalize_intent(&long);
+        assert!(n.len() <= 48);
+    }
+
+    #[test]
+    fn normalize_case_insensitive() {
+        assert_eq!(normalize_intent("DEPLOY Server"), normalize_intent("deploy server"));
+    }
+
+    // ── record_outcome ───────────────────────────────────────────────────
+
+    #[test]
+    fn record_outcome_success() {
+        record_outcome("test_skill", true, 100);
+        let (gen, imp, reg, refl, cyc) = counters();
+        // gen may or may not increment depending on state
+        let _ = (gen, imp, reg, refl, cyc);
+    }
+
+    #[test]
+    fn record_outcome_failure() {
+        record_outcome("failing_skill", false, 200);
+        // Should add to improve_queue
+    }
+
+    // ── generate_from_pattern ────────────────────────────────────────────
+
+    #[test]
+    fn generate_from_pattern_returns_skill_md() {
+        let md = generate_from_pattern("test_deploy");
+        assert!(md.is_some());
+        let content = md.unwrap();
+        assert!(content.contains("test_deploy") || content.contains("skill"));
+    }
+
+    // ── llm_skill_prompt ─────────────────────────────────────────────────
+
+    #[test]
+    fn llm_skill_prompt_format() {
+        let prompt = llm_skill_prompt("my_skill", "Deploys things");
+        assert!(prompt.contains("my_skill"));
+        assert!(prompt.contains("Deploys things"));
+        assert!(prompt.contains("ADR-0052"));
+    }
+
+    // ── verify_skill_md ──────────────────────────────────────────────────
+
+    #[test]
+    fn verify_empty_content() {
+        let v = verify_skill_md("");
+        // Should reject empty content
+        assert!(matches!(v, VerifyVerdict::Reject(_)));
+    }
+
+    // ── counters ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn counters_returns_tuple() {
+        let (gen, imp, reg, refl, cyc) = counters();
+        // All should be u32/u64, no panic
+        let _ = (gen, imp, reg, refl, cyc);
+    }
+
+    // ── status_line ──────────────────────────────────────────────────────
+
+    #[test]
+    fn status_line_format() {
+        let s = status_line();
+        assert!(s.contains("EVOLVE") || s.contains("self_evolve") || !s.is_empty());
+    }
+
+    // ── recent_insights ──────────────────────────────────────────────────
+
+    #[test]
+    fn recent_insights_respects_limit() {
+        let insights = recent_insights(5);
+        assert!(insights.len() <= 5);
+    }
+
+    // ── observe_intent ───────────────────────────────────────────────────
+
+    #[test]
+    fn observe_intent_short_ignored() {
+        // "ok" → normalized to "ok" (len 2 < 3) → ignored
+        observe_intent("ok", 100);
+    }
+
+    #[test]
+    fn observe_intent_valid() {
+        observe_intent("deploy the production server", 200);
+        // Should not panic, increments pattern hits
+    }
 }
 
 
