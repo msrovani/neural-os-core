@@ -829,7 +829,179 @@ pub fn status_line() -> String {
 }
 
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Testes host — P1-1 (cognitive_bridge)
+// ═══════════════════════════════════════════════════════════════════════════════
 
+#[cfg(test)]
+mod tests {
+    use super::*;
 
+    // ── is_skill_creation_request ────────────────────────────────────────
 
+    #[test]
+    fn skill_request_ptbr() {
+        assert!(is_skill_creation_request("cria um skill de deploy"));
+        assert!(is_skill_creation_request("novo skill para backup"));
+        assert!(is_skill_creation_request("registra skill de monitoramento"));
+    }
 
+    #[test]
+    fn skill_request_en() {
+        assert!(is_skill_creation_request("create a skill for testing"));
+        assert!(is_skill_creation_request("new skill for deploy"));
+        assert!(is_skill_creation_request("register a skill"));
+    }
+
+    #[test]
+    fn skill_request_slash_commands() {
+        assert!(is_skill_creation_request("/add_skill my_tool"));
+        assert!(is_skill_creation_request("/learn how to deploy"));
+    }
+
+    #[test]
+    fn skill_request_negative() {
+        assert!(!is_skill_creation_request("hello world"));
+        assert!(!is_skill_creation_request("deploy the server"));
+        assert!(!is_skill_creation_request("show me the skills"));
+    }
+
+    // ── emotion_hint ─────────────────────────────────────────────────────
+
+    #[test]
+    fn emotion_joy() {
+        assert_eq!(emotion_hint("obrigado pela ajuda"), "joy");
+        assert_eq!(emotion_hint("estou muito feliz"), "joy");
+    }
+
+    #[test]
+    fn emotion_anger() {
+        assert_eq!(emotion_hint("isso me da raiva"), "anger");
+    }
+
+    #[test]
+    fn emotion_sadness() {
+        assert_eq!(emotion_hint("estou triste"), "sadness");
+        assert_eq!(emotion_hint("que pena"), "sadness");
+    }
+
+    #[test]
+    fn emotion_fear() {
+        assert_eq!(emotion_hint("tenho medo disso"), "fear");
+    }
+
+    #[test]
+    fn emotion_curious() {
+        assert_eq!(emotion_hint("como funciona isso?"), "curious");
+    }
+
+    #[test]
+    fn emotion_neutral() {
+        assert_eq!(emotion_hint("ok"), "neutral");
+    }
+
+    // ── budget ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn budget_basic() {
+        budget_set_max(3);
+        assert_eq!(budget_tick(), BudgetVerdict::Continue); // left 3→2
+        assert_eq!(budget_tick(), BudgetVerdict::Continue); // left 2→1
+        assert_eq!(budget_tick(), BudgetVerdict::Continue); // left 1→0
+        assert_eq!(budget_tick(), BudgetVerdict::Grace);    // grace=0→1
+        assert_eq!(budget_tick(), BudgetVerdict::Exhausted); // exhausted
+    }
+
+    #[test]
+    fn budget_reset_test() {
+        budget_set_max(2);
+        budget_tick();
+        budget_tick();
+        budget_tick(); // grace
+        super::budget_reset();
+        assert_eq!(budget_tick(), BudgetVerdict::Continue);
+    }
+
+    #[test]
+    fn budget_status_format() {
+        budget_set_max(5);
+        let s = budget_status();
+        assert!(s.contains("BUDGET"));
+        assert!(s.contains("left="));
+    }
+
+    // ── prefer_expert_skill ──────────────────────────────────────────────
+
+    #[test]
+    fn expert_hw_control() {
+        let skills = prefer_expert_skill("hw_control");
+        assert!(skills.is_some());
+        assert!(skills.unwrap().contains(&"audio_set_volume"));
+    }
+
+    #[test]
+    fn expert_unknown() {
+        assert!(prefer_expert_skill("unknown_expert").is_none());
+    }
+
+    // ── session search ───────────────────────────────────────────────────
+
+    #[test]
+    fn session_record_and_search() {
+        session_record("user", "deploy the API", 100);
+        session_record("assistant", "deploying now", 101);
+        let results = session_search("deploy", 5);
+        assert!(results.contains("deploy"));
+    }
+
+    #[test]
+    fn session_len_after_record() {
+        let before = session_len();
+        session_record("user", "test message", 999);
+        assert!(session_len() > before);
+    }
+
+    // ── memory nudge ─────────────────────────────────────────────────────
+
+    #[test]
+    fn propose_memory_nudge_does_not_panic() {
+        propose_memory_nudge("test fact for nudge");
+    }
+
+    // ── extract_qa_pairs ─────────────────────────────────────────────────
+
+    #[test]
+    fn extract_qa_empty() {
+        let pairs = extract_qa_pairs(10);
+        // May or may not be empty depending on session state
+        assert!(pairs.len() <= 10);
+    }
+
+    // ── cortex_system_prompt ─────────────────────────────────────────────
+
+    #[test]
+    fn cortex_system_prompt_contains_affect() {
+        let prompt = cortex_system_prompt("deploy the server");
+        assert!(prompt.contains("AFFECT"), "prompt should contain AFFECT: {}", prompt);
+        assert!(prompt.contains("NEURAL-OS"), "prompt should contain NEURAL-OS header");
+    }
+
+    // ── caps_available ───────────────────────────────────────────────────
+
+    #[test]
+    fn caps_available_not_empty() {
+        let caps = caps_available();
+        assert!(!caps.is_empty());
+    }
+
+    // ── skill_visible ────────────────────────────────────────────────────
+
+    #[test]
+    fn skill_visible_detects_skills() {
+        // No capabilities field → visible (returns true)
+        assert!(skill_visible("hello world"));
+        // With capabilities that exist → visible
+        assert!(skill_visible("capabilities: [net]
+action: deploy"));
+    }
+}
