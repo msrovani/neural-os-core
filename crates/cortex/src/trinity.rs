@@ -540,6 +540,11 @@ impl TrinityRouter {
             .unwrap_or(&FALLBACK_GENERATOR)
     }
 
+    /// Slice dos experts registrados (telemetria/auditoria).
+    pub fn experts(&self) -> &[Expert] {
+        &self.experts
+    }
+
     pub fn agent_count(&self) -> usize { self.experts.len() }
 
     /// True só com pesos de arquivo treinado. LCG/ausente = keyword (honesto).

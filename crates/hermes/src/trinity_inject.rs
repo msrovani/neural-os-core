@@ -57,6 +57,30 @@ pub fn ensure_expert_resident(kind: ExpertKind) -> Option<usize> {
     }
 }
 
+/// Popula hermes::globals::TRINITY com experts do bin (Phase 6 boot).
+/// Copia name/description de cada expert registrado no bin para o router do hermes.
+/// Expert weights NÃO são copiados (lazy via get_or_mmap_expert + bridge).
+pub fn populate_trinity_from_bin(
+    bin_experts: &[(ExpertKind, &'static str, &'static str)],
+) {
+    let mut router = crate::globals::TRINITY.lock();
+    let before = router.experts().len();
+    for &(kind, name, desc) in bin_experts {
+        if !router.experts().iter().any(|e| e.kind == kind) {
+            use cortex::trinity::Expert;
+            router.register_expert(Expert {
+                kind, name, description: desc, weight: None,
+            });
+        }
+    }
+    let after = router.experts().len();
+    k_nano::slog_hermes!(
+        "TRINITY", "info",
+        "populate_trinity_from_bin: {} -> {} experts",
+        before, after
+    );
+}
+
 /// Resultado da injeção — distingue o fluxo completo do degradado (honesto).
 #[derive(Debug, Clone, PartialEq)]
 pub enum InjectOutcome {

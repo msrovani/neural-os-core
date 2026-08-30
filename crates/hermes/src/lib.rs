@@ -107,7 +107,7 @@ pub use k_hal::net::wifi_msix;
 // ADR-0062 E3 — SoftMAC BE via k-hal; hermes re-exporta
 pub use k_hal::net::wifi_softmac;
 // pub mod voice_skill; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
-// pub mod trinity_inject; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
+pub mod trinity_inject;
 // pub mod proactive; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 // pub mod net_fallback; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod stream_packet;

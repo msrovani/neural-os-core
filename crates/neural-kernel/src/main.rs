@@ -1843,6 +1843,24 @@ pub(crate) fn kernel_boot(
     });
     hermes_crate::net_bridge::register_udp_xfer(crate::net::udp_exchange_safe);
     hermes_crate::net_bridge::register_dns_resolve(crate::net::dns_resolve_host_safe);
+    // --- Trinity MoE: populate hermes router + install bridge ---
+    {
+        use hermes_crate::trinity_inject;
+        use cortex_crate::trinity::ExpertKind;
+        let bin_trinity = crate::TRINITY.lock();
+        let expert_count = bin_trinity.experts().len();
+        let expert_info: alloc::vec::Vec<(ExpertKind, &'static str, &'static str)> =
+            bin_trinity.experts().iter().map(|e| (e.kind, e.name, e.description)).collect();
+        drop(bin_trinity);
+        trinity_inject::populate_trinity_from_bin(&expert_info);
+        trinity_inject::install_trinity_mmap_bridge(|kind| {
+            let mut t = crate::TRINITY.lock();
+            if let Some(_expert) = t.get_or_mmap_expert(kind) {
+                Some(t.expert_resident_bytes())
+            } else { None }
+        });
+        k_nano::slog_bin!("TRINITY", "info", "Trinity bridge + hermes router populado ({} experts)", expert_count);
+    }
     // TLS N4 bridge → hermes tls::fetch_url dispatcher (embedded-tls 0.19, HybridProvider)
     hermes_crate::tls::register_https_get(crate::net::https_get);
     // SESSION_234: transporte P2P (ADR-0081) movido para k_nano — hermes
