@@ -512,7 +512,7 @@ impl JarbasDesktop {
         }
         
         // Only full-screen clear for mesh/windows/HUD. Orb: clear bounding box only.
-        let need_full_bg = self.dirty_mesh || self.dirty_windows || self.dirty_hud;
+        let need_full_bg = self.dirty_mesh || self.dirty_windows;
         if need_full_bg {
             self.fb.fill_rect(0, 0, w, h, theme.bg.0, theme.bg.1, theme.bg.2);
         } else if self.dirty_orb {

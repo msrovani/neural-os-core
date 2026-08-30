@@ -1901,6 +1901,37 @@ pub(crate) fn kernel_boot(
         k_nano::slog_nano!("USB", "xhci", "skip — DeviceTree sem UsbHost");
     }
 
+    // PS/2 mouse init (i8042) — always works in QEMU, fallback for xHCI HID
+    {
+        use x86_64::instructions::port::Port;
+        unsafe {
+            // Wait for input buffer empty
+            while Port::<u8>::new(0x64).read() & 0x02 != 0 { core::hint::spin_loop(); }
+            // Enable auxiliary device
+            Port::<u8>::new(0x64).write(0xA8u8);
+            // Wait
+            while Port::<u8>::new(0x64).read() & 0x02 != 0 { core::hint::spin_loop(); }
+            // Read config byte
+            Port::<u8>::new(0x64).write(0x20u8);
+            while Port::<u8>::new(0x64).read() & 0x01 == 0 { core::hint::spin_loop(); }
+            let cfg: u8 = Port::<u8>::new(0x60).read();
+            // Enable IRQ12 (bit1)
+            while Port::<u8>::new(0x64).read() & 0x02 != 0 { core::hint::spin_loop(); }
+            Port::<u8>::new(0x64).write(0x60u8);
+            while Port::<u8>::new(0x64).read() & 0x02 != 0 { core::hint::spin_loop(); }
+            Port::<u8>::new(0x60).write(cfg | 0x02);
+            // Enable data reporting
+            while Port::<u8>::new(0x64).read() & 0x02 != 0 { core::hint::spin_loop(); }
+            Port::<u8>::new(0x64).write(0xD4u8);
+            while Port::<u8>::new(0x64).read() & 0x02 != 0 { core::hint::spin_loop(); }
+            Port::<u8>::new(0x60).write(0xF4u8);
+            // Wait for ACK
+            while Port::<u8>::new(0x64).read() & 0x01 == 0 { core::hint::spin_loop(); }
+            let ack: u8 = Port::<u8>::new(0x60).read();
+            k_nano::slog_nano!("PS2", "warn", "mouse init cfg={:#x} ack={:#x}", cfg, ack);
+        }
+    }
+
     crate::display::fb::boot_ckpt(24, "antes USB-MSC probe");
     {
         if want_usb {
@@ -3143,7 +3174,13 @@ pub(crate) fn kernel_boot(
             })
             .unwrap_or((None, None))
         };
-        if mem_has_4gb {
+        // QEMU dev (≤6GB RAM): pula o LLM probe/copy (989MB OOMa a heap 512MB
+        // sob TCG) — o boot prossegue sem modelo para validar NSGDB/ingest.
+        let qemu_dev_skip_models = k_nano::platform_probe::hypervisor().is_sandbox()
+            && k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) <= 6144;
+        if qemu_dev_skip_models {
+            k_nano::slog_bin!("Asset", "skip", "QEMU dev (≤6GB RAM) — LLM probe/copy pulado (dev/test NSGDB path)");
+        } else if mem_has_4gb {
             k_nano::slog_bin!("Asset", "ok", "LLM probe: mem_has_4gb=true, probing @0x{load_addr:x}…");
             let probe_ptr = (load_addr + pm_offset) as *const u8;
             let raw0 = unsafe { core::ptr::read_volatile(probe_ptr) };
