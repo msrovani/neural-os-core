@@ -107,7 +107,7 @@ pub struct TrinityRouter {
     pub stats_fallback: core::sync::atomic::AtomicU64,
 }
 
-const VOCAB: usize = 99;
+const VOCAB: usize = 256;
 pub const ROUTER_HIDDEN: usize = 64;
 pub const ROUTER_MAX_EXPERTS: usize = 8;
 const BOS: u16 = 0;
@@ -117,12 +117,11 @@ const CHAR_OFFSET: u16 = 3;
 fn encode(text: &str) -> Vec<u16> {
     let mut tokens = vec![BOS];
     for b in text.bytes() {
-        if b >= 32 && b <= 126 {
-            tokens.push((b - 32) as u16 + CHAR_OFFSET);
-        }
+        // Map all 256 byte values to tokens 2-257 (BOS=0, EOS=1, bytes+2)
+        tokens.push(b as u16 + 2);
     }
     tokens.push(EOS);
-    tokens.truncate(32);
+    tokens.truncate(64); // suporta frases mais longas com vocab expandido
     tokens
 }
 
@@ -731,8 +730,9 @@ pub fn load_router_from_file(data: &[u8]) -> bool {
         .chunks_exact(4)
         .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
         .collect();
-    if floats.len() != VOCAB * ROUTER_HIDDEN {
-        k_nano::slog_cortex!("TRINITY", "warn", "Router embed count: {} (esperado {})", floats.len(), VOCAB * ROUTER_HIDDEN);
+    // Aceita vocab 99 (legado) ou 256 (atual) — padroniza para VOCAB atual
+    if floats.len() != VOCAB * ROUTER_HIDDEN && floats.len() != 99 * ROUTER_HIDDEN {
+        k_nano::slog_cortex!("TRINITY", "warn", "Router embed count: {} (esperado {} ou {})", floats.len(), VOCAB * ROUTER_HIDDEN, 99 * ROUTER_HIDDEN);
         return false;
     }
     pos += embed_bytes;
@@ -823,7 +823,7 @@ mod tests {
     /// e valida que o loader Rust o parseia — a ponte treino→kernel (item 11 ADR-0083).
     #[test]
     fn load_router_v6_roundtrip() {
-        const VOCAB: usize = 99;
+        const VOCAB: usize = 256;
         const N_EXPERTS: usize = 7;
         let embed: Vec<f32> = (0..VOCAB * ROUTER_HIDDEN).map(|i| (i % 7) as f32 * 0.01).collect();
         let weights: Vec<i8> = (0..ROUTER_HIDDEN * N_EXPERTS).map(|i| (i % 3) as i8 - 1).collect();
