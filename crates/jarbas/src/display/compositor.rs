@@ -511,9 +511,23 @@ impl JarbasDesktop {
             self.dirty_orb = true;
         }
         
-        let need_bg = self.dirty_orb || self.dirty_mesh || self.dirty_windows || self.dirty_hud;
-        if need_bg {
+        // Only clear full screen for mesh/windows/HUD changes.
+        // Orb: clear only its bounding box to avoid full-screen flicker.
+        let need_full_bg = self.dirty_mesh || self.dirty_windows || self.dirty_hud;
+        if need_full_bg {
             self.fb.fill_rect(0, 0, w, h, theme.bg.0, theme.bg.1, theme.bg.2);
+        } else if self.dirty_orb {
+            // Clear only the orb region (center ± 2x radius)
+            let orb_clear_r = (self.soul_mirror.base_r * 3.0) as usize;
+            let ox = self.soul_mirror.cx as usize;
+            let oy = self.soul_mirror.cy as usize;
+            let x0 = ox.saturating_sub(orb_clear_r).min(w);
+            let y0 = oy.saturating_sub(orb_clear_r).min(h);
+            let cw = (orb_clear_r * 2).min(w.saturating_sub(x0));
+            let ch = (orb_clear_r * 2).min(h.saturating_sub(y0));
+            if cw > 0 && ch > 0 {
+                self.fb.fill_rect(x0, y0, cw, ch, theme.bg.0, theme.bg.1, theme.bg.2);
+            }
         }
 
         // Herói visual: Soul Mirror (brand).
