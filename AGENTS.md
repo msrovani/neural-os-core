@@ -598,3 +598,19 @@ For deep work on a specific folder, also read that folder's `codemap.md`.
 
 - **neural-sgdb não é KV — é substrato de memória (SESSION_284):** o `Hit` tem 12 campos (key, text, dist, path, content_type, payload_type, score, matched_terms, validity, rel, provenance, score_breakdown). Reduzir a `(String, u32)` perde 80% da informação. O `recall_lexical` (BM25) é o default do MCP (ADR-0008) e funciona SEM embedding. O `Sgdb` do neural-sgdb não é genérico — usa `Box<dyn Storage>` internamente, requer wrapper `unsafe impl Send + Sync` (SafeSgdb). ContentType awareness muda o RAG: Embedding/Binary são skip, Json/Text/Code renderizam verbatim. Lifecycle é determinístico (sem wall clock). OsEmbedder conecta BGE ao Embedder trait. Dual-write durante migração (TickvLite + neural-sgdb ART/BQ redundantes até Fase 3).
 
+- **ATA 4Kn detecta sector size do hardware (SESSION_285):**  agora lê words 117-118 do IDENTIFY para detectar  (512/1024/2048/4096).  adapta: 4Kn → múltiplos reads de 512B por setor lógico.  retorna o valor real.  traduz count de 512B para sectors do device. Testes host validam 512 e 4096.
+
+- **DMA map_page_uc antes de set_page_uc (SESSION_285):**  só altera flags em mapeamento EXISTENTE — sem  antes, o MMIO fica stale e o device leitura 0. Padrão:  →  em todo driver DMA.
+
+- **TSC sleep substitui spin loops no ATA (SESSION_285):**  é ~10ms fixo e impreciso. Substituído por  calibrado via TSC/HPET. Funciona em HW real e QEMU.
+
+- **Dead code excluído ≠ removido (SESSION_285/286):** módulos sem callers são comentados no  (preservados no disco) em vez de deletados. Reduz build time ~23% (7,446 LOC) sem perder referência para futura reativação.
+
+- **Jarbas: 40 locks eliminados por frame (ADR-0093):** Theme (), Mouse (), HUD string (cache), dirty-rects (skip background fill 1M px). Render loop passou de ~40 lock() calls/frame a ~0.
+
+- **Hermes: 48 testes host adicionados em 3 módulos (ADR-0094):** cognitive_bridge (22), memory_store (11), self_evolve (15). Base para refactor seguro dos 32K LOC.
+
+- **MHI migration executor real (SESSION_285):**  agora executa  em demote (Dram→Hdd) e  em promote (Hdd→Dram). Antes era metadata-only sem cópia de dados.
+
+- **PT-BR TTS fonemas extras (ADR-0093):** 8 fonemas adicionados ao formant: lh, nh, ã nasal, õ nasal, rr, s final, ss, x → sh. TTS agora cobre a maioria dos sons PT-BR comuns.
+
