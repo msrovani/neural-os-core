@@ -326,10 +326,21 @@ unsafe fn map_page_direct(base: VirtAddr, virt: VirtAddr, phys: u64) {
 }
 
 /// #PF cure: buraco no heap Tier-1 (BitNet `to_vec` mid-load). Retorna true se page presente apos.
+/// SESSION_293: cobre AMBOS os ranges do heap:
+/// 1. HEAP_START (0x_4000_0000_0000) — TALC allocator (pós-boot)
+/// 2. HEAP_BUFFER linker addr (kernel_base + offset) — bump allocator (boot + runtime)
+/// Sem isso, #PF em CR2=0xffffffffa0cea000 (linker heap) não é curado.
 pub fn try_fault_in_heap(cr2: u64) -> bool {
+    // Range 1: TALC heap (HEAP_START)
     let start = HEAP_START as u64;
     let end = start + (CURRENT_HEAP_MB.load(Ordering::Relaxed) as u64) * 1024 * 1024;
-    if cr2 < start || cr2 >= end {
+    let in_talc = cr2 >= start && cr2 < end;
+    // Range 2: bump heap (linker address of HEAP_BUFFER)
+    let bump_start = unsafe { HEAP_BUFFER.as_mut_ptr() as u64 };
+    let bump_end = bump_start + HEAP_SIZE as u64;
+    let in_bump = cr2 >= bump_start && cr2 < bump_end;
+
+    if !in_talc && !in_bump {
         return false;
     }
     let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
