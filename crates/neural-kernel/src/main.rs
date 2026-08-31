@@ -3255,7 +3255,7 @@ pub(crate) fn kernel_boot(
             let raw1 = unsafe { core::ptr::read_volatile(probe_ptr.add(1)) };
             let raw2 = unsafe { core::ptr::read_volatile(probe_ptr.add(2)) };
             let raw3 = unsafe { core::ptr::read_volatile(probe_ptr.add(3)) };
-            k_nano::slog_bin!("Asset", "ramdisk", "Probe 4GB: raw=[0x{:02x},0x{:02x},0x{:02x},0x{:02x}]", raw0, raw1, raw2, raw3);
+            k_nano::slog_bin!("Asset", "ok", "Probe 4GB: raw=[0x{:02x},0x{:02x},0x{:02x},0x{:02x}]", raw0, raw1, raw2, raw3);
             let qemu_magic = u32::from_le_bytes([raw0, raw1, raw2, raw3]);
             if qemu_magic == 0xBE11BE11 {
                 // Fallback so se FAT nao tiver blob (loader-only).
@@ -3272,7 +3272,7 @@ pub(crate) fn kernel_boot(
                 if let Some(r_end) = handoff.region_end_containing(load_addr) {
                     let region = (r_end - load_addr) as usize;
                     if region < model_len {
-                        k_nano::slog_bin!("Asset", "ramdisk", "region {}MB < model {}MB — truncando", region / (1024*1024), model_len / (1024*1024));
+                        k_nano::slog_bin!("Asset", "warn", "region {}MB < model {}MB — truncando", region / (1024*1024), model_len / (1024*1024));
                         model_len = region;
                     }
                 }                    k_nano::slog_bin!("Asset", "ok", "LLM magic 0xBE11BE11 @0x100000000 — model {}KB fat={:?}",
@@ -3347,7 +3347,7 @@ pub(crate) fn kernel_boot(
                         if let Some(r_end) = handoff.region_end_containing(load_addr2) {
                             let region2 = (r_end - load_addr2) as usize;
                             if region2 < model_len2 {
-                                k_nano::slog_bin!("Asset", "ramdisk", "region2 {}MB < model2 {}MB — truncando", region2 / (1024*1024), model_len2 / (1024*1024));
+                                k_nano::slog_bin!("Asset", "warn", "region2 {}MB < model2 {}MB — truncando", region2 / (1024*1024), model_len2 / (1024*1024));
                                 model_len2 = region2;
                             }
                         }
@@ -3358,7 +3358,7 @@ pub(crate) fn kernel_boot(
                         });
                         if let Some(big_model) = llm_v6.or_else(|| crate::cortex::load_model(model_data2)) {
                             crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-                            k_nano::slog_bin!("RAMDISK", "info", "LLM LOADED file=Falcon3-3B-Instruct-1.58bit (QEMU-loader @0x120000000)");
+                            k_nano::slog_bin!("LLM", "ok", "LLM LOADED (QEMU-loader @0x120000000) size={}KB", model_len2 / 1024);
                             model_loaded = true;
                         }
                     }
@@ -3876,7 +3876,7 @@ pub(crate) fn kernel_boot(
                                 .or_else(|| cortex_crate::cortex::load_hwexpert_v5(data))
                             {
                                 cortex_crate::cortex::set_hwexpert_v4_model(v4model);
-                                k_nano::slog_bin!("HWEXPERT", "info", "v4 multi-head LOADED (QEMU-loader @{:#x})", addr);
+                                k_nano::slog_bin!("HWEXPERT", "ok", "v4 multi-head LOADED (QEMU-loader @{:#x})", addr);
                                 v4_ok = true;
                             }
                         }
@@ -3908,7 +3908,7 @@ pub(crate) fn kernel_boot(
                                         .or_else(|| crate::cortex::load_hwexpert_v5(&v4data))
                                     {
                                         crate::cortex::set_hwexpert_v4_model(v4model);
-                                        k_nano::slog_bin!("HWEXPERT", "info", "v4 multi-head LOADED (FAT) size={}KB", v4data.len() / 1024);
+                                        k_nano::slog_bin!("HWEXPERT", "ok", "v4 multi-head LOADED (FAT) size={}KB", v4data.len() / 1024);
                                         v4_ok = true;
                                         break;
                                     }
@@ -4138,7 +4138,7 @@ pub(crate) fn kernel_boot(
         if dim >= 2048 {
             crate::model_hub::mark_pro_alias(true);
         }
-        k_nano::slog_bin!("MODEL", "info", "{}", crate::model_hub::hub_status());
+        k_nano::slog_bin!("MODEL", "ok", "{}", crate::model_hub::hub_status());
         }
     }
 

@@ -8,8 +8,18 @@ use crate::tsc::{rdtsc, TSC_HZ};
 const SAMPLE_SECTORS: usize = 16;
 
 /// TCG: skip honesto. BMIDE 0xC8: **UNSUPPORTED** (T-010) — ATA usa amostra PIO 16 setores no metal.
+/// Usado APENAS para benchmark (medir MB/s). NÃO impede o probe ATA.
 pub fn skip_measure() -> bool {
     hypervisor() == HypervisorKind::Tcg
+}
+
+/// Probe de storage SEMPRE permitido (QEMU, TCG, metal).
+/// SESSION_293: skip_measure() bloqueava ATA probe inteiro em TCG → boot
+/// sem disco → sem BOOT.LOG → sem cross-boot NSGDB recall.
+/// Aprendizado: TCG PIO 16 setores é lento mas NÃO trava; o problema
+/// era a benchmark de 256 setores (T-010). Probe usa identify + 1 setor.
+pub fn allow_probe() -> bool {
+    true
 }
 
 /// MB/s a partir de bytes, delta TSC e Hz. `0` se inválido.

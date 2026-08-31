@@ -55,10 +55,10 @@ pub fn observe_and_plan(trust_ok: bool) -> (usize, usize) {
             classify_storage(cap.id.pci_class, cap.id.pci_subclass)
         };
         if st != StorageKind::None && allow_auto && !stores.iter().any(|k| *k == st) {
-            let tcg = k_nano::platform_probe::hypervisor()
-                == k_nano::platform_probe::HypervisorKind::Tcg;
-            if tcg && st == StorageKind::Ata {
-                k_nano::slog_kai!("Boot", "observe", "TCG skip ATA no plano");
+            // SESSION_293: ATA SEMPRE no plano (allow_probe).
+            // Antes, TCG puxava ATA do plano → boot sem disco → sem BOOT.LOG.
+            if !k_nano::storage_bw::allow_probe() {
+                k_nano::slog_kai!("Boot", "observe", "storage probe bloqueado (allow_probe=false)");
             } else {
                 stores.push(st);
             }

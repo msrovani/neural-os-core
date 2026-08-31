@@ -30,13 +30,14 @@ impl AtaDriver {
     }
 
     pub unsafe fn probe() -> Option<Self> {
-        // T-011: TCG + PIO identify trava o boot (SESSION_243). Skip honesto;
-        // QEMU-loader / NoDisk seguem. Metal/WHPX medem de verdade.
-        if crate::storage_bw::skip_measure() {
+        // SESSION_293: probe ATA SEMPRE roda (allow_probe=true).
+        // A benchmark (skip_measure) é que pula em TCG — não o probe.
+        // Identificacao + 1 setor MBR são ~16ms mesmo em TCG.
+        if !crate::storage_bw::allow_probe() {
             crate::slog_nano!(
                 "Disk",
                 "ata",
-                "CRITICO ATA probe skip (TCG) — boot sem disco PIO"
+                "CRITICO ATA probe skip — allow_probe=false"
             );
             return None;
         }
