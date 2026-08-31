@@ -4,6 +4,13 @@
 //! - Matmul ternario bitwise sem branch (16 pesos por iteracao)
 //! - Prefetch entre camadas do transformer
 //! - Dispatch adaptativo por CPU: scalar, AVX2, bitwise
+//!
+//! Honesty ADR-0101 / SESSION_298 (lab Falcon3-3B 1.58):
+//! - Scalar/SSE: ADD/SUB/SKIP de ativações f32 sobre packed 2-bit — nativo algébrico.
+//! - AVX2 host (`not(target_os="none")`): unpack i8/LUT → f32 FMA — NÃO skip-native SIMD.
+//! - Bare-metal (`target_os="none"`): `avx2_ternary_matmul_impl` é o scalar.
+//! - W2A8 maddubs existe mas `w2a8_enabled()` é false (`GENERATION_GAPS_RESOLVED`).
+//! Onda 0 do lab 3B = SIMD ADD/SUB/SKIP compilado para `x86_64-unknown-none`, não LUT→GEMM.
 
 use crate::tensor::{PackedTernaryTensor, Tensor};
 use alloc::vec;

@@ -1,4 +1,10 @@
-﻿# STATE — neural-os-core v1.9.99-s297 — virtio_blk + NSGDB persistente no QEMU
+﻿# STATE — neural-os-core v1.9.99-s298 — Falcon3-3B lab (ADR-0101)
+#   SESSION_298: lab canônico = tiiuae/Falcon3-3B-Instruct-1.58bit (não 1B, não 7B).
+#     HF: 3B=22L/h3072/FFN9216; 1.58bit ctx=4096 (32K só no Instruct denso); 7B=28L/23040.
+#     Kernel: scalar ADD/SUB/SKIP nativo; AVX2 host = FMA f32; metal AVX2 = stub scalar; W2A8 gated.
+#     Sem tok/s Neural OS. ATLAS 7.1/10.1 = referência externa. Inventário FAT 3B-first.
+#     ADR-0101 + IDEA #544. Onda 0 SIMD skip-native no `none` = próximo. Sem commit.
+# STATE — neural-os-core v1.9.99-s297 — virtio_blk + NSGDB persistente no QEMU
 #   SESSION_297: causa raiz 'virtio-blk missing headers' = VRING_DESC_F_NEXT ausente nos
 #     flags dos descritores encadeados (QEMU ignora `next` sem o bit 0). Fix desc[0].flags=NEXT,
 #     desc[1]=NEXT|WRITE. FileFlash ganhou FlashDev::VirtioBlk -> TICKV backend=file dev=virtio

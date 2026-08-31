@@ -127,3 +127,24 @@ fn unpack_quad_byte(byte: u8) -> [i8; 4] {
     let w3 = (((byte >> 6) & 0b11) & 1) as i8 - (((byte >> 6) & 0b11) >> 1) as i8;
     [w0, w1, w2, w3]
 }
+
+#[cfg(test)]
+mod ternary_native_contract {
+    use super::*;
+    use crate::tensor::PackedTernaryTensor;
+
+    /// Contrato ADR-0101: W∈{+1,0,-1} ⇒ ADD / SKIP / SUB da ativação, sem W denso.
+    #[test]
+    fn add_skip_sub_matches_scalar_semantics() {
+        let w = PackedTernaryTensor {
+            shape: (1, 3),
+            packed_data: PackedTernaryTensor::pack_weights(&[1i8, 0, -1]),
+        };
+        let x = Tensor::from_row_major((1, 1), alloc::vec![2.5f32]).expect("x");
+        let y = ternary_matmul(&w, &x).expect("matmul");
+        assert_eq!(y.shape, (1, 3));
+        assert!((y.data[0] - 2.5).abs() < 1e-6, "W=+1 deve somar x, got {}", y.data[0]);
+        assert!(y.data[1].abs() < 1e-6, "W=0 deve skip, got {}", y.data[1]);
+        assert!((y.data[2] + 2.5).abs() < 1e-6, "W=-1 deve subtrair x, got {}", y.data[2]);
+    }
+}

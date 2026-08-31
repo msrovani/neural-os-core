@@ -229,7 +229,8 @@ pub fn slot_too_tight(slot_name: &str) -> bool {
     }
 }
 
-/// Família Falcon3 Instruct 1.58bit (tiiuae): 1B / 3B / 7B (alvo) / 10B.
+/// Família Falcon3 Instruct 1.58bit (tiiuae): **3B = lab** (ADR-0101);
+/// 1B comparativo; 7B GeneratorPro opcional; 10B se couber.
 /// Carga: residente se couber; senão AirLLM/GGUF (ADR-0046). Sem SKU 8/16GB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Falcon3Kind {
@@ -295,13 +296,13 @@ impl LlmBootPlan {
     }
 }
 
-/// Ordem FAT: 7B primeiro (alvo), GGUF p/ AirLLM, depois 10B / 3B / 1B.
+/// Ordem FAT: **3B lab primeiro** (ADR-0101), depois GGUF AirLLM, 7B/10B opcionais, 1B comparativo.
 pub fn falcon3_boot_names() -> &'static [&'static str] {
     &[
+        "FALCON3.V6", "FALCON3B.v6", "FALCON3B.BIN", "FALCN3B.GGUF",
         "PRO.v6", "PRO.BIN", "FALCON7B.v6", "FALCON7B.BIN",
         "PRO.GGUF", "FALCN7B.GGUF",
         "FALCON10.v6", "FALCON10.BIN", "F10B.v6", "FALCN10.GGUF",
-        "FALCON3B.BIN", "FALCON3.V6", "FALCN3B.GGUF",
         "FALCON1B.BIN", "F1B.v6", "FALCN1B.GGUF",
         "BITNET2B.v6", "BITNET2B.BIN", "BITNET13.BIN", "BITNET850.BIN",
         "MICRO.BITNET", "LLAMA8B.BIN",
@@ -348,7 +349,7 @@ pub fn pack_resident_ok(ram_mb: u64, already_mb: u64, file_mb: u64) -> bool {
 pub fn hub_slot_for_kind(k: Falcon3Kind) -> crate::model_hub::ModelSlot {
     match k {
         Falcon3Kind::Goal7B | Falcon3Kind::Large10B => crate::model_hub::ModelSlot::GeneratorPro,
-        Falcon3Kind::Daily3B => crate::model_hub::ModelSlot::Agent,
+        Falcon3Kind::Daily3B => crate::model_hub::ModelSlot::Active,
         Falcon3Kind::Tiny1B => crate::model_hub::ModelSlot::Learner,
     }
 }
@@ -370,21 +371,19 @@ pub fn llm_boot_plan(ram_mb: u64) -> LlmBootPlan {
         Falcon3Kind::Daily3B.params(),
         Falcon3Kind::Daily3B.file_mb_hint(),
     ) && ram_mb > 0;
-    let pick = if res10 && res7 {
-        Falcon3Kind::Goal7B
+    let pick = if res3 {
+        Falcon3Kind::Daily3B
     } else if res7 {
         Falcon3Kind::Goal7B
-    } else if res3 {
-        Falcon3Kind::Daily3B
     } else {
         Falcon3Kind::Tiny1B
     };
-    let tier = if res7 {
+    let tier = if res3 {
+        LlmTier::Daily
+    } else if res7 {
         LlmTier::Goal
     } else if res10 {
         LlmTier::Large
-    } else if res3 {
-        LlmTier::Daily
     } else {
         LlmTier::Tight
     };
@@ -408,11 +407,12 @@ mod ram_policy_tests {
     use super::*;
 
     #[test]
-    fn llm_plan_7b_airllm_when_tight_resident_when_room() {
+    fn llm_plan_3b_lab_first_7b_optional_when_room() {
         let d = llm_boot_plan(2048);
         assert!(!d.load_pro_7b_resident);
         assert!(d.try_7b_airllm);
         let f = llm_boot_plan(32768);
+        assert_eq!(f.pick, Falcon3Kind::Daily3B);
         assert!(f.load_pro_7b_resident);
         assert!(!f.try_7b_airllm);
         assert!(f.max_resident_mb > 2000);
@@ -435,5 +435,7 @@ mod ram_policy_tests {
         assert_eq!(falcon3_kind_of_name("PRO.v6"), Some(Falcon3Kind::Goal7B));
         assert_eq!(falcon3_kind_of_name("FALCON3B.BIN"), Some(Falcon3Kind::Daily3B));
         assert_eq!(falcon3_kind_of_name("FALCON10.v6"), Some(Falcon3Kind::Large10B));
+        assert_eq!(hub_slot_for_kind(Falcon3Kind::Daily3B), crate::model_hub::ModelSlot::Active);
+        assert_eq!(falcon3_boot_names()[0], "FALCON3.V6");
     }
 }

@@ -7,8 +7,8 @@ Lida com:
   - RMS norms em BF16 → f32
 
 Uso:
-  python tools/convert_falcon3_bitnet.py --hf-repo tiiuae/Falcon3-7B-Instruct-1.58bit --output target/models/PRO.BIN
-  python tools/convert_falcon3_bitnet.py --hf-repo tiiuae/Falcon3-3B-Instruct-1.58bit --output target/models/AGENT.BIN
+  python tools/convert_falcon3_bitnet.py --hf-repo tiiuae/Falcon3-3B-Instruct-1.58bit --output target1/FALCON3.V6
+  python tools/convert_falcon3_bitnet.py --hf-repo tiiuae/Falcon3-7B-Instruct-1.58bit --output target1/PRO.v6
   
   # Com cache local (evita re-download):
   python tools/convert_falcon3_bitnet.py --hf-repo ... --output ... --cache-dir D:\\llm-models

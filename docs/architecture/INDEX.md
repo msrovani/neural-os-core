@@ -105,6 +105,7 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0089-smp-per-cpu-runqueue.md` | Proposed | `por_fazer` | #492 | **Conflito 0089.** Runqueue agents no AP; feature `smp-runqueue`; não wired no boot. Ordem de execução → **0100 Onda 4** |
 | `0092-boot-observability.md` | Accepted | `fazendo` | **#539** | **Canônico 0092.** O0–O5 no código (slog sev, PHASE banner, mutes, BOOT SCORE, HUD, profile qemu). Aceite QEMU boot log + `tools/parse_boot_score.py` residual até evidência serial nova. |
 | `0100-k3chj-backlog-custo-anel.md` | Proposed | `fazendo` | **#538** | **Plano-mestre.** Filtra residuals 0077–0089; ondas 0–10 por custo×anel K³CHJ; TODOs T-001–T-075. Lacuna 0090–0099 intencional **exceto ADR-0092**. Não substitui ADRs temáticas |
+| `0101-falcon3-3b-cognitive-lab.md` | Proposed | `pesquisa` | **#544** | **Lab 3B-first.** Falcon3-3B Instruct 1.58-bit (não 1B, não 7B). Prova SESSION_298: scalar nativo; AVX2 host FMA; metal stub. Onda 0 kernel packed. Não substitui 0084/0085/0060 |
 | `0081-malha-cognitiva-distribuida-p2p.md` | Accepted | `completa (parcial)` | #189/#312f/#315.26/#315.27 | Fase A–C + HMAC s238–241. **Abertos:** SemanticRouter, merge CRDT, merkle piece. SESSION_280: 1c mesh PASS; 2c TCG hang SIPI |
 | `0077-ring3-isolation-ring.md` | Proposed | `fazendo` | ADR-0059 F6; #426 | **Canônico Ring3.** SESSION_278 TCG iretq+CPL3. B/C gated. WHPX/HW + `register_native_ring` abertos |
 | `0078-multi-slot-multimodal-learner.md` | Proposed | `por_fazer` | GGUF→ternário, 6 slots, visão, learner | Fases 1-4 não iniciadas como sprint |
@@ -194,6 +195,7 @@ Registro dos planos de implementação (Cursor Plans) já refletidos no corpo da
 | `Sanitizar pasta docs` | INDEX + GOVERNANCE | ✅ ciclo IDEA→ADR | archive + INDEX |
 | DeviceTree H1 + plano bind boot | **0088** + **0041** H1 | ✅ NIC (s271) + storage/Trust/HITL (s272) + honesty (s273–274) | SESSION_271–274 / PR #12–13 |
 | Backlog custo×anel T-001–T-075 | **0100** | 🟡 plano SESSION_282 | não versionar `.cursor/plans` |
+| Falcon3-3B ternary-native lab | **0101** | 🟡 pesquisa SESSION_298 | Onda 0 kernel; sem tok/s nosso |
 
 **Próximo aceite operacional (0041):** ✅ CONCLUÍDO (SESSION_251) — boot WHPX com slog `NotifySent` + Cap/AS non-fatal evidenciado em `docs/evidence/boot-whpx-20260805.txt`. Fix raiz do reboot loop (commit 2662d50): GDT passa a usar `&*TSS` (lazy_static TSS com ISTs zerados nunca era dereferenciado → entrega #PF/#GP/timer fazia push para 0 → triple fault).
 
