@@ -445,6 +445,9 @@ impl ReActLoop {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // #172 MCP Server — Model Context Protocol (subset)
+// DEPRECATED (P08 dívida técnica): stub puro, sem caller real.
+// Substituir por no-op documentado ou MCP real via WASM quando #485 landing.
+// Mantido para compatibilidade de boot log (status).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub struct McpServer {
@@ -1544,6 +1547,9 @@ impl LayerGradients {
 // M39 Candle Trainer sidecar — stub para treino externo
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// DEPRECATED (P08 dívida técnica): stub puro, sem caller real.
+// Substituir por no-op documentado ou Candle bridge real quando GPU compute landing.
+// Mantido para compatibilidade de boot log (status).
 // ponytail: no-op — real sidecar when on-device Candle/PyTorch bridge lands
 pub struct CandleSidecar {
     pub connected: bool,
@@ -1560,6 +1566,9 @@ impl CandleSidecar {
 // M40 Task Spawner — ELF loader wrapper
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// DEPRECATED (P08 dívida técnica): stub puro, sem caller real.
+// Substituir por no-op documentado ou ELF loader real quando ADR-0060 Ring3 landing.
+// Mantido para compatibilidade de boot log (status).
 // ponytail: no-op — real spawner when Ring3 isolation (ADR-0060) enables ELF load
 pub struct TaskSpawner {
     pub spawned: u64,

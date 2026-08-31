@@ -244,7 +244,7 @@ mod elf_loader;
 
 use lazy_static::lazy_static;
 
-use cognitive::{IntentPlanner, SuccessEngine, NeuralCache, FeedbackLoop, WorkflowPredictor, CodebookVQ, ReActLoop, McpServer, AutoSkillGen, DynamicScaler, SelfOptScheduler, ReplayBuffer, BitNetTrainer, EpisodicMemory, TaskSpawner, WorkspaceIsolation, DeltaBranch, MatMulFreeLM};
+use cognitive::{IntentPlanner, SuccessEngine, NeuralCache, FeedbackLoop, WorkflowPredictor, CodebookVQ, AutoSkillGen, DynamicScaler, SelfOptScheduler, ReplayBuffer, BitNetTrainer, EpisodicMemory, WorkspaceIsolation, DeltaBranch, MatMulFreeLM};
 
 pub use trinity::TRINITY;
 
@@ -653,9 +653,9 @@ lazy_static! {
 
     static ref CODEBOOK_VQ: ticket_lock::TicketLock<CodebookVQ> = ticket_lock::TicketLock::new(CodebookVQ::new(256, 64));
 
-    static ref REACT_LOOP: ticket_lock::TicketLock<ReActLoop> = ticket_lock::TicketLock::new(ReActLoop::new(10));
+    // P08: REACT_LOOP removido (stub deprecated)
 
-    static ref MCP_SERVER: ticket_lock::TicketLock<McpServer> = ticket_lock::TicketLock::new(McpServer::new());
+    // P08: MCP_SERVER removido (stub deprecated)
 
     static ref AUTOSKILL_GEN: ticket_lock::TicketLock<AutoSkillGen> = ticket_lock::TicketLock::new(AutoSkillGen::new());
 
@@ -669,7 +669,7 @@ lazy_static! {
 
     static ref EPISODIC_MEM: ticket_lock::TicketLock<EpisodicMemory> = ticket_lock::TicketLock::new(EpisodicMemory::new(1000));
 
-    static ref TASK_SPAWNER: ticket_lock::TicketLock<TaskSpawner> = ticket_lock::TicketLock::new(TaskSpawner::new());
+    // P08: TASK_SPAWNER removido (stub deprecated)
 
     static ref WORKSPACE_ISO: ticket_lock::TicketLock<WorkspaceIsolation> = ticket_lock::TicketLock::new(WorkspaceIsolation::new());
 
@@ -4413,9 +4413,9 @@ pub(crate) fn kernel_boot(
 
     k_nano::slog_bin!("COG", "info", "{}", CODEBOOK_VQ.lock().status());
 
-    k_nano::slog_bin!("COG", "info", "{}", REACT_LOOP.lock().status());
+    // P08: REACT_LOOP removido (stub deprecated)
 
-    k_nano::slog_bin!("COG", "info", "{}", MCP_SERVER.lock().status());
+    // P08: MCP_SERVER removido (stub deprecated)
 
     k_nano::slog_bin!("COG", "info", "{}", AUTOSKILL_GEN.lock().status());
 
@@ -4429,7 +4429,7 @@ pub(crate) fn kernel_boot(
 
     k_nano::slog_bin!("COG", "info", "{}", EPISODIC_MEM.lock().status());
 
-    k_nano::slog_bin!("COG", "info", "{}", TASK_SPAWNER.lock().status());
+    // P08: TASK_SPAWNER removido (stub deprecated)
 
     k_nano::slog_bin!("COG", "info", "{}", WORKSPACE_ISO.lock().status());
 

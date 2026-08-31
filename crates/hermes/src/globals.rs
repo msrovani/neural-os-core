@@ -85,6 +85,11 @@ lazy_static! {
     pub static ref CONVERSATION_TRACKER: TicketLock<crate::hermes::ConversationTracker> =
         TicketLock::new(crate::hermes::ConversationTracker::new());
     pub static ref PENDING_SKILL: TicketLock<Option<(String, String)>> = TicketLock::new(None);
+    // P08: Duas instâncias SelfHeal são INTENCIONAIS:
+    // - neural-kernel: IrqSafeLock (boot_log_agent roda em contexto de exceção)
+    // - hermes: TicketLock (agent ticks, contexto normal)
+    // Unificar exige bridge IRQ-safe→normal; documentado mas NÃO unificado
+    // para preservar garantia de IRQ-safety do boot path.
     pub static ref SELF_HEAL: TicketLock<SelfHeal> = TicketLock::new(SelfHeal::new());
     pub static ref BITNET_TRAINER: TicketLock<BitNetTrainer> =
         TicketLock::new(BitNetTrainer::new());
