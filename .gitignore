@@ -89,3 +89,11 @@ models/tokenizer/E5_MULTI.BIN
 docs/memory/.preflight_cache/
 # neural-sgdb local memory DB
 .nsgdb/
+# Repo irmão clonado localmente (k_ai path dep) — não versionar neste git
+crates/neural-sgdb/
+# Debug compositor (SESSION_294)
+fb_dump*.ppm
+fb_dump*.png
+fb_viewer.html
+# Patches one-shot de sessões (não integrados)
+tools/patch_*.py

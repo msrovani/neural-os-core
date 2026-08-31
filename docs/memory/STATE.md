@@ -1,4 +1,11 @@
-﻿# STATE — neural-os-core v1.9.99-s298 — Falcon3-3B lab (ADR-0101)
+﻿# STATE — neural-os-core v1.9.99-s298+ — Plano consolidado 1–6 (2026-08-31)
+#   Passo 1: merge cursor/falcon3-3b-cognitive-lab → main (fast-forward 20ecae8).
+#   Passo 2: Imagem A `target/usb_hw.img` 6271MB PACK_LLM=none + --build-boot OK.
+#   Passo 3: `tools/parse_t018_smp.py` — validar log metal pós-reflash (T-018).
+#   Passo 4: .gitignore (neural-sgdb clone local, fb dumps, patch_*.py); patch_chat_tree removido.
+#   Passo 5: convert HF→FALCON3.V6 em andamento; target1/FALCON3.V6 antigo (1.86GB 23/08) = 7B mislabel — aguardar conversão 3B antes Imagem B.
+#   Passo 6: Onda 0 Fase B SSE2 skip-native em bitnet_sse.rs (none prioriza SSE2 vs stub AVX2); testes parity PASS.
+# STATE — neural-os-core v1.9.99-s298 — Falcon3-3B lab (ADR-0101)
 #   SESSION_298: lab canônico = tiiuae/Falcon3-3B-Instruct-1.58bit (não 1B, não 7B).
 #     HF: 3B=22L/h3072/FFN9216; 1.58bit ctx=4096 (32K só no Instruct denso); 7B=28L/23040.
 #     Kernel: scalar ADD/SUB/SKIP nativo; AVX2 host = FMA f32; metal AVX2 = stub scalar; W2A8 gated.

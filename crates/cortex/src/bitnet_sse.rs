@@ -56,15 +56,24 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
         return Some(r);
     }
 
-    // Try AVX2
+    // Bare-metal: SSE2 skip-native ANTES do stub AVX2 (ADR-0101 Onda 0 Fase B).
+    #[cfg(all(target_arch = "x86_64", target_os = "none"))]
+    if n >= 4 {
+        return Some(unsafe { sse2_ternary_matmul_skip_native(weight, input, m, k, n) });
+    }
+
+    // Host AVX2 (FMA dequant — path rápido em testes/dev)
     if k_nano::platform_probe::allow_avx2() && k >= 8 && n >= 8 && n % 4 == 0 {
         return Some(unsafe { crate::bitnet_avx2::avx2_ternary_matmul_impl(weight, input, m, k, n) });
     }
 
-    // SSE4.2 path (safe, no inline asm — pure scalar with block array processing)
-    // Processa em blocos de 4 colunas usando unpack_quad_byte
-    // NB: n pode nao ser multiplo de 4 (ex: heads do HW Expert v4 com 17/9/10
-    // colunas) — limitar o ultimo bloco para nao ler alem de n.
+    // Host SSE2 skip-native (sem AVX2 ou shapes pequenos)
+    #[cfg(target_arch = "x86_64")]
+    if n >= 4 && sse2_available() {
+        return Some(unsafe { sse2_ternary_matmul_skip_native(weight, input, m, k, n) });
+    }
+
+    // Scalar bloco-4 (host sem SSE ou shapes pequenos)
     if n >= 4 {
         let mut result = Tensor::new((m, n));
         for i in 0..m {
@@ -94,6 +103,59 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
 
     // Scalar fallback (n < 4 ou shapes pequenos)
     Some(scalar_ternary_matmul(weight, input, m, k, n))
+}
+
+// ─── ADR-0101 Onda 0: SSE2 skip-native (bare-metal + host) ───────────────
+
+#[inline]
+fn sse2_available() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // Baseline x86_64-v2+ / WHPX / metal — SSE2 sempre presente.
+        true
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        false
+    }
+}
+
+/// Matmul ternário: acc[j] += w[j] * x com w∈{-1,0,+1}, x broadcast — paridade scalar.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+unsafe fn sse2_ternary_matmul_skip_native(
+    weight: &PackedTernaryTensor,
+    input: &Tensor,
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Tensor {
+    use core::arch::x86_64::*;
+    let mut result = Tensor::new((m, n));
+    for i in 0..m {
+        for j in (0..n).step_by(4) {
+            let lanes = core::cmp::min(4, n - j);
+            let mut acc = _mm_setzero_ps();
+            let in_base = i * k;
+            let w_col_base = j;
+            for t in 0..k {
+                let x = _mm_set1_ps(input.data[in_base + t]);
+                let mut wf = [0.0f32; 4];
+                let w_row = t * n + w_col_base;
+                for lane in 0..lanes {
+                    wf[lane] = weight.get_weight(w_row + lane) as f32;
+                }
+                let wv = _mm_loadu_ps(wf.as_ptr());
+                acc = _mm_add_ps(acc, _mm_mul_ps(wv, x));
+            }
+            let mut out = [0.0f32; 4];
+            _mm_storeu_ps(out.as_mut_ptr(), acc);
+            for lane in 0..lanes {
+                result.data[i * n + j + lane] = out[lane];
+            }
+        }
+    }
+    result
 }
 
 // ─── Scalar Fallback ────────────────────────────────────────────────────
@@ -146,5 +208,37 @@ mod ternary_native_contract {
         assert!((y.data[0] - 2.5).abs() < 1e-6, "W=+1 deve somar x, got {}", y.data[0]);
         assert!(y.data[1].abs() < 1e-6, "W=0 deve skip, got {}", y.data[1]);
         assert!((y.data[2] + 2.5).abs() < 1e-6, "W=-1 deve subtrair x, got {}", y.data[2]);
+    }
+
+    /// Paridade SSE2 skip-native vs scalar bloco-4 (Onda 0 ADR-0101).
+    #[test]
+    fn sse2_skip_native_parity_vs_scalar() {
+        let weights: alloc::vec::Vec<i8> = (0..48)
+            .map(|i| match i % 3 {
+                0 => 1i8,
+                1 => 0,
+                _ => -1,
+            })
+            .collect();
+        let w = PackedTernaryTensor {
+            shape: (4, 12),
+            packed_data: PackedTernaryTensor::pack_weights(&weights),
+        };
+        let x_data: alloc::vec::Vec<f32> = (0..8).map(|i| (i as f32 + 1.0) * 0.25).collect();
+        let x = Tensor::from_row_major((2, 4), x_data).expect("x");
+        let (m, k) = x.shape;
+        let (k_w, n) = w.shape;
+        assert_eq!(k, k_w);
+
+        let scalar = super::scalar_ternary_matmul(&w, &x, m, k, n);
+        #[cfg(target_arch = "x86_64")]
+        let simd = unsafe { super::sse2_ternary_matmul_skip_native(&w, &x, m, k, n) };
+        #[cfg(not(target_arch = "x86_64"))]
+        let simd = scalar.clone();
+
+        assert_eq!(scalar.shape, simd.shape);
+        for (a, b) in scalar.data.iter().zip(simd.data.iter()) {
+            assert!((a - b).abs() < 1e-5, "parity fail: scalar={a} simd={b}");
+        }
     }
 }

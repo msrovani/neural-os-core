@@ -12,7 +12,7 @@
 **Residuals por onda:** 0–7 ✅ · Pós-LAN ✅ (NetFs PASS) · **ADR-0086 núcleo ✅ (U1/U2/U4/U6 + I3–I12 SESSION_252; A1–A9 residual)** · WiFi AWAITING · **TLS parcial ✅ (s156 smoke PASS; PKI real pendente)** · R soft-float defer.
 **Fora do gate (não atracar):** SmileyOS 279a–b/e, Cube 283a, XDNA 💰, SKYNET 315.26–27, Mach-O/APK, wasmi-USB #8/#11.
 
-**Feito recente (SESSION_298):** ADR-0101 Falcon3-3B lab — prova kernel (scalar nativo / AVX2 host FMA / metal stub); inventário 3B-first. Sem tok/s nosso.
+**Feito recente (SESSION_298+):** ADR-0101 Falcon3-3B lab merge main; Onda 0 Fase B SSE2 skip-native (`bitnet_sse.rs`); `tools/parse_t018_smp.py`; Imagem A `usb_hw.img` PACK_LLM=none.
 **Feito recente (SESSION_294):** compositor hot path — fill scanline + glow isqrt; FPS=1 tick PIT. Residual mouse tablet #542. SESSION_274: GPU compute honesto.
 
 ---

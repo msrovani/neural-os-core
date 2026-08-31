@@ -17,6 +17,9 @@ Uso:
 import argparse, json, os, struct, sys, time
 from pathlib import Path
 
+# Permite `python tools/convert_falcon3_bitnet.py` sem PYTHONPATH=.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import numpy as np
 import torch
 
