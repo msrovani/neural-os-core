@@ -1,4 +1,9 @@
-﻿# STATE — neural-os-core v1.9.99-s298+ — Plano consolidado 1–6 (2026-08-31)
+﻿# STATE — neural-os-core v1.9.99-s299 — Boot audit + ATA TCG + #PF fix
+#   SESSION_299: ATA probe habilitado em TCG (allow_probe); slog visibility (ok/warn);
+#   #PF fix: try_fault_in_heap cobre AMBOS ranges (TALC + bump linker addr);
+#   ZERO #PFs, FAT32 mount OK, boot phases 0-5 completas em TCG.
+#   Commits: 456afab (ATA+slog), bb90042 (#PF fix).
+# STATE — neural-os-core v1.9.99-s298+ — Plano consolidado 1–6 (2026-08-31)
 #   Passo 1: merge cursor/falcon3-3b-cognitive-lab → main (fast-forward 20ecae8).
 #   Passo 2: Imagem A `target/usb_hw.img` 6271MB PACK_LLM=none + --build-boot OK.
 #   Passo 3: `tools/parse_t018_smp.py` — validar log metal pós-reflash (T-018).

@@ -7,6 +7,7 @@
 ## Sessões Mantidas (107+)
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
+| 299 | Boot | Audit + ATA TCG fix + #PF fix | ATA probe em TCG habilitado; slog visibility; demand-page dual-range |
 | 298 | LLM | Falcon3-3B lab | 3B≠7B; metal scalar ADD/SUB; AVX2 host = FMA f32 | HF: 3B=22L/9216/ctx 4K no 1.58bit (32K só no denso); 7B=28L/23040. AGENTS.md SESSION_288 mentia “mesma arch”. Lab = `tiiuae/Falcon3-3B-Instruct-1.58bit` (ADR-0101 #544). W2A8 gated. ATLAS 7.1 tok/s ≠ nosso. Inventário FAT 3B-first. Sem rewrite AVX2 `none`. |
 | 297 | Storage | virtio_blk + NSGDB | missing headers = VRING_DESC_F_NEXT + persistência QEMU | `virtio-blk missing headers` = descritores encadeados sem `VRING_DESC_F_NEXT` no flags (QEMU ignora `next` sem bit 0; `virtqueue_split_read_next_desc`); `virtio_net.rs` não encadeia (1 desc, next=0) então nunca acertou. `page_leaf_phys` refutou corrupção de page tables (HHDM ok; bug era conteúdo). `FlashDev::VirtioBlk` → `TICKV backend=file dev=virtio cap=8192KB` (antes RAM VOLATIL). Commits `6027ee4`+`9d0cf04`. Residual: recall cross-boot. |
 | 296 | Boot/UI | HW splash freeze | E: sem write + 1º frame compositor | `E:\BOOT.LOG` placeholder + `NSGDB.BIN` zeros = sem MSC; splash = Runtime tick 1. Fix: `render()` imediato pós-`claim_graphics()` (SESSION_168). `usb_hw.img` 22:22. |
