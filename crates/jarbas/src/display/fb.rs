@@ -250,19 +250,18 @@ pub fn probe_raw_framebuffer(
         addr,
         rgb_order
     );
+    let w = gpu.fb_width as usize;
+    let h = gpu.fb_height as usize;
+    let stride = gpu.fb_stride as usize;
+    let bpp = gpu.fb_bpp as usize;
+    let addr = gpu.fb_addr as usize;
+    let rgb = gpu.rgb_order;
     *GPU.lock() = Some(gpu);
-    console_clear();
-    boot_ckpt(0, "probe FB ok (limine/raw)");
-    k_nano::slog_jarbas!(
-        "Display",
-        "info",
-        "Framebuffer raw configurado: {}x{} bpp={} stride={} @{:x}",
-        width,
-        height,
-        bpp,
-        fb_stride,
-        addr
-    );
+    // Ideia Redox graphical_debug: pintar no T+0 SEM limpar o FB inteiro
+    // (write_volatile em 1080p UC parece freeze no splash Limine) e SEM slog/ramlog.
+    paint_t0_banner(addr, w, h, stride, bpp, rgb);
+    CONSOLE_LINE.store(4, Ordering::Relaxed);
+    CONSOLE_INITED.store(true, Ordering::Relaxed);
 }
 
 /// Pinta resposta TTS/LLM no FB (antes do scheduler / DisplayAgent).
@@ -387,9 +386,11 @@ pub fn console_print(text: &str) {
     if text.is_empty() {
         return;
     }
-    // Route through vconsole for virtual console support
-    crate::vconsole::write_to_active(text);
-    crate::vconsole::write_to_active("\n");
+    // vconsole faz String::push — so apos heap (kernel_boot chama phase_line antes).
+    if k_nano::boot_logger::heap_ready() {
+        crate::vconsole::write_to_active(text);
+        crate::vconsole::write_to_active("\n");
+    }
     
     if GRAPHICS_OWNED.load(Ordering::Relaxed) {
         return;
@@ -628,6 +629,62 @@ pub fn boot_progress_line(msg: &str) {
     phase_line(msg);
 }
 
+/// Faixa T+0 (Redox DebugDisplay): prova visual de que o ELF entrou.
+/// Limine permanece na tela se esta funcao nunca rodou.
+fn paint_t0_banner(
+    addr: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+    bpp: usize,
+    rgb: bool,
+) {
+    if bpp == 0 || width == 0 || height == 0 {
+        return;
+    }
+    let bar_h = 56usize.min(height);
+    let (c0, c1, c2) = if rgb {
+        (0u8, 212u8, 255u8)
+    } else {
+        (255u8, 212u8, 0u8)
+    };
+    unsafe {
+        let ptr = addr as *mut u8;
+        for y in 0..bar_h {
+            let row = ptr.add(y * stride);
+            if bpp == 4 {
+                let pix = u32::from_le_bytes([c0, c1, c2, 0xFF]);
+                let mut x = 0usize;
+                let row_bytes = (width * 4).min(stride);
+                while x + 4 <= row_bytes {
+                    write_volatile(row.add(x) as *mut u32, pix);
+                    x += 4;
+                }
+            } else {
+                let mut x = 0usize;
+                while x + bpp <= stride && x / bpp < width {
+                    write_volatile(row.add(x), c0);
+                    write_volatile(row.add(x + 1), c1);
+                    write_volatile(row.add(x + 2), c2);
+                    x += bpp;
+                }
+            }
+        }
+        core::arch::asm!("sfence", options(nostack, preserves_flags));
+    }
+    // Texto navy sobre faixa ciano (fonte 8x16 estatica, zero alloc).
+    let (n0, n1, n2) = if rgb {
+        (8u8, 12u8, 24u8)
+    } else {
+        (24u8, 12u8, 8u8)
+    };
+    splash_draw_text_fg(addr, width, height, stride, bpp, 16, 8, "NEURAL KERNEL", n0, n1, n2);
+    splash_draw_text_fg(addr, width, height, stride, bpp, 16, 28, "boot=limine T+0", n0, n1, n2);
+    unsafe {
+        core::arch::asm!("sfence", options(nostack, preserves_flags));
+    }
+}
+
 fn splash_draw_text(
     fb_addr: usize,
     width: usize,
@@ -639,6 +696,27 @@ fn splash_draw_text(
     y0: usize,
     text: &str,
 ) {
+    let (c0, c1, c2) = if rgb_order {
+        (0u8, 200u8, 255u8)
+    } else {
+        (255u8, 200u8, 0u8)
+    };
+    splash_draw_text_fg(fb_addr, width, height, stride, bpp, x0, y0, text, c0, c1, c2);
+}
+
+fn splash_draw_text_fg(
+    fb_addr: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+    bpp: usize,
+    x0: usize,
+    y0: usize,
+    text: &str,
+    c0: u8,
+    c1: u8,
+    c2: u8,
+) {
     if bpp == 0 {
         return;
     }
@@ -646,11 +724,6 @@ fn splash_draw_text(
     let cw = 8usize;
     let mut x = x0;
     let y = y0;
-    let (c0, c1, c2) = if rgb_order {
-        (0u8, 200u8, 255u8)
-    } else {
-        (255u8, 200u8, 0u8)
-    };
     for c in text.chars() {
         if x + cw > width || y + ch > height {
             break;

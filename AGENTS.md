@@ -68,8 +68,9 @@ You are a Senior Systems and AI Engineer building "neural-os-core", an AI-native
 2. **Agent/Skill-First:** Every entity is an Agent. ~50 native agents with manifests, plus variable HW agents at runtime.
 3. **Hardware Rings:** Ring 0 (NPU — intent routing), Ring 1 (GPU — tensor), Ring 2 (CPU — agents/skills). ⚠️ **Anéis são organização de código, NÃO fronteira de segurança imposta pelo processador** — tudo executa em Ring 0 real; isolamento efetivo hoje = wasmi (Caminho A) + Ring3 gated (ADR-0077, não registrado).
 4. **HW Real First:** QEMU/VirtualBox são apenas **desenvolvimento e debug**. Validação final sempre em HW real.
-5. **Trinity MoE:** LLM + router treinável + experts (RustCoder, HWIdentify, etc). AutoLearn: detecta necessidade → treina → registra.
+5. **Trinity MoE:** LLM + router treinável (VOCAB=256 PT-BR, routing telemetry neural/keyword/fallback) + 7 experts (3 com pesos: HWEXPRT, RUSTCDR, PIPER). Expert on-demand load via `get_or_mmap_expert` na Cortex Arena. AutoLearn: detecta necessidade → treina → registra.
 6. **Toda tecnologia nova DEVE ser registrada em `TECNOLOGIAS.md`** com ADR, IDEA, arquivo e sprint. Rodar `tools/update_tecnologias.py` após alterações.
+7. **Lições S292-S294:** TTS split_into_sentences com core::mem::replace (ownership-safe state machine); compositor hot path: fill scanline + isqrt_u64 (não sqrtf); TARGET_FRAME_TICKS=1 (PIT ~18Hz).
 
 # Agent/Skill-First Design Principles
 - **Unificação Ontológica:** Tudo é Agent. Drivers → DriverAgent, Daemons → InferenceAgent/RouterAgent.
@@ -183,13 +184,14 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - VGA address: `0xB8000 + physical_memory_offset` (runtime)
 - Heap: `0x_4000_0000_0000` (512MB, talc — fora do range kernel/bootloader)
 - BitNet ternário: ADD/SUB apenas, zero FPU em matmul. 2-bit packing (4 pesos/byte)
-- Trinity MoE: LLM + 7 kind (HwIdentify, HwControl, RustCoder, DiskDiag, Security, Generator, SpeechSynth — 2 wired HWEXPRT/RUSTCDR, 4 keyword→Generator) + router_weight treinável (ROUTER.BITNET VOCAB=99 HIDDEN=64; moe_router=LOADED vs ABSENT keyword+FALLBACK_GENERATOR)
+- Trinity MoE: LLM + 7 kind (HwIdentify, HwControl, RustCoder, DiskDiag, Security, Generator, SpeechSynth — 3 wired HWEXPRT/RUSTCDR/PIPER, 4 keyword→Generator) + router_weight treinável (ROUTER.BITNET VOCAB=256 HIDDEN=64; moe_router=LOADED vs ABSENT keyword+FALLBACK_GENERATOR; routing telemetry neural/keyword/fallback counters)
 - SDIO MoE: 95.812 entradas .inf/.sys reais + análise pefile
 - HardwareRegisterMap: gerado por IA (3 níveis: HWID→família→heurística)
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: **v1.9.99-s295 TEST** (HW pendrive boot regressão) — s294 compositor hot path; s293 OVMF/Falcon3.
+# Current Sprint: **v1.9.99-s297 TEST** — virtio_blk + NSGDB persistente; s296 HW splash freeze; s295 HW pendrive;
+# s294 compositor hot path (TTS streaming); s293 OVMF/Falcon3; s292 TTS sentence-level.
 # v279: SMP AIOS MADT inventário; trampoline jmp@IP=0; IDs u32 (s278 Ring3 TCG iretq+CPL3; B/C **não** liberados).
 # ADR-0081 mesh (SESSION_242): **REASSEMBLY 2→16 slots** + **ACK seletivo** (FRAG\0→FRACK\0 stop-and-wait, 3 retries, 50 ticks) + timeout 500→2000 ticks; **probe_node exponential backoff** 50→3200 ticks; **cleanup_peer_health_ttl** (>60s a cada 500 ticks); PeerHealth expandido (avg_rtt EWMA α=1/8, rtt_samples[32], `peer_p99_rtt` via `(count*99+99)/100` — no_std sem f32::ceil); **ARP cache** PEER_MAC_CACHE + `recv_*_with_mac` expõe src_mac; **capacity_weighted_assign health-aware** (unreachable→0, latency/p99 factors); **token bucket** rate limiting (1/tick, burst 20; heartbeat=1, ROLE=2, dados=3); **JSON dashboard**: `PeerHealth::to_json` + `publish_mesh_health` emite JSON array no tópico `MESH_HEALTH`, `mesh_health_json::parse` no_std no Jarbas + lazy subscribe no DisplayAgent. Transporte vive em **k_nano R0**. Commit 7a97556.
 # ADR-0081 mesh (s238+): transporte (udp_broadcast frame/send/recv) + serviço (mesh::p2p_tick) vivem em **k_nano R0** (bin re-exporta statics NIC: `pub use k_nano::nic_globals::{RTL8139,E1000,VIRTIO_DEV}`). **Segurança Fase A (s238):** RX fail-closed (assinatura vs pk vinculada → DROP), TOFU via `PK\0`+pk no heartbeat (`PEER_KEYS[16]`, seam SKYNET `peer_public_key()`), anti-replay (clock ≤ last → DROP), todos TX assinam — sec=0/0/0 validado. **Fragmentação MTU (s238):** `send_fragmented`/`recv_fragmented` (`FRAG\0` header 21B, fora-de-ordem OK, timeout 2000 ticks); gate 1200B removido — matmul 64×64 ~17.5KB round-trip OK. Non-heartbeat → EventBus `P2P_PACKET`; skill_sync/marketplace consomem via poll_p2p. BitTorrent: NÃO implementar (veredicto s238 — merkle piece verification quando modelos). `run-qemu-p2p-mesh.ps1`: ASCII puro, socket listen/connect, 8G, OVMF 8.3, -smp 2 MTTCG, -NoDisk. Commits: f240fa4→916d155 (s234-s238).

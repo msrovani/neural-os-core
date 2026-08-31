@@ -1,9 +1,9 @@
 # Neural OS Hermes — AI Summary
 
-**O que é:** Sistema operacional bare-metal (`no_std` Rust) onde **tudo é Agente ou Skill**. ~50 agentes nativos, Trinity MoE no kernel, BitNet ternário para HW e inferência.
+**O que é:** Sistema operacional bare-metal (`no_std` Rust) onde **tudo é Agente ou Skill**. ~50 agentes nativos, Trinity MoE no kernel (VOCAB=256, routing telemetry), BitNet ternário para HW e inferência.
 
-**Versão release:** **v1.9.0 TESTE / NÃO ESTÁVEL** (2026-07-18) — Pós-LAN + Residuals 0–7; base v1.8.6.
-**Estado:** ~26.000 LOC, 180+ arquivos, `cargo nk` = 0 erros.
+**Versão release:** **v1.9.99-s297 TESTE / NÃO ESTÁVEL** (2026-08-31) — virtio_blk + NSGDB persistente; TTS streaming; compositor hot path; Trinity improvements.
+**Estado:** ~28.000 LOC, 180+ arquivos, `cargo nk` = 0 erros, 168 testes host.
 
 **Base v1.8.0:**
 - ADR-0042 N1–N5 ✅ — cadeia funcional K³CHJ
@@ -33,7 +33,7 @@
 | `jarbas` | Display FE, persona (GPU BE em k_hal) |
 | `neural-kernel` | Bin de boot (integração + residuals) |
 
-**Pista ativa:** Pós-LAN B-01 ✅ (SESSION_152) — NetFs PASS; TLS BLOCKED; WiFi AWAITING; gate v2.0.0 review.
+**Pista ativa:** s297 virtio_blk + NSGDB; s296 HW splash freeze; s295 HW pendrive; s294 compositor hot path + TTS streaming; s293 Trinity vocab256 + routing telemetry; s292 instalador pendrive→HD. Gate v2.0.0 review pendente.
 
 **Para agentes de IA:**
 1. `AGENTS.md` — regras operacionais

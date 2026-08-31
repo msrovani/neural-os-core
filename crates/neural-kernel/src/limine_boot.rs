@@ -105,8 +105,37 @@ pub unsafe extern "C" fn _start() -> ! {
     limine_entry()
 }
 
+/// Pinta o FB do Limine no T+0 (antes de HHDM/memmap).
+/// Se a tela continuar so no splash Limine, o ELF nao entrou.
+unsafe fn paint_fb_from_limine() {
+    if LIMINE_FB.response.is_null() {
+        return;
+    }
+    let fb_resp = &*LIMINE_FB.response;
+    if fb_resp.framebuffer_count == 0 || fb_resp.framebuffers.is_null() {
+        return;
+    }
+    let fbp = *fb_resp.framebuffers;
+    if fbp.is_null() {
+        return;
+    }
+    let f = &*fbp;
+    // Limine rev 2+: address ja e HHDM-virtual — nao somar offset.
+    jarbas_crate::display::fb::probe_raw_framebuffer(
+        f.address as u64,
+        f.width as u32,
+        f.height as u32,
+        f.pitch as u32,
+        f.bpp,
+        f.red_mask_shift == 0,
+    );
+}
+
 unsafe extern "C" fn limine_entry() -> ! {
     early_serial(b"[neural] Limine handoff\r\nL\r\nboot=limine\r\n");
+    // AIOS: Observe no silicio primeiro. Splash Limine some so se o kernel
+    // pintar. Se HHDM/memmap travar depois, o humano ainda ve NEURAL KERNEL.
+    paint_fb_from_limine();
 
     // Debug: verificar se BaseRevision foi aceito
     if LIMINE_BASE_REV.supported() {
@@ -156,27 +185,6 @@ unsafe extern "C" fn limine_entry() -> ! {
 
     // 3. RSDP
     crate::acpi::set_boot_rsdp(handoff.rsdp);
-
-    // 4. Framebuffer
-    if !LIMINE_FB.response.is_null() {
-        let fb_resp = &*LIMINE_FB.response;
-        if fb_resp.framebuffer_count > 0 && !fb_resp.framebuffers.is_null() {
-            let fbp = *fb_resp.framebuffers;
-            if !fbp.is_null() {
-                let f = &*fbp;
-                // Limine rev 2+: framebuffer address is ALREADY HHDM-virtual
-                // Do NOT add PHYS_MEM_OFFSET again — that would double-offset.
-                jarbas_crate::display::fb::probe_raw_framebuffer(
-                    f.address as u64,
-                    f.width as u32,
-                    f.height as u32,
-                    f.pitch as u32,
-                    f.bpp,
-                    f.red_mask_shift == 0,
-                );
-            }
-        }
-    }
 
     // 5. Log módulos
     if !LIMINE_MODULES.response.is_null() {

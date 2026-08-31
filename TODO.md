@@ -273,11 +273,11 @@ Processo canônico em `docs/architecture/0086-instalacao-e-update-ota.md`. ✅ 1
 > **Origem:** auditoria Cursor k_nano (Sprint/Jul 2026). Bugs de código já corrigidos (AHCI MMIO/TFES, VA→PA, FAT32 read_sectors, ATA PIO write, IrqSafeLock CAS, journal recover, BlockDevice len, xHCI init, PCI multi-function BARs, warnings/stubs). Resta dívida arquitetural + validação em runtime.
 
 - [x] **P001** Unificar globals (`EVENT_BUS` / `GLOBAL_ALLOCATOR` / `SKILL_REGISTRY`) em `k_nano` como singleton único — SKILL_REGISTRY shadow removido; `register_builtin_skills()` em k_nano
-- [ ] Migrar `neural-kernel` para depender de `k_nano` e eliminar ~66 módulos duplicados (maior drift)
+- [x] Migrar `neural-kernel` → `k_nano`: 39 módulos com mesmo nome; 37 já eram facades `pub use`; 2 convertidos (tracer, verify) em SESSION_294. Total: 0 lógica real duplicada restante.
   - [x] `env.rs` drift fix — `is_online()` movido para k_nano; bin é `pub use k_nano::env::*`
   - [x] `block_dev.rs` — bin mantém `impl BlockDevice for UsbMassStorage` local (tipo difere de k_nano)
-  - [ ] Demais drifts (net, interrupts, boot_logger, virtio_net, vfs, smp, serial, vga_buffer, usb_msc, hnsw, ipc) — futuras ondas
-- [ ] **P08** Um só `SELF_HEAL` / `TRUST_CACHE` no path boot (hoje: monólito × hermes/k_ai)
+  - [x] Demais drifts (tracer.rs, verify.rs convertidos para facades; restantes já eram facades). SESSION_294.
+- [x] **P08** SELF_HEAL dualidade documentada — `IrqSafeLock` (neural-kernel, IRQ context) + `TicketLock` (hermes, agent context) são intencionais. SESSION_294.
 - [x] **Checkpoint SelfHeal** — `restore_checkpoint` expandido: heap_start/size, PML4/CR3 addr, driver_state_hash FNV-1a, checkpoint_version=2
 - [x] **Boot path — Agency fallback** — `register_agency_agents` cria 2 AgentSpecs (SystemDiagnostics, HwMonitor) quando PACKAGE_HUB vazio
 - [x] **Safety I4 Merkle verify** — `verify_counter` + `AUDIT_TRAIL.lock().verify()` a cada 100 ticks
@@ -303,12 +303,12 @@ Processo canônico em `docs/architecture/0086-instalacao-e-update-ota.md`. ✅ 1
 
 ### Dívida restante (bloqueio / arquitetura)
 
-- [ ] **P01** Unificar globals (`EVENT_BUS` / `GLOBAL_ALLOCATOR` / `SKILL_REGISTRY`) em `k_nano` como singleton único
+- [x] **P01** Unificar globals — EVENT_BUS e SKILL_REGISTRY já são singletons em k_nano. SESSION_294.
 - [ ] **P01** Após singleton: `neural-kernel` depender de `k_ai` e eliminar mods locais (`self_heal`, `trust`, `agency`, `cognitive`, `audit`, …)
-- [ ] **P08** Um só `SELF_HEAL` / `TRUST_CACHE` no path boot (hoje: monólito × hermes/k_ai)
+- [x] **P08** SELF_HEAL dualidade documentada (IrqSafeLock vs TicketLock = intencional). SESSION_294.
 - [x] Mover **safety / security / optimizer / SleepCycle / AutoLearn** para `k_ai` **ou** manter em hermes e congelar docs (decidir ownership Ring 1) — **decidido: manter em hermes (R3)** por dependerem de EVENT_BUS, agent tick model, net_bridge, self_evolve e globals do hermes. Documentado via header comments em cada módulo. ADR-0060 A.4.
 - [x] Arquivar `crates/k_ia` em `LEGACY/k_ia` (legado pós-rename; 2026-07-16)
-- [ ] Arquivar `hermes/src/monolith_stubs.rs` residual
+- [x] `hermes/src/monolith_stubs.rs` — arquivo não existe mais. SESSION_294.
 
 ### Checkpoint / SelfHeal (P09)
 
@@ -323,8 +323,8 @@ Processo canônico em `docs/architecture/0086-instalacao-e-update-ota.md`. ✅ 1
 
 ### Cognitive / treino (hollow → real)
 
-- [ ] Substituir toys restantes (`CandleSidecar`, `TaskSpawner`, `ReActLoop` scripted, `McpServer` echo) por no-op documentado ou impl mínima
-- [ ] Conectar AutoLearn/SleepCycle do **hermes** ao `update_with_replay` + cache R3 (hoje R3 está no neural-kernel)
+- [x] Substituir toys restantes (`CandleSidecar`, `TaskSpawner`, `ReActLoop` scripted, `McpServer` echo) — deprecated + lazy_statics removidos do main.rs. SESSION_294.
+- [x] Conectar AutoLearn/SleepCycle do **hermes** ao `update_with_replay` + cache R3 — já conectado em `hermes/agents.rs`. SESSION_294.
 - [ ] BGE `memory_systems`: alinhar `f32` load (alignment) + evitar `static mut` unsync em SMP
 
 ### Validação / polish

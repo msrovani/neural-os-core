@@ -1,9 +1,9 @@
 # Roadmap — neural-os-core
 
-**Última atualização:** 2026-07-22
-**Versão release:** **v1.9.7 TESTE / NÃO ESTÁVEL**
-**Estado:** ~26.000 LOC, 180+ arquivos Rust, ~50 agentes nativos, 0 erros (`cargo nk`)
-**Pista ativa:** v1.9.7 TEST — SESSION_168 splash persistente; LLM gerando saudação; tela preta fixada; gate v2.0.0 review.
+**Última atualização:** 2026-08-31
+**Versão release:** **v1.9.99-s297 TEST / NÃO ESTÁVEL**
+**Estado:** ~28.000 LOC, 180+ arquivos Rust, ~50 agentes nativos, 0 erros (`cargo nk`)
+**Pista ativa:** s297 virtio_blk + NSGDB persistente; s296 HW splash freeze; s295 HW pendrive; s294 compositor hot path + TTS streaming; s293 Trinity vocab256 + routing telemetry.
 
 ---
 
@@ -137,6 +137,21 @@
 
 ---
 
+## 🚀 Sprints 292-297 — Pós-LAN (Agosto 2026)
+
+| Sprint | Foco | LOC | Status |
+|--------|------|-----|--------|
+| s292 | Instalador pendrive→HD + NeuralFS opt-in FAT32 | ~500 | ✅ |
+| s293 | Card seleção disco (install) + Falcon3 7B + Trinity vocab256 | ~300 | ✅ |
+| s294 | Compositor hot path (fill scanline, isqrt_u64, FPS=1 tick) + TTS sentence-level streaming | ~200 | ✅ |
+| s295 | HW pendrive: hang pós BOOT.LOG skip + pipeline ESP | ~400 | ✅ |
+| s296 | HW splash freeze: 1º frame compositor | ~100 | ✅ |
+| s297 | VirtIO-blk driver (VRING_DESC_F_NEXT fix) + NSGDB persistente no QEMU | ~300 | ✅ |
+| S29x | Trinity routing telemetry + vocab 256 + expert on-demand load | ~200 | ✅ |
+| S29x | Dívida técnica: toys deprecated + P08 dualidade documentada + migração facades | ~100 | ✅ |
+
+---
+
 ## 📊 RESUMO v2.0 "Cognição"
 
 | Sprint | Foco | LOC | Status |
@@ -157,7 +172,8 @@
 | 106-10 | SkillOpt - Tradução Python→Rust | ~400 | ✅ |
 | 106-3 | Corrigir SOUL.md parser | ~300 | ✅ |
 | 106-11 | Heap address HW real + boot diagnostics | ~100 | ✅ |
-| **Total v2.0** | | **~9.000 LOC** | |
+| s292-s297 | Pós-LAN: virtio-blk, TTS streaming, compositor hot path, Trinity telemetry | ~2.100 | ✅ |
+| **Total v2.0** | | **~11.100 LOC** | |
 
 ---
 

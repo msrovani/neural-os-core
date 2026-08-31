@@ -38,7 +38,9 @@ The inference engine is a ternary (Falcon3-3B-Instruct-1.58bit) language model �
 2-bit packed weights, ADD/SUB-only matmul, AVX2/SSE kernels — loaded from disk and
 run inside the kernel address space, plus a small Mixture-of-Experts router
 (Trinity MoE) with specialized experts (hardware identification, code generation,
-security, speech).
+security, speech). The Trinity router is vocab-256 aware (PT-BR acentos) with
+neural/keyword/fallback telemetry, and experts load on-demand into the Cortex Arena.
+Sentence-level TTS streaming provides sub-200ms first-phrase latency via Piper.
 
 ## Status
 
@@ -54,7 +56,7 @@ explicit gate over a silent promise.
 | Memory management | AIOS self-adapting heap: modest 512MB floor, `grow_bump_auto` expands on demand (256MB steps) up to 75% of detected RAM; Limine kernel stack reserved in the frame allocator (fixes a `#PF ip=0` with large QEMU-loader models at 4GB+) |
 | Networking | Intel e1000 driver (TX/RX, DMA fixed via uncached mapping), raw DNS, HTTP GET via smoltcp, NTP, TLS 1.3 (`embedded-tls`, wired through hermes), NetFs (TCP file server, smoke-tested) |
 | P2P mesh | Two QEMU instances discover each other over UDP broadcast (port 42069), exchange skills; selective ACK per fragment, 16-slot reassembly, HMAC-SHA256/Ed25519 crypto tiers, token-bucket rate limiting |
-| Storage | ATA PIO, FAT32 read/write (data partition), exFAT (opt-in) |
+| Storage | ATA PIO, FAT32 read/write (data partition), exFAT (opt-in), VirtIO-blk (QEMU) |
 | WASM | `wasmi` `no_std` runtime with fuel metering, capability-gated host imports (`aios::*`); self-test `add(2,3)=5` passes |
 | Audio/voice | Intel HDA capture + playback, Piper TTS (PT-BR/EN), CTC STT (55K params), wake word "Jarvis" |
 | GPU compute | NVIDIA PUSH_BUFFER (validated on a GTX 1050), VirtIO-GPU 2D (QEMU), Intel GEN ring (canary) |
@@ -62,7 +64,7 @@ explicit gate over a silent promise.
 | UI | `embedded-graphics` card desktop, Z-order compositor, PS/2 mouse, FFT-driven orb |
 | Security | Ed25519 trust chain, capability gates, fail-closed mesh authentication |
 | Self-installer (ADR-0079) | Detects PCI hardware, partitions, formats FAT32 ESP, deploys bootloader and only the needed firmware/models |
-| Host tests | `cargo test --workspace` runs on the host (139 tests passing) |
+| Host tests | `cargo test --workspace` runs on the host (168 tests passing) |
 | CI | GitHub Actions: `cargo check --release` (0 errors), host tests, boot smoke test in QEMU |
 
 ### In development / experimental
@@ -219,7 +221,7 @@ and Rust-subset paths exist but are gated behind the isolation ring.
 - **Falcon3-3B-Instruct-1.58bit** — 3B ternary params (`FALCON3.V6`, ~989MB, loaded via
   QEMU loader or FAT32), 30 layers, hidden 2560, GQA, Medusa speculative decode,
   AVX2/SSE4.2 kernels with runtime dispatch
-- **Trinity MoE** — router + 7 kind (HwIdentify, HwControl, RustCoder, DiskDiag, Security, Generator, SpeechSynth — 2 wired HWEXPRT/RUSTCDR, 4 keyword→Generator) (hardware ID, code generation, disk
+- **Trinity MoE** — router + 7 kind (HwIdentify, HwControl, RustCoder, DiskDiag, Security, Generator, SpeechSynth — 3 wired HWEXPRT/RUSTCDR/PIPER, 4 keyword→Generator) (hardware ID, code generation, disk
   diagnostics, security, speech, text completion); router weights trained offline,
   on-device AutoLearn training experimental
 - **HW Expert v3** — 61,453 PCI/USB VID/DID pairs recognized by a 259KB ternary
@@ -307,6 +309,10 @@ application) registered at boot — about 259 agents total at runtime.
 | v1.9.x Pós-LAN (NetFs, HTTP, NTP, self-update, residual waves) | Done |
 | Voice pipeline (Piper TTS, STT, wake word, HDA) | Done |
 | ADR-0057/0058/0059/0079/0081 (compute, cards, app factory, installer, mesh) | Done |
+| Trinity MoE vocab-256 + routing telemetry + expert on-demand load | Done |
+| TTS streaming (sentence-level, Piper sub-200ms) | Done |
+| VirtIO-blk driver (QEMU disk) | Done |
+| neural-sgdb extraction (standalone crate) | Done |
 | Ring 3 isolation (ADR-0060/0082) | Gated — triple-fault to fix |
 | WiFi/TLS hardware validation | Pending hardware |
 | v2.0.0 gate (formal review + zero backlog + maintainer OK) | Not passed |
@@ -318,7 +324,7 @@ application) registered at boot — about 259 agents total at runtime.
 - `cargo check --release` — 0 errors required (dead-code warnings are the
   project's Known Warnings policy)
 - `cargo test --workspace --exclude neural-kernel --exclude boot` — host unit
-  tests (139 passing)
+  tests (168 passing)
 - QEMU boot smoke test (UEFI + TCG) — validates the full 8-phase boot to the
   runtime tick loop
 - CI (GitHub Actions) runs all three on every push and PR

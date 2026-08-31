@@ -550,6 +550,13 @@ def main() -> None:
         print(f"[OK] alias {alias}")
 
     print(f"\n[OK] {out}: {final // (1024 * 1024)} MB (ESP FAT + dados {fs_name})")
+    # AIOS Verify: recusar imagem que o firmware nao consegue carregar.
+    v = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "tools", "verify_usb_esp.py"), out],
+        cwd=ROOT,
+    )
+    if v.returncode != 0:
+        raise SystemExit("[ERRO] verify_usb_esp FAIL — nao grave esta imagem (Limine-only)")
     if args.fixed_disk:
         print("Rufus: Advanced -> List USB Hard Drives -> DD -> HD externo (Secure Boot OFF).")
         print("F12: procure UEFI: <marca do HD> (nao 'Removable Drive').")

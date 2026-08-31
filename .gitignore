@@ -97,3 +97,4 @@ fb_dump*.png
 fb_viewer.html
 # Patches one-shot de sessões (não integrados)
 tools/patch_*.py
+!tools/patch_usb_esp.py

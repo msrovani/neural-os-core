@@ -11,6 +11,18 @@
 - **Resultado:** `TICKV backend=file lba=5514479 dev=virtio cap=8192KB` (antes `backend=RAM VOLATIL`).
 - **Commits:** `6027ee4` + `9d0cf04`.
 
+## [1.9.99-s293t] - 2026-08-31 — Trinity MoE improvements + Routing telemetry + vocab 256
+
+**Trinity MoE router improvement: vocab 256 PT-BR accents + routing counters + expert on-demand load.**
+
+- **VOCAB 99→256:** Router now maps all 256 byte values including PT-BR accented characters (á=0xE1, ã=0xE3, ç=0xE7); encoding truncated input to 64 tokens.
+- **Routing telemetry:** `stats_neural`, `stats_keyword`, `stats_fallback` AtomicU64 counters exposed to MonitorAgent for % accuracy measurement.
+- **Expert on-demand load:** `get_or_mmap_expert(ExpertKind)` loads `.bitnet` weights into CORTEX_ARENA on first use; `expert_resident_bytes_kind()` free function for HUD.
+- **hermes::globals::TRINITY populated:** `populate_trinity_from_bin()` copies 7 experts from bin to hermes at boot; `install_trinity_mmap_bridge()` wired into Phase 5.
+- **SpeechSynth → PIPER.BIN weight source** added (3/7 experts now have weight sources).
+- **host tests:** trinity_inject module re-enabled with 22 new tests (total 168).
+- **Commits:** `7afae8e`, `5514295`, `b14e8e2`, `107d075`.
+
 ## [1.9.99-s292] - 2026-08-30 — TTS streaming por frases + sentence-level synthesis
 
 **TTS bloqueava toda a resposta do LLM antes de começar a reproduzir (~500-2000ms).**

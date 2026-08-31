@@ -1302,6 +1302,7 @@ pub(crate) fn kernel_boot(
     // Chamada idempotente — bootloader fez em kernel_main, Limine em limine_entry.
     crate::acpi::set_boot_rsdp(handoff.rsdp_addr());
     let boot_tag = handoff.boot_tag();
+    crate::display::fb::phase_line("NEURAL kernel_boot");
     let serial_exists = crate::serial::SERIAL.lock().is_some();
     crate::display::fb::boot_ckpt(1, "pos-probe + serial");
     k_nano::slog_bin!("Boot", "info", "boot={}", boot_tag);
