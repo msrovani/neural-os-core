@@ -493,6 +493,20 @@ fn mark_skip(bit: u8) {
     BACKEND_SKIP.fetch_or(bit, Ordering::Relaxed);
 }
 
+/// Pendrive Limine sem MSC: não tentar `BOOT.LOG` em ATA/AHCI/NVMe internos.
+/// `overwrite_boot_log` = FAT walk PIO no HD errado → hang minutos (SESSION_296+).
+pub fn skip_disk_persist_except_usb() {
+    #[cfg(feature = "fat-boot-log")]
+    {
+        mark_skip(SKIP_ATA | SKIP_AHCI | SKIP_NVME);
+        crate::slog_nano!("LOG", "info", "persist USB-only (live stick sem MSC)");
+    }
+    #[cfg(not(feature = "fat-boot-log"))]
+    {
+        let _ = ();
+    }
+}
+
 fn is_skipped(bit: u8) -> bool {
     BACKEND_SKIP.load(Ordering::Relaxed) & bit != 0
 }

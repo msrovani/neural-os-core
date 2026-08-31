@@ -868,7 +868,10 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     });
     registry.init_phase();
     crate::display::fb::boot_ckpt(52, "init_phase done");
-    k_ai::boot_observe::ingest_bootlog(); // IDEA #539c: ramlog → memória L3 episódica (Remember entre boots)
+    // IDEA #539c: ingest do ramlog MOVIDO para pós-`sgdb::boot_init()` — o recall
+    // cross-boot usa `with_nsgdb()` (Sgdb::open), que só existe após boot_init.
+    // Aqui (pré-NSGDB) o recall via `scan_prefix_nsgdb` retornava vazio e a
+    // feature "Remember entre boots" gravava mas nunca lia o boot anterior.
     agent_core::set_sched_metrics_hook(Some(sched_metrics_hook));
     // ADR-0060: BEI tick hook — runs every scheduler tick
     agent_core::set_bei_tick_hook(Some(bei_init::bei_tick));
@@ -1998,13 +2001,16 @@ pub(crate) fn kernel_boot(
         } else {
             crate::display::fb::boot_ckpt(16, "USB-MSC skip (plano)");
         }
-        crate::display::fb::boot_ckpt(25, "antes BOOT.LOG flush");
-        crate::boot_logger::init_after_usb();
-        crate::display::fb::boot_ckpt(17, "BOOT.LOG flush tentado");
-        // Pendrive Limine sem MSC: xHCI HID (P24a/b) pode travar minutos — defer p/ Runtime.
         let live_usb_no_msc = hw_real
             && boot_tag.contains("limine")
             && crate::USB_MSC.lock().is_none();
+        crate::display::fb::boot_ckpt(25, "antes BOOT.LOG flush");
+        if live_usb_no_msc {
+            k_nano::boot_logger::skip_disk_persist_except_usb();
+        }
+        crate::boot_logger::init_after_usb();
+        crate::display::fb::boot_ckpt(17, "BOOT.LOG flush tentado");
+        // Pendrive Limine sem MSC: xHCI HID (P24a/b) pode travar minutos — defer p/ Runtime.
         // FIX: removido qemu_hid skip — cmd_enable_slot funciona em WHPX/TCG moderno.
         let usb_msc_boot = crate::USB_MSC.lock().is_some();
         if usb_msc_boot || live_usb_no_msc {
@@ -2058,9 +2064,13 @@ pub(crate) fn kernel_boot(
         } else if live_usb_no_msc {
             k_nano::slog_bin!("Sec", "info", "skip ATA KERNEL~1 verify (live USB sem MSC)");
             crate::display::fb::console_print("SEC: skip ATA verify (USB live)");
+            k_nano::boot_logger::skip_disk_persist_except_usb();
         }
         crate::boot_logger::init(None, &[]);
         crate::boot_logger::log("BOOT: ATA+FAT init OK");
+        if live_usb_no_msc {
+            crate::display::fb::console_print("LOG: persist USB-only (sem MSC)");
+        }
     }
 
     // Honesty smokes adiados (SESSION_265) — USB live sem MSC: lite only (evita hang K71).
@@ -2071,6 +2081,9 @@ pub(crate) fn kernel_boot(
         labor_smokes::run_deferred(boot_tag);
     }
     crate::display::fb::boot_ckpt(72, "labor smokes ok");
+    if hw_real && boot_tag.contains("limine") && crate::USB_MSC.lock().is_none() {
+        crate::display::fb::console_print("BOOT: smokes ok (USB live)");
+    }
     crate::display::fb::boot_ckpt(28, "VFS init");
     {
         use crate::vfs::VfsRegistry;
@@ -2275,6 +2288,9 @@ pub(crate) fn kernel_boot(
     // ADR-0063: facade + demo + Hamming dispatch
     k_ai::sgdb::boot_init();
     k33_step!("sgdb_boot");
+    // IDEA #539c: ramlog → memória L3 episódica (Remember entre boots). Roda
+    // APÓS boot_init para o recall cross-boot enxergar o NSGDB montado (Sgdb::open).
+    k_ai::boot_observe::ingest_bootlog();
     {
         let p = k_ai::sgdb::hamming_kernel_name();
         k_nano::slog_bin!("sgdb", "hamming", "{}", p);
@@ -2333,12 +2349,18 @@ pub(crate) fn kernel_boot(
 
     crate::display::fb::boot_ckpt(34, "antes load modelos");
 
-    // Pendrive HW: sem USB-MSC/ATA o BOOT.LOG nao grava e FAT PIO pode travar (AHCI
-    // interno sozinho nao conta — disco errado / portas vazias). QEMU-loader continua.
-    let has_fat_block = crate::ATA_DRIVER.lock().is_some()
-        || crate::USB_MSC.lock().is_some()
-        || crate::AHCI_DRIVER.lock().is_some()
-        || k_nano::disk_agent::nvme::NVME_DRIVER.lock().is_some();
+    // Pendrive HW sem MSC: não PIO modelos no ATA/AHCI interno (disco errado / hang).
+    let live_usb_no_msc_models = hw_real
+        && boot_tag.contains("limine")
+        && crate::USB_MSC.lock().is_none();
+    let has_fat_block = if live_usb_no_msc_models {
+        false
+    } else {
+        crate::ATA_DRIVER.lock().is_some()
+            || crate::USB_MSC.lock().is_some()
+            || crate::AHCI_DRIVER.lock().is_some()
+            || k_nano::disk_agent::nvme::NVME_DRIVER.lock().is_some()
+    };
     if !has_fat_block {
         crate::display::fb::boot_ckpt(38, "sem MSC/ATA — skip FAT");
         k_nano::slog_nano!(
