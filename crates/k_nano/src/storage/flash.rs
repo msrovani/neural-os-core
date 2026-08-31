@@ -389,6 +389,12 @@ impl FileFlash {
         ];
         let want = crate::fat32::encode_83(FILE_FLASH_NAME);
         for dev in ORDER {
+            // Live USB sem MSC: só stick (USB); evita FAT walk no HD interno (hang HW).
+            if crate::boot_logger::internal_disk_skipped()
+                && matches!(dev, FlashDev::Ata | FlashDev::Ahci | FlashDev::Nvme)
+            {
+                continue;
+            }
             // Mesmo gate do persist_now: ATA PIO pode hangar TCG fora do plano.
             if dev == FlashDev::Ata
                 && !crate::boot_bind::storage_includes(crate::boot_bind::StorageKind::Ata)
@@ -551,6 +557,15 @@ pub fn init_flash() -> &'static str {
         );
         *g = Some(ActiveFlash::File(ff));
         return "file";
+    }
+    if crate::boot_logger::internal_disk_skipped() {
+        *g = Some(ActiveFlash::Ram(RamFlash::new(1024 * 1024)));
+        crate::slog_nano!(
+            "TICKV",
+            "info",
+            "backend=RAM (live USB sem MSC — skip NVMe interno)"
+        );
+        return "ram";
     }
     if NVME_DRIVER.lock().is_some() {
         *g = Some(ActiveFlash::Nvme(NvmeFlashRegion::default_region()));

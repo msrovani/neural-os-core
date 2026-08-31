@@ -623,6 +623,11 @@ pub fn phase_line(s: &str) {
     }
 }
 
+/// Progresso de boot visível no FB (live USB / sem compositor ainda).
+pub fn boot_progress_line(msg: &str) {
+    phase_line(msg);
+}
+
 fn splash_draw_text(
     fb_addr: usize,
     width: usize,

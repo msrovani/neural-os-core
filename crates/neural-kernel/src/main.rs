@@ -2084,6 +2084,10 @@ pub(crate) fn kernel_boot(
     if hw_real && boot_tag.contains("limine") && crate::USB_MSC.lock().is_none() {
         crate::display::fb::console_print("BOOT: smokes ok (USB live)");
     }
+    let usb_live_fb = k_nano::boot_logger::internal_disk_skipped();
+    if usb_live_fb {
+        crate::display::fb::boot_progress_line("BOOT: VFS+FS...");
+    }
     crate::display::fb::boot_ckpt(28, "VFS init");
     {
         use crate::vfs::VfsRegistry;
@@ -2109,6 +2113,9 @@ pub(crate) fn kernel_boot(
     });
     k_nano::slog_bin!("VFS", "info", "Hermes bridge -> neural-kernel FS_AGENTS");
     crate::boot_logger::log("BOOT: FS agents OK");
+    if usb_live_fb {
+        crate::display::fb::boot_progress_line("BOOT: FS ok — disk...");
+    }
 
     {
         let (meta, copy, skip, demoted, promoted) = crate::mhi::migration_stats();
@@ -2201,6 +2208,9 @@ pub(crate) fn kernel_boot(
 
     let disk_agent_box = Box::new(disk_agent);
     crate::boot_logger::log("BOOT: DiskAgent ready");
+    if usb_live_fb {
+        crate::display::fb::boot_progress_line("BOOT: self-tests...");
+    }
 
     crate::display::fb::boot_ckpt(33, "apps+audio+wasm");
     crate::apps::init_apps();
@@ -2332,6 +2342,9 @@ pub(crate) fn kernel_boot(
         }
     }
     k33_step!("tickv_smokes");
+    if usb_live_fb {
+        crate::display::fb::boot_progress_line("BOOT: tests ok — hub...");
+    }
     crate::display::fb::boot_ckpt(35, "session identity");
     k_nano::identity::init_session_identity();
     crate::display::fb::boot_ckpt(36, "package_hub");
@@ -2363,6 +2376,9 @@ pub(crate) fn kernel_boot(
     };
     if !has_fat_block {
         crate::display::fb::boot_ckpt(38, "sem MSC/ATA — skip FAT");
+        if usb_live_fb {
+            crate::display::fb::boot_progress_line("BOOT: skip models (no MSC)");
+        }
         k_nano::slog_nano!(
             "FAT",
             "info",
@@ -2507,24 +2523,26 @@ pub(crate) fn kernel_boot(
         {
             let pm = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
             if pm != 0 {
-                // Tamanho do BGE: tenta pegar do FAT, default 512KB
+                // Tamanho do BGE: tenta FAT só se não for live USB sem MSC (evita PIO HD interno).
                 let mut size_hint = 512 * 1024usize;
-                let ata_guard = crate::ATA_DRIVER.lock();
-                if let Some(ref ata) = *ata_guard {
-                    let parts = crate::fat32::read_mbr(ata);
-                    for p in &parts {
-                        if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
-                            continue;
-                        }
-                        if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
-                            if let Some(sz) = fs.lookup_file_size("BGE.BIN") {
-                                size_hint = sz.min(1024 * 1024).max(64);
-                                break;
+                if !live_usb_no_msc_models {
+                    let ata_guard = crate::ATA_DRIVER.lock();
+                    if let Some(ref ata) = *ata_guard {
+                        let parts = crate::fat32::read_mbr(ata);
+                        for p in &parts {
+                            if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
+                                continue;
+                            }
+                            if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                                if let Some(sz) = fs.lookup_file_size("BGE.BIN") {
+                                    size_hint = sz.min(1024 * 1024).max(64);
+                                    break;
+                                }
                             }
                         }
                     }
+                    drop(ata_guard);
                 }
-                drop(ata_guard);
                 let mut addr = 0x100000000u64;
                 while addr < 0x180000000 {
                     // SESSÃO_260 (AIOS): o scan lia read_volatile em região de
@@ -4563,6 +4581,9 @@ pub(crate) fn kernel_boot(
         registry as *const _ as usize,
         SCHED_STACK_SIZE / (1024 * 1024)
     );
+    if usb_live_fb {
+        crate::display::fb::boot_progress_line("BOOT: AgentFleet ok — Runtime");
+    }
 
     unsafe {
         publish_boot_phase(BootPhase::PostRuntime, "BOOT SCORE");
