@@ -1,5 +1,16 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s297] - 2026-08-31 — virtio_blk driver + NSGDB persistente no QEMU
+
+**`virtio-blk missing headers` bloqueava o disco virtio e o NSGDB ficava em RAM VOLATIL no QEMU dev/test.**
+
+- **Causa raiz:** descritores encadeados (hdr→dado→status) não setavam `VRING_DESC_F_NEXT` (0x1) no campo `flags`. O QEMU só segue o campo `next` SE esse bit estiver setado — sem ele lia só o header → `out_num=1, in_num=0` → `virtio_error` marca o device BROKEN e todos os requests timeout.
+- **Fix:** `desc[0].flags = DESC_F_NEXT`; `desc[1].flags = DESC_F_NEXT | DESC_F_WRITE` (se read); `desc[2]` fim. `virtio_net.rs` nunca acertou porque não encadeia descritores.
+- **FileFlash:** `FlashDev::VirtioBlk` (enum + name + with_flash_dev + ORDER) → `/NSGDB.BIN` monta do disco virtio (`-drive if=virtio`).
+- **`page_leaf_phys()`:** walk P4→PT que refutou a hipótese de corrupção de page tables (HHDM apontava pro frame correto — o bug era o conteúdo do descritor).
+- **Resultado:** `TICKV backend=file lba=5514479 dev=virtio cap=8192KB` (antes `backend=RAM VOLATIL`).
+- **Commits:** `6027ee4` + `9d0cf04`.
+
 ## [1.9.99-s292] - 2026-08-30 — TTS streaming por frases + sentence-level synthesis
 
 **TTS bloqueava toda a resposta do LLM antes de começar a reproduzir (~500-2000ms).**
