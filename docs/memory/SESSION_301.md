@@ -66,8 +66,59 @@ let in_kernel_virt = cr2 >= kvirt && phys_k < 8GB;
    são lock-free e podem ser lidos no handler via `puts`/`puthex` sem risco
    de deadlock.
 
+## Fix 2: cognitive.rs OOB (commit 6d18405)
+
+Após o fix do #PF, o boot avançou mas panico em `cognitive.rs` — index OOB
+no path de inferência do transformer (rope_apply, gqa_attn_forward, rms_backward).
+
+### Root Cause
+
+O `head_dim` era calculado uma vez do model-level (`model.kv_dim / num_heads`)
+e usado para todas as camadas. Mas o `matmul_hybrid` pode retornar tensores
+com dimensões diferentes do esperado, causando OOB em:
+
+- `rope_apply`: `data[off + 2*d + 1]` ultrapassava o slice
+- `gqa_attn_forward`: `q.data[s * qw + q_base + d]` com `qw` derivado de head_dim errado
+- `rms_backward`: iteração `0..x.data.len()` mas `dy.data.len() < x.data.len()`
+
+### Fix
+
+- **train_forward**: derivar `hd` por-layer de `q.shape.1 / num_heads` (não do model)
+- **backward**: derivar `hd` por-layer de `act.q.shape.1 / num_heads`
+- **gqa_attn_forward**: clamp `hd` para `min(q.shape.1, k.shape.1) / num_heads`
+- **rope_apply**: bounds check antes de acessar `data[off + 2*d + 1]`
+- **rms_backward**: `len = min(x, dy, dx)` + safe `w` access
+
+### Resultado
+
+| Métrica | Antes | Depois |
+|---|---|---|
+| cognitive panic | OOB em line 770/830/858 | **0 panics** ✅ |
+| Boot progress | Phase 5 + panic | **Phase 5 + training loop** ✅ |
+| Training | crash | **executa (lento no TCG)** ✅ |
+
+## Lições Aprendidas
+
+1. **Kernel virtual ≠ HHDM** — São mapeamentos separados. `cr2 - HHDM_OFFSET` só
+   funciona para HHDM. Kernel virtual precisa de `kernel_phys + (cr2 - kernel_virt)`.
+
+2. **`serial_print!` deadlock em #PF handler** — O UART lock é spinlock. Se o
+   interrupt já está no handler e o serialPrint tenta lock, deadlock. Usar
+   `puts`/`puthex` (lock-free raw I/O) ou contadores atômicos para diagnóstico.
+
+3. **Atomic counters > logs em interrupt handlers** — `PF_DIAG_*` counters
+   são lock-free e podem ser lidos no handler via `puts`/`puthex` sem risco
+   de deadlock.
+
+4. **Per-layer head_dim é obrigatório** — O head_dim do modelo (model.head_dim)
+   pode não corresponder ao shape real do tensor Q/K/V após matmul. Derivar
+   de `q.shape.1 / num_heads` POR LAYER é o correto.
+
+5. **rms_backward precisa de bounds checking** — Tensores x, dy, e dx podem ter
+   tamanhos diferentes. Usar `min(x.len(), dy.len(), dx.len())` como limite.
+
 ## Próximo
 
-- Panic em `cognitive.rs:770` (index out of bounds) — bug separado
+- Training loop muito lento no TCG — considerar treinar no host (GPU)
 - Cross-boot NSGDB recall — desbloqueado com ATA funcionando
 - Boot loop: goal = Jarbas greeting + NSGDB recall cross-boot
