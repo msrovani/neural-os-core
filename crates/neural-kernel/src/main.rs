@@ -1370,6 +1370,9 @@ pub(crate) fn kernel_boot(
             let image_len = virt_end.saturating_sub(virt_base);
             frame_allocator.reserve_range(kp, image_len);
             reserve_heap(frame_allocator, kp);
+            // SESSION_299/300/301: expose kernel base/end to allocator #PF handler
+            k_nano::allocator::set_kernel_virt_end(virt_end);
+            k_nano::allocator::set_kernel_phys_base(kp, virt_base);
         } else {
             // SESSION_252: KernelAddressRequest não processado por esta build
             // do Limine (response null) — usa a região KernelAndModules (tipo 1)
@@ -1377,6 +1380,10 @@ pub(crate) fn kernel_boot(
             let (kb, kl) = handoff.kernel_region();
             frame_allocator.reserve_range(kb, kl);
             reserve_heap(frame_allocator, kb);
+            // SESSION_299/300/301: expose kernel base/end to allocator #PF handler
+            let virt_end = virt_base + kl;
+            k_nano::allocator::set_kernel_virt_end(virt_end);
+            k_nano::allocator::set_kernel_phys_base(kb, virt_base);
             k_nano::slog_bin!("MEM", "info", "kernel_region fallback: reserva {:#x} len={:#x} virt_base={:#x}", kb, kl, virt_base);
         }
 

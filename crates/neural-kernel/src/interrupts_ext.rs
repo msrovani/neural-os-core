@@ -265,10 +265,47 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     // P7: demand-paging — cura lazy map e retorna (retry insn); sem hlt.
     if crate::demand_page::try_handle_fault(cr2.as_u64()) {
         return;
-    }
-    // Heap Tier-1: buracos apos demos CR3/AS ou map incompleto — cura 4KiB e retry.
+    }    // Heap Tier-1 + kernel demand-page — cura 4KiB e retry.
     if crate::allocator::try_fault_in_heap(cr2.as_u64()) {
         return;
+    }
+    // Debug: show why try_fault_in_heap failed
+    {
+        let cnt = PAGE_FAULT_COUNT.load(core::sync::atomic::Ordering::Relaxed);
+        if cnt < 1 {
+            let (kphys, kvirt) = crate::allocator::kernel_phys_virt();
+            puts(b"[PF_DBG] heap-fail cr2="); puthex(cr2.as_u64());
+            puts(b" kphys="); puthex(kphys);
+            puts(b" kvirt="); puthex(kvirt); putc(b'\n');
+        }
+    }
+    // Diagnostic: dump 16 bytes at faulting IP + call-chain backtrace
+    {
+        let ip = f.instruction_pointer.as_u64();
+        puts(b"[PF_DBG] ip="); puthex(ip);
+        puts(b" cr2="); puthex(cr2.as_u64());
+        puts(b" err="); puthex(code.bits()); putc(b'\n');
+        // Dump first 16 bytes at IP (helps identify the instruction)
+        puts(b"[PF_DBG] ip_bytes:");
+        for i in 0..16u64 {
+            let b = unsafe { core::ptr::read_volatile((ip + i) as *const u8) };
+            puthex(b as u64);
+        }
+        putc(b'\n');
+        // Walk return addresses up the stack (20 qwords)
+        let sp = f.stack_pointer.as_u64();
+        puts(b"[PF_DBG] stk:");
+        for i in 0..20u64 {
+            let a = sp + i * 8;
+            let page_end = (a | 0xFFF) + 1;
+            if a + 8 > page_end { break; }
+            let v = unsafe { core::ptr::read_volatile(a as *const u64) };
+            if v >= 0xffffffff80000000 && v < 0xffffffffc0000000 {
+                putc(b' ');
+                puthex(v);
+            }
+        }
+        putc(b'\n');
     }
     dump_exception("#PF", &f, Some(code.bits() as u64));
     puts(b" CR2="); puthex(cr2.as_u64()); putc(b'\n');

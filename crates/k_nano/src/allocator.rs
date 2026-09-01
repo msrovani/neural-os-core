@@ -207,6 +207,51 @@ pub fn set_bump_heap_phys(phys: u64) {
     crate::slog_nano!("HEAP", "info", "bump heap phys={:#x} len={}MB", phys, HEAP_SIZE / (1024 * 1024));
 }
 
+/// KERNEL_END virtual address (set from linker symbol at boot).
+/// .kheap contains HEAP_BUFFER + statics placed by the linker after it.
+/// The #PF handler needs to cover all pages up to KERNEL_END.
+static KERNEL_VIRT_END: AtomicU64 = AtomicU64::new(0);
+
+pub fn set_kernel_virt_end(addr: u64) {
+    KERNEL_VIRT_END.store(addr, Ordering::Release);
+}
+
+/// Kernel physical base address (set from Limine handoff at boot).
+/// Used by #PF handler to derive physical address for kernel virtual
+/// addresses: phys = kernel_phys + (virt - kernel_virt_base).
+static KERNEL_PHYS_BASE: AtomicU64 = AtomicU64::new(0);
+static KERNEL_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
+
+pub fn set_kernel_phys_base(phys: u64, virt: u64) {
+    KERNEL_PHYS_BASE.store(phys, Ordering::Release);
+    KERNEL_VIRT_BASE.store(virt, Ordering::Release);
+}
+
+/// Returns (kernel_phys_base, kernel_virt_base) for diagnostics.
+pub fn kernel_phys_virt() -> (u64, u64) {
+    (KERNEL_PHYS_BASE.load(Ordering::Relaxed), KERNEL_VIRT_BASE.load(Ordering::Relaxed))
+}
+
+/// Diagnostic counters for #PF handler (lock-free).
+pub static PF_DIAG_PMOFF_ZERO: AtomicU64 = AtomicU64::new(0);
+pub static PF_DIAG_NO_RANGE: AtomicU64 = AtomicU64::new(0);
+pub static PF_DIAG_ALLOC_FAIL: AtomicU64 = AtomicU64::new(0);
+pub static PF_DIAG_MAP_FAIL: AtomicU64 = AtomicU64::new(0);
+pub static PF_DIAG_OK: AtomicU64 = AtomicU64::new(0);
+pub static PF_DIAG_P0: AtomicU64 = AtomicU64::new(0);
+
+/// Returns all diagnostic counters as a tuple.
+pub fn pf_diag() -> (u64, u64, u64, u64, u64, u64) {
+    (
+        PF_DIAG_PMOFF_ZERO.load(Ordering::Relaxed),
+        PF_DIAG_NO_RANGE.load(Ordering::Relaxed),
+        PF_DIAG_ALLOC_FAIL.load(Ordering::Relaxed),
+        PF_DIAG_MAP_FAIL.load(Ordering::Relaxed),
+        PF_DIAG_OK.load(Ordering::Relaxed),
+        PF_DIAG_P0.load(Ordering::Relaxed),
+    )
+}
+
 /// VA do `HEAP_BUFFER` (higher-half). O boot traduz para phys com virt_base
 /// do Limine e reserva no PMM — não vazar `static mut` para o bin.
 pub fn bump_heap_virt() -> u64 {
@@ -325,41 +370,98 @@ unsafe fn map_page_direct(base: VirtAddr, virt: VirtAddr, phys: u64) {
     x86_64::instructions::tlb::flush(virt);
 }
 
-/// #PF cure: buraco no heap Tier-1 (BitNet `to_vec` mid-load). Retorna true se page presente apos.
-/// SESSION_293: cobre AMBOS os ranges do heap:
+/// #PF cure: demand-map kernel pages on fault.
+/// SESSION_293/299/300/301: cures #PF for:
 /// 1. HEAP_START (0x_4000_0000_0000) — TALC allocator (pós-boot)
-/// 2. HEAP_BUFFER linker addr (kernel_base + offset) — bump allocator (boot + runtime)
-/// Sem isso, #PF em CR2=0xffffffffa0cea000 (linker heap) não é curado.
+/// 2. HEAP_BUFFER linker addr — bump allocator (boot + runtime)
+/// 3. Kernel virtual range — pages loaded by Limine but dropped from
+///    kernel page tables, or pages in the LOAD segment beyond
+///    KERNEL_END that code accesses (e.g., ATA buffers, statics).
+///    Derives physical address from HHDM (identity map) so the
+///    ORIGINAL frame is mapped (not a fresh allocation).
 pub fn try_fault_in_heap(cr2: u64) -> bool {
-    // Range 1: TALC heap (HEAP_START)
-    let start = HEAP_START as u64;
-    let end = start + (CURRENT_HEAP_MB.load(Ordering::Relaxed) as u64) * 1024 * 1024;
-    let in_talc = cr2 >= start && cr2 < end;
-    // Range 2: bump heap (linker address of HEAP_BUFFER)
-    let bump_start = unsafe { HEAP_BUFFER.as_mut_ptr() as u64 };
-    let bump_end = bump_start + HEAP_SIZE as u64;
-    let in_bump = cr2 >= bump_start && cr2 < bump_end;
-
-    if !in_talc && !in_bump {
-        return false;
-    }
     let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     if pmoff == 0 {
+        PF_DIAG_PMOFF_ZERO.fetch_add(1, Ordering::Relaxed);
         return false;
     }
+
     let virt = VirtAddr::new(cr2 & !0xFFF);
     let base = VirtAddr::new(pmoff);
-    // Ja presente? So TLB stale apos CR3 switch — flush e retry.
+
+    // Check 0: Already present? Just stale TLB after CR3 switch.
     if unsafe { heap_pte_present(base, virt) } {
         x86_64::instructions::tlb::flush(virt);
         return true;
     }
-    let phys = match crate::memory::alloc_physical_frame() {
-        Some(f) => f.start_address().as_u64(),
-        None => return false,
+
+    // Determine which range the fault is in:
+    let start = HEAP_START as u64;
+    let talc_end = start + (CURRENT_HEAP_MB.load(Ordering::Relaxed) as u64) * 1024 * 1024;
+    let in_talc = cr2 >= start && cr2 < talc_end;
+
+    let bump_start = unsafe { HEAP_BUFFER.as_mut_ptr() as u64 };
+    let kvirt_end = KERNEL_VIRT_END.load(Ordering::Relaxed);
+    let limit_end = bump_start + HEAP_LIMIT.load(Ordering::Relaxed) as u64;
+    let bump_end = core::cmp::max(kvirt_end, limit_end);
+    let in_bump = cr2 >= bump_start && cr2 < bump_end;
+
+    // Range 3: kernel virtual range — HHDM-backed physical RAM.
+    let hhdm_offset = pmoff;
+    let phys = cr2.wrapping_sub(hhdm_offset);
+    let in_kernel_virt = cr2 >= 0xffffffff80000000
+        && phys < 8 * 1024 * 1024 * 1024;
+
+    if !in_talc && !in_bump && !in_kernel_virt {
+        PF_DIAG_NO_RANGE.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+
+    if in_talc || in_bump {
+        // Heap ranges: allocate a fresh frame (old behavior)
+        if let Some(f) = crate::memory::alloc_physical_frame() {
+            let p = f.start_address().as_u64();
+            unsafe {
+                map_page_direct(base, virt, p);
+                return heap_pte_present(base, virt);
+            }
+        }
+        PF_DIAG_ALLOC_FAIL.fetch_add(1, Ordering::Relaxed);
+    }
+
+    // Kernel virtual range: map the page using HHDM identity.
+    // For addresses in the LOAD segment, the physical page exists in RAM
+    // (mapped 1:1 via HHDM). For addresses beyond KERNEL_END that were
+    // allocated by grow_bump_auto, we allocate a fresh frame.
+    // Strategy: try to use the HHDM-derived physical address first;
+    // if it fails (page table walk error), allocate a fresh frame.
+    let kphys = KERNEL_PHYS_BASE.load(Ordering::Relaxed);
+    let kvirt = KERNEL_VIRT_BASE.load(Ordering::Relaxed);
+    let target_phys = if kphys != 0 && kvirt != 0 {
+        kphys + (cr2 - kvirt)
+    } else {
+        // Fallback: HHDM identity
+        phys
     };
+    // Choose the best physical frame to map:
+    // 1. If within kernel image range (kphys..KERNEL_END), use HHDM identity
+    // 2. Otherwise, allocate a fresh frame
+    let kvirt_end = KERNEL_VIRT_END.load(Ordering::Relaxed);
+    let use_identity = kphys != 0 && kvirt != 0 && cr2 >= kvirt && cr2 < kvirt_end;
+    let p = if use_identity {
+        target_phys & !0xFFF
+    } else if let Some(f) = crate::memory::alloc_physical_frame() {
+        f.start_address().as_u64()
+    } else {
+        // Last resort: use HHDM identity even outside kernel image
+        target_phys & !0xFFF
+    };
+    if p == 0 {
+        return false;
+    }
     unsafe {
-        map_page_direct(base, virt, phys);
+        map_page_direct(base, virt, p);
+        x86_64::instructions::tlb::flush(virt);
         heap_pte_present(base, virt)
     }
 }
