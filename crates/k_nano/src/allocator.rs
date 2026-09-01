@@ -406,11 +406,22 @@ pub fn try_fault_in_heap(cr2: u64) -> bool {
     let bump_end = core::cmp::max(kvirt_end, limit_end);
     let in_bump = cr2 >= bump_start && cr2 < bump_end;
 
-    // Range 3: kernel virtual range — HHDM-backed physical RAM.
-    let hhdm_offset = pmoff;
-    let phys = cr2.wrapping_sub(hhdm_offset);
-    let in_kernel_virt = cr2 >= 0xffffffff80000000
-        && phys < 8 * 1024 * 1024 * 1024;
+    // Range 3: kernel virtual range — pages in the kernel's LOAD segment
+    // or beyond KERNEL_END that code accesses. The correct physical
+    // address is kernel_phys + (cr2 - kernel_virt), NOT cr2 - HHDM.
+    // Kernel virtual addresses (0xffffffff80000000+) are a separate
+    // mapping from HHDM (0xffff800000000000+).
+    // HHDM phys (for fallback in target_phys computation below).
+    let hhdm_phys = cr2.wrapping_sub(pmoff);
+    let kphys_check = KERNEL_PHYS_BASE.load(Ordering::Relaxed);
+    let kvirt_check = KERNEL_VIRT_BASE.load(Ordering::Relaxed);
+    let in_kernel_virt = if kphys_check != 0 && kvirt_check != 0 {
+        let phys_k = kphys_check.wrapping_add(cr2.wrapping_sub(kvirt_check));
+        cr2 >= kvirt_check && phys_k < 8 * 1024 * 1024 * 1024
+    } else {
+        // Fallback: assume any address in high half is kernel virt
+        cr2 >= 0xffffffff80000000
+    };
 
     if !in_talc && !in_bump && !in_kernel_virt {
         PF_DIAG_NO_RANGE.fetch_add(1, Ordering::Relaxed);
@@ -423,7 +434,14 @@ pub fn try_fault_in_heap(cr2: u64) -> bool {
             let p = f.start_address().as_u64();
             unsafe {
                 map_page_direct(base, virt, p);
-                return heap_pte_present(base, virt);
+                x86_64::instructions::tlb::flush(virt);
+                let ok = heap_pte_present(base, virt);
+                if ok {
+                    PF_DIAG_OK.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    PF_DIAG_MAP_FAIL.fetch_add(1, Ordering::Relaxed);
+                }
+                return ok;
             }
         }
         PF_DIAG_ALLOC_FAIL.fetch_add(1, Ordering::Relaxed);
@@ -440,11 +458,11 @@ pub fn try_fault_in_heap(cr2: u64) -> bool {
     let target_phys = if kphys != 0 && kvirt != 0 {
         kphys + (cr2 - kvirt)
     } else {
-        // Fallback: HHDM identity
-        phys
+        // Fallback: HHDM phys
+        hhdm_phys
     };
     // Choose the best physical frame to map:
-    // 1. If within kernel image range (kphys..KERNEL_END), use HHDM identity
+    // 1. If within kernel image range (kphys..KERNEL_END), use kernel_phys+offset
     // 2. Otherwise, allocate a fresh frame
     let kvirt_end = KERNEL_VIRT_END.load(Ordering::Relaxed);
     let use_identity = kphys != 0 && kvirt != 0 && cr2 >= kvirt && cr2 < kvirt_end;
@@ -453,16 +471,23 @@ pub fn try_fault_in_heap(cr2: u64) -> bool {
     } else if let Some(f) = crate::memory::alloc_physical_frame() {
         f.start_address().as_u64()
     } else {
-        // Last resort: use HHDM identity even outside kernel image
+        // Last resort: use kernel_phys+offset even outside kernel image
         target_phys & !0xFFF
     };
     if p == 0 {
+        PF_DIAG_P0.fetch_add(1, Ordering::Relaxed);
         return false;
     }
     unsafe {
         map_page_direct(base, virt, p);
         x86_64::instructions::tlb::flush(virt);
-        heap_pte_present(base, virt)
+        let ok = heap_pte_present(base, virt);
+        if ok {
+            PF_DIAG_OK.fetch_add(1, Ordering::Relaxed);
+        } else {
+            PF_DIAG_MAP_FAIL.fetch_add(1, Ordering::Relaxed);
+        }
+        ok
     }
 }
 

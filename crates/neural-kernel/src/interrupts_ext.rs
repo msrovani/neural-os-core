@@ -269,14 +269,22 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     if crate::allocator::try_fault_in_heap(cr2.as_u64()) {
         return;
     }
-    // Debug: show why try_fault_in_heap failed
+    // Debug: show why try_fault_in_heap failed + diagnostic counters
     {
         let cnt = PAGE_FAULT_COUNT.load(core::sync::atomic::Ordering::Relaxed);
-        if cnt < 1 {
+        if cnt < 2 {
             let (kphys, kvirt) = crate::allocator::kernel_phys_virt();
             puts(b"[PF_DBG] heap-fail cr2="); puthex(cr2.as_u64());
             puts(b" kphys="); puthex(kphys);
             puts(b" kvirt="); puthex(kvirt); putc(b'\n');
+            // Read lock-free diagnostic counters
+            let (pmoff_z, no_rng, alloc_f, map_f, ok, p0) = crate::allocator::pf_diag();
+            puts(b"[PF_DBG] diag pmoff_z="); puthex(pmoff_z);
+            puts(b" no_rng="); puthex(no_rng);
+            puts(b" alloc_f="); puthex(alloc_f);
+            puts(b" map_f="); puthex(map_f);
+            puts(b" ok="); puthex(ok);
+            puts(b" p0="); puthex(p0); putc(b'\n');
         }
     }
     // Diagnostic: dump 16 bytes at faulting IP + call-chain backtrace
