@@ -1,5 +1,21 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s301] - 2026-09-01 — Boot Fix: #PF kernel virtual range + cognitive OOB
+
+**2 fixes milestones: #PF eliminated and cognitive.rs panics resolved in QEMU TCG 4-core.**
+
+### Fix 1: #PF kernel virtual range detection
+- **Causa raiz:** `cr2 - HHDM_OFFSET` para endereços kernel virtual (0xffffffff80000000+) dá 140 PB — mapeamento SEPARADO do HHDM.
+- **Fix:** `kernel_phys + (cr2 - kernel_virt)` — fórmula correta. `KERNEL_PHYS_BASE`/`KERNEL_VIRT_BASE` armazenados em statics durante boot.
+- **Resultado:** 11 #PFs → 0. ATA FAT32 mount OK. SMP 3 APs OK.
+
+### Fix 2: cognitive.rs OOB bounds
+- **Causa raiz:** `head_dim` calculado uma vez do model-level (`model.kv_dim / num_heads`) causava OOB em rope_apply, gqa_attn_forward, e rms_backward.
+- **Fix:** derivar `hd` per-layer de `q.shape.1 / num_heads`; bounds checking em rope_apply e gqa_attn_forward; `min(x, dy, dx)` em rms_backward.
+- **Resultado:** 0 panics. Training loop roda (lento no TCG ~2min).
+
+- **Commits:** `b533364` + `67b4613` + `44f52e1` + `6d18405` + `e2f7a14`.
+
 ## [1.9.99-s297] - 2026-08-31 — virtio_blk driver + NSGDB persistente no QEMU
 
 **`virtio-blk missing headers` bloqueava o disco virtio e o NSGDB ficava em RAM VOLATIL no QEMU dev/test.**
