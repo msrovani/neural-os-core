@@ -767,6 +767,8 @@ fn rope_apply(data: &mut [f32], seq_len: usize, num_heads: usize, head_dim: usiz
         for h in 0..num_heads {
             let off = base + h * head_dim;
             for d in 0..half {
+                // SESSION_301: bounds check to prevent OOB when kv_dim != head_dim*num_heads
+                if off + 2 * d + 1 >= data.len() { return; }
                 let x = data[off + 2 * d];
                 let y = data[off + 2 * d + 1];
                 let c = cos[rope_off + d];
@@ -816,17 +818,20 @@ fn rms_backward(x: &Tensor, w: &[f32], dy: &Tensor) -> (Tensor, Vec<f32>) {
     let mut sq = 0.0f32;
     for &v in &x.data { sq += v * v; }
     let r = libm::sqrtf(sq / n as f32 + 1e-6);
+    // SESSION_301: iterate over min of all tensor lengths to prevent OOB
+    let dx = Tensor::zero(x.shape);
+    let mut dw = alloc::vec![0.0f32; w.len()];
+    let len = x.data.len().min(dy.data.len()).min(dx.data.len());
     let mut term = 0.0f32;
-    for i in 0..x.data.len() {
-        term += dy.data[i] * w[i % w.len()] * x.data[i];
+    for i in 0..len {
+        if i < w.len() { term += dy.data[i] * w[i] * x.data[i]; }
     }
     term /= r;
-    let mut dx = Tensor::zero(x.shape);
-    let mut dw = alloc::vec![0.0f32; w.len()];
-    for i in 0..x.data.len() {
-        let wi = w[i % w.len()];
+    let mut dx = dx;
+    for i in 0..len {
+        let wi = if i < w.len() { w[i] } else { 0.0 };
         dx.data[i] = wi * dy.data[i] / r - x.data[i] * term / (r * r * n as f32);
-        dw[i % w.len()] += dy.data[i] * x.data[i] / r;
+        if i < w.len() { dw[i] += dy.data[i] * x.data[i] / r; }
     }
     (dx, dw)
 }
@@ -838,6 +843,12 @@ fn rms_backward(x: &Tensor, w: &[f32], dy: &Tensor) -> (Tensor, Vec<f32>) {
 fn gqa_attn_forward(q: &Tensor, k: &Tensor, v: &Tensor, seq: usize,
                     num_heads: usize, num_kv_heads: usize, hd: usize) -> (Tensor, Tensor) {
     let q_group = num_heads / num_kv_heads.max(1);
+    let qw = num_heads * hd;
+    let kw = num_kv_heads * hd;
+    // SESSION_301: clamp hd to actual tensor widths to prevent OOB
+    let q_cols = if !q.data.is_empty() { q.shape.1 } else { qw };
+    let k_cols = if !k.data.is_empty() { k.shape.1 } else { kw };
+    let hd = hd.min(q_cols / num_heads.max(1)).min(k_cols / num_kv_heads.max(1)).max(2);
     let qw = num_heads * hd;
     let kw = num_kv_heads * hd;
     let scale = 1.0 / libm::sqrtf(hd as f32);
@@ -973,7 +984,6 @@ impl TransformerTrainer {
         let seq = tokens.len().min(model.max_seq).max(1);
         let hidden = model.hidden;
         let vocab = model.vocab_size as usize;
-        let head_dim = (model.kv_dim / model.num_heads.max(1)).max(1);
         let mut x = Tensor::new((seq, hidden));
         for s in 0..seq {
             let t = (tokens[s] as usize).min(model.embed.shape.1.saturating_sub(1));
@@ -991,9 +1001,12 @@ impl TransformerTrainer {
             k.mul_scalar(layer.k_scale);
             let mut v = layer.v.matmul_hybrid(&norm1).unwrap_or_else(|| Tensor::zero((seq, layer.kv_dim)));
             v.mul_scalar(layer.v_scale);
-            rope_apply(&mut q.data, seq, model.num_heads, head_dim, &model.rope_cos, &model.rope_sin, 0);
-            rope_apply(&mut k.data, seq, model.num_kv_heads, head_dim, &model.rope_cos, &model.rope_sin, 0);
-            let (attn_out, attn_w) = gqa_attn_forward(&q, &k, &v, seq, model.num_heads, model.num_kv_heads, head_dim);
+            // SESSION_301: derive head_dim from actual Q tensor columns
+            let q_cols = q.shape.1;
+            let hd = (q_cols / model.num_heads.max(1)).max(2);
+            rope_apply(&mut q.data, seq, model.num_heads, hd, &model.rope_cos, &model.rope_sin, 0);
+            rope_apply(&mut k.data, seq, model.num_kv_heads, hd, &model.rope_cos, &model.rope_sin, 0);
+            let (attn_out, attn_w) = gqa_attn_forward(&q, &k, &v, seq, model.num_heads, model.num_kv_heads, hd);
             let attn_out_norm = rms_forward(&attn_out, &layer.rms_inner_attn);
             let mut proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap_or_else(|| Tensor::zero((seq, hidden)));
             proj.mul_scalar(layer.o_scale);
@@ -1083,7 +1096,7 @@ impl TransformerTrainer {
         let cols = model.vocab_size as usize;
         let hidden = model.hidden;
         let seq = cache.seq;
-        let head_dim = (model.kv_dim / model.num_heads.max(1)).max(1);
+        let head_dim = model.head_dim;
         let qw = model.num_heads * head_dim;
         let kw = model.num_kv_heads * head_dim;
         let scale_out = if model.tie_embeddings { model.embed_scale } else { model.unembed_scale };
@@ -1114,6 +1127,11 @@ impl TransformerTrainer {
         for li in (0..model.num_layers).rev() {
             let layer = &model.layers[li];
             let act = &cache.acts[li];
+            // SESSION_301: derive per-layer dimensions from cached Q tensor
+            let q_cols = act.q.shape.1;
+            let hd = (q_cols / model.num_heads.max(1)).max(2);
+            let qw = model.num_heads * hd;
+            let kw = model.num_kv_heads * hd;
             let ffn_group = layer.ffn_group_size.max(1);
             let intermediate = layer.intermediate_size.max(ffn_group);
             let num_groups = (intermediate / ffn_group).max(1);
@@ -1196,12 +1214,12 @@ impl TransformerTrainer {
             let mut dproj = d_x_attn;
             // proj = W_o @ attn_out_norm * o_scale
             let mut wo = alloc::vec![0.0f32; qw * hidden];
-            for i in 0..(qw * hidden) { wo[i] = layer.o.get_weight(i) as f32; }
+            for i in 0..(qw * hidden).min(layer.o.packed_data.len() * 4) { wo[i] = layer.o.get_weight(i) as f32; }
             let mut d_attn_out_norm = alloc::vec![0.0f32; seq * qw];
             mmul_din(&dproj.data, seq, &wo, qw, hidden, &mut d_attn_out_norm, false);
             let mut o_grad = alloc::vec![0.0f32; qw * hidden];
             mmul_dw(&act.attn_out_norm.data, seq, qw, &dproj.data, hidden, &mut o_grad);
-            for i in 0..(qw * hidden) { o_grad[i] *= layer.o_scale; }
+            for i in 0..(qw * hidden).min(o_grad.len()) { o_grad[i] *= layer.o_scale; }
             for s in 0..seq { for h2 in 0..hidden { dproj.data[s * hidden + h2] *= layer.o_scale; } }
             let mut d_aon = alloc::vec![0.0f32; seq * qw];
             mmul_din(&dproj.data, seq, &wo, qw, hidden, &mut d_aon, false);
@@ -1215,11 +1233,11 @@ impl TransformerTrainer {
             // attention backward
             let (mut dq, mut dk, dv) = gqa_attn_backward(
                 &act.q, &act.k, &act.v, &act.attn_w, &d_attn_out,
-                seq, model.num_heads, model.num_kv_heads, head_dim,
+                seq, model.num_heads, model.num_kv_heads, hd,
             );
             // RoPE backward (q: num_heads; k: num_kv_heads)
-            rope_backward(&mut dq.data, seq, model.num_heads, head_dim, &model.rope_cos, &model.rope_sin, 0);
-            rope_backward(&mut dk.data, seq, model.num_kv_heads, head_dim, &model.rope_cos, &model.rope_sin, 0);
+            rope_backward(&mut dq.data, seq, model.num_heads, hd, &model.rope_cos, &model.rope_sin, 0);
+            rope_backward(&mut dk.data, seq, model.num_kv_heads, hd, &model.rope_cos, &model.rope_sin, 0);
 
             // q/k/v matmuls: q = W_q @ norm1 * q_scale
             let mut wq = alloc::vec![0.0f32; hidden * qw];
@@ -1232,13 +1250,13 @@ impl TransformerTrainer {
             }
             let mut d_norm1 = alloc::vec![0.0f32; seq * hidden];
             let mut dq_s = alloc::vec![0.0f32; seq * qw];
-            for i in 0..(seq * qw) { dq_s[i] = dq.data[i] * layer.q_scale; }
+            for i in 0..(seq * qw).min(dq.data.len()) { dq_s[i] = dq.data[i] * layer.q_scale; }
             mmul_din(&dq_s, seq, &wq, hidden, qw, &mut d_norm1, true);
             let mut dk_s = alloc::vec![0.0f32; seq * kw];
-            for i in 0..(seq * kw) { dk_s[i] = dk.data[i] * layer.k_scale; }
+            for i in 0..(seq * kw).min(dk.data.len()) { dk_s[i] = dk.data[i] * layer.k_scale; }
             mmul_din(&dk_s, seq, &wk, hidden, kw, &mut d_norm1, true);
             let mut dv_s = alloc::vec![0.0f32; seq * kw];
-            for i in 0..(seq * kw) { dv_s[i] = dv.data[i] * layer.v_scale; }
+            for i in 0..(seq * kw).min(dv.data.len()) { dv_s[i] = dv.data[i] * layer.v_scale; }
             mmul_din(&dv_s, seq, &wv, hidden, kw, &mut d_norm1, true);
             let mut q_grad = alloc::vec![0.0f32; hidden * qw];
             mmul_dw(&act.norm1.data, seq, hidden, &dq_s, qw, &mut q_grad);
