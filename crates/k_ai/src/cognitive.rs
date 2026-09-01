@@ -1160,10 +1160,12 @@ impl TransformerTrainer {
 
             // expand backward: dGated[s, d] = sum_g dGatedFull[s, g*ffn_group + d]
             let mut dgated = alloc::vec![0.0f32; seq * ffn_group];
+            let dgf_len = d_gated_full.data.len();
             for s in 0..seq {
                 for g in 0..num_groups {
                     for d in 0..ffn_group {
-                        dgated[s * ffn_group + d] += d_gated_full.data[s * intermediate + g * ffn_group + d];
+                        let idx = s * intermediate + g * ffn_group + d;
+                        if idx < dgf_len { dgated[s * ffn_group + d] += d_gated_full.data[idx]; }
                     }
                 }
             }
