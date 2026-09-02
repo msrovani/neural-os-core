@@ -24,7 +24,7 @@ const Q5_K_BLOCK_BYTES: usize = 192; // d(2)+dmin(2)+scales[12]+mins[16]+qh[32]+
 const TQ2_0_BLOCK_SIZE: usize = 32;
 const TQ2_0_BLOCK_BYTES: usize = 24;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(non_camel_case_types)] // nomes alinhados a ggml/llama.cpp (Q4_K, …)
 pub enum GgufType {
     F32,
