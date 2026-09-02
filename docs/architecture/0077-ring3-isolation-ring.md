@@ -1,8 +1,9 @@
 # ADR-0077: Ring3 Isolation Ring — execução nativa isolada (ex-ADR-0059 F6)
 
 **Data:** 2026-07-26
-**Status:** Proposed — **B/C nativo ainda gated**. Demos P6 TCG (SESSION_278): `TRY_ENTER_RING3=true`, iretq+CPL3 + fault-containment PASS. WHPX/HW e `register_native_ring` **não** liberados. Sem Ring3, código de IA não-confiável continua só wasmi.
+**Status:** Proposed — **B/C nativo ainda gated**. Demos P6 TCG (SESSION_278): `TRY_ENTER_RING3=true`, iretq+CPL3 + fault-containment PASS **nessa sessão**. WHPX/HW e `register_native_ring` **não** liberados. Sem Ring3, código de IA não-confiável continua só wasmi.
 **Lifecycle (INDEX):** `fazendo`
+**Filtro de execução / recusa process-OS:** **ADR-0102** (#545). O §6 desta ADR **não muda**. Plano Fuchsia Job/Handle/ExceptionChannel (rascunho 0102) está rejeitado.
 **Extraído de:** ADR-0059 §F6 (esta ADR é o lar dedicado do "ring de isolamento").
 **Nota sobre o número:** Originalmente proposto como ADR-0060 no PR #5, mas `0060` já estava alocado para BEI (BitNet Ecosystem Intelligence). Renumerado para 0077.
 **Depende de / reusa:** ADR-0041 (Ring3/AS/CR3/int 0x90 PoC), ADR-0059 F7 (`exec_arena` W^X — codegen nativo).
@@ -59,23 +60,25 @@ O kernel **não** libera B/C nativo. Demos P6 em TCG usam `TRY_ENTER_RING3=true`
 
 | Salvaguarda | Estado | Onde |
 |---|---|---|
-| `TRY_ENTER_RING3` | **`true`** (demo TCG; não é aceite HW) | `neural-kernel/src/user_mode.rs` |
+| `TRY_ENTER_RING3` | **`true`** (constante em `k_nano::paging`; facade em `user_mode.rs`) | `crates/k_nano/src/paging.rs` |
+| Demos P6 no boot (2026-09-01) | **Stubs** `Ok(())` — boot loga OK **sem** `iretq`. SESSION_278 é evidência histórica, não o path atual. Honesty = ADR-0102 H2 | `neural-kernel/src/user_mode.rs` |
 | `isolation_ring_available()` | **`false`** (nenhum ring nativo registrado) | `crates/hermes/src/app_factory.rs` |
 | Caminhos B/C nativo | **gated** (`AWAITING_ISOLATION`) | `app_factory::execute` |
 | Código de IA não-confiável | roda **só no wasmi** | `crates/hermes/src/wasmi_rt.rs` |
 | `exec_arena` (F7) | roda **só código próprio/confiável** em Ring 0 | `neural-kernel/src/exec_arena.rs` |
-| `isolation_ring::init_connectors` | loga diagnóstico mas **não registra** ring | `neural-kernel/src/isolation_ring.rs` |
-| Boot QEMU | 8 fases + scheduler vivo + sem panic | evidência em `logs/` |
+| `isolation_ring::init_connectors` | loga diagnóstico; `register_native_ring` **comentado** mesmo se `ring3_is_safe()` | `neural-kernel/src/isolation_ring.rs` |
+| `ring3_run_native` | delega a `ring3_run_native_blob` (W^X USER + `enter_user_mode`); **não** é mais `Err("não implementado")` | `k_hal::cap_gate` → `k_nano::paging` |
+| Boot QEMU | 8 fases + scheduler vivo | evidência em `logs/` (P6 atual ≠ SESSION_278) |
 
-**Invariante:** `isolation_ring_available()==false` (nenhum ring nativo registrado) ⇒ IA não-confiável **só** wasmi. `TRY_ENTER_RING3=true` no tree é **demo P6 TCG**, não liberação de B/C. **Não** registrar `register_native_ring` até §6 passar em HW.
+**Invariante:** `isolation_ring_available()==false` (nenhum ring nativo registrado) ⇒ IA não-confiável **só** wasmi. `TRY_ENTER_RING3=true` no tree **não** é liberação de B/C. Demos P6 no boot, em 2026-09-01, são stubs — não tratar log `P6 Ring3 OK` como evidência (ADR-0102 H2). **Não** registrar `register_native_ring` até §6 passar em HW.
 
 ## 5. Conectores no código (seams para quando atacarmos o F6)
 
 Deixados prontos para a implementação futura plugar sem refatorar:
 
 1. **Seam de registro (hermes):** `hermes::app_factory::register_native_ring(fn)` + `native_ring_registered()`. `isolation_ring_available()` passa a refletir **se um ring nativo validado foi registrado**. `execute()` dos Caminhos B/C chama o ring registrado; sem registro → `AWAITING_ISOLATION` (comportamento atual).
-2. **Módulo de implementação (neural-kernel):** `neural-kernel/src/isolation_ring.rs` — `init_connectors()` (chamado no boot; **hoje NÃO registra** — ring não pronto) e `ring3_run_native()` (site futuro da execução isolada; hoje retorna `Err("F6: Ring3 não implementado")`). Documenta os blocos a reusar: `exec_arena` (W^X codegen), `user_mode::enter_user_mode` (iretq), `address_space` (AS/CR3), `syscall`/`capability_gate` (gate), `interrupts` (GDT user + TSS/IST + handlers).
-3. **Flag de experimentação:** `TRY_ENTER_RING3` (bool) permanece o interruptor do `iretq` real para a sessão de debug.
+2. **Módulo de implementação:** `neural-kernel/src/isolation_ring.rs` — `init_connectors()` (boot; **não registra** — linha `register_native_ring` comentada mesmo em KVM) e `ring3_run_native()` (delega a `k_nano::paging::ring3_run_native_blob`). Reusar: `enter_user_mode` / `create_sandbox_as` / `jit_write_exec_user` em `k_nano::paging`; CapGate em `k_hal`; GDT user + TSS.RSP0 em `k_nano::{gdt,interrupts}`. ELF: `elf_loader.rs` já parseia; o wire `load_and_spawn` está comentado (ADR-0102).
+3. **Flag de experimentação:** `TRY_ENTER_RING3` em `k_nano::paging` (bool) permanece o interruptor do `iretq` real. Demos no bin têm de **chamar** esse path — stub `Ok(())` não conta (ADR-0102 H2).
 
 Quando o F6 estiver validado (§6), `isolation_ring::init_connectors()` chamará `register_native_ring(ring3_run_native)` → `isolation_ring_available()` vira `true` → B/C liberados (sob HITL).
 
@@ -89,18 +92,18 @@ Quando o F6 estiver validado (§6), `isolation_ring::init_connectors()` chamará
 
 Só com **todos** ✅ → `register_native_ring(...)` → B/C nativo liberado (HITL forte).
 
-## 7. Plano (sessão dedicada, modo depurador)
+## 7. Plano (execução)
 
-1. Reproduzir o triple-fault com instrumentação (log pré/pós `mov cr3`, dump CR2/err/RIP, checar IST/TSS).
-2. Corrigir o AS do sandbox: mapear kernel higher-half como supervisor-only + garantir IDT/handlers/IST no clone; considerar AS dedicado (não clone raso) com só o necessário.
-3. Fault handlers com recuperação por-sandbox (reusar `user_mode::fault_abort`, sem storm).
-4. Gate de syscall real (substituir staging por atomics).
-5. `exec_arena` → emitir em página **user** RX no AS do sandbox (não Ring 0).
-6. Self-test: rodar blob que faz syscall gated + provocar falta → sandbox morto, kernel vivo.
-7. Passar §6 → registrar o ring → liberar B/C.
+O debug-loop histórico (reproduzir triple-fault → AS → fault → syscall → arena USER → §6) **já teve o trecho TCG** na SESSION_278. A ordem vigente é **ADR-0100 Onda 6** filtrada por **ADR-0102**:
+
+1. Honesty: feature `ring3` propaga ao `k_nano`; destubar P6; cisão `can_iretq` / `can_register`.
+2. T-051 WHPX vs `#GP` OVMF; T-052 metal um notebook.
+3. T-053 §6 desta ADR em HW → T-054 `register_native_ring` + HITL → T-055.
+4. T-056 JIT sem SSE; T-057 pin DMA só depois.
+5. **Não** HandleTable / ExceptionChannel / SYSCALL/SYSRET nesta onda (0102 §4–§5).
 
 ## 8. Referências
 
 - Código/seams: `crates/hermes/src/app_factory.rs`, `crates/neural-kernel/src/{isolation_ring,exec_arena,user_mode,address_space,syscall,capability_gate,interrupts}.rs`.
-- ADRs: ADR-0041 (capability rings P0–P9), ADR-0059 (Runtime App Factory; A/F7), ADR-0052 (contrato de artefato).
+- ADRs: ADR-0041 (capability rings P0–P9), ADR-0059 (Runtime App Factory; A/F7), ADR-0052 (contrato de artefato), **ADR-0102** (filtro sandbox vs process-OS; honesty tree), ADR-0100 Onda 6 (T-051–T-057).
 - Externos: rustc-lite/ClaudioOS (self-hosting bare-metal), MCP-SandboxScan (sandbox WASM), Intel SDM (Ring3/TSS/IST/iretq).

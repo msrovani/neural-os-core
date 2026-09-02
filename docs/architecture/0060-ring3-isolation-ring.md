@@ -1,9 +1,11 @@
 # ADR-0060: Ring3 Isolation Ring — execução nativa isolada (ex-ADR-0059 F6)
 
 > **Conflito de ID:** `0060` canônico no INDEX é **BEI** (`0060-bitnet-cognitivo-bei.md`). Este arquivo é cópia histórica. Autoridade Ring3 = **ADR-0077**. Não seguir este número.
+>
+> **Stale (2026-09-01):** status "triple-fault reboot loop" e `TRY_ENTER_RING3=false` refletem pré-SESSION_278. SESSION_278 corrigiu `iretq`+CPL3 em TCG; canônico e gate atual = **0077 §6** + **ADR-0102** Onda 6. Demos boot P6 = stubs — ver ADR-0102 H2.
 
 **Data:** 2026-07-22
-**Status:** Proposed — **BLOQUEADOR conhecido** (habilitar hoje = triple-fault → reboot loop). NÃO habilitado; kernel em **porto seguro** (ver §4).
+**Status:** Proposed — **arquivo histórico**; ver **ADR-0077**. BLOQUEADOR pré-278 superado em TCG; produção ainda gated.
 **Lifecycle (INDEX):** `pesquisa`
 **Extraído de:** ADR-0059 §F6 (esta ADR é o lar dedicado do "ring de isolamento").
 **Depende de / reusa:** ADR-0041 (Ring3/AS/CR3/int 0x90 PoC), ADR-0059 F7 (`exec_arena` W^X — codegen nativo).

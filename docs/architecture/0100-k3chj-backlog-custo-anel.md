@@ -223,19 +223,24 @@ Numeração global **T-001…**. Aceite de onda = todos os T da onda `[x]` **ou*
 
 ---
 
-### Onda 6 — Ring3 produção (custo L · R0 GDT/AS · bin `user_mode`/`isolation_ring` · R3 `hermes` seam)
+### Onda 6 — Ring3 produção (custo L nominal · **4–8 sem realista** · R0 GDT/AS · bin `user_mode`/`isolation_ring` · R3 `hermes` seam)
 
-**Por quê:** 0077; B/C gated; TCG P6 ≠ produto.
+**Por quê:** 0077; B/C gated; TCG P6 ≠ produto.  
+**Filtro ADR-0102 (#545):** um sandbox CPL=3 para blob B/C; **não** Job/Handle/ExceptionChannel Fuchsia; syscall da onda = `int 0x90` + mailbox USER. SYSCALL/SYSRET adiada (ABI GS/STAR/EFER). Gaps N1–N7 (estado global, GS leak, teardown, IF=0) = trabalho Onda 6, não “preempção futura”.  
+**Pré-req honesty (antes de T-052):** H1 `ring3 = ["k-nano/ring3"]` (~1h); H2 restaurar demos P6 reais (**2–5d**, não trivial); H3 `can_iretq` = **self-test de boot** (não tabela vendor); `can_register` separado — TCG não registra ring.
 
 #### 6.1 Não-TCG
-- **T-051** WHPX: separar `#GP` OVMF (s280) de `#GP` kernel Ring3.
-- **T-052** Metal: iretq+CPL3 **um** notebook; fault-containment.
+- **T-051** WHPX: separar `#GP` OVMF (s280) de `#GP` kernel Ring3. *(Fora do caminho crítico — flaky.)*
+- **T-052** Metal: iretq+CPL3 **um** notebook; fault-containment. *(Depende Onda 2 SMP metal; 1–3 sem.)*
 
 #### 6.2 Liberação B/C
 - **T-053** Checklist ADR-0077 §6 completo em HW.
 - **T-054** `register_native_ring` + HITL Escalate para nativo.
 - **T-055** `isolation_ring_available()==true` só então.
-- **T-056** Soft-float: JIT sem SSE default (`#UD` SESSION_278).
+- **T-056** Fronteira xmm segura: verificador de opcode SSE/AVX **ou** `fxsave64`/`xrstor64` — **não** `#UD` por `CR0.EM` (falso; `enable_simd()` limpa EM no boot).
+
+#### 6.3 0076 SYS_PIN_DMA
+- **T-057** Pin/unpin frames **após** T-055; CapGate deny DMA a CPL=3.
 
 #### 6.3 0076 SYS_PIN_DMA
 - **T-057** Pin/unpin frames **após** T-055; CapGate deny DMA a CPL=3.

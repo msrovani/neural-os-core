@@ -4,7 +4,7 @@
 
 **Data:** 2026-08-02  
 **Fonte:** `docs/architecture/0082-ring3-isolation-production.md`  
-**Status:** Proposed — registro estruturado para execução e rastreamento
+**Status:** Proposed — registro estruturado para execução e rastreamento. **Filtro:** ADR-0102 §5 (tabela R3-*) modifica critérios de alguns itens.
 
 ---
 

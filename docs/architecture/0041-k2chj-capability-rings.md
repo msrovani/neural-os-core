@@ -379,7 +379,7 @@ Custo em **esforço relativo** (S=dias–1 sem; M=2–6 sem; G=mês+; X=trimestr
 | IPC só ring lock-free entre AS | **MVP C parcial** | EventBus in-process; SPSC shared pages | M | Baixo se isolado |
 | Capability autoritativa por operação | **Parcial** | Cap bitflags + syscall | P | Baixo |
 | Dois address spaces + CR3 switch | **MVP C** | `address_space.rs` | M | Médio (non-fatal) |
-| Ring3 CPL=3 real (`iretq`) | **P6 PoC** | `user_mode.rs` | G | Médio |
+| Ring3 CPL=3 real (`iretq`) | **P6 PoC** 🟡 | `user_mode.rs` | G | Médio |
 | **k-HAL R1 único dono MMIO** | **Fictício → H1+** | hoje espalhado jarbas/hermes | G | Médio (migração) |
 
 ---
@@ -394,7 +394,7 @@ Custo em **esforço relativo** (S=dias–1 sem; M=2–6 sem; G=mês+; X=trimestr
 | **P3** | Hermes WASM host-functions por Cap (sem AS full) | ✅ CapGate + SEND_TCP/WRITE_RING |
 | **P4** | JARBAS FB MMIO capability + double-buffer contract | ✅ PoC |
 | **P5** | K-IA DMA pin + Cortex mmap pesos (AS dedicado) | ✅ PoC |
-| **P6** | Ring3 user-mode real (`iretq` + stub USER + Cap::ENTER_USER + return) | ✅ PoC |
+| **P6** | Ring3 user-mode real (`iretq` + stub USER + Cap::ENTER_USER + return) | 🟡 PoC (SESSION_278 TCG; demos boot stub 2026-09-01 — ADR-0102 H2) |
 | **P7** | Demand-paging via #PF (lazy Cortex weights) | ✅ PoC |
 | **P8** | VirtIO vring wiring sobre DMA pin | ✅ PoC |
 | **P9** | GGUF/FAT file-backed mmap sobre demand-paging | ✅ PoC |
@@ -450,6 +450,7 @@ Roadmap mecânico P0–P9 ✅ PoC.
 - Demo boot non-fatal pós-P5; #GP/#PF durante demo → WARN + restore (não halt).
 - Flag `TRY_ENTER_RING3` para disable se WHPX/QEMU instável (🟡 parcial).
 - Limitação: PoC single-threaded; sem ELF loader / preemptive usermode; shallow L4 ainda compartilha PTs do kernel.
+- **Honesty (2026-09-01, ADR-0102 H2):** `demo_ring3*` no boot path retornam `Ok(())` sem `iretq` — log `P6 Ring3 OK` **não** é evidência de CPL=3. Restaurar demos reais = pré-req Onda 6.
 
 ### P7 — aceite (demand-paging via #PF)
 
@@ -499,7 +500,7 @@ Roadmap mecânico P0–P9 ✅ PoC.
 | P3 CapGate | ✅ | SFI/AS WASM pleno = #426 |
 | P4 JARBAS FB | ✅ | VSync stub; bootloader FB |
 | P5 DMA + mmap | ✅ | Pesos eager simulados |
-| P6 Ring3 iretq | ✅ código | Untested QEMU estável; sem ELF/preempt |
+| P6 Ring3 iretq | 🟡 código | SESSION_278 TCG PASS; demos boot `demo_ring3*` = stubs `Ok(())` (ADR-0102 H2); sem ELF/preempt |
 | P7 demand-page #PF | ✅ | Sem I/O no fault |
 | P8 VirtIO vring | ✅ layout+pin | H4+ acrescenta QUEUE_NOTIFY em `k_hal::virtio` |
 | P9 GGUF/FAT mmap | ✅ pré-fill | Prefixo 1–4 pág.; sem streaming |

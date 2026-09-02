@@ -106,8 +106,9 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0092-boot-observability.md` | Accepted | `fazendo` | **#539** | **Canônico 0092.** O0–O5 no código (slog sev, PHASE banner, mutes, BOOT SCORE, HUD, profile qemu). Aceite QEMU boot log + `tools/parse_boot_score.py` residual até evidência serial nova. |
 | `0100-k3chj-backlog-custo-anel.md` | Proposed | `fazendo` | **#538** | **Plano-mestre.** Filtra residuals 0077–0089; ondas 0–10 por custo×anel K³CHJ; TODOs T-001–T-075. Lacuna 0090–0099 intencional **exceto ADR-0092**. Não substitui ADRs temáticas |
 | `0101-falcon3-3b-cognitive-lab.md` | Proposed | `pesquisa` | **#544** | **Lab 3B-first.** Falcon3-3B Instruct 1.58-bit (não 1B, não 7B). Prova SESSION_298: scalar nativo; AVX2 host FMA; metal stub. Onda 0 kernel packed. Não substitui 0084/0085/0060 |
+| `0102-ring3-isolation-migration-cpl03.md` | Proposed | `por_fazer` | **#548** | **Filtro Ring3.** Um sandbox CPL=3 para B/C; rejeita Fuchsia Job/Handle/ExceptionChannel. Execução = **0100 Onda 6** (T-051–T-057). Não substitui **0077**. Honesty: P6 stub + `ring3` não propaga (2026-09-01) |
 | `0081-malha-cognitiva-distribuida-p2p.md` | Accepted | `completa (parcial)` | #189/#312f/#315.26/#315.27 | Fase A–C + HMAC s238–241. **Abertos:** SemanticRouter, merge CRDT, merkle piece. SESSION_280: 1c mesh PASS; 2c TCG hang SIPI |
-| `0077-ring3-isolation-ring.md` | Proposed | `fazendo` | ADR-0059 F6; #426 | **Canônico Ring3.** SESSION_278 TCG iretq+CPL3. B/C gated. WHPX/HW + `register_native_ring` abertos |
+| `0077-ring3-isolation-ring.md` | Proposed | `fazendo` | ADR-0059 F6; #426; **#548** → 0102 | **Canônico Ring3.** SESSION_278 TCG iretq+CPL3. B/C gated. Filtro de execução / recusa process-OS = **0102**. WHPX/HW + `register_native_ring` abertos |
 | `0078-multi-slot-multimodal-learner.md` | Proposed | `por_fazer` | GGUF→ternário, 6 slots, visão, learner | Fases 1-4 não iniciadas como sprint |
 | `0060-ring3-isolation-ring.md` | Proposed | `conflito_id` | → **0077** | Número 0060 = BEI; este arquivo é cópia Ring3 |
 | `0079-neural-auto-installer.md` | **Superseded (processo) → 0086** | `substituida` | #421 | **AutoInstaller Neural (2026-07-27):** migração pendrive→HD/SSD/NVMe com seleção por HW (modelo por RAM, firmware por PCI, WASM por CPU), MHI no lugar de swap, Limine, particionamento, `MODELS_SOURCE=network`. **Deprecada 2026-08-05 — processo consolidado na ADR-0086 §2** (canônica); mantida como referência de design/riscos |
@@ -138,7 +139,7 @@ Os conflitos são preservados; nenhum arquivo deve ser renomeado sem migração 
 - **Lacuna 0008:** não há arquivo ADR-0008 no repositório; o índice não infere conteúdo ausente.
 - **ADR-0074 (lacuna):** sem arquivo próprio; referenciada apenas no código (`hermes/src/git_thin.rs` "git-over-HTTPS thin client (ADR-0074)") e SESSION_241. Conteúdo consolidado na ADR-0086 §3.3.
 - **0060:** `0060-bitnet-cognitivo-bei.md` é o canônico (BEI). `0060-ring3-isolation-ring.md` é cópia histórica → **0077**.
-- **0082:** `0082-hardware-info-registry.md` é o canônico (HardwareInfo). `0082-ring3-isolation-registry.md` e `0082-ring3-isolation-production.md` são checklist Ring3 → **0077**.
+- **0082:** `0082-hardware-info-registry.md` é o canônico (HardwareInfo). `0082-ring3-isolation-registry.md` e `0082-ring3-isolation-production.md` são checklist Ring3 → **0077**. **ADR-0102 não supersede 0082** (nem HardwareInfo nem o checklist); filtra o checklist via Onda 6.
 - **0089:** `0089-novo-hermes-malha-cognitiva-global.md` é pesquisa/whitepaper. `0089-smp-per-cpu-runqueue.md` é runqueue SMP (`por_fazer`). Não fundir.
 - **0090–0099:** lacuna intencional para não colidir com **0100**; **não** preencher IDs vazios. **Exceção:** `0092-boot-observability.md` (contrato de log de boot, maintainer 2026-08-24). 0090/0091/0093–0099 continuam vazios.
 
@@ -196,6 +197,7 @@ Registro dos planos de implementação (Cursor Plans) já refletidos no corpo da
 | DeviceTree H1 + plano bind boot | **0088** + **0041** H1 | ✅ NIC (s271) + storage/Trust/HITL (s272) + honesty (s273–274) | SESSION_271–274 / PR #12–13 |
 | Backlog custo×anel T-001–T-075 | **0100** | 🟡 plano SESSION_282 | não versionar `.cursor/plans` |
 | Falcon3-3B ternary-native lab | **0101** | 🟡 pesquisa SESSION_298 | Onda 0 kernel; sem tok/s nosso |
+| Ring3 sandbox B/C (recusa Fuchsia OS) | **0102** (+ **0077** §6, **0100** Onda 6) | 🟡 Proposed 2026-09-01 | Honesty P6 stub; SYSCALL adiada |
 
 **Próximo aceite operacional (0041):** ✅ CONCLUÍDO (SESSION_251) — boot WHPX com slog `NotifySent` + Cap/AS non-fatal evidenciado em `docs/evidence/boot-whpx-20260805.txt`. Fix raiz do reboot loop (commit 2662d50): GDT passa a usar `&*TSS` (lazy_static TSS com ISTs zerados nunca era dereferenciado → entrega #PF/#GP/timer fazia push para 0 → triple fault).
 

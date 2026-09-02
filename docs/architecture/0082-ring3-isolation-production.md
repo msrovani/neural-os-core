@@ -1,10 +1,12 @@
 # ADR-0082: Ring3 Isolation — Produção (Sucessor de ADR-0041 §P9+)
 
+> **Conflito de ID:** `0082` canônico no INDEX é **HardwareInfo** (`0082-hardware-info-registry.md`). Este arquivo e `0082-ring3-isolation-registry.md` são o **checklist Ring3** (execução → **ADR-0077**). Não misturar com HardwareInfo. **ADR-0102** (#545) filtra itens deste checklist via Onda 6 — não substitui a 0077.
+
 **Data:** 2026-08-02  
-**Status:** Proposed — foco exclusivo em isolamento Ring3 de produção; **depreca ADR-0041 para escopo Ring3**  
+**Status:** Proposed — checklist de execução Ring3; **subordinado a ADR-0077** (autoridade) e **ADR-0102** (filtro Onda 6)  
 **Supersedes:** ADR-0041 §3 (non-goals), §4 (P9), §7 (checklist), §8 (next steps) — **apenas para Ring3**  
-**Relacionada:** ADR-0041 (K³CHJ capability rings — mantida para mapa de privilégio R0–R3), ADR-0042 (N1–N5), ADR-0059 (WASM B/C), ADR-0077 (isolation ring connectors)  
-**Sprint:** Pós-v2.0.0 gate  
+**Relacionada:** ADR-0041, ADR-0042, ADR-0059 (WASM B/C), **ADR-0077** (canônico Ring3), **ADR-0102** (filtro sandbox B/C), `0082-ring3-isolation-registry.md`  
+**Sprint:** ADR-0100 Onda 6 (T-051–T-057) — enquadrado em **Pós-gate / Layer S**, não sprint paralelo  
 
 ---
 
@@ -187,9 +189,9 @@ Antes de iniciar Fase 1:
 
 ## 9. Decisão de Depreciação
 
-**ADR-0041 §3 (non-goals Ring3), §4 (P9), §7 (checklist Ring3), §8 (next steps Ring3) são DEPRECADOS para escopo Ring3.**
+**ADR-0041 §3 (non-goals Ring3), §4 (P9), §7 (checklist Ring3), §8 (next steps Ring3) são DEPRECADOS para escopo Ring3** — substituídos por este checklist **e** pelo gate de aceite **ADR-0077 §6**.
 
-Esta ADR-0082 é a **única fonte de verdade** para isolamento Ring3 de produção a partir de 2026-08-02.
+**Autoridade Ring3:** **ADR-0077** (decisão + §6). Este arquivo e `0082-ring3-isolation-registry.md` são **checklists de execução** subordinados. **ADR-0102** filtra itens (ex.: R3-01 deep clone → compartilhar PTs kernel com USER off; R3-04 SYSCALL → adiado; ver §2 da 0102).
 
 ADR-0041 permanece **válida e ativa** para:
 - Mapa de privilégio R0–R3 + k-HAL ownership (§9.2)
