@@ -3446,6 +3446,50 @@ pub(crate) fn kernel_boot(
                         }
                     }
                 }
+                // GGUF fallback: se nenhum bitnet magic encontrado, tenta GGUF (0x46554747)
+                // em ambos os enderecos do QEMU loader
+                if !model_loaded && mem_has_4gb {
+                    for &addr in &[load_addr, 0x120000000u64] {
+                        if !handoff.has_addr_in_any_region(addr) { continue; }
+                        let probe_ptr = (addr + pm_offset) as *const u8;
+                        let m0 = unsafe { core::ptr::read_volatile(probe_ptr) };
+                        let m1 = unsafe { core::ptr::read_volatile(probe_ptr.add(1)) };
+                        let m2 = unsafe { core::ptr::read_volatile(probe_ptr.add(2)) };
+                        let m3 = unsafe { core::ptr::read_volatile(probe_ptr.add(3)) };
+                        let gguf_magic = u32::from_le_bytes([m0, m1, m2, m3]);
+                        if gguf_magic == 0x46554747 { // "GGUF" little-endian
+                            // Descobrir tamanho do GGUF via FAT ou estimativa
+                            let gguf_len = fat_sz.unwrap_or(0);
+                            if gguf_len == 0 { continue; } // sem tamanho = sem GGUF real
+                            if let Some(r_end) = handoff.region_end_containing(addr) {
+                                let region = (r_end - addr) as usize;
+                                if region < gguf_len {
+                                    k_nano::slog_bin!("Asset", "warn", "GGUF region {}MB < file {}MB", region / (1024*1024), gguf_len / (1024*1024));
+                                    continue;
+                                }
+                            }
+                            k_nano::slog_bin!("Asset", "ok", "GGUF magic 0x46554747 @0x{:x} — {}KB", addr, gguf_len / 1024);
+                            let gguf_data = unsafe { core::slice::from_raw_parts(probe_ptr, gguf_len) };
+                            // Copia + leak (mesmo pattern do bitnet)
+                            let owned: alloc::vec::Vec<u8> = gguf_data.to_vec();
+                            let leaked: &'static [u8] = alloc::boxed::Box::leak(owned.into_boxed_slice());
+                            match cortex_crate::gguf::load_gguf(leaked) {
+                                Ok(file) => {
+                                    let gguf_model = cortex_crate::gguf::GgufBackedModel::new(file);
+                                    crate::cortex::set_model(alloc::boxed::Box::new(gguf_model));
+                                    k_nano::slog_bin!("Asset", "ok", "GGUF LOADED (QEMU@0x{:x}) -> CURRENT_MODEL", addr);
+                                    crate::boot_logger::log("BOOT: QEMU loader GGUF model loaded");
+                                    model_loaded = true;
+                                    QEMU_LOADER_SCAN_START.store(0x129000000, core::sync::atomic::Ordering::Relaxed);
+                                    break;
+                                }
+                                Err(e) => {
+                                    k_nano::slog_bin!("Asset", "warn", "GGUF parse failed @0x{:x}: {}", addr, e);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         } else {
             k_nano::slog_bin!("Asset", "warn", "LLM probe: mem_has_4gb=FALSE — 0x{load_addr:x} NOT in any usable region! RAM may be <4GB or regions fragmented.");

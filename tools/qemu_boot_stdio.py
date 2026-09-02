@@ -49,11 +49,11 @@ for name, path in [("OVMF CODE", ovmf_code), ("OVMF VARS", ovmf_vars), ("UEFI ES
 ext_dirs = [d for d in [r"E:\modelos", r"D:\modelos"] if os.path.isdir(d)]
 models = []
 seen_sizes = set()
-for d in [os.path.join(ROOT, "target")] + ext_dirs:
+for d in [os.path.join(ROOT, "target"), os.path.join(ROOT, "target", "models")] + ext_dirs:
     if not os.path.isdir(d):
         continue
     for f in sorted(os.listdir(d)):
-        if f.upper().endswith((".BITNET", ".BIN", ".V6")):
+        if f.upper().endswith((".BITNET", ".BIN", ".V6", ".GGUF")):
             full = os.path.join(d, f)
             sz = os.path.getsize(full)
             if 10240 < sz <= 2 * 1024 * 1024 * 1024:  # 10KB..2GB
@@ -66,7 +66,7 @@ for d in [os.path.join(ROOT, "target")] + ext_dirs:
 # LIMIT: cap total loading to 1GB physical (TCG slow with many large models).
 # Core LLM + experts only — rest loaded from FAT32 or skipped.
 total_model_bytes = 0
-MAX_TOTAL = 1024 * 1024 * 1024  # 1GB
+MAX_TOTAL = 2 * 1024 * 1024 * 1024  # 2GB (Falcon3 GGUF = 1.1GB)
 capped = []
 for m in models:
     if total_model_bytes + m[1] > MAX_TOTAL and capped:

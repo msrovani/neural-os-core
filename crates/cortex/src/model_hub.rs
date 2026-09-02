@@ -102,9 +102,18 @@ pub fn register_bytes(slot: ModelSlot, data: &[u8]) -> bool {
     let view = match crate::model::load_model_v6(data) {
         Some(v) => Some(v),
         None => {
-            // 2. Tenta GGUF
-            if crate::gguf::load_gguf(data).is_ok() {
-                k_nano::slog_bin!("MODEL", "info", "register_bytes slot={} GGUF", slot.name());
+            // 2. Tenta GGUF — cria GgufBackedModel e seta como CURRENT_MODEL
+            if let Ok(file) = crate::gguf::load_gguf(data) {
+                k_nano::slog_bin!("MODEL", "ok", "register_bytes slot={} GGUF auto-config", slot.name());
+                let gguf_model = crate::gguf::GgufBackedModel::new(file);
+                let boxed: Box<dyn Model> = Box::new(gguf_model);
+                if matches!(slot, ModelSlot::Active | ModelSlot::GeneratorPro) {
+                    *crate::cortex::CURRENT_MODEL.lock() = Some(boxed);
+                    k_nano::slog_bin!("MODEL", "ok", "GGUF -> CURRENT_MODEL set (active=true)");
+                } else {
+                    let i = idx(slot);
+                    HUB.lock().slots[i] = Some(boxed);
+                }
                 mark(slot, true);
                 return true;
             }

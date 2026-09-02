@@ -215,72 +215,62 @@ fn read_string(data: &[u8], offset: &mut usize) -> String {
 }
 
 /// Le metadata value (string or array) como string
+/// GGUFValueType (gguf-py constants.py / ggml.h):
+///   0=UINT8 1=INT8 2=UINT16 3=INT16 4=UINT32 5=INT32
+///   6=FLOAT32 7=BOOL 8=STRING 9=ARRAY 10=FLOAT64
 fn read_metadata_value(data: &[u8], offset: &mut usize) -> String {
     let val_type = read_u32(data, offset);
     match val_type {
-        0 => { // uint8
+        0 => { // UINT8
             if *offset >= data.len() { return String::new(); }
             let v = data[*offset];
             *offset += 1;
             alloc::format!("{}", v)
         }
-        1 => { // int8
+        1 => { // INT8
             if *offset >= data.len() { return String::new(); }
             let v = data[*offset] as i8;
             *offset += 1;
             alloc::format!("{}", v)
         }
-        2 => { // uint16
+        2 => { // UINT16
             if *offset + 2 > data.len() { return String::new(); }
             let v = u16::from_le_bytes([data[*offset], data[*offset + 1]]);
             *offset += 2;
             alloc::format!("{}", v)
         }
-        3 => { // int16
+        3 => { // INT16
             if *offset + 2 > data.len() { return String::new(); }
             let v = i16::from_le_bytes([data[*offset], data[*offset + 1]]);
             *offset += 2;
             alloc::format!("{}", v)
         }
-        4 => { // uint32
+        4 => { // UINT32
             let v = read_u32(data, offset);
             alloc::format!("{}", v)
         }
-        5 => { // int32
+        5 => { // INT32
             if *offset + 4 > data.len() { return String::new(); }
             let v = i32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]]);
             *offset += 4;
             alloc::format!("{}", v)
         }
-        6 => { // uint64
-            let v = read_u64(data, offset);
-            alloc::format!("{}", v)
-        }
-        7 => { // int64
-            if *offset + 8 > data.len() { return String::new(); }
-            let v = i64::from_le_bytes([
-                data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3],
-                data[*offset + 4], data[*offset + 5], data[*offset + 6], data[*offset + 7],
-            ]);
-            *offset += 8;
-            alloc::format!("{}", v)
-        }
-        8 => { // float32
+        6 => { // FLOAT32
             if *offset + 4 > data.len() { return String::new(); }
             let v = f32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]]);
             *offset += 4;
-            alloc::format!("{:.4}", v)
+            alloc::format!("{:.6}", v)
         }
-        9 => { // bool
+        7 => { // BOOL
             if *offset >= data.len() { return String::new(); }
             let v = data[*offset] != 0;
             *offset += 1;
             String::from(if v { "true" } else { "false" })
         }
-        10 => { // string
+        8 => { // STRING
             read_string(data, offset)
         }
-        11 => { // array
+        9 => { // ARRAY
             let arr_type = read_u32(data, offset);
             let arr_len = read_u64(data, offset) as usize;
             let mut items = Vec::new();
@@ -289,32 +279,95 @@ fn read_metadata_value(data: &[u8], offset: &mut usize) -> String {
             }
             alloc::format!("[{}]", items.join(", "))
         }
+        10 => { // FLOAT64
+            if *offset + 8 > data.len() { return String::new(); }
+            let v = f64::from_le_bytes([
+                data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3],
+                data[*offset + 4], data[*offset + 5], data[*offset + 6], data[*offset + 7],
+            ]);
+            *offset += 8;
+            alloc::format!("{:.6}", v)
+        }
         _ => {
-            String::from("(unknown)")
+            // Unknown type: skip 8 bytes (conservative)
+            if *offset + 8 <= data.len() { *offset += 8; }
+            alloc::format!("(unknown_type_{})", val_type)
         }
     }
 }
 
 fn read_metadata_value_inner(data: &[u8], offset: &mut usize, val_type: u32) -> String {
     match val_type {
-        8 => { // float32
-            if *offset + 4 > data.len() { return String::new(); }
-            let v = f32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]]);
-            *offset += 4;
-            alloc::format!("{:.4}", v)
+        0 => { // UINT8
+            if *offset >= data.len() { return String::new(); }
+            let v = data[*offset]; *offset += 1;
+            alloc::format!("{}", v)
         }
-        10 => read_string(data, offset),
-        _ => {
-            // Unknown inner type: try length-prefixed skip if possible
-            if *offset + 4 <= data.len() {
-                let len = u32::from_le_bytes(data[*offset..*offset + 4].try_into().unwrap_or([0; 4])) as usize;
-                *offset += 4 + len.min(data.len().saturating_sub(*offset + 4));
-            } else {
-                *offset = data.len();
+        1 => { // INT8
+            if *offset >= data.len() { return String::new(); }
+            let v = data[*offset] as i8; *offset += 1;
+            alloc::format!("{}", v)
+        }
+        2 => { // UINT16
+            if *offset + 2 > data.len() { return String::new(); }
+            let v = u16::from_le_bytes([data[*offset], data[*offset + 1]]); *offset += 2;
+            alloc::format!("{}", v)
+        }
+        3 => { // INT16
+            if *offset + 2 > data.len() { return String::new(); }
+            let v = i16::from_le_bytes([data[*offset], data[*offset + 1]]); *offset += 2;
+            alloc::format!("{}", v)
+        }
+        4 => { // UINT32
+            let v = read_u32(data, offset);
+            alloc::format!("{}", v)
+        }
+        5 => { // INT32
+            if *offset + 4 > data.len() { return String::new(); }
+            let v = i32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]]); *offset += 4;
+            alloc::format!("{}", v)
+        }
+        6 => { // FLOAT32
+            if *offset + 4 > data.len() { return String::new(); }
+            let v = f32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]]); *offset += 4;
+            alloc::format!("{:.6}", v)
+        }
+        7 => { // BOOL
+            if *offset >= data.len() { return String::new(); }
+            let v = data[*offset] != 0; *offset += 1;
+            String::from(if v { "true" } else { "false" })
+        }
+        8 => { // STRING
+            read_string(data, offset)
+        }
+        9 => { // ARRAY (nested)
+            let arr_type = read_u32(data, offset);
+            let arr_len = read_u64(data, offset) as usize;
+            let mut items = Vec::new();
+            for _ in 0..arr_len {
+                items.push(read_metadata_value_inner(data, offset, arr_type));
             }
+            alloc::format!("[{}]", items.join(", "))
+        }
+        10 => { // FLOAT64
+            if *offset + 8 > data.len() { return String::new(); }
+            let v = f64::from_le_bytes([data[*offset], data[*offset+1], data[*offset+2], data[*offset+3],
+                data[*offset+4], data[*offset+5], data[*offset+6], data[*offset+7]]); *offset += 8;
+            alloc::format!("{:.6}", v)
+        }
+        _ => {
+            // Unknown inner type: skip conservatively
+            if *offset + 8 <= data.len() { *offset += 8; }
             String::from("?")
         }
     }
+}
+
+/// Verifica rapido se os bytes sao um GGUF valido (magic check).
+pub fn is_gguf(data: &[u8]) -> bool {
+    if data.len() < 4 { return false; }
+    let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    magic == GGUF_MAGIC
 }
 
 /// Carrega e parseia um arquivo GGUF completo em memoria
