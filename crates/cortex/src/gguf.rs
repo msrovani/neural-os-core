@@ -19,6 +19,10 @@ pub(crate) const Q6_K_BLOCK_BYTES: usize = 210; // ql[128]+qh[64]+scales[16]+d
 const Q2_K_BLOCK_BYTES: usize = 96;  // d(2)+dmin(2)+scales[12]+mins[16]+qs[64]
 const Q3_K_BLOCK_BYTES: usize = 128; // d(2)+dmin(2)+scales[12]+mins[16]+qh[32]+qs[64]
 const Q5_K_BLOCK_BYTES: usize = 192; // d(2)+dmin(2)+scales[12]+mins[16]+qh[32]+qs[128]
+// SESSION_301: TQ2_0 ternary 2-bit (Falcon3 GGUF, PrismML Bonsai).
+// Layout: f16 scale (2) + packed 2-bit ternary weights (22) = 24 bytes per 32-element block.
+const TQ2_0_BLOCK_SIZE: usize = 32;
+const TQ2_0_BLOCK_BYTES: usize = 24;
 
 #[derive(Debug, Clone, Copy)]
 #[allow(non_camel_case_types)] // nomes alinhados a ggml/llama.cpp (Q4_K, …)
@@ -36,6 +40,7 @@ pub enum GgufType {
     Q4_K,
     Q5_K,
     Q6_K,
+    TQ2_0,
     Unknown(u32),
 }
 
@@ -55,6 +60,7 @@ impl GgufType {
             12 => GgufType::Q4_K,
             13 => GgufType::Q5_K,
             14 => GgufType::Q6_K,
+            25 => GgufType::TQ2_0,
             x => GgufType::Unknown(x),
         }
     }
@@ -71,6 +77,7 @@ impl GgufType {
             GgufType::Q4_K => 5,
             GgufType::Q5_K => 6,
             GgufType::Q6_K => 7,
+            GgufType::TQ2_0 => 2,
             GgufType::Unknown(_) => 32,
         }
     }
@@ -111,6 +118,10 @@ impl GgufType {
             GgufType::Q5_K => {
                 let blocks = (ne + QK_K - 1) / QK_K;
                 blocks.saturating_mul(Q5_K_BLOCK_BYTES)
+            }
+            GgufType::TQ2_0 => {
+                let blocks = (ne + TQ2_0_BLOCK_SIZE - 1) / TQ2_0_BLOCK_SIZE;
+                blocks.saturating_mul(TQ2_0_BLOCK_BYTES)
             }
             GgufType::Q4_1 | GgufType::Q5_1 | GgufType::Q8_1 => {
                 ne.saturating_mul(2) // bound until dedicated dequant
@@ -628,6 +639,57 @@ pub fn dequantize_q2_k(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> 
 }
 
 // ---------------------------------------------------------------------------
+// TQ2_0: Ternary 2-bit (Falcon3 GGUF, PrismML Bonsai, BitNet b1.58)
+// GGUF type ID 25. Layout: f16 scale (2B) + packed 2-bit ternary (8B) + padding (14B) = 24B per 32-element block.
+// Weights: {-1, 0, +1} packed 2 bits each, 4 per byte.
+// ---------------------------------------------------------------------------
+
+/// TQ2_0 block: 24 B → 32 f32. f16 scale + packed 2-bit ternary.
+fn dequantize_tq2_0_block(block: &[u8], out: &mut [f32]) -> Result<(), &'static str> {
+    if block.len() < TQ2_0_BLOCK_BYTES || out.len() < TQ2_0_BLOCK_SIZE {
+        return Err("TQ2_0 block too short");
+    }
+    let scale = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
+    // Packed 2-bit ternary: each byte holds 4 weights.
+    // Encoding: 00=0, 01=+1, 10=-1, 11=0 (same as BitNet kernel).
+    for i in 0..TQ2_0_BLOCK_SIZE {
+        let byte_idx = 2 + (i / 4);
+        let bit_offset = (i % 4) * 2;
+        let packed = if byte_idx < block.len() { block[byte_idx] } else { 0 };
+        let w2 = (packed >> bit_offset) & 0b11;
+        let val = match w2 {
+            0b01 => 1.0f32,
+            0b10 => -1.0f32,
+            _ => 0.0f32, // 0b00 or 0b11 = zero
+        };
+        out[i] = val * scale;
+    }
+    Ok(())
+}
+
+/// Dequantiza tensor TQ2_0 (ternary 2-bit GGUF).
+pub fn dequantize_tq2_0(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
+    let total = rows * cols;
+    let num_blocks = (total + TQ2_0_BLOCK_SIZE - 1) / TQ2_0_BLOCK_SIZE;
+    let expected = num_blocks * TQ2_0_BLOCK_BYTES;
+    if data.len() < expected {
+        return None;
+    }
+    let mut tensor_data = Vec::with_capacity(total);
+    let mut scratch = [0.0f32; TQ2_0_BLOCK_SIZE];
+    for b in 0..num_blocks {
+        let start = b * TQ2_0_BLOCK_BYTES;
+        if dequantize_tq2_0_block(&data[start..start + TQ2_0_BLOCK_BYTES], &mut scratch).is_err() {
+            return None;
+        }
+        let remaining = total - tensor_data.len();
+        let to_copy = remaining.min(TQ2_0_BLOCK_SIZE);
+        tensor_data.extend_from_slice(&scratch[..to_copy]);
+    }
+    Tensor::from_row_major((rows, cols), tensor_data)
+}
+
+// ---------------------------------------------------------------------------
 // Q3_K: 3-bit K-quant (llama.cpp QK_K=256, block 128B)
 // Layout: d(f16) + dmin(f16) + scales[12] + mins[16] + qh[32] + qs[64]
 // ---------------------------------------------------------------------------
@@ -947,6 +1009,22 @@ mod tests {
         };
         f16.to_le_bytes()
     }
+
+    /// TQ2_0: constrói um bloco e verifica dequant (scale=2.0).
+    #[test]
+    fn tq2_0_dequant_known_block() {
+        let mut block = [0u8; TQ2_0_BLOCK_BYTES];
+        block[0..2].copy_from_slice(&f16_to_f32_bytes(2.0)); // scale = 2.0
+        // Byte 2: bits [1:0]=01(+1), [3:2]=10(-1), [5:4]=00(0), [7:6]=01(+1)
+        // LSB-first: w0=+1, w1=-1, w2=0, w3=+1
+        block[2] = 0b01_00_10_01;
+        let mut out = [0.0f32; TQ2_0_BLOCK_SIZE];
+        dequantize_tq2_0_block(&block, &mut out).unwrap();
+        assert!((out[0] - 2.0).abs() < 1e-5, "TQ2_0[0] = {} want 2.0", out[0]);
+        assert!((out[1] - (-2.0)).abs() < 1e-5, "TQ2_0[1] = {} want -2.0", out[1]);
+        assert!((out[2] - 0.0).abs() < 1e-5, "TQ2_0[2] = {} want 0.0", out[2]);
+        assert!((out[3] - 2.0).abs() < 1e-5, "TQ2_0[3] = {} want 2.0", out[3]);
+    }
 }pub fn dequantize_raw(qtype: GgufType, data: &[u8], rows: usize, cols: usize) -> Option<Vec<f32>> {
     let ne = rows * cols;
     match qtype {
@@ -976,6 +1054,7 @@ mod tests {
         GgufType::Q2_K => dequantize_q2_k(data, rows, cols).map(|t| t.data),
         GgufType::Q3_K => dequantize_q3_k(data, rows, cols).map(|t| t.data),
         GgufType::Q5_K => dequantize_q5_k(data, rows, cols).map(|t| t.data),
+        GgufType::TQ2_0 => dequantize_tq2_0(data, rows, cols).map(|t| t.data),
         _ => None,
     }
 }

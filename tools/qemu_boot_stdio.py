@@ -13,6 +13,7 @@ smp = 4
 ram = "8G"
 timeout = 300
 instance = 0
+visual = False
 for i, arg in enumerate(sys.argv[1:], 1):
     if arg == "--smp" and i < len(sys.argv) - 1:
         smp = int(sys.argv[i + 1])
@@ -22,6 +23,10 @@ for i, arg in enumerate(sys.argv[1:], 1):
         timeout = int(sys.argv[i + 1])
     elif arg == "--instance" and i < len(sys.argv) - 1:
         instance = int(sys.argv[i + 1])
+    elif arg == "--visual":
+        visual = True
+    elif arg == "--no-timeout":
+        timeout = 999999
 
 ts = time.strftime("%Y%m%d_%H%M%S")
 logdir = os.path.join(ROOT, "logs")
@@ -87,13 +92,22 @@ for name, sz, path in models:
     print(f"  QEMU loader: {name} ({sz // (1024*1024)}MB) @0x{addr:X}")
     addr += ((sz + gap - 1) // gap) * gap + gap
 
-args += [
-    "-chardev", f"file,id=ser0,path={logfile}",
-    "-serial", "chardev:ser0",
-    "-netdev", "user,id=n0",
-    "-device", "e1000,netdev=n0",
-    "-vga", "none", "-display", "none", "-nographic",
-]
+if visual:
+    args += [
+        "-chardev", f"file,id=ser0,path={logfile}",
+        "-serial", "chardev:ser0",
+        "-netdev", "user,id=n0",
+        "-device", "e1000,netdev=n0",
+        "-vga", "std", "-display", "sdl",
+    ]
+else:
+    args += [
+        "-chardev", f"file,id=ser0,path={logfile}",
+        "-serial", "chardev:ser0",
+        "-netdev", "user,id=n0",
+        "-device", "e1000,netdev=n0",
+        "-vga", "none", "-display", "none", "-nographic",
+    ]
 
 print(f"QEMU {smp}C TCG {ram} (inst{instance})")
 print(f"Models: {len(models)} loaded")
