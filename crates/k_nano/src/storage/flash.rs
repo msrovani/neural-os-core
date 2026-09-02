@@ -388,6 +388,24 @@ impl FileFlash {
             FlashDev::VirtioBlk,
         ];
         let want = crate::fat32::encode_83(FILE_FLASH_NAME);
+        // QEMU/TCG: ata0 = uefi.img boot — FAT walk PIO trava; virtio-blk data disk only.
+        if crate::storage_bw::skip_measure() {
+            if let Ok(Some(sectors)) =
+                with_flash_dev(FlashDev::VirtioBlk, |d| resolve_fat_file_sectors(d, &want))
+            {
+                crate::slog_nano!(
+                    "TICKV",
+                    "ok",
+                    "FileFlash probe virtio-blk NSGDB sectors={}",
+                    sectors.len()
+                );
+                return Some(FileFlash {
+                    sectors,
+                    dev: FlashDev::VirtioBlk,
+                });
+            }
+            return None;
+        }
         for dev in ORDER {
             // Live USB sem MSC: só stick (USB); evita FAT walk no HD interno (hang HW).
             if crate::boot_logger::internal_disk_skipped()

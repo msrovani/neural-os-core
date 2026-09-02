@@ -1,5 +1,28 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s305] - 2026-09-02 — QEMU 4c loop: P6 iretq PASS + Jarbas greeting
+
+**Boot TCG 4 cores completa com saudação Jarbas, demo Ring3 iretq OK e NSGDB persistente no virtio-blk.**
+
+### Ring3 P6 (QEMU dev)
+- **IDT vetor 0x90 DPL=3** instalado em `k_nano::interrupts` (não depende só de `patch_idt` bin).
+- **Marker demo** movido para offset **+48** após mailbox N4 — evita clobber por `syscall_finish_ok`.
+- **`syscall_stage_from_mailbox`:** preserva stage pré-iretq quando mailbox zerada.
+- **`patch_idt()`** reexecutado antes dos demos P6; logs P6 fail/success visíveis (`warn`/`ok`).
+
+### Boot TCG (hangs eliminados)
+- **BOOT.LOG:** virtio-blk antes de ATA; skip ATA persist e USB MSC probe no TCG+virtio.
+- **NeuralFS/FileFlash/StorageBus:** gates `skip_measure` / TCG+virtio — não formata/varre `uefi.img`.
+- **`tcg_lite`:** labor smokes reduzidos; `TransformerTrainer::self_test` skip no TCG.
+- **Jarbas greeting/TTS:** logs `sub=ok` na serial; scan BGE honesto (magic BitNet ≠ BGE).
+
+### Tooling
+- **`tools/run-qemu-4c-loop.ps1`:** loop 4c, markers goal (saudacao, TTS, P6, Runtime, desktop_ready).
+
+### Validação
+- `tools/run-qemu-4c-loop.ps1 -Cores 4` → exit 0
+- Serial: `ring3_can_iretq=true`, `saudacao suit-boot`, `desktop_ready`
+
 ## [1.9.99-s302] - 2026-09-01 — Ring3 Onda 6: isolamento CPL=3 (ADR-0102)
 
 **Sandbox nativo B/C wired em `k_nano`; wasmi permanece default até T-053 HW.**

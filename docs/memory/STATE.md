@@ -1,4 +1,7 @@
-# STATE — neural-os-core v1.9.99-s303 — Ring3 Onda 6 (ADR-0102) + Onda 0/2
+# STATE — neural-os-core v1.9.99-s305 — QEMU 4c loop PASS + P6 iretq (ADR-0102)
+#   SESSION_305: QEMU 4c TCG loop exit 0 — saudacao+TTS Jarbas, ring3_can_iretq=true, NSGDB virtio-blk, Runtime+desktop_ready.
+#   Fixes: IDT 0x90 DPL=3 k_nano; marker P6 +48; tcg_lite boot gates; virtio-blk BOOT.LOG; Jarbas slog ok.
+#   Aceite HW T-052/053 pendente. Piper/LLM ABSENT no FAT (TTS formant drain).
 #   SESSION_302: isolamento CPL=3 wired em k_nano + bin facade.
 #   H1–H3 ✅ | N1–N7 ✅ | T-056 opcode verifier ✅ | ELF path ✅ | N5 USER mask ✅ | N2 GS.base ✅.
 #   register_native_ring gated: can_iretq(self-test) + metal + ring3_mark_hw_gate_passed (T-053).

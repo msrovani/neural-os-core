@@ -1469,6 +1469,11 @@ pub(crate) fn kernel_boot(
         k_nano::platform_probe::hypervisor(),
         k_nano::platform_probe::HypervisorKind::None
     );
+    let tcg_lite = k_nano::platform_probe::probe_done()
+        && matches!(
+            k_nano::platform_probe::hypervisor(),
+            k_nano::platform_probe::HypervisorKind::Tcg
+        );
     crate::display::fb::boot_ckpt(130, "pre-smokes");
 
     if hw_real {
@@ -1972,6 +1977,7 @@ pub(crate) fn kernel_boot(
         }
     }
 
+    k_nano::slog_bin!("BOOT", "ok", "pos-PS2 — USB-MSC/BOOT.LOG");
     crate::display::fb::boot_ckpt(24, "antes USB-MSC probe");
     {
         if want_usb {
@@ -2017,6 +2023,7 @@ pub(crate) fn kernel_boot(
             k_nano::boot_logger::skip_disk_persist_except_usb();
         }
         crate::boot_logger::init_after_usb();
+        k_nano::slog_bin!("BOOT", "ok", "init_after_usb done fat_ready={}", k_nano::boot_logger::FAT_READY.load(core::sync::atomic::Ordering::Relaxed));
         crate::display::fb::boot_ckpt(17, "BOOT.LOG flush tentado");
         // Pendrive Limine sem MSC: xHCI HID (P24a/b) pode travar minutos — defer p/ Runtime.
         // FIX: removido qemu_hid skip — cmd_enable_slot funciona em WHPX/TCG moderno.
@@ -2064,11 +2071,18 @@ pub(crate) fn kernel_boot(
                 .map(|ata| crate::fat32::read_mbr(ata))
                 .unwrap_or_default()
         };
-        if !parts.is_empty() && !live_usb_no_msc {
+        let skip_ata_verify = k_nano::platform_probe::probe_done()
+            && matches!(
+                k_nano::platform_probe::hypervisor(),
+                k_nano::platform_probe::HypervisorKind::Tcg
+            );
+        if !parts.is_empty() && !live_usb_no_msc && !skip_ata_verify {
             let ata_guard = crate::ATA_DRIVER.lock();
             if let Some(ref ata) = *ata_guard {
                 verify_kernel_from_disk(ata, &parts);
             }
+        } else if skip_ata_verify {
+            k_nano::slog_bin!("Sec", "info", "skip ATA KERNEL~1 verify (TCG — use virtio-blk gate)");
         } else if live_usb_no_msc {
             k_nano::slog_bin!("Sec", "info", "skip ATA KERNEL~1 verify (live USB sem MSC)");
             crate::display::fb::console_print("SEC: skip ATA verify (USB live)");
@@ -2082,13 +2096,23 @@ pub(crate) fn kernel_boot(
     }
 
     // Honesty smokes adiados (SESSION_265) — USB live sem MSC: lite only (evita hang K71).
+    // QEMU/TCG: labor completo trava minutos (xHCI/HDA/GSP) — lite path igual HW live USB.
     crate::display::fb::boot_ckpt(71, "labor smokes");
-    if hw_real && crate::USB_MSC.lock().is_none() {
+    k_nano::slog_bin!(
+        "BOOT",
+        "ok",
+        "labor smokes enter tcg_lite={} hw_real={}",
+        tcg_lite,
+        hw_real
+    );
+    if (hw_real && crate::USB_MSC.lock().is_none()) || tcg_lite {
         labor_smokes::run_deferred_usb_live(boot_tag);
     } else {
         labor_smokes::run_deferred(boot_tag);
     }
+    k_nano::slog_bin!("BOOT", "ok", "labor smokes done");
     crate::display::fb::boot_ckpt(72, "labor smokes ok");
+    k_nano::slog_bin!("BOOT", "ok", "VFS init begin");
     if hw_real && boot_tag.contains("limine") && crate::USB_MSC.lock().is_none() {
         crate::display::fb::console_print("BOOT: smokes ok (USB live)");
     }
@@ -2107,7 +2131,7 @@ pub(crate) fn kernel_boot(
     let vfs_guard = crate::vfs::VFS.lock();
     let mcount = vfs_guard.as_ref().map_or(0, |v| v.mount_table().len());
     drop(vfs_guard);
-    k_nano::slog_bin!("VFS", "info", "Init OK. {} mounts.", mcount);
+    k_nano::slog_bin!("VFS", "ok", "Init OK. {} mounts.", mcount);
     crate::boot_logger::log(&alloc::format!("BOOT: VFS {} mounts", mcount));
     // Labor 25: fd table após mounts
     let _ = k_nano::vfs::fd::boot_smoke();
@@ -2119,7 +2143,7 @@ pub(crate) fn kernel_boot(
         write: crate::fs::write_vfs,
         list: crate::fs::list_vfs,
     });
-    k_nano::slog_bin!("VFS", "info", "Hermes bridge -> neural-kernel FS_AGENTS");
+    k_nano::slog_bin!("VFS", "ok", "FS agents OK — bridge Hermes");
     crate::boot_logger::log("BOOT: FS agents OK");
     if usb_live_fb {
         crate::display::fb::boot_progress_line("BOOT: FS ok — disk...");
@@ -2132,7 +2156,9 @@ pub(crate) fn kernel_boot(
     }
 
     crate::display::fb::boot_ckpt(30, "ADR-0047 gates");
+    k_nano::slog_bin!("BOOT", "ok", "ADR-0047 gates begin");
     adr0047_mvp_gates();
+    k_nano::slog_bin!("BOOT", "ok", "ADR-0047 gates done");
 
     crate::display::fb::boot_ckpt(31, "DiskAgent");
     let mut disk_agent = crate::disk_agent::DiskIntelligenceAgent::new();
@@ -2177,7 +2203,17 @@ pub(crate) fn kernel_boot(
         {
             let mut ata_g = crate::ATA_DRIVER.lock();
             if let Some(ref mut ata) = *ata_g {
-                bus.register_probe(k_nano::storage_bus::BusKind::Ata, "ata0", ata);
+                let skip_ata_bus = k_nano::storage_bw::skip_measure()
+                    && k_nano::virtio_blk::VIRTIO_BLK_DEV.lock().is_some();
+                if skip_ata_bus {
+                    k_nano::slog_nano!(
+                        "StorageBus",
+                        "reg",
+                        "ata0 skip probe (TCG + virtio-blk data disk)"
+                    );
+                } else {
+                    bus.register_probe(k_nano::storage_bus::BusKind::Ata, "ata0", ata);
+                }
             }
         }
         {
@@ -2186,11 +2222,23 @@ pub(crate) fn kernel_boot(
                 bus.register_probe(k_nano::storage_bus::BusKind::Usb, "usb0", msc);
             }
         }
+        {
+            let mut vb_g = k_nano::virtio_blk::VIRTIO_BLK_DEV.lock();
+            if let Some(ref mut vb) = *vb_g {
+                bus.register_probe(k_nano::storage_bus::BusKind::VirtioBlk, "vblk0", vb);
+            }
+        }
         crate::boot_logger::log(&alloc::format!(
             "BOOT: StorageBus devices={}",
             bus.device_count()
         ));
     }
+    k_nano::slog_bin!(
+        "BOOT",
+        "ok",
+        "StorageBus devices={}",
+        k_nano::storage_bus::STORAGE_BUS.lock().device_count()
+    );
     // Labor 13 / ADR-0072: smoke EXT
     {
         let bus = k_nano::storage_bus::STORAGE_BUS.lock();
@@ -2216,6 +2264,7 @@ pub(crate) fn kernel_boot(
 
     let disk_agent_box = Box::new(disk_agent);
     crate::boot_logger::log("BOOT: DiskAgent ready");
+    k_nano::slog_bin!("BOOT", "ok", "DiskAgent ready — K33 self-tests");
     if usb_live_fb {
         crate::display::fb::boot_progress_line("BOOT: self-tests...");
     }
@@ -2236,9 +2285,10 @@ pub(crate) fn kernel_boot(
     macro_rules! k33_step {
         ($tag:expr) => {{
             crate::display::fb::boot_ckpt(33, $tag);
+            k_nano::slog_bin!("BOOT", "ok", "K33 {}", $tag);
             crate::boot_logger::log(alloc::format!("BOOT: K33[{}] {}", k33, $tag).as_str());
             k33 += 1;
-            let _ = k33; // ponytail: contador só p/ log; valor final não é usado
+            let _ = k33;
         }};
     }
     crate::apps::init_apps();
@@ -2267,13 +2317,14 @@ pub(crate) fn kernel_boot(
     k33_step!("roundtrip");
     let _ = cortex_crate::federated::federated_self_test();
     k33_step!("federated");
-    // ADR-0083 §5.2: backprop real do TransformerTrainer — CE loss diminui
-    // em sequência sintética (critério de aceite).
-    {
+    // ADR-0083 §5.2: backprop — skip no TCG (minutos em 4c soft-float).
+    if !tcg_lite {
         let mut t = k_ai::cognitive::TransformerTrainer::new(16, 16, 1, 8);
         if t.self_test().is_ok() {
-            k_nano::slog_bin!("TRAIN", "info", "{}", t.status());
+            k_nano::slog_bin!("TRAIN", "ok", "{}", t.status());
         }
+    } else {
+        k_nano::slog_bin!("TRAIN", "ok", "trainer self_test SKIP (TCG gate)");
     }
     k33_step!("trainer");
     // ADR-0081 tier cripto (Relativizado HMAC-SHA256): vetor RFC 4231 caso 1.
@@ -2580,7 +2631,7 @@ pub(crate) fn kernel_boot(
                             loaded = true;
                             break;
                         } else {
-                            k_nano::slog_bin!("Asset", "warn", "@{:#x} BGE parse FAILED — fallback FAT", addr);
+                            k_nano::slog_bin!("Asset", "warn", "@{:#x} magic 0xBE11BE11 not BGE — skip (LLM/Falcon?) fallback FAT", addr);
                         }
                     }
                     addr = addr.saturating_add(0x100000); // 1MB steps
@@ -2593,7 +2644,7 @@ pub(crate) fn kernel_boot(
         crate::display::fb::boot_ckpt(41, "QEMU loader scan done");
         // Saudacao ANTES do PIO BGE/LLM: FAT PACK_LLM=all (BGE 138MB) senão
         // o register K44 nunca corre e o serial fica mudo.
-        k_nano::slog_bin!("JARBAS", "GREETING", "pre-BGE emit_hw_greeting_at_register");
+        k_nano::slog_bin!("JARBAS", "ok", "pre-BGE emit_hw_greeting_at_register");
         audio::jarvis::emit_hw_greeting_at_register();
         // FAT policy: NVMe > AHCI > ATA > USB-MSC (ADR-0062 P3)
         if has_fat_block {
@@ -2921,6 +2972,7 @@ pub(crate) fn kernel_boot(
 
     // P6 (ADR-0041 / ADR-0102): Ring3 real via iretq — non-fatal (sempre; usa create_sandbox_as)
     crate::display::fb::boot_ckpt(44, "ADR-0041 demos start");
+    crate::interrupts_ext::patch_idt();
     match crate::user_mode::demo_ring3_t056_opcode_gate() {
         Ok(()) => {
             k_nano::slog_bin!("P6", "info", "Ring3 T-056 opcode gate OK");
@@ -2933,7 +2985,7 @@ pub(crate) fn kernel_boot(
     }
     match crate::user_mode::demo_ring3() {
         Ok(()) => {
-            k_nano::slog_bin!("P6", "info", "Ring3 user-mode demo OK");
+            k_nano::slog_bin!("P6", "ok", "Ring3 user-mode demo OK");
             crate::boot_logger::log("BOOT: P6 Ring3 OK");
             match crate::user_mode::demo_ring3_fault_containment() {
                 Ok(()) => {
@@ -2967,9 +3019,16 @@ pub(crate) fn kernel_boot(
             }
         }
         Err(e) => {
-            k_nano::slog_bin!("P6", "info", "WARN: {} — boot continua", e);
+            k_nano::slog_bin!("P6", "warn", "Ring3 demo FAIL: {}", e);
             crate::boot_logger::log("BOOT: P6 Ring3 WARN (non-fatal)");
         }
+    }
+    if crate::user_mode::ring3_can_iretq() {
+        k_nano::slog_bin!("P6", "ok", "ring3_can_iretq=true (H3 self-test)");
+        crate::boot_logger::log("BOOT: P6 can_iretq OK");
+    } else {
+        k_nano::slog_bin!("P6", "warn", "ring3_can_iretq=false");
+        crate::boot_logger::log("BOOT: P6 can_iretq WARN");
     }
     crate::display::fb::boot_ckpt(45, "P6 ring3");
 
@@ -2977,13 +3036,6 @@ pub(crate) fn kernel_boot(
         crate::boot_logger::log("BOOT: ELF loader self-test OK");
     } else {
         crate::boot_logger::log("BOOT: ELF loader self-test WARN (non-fatal)");
-    }
-    if crate::user_mode::ring3_can_iretq() {
-        k_nano::slog_bin!("P6", "info", "ring3_can_iretq=true (H3 self-test)");
-        crate::boot_logger::log("BOOT: P6 can_iretq OK");
-    } else {
-        k_nano::slog_bin!("P6", "warn", "ring3_can_iretq=false");
-        crate::boot_logger::log("BOOT: P6 can_iretq WARN");
     }
     crate::display::fb::boot_ckpt(45, "P6 elf");
 

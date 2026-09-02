@@ -233,7 +233,7 @@ pub fn emit_hw_greeting_at_register() {
     let line = alloc::format!("[JARBAS] JARBAS: {}", body);
     k_nano::slog_jarbas!(
         "Jarbas",
-        "info",
+        "ok",
         "saudacao suit-boot @register K44 (qemu_or_hw bare={} no_fat={})",
         bare,
         no_fat
@@ -247,7 +247,7 @@ pub fn emit_hw_greeting_at_register() {
         let _ = PLAYBACK_RING.push(&pcm[..n]);
         k_nano::slog_jarbas!(
             "Jarbas",
-            "info",
+            "ok",
             "TTS boot greeting {} frames (QEMU/HDA drain no mixer)",
             pcm.len()
         );

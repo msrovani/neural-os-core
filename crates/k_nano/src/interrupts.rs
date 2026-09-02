@@ -7,6 +7,8 @@ use x86_64::instructions::segmentation::{CS, DS, ES, SS, Segment};
 use x86_64::structures::gdt::SegmentSelector;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::structures::tss::TaskStateSegment;
+#[cfg(not(windows))]
+use x86_64::PrivilegeLevel;
 use x86_64::VirtAddr;
 
 pub const PIC_1_OFFSET: u8 = 32;
@@ -556,10 +558,17 @@ lazy_static! {
         idt[0x81].set_handler_fn(ipi_halt_handler);
         idt[0x82].set_handler_fn(ipi_call_function_handler);
 
-        // Demais vetores (34-255, exceto IPI)
+        // int 0x90 CapGate syscall — DPL=3 para CPL3 (P6). Bin patch_idt pode substituir handler.
+        unsafe {
+            idt[0x90]
+                .set_handler_fn(crate::paging::syscall_int_handler)
+                .set_privilege_level(PrivilegeLevel::Ring3);
+        }
+
+        // Demais vetores (34-255, exceto IPI + syscall)
         for i in 34..=255usize {
-            if i == 0x80 || i == 0x81 || i == 0x82 {
-                continue; // IPI handlers já configurados
+            if i == 0x80 || i == 0x81 || i == 0x82 || i == 0x90 {
+                continue;
             }
             idt[i].set_handler_fn(unhandled_interrupt_handler);
         }

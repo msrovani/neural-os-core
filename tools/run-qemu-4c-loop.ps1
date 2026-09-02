@@ -1,78 +1,104 @@
 #!/usr/bin/env pwsh
-# Run QEMU 4 cores (TCG) with Falcon3 3B via QEMU-loader.
-# Monitors log until greeting or PF storm or timeout.
-# NSGDB.BIN lives in disk_qemu.raw (FAT32) attached as virtio-blk: the kernel's
-# VirtIO-blk driver resolves it via FileFlash (persistent NSGDB across runs).
-# uefi.img stays on IDE index=0 (OVMF boots from it).
+# QEMU 4 cores (TCG) — loop até greeting Jarbas + NSGDB/P6 Ring3 no log.
 param(
     [int]$Cores = 4,
-    [int]$TimeoutSec = 120,
-    [string]$LogPath = "logs\qemu4c_3b_loop.txt"
+    [int]$TimeoutSec = 900,
+    [string]$LogPath = "",
+    [switch]$NoLoader
 )
-$ErrorActionPreference = "Stop"
-$Root = (Resolve-Path ".").Path
+function Read-LogShared([string]$path) {
+    if (-not (Test-Path $path)) { return "" }
+    $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        $sr = New-Object System.IO.StreamReader($fs)
+        return $sr.ReadToEnd()
+    } finally {
+        $sr.Close()
+        $fs.Close()
+    }
+}
+
+$Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+if ($LogPath -eq "") {
+    $LogPath = Join-Path $Root "logs\qemu4c_ring3_loop.txt"
+}
 $Qemu = "C:\Program Files\qemu\qemu-system-x86_64.exe"
-$Ovmf = "C:\DEV\neural-os-core-latest\target\ovmf.bin"
+$Ovmf = Join-Path $Root "target\ovmf.bin"
 $UefiImg = Join-Path $Root "target\uefi.img"
 $DiskImg = Join-Path $Root "target\disk_qemu.raw"
 $LoaderBin = Join-Path $Root "models\FALCON3.BIN"
-if (-not (Test-Path $Qemu))    { throw "qemu nao encontrado" }
-if (-not (Test-Path $Ovmf))    { throw "ovmf nao encontrado" }
-if (-not (Test-Path $UefiImg)) { throw "uefi.img nao encontrado" }
-if (-not (Test-Path $DiskImg)) { throw "disk_qemu.raw nao encontrado" }
+foreach ($p in @($Qemu, $Ovmf, $UefiImg, $DiskImg)) {
+    if (-not (Test-Path $p)) { throw "missing: $p" }
+}
 New-Item -ItemType Directory -Force -Path (Split-Path $LogPath -Parent) | Out-Null
 Remove-Item -Force $LogPath -ErrorAction SilentlyContinue
 $args = @(
-    "-m","4G","-smp",$Cores,"-accel","tcg","-net","none",
-    "-drive","format=raw,file=$UefiImg,if=ide,index=0",
-    "-drive","format=raw,file=$DiskImg,if=virtio",
-    "-drive","if=pflash,format=raw,file=`"$Ovmf`",readonly=on",
-    "-serial","file=$LogPath","-serial","null","-display","none"
+    "-m", "4G", "-smp", $Cores, "-accel", "tcg", "-net", "none",
+    "-drive", "format=raw,file=$UefiImg,if=ide,index=0",
+    "-drive", "format=raw,file=$DiskImg,if=virtio",
+    "-drive", "if=pflash,format=raw,file=$Ovmf,readonly=on",
+    "-serial", "file:$LogPath", "-serial", "null", "-display", "none"
 )
-if (Test-Path $LoaderBin) {
-    $args += @("-device","loader,file=$LoaderBin,addr=0x100000000")
+if ((Test-Path $LoaderBin) -and -not $NoLoader) {
+    $args += @("-device", "loader,file=$LoaderBin,addr=0x100000000")
 }
 Write-Host "[loop] cores=$Cores timeout=${TimeoutSec}s log=$LogPath"
-Write-Host "[loop] cmd: $Qemu $($args -join ' ')"
 $p = Start-Process -FilePath $Qemu -ArgumentList $args -PassThru
-$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-$lastLines = 0
-$greetingSeen = $false
-$pfStorm = $false
-while (!$p.HasExited) {
-    Start-Sleep -Seconds 2
-    $elapsed = [int]$stopwatch.Elapsed.TotalSeconds
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$lastBytes = 0
+$goal = $false
+$markers = @(
+    "saudacao suit-boot",
+    "TTS boot greeting",
+    "desktop_ready",
+    "P6 Ring3 OK",
+    "ring3_can_iretq=true",
+    "NSGDB",
+    "sgdb.*demo.*PASS",
+    "\[SCHEDULER\]"
+)
+while (-not $p.HasExited) {
+    Start-Sleep -Seconds 5
+    $elapsed = [int]$sw.Elapsed.TotalSeconds
     if ($elapsed -ge $TimeoutSec) {
-        Write-Host "[loop] timeout ${TimeoutSec}s"
+        Write-Host "[loop] TIMEOUT ${TimeoutSec}s"
         break
     }
-    if (Test-Path $LogPath) {
-        $content = Get-Content $LogPath -Raw -ErrorAction SilentlyContinue
-        if ($content) {
-            $lines = ($content -split "`n").Count
-            if ($lines -ne $lastLines) {
-                $tail = ($content -split "`n") | Select-Object -Last 1
-                Write-Host "[loop][${elapsed}s] $lines | $tail"
-                $lastLines = $lines
-            }
-            if ($content -match "saudacao|Greeting|salutation|JARBAS greet|Hub ready|desktop_ready|MOUSE\] desktop" -and -not $greetingSeen) {
-                Write-Host "[loop] *** GREETING DETECTADO ***"
-                $greetingSeen = $true
-                Start-Sleep -Seconds 5
+    if (-not (Test-Path $LogPath)) { continue }
+    $bytes = (Get-Item $LogPath).Length
+    if ($bytes -ne $lastBytes) {
+        $lastBytes = $bytes
+        $tail = ((Read-LogShared $LogPath) -split "`n" | Select-Object -Last 1)
+        Write-Host "[loop][${elapsed}s] bytes=$bytes | $tail"
+    }
+    $raw = (Read-LogShared $LogPath) -replace '\x1b\[[0-9;?]*[a-zA-Z]', ''
+    foreach ($m in $markers) {
+        if ($raw -match $m) {
+            if ($m -match "saudacao|TTS boot|desktop_ready") {
+                Write-Host "[loop] *** GOAL: $m ***"
+                $goal = $true
+                Start-Sleep -Seconds 8
                 break
-            }
-            if ($content -match "#PF ip=") {
-                $pfCount = ([regex]::Matches($content, "#PF ip=")).Count
-                if ($pfCount -gt 50 -and -not $pfStorm) {
-                    Write-Host "[loop] *** PF STORM ($pfCount) ***"
-                    $pfStorm = $true
-                    Start-Sleep -Seconds 10
-                    break
-                }
             }
         }
     }
+    if ($goal) { break }
+    $pf = ([regex]::Matches($raw, "#PF ip=")).Count
+    if ($pf -gt 80) {
+        Write-Host "[loop] *** PF STORM ($pf) ***"
+        break
+    }
 }
-if (!$p.HasExited) { Stop-Process -Id $p.Id -Force; Start-Sleep -Seconds 1 }
-$final = (Get-Content $LogPath -ErrorAction SilentlyContinue | Measure-Object -Line).Lines
-Write-Host "[loop] done. lines=$final log=$LogPath"
+if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 1
+$clean = Join-Path $Root "logs\qemu4c_clean.txt"
+if (Test-Path $LogPath) {
+    $text = (Read-LogShared $LogPath) -replace '\x1b\[[0-9;?]*[a-zA-Z]', ''
+    $text | Out-File $clean -Encoding utf8
+    Write-Host "[loop] clean log: $clean lines=$((($text -split "`n").Count))"
+    foreach ($k in @("P6", "Ring3", "Jarbas", "saudacao", "TTS", "NSGDB", "SCHEDULER", "Runtime")) {
+        $n = ([regex]::Matches($text, $k, "IgnoreCase")).Count
+        if ($n -gt 0) { Write-Host "  marker $k = $n" }
+    }
+}
+if ($goal) { exit 0 } else { exit 1 }

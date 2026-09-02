@@ -433,6 +433,8 @@ pub fn user_arena_self_test() -> bool {
 
 pub const USER_CODE_VA: u64 = 0x0000_7000_0030_0000;
 pub const USER_STACK_VA: u64 = 0x0000_7000_0030_1000;
+/// Demo marker fica **após** a mailbox N4 (48 bytes) — evita clobber de `syscall_finish_ok`.
+const USER_DEMO_MARKER_OFF: u64 = 48;
 /// Alias histórico — mailbox canônica em `ring3::USER_MAILBOX_VA` (N4).
 pub const USER_MARKER_VA: u64 = crate::ring3::USER_MAILBOX_VA;
 pub const RING3_MAGIC: u64 = 0x0033_5249_4E47_0001;
@@ -498,6 +500,10 @@ pub fn syscall_finish_err() {
 }
 pub fn syscall_stage_from_mailbox(_mbox: u64) {
     let m = unsafe { crate::ring3::read_user_mailbox() };
+    // Mailbox zerada: preserva stage de enter_user_mode (demo P6 pré-iretq).
+    if m.nr == 0 && m.cap == 0 {
+        return;
+    }
     SYS_NR.store(m.nr, Ordering::SeqCst);
     SYS_ARG.store(m.arg0, Ordering::SeqCst);
     let cap_bits = if m.cap != 0 {
@@ -841,8 +847,12 @@ pub fn soft_syscall(nr: u64, arg: u64, cap: Cap) -> Result<u64, &'static str> {
     if SYS_STATUS.load(Ordering::SeqCst) != 0 { Err("mvp-c: syscall negada") } else { Ok(SYS_RESULT.load(Ordering::SeqCst)) }
 }
 pub extern "x86-interrupt" fn syscall_int_handler(_stack: x86_64::structures::idt::InterruptStackFrame) {
-    // Minimal handler — real handler lives in k_hal::cap_gate::syscall_int_handler and is installed via IDT patch.
-    // This stub keeps R0 linkable for tests.
+    // R0 handler (DPL=3 na IDT). Bin patch_idt pode substituir por handler com dispatch k_hal.
+    if mailbox_syscalls() {
+        syscall_stage_from_mailbox(0);
+    } else {
+        syscall_try_regs_fallback();
+    }
     let nr = SYS_NR.load(Ordering::SeqCst);
     let arg = SYS_ARG.load(Ordering::SeqCst);
     let cap = Cap::from_bits(SYS_CAP.load(Ordering::SeqCst));
@@ -915,7 +925,7 @@ pub fn host_sse_stub() {}
 fn demo_write_stub(code: PhysFrame<Size4KiB>) {
     let mut buf = [0u8; 48];
     let mut o = 0usize;
-    let result_va = USER_MARKER_VA + 32;
+    let result_va = USER_MARKER_VA + USER_DEMO_MARKER_OFF;
     buf[o] = 0x48; buf[o + 1] = 0xB8; o += 2;
     buf[o..o + 8].copy_from_slice(&result_va.to_le_bytes()); o += 8;
     buf[o] = 0x48; buf[o + 1] = 0xB9; o += 2;
@@ -942,7 +952,7 @@ fn demo_write_capgate_stub(code: PhysFrame<Size4KiB>) {
     let mut buf = [0u8; 80];
     let mut o = 0usize;
     buf[o] = 0x48; buf[o + 1] = 0xB8; o += 2;
-    buf[o..o + 8].copy_from_slice(&USER_MARKER_VA.to_le_bytes()); o += 8;
+    buf[o..o + 8].copy_from_slice(&crate::ring3::USER_MAILBOX_VA.to_le_bytes()); o += 8;
     for nr in [SYS_PIN_DMA, SYS_MAP_FB, SYS_EXIT_USER] {
         buf[o] = 0x48; buf[o + 1] = 0xC7; buf[o + 2] = 0x00; o += 3;
         buf[o..o + 4].copy_from_slice(&(nr as u32).to_le_bytes()); o += 4;
@@ -988,7 +998,9 @@ pub fn demo_ring3() -> Result<(), &'static str> {
         as_user.map_user_page(VirtAddr::new(USER_CODE_VA), code_frame, user_code_flags())?;
         as_user.map_user_page(VirtAddr::new(USER_STACK_VA), stack_frame, user_data_flags())?;
         as_user.map_user_page(VirtAddr::new(USER_MARKER_VA), marker_frame, user_data_flags())?;
-        hhdm_mut::<u64>(marker_frame).write_volatile(0);
+        let mb = hhdm_mut::<crate::ring3::SyscallMailbox>(marker_frame);
+        (*mb).nr = SYS_EXIT_USER;
+        (*mb).cap = Cap::ENTER_USER.bits();
     }
     let stack_top = USER_STACK_VA + 0x1000;
     x86_64::instructions::interrupts::without_interrupts(|| unsafe {
@@ -996,7 +1008,7 @@ pub fn demo_ring3() -> Result<(), &'static str> {
     })?;
     let marker = unsafe {
         let base = hhdm_mut::<u8>(marker_frame);
-        core::ptr::read_volatile(base.add(32) as *const u64)
+        core::ptr::read_volatile(base.add(USER_DEMO_MARKER_OFF as usize) as *const u64)
     };
     demo_free_triplet(&as_user, code_frame, stack_frame, Some(marker_frame));
     if marker != RING3_MAGIC { return Err("P6: marker Ring3 nao escrito"); }

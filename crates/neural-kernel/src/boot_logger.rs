@@ -50,7 +50,7 @@ pub fn init_after_usb() {
         let has_ahci = crate::AHCI_DRIVER.lock().is_some();
         let ok = ensure_persisted();
         k_nano::slog_bin!(
-            "LOG", "info",
+            "LOG", "ok",
             "init_after_usb BOOT.LOG ok={} msc={} ata={} ahci={} (procure BOOT.LOG na raiz FAT32)",
             ok, has_msc, has_ata, has_ahci
         );

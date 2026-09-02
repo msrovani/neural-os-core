@@ -76,9 +76,15 @@ impl StorageBus {
             );
         }
 
-        let mut mounts = detect_exfat(dev, kind);
-        mounts.extend(detect_ext(dev, kind));
-        mounts.extend(detect_ntfs(dev, kind));
+        // TCG: skip EXT/NTFS/exFAT scan — ATA IDE (uefi.img) PIO multi-partição trava o boot.
+        let mut mounts = if crate::storage_bw::skip_measure() {
+            Vec::new()
+        } else {
+            let mut m = detect_exfat(dev, kind);
+            m.extend(detect_ext(dev, kind));
+            m.extend(detect_ntfs(dev, kind));
+            m
+        };
         for m in &mounts {
             crate::slog_nano!(
                 "StorageBus",
@@ -115,7 +121,8 @@ impl StorageBus {
             crate::slog_nano!("SGDB", "ok", "/hw/storage/{}/kind={} sectors={} mbr_ok={}", idx, kind_str, total, mbr_ok);
             // delega ao sgdb central (também sloga)
             let full_kind = alloc::format!("hw/storage/{}/kind", idx);
-            if crate::storage::tickv::is_ready() {
+            // Tickv mount/recover no hot path do probe — defer p/ tickv_smoke (TCG: scan 8MB).
+            if !crate::storage_bw::skip_measure() && crate::storage::tickv::is_ready() {
                 let _ = crate::storage::tickv::put_blob(&full_kind, kind_str.as_bytes());
                 let sec_key = alloc::format!("hw/storage/{}/sectors", idx);
                 let _ = crate::storage::tickv::put_blob(&sec_key, alloc::format!("{}", total).as_bytes());

@@ -567,7 +567,26 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
             }
         }
 
-        if !ok && skip & SKIP_ATA == 0 && crate::boot_bind::storage_includes(crate::boot_bind::StorageKind::Ata) {
+        // QEMU gate: virtio-blk data disk (disk_qemu.raw) antes de ATA IDE (uefi.img).
+        if !ok {
+            if let Some(mut g) = crate::virtio_blk::VIRTIO_BLK_DEV.try_lock() {
+                if let Some(ref mut vb) = *g {
+                    any_tried = true;
+                    last_name = "virtio-blk";
+                    last = unsafe { overwrite_boot_log(vb, &content) };
+                    if last.is_ok() {
+                        vb.sync_cache();
+                        ok = true;
+                    }
+                }
+            }
+        }
+
+        if !ok
+            && skip & SKIP_ATA == 0
+            && !crate::storage_bw::skip_measure()
+            && crate::boot_bind::storage_includes(crate::boot_bind::StorageKind::Ata)
+        {
             if let Some(mut g) = crate::globals::ATA_DRIVER.try_lock() {
                 if let Some(ref mut ata) = *g {
                     any_tried = true;
@@ -769,7 +788,7 @@ pub fn flush() -> bool {
     #[cfg(feature = "fat-boot-log")]
     {
         let ok = persist_now(None);
-        crate::slog_nano!("LOG", "info", "flush BOOT.LOG ok={} bytes~{}",
+        crate::slog_nano!("LOG", "ok", "flush BOOT.LOG ok={} bytes~{}",
             ok,
             build_session_bytes().len());
         return ok;
@@ -851,10 +870,17 @@ pub fn ensure_persisted() -> bool {
     if !persist_allowed_now() {
         return false;
     }
-    let msc = try_ensure_usb_msc();
-    if msc {
-        // Stick voltou → libera skip USB p/ nova tentativa.
-        BACKEND_SKIP.fetch_and(!SKIP_USB, Ordering::Relaxed);
+    // QEMU/TCG: virtio-blk data disk basta — re-probe MSC (xHCI) trava minutos.
+    let skip_msc_retry = crate::storage_bw::skip_measure()
+        && crate::virtio_blk::VIRTIO_BLK_DEV.lock().is_some();
+    if !skip_msc_retry {
+        let msc = try_ensure_usb_msc();
+        if msc {
+            // Stick voltou → libera skip USB p/ nova tentativa.
+            BACKEND_SKIP.fetch_and(!SKIP_USB, Ordering::Relaxed);
+        }
+    } else {
+        crate::slog_nano!("LOG", "ok", "ensure_persisted: skip MSC retry (TCG+virtio-blk)");
     }
     flush()
 }

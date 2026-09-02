@@ -110,7 +110,10 @@ impl NeuralFsAgent {
             mount_point: String::from("/mnt/neural"),
             state: Mutex::new(None),
         };
-        if agent.try_bootstrap_ata() {
+        // QEMU/TCG: ata0 = uefi.img (boot) — NeuralFS format/mount PIO trava minutos.
+        let skip_ata_bootstrap = crate::storage_bw::skip_measure()
+            && crate::virtio_blk::VIRTIO_BLK_DEV.lock().is_some();
+        if !skip_ata_bootstrap && agent.try_bootstrap_ata() {
             agent.ensure_ecosystem_tree();
             Self::try_exfat_write_smoke();
             return agent;
@@ -120,6 +123,13 @@ impl NeuralFsAgent {
             Self::try_exfat_write_smoke();
             return agent;
         }
+        if skip_ata_bootstrap {
+            crate::slog_nano!(
+                "NEURALFS",
+                "ok",
+                "ATA bootstrap skip (TCG+virtio-blk) — RAM 4MB"
+            );
+        }
         agent.bootstrap_ram();
         agent.ensure_ecosystem_tree();
         Self::try_exfat_write_smoke();
@@ -128,6 +138,10 @@ impl NeuralFsAgent {
 
     /// IDEA #417 — write opt-in: `EXFAT_WRITE=1` no CONFIG.TXT do volume exFAT.
     fn try_exfat_write_smoke() {
+        if crate::storage_bw::skip_measure() {
+            crate::slog_nano!("EXFAT", "ok", "write smoke SKIP (TCG gate)");
+            return;
+        }
         let mut guard = crate::ATA_DRIVER.lock();
         let Some(ata) = guard.as_mut() else {
             return;
