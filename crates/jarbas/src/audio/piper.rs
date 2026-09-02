@@ -24,6 +24,44 @@ use libm::expf;
 
 pub const PIPER_SR: u32 = 22050;
 
+const PIPER_MAGIC: u32 = 0xBE11BE11;
+const PIPER_VERSION: u32 = 3;
+
+/// Header v3 exportado por `tools/convert_piper_to_bitnet.py` (≠ BGE/LLM .bitnet).
+pub fn is_piper_header(data: &[u8]) -> bool {
+    if data.len() < 16 {
+        return false;
+    }
+    let r4 = |o: usize| u32::from_le_bytes(data[o..o + 4].try_into().unwrap_or([0; 4]));
+    r4(0) == PIPER_MAGIC
+        && r4(4) == PIPER_VERSION
+        && (50..=512).contains(&r4(8))
+}
+
+/// Tamanho do blob Piper a partir do índice de tensores (autodescritivo).
+pub fn piper_blob_size(data: &[u8]) -> Option<usize> {
+    if !is_piper_header(data) {
+        return None;
+    }
+    let r4 = |o: usize| u32::from_le_bytes(data[o..o + 4].try_into().unwrap_or([0; 4]));
+    let n = r4(8) as usize;
+    let idx_end = 16usize.saturating_add(n.saturating_mul(40));
+    if data.len() < idx_end {
+        return None;
+    }
+    let mut end_bytes = idx_end;
+    for i in 0..n {
+        let b = 16 + i * 40;
+        let off_f32 = r4(b + 32) as usize;
+        let cnt = r4(b + 36) as usize;
+        let part_end = off_f32.saturating_add(cnt).saturating_mul(4);
+        if part_end > end_bytes {
+            end_bytes = part_end;
+        }
+    }
+    Some(end_bytes.min(data.len()))
+}
+
 fn sigmoid(x: f32) -> f32 { 1.0 / (1.0 + expf(-x)) }
 
 struct W { name: String, data: Vec<f32>, rows: usize, cols: usize } // rows=out_ch, cols=in_ch*k for conv

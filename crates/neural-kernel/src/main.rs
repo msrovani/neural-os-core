@@ -1902,6 +1902,8 @@ pub(crate) fn kernel_boot(
         }
         drop(bus);
         publish_boot_phase(BootPhase::DriverInit, "VirtIO-blk found");
+        // Piper TTS cedo (virtio-blk FAT / loader) — antes da saudacao K44 (formant fallback).
+        audio::skills::init_neural_tts();
     }
 
     // Labor 12: pins FAT após ATA (smoke HTTPS pode ter aprendido em RAM antes).
@@ -2645,6 +2647,7 @@ pub(crate) fn kernel_boot(
         // Saudacao ANTES do PIO BGE/LLM: FAT PACK_LLM=all (BGE 138MB) senão
         // o register K44 nunca corre e o serial fica mudo.
         k_nano::slog_bin!("JARBAS", "ok", "pre-BGE emit_hw_greeting_at_register");
+        audio::skills::init_neural_tts();
         audio::jarvis::emit_hw_greeting_at_register();
         // FAT policy: NVMe > AHCI > ATA > USB-MSC (ADR-0062 P3)
         if has_fat_block {
@@ -2751,7 +2754,7 @@ pub(crate) fn kernel_boot(
         }
     }
 
-    // Piper TTS: loader QEMU @0x130000000 ou FAT PIO (apos BGE para STATUS honesto)
+    // Piper TTS: loader scan / virtio-blk FAT / ATA PIO (idempotente; virtio init ja tentou).
     audio::skills::init_neural_tts();
     crate::load_status::print_status_banner();
 

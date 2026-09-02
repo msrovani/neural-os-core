@@ -4,7 +4,8 @@ param(
     [int]$Cores = 4,
     [int]$TimeoutSec = 900,
     [string]$LogPath = "",
-    [switch]$NoLoader
+    [switch]$NoLoader,
+    [switch]$NoLlmLoader
 )
 function Read-LogShared([string]$path) {
     if (-not (Test-Path $path)) { return "" }
@@ -27,6 +28,11 @@ $Ovmf = Join-Path $Root "target\ovmf.bin"
 $UefiImg = Join-Path $Root "target\uefi.img"
 $DiskImg = Join-Path $Root "target\disk_qemu.raw"
 $LoaderBin = Join-Path $Root "models\FALCON3.BIN"
+$PiperBin = @(
+    (Join-Path $Root "target\PIPER_PT_BR.BIN"),
+    (Join-Path $Root "target\PIPER.BIN"),
+    (Join-Path $Root "target\piper\PIPER_PT_BR_CADU_MEDIUM.bitnet")
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
 foreach ($p in @($Qemu, $Ovmf, $UefiImg, $DiskImg)) {
     if (-not (Test-Path $p)) { throw "missing: $p" }
 }
@@ -39,8 +45,13 @@ $args = @(
     "-drive", "if=pflash,format=raw,file=$Ovmf,readonly=on",
     "-serial", "file:$LogPath", "-serial", "null", "-display", "none"
 )
-if ((Test-Path $LoaderBin) -and -not $NoLoader) {
+if ((Test-Path $LoaderBin) -and -not $NoLoader -and -not $NoLlmLoader) {
     $args += @("-device", "loader,file=$LoaderBin,addr=0x100000000")
+    Write-Host "[loop] LLM loader: $LoaderBin @0x100000000" -ForegroundColor Cyan
+}
+if ($PiperBin -and -not $NoLoader) {
+    $args += @("-device", "loader,file=$PiperBin,addr=0x124200000")
+    Write-Host "[loop] Piper loader: $PiperBin @0x124200000" -ForegroundColor Cyan
 }
 Write-Host "[loop] cores=$Cores timeout=${TimeoutSec}s log=$LogPath"
 $p = Start-Process -FilePath $Qemu -ArgumentList $args -PassThru
@@ -50,6 +61,8 @@ $goal = $false
 $markers = @(
     "saudacao suit-boot",
     "TTS boot greeting",
+    "Piper TTS LOADED",
+    "Audio.*tts.*Piper",
     "desktop_ready",
     "P6 Ring3 OK",
     "ring3_can_iretq=true",

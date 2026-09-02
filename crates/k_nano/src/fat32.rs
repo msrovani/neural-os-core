@@ -530,6 +530,99 @@ pub unsafe fn lookup_file_on_dev(
     None
 }
 
+/// Retorna tamanho do arquivo na raiz FAT32 (8.3) sem ler dados — qualquer BlockDevice.
+pub unsafe fn lookup_root_file_size_dev(
+    dev: &mut dyn crate::block_dev::BlockDevice,
+    part: &Partition,
+    name: &str,
+) -> Option<usize> {
+    if !matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0x73 | 0xEF) {
+        return None;
+    }
+    let mut bpb = [0u8; 512];
+    if !dev.read_sectors(part.lba_start as u64, &mut bpb) {
+        return None;
+    }
+    let bytes_per_sector = u16::from_le_bytes([bpb[0x0B], bpb[0x0C]]) as u32;
+    let sectors_per_cluster = bpb[0x0D] as u32;
+    let reserved_sectors = u16::from_le_bytes([bpb[0x0E], bpb[0x0F]]) as u32;
+    let fat_count = bpb[0x10] as u32;
+    let root_entry_count = u16::from_le_bytes([bpb[0x11], bpb[0x12]]);
+    let sectors_per_fat32 = u32::from_le_bytes([bpb[0x24], bpb[0x25], bpb[0x26], bpb[0x27]]);
+    let root_cluster = u32::from_le_bytes([bpb[0x2C], bpb[0x2D], bpb[0x2E], bpb[0x2F]]);
+    if root_entry_count > 0
+        || bytes_per_sector < 512
+        || bytes_per_sector > 4096
+        || bytes_per_sector % 32 != 0
+        || sectors_per_cluster == 0
+    {
+        return None;
+    }
+    let fat_lba = part.lba_start as u64 + reserved_sectors as u64;
+    let data_lba = fat_lba + fat_count as u64 * sectors_per_fat32 as u64;
+    let cluster_bytes = (sectors_per_cluster * bytes_per_sector) as usize;
+
+    let want = encode_83(name);
+    let mut cluster = root_cluster;
+    let mut walked = 0u32;
+    let mut prev = 0u32;
+
+    while cluster < 0x0FFF_FFF8 && cluster >= 2 && walked < Fat32Reader::MAX_ROOT_DIR_CLUSTERS {
+        if cluster == prev {
+            break;
+        }
+        prev = cluster;
+        walked += 1;
+        let clba = data_lba + (cluster as u64 - 2) * sectors_per_cluster as u64;
+        let mut buf = vec![0u8; cluster_bytes];
+        for s in 0..sectors_per_cluster {
+            let off = (s * bytes_per_sector) as usize;
+            if !dev.read_sectors(clba + s as u64, &mut buf[off..off + bytes_per_sector as usize]) {
+                return None;
+            }
+        }
+        for entry_off in (0..buf.len()).step_by(32) {
+            let first = buf[entry_off];
+            if first == 0 {
+                return None;
+            }
+            if first == 0xE5 {
+                continue;
+            }
+            if buf[entry_off + 11] & 0x08 != 0 {
+                continue;
+            }
+            if buf[entry_off + 11] & 0x0F == 0x0F {
+                continue;
+            }
+            if buf[entry_off..entry_off + 11] != want {
+                continue;
+            }
+            let file_size = u32::from_le_bytes([
+                buf[entry_off + 28],
+                buf[entry_off + 29],
+                buf[entry_off + 30],
+                buf[entry_off + 31],
+            ]) as usize;
+            return Some(file_size);
+        }
+        let fat_off = cluster as u64 * 4;
+        let fat_sec = fat_lba + fat_off / bytes_per_sector as u64;
+        let mut fsec = [0u8; 512];
+        if !dev.read_sectors(fat_sec, &mut fsec) {
+            return None;
+        }
+        let boff = (fat_off % bytes_per_sector as u64) as usize;
+        cluster = u32::from_le_bytes([
+            fsec[boff],
+            fsec[boff + 1],
+            fsec[boff + 2],
+            fsec[boff + 3],
+        ]) & 0x0FFF_FFFF;
+    }
+    None
+}
+
 /// Lê arquivo da RAIZ FAT32 sobre QUALQUER BlockDevice (USB-MSC, CachedDisk…),
 /// sem AtaDriver — espelha `Fat32Reader::read_file` (mesmos gates e limites).
 /// Motivo: Fat32Reader é tipado em `&AtaDriver` (I/O `&self`); callers dinâmicos

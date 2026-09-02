@@ -1,13 +1,20 @@
-use alloc::vec::Vec;
 use alloc::string::String;
-use skill_registry::{Skill, McpManifest, OutputSchema};
+use alloc::vec::Vec;
+use core::sync::atomic::Ordering;
+use skill_registry::{McpManifest, OutputSchema, Skill};
 use spin;
-use crate::audio::vad::{VAD, VadTransition};
-use crate::audio::piper::PiperEngine;
+
+use crate::audio::piper::{piper_blob_size, PiperEngine, is_piper_header};
+use crate::audio::vad::{VadTransition, VAD};
 
 static TTS_ENGINE: spin::Mutex<Option<PiperEngine>> = spin::Mutex::new(None);
 
+const PIPER_FAT_NAMES: &[&str] = &["PIPER.BIN", "PIPER_EN.BIN", "PIPER_PT_BR.BIN"];
+
 pub fn init_neural_tts() {
+    if piper_is_loaded() {
+        return;
+    }
     let engine = try_load_piper();
     if engine.is_some() {
         k_nano::load_status::set(
@@ -25,16 +32,24 @@ pub fn synthesize_tts(text: &str) -> Vec<i16> {
     match guard.as_ref() {
         Some(engine) if engine.is_loaded() => {
             let audio = engine.generate(text);
-            k_nano::slog_bin!("Audio", "tts", "Piper: \"{}\" ({} samples)",
-                text,
-                audio.len());
+            k_nano::slog_jarbas!(
+                "Jarbas",
+                "ok",
+                "TTS Piper: \"{}\" ({} samples)",
+                text.chars().take(48).collect::<String>(),
+                audio.len()
+            );
             audio
         }
         _ => {
             let audio = crate::audio::tts::synthesize(text);
-            k_nano::slog_bin!("Audio", "tts", "Formant: \"{}\" ({} samples)",
-                text,
-                audio.len());
+            k_nano::slog_jarbas!(
+                "Jarbas",
+                "ok",
+                "TTS Formant: \"{}\" ({} samples)",
+                text.chars().take(48).collect::<String>(),
+                audio.len()
+            );
             audio
         }
     }
@@ -50,23 +65,34 @@ pub fn piper_is_loaded() -> bool {
 }
 
 /// Smoke test: valida que Piper gera audio com amplitude > 0.
-/// Chamar após load() para detectar pesos corrompidos.
 pub fn piper_smoke_test() -> bool {
     let guard = TTS_ENGINE.lock();
     if let Some(ref engine) = *guard {
-        if !engine.is_loaded() { return false; }
+        if !engine.is_loaded() {
+            return false;
+        }
         let pcm = engine.generate("hello");
         if pcm.is_empty() {
             k_nano::slog_jarbas!("Audio", "piper", "SMOKE FAIL: empty output");
             return false;
         }
-        // Verificar amplitude máxima > 100 (não silêncio)
         let max_amp = pcm.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
         if max_amp < 100 {
-            k_nano::slog_jarbas!("Audio", "piper", "SMOKE FAIL: max amplitude={} (< 100, pesos corrompidos?)", max_amp);
+            k_nano::slog_jarbas!(
+                "Audio",
+                "piper",
+                "SMOKE FAIL: max amplitude={} (< 100, pesos corrompidos?)",
+                max_amp
+            );
             return false;
         }
-        k_nano::slog_jarbas!("Audio", "piper", "SMOKE OK: {} samples, max_amp={}", pcm.len(), max_amp);
+        k_nano::slog_jarbas!(
+            "Audio",
+            "piper",
+            "SMOKE OK: {} samples, max_amp={}",
+            pcm.len(),
+            max_amp
+        );
         true
     } else {
         false
@@ -74,83 +100,235 @@ pub fn piper_smoke_test() -> bool {
 }
 
 fn try_load_piper() -> Option<PiperEngine> {
-    // 1) QEMU -device loader @0x124200000 (WHPX rápido; evita PIO ~61MB)
-    if let Some(eng) = try_load_piper_from_loader() {
+    // 1) QEMU -device loader scan [0x100000000..0x180000000) — magic Piper v3
+    if let Some(eng) = try_load_piper_from_loader_scan() {
         return Some(eng);
     }
-    // 2) FAT PIO — sempre carregar quando presente (motor TTS = Piper)
+    // 2) virtio-blk data disk (disk_qemu.raw) — rápido no TCG 4c
+    if let Some(eng) = try_load_piper_from_virtio_fat() {
+        return Some(eng);
+    }
+    // 3) ATA PIO — só arquivos pequenos ou HW sem virtio (PACK_LLM ~61MB congela TCG)
+    try_load_piper_from_ata_fat()
+}
+
+fn try_load_piper_from_loader_scan() -> Option<PiperEngine> {
+    let pm = k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+    let mut addr = 0x1000_0000_0u64;
+    while addr < 0x1800_0000_0 {
+        let va = addr.saturating_add(pm);
+        if !k_nano::memory::is_page_present(va) {
+            addr = addr.saturating_add(0x100_000);
+            continue;
+        }
+        let ptr = va as *const u8;
+        let hdr = unsafe { core::slice::from_raw_parts(ptr, 512) };
+        if !is_piper_header(hdr) {
+            addr = addr.saturating_add(0x100_000);
+            continue;
+        }
+        let n = u32::from_le_bytes(hdr[8..12].try_into().ok()?) as usize;
+        let idx_bytes = 16usize.saturating_add(n.saturating_mul(40)).min(256 * 1024);
+        if mapped_len(va, idx_bytes) < idx_bytes {
+            addr = addr.saturating_add(0x100_000);
+            continue;
+        }
+        let idx = unsafe { core::slice::from_raw_parts(ptr, idx_bytes) };
+        let Some(mut sz) = piper_blob_size(idx) else {
+            addr = addr.saturating_add(0x100_000);
+            continue;
+        };
+        let mapped = mapped_len(va, sz);
+        if mapped < 4096 {
+            addr = addr.saturating_add(0x100_000);
+            continue;
+        }
+        sz = mapped.min(sz);
+        k_nano::slog_jarbas!(
+            "Audio",
+            "piper",
+            "QEMU-loader @{:#x} Piper v3 — parse {} KB…",
+            addr,
+            sz / 1024
+        );
+        let data = unsafe { core::slice::from_raw_parts(ptr, sz) };
+        let mut eng = PiperEngine::new();
+        if eng.load(data) {
+            k_nano::slog_jarbas!(
+                "Audio",
+                "ok",
+                "Piper TTS LOADED (QEMU-loader @{:#x}) size={} KB",
+                addr,
+                sz / 1024
+            );
+            return Some(eng);
+        }
+        k_nano::slog_jarbas!(
+            "Audio",
+            "piper",
+            "QEMU-loader @{:#x} parse FAILED — fallback FAT",
+            addr
+        );
+        addr = addr.saturating_add(0x100_000);
+    }
+    None
+}
+
+fn mapped_len(base_va: u64, want: usize) -> usize {
+    let page = 4096usize;
+    let mut ok = 0usize;
+    while ok < want {
+        if !k_nano::memory::is_page_present(base_va.saturating_add(ok as u64)) {
+            break;
+        }
+        ok = ok.saturating_add(page).min(want);
+    }
+    ok
+}
+
+unsafe fn try_load_piper_from_fat_dev(
+    dev: &mut dyn k_nano::block_dev::BlockDevice,
+    backend: &str,
+    max_bytes: usize,
+) -> Option<PiperEngine> {
+    let parts = k_nano::fat32::read_mbr_dev(dev);
+    for p in &parts {
+        if !matches!(p.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
+            continue;
+        }
+        for name in PIPER_FAT_NAMES {
+            let Some(sz) = k_nano::fat32::lookup_root_file_size_dev(dev, p, name) else {
+                continue;
+            };
+            if sz > max_bytes {
+                k_nano::slog_jarbas!(
+                    "Audio",
+                    "piper",
+                    "skip {} {}KB via {} (>{}MB cap)",
+                    name,
+                    sz / 1024,
+                    backend,
+                    max_bytes / (1024 * 1024)
+                );
+                continue;
+            }
+            k_nano::slog_jarbas!(
+                "Audio",
+                "piper",
+                "{} presente ({} KB) via {} — read…",
+                name,
+                sz / 1024,
+                backend
+            );
+            let Some(data) = k_nano::fat32::read_root_file_dev(dev, p, name) else {
+                k_nano::slog_jarbas!("Audio", "piper", "{} I/O read FAILED via {}", name, backend);
+                continue;
+            };
+            if data.len() < sz.min(16) {
+                k_nano::slog_jarbas!(
+                    "Audio",
+                    "piper",
+                    "{} I/O short read ({} / {} KB) via {}",
+                    name,
+                    data.len() / 1024,
+                    sz / 1024,
+                    backend
+                );
+                continue;
+            }
+            let mut eng = PiperEngine::new();
+            if eng.load(&data) {
+                k_nano::slog_jarbas!(
+                    "Audio",
+                    "ok",
+                    "Piper TTS LOADED from {} ({}): {} KB",
+                    backend,
+                    name,
+                    data.len() / 1024
+                );
+                return Some(eng);
+            }
+            k_nano::slog_jarbas!(
+                "Audio",
+                "piper",
+                "{} parse FAILED via {} ({} KB)",
+                name,
+                backend,
+                data.len() / 1024
+            );
+        }
+    }
+    None
+}
+
+fn try_load_piper_from_virtio_fat() -> Option<PiperEngine> {
+    let mut g = k_nano::virtio_blk::VIRTIO_BLK_DEV.lock();
+    let vb = g.as_mut()?;
+    // virtio-blk: até 128MB inline (read_root_file_dev cap 256MB)
+    unsafe { try_load_piper_from_fat_dev(vb, "virtio-blk", 128 * 1024 * 1024) }
+}
+
+fn try_load_piper_from_ata_fat() -> Option<PiperEngine> {
+    let slow_ata = k_nano::storage_bw::skip_measure()
+        || k_nano::virtio_blk::VIRTIO_BLK_DEV.lock().is_some();
+    let max_bytes = if slow_ata {
+        8 * 1024 * 1024
+    } else {
+        128 * 1024 * 1024
+    };
     let mut found_any = false;
     let mut load_failed = false;
     unsafe {
         for try_slave in &[false, true] {
             let mut tmp = k_nano::ATA_DRIVER.lock();
-            if let Some(ref mut ata) = *tmp {
-                let orig = ata.slave;
-                ata.slave = *try_slave;
-                let parts = k_nano::fat32::read_mbr(ata);
-                for p in &parts {
-                    if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
-                        continue;
-                    }
-                    if let Some(fs) = k_nano::fat32::Fat32Reader::new(ata, p) {
-                        for name in &["PIPER.BIN", "PIPER_EN.BIN", "PIPER_PT_BR.BIN"] {
-                            let Some(sz) = fs.lookup_file_size(name) else {
-                                continue;
-                            };
-                            found_any = true;
-                            k_nano::slog_jarbas!("Audio", "piper", "{} presente ({} KB) — carregando via PIO (read_file)…",
+            let Some(ref mut ata) = *tmp else {
+                continue;
+            };
+            let orig = ata.slave;
+            ata.slave = *try_slave;
+            let parts = k_nano::fat32::read_mbr(ata);
+            for p in &parts {
+                if !matches!(p.type_code, 0x0B | 0x0C | 0x1C) {
+                    continue;
+                }
+                if let Some(fs) = k_nano::fat32::Fat32Reader::new(ata, p) {
+                    for name in PIPER_FAT_NAMES {
+                        let Some(sz) = fs.lookup_file_size(name) else {
+                            continue;
+                        };
+                        found_any = true;
+                        if sz > max_bytes {
+                            k_nano::slog_jarbas!(
+                                "Audio",
+                                "piper",
+                                "skip ATA PIO {} {}KB (boot; formant TTS)",
                                 name,
-                                sz / 1024);
-                            // PACK_LLM: PIPER ~61MB ATA PIO congela apos K50 (greet).
-                            // Formant ja falou; Piper fica para runtime/loader.
-                            if sz > 8 * 1024 * 1024 {
-                                k_nano::slog_jarbas!(
-                                    "Audio",
-                                    "piper",
-                                    "skip ATA PIO {} {}KB (boot; formant TTS)",
-                                    name,
-                                    sz / 1024
-                                );
-                                continue;
-                            }
-                            let data = match fs.read_file(name) {
-                                Some(d) => d,
-                                None => {
-                                    k_nano::slog_jarbas!("Audio", "piper", "{} I/O read FAILED",
-                                        name);
-                                    load_failed = true;
-                                    continue;
-                                }
-                            };
-                            if data.len() < sz.min(16) {
-                                k_nano::slog_jarbas!("Audio", "piper", "{} I/O read FAILED ({} / {} KB)",
-                                    name,
-                                    data.len() / 1024,
-                                    sz / 1024);
-                                load_failed = true;
-                                continue;
-                            }
-                            k_nano::slog_jarbas!("Audio", "piper", "{} lido {} KB — parse…",
-                                name,
-                                data.len() / 1024);
-                            let mut eng = PiperEngine::new();
-                            if eng.load(&data) {
-                                k_nano::slog_jarbas!("Audio", "piper", "Piper TTS LOADED from FAT ({}): {} ({} KB)",
-                                    if *try_slave { "slave" } else { "master" },
-                                    name,
-                                    data.len() / 1024);
-                                ata.slave = orig;
-                                return Some(eng);
-                            }
-                            k_nano::slog_jarbas!("Audio", "piper", "{} lido ({} KB) mas load() falhou (magic/tensors)",
-                                name,
-                                data.len() / 1024);
-                            load_failed = true;
+                                sz / 1024
+                            );
+                            continue;
                         }
+                        let Some(data) = fs.read_file(name) else {
+                            load_failed = true;
+                            continue;
+                        };
+                        let mut eng = PiperEngine::new();
+                        if eng.load(&data) {
+                            k_nano::slog_jarbas!(
+                                "Audio",
+                                "piper",
+                                "Piper TTS LOADED from FAT ({}): {} ({} KB)",
+                                if *try_slave { "slave" } else { "master" },
+                                name,
+                                data.len() / 1024
+                            );
+                            ata.slave = orig;
+                            return Some(eng);
+                        }
+                        load_failed = true;
                     }
                 }
-                ata.slave = orig;
             }
+            ata.slave = orig;
         }
     }
     if load_failed || found_any {
@@ -158,7 +336,11 @@ fn try_load_piper() -> Option<PiperEngine> {
             k_nano::load_status::AssetKind::Piper,
             k_nano::load_status::LoadStatus::Failed,
         );
-        k_nano::slog_jarbas!("Audio", "piper", "Piper TTS FAILED — arquivo presente mas nao carregavel; formant fallback");
+        k_nano::slog_jarbas!(
+            "Audio",
+            "piper",
+            "Piper TTS FAILED — arquivo presente mas nao carregavel; formant fallback"
+        );
     } else {
         k_nano::load_status::set(
             k_nano::load_status::AssetKind::Piper,
@@ -169,65 +351,6 @@ fn try_load_piper() -> Option<PiperEngine> {
     None
 }
 
-/// WHPX: `-device loader,file=PIPER_PT_BR_CADU_MEDIUM.bitnet,addr=0x124200000` + `-m 6G`.
-/// Usa PHYS_MEM_OFFSET (igual BitNet @0x100000000) — VA = PA + offset.
-fn try_load_piper_from_loader() -> Option<PiperEngine> {
-    // QEMU launch: -device loader,PIPER_PT_BR_CADU_MEDIUM.bitnet,addr=0x124200000
-    const LOAD_ADDR: u64 = 0x124200000;
-    // Tamanho via FAT (mesmo nome no disco) — loader sozinho nao reporta len.
-    let mut size_hint: Option<usize> = None;
-    unsafe {
-        let ata_guard = k_nano::ATA_DRIVER.lock();
-        if let Some(ref ata) = *ata_guard {
-            let parts = k_nano::fat32::read_mbr(ata);
-            for p in &parts {
-                if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
-                    continue;
-                }
-                if let Some(fs) = k_nano::fat32::Fat32Reader::new(ata, p) {
-                    for name in &["PIPER.BIN", "PIPER_EN.BIN", "PIPER_PT_BR.BIN"] {
-                        if let Some(sz) = fs.lookup_file_size(name) {
-                            // Host PIPER regenerado ~60MB; FAT size hint pode estar stale.
-                            size_hint = Some(sz.max(62 * 1024 * 1024));
-                            break;
-                        }
-                    }
-                }
-                if size_hint.is_some() {
-                    break;
-                }
-            }
-        }
-    }
-    let Some(sz) = size_hint else {
-        return None;
-    };
-    if sz < 16 {
-        return None;
-    }
-    let pm = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-    if !k_nano::memory::is_page_present(LOAD_ADDR + pm) {
-        k_nano::slog_jarbas!("Audio", "piper", "QEMU-loader @0x124200000 page absent (skip)");
-        return None;
-    }
-    let ptr = (LOAD_ADDR + pm) as *const u8;
-    let magic = unsafe { core::ptr::read_volatile(ptr as *const u32) };
-    if magic != 0xBE11BE11 {
-        k_nano::slog_jarbas!("Audio", "piper", "QEMU-loader @0x124200000 magic=0x{:08X} (sem Piper; FAT PIO a seguir)", magic);
-        return None;
-    }
-    k_nano::slog_jarbas!("Audio", "piper", "QEMU-loader @0x124200000 magic OK — parse {} KB…", sz / 1024);
-    let data = unsafe { core::slice::from_raw_parts(ptr, sz) };
-    let mut eng = PiperEngine::new();
-    if eng.load(data) {
-        k_nano::slog_jarbas!("Audio", "piper", "Piper TTS LOADED (QEMU-loader @0x124200000) size={} KB", sz / 1024);
-        Some(eng)
-    } else {
-        k_nano::slog_jarbas!("Audio", "piper", "QEMU-loader parse FAILED — fallback FAT PIO");
-        None
-    }
-}
-
 pub struct TtsSkill;
 
 impl Skill for TtsSkill {
@@ -235,8 +358,12 @@ impl Skill for TtsSkill {
         McpManifest {
             name: String::from("tts_speak"),
             description: String::from("Sintetiza texto em audio PCM (neural GPU ou formant CPU)"),
-            required_tokens: Vec::new(), preconditions: Vec::new(), context_links: Vec::new(),
-            output_schema: OutputSchema::Any, idempotent: false, contracts: Vec::new(),
+            required_tokens: Vec::new(),
+            preconditions: Vec::new(),
+            context_links: Vec::new(),
+            output_schema: OutputSchema::Any,
+            idempotent: false,
+            contracts: Vec::new(),
         }
     }
 
@@ -271,7 +398,6 @@ impl Skill for SttSkill {
             return Ok(alloc::vec![b'?']);
         }
 
-        // Telemetria VAD opcional
         let mut vad = VAD::new(crate::audio::settings::vad_threshold(), 16000);
         let mut speech_segments = 0u32;
         for chunk in pcm.chunks(320) {
