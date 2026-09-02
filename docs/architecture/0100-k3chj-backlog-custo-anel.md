@@ -242,9 +242,6 @@ Numeração global **T-001…**. Aceite de onda = todos os T da onda `[x]` **ou*
 #### 6.3 0076 SYS_PIN_DMA
 - **T-057** Pin/unpin frames **após** T-055; CapGate deny DMA a CPL=3.
 
-#### 6.3 0076 SYS_PIN_DMA
-- **T-057** Pin/unpin frames **após** T-055; CapGate deny DMA a CPL=3.
-
 **Aceite 6:** wasmi permanece default IA não-confiável até T-055.
 
 ---

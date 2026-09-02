@@ -225,6 +225,18 @@ O rascunho pedia 11 critérios incluindo “ExceptionChannel”, “preemption�
 
 ---
 
+## 9. Referências
+
+- Canônico Ring3: `docs/architecture/0077-ring3-isolation-ring.md` (substitui `0060-ring3-isolation-ring.md`, cópia histórica)
+- Backlog: `docs/architecture/0100-k3chj-backlog-custo-anel.md` Onda 6
+- Checklists filtrados: `0082-ring3-isolation-production.md`, `0082-ring3-isolation-registry.md` (subordinados à 0077)
+- App Factory: ADR-0059; Cap: ADR-0041; SMP/TSS: ADR-0057
+- Sessões: 243 (WHPX SYSCALL MSR), 262 (bin `smp/percpu` duplicado), 264 (feature não propaga), 278 (iretq TCG + GDT + RSP0), 279 (sem teto de cores), **281** (GDT 1 TSS/CPU)
+- Código: `crates/k_nano/src/{paging.rs,gdt.rs,interrupts.rs,smp/{mod,percpu}.rs,simd.rs}`, `crates/k_hal/src/cap_gate.rs`, `crates/neural-kernel/src/{isolation_ring.rs,user_mode.rs,elf_loader.rs,process.rs,interrupts_ext.rs,smp/percpu.rs}`, `crates/hermes/src/app_factory.rs`
+- SDM: `iretq`, TSS.RSP0, `int` DPL=3, SYSCALL/SYSRET STAR[+16], `IA32_EFER.SCE`, `IA32_KERNEL_GS_BASE`
+
+---
+
 ## 10. Estimativa de prazo (honestidade vs ADR-0100 “custo L”)
 
 ADR-0100 marca Onda 6 como **L (1–3 semanas)**. Com gaps N1–N7 e H2 não-trivial:
@@ -249,15 +261,3 @@ ADR-0100 marca Onda 6 como **L (1–3 semanas)**. Com gaps N1–N7 e H2 não-tri
 | 4 | `0060-ring3` stale + AGENTS.md F6→0060 | **Corrigido** |
 | 5 | 0077 §6 checkbox composto | **Aberto** — granularidade T-053/054/055 na 0100 permanece mais fina |
 | 6–8 | §6 T-056/057, refs 281, SESSION_278 título | **Corrigido** nesta revisão |
-
----
-
-## 9. Referências
-
-- Canônico Ring3: `docs/architecture/0077-ring3-isolation-ring.md` (substitui `0060-ring3-isolation-ring.md`, cópia histórica)
-- Backlog: `docs/architecture/0100-k3chj-backlog-custo-anel.md` Onda 6
-- Checklists filtrados: `0082-ring3-isolation-production.md`, `0082-ring3-isolation-registry.md` (subordinados à 0077)
-- App Factory: ADR-0059; Cap: ADR-0041; SMP/TSS: ADR-0057
-- Sessões: 243 (WHPX SYSCALL MSR), 262 (bin `smp/percpu` duplicado), 264 (feature não propaga), 278 (iretq TCG + GDT + RSP0), 279 (sem teto de cores), **281** (GDT 1 TSS/CPU)
-- Código: `crates/k_nano/src/{paging.rs,gdt.rs,interrupts.rs,smp/{mod,percpu}.rs,simd.rs}`, `crates/k_hal/src/cap_gate.rs`, `crates/neural-kernel/src/{isolation_ring.rs,user_mode.rs,elf_loader.rs,process.rs,interrupts_ext.rs,smp/percpu.rs}`, `crates/hermes/src/app_factory.rs`
-- SDM: `iretq`, TSS.RSP0, `int` DPL=3, SYSCALL/SYSRET STAR[+16], `IA32_EFER.SCE`, `IA32_KERNEL_GS_BASE`
