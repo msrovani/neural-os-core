@@ -2,10 +2,11 @@
 //! ADR-0041 §11: paging/TSS/IST in R0, CapGate in R1. No static Cap privilege escalation here.
 pub use k_nano::paging::{
     demo_active, demo_ring3, demo_ring3_capgate_dma_mmio, demo_ring3_fault_containment,
-    demo_ring3_softfloat_sse, enter_user_mode, fault_abort, mailbox_syscalls,
-    note_sandbox_cap_deny, return_from_user, ring3_can_iretq, ring3_can_register_native,
-    ring3_self_test_iretq, sandbox_dma_denies, sandbox_mmio_denies, sandbox_syscalls, Cap,
-    RING3_MAGIC, TRY_ENTER_RING3, USER_CODE_VA, USER_MARKER_VA, USER_STACK_VA,
+    demo_ring3_softfloat_sse, demo_ring3_t056_opcode_gate, enter_user_mode, fault_abort,
+    mailbox_syscalls, note_sandbox_cap_deny, return_from_user, ring3_can_iretq,
+    ring3_can_register_native, ring3_self_test_iretq, sandbox_dma_denies, sandbox_mmio_denies,
+    sandbox_syscalls, Cap, RING3_MAGIC, TRY_ENTER_RING3, USER_CODE_VA, USER_MARKER_VA,
+    USER_STACK_VA,
 };
 pub use k_nano::ring3::{ring3_mark_hw_gate_passed, USER_MAILBOX_VA};
 

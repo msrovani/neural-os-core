@@ -482,7 +482,8 @@ fn json_u8(body: &str, key: &str) -> Option<u8> {
 }
 
 /// (slot, tries, attempts, last_good). last_good 0 = ausente.
-pub(crate) fn parse_bootcfg(text: &str) -> (u8, u8, u8, u8) {
+/// T-030: ChromeOS-like — exposto para `ota.rs` teste host.
+pub fn parse_bootcfg(text: &str) -> (u8, u8, u8, u8) {
     let slot = if text.contains("\"boot_slot\":\"2\"") || text.contains("slot_b") {
         2
     } else {

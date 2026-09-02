@@ -17,7 +17,9 @@ pub mod approval;
 pub mod hitl_ui;
 pub mod apps;
 pub mod browser_agent;
-// pub mod cron; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
+pub mod cron; // T-026: Cron/LogAgent POST /api/logs com backoff
+pub mod ota; // T-022/T-030: OTA facade (net_bridge) + ChromeOS tries
+pub mod provision; // T-024: NET_READY + first_boot gate
 pub mod cross_os;
 // pub mod elf_loader; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod hermes;
@@ -115,6 +117,7 @@ pub mod chat_tree;
 // pub mod graph_engine; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod matrix_learn;
 pub mod tls;
+pub mod crdt;
 
 
 

@@ -192,3 +192,11 @@ impl<const N: usize> PhysicalBuffer<N> {
 }
 
 // Drop automaticamente via DmaBuf (desaloca frames + restaura WB).
+
+// ─── T-010 BMIDE 0xC8 — Bus Master IDE DMA (PATA) ───────────────────────
+// VERDICT=UNSUPPORTED honesto, sem PIO eterno. ATA PIO é o fallback (amostra 4 setores, skip TCG).
+pub const BMIDE_CMD_PORT: u16 = 0xC8;
+pub fn bmide_probe() {
+    crate::slog_nano!("BMIDE", "warn", "VERDICT=UNSUPPORTED BMIDE 0xC8 DMA not implemented — use AHCI/NVMe/USB (skip PIO eterno)");
+}
+pub fn bmide_is_supported() -> bool { false }

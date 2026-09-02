@@ -9,6 +9,7 @@ extern crate alloc;
 // Self-healing, trust, audit, agency, training, memory, inventory
 // Depends on k_nano (foundation) and cortex (BitNet). Sem dep Ring 2 (jarbas/hermes).
 
+pub mod boot_metrics;
 pub mod agency;
 pub mod agency_importer;
 pub mod arch;
@@ -59,6 +60,7 @@ pub mod self_optimizing_scheduler;
 /// ADR-0063 F2–F5 SGDB (MemoryDoc · Engine · ART · BQ) — MVP Onda 5.
 pub mod self_learning;
 pub mod self_state;
+pub mod provision; // T-024: gate Installed+first_boot
 pub mod sgdb;
 /// #218 4-Tier memory consolidation (SleepCycle CONSOLIDATE).
 pub mod tiers;

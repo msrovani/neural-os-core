@@ -87,8 +87,13 @@ Quando o F6 estiver validado (§6), `isolation_ring::init_connectors()` chamará
 - [x] **iretq estável (TCG):** SESSION_278 `SUCCESS iretq+CPL3` NoDisk. Metal/WHPX aberto.
 - [x] **Contenção de falta (TCG):** fault-containment demo PASS.
 - [x] **DMA/MMIO negados (demo):** CapGate sandbox deny PIN_DMA/MAP_FB (SESSION_278).
-- [x] **Soft-float SSE:** `#UD` contido no demo.
-- [ ] **AS isolado / syscall gate / WHPX+HW / register_native_ring** — B/C continuam gated.
+- [x] **Soft-float SSE:** `#UD` contido no demo → **redefinido** `0102 §4.5 T-056` (verificador opcode **ou** XSAVE; `CR0.EM=0` no tree `simd.rs:25`).
+- [ ] **AS isolado** — `create_sandbox_as` L4 novo + P4[511]+HHDM com `USER_ACCESSIBLE` mascarado (`paging.rs:267-273`); sem deep clone total — **T-053** (`0100`).
+- [ ] **Syscall gate** — `int 0x90` DPL=3 + mailbox USER `0x7000_0030_2000` (`ring3.rs:14`/`paging.rs:299`) + CapGate deny DMA/FB — **T-053**.
+- [ ] **WHPX+HW** — `iretq+CPL3` estável **metal** (T-052) e WHPX separado de `#GP` OVMF (T-051) — não só TCG.
+- [ ] **`register_native_ring`** — `HW_GATE_PASSED && can_iretq && probe_done && hv==None` (`ring3.rs:35-43`) + HITL Escalate → `isolation_ring_available()==true` — **T-054/T-055** (`0100`).
+
+> Granularidade `0102 §11.5` fechada: o checkbox composto foi cindido em 4 — espelha `0100` T-053/054/055. `0102 §10` `L → 4/6-8/cauda ∞` já reflete H2+T-052 como cauda.
 
 Só com **todos** ✅ → `register_native_ring(...)` → B/C nativo liberado (HITL forte).
 

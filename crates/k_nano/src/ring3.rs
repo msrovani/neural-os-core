@@ -93,6 +93,25 @@ pub fn publish_sandbox_fault(reason: &'static str) {
     });
 }
 
+/// T-051: classifica #GP para separar firmware/OVMF vs kernel vs Ring3 user.
+pub fn gp_fault_class(ip: u64, cs: u64) -> &'static str {
+    if cs & 3 == 3 {
+        return "ring3_user";
+    }
+    if ip >= 0xffff_ffff_8000_0000 {
+        return "kernel";
+    }
+    if ip < 0x0010_0000 {
+        return "firmware_ovmf";
+    }
+    "unknown"
+}
+
+/// T-051: true se o #GP provavelmente veio do firmware UEFI/OVMF (não sandbox Ring3).
+pub fn gp_likely_firmware(ip: u64, cs: u64) -> bool {
+    gp_fault_class(ip, cs) == "firmware_ovmf"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +131,25 @@ mod tests {
     #[test]
     fn can_register_false_without_hw_gate() {
         assert!(!ring3_can_register_native());
+    }
+
+    #[test]
+    fn gp_classifies_firmware_low_ip() {
+        assert_eq!(gp_fault_class(0x8000, 0x08), "firmware_ovmf");
+    }
+
+    #[test]
+    fn gp_classifies_ring3_user() {
+        assert_eq!(gp_fault_class(0x7000_0030_0000, 0x1B), "ring3_user");
+    }
+
+    #[test]
+    fn gp_classifies_kernel_high_ip() {
+        assert_eq!(gp_fault_class(0xffff_ffff_8010_0000, 0x08), "kernel");
+    }
+
+    #[test]
+    fn mailbox_layout_48_bytes() {
+        assert_eq!(core::mem::size_of::<SyscallMailbox>(), 48);
     }
 }

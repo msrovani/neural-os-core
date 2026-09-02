@@ -13,3 +13,8 @@ pub use tickv::{
     smoke as tickv_smoke, status_line as tickv_status, stress_gc_smoke, with_tickv, CKPT_KEY,
     HEADER, MAGIC, ScanResult, TickvLite, TickvStats, TICKV,
 };
+
+/// T-007 helper canônico — `k_nano::storage::measure_bandwidth(&mut dyn BlockDevice) -> u64` (B/s, TSC).
+pub fn measure_bandwidth(dev: &mut dyn crate::block_dev::BlockDevice) -> u64 {
+    crate::storage_bw::measure_bandwidth(dev)
+}

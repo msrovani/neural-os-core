@@ -1060,6 +1060,18 @@ pub fn demo_ring3_capgate_dma_mmio() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// T-056 opção A: verificador rejeita blob SSE **antes** do iretq (sem HW).
+pub fn demo_ring3_t056_opcode_gate() -> Result<(), &'static str> {
+    let sse_blob = [0x0F, 0x57, 0xC0, 0xC3]; // xorps xmm0,xmm0; ret
+    match crate::ring3::verify_blob_no_simd(&sse_blob) {
+        Err(_) => {
+            crate::slog_nano!("P6", "info", "SUCCESS T-056 opcode gate rejeitou xorps");
+            Ok(())
+        }
+        Ok(()) => Err("P6: T-056 deveria rejeitar xorps"),
+    }
+}
+
 pub fn demo_ring3_softfloat_sse() -> Result<(), &'static str> {
     if !TRY_ENTER_RING3 { return Ok(()); }
     let mut as_user = create_sandbox_as()?;

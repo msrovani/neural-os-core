@@ -95,13 +95,16 @@ pub fn observe_and_plan(trust_ok: bool) -> (usize, usize) {
         verify: 0,
     };
     k_nano::boot_report::note_ai(ai);
-    k_nano::slog_kai!("Boot", "aios", "{}", ai.line());
+    // T-003 visível na consola (sev=ok, não trace "aios")
+    k_nano::slog_kai!("Boot", "ok", "{}", ai.line());
     let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
         id: 0,
         topic: String::from("BOOT_AI"),
         payload: ai.line().into_bytes(),
         token: event_bus::CapabilityToken::Legacy(1),
     });
+    // T-001 R2 mirror keeps lock-free counters in sync (ponytail: no extra alloc)
+    crate::boot_metrics::set_mirror(ai);
     k_nano::slog_kai!("Boot", "observe", "{} (tabela+recipe; Cortex sem pesos)", summary);
     let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
         id: 0,
@@ -158,6 +161,9 @@ pub fn hydrate_memory() {
         let _ = crate::sgdb::put_hanr("boot_bind", &s);
         crate::self_state::record_life_event(&s);
         k_nano::boot_report::note_ai_verify();
+        crate::boot_metrics::inc_verify(1);
+        // T-001 final emit após verify (observe/plan/act/verify com escalate)
+        k_nano::boot_report::publish_boot_ai();
     } else {
         k_nano::slog_kai!("Boot", "observe", "SGDB nao ready — plano so no EventBus (honesto)");
         *PENDING_HANR.lock() = Some(s);

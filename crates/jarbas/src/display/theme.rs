@@ -145,6 +145,28 @@ const HIGH_CONTRAST: Theme = Theme::new(
     (0x00,0x00,0x00),
 );
 
+// ── Onda 9 T-070 S5: 1 widget tema — JARVIS high-contrast (ponytail: standalone const
+// reuse embedded-graphics DrawTarget já em jarbas; TTF não duplicado — ttf_engine separado).
+// 4 cores núcleo: bg preto, fg branco, accent cyan #00D4FF, border branco. Não entra em
+// THEMES[5] nem THEME_MODE_ATOMIC para não churnar switcher; promover a THEMES[6]+mode=3 quando UI precisar.
+// Se TTF já em eg.rs, apenas validar — eg.rs já tem FbTarget, TTF fica em ttf_engine.rs.
+pub const JARVIS_DARK_HIGH_CONTRAST: Theme = Theme::new(
+    "jarvis-hc",
+    (0x00, 0x00, 0x00),
+    (0x0A, 0x0F, 0x14),
+    (0xFF, 0xFF, 0xFF),
+    (0xC8, 0xD0, 0xD8),
+    (0x00, 0xD4, 0xFF),
+    (0x00, 0xA8, 0xCC),
+    (0xFF, 0xFF, 0xFF),
+    (0x0A, 0x0A, 0x0A),
+    (0x1A, 0x1A, 0x20),
+    (0xFF, 0x3B, 0x30),
+    (0x30, 0xFF, 0x90),
+    (0xFF, 0xCC, 0x00),
+    (0x00, 0x00, 0x00),
+);
+
 pub fn current() -> &'static Theme {
     &THEMES[ACTIVE_THEME.load(Ordering::Relaxed)]
 }
@@ -194,4 +216,92 @@ pub fn toggle_mode() {
 
 pub fn list_names() -> Vec<&'static str> {
     THEMES.iter().map(|t| t.name).collect()
+}
+
+// ── host tests Onda 9 T-070..072 (ponytail: 1 arquivo, mínimo) ───────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_does_not_panic() {
+        // T-070: Theme::current() / current_theme() não quebram após adicionar JARVIS_HC
+        let a = current();
+        assert!(!a.name.is_empty());
+        assert!(a.bg != a.fg, "bg != fg");
+        let b = current_theme();
+        assert!(!b.name.is_empty());
+        // novo tema standalone acessível sem quebrar índices
+        assert_eq!(JARVIS_DARK_HIGH_CONTRAST.name, "jarvis-hc");
+        assert_eq!(JARVIS_DARK_HIGH_CONTRAST.bg, (0x00, 0x00, 0x00));
+        assert_eq!(JARVIS_DARK_HIGH_CONTRAST.accent, (0x00, 0xD4, 0xFF));
+        assert_eq!(JARVIS_DARK_HIGH_CONTRAST.border, (0xFF, 0xFF, 0xFF));
+    }
+
+    #[test]
+    fn jarvis_hc_four_core_colors() {
+        // 4 cores núcleo distintas (bg/fg/accent/border) — critério T-070
+        let t = &JARVIS_DARK_HIGH_CONTRAST;
+        assert_ne!(t.bg, t.fg);
+        assert_ne!(t.bg, t.accent);
+        assert_ne!(t.fg, t.accent);
+        assert_ne!(t.border, t.bg);
+        // fg branco puro, accent cyan JARVIS
+        assert_eq!(t.fg, (0xFF, 0xFF, 0xFF));
+        assert_eq!(t.accent, (0x00, 0xD4, 0xFF));
+    }
+
+    #[test]
+    fn toggle_mode_still_cycles_three() {
+        // T-070: THEME_MODE_ATOMIC 0..2 continua — JARVIS_HC standalone não churnou ciclo
+        let prev = THEME_MODE_ATOMIC.load(core::sync::atomic::Ordering::Relaxed);
+        toggle_mode();
+        let after = THEME_MODE_ATOMIC.load(core::sync::atomic::Ordering::Relaxed);
+        assert_ne!(prev, after);
+        // restaura
+        THEME_MODE_ATOMIC.store(prev, core::sync::atomic::Ordering::Relaxed);
+        let t = current_theme();
+        assert!(t.name == "cosmic-dark" || t.name == "cosmic-light" || t.name == "high-contrast");
+    }
+
+    #[test]
+    fn tick_does_not_call_render_card_session_261() {
+        // T-072: SESSION_261 — tick() nunca desenha cards diretamente; só render() pinta
+        let agent_src = include_str!("agent.rs");
+        // DisplayAgent::tick não deve conter render_card/draw_card — só spawn_card + render()
+        // agent.rs atualmente tem 0 ocorrências; se alguém reintroduzir, este teste quebra
+        assert!(
+            !agent_src.contains("render_card"),
+            "agent.rs tick() must not call render_card directly — SESSION_261"
+        );
+        assert!(
+            !agent_src.contains("draw_card"),
+            "agent.rs tick() must not call draw_card — SESSION_261"
+        );
+        // compositor render deve conter render_card (único lugar permitido)
+        let comp_src = include_str!("compositor.rs");
+        assert!(comp_src.contains("fn render("), "compositor must have render()");
+        assert!(
+            comp_src.contains("render_card"),
+            "compositor::render must call render_card (allowed painting site)"
+        );
+        // card.rs deve usar FbTarget (DrawTarget reuse, T-070)
+        let eg_src = include_str!("eg.rs");
+        assert!(eg_src.contains("DrawTarget"), "eg.rs must expose DrawTarget");
+        assert!(eg_src.contains("FbTarget"), "eg.rs must have FbTarget");
+    }
+
+    #[test]
+    fn hda_playback_path_exists_not_uvc() {
+        // T-071: HDA playback já existe (k_hal::audio::hda::write_hda_playback); UVC = AWAITING_HW
+        // Valida via include_str que o path não foi quebrado: mixer.rs chama write_hda_playback,
+        // uvc_driver.rs existe mas é AWAITING_HW (não implementado aqui)
+        let mixer_src = include_str!("../audio/mixer.rs");
+        assert!(
+            mixer_src.contains("write_hda_playback"),
+            "mixer must call write_hda_playback (HDA playback path)"
+        );
+        let uvc_src = include_str!("../uvc_driver.rs");
+        assert!(uvc_src.contains("UvcDriverAgent"), "uvc_driver.rs must still exist (AWAITING_HW)");
+    }
 }

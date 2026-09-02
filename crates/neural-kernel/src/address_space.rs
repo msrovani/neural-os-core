@@ -9,6 +9,10 @@ pub use k_nano::paging::{Cap, SYS_DEMAND_PAGE, SYS_MAP_FILE, SYS_MAP_WEIGHTS};
 
 /// Demo retained as wire into k_hal/k_nano where possible; kept here for boot log.
 pub fn demo_as_r1_r3_shallow() {
+    if !crate::demo_flags::RUN_CAP_DEMOS {
+        k_nano::slog_bin!("AS", "r1", "skip — cap-demos off (N7 ADR-0102)");
+        return;
+    }
     k_nano::slog_bin!("AS", "r1", "demo shallow start (facade → k_nano::paging + k_hal::cap_gate)");
     let bar0 = match k_hal::cap_gate::hal_as_bar0() {
         Some(b) if b != 0 && b != 0xffff_ffff_ffff_ffff => b,

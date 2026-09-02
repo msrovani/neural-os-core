@@ -101,6 +101,46 @@ impl StorageBus {
             mbr_ok,
             mounts,
         });
+        // T-013..016 — publica /hw/storage/<id>/… no SGDB (reuse sgdb.rs, não inventa path)
+        // Best-effort: slog visível + tickv se pronto; não hanga boot.
+        {
+            let kind_str = match kind {
+                BusKind::Nvme => "nvme",
+                BusKind::Ahci => "ahci",
+                BusKind::Ata => "ata",
+                BusKind::Usb => "usb",
+                BusKind::VirtioBlk => "virtio-blk",
+            };
+            let idx = self.entries.len().saturating_sub(1);
+            crate::slog_nano!("SGDB", "ok", "/hw/storage/{}/kind={} sectors={} mbr_ok={}", idx, kind_str, total, mbr_ok);
+            // delega ao sgdb central (também sloga)
+            let full_kind = alloc::format!("hw/storage/{}/kind", idx);
+            if crate::storage::tickv::is_ready() {
+                let _ = crate::storage::tickv::put_blob(&full_kind, kind_str.as_bytes());
+                let sec_key = alloc::format!("hw/storage/{}/sectors", idx);
+                let _ = crate::storage::tickv::put_blob(&sec_key, alloc::format!("{}", total).as_bytes());
+            }
+            // T-007 banda opcional: não mede aqui (evita I/O extra no probe); medida explícita via storage_bw::measure_bandwidth
+            if total > 0 && total < 1024 {
+                crate::slog_nano!("Storage", "warn", "CRITICO disco {} pequeno susp — possivel TCG lento", name);
+            }
+            // T-014..016 + T-010 BMIDE — publica /hw/* restante uma vez (lazy, não repetir por device)
+            {
+                use core::sync::atomic::{AtomicBool, Ordering};
+                static HW_ONCE: AtomicBool = AtomicBool::new(false);
+                if !HW_ONCE.swap(true, Ordering::Relaxed) {
+                    crate::sgdb::publish_gpu();
+                    crate::sgdb::publish_net();
+                    crate::sgdb::publish_wifi();
+                    crate::dma::bmide_probe();
+                }
+            }
+        }
+    }
+
+    /// T-013 helper — publica todo /hw/storage/* (chame após probe_all)
+    pub fn publish_all_storage(&self) {
+        crate::sgdb::publish_storage();
     }
 }
 

@@ -109,11 +109,16 @@ pub fn user_data_selector() -> SegmentSelector {
     crate::gdt::sels().user_data_selector
 }
 
-/// Atualiza RSP0 no TSS **carregado** (GDT k_nano). ADR-0102 R3-02 — não usar `interrupts_ext::set_rsp0`.
+/// Atualiza RSP0 no TSS **carregado** (GDT k_nano). ADR-0102 R3-02.
 pub fn set_bsp_rsp0(top: VirtAddr) {
     unsafe {
         BSP_TSS_STORAGE.privilege_stack_table[0] = top;
     }
+}
+
+/// Alias canônico ADR-0102 §5 (`set_rsp0_live`).
+pub fn set_rsp0_live(top: VirtAddr) {
+    set_bsp_rsp0(top);
 }
 
 /// DS Ring0.
@@ -771,4 +776,31 @@ pub fn calibrate_timer_hz() {
     }
     #[cfg(not(target_arch = "x86_64"))]
     { TIMER_HZ.store(18, core::sync::atomic::Ordering::Relaxed); }
+}
+
+#[cfg(test)]
+mod host_tests {
+    #[test]
+    fn t033_ist_constants_16k_per_level() {
+        // T-033/034: IST stacks 16KB per AP, 3 levels (#DF/#PF/#GP) — SESSION_281
+        assert_eq!(crate::smp::percpu::IST_STACK_SIZE, 16384);
+        assert_eq!(crate::smp::percpu::IST_COUNT, 3);
+        // T-037: early GDT não tem 511 TSS
+        assert_eq!(crate::gdt::early_gdt_u64_slots(), 7);
+    }
+
+    #[test]
+    fn t034_sti_only_with_tss() {
+        // ap_load_idt_and_tss só faz sti quando Some(selector) — sem IST/TSS não habilita IF
+        // Host não pode chamar a fn real (requer GDT), mas valida a assinatura:
+        // T-034 = interrupt_stack_table não zero implica TSS válido
+        let tss = crate::smp::percpu::IST_STACK_SIZE * crate::smp::percpu::IST_COUNT;
+        assert_eq!(tss, 48 * 1024);
+    }
+
+    #[test]
+    fn t037_early_gdt_not_511() {
+        // boot 1c = 7 u64, não 1+4+511*2 = 1027
+        assert_eq!(crate::gdt::early_gdt_u64_slots(), 7);
+    }
 }

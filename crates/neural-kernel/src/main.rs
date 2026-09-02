@@ -2309,6 +2309,8 @@ pub(crate) fn kernel_boot(
     // IDEA #539c: ramlog → memória L3 episódica (Remember entre boots). Roda
     // APÓS boot_init para o recall cross-boot enxergar o NSGDB montado (Sgdb::open).
     k_ai::boot_observe::ingest_bootlog();
+    // ADR-0100 T-001 Onda 0.1 + 0102 §11.5: final BOOT_AI após boot_init+ingest (observe/plan/act/verify)
+    k_nano::boot_report::publish_boot_ai();
     {
         let p = k_ai::sgdb::hamming_kernel_name();
         k_nano::slog_bin!("sgdb", "hamming", "{}", p);
@@ -2710,7 +2712,7 @@ pub(crate) fn kernel_boot(
     k_hal::cap_gate::demo_h5_deny();
     // ADR-0056: 4 LEGOs na FAT — localize + utilize bind table (≠ Ready)
     k_hal::lego_boot::boot_selftest();
-    // ADR-0041 Fase 4: AS R1/R3 shallow (PoC non-fatal)
+    // ADR-0041 Fase 4: AS R1/R3 shallow (PoC non-fatal; N7 cap-demos)
     crate::address_space::demo_as_r1_r3_shallow();
 
     // GPU: detecta hardware, separa display/compute, inicializa backend (k_hal BE)
@@ -2857,6 +2859,7 @@ pub(crate) fn kernel_boot(
 
     publish_boot_phase(BootPhase::DriverInit, "NIC/ATA/AHCI/xHCI/GPU probes concluidos");
 
+    if crate::demo_flags::RUN_CAP_DEMOS {
     // MVP C (ADR-0041): CR3 switch + ring shared + Cap — non-fatal
     match crate::ipc::demo_two_spaces() {
         Ok(()) => {
@@ -2914,9 +2917,20 @@ pub(crate) fn kernel_boot(
             crate::boot_logger::log("BOOT: P5 mmap WARN (non-fatal)");
         }
     }
+    } // cap-demos: MVP-C .. P5
 
-    // P6 (ADR-0041): Ring3 real via iretq — non-fatal
+    // P6 (ADR-0041 / ADR-0102): Ring3 real via iretq — non-fatal (sempre; usa create_sandbox_as)
     crate::display::fb::boot_ckpt(44, "ADR-0041 demos start");
+    match crate::user_mode::demo_ring3_t056_opcode_gate() {
+        Ok(()) => {
+            k_nano::slog_bin!("P6", "info", "Ring3 T-056 opcode gate OK");
+            crate::boot_logger::log("BOOT: P6 Ring3 T-056 OK");
+        }
+        Err(e) => {
+            k_nano::slog_bin!("P6", "info", "WARN T-056: {} — boot continua", e);
+            crate::boot_logger::log("BOOT: P6 Ring3 T-056 WARN (non-fatal)");
+        }
+    }
     match crate::user_mode::demo_ring3() {
         Ok(()) => {
             k_nano::slog_bin!("P6", "info", "Ring3 user-mode demo OK");
@@ -2959,13 +2973,18 @@ pub(crate) fn kernel_boot(
     }
     crate::display::fb::boot_ckpt(45, "P6 ring3");
 
-    // ADR-0082 F2.1: ELF64 loader self-test (parse + sandbox + RX/RW + BSS) — non-fatal
-    // DEAD CODE: elf_loader excluded (HERMES_AUDIT.md)
-    // if crate::elf_loader::elf_boot_self_test() {
-    //     crate::boot_logger::log("BOOT: ELF loader self-test OK");
-    // } else {
-    //     crate::boot_logger::log("BOOT: ELF loader self-test WARN (non-fatal)");
-    // }
+    if crate::elf_loader::elf_boot_self_test() {
+        crate::boot_logger::log("BOOT: ELF loader self-test OK");
+    } else {
+        crate::boot_logger::log("BOOT: ELF loader self-test WARN (non-fatal)");
+    }
+    if crate::user_mode::ring3_can_iretq() {
+        k_nano::slog_bin!("P6", "info", "ring3_can_iretq=true (H3 self-test)");
+        crate::boot_logger::log("BOOT: P6 can_iretq OK");
+    } else {
+        k_nano::slog_bin!("P6", "warn", "ring3_can_iretq=false");
+        crate::boot_logger::log("BOOT: P6 can_iretq WARN");
+    }
     crate::display::fb::boot_ckpt(45, "P6 elf");
 
     // ADR-0082 F3.1: arena W^X USER no sandbox AS (base p/ Cranelift B/C) — non-fatal
@@ -2979,6 +2998,7 @@ pub(crate) fn kernel_boot(
     // ADR-0077: conectores do Ring3 isolation ring (ex-ADR-0059 F6) — gated
     crate::isolation_ring::init_connectors();
 
+    if crate::demo_flags::RUN_CAP_DEMOS {
     // P7 (ADR-0041): demand-paging via #PF (lazy Cortex weights) — non-fatal
     match crate::cortex_mmap::demo_demand_paging() {
         Ok(()) => {
@@ -3017,6 +3037,10 @@ pub(crate) fn kernel_boot(
         }
     }
     crate::display::fb::boot_ckpt(45, "P6 gguf");
+    } else {
+        k_nano::slog_bin!("Cap", "info", "P4-P9 cap-demos SKIP (feature cap-demos off)");
+        crate::boot_logger::log("BOOT: cap-demos SKIP (N7 ADR-0102)");
+    }
 
     // Skill Observer: registra observação inicial
     crate::display::fb::boot_ckpt(45, "ADR-0041 demos done");

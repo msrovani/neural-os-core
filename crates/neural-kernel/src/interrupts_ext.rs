@@ -7,7 +7,6 @@ use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 use x86_64::instructions::segmentation::Segment;
-use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
 use x86_64::structures::idt::{InterruptStackFrame, PageFaultErrorCode};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
@@ -19,9 +18,7 @@ const PAGE_FAULT_IST_INDEX: u16 = 1;
 const GENERAL_PROTECTION_IST_INDEX: u16 = 2;
 const TIMER_IST_INDEX: u16 = 3;
 
-// --------------------------------------------------------------------------
-// P6: TSS per-process (Ring3) — GDT user + TSS.RSP0 para trap de CPL=3.
-// --------------------------------------------------------------------------
+// P6: TSS per-process (Ring3) — stacks RSP0 por slot; GDT/TSS canônicos em k_nano.
 
 // Wrapper com interior mutability para TSS — só mutado single-threaded
 // durante transições Ring3 (CLI), portanto Sync é seguro.
@@ -99,10 +96,9 @@ lazy_static! {
 /// Current process index for TSS selection (0 = kernel).
 static CURRENT_PROC_IDX: AtomicUsize = AtomicUsize::new(0);
 
-/// Atualiza RSP0 do TSS para o processo atual (Phase 2).
+/// Atualiza RSP0 do TSS para o processo atual — delega ao TSS **vivo** (ADR-0102).
 pub fn set_rsp0(stack_top: VirtAddr) {
-    let idx = CURRENT_PROC_IDX.load(Ordering::Relaxed);
-    TSS_ARRAY[idx].set_rsp0(stack_top);
+    k_nano::interrupts::set_rsp0_live(stack_top);
 }
 
 /// Switch to process TSS (updates RSP0 on the **live** BSP TSS — ADR-0102 R3-02).
@@ -112,63 +108,10 @@ pub fn switch_to_proc_tss(proc_idx: usize) {
     }
     CURRENT_PROC_IDX.store(proc_idx, Ordering::SeqCst);
     let rsp0 = TSS_ARRAY[proc_idx].privilege_stack_table[0];
-    k_nano::interrupts::set_bsp_rsp0(rsp0);
+    k_nano::interrupts::set_rsp0_live(rsp0);
 }
 
-/// Retorna referência ao TSS do processo atual para init da GDT.
-fn tss_ref() -> &'static TaskStateSegment {
-    &TSS_ARRAY[0]
-}
-
-lazy_static! {
-    static ref GDT: (GlobalDescriptorTable, Selectors) = {
-        let mut gdt = GlobalDescriptorTable::new();
-        // GDT max 8 slots: null + 4 usersegs + TSS(2) = 7
-        let code_selector = gdt.add_entry(Descriptor::kernel_code_segment());
-        let data_selector = gdt.add_entry(Descriptor::kernel_data_segment());
-        let user_code_selector = gdt.add_entry(Descriptor::user_code_segment());
-        let user_data_selector = gdt.add_entry(Descriptor::user_data_segment());
-        let tss_selector = gdt.add_entry(Descriptor::tss_segment(tss_ref()));
-        (
-            gdt,
-            Selectors {
-                code_selector,
-                data_selector,
-                user_code_selector,
-                user_data_selector,
-                tss_selector,
-            },
-        )
-    };
-}
-
-struct Selectors {
-    code_selector: SegmentSelector,
-    data_selector: SegmentSelector,
-    user_code_selector: SegmentSelector,
-    user_data_selector: SegmentSelector,
-    tss_selector: SegmentSelector,
-}
-
-/// Seletor CS Ring0 (P6 / enter_user_mode).
-pub fn kernel_code_selector() -> SegmentSelector {
-    GDT.1.code_selector
-}
-
-/// Seletor DS Ring0.
-pub fn kernel_data_selector() -> SegmentSelector {
-    GDT.1.data_selector
-}
-
-/// Seletor CS Ring3 — **GDT carregada** em `k_nano::interrupts` (SESSION_278).
-pub fn user_code_selector() -> SegmentSelector {
-    k_nano::interrupts::user_code_selector()
-}
-
-/// Seletor DS/SS Ring3 — GDT k_nano (não a GDT fantasma local).
-pub fn user_data_selector() -> SegmentSelector {
-    k_nano::interrupts::user_data_selector()
-}
+// GDT fantasma removida (SESSION_278 / ADR-0102) — seletores user/kernel vivem em k_nano::gdt.
 
 // --------------------------------------------------------------------------
 // Serial lock-free (exception / P6 abort path — sem Mutex; evita #DF cascade)
@@ -240,9 +183,19 @@ extern "x86-interrupt" fn invalid_opcode_handler(f: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFrame, code: u64) {
+    let ip = f.instruction_pointer.as_u64();
+    let cs = f.code_segment;
     if crate::user_mode::demo_active() {
         dump_exception("#GP", &f, Some(code));
         crate::user_mode::fault_abort("P6 #GP in Ring3 demo");
+    }
+    let class = k_nano::ring3::gp_fault_class(ip, cs);
+    puts(b"[EXC] #GP class=");
+    puts(class.as_bytes());
+    putc(b'\n');
+    if k_nano::ring3::gp_likely_firmware(ip, cs) {
+        puts(b"[EXC] #GP firmware/OVMF (T-051) - ignorando (non-fatal)\n");
+        return;
     }
     dump_exception("#GP", &f, Some(code));
     loop { x86_64::instructions::hlt(); }

@@ -587,3 +587,64 @@ pub unsafe fn init_smp() {
     let workers = (ap_woke as usize).saturating_add(1);
     work_stealing::init_global_pool(workers);
 }
+
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+    use core::sync::atomic::Ordering;
+    use spin::Mutex;
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn t033_ap_pollable_starts_false() {
+        let _g = LOCK.lock();
+        // T-033: AP_IDT_READY barrier gate — ap_pollable deve começar false (BSP-only safe default)
+        // só vira true após último AP fazer AP_IDT_READY == AP_EXPECTED
+        // host começa sem APs, então false
+        // não força true aqui — valida default honesto
+        assert!(!ap_pollable() || AP_ENTRY_COUNTER.load(Ordering::Relaxed) > 0);
+        // em teste host puro, deve ser false
+        let was = AP_POLLABLE.load(Ordering::Relaxed);
+        if AP_EXPECTED.load(Ordering::Relaxed) == 0 {
+            assert!(!was, "default OFF sem IDT/IPI pleno");
+        }
+    }
+
+    #[test]
+    fn t033_ap_idt_ready_barrier_invariants() {
+        let _g = LOCK.lock();
+        // barrier: AP_IDT_READY <= AP_EXPECTED quando pollable false
+        let ready = AP_IDT_READY.load(Ordering::Relaxed);
+        let expected = AP_EXPECTED.load(Ordering::Relaxed);
+        if !ap_pollable() {
+            assert!(ready <= expected || expected == 0);
+        }
+    }
+
+    #[test]
+    fn t034_ist_constants_host() {
+        // T-034: sti só com IST mapeado — valida que cada AP tem 3 stacks de 16KB
+        assert_eq!(percpu::IST_STACK_SIZE, 16384);
+        assert_eq!(percpu::IST_COUNT, 3);
+    }
+
+    #[test]
+    fn t037_heap_not_bss_511_host() {
+        let _g = LOCK.lock();
+        // T-037: PerCpu/TSS heap, não BSS 511 — boot 1c não reserva
+        // ap_slots já testado em percpu, aqui valida que AP_EXPECTED 0 => ap_slots 0
+        if AP_EXPECTED.load(Ordering::Relaxed) == 0 {
+            assert_eq!(percpu::ap_slots(), 0);
+        }
+    }
+
+    #[test]
+    fn t035_parallel_gate_predicates() {
+        // T-035: cortex::parallel_* gate = allow_smp && ap_pollable && entry_count>0
+        // Em host sem APs, gate deve ser false => BSP fallback, não deadlock
+        let gate = crate::platform_probe::allow_smp() && ap_pollable() && ap_entry_count() > 0;
+        if !ap_pollable() {
+            assert!(!gate, "sem ap_pollable=true, parallel_* deve cair no BSP");
+        }
+    }
+}

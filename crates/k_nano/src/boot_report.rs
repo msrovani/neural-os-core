@@ -91,30 +91,75 @@ impl BootReport {
 
 static BOOT_REPORT: Mutex<Option<BootReport>> = Mutex::new(None);
 static GPU_NOTE: Mutex<Option<(String, bool)>> = Mutex::new(None);
-static AI_NOTE: Mutex<BootAiCounts> = Mutex::new(BootAiCounts {
-    observe: 0,
-    plan: 0,
-    act: 0,
-    escalate: 0,
-    verify: 0,
-});
+// ADR-0100 Onda 0 T-001: lock-free atomic counters (observe/plan/act/verify/escalate)
+static AI_OBSERVE: AtomicU32 = AtomicU32::new(0);
+static AI_PLAN: AtomicU32 = AtomicU32::new(0);
+static AI_ACT: AtomicU32 = AtomicU32::new(0);
+static AI_ESCALATE: AtomicU32 = AtomicU32::new(0);
+static AI_VERIFY: AtomicU32 = AtomicU32::new(0);
 static LAST_SCORE: Mutex<String> = Mutex::new(String::new());
 static PHASE_SEEN: AtomicU32 = AtomicU32::new(0);
+
+pub fn snapshot_ai() -> BootAiCounts {
+    BootAiCounts {
+        observe: AI_OBSERVE.load(Ordering::Relaxed),
+        plan: AI_PLAN.load(Ordering::Relaxed),
+        act: AI_ACT.load(Ordering::Relaxed),
+        escalate: AI_ESCALATE.load(Ordering::Relaxed),
+        verify: AI_VERIFY.load(Ordering::Relaxed),
+    }
+}
+pub fn reset_ai() {
+    AI_OBSERVE.store(0, Ordering::Relaxed);
+    AI_PLAN.store(0, Ordering::Relaxed);
+    AI_ACT.store(0, Ordering::Relaxed);
+    AI_ESCALATE.store(0, Ordering::Relaxed);
+    AI_VERIFY.store(0, Ordering::Relaxed);
+}
+pub fn inc_observe(n: u32) {
+    AI_OBSERVE.fetch_add(n, Ordering::Relaxed);
+}
+pub fn inc_plan(n: u32) {
+    AI_PLAN.fetch_add(n, Ordering::Relaxed);
+}
+pub fn inc_act(n: u32) {
+    AI_ACT.fetch_add(n, Ordering::Relaxed);
+}
+pub fn inc_escalate(n: u32) {
+    AI_ESCALATE.fetch_add(n, Ordering::Relaxed);
+}
+pub fn inc_verify(n: u32) {
+    AI_VERIFY.fetch_add(n, Ordering::Relaxed);
+}
 
 pub fn note_gpu(name: &str, ok: bool) {
     *GPU_NOTE.lock() = Some((String::from(name), ok));
 }
 
 pub fn note_ai(c: BootAiCounts) {
-    let mut g = AI_NOTE.lock();
-    let verify = g.verify;
-    *g = c;
-    g.verify = g.verify.max(verify);
+    let cur_verify = AI_VERIFY.load(Ordering::Relaxed);
+    AI_OBSERVE.store(c.observe, Ordering::Relaxed);
+    AI_PLAN.store(c.plan, Ordering::Relaxed);
+    AI_ACT.store(c.act, Ordering::Relaxed);
+    AI_ESCALATE.store(c.escalate, Ordering::Relaxed);
+    AI_VERIFY.store(cur_verify.max(c.verify), Ordering::Relaxed);
 }
 
 pub fn note_ai_verify() {
-    let mut g = AI_NOTE.lock();
-    g.verify = g.verify.saturating_add(1);
+    AI_VERIFY.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Emit serial BOOT_AI line (sev=ok, visível) + EventBus BOOT_AI (payload = line).
+pub fn publish_boot_ai() {
+    let c = snapshot_ai();
+    let line = c.line();
+    crate::slog_bin!("BOOT", "ok", "{}", line);
+    let _ = crate::globals::EVENT_BUS.publish(event_bus::Event {
+        id: 0,
+        topic: alloc::string::String::from("BOOT_AI"),
+        payload: line.into_bytes(),
+        token: event_bus::CapabilityToken::Legacy(1),
+    });
 }
 
 pub fn store(report: BootReport) {
@@ -331,10 +376,12 @@ pub fn finalize_and_publish() -> BootReport {
         });
     }
 
-    r.ai = *AI_NOTE.lock();
+    r.ai = snapshot_ai();
     r.score = build_score_text();
     *LAST_SCORE.lock() = r.score.clone();
     publish_score_serial(&r.score);
+    // ADR-0100 T-001: também publica BOOT_AI final (visível) para telemetria IA
+    publish_boot_ai();
     store(r.clone());
     r
 }
@@ -372,5 +419,47 @@ mod tests {
         assert!(s.contains("BOOT SCORE"));
         assert!(s.contains("qemu="));
         assert!(s.contains("attention"));
+    }
+
+    #[test]
+    fn atomic_boot_ai_roundtrip() {
+        reset_ai();
+        inc_observe(3);
+        inc_plan(2);
+        inc_act(2);
+        inc_escalate(1);
+        inc_verify(1);
+        let c = snapshot_ai();
+        let line = c.line();
+        let p = parse_boot_ai_line(&line).unwrap();
+        assert_eq!(p.observe, 3);
+        assert_eq!(p.plan, 2);
+        assert_eq!(p.verify, 1);
+        // T-002 Escalate ≠ act
+        assert_eq!(p.escalate, 1);
+        assert_eq!(p.act, 2);
+        reset_ai();
+    }
+
+    #[test]
+    fn note_ai_preserves_verify_max() {
+        reset_ai();
+        note_ai(BootAiCounts {
+            observe: 5,
+            plan: 1,
+            act: 1,
+            escalate: 0,
+            verify: 0,
+        });
+        inc_verify(2);
+        note_ai(BootAiCounts {
+            observe: 5,
+            plan: 1,
+            act: 1,
+            escalate: 0,
+            verify: 0,
+        });
+        assert_eq!(snapshot_ai().verify, 2);
+        reset_ai();
     }
 }

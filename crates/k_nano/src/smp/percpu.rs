@@ -150,10 +150,70 @@ pub fn cpu_id() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use spin::Mutex;
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn no_511_ap_array_in_bss() {
         // Slots começam em 0; 1c não reserva PerCpu[511].
+        // 1c => n_aps=0 => heap 0, não BSS 511
         assert_eq!(super::ap_slots(), 0);
+    }
+
+    #[test]
+    fn ist_stack_constants_are_correct() {
+        // T-033/034: IST 16KB per level, 3 levels (#DF, #PF, #GP)
+        assert_eq!(IST_STACK_SIZE, 16 * 1024);
+        assert_eq!(IST_COUNT, 3);
+        // total per AP = 48KB, não 511*TSS no BSS
+        assert_eq!(IST_STACK_SIZE * IST_COUNT, 48 * 1024);
+    }
+
+    #[test]
+    fn ap_slots_heap_limited_to_madt() {
+        let _g = TEST_LOCK.lock();
+        // T-037: heap Vec, não BSS 511 — boot 1c não reserva
+        // alloc_slots(0) => len 0
+        let before = ap_slots();
+        assert!(alloc_slots(0));
+        assert_eq!(ap_slots(), 0);
+        // alloc 3 APs => len 3, não 511
+        assert!(alloc_slots(3));
+        assert_eq!(ap_slots(), 3);
+        assert!(ap_pcpu_ptr_mut(0).is_some());
+        assert!(ap_pcpu_ptr_mut(2).is_some());
+        assert!(ap_pcpu_ptr_mut(3).is_none()); // oob
+        assert!(ap_pcpu_ptr_mut(511).is_none()); // nunca 511
+        // cleanup: volta a 0 para não poluir outros testes
+        AP_PCPU_LEN.store(before as u16, core::sync::atomic::Ordering::Release);
+        if before == 0 {
+            AP_PCPU_PTR.store(0, core::sync::atomic::Ordering::Release);
+        }
+    }
+
+    #[test]
+    fn alloc_mapped_stack_returns_aligned_top() {
+        let _g = TEST_LOCK.lock();
+        let top = alloc_mapped_stack(4096).unwrap();
+        assert!(top >= 4096);
+        assert_eq!(top & 0xF, 0); // 16-byte align
+        // segundo stack não colide
+        let top2 = alloc_mapped_stack(IST_STACK_SIZE).unwrap();
+        assert_ne!(top, top2);
+    }
+
+    #[test]
+    fn init_ap_ist_returns_three_stacks() {
+        let _g = TEST_LOCK.lock();
+        let stacks = unsafe { init_ap_ist(0) }.unwrap();
+        assert_eq!(stacks.len(), 3);
+        for &s in &stacks {
+            assert!(s != 0);
+            assert_eq!(s & 0xF, 0);
+        }
+        assert_ne!(stacks[0], stacks[1]);
+        assert_ne!(stacks[1], stacks[2]);
     }
 }
 
