@@ -3512,7 +3512,13 @@ pub fn slim_prompt_tokens_for_heavy(tokens: &[u32], use_bpe: bool) -> Vec<u32> {
 }
 
 pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder: Option<&mut StructuredDecoder>) -> alloc::string::String {
-    let max_seq = model.max_seq.min(64);
+    // Respect model context: large models (hidden>=2048) use more tokens.
+    // Small demo models cap at 64; real models use their configured max_seq.
+    let max_seq = if model.hidden >= 2048 {
+        model.max_seq.min(512) // Falcon3: up to 512 tokens (KV-cache safe)
+    } else {
+        model.max_seq.min(64)  // Demo: cap at 64
+    };
     let use_bpe = crate::bpe::is_loaded();
     let eos: u32 = if use_bpe { crate::bpe::eos_id() as u32 } else { EOS as u32 };
     let eot: u32 = if use_bpe { crate::bpe::eot_id() as u32 } else { EOS as u32 };

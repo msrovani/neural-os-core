@@ -1353,10 +1353,26 @@ impl GgufBackedModel {
     }
 }
 
+impl GgufBackedModel {
+    /// Wraps user prompt in Falcon3/Llama chat template.
+    /// Format: <|system|>\n{system}\n<|user|>\n{prompt}\n<|assistant|>\n
+    fn format_chat_prompt(&self, prompt: &str) -> alloc::string::String {
+        // Check if prompt already has chat tags (avoid double-wrapping)
+        if prompt.contains("<|user|>") || prompt.contains("<|assistant|>") {
+            return alloc::string::String::from(prompt);
+        }
+        alloc::format!(
+            "<|system|>\nYou are a helpful AI assistant. Be concise and accurate.\n<|user|>\n{}\n<|assistant|>\n",
+            prompt
+        )
+    }
+}
+
 impl Model for GgufBackedModel {
     fn generate(&self, prompt: &str) -> String {
         if let Some(model) = self.try_build_transformer() {
-            crate::cortex::generate_text(&model, prompt)
+            let formatted = self.format_chat_prompt(prompt);
+            crate::cortex::generate_text(&model, &formatted)
         } else {
             let summary = gguf_summary(&self.file);
             alloc::format!("[GGUF] Modelo carregado. {} camadas, {} hidden.\n\
