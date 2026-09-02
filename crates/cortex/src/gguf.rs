@@ -40,26 +40,33 @@ pub enum GgufType {
     Q4_K,
     Q5_K,
     Q6_K,
+    Q8_K,
+    BF16,
+    TQ1_0,
     TQ2_0,
     Unknown(u32),
 }
 
 impl GgufType {
     fn from_u32(v: u32) -> Self {
+        // Standard GGUF type IDs (ggml-quants.h / gguf-py constants.py)
         match v {
             0 => GgufType::F32,
             1 => GgufType::F16,
-            2 => GgufType::Q4_0,
-            3 => GgufType::Q4_1,
-            6 => GgufType::Q5_0,
-            7 => GgufType::Q5_1,
-            8 => GgufType::Q8_0,
-            9 => GgufType::Q8_1,
-            10 => GgufType::Q2_K,
-            11 => GgufType::Q3_K,
-            12 => GgufType::Q4_K,
-            13 => GgufType::Q5_K,
-            14 => GgufType::Q6_K,
+            2 => GgufType::BF16,
+            3 => GgufType::Q4_0,
+            4 => GgufType::Q4_1,
+            5 => GgufType::Q5_0,
+            6 => GgufType::Q5_1,
+            7 => GgufType::Q8_0,
+            8 => GgufType::Q8_1,
+            9 => GgufType::Q2_K,
+            10 => GgufType::Q3_K,
+            11 => GgufType::Q4_K,
+            12 => GgufType::Q5_K,
+            13 => GgufType::Q6_K,
+            14 => GgufType::Q8_K,
+            24 => GgufType::TQ1_0,
             25 => GgufType::TQ2_0,
             x => GgufType::Unknown(x),
         }
@@ -77,6 +84,9 @@ impl GgufType {
             GgufType::Q4_K => 5,
             GgufType::Q5_K => 6,
             GgufType::Q6_K => 7,
+            GgufType::Q8_K => 9,
+            GgufType::BF16 => 16,
+            GgufType::TQ1_0 => 1,
             GgufType::TQ2_0 => 2,
             GgufType::Unknown(_) => 32,
         }
@@ -119,9 +129,19 @@ impl GgufType {
                 let blocks = (ne + QK_K - 1) / QK_K;
                 blocks.saturating_mul(Q5_K_BLOCK_BYTES)
             }
+            GgufType::BF16 => ne.saturating_mul(2),
+            GgufType::TQ1_0 => {
+                // TQ1_0: 32 bytes per 32-element block (same as Q4_0 layout)
+                let blocks = (ne + 31) / 32;
+                blocks.saturating_mul(32)
+            }
             GgufType::TQ2_0 => {
                 let blocks = (ne + TQ2_0_BLOCK_SIZE - 1) / TQ2_0_BLOCK_SIZE;
                 blocks.saturating_mul(TQ2_0_BLOCK_BYTES)
+            }
+            GgufType::Q8_K => {
+                let blocks = (ne + QK_K - 1) / QK_K;
+                blocks.saturating_mul(256 + 32) // simplified
             }
             GgufType::Q4_1 | GgufType::Q5_1 | GgufType::Q8_1 => {
                 ne.saturating_mul(2) // bound until dedicated dequant
@@ -1043,6 +1063,18 @@ mod tests {
             for i in 0..ne {
                 let o = i * 2;
                 vals.push(f16_to_f32(u16::from_le_bytes([data[o], data[o + 1]])));
+            }
+            Some(vals)
+        }
+        GgufType::BF16 => {
+            // BF16: upper 16 bits of f32 — shift left 16 to reconstruct f32.
+            if data.len() < ne * 2 { return None; }
+            let mut vals = Vec::with_capacity(ne);
+            for i in 0..ne {
+                let o = i * 2;
+                let bf16 = u16::from_le_bytes([data[o], data[o + 1]]);
+                let f32_bits = (bf16 as u32) << 16;
+                vals.push(f32::from_bits(f32_bits));
             }
             Some(vals)
         }
