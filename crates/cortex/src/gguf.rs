@@ -1154,83 +1154,176 @@ fn dequantize_tensor_by_name(file: &GgufFile, name_hint: &str) -> Option<(Vec<f3
     None
 }
 
-/// Modelo alimentado por GGUF. Tenta converter pesos GGUF para TransformerModel.
+/// GGUF model config — all fields read from metadata, zero hardcoded.
+struct GgufConfig {
+    hidden: usize,
+    num_layers: usize,
+    num_heads: usize,
+    num_kv_heads: usize,
+    head_dim: usize,
+    intermediate: usize,
+    vocab: usize,
+    rope_theta: f32,
+    rms_epsilon: f32,
+    tie_embeddings: bool,
+}
+
+impl GgufConfig {
+    fn from_metadata(file: &GgufFile) -> Self {
+        let get_u64 = |key: &str| -> usize {
+            file.metadata.iter()
+                .find(|m| m.key == key)
+                .and_then(|m| m.value.parse().ok())
+                .unwrap_or(0)
+        };
+        let get_f32 = |key: &str| -> f32 {
+            file.metadata.iter()
+                .find(|m| m.key == key)
+                .and_then(|m| m.value.parse().ok())
+                .unwrap_or(0.0)
+        };
+        let get_bool = |key: &str| -> bool {
+            file.metadata.iter()
+                .find(|m| m.key == key)
+                .map(|m| m.value == "true")
+                .unwrap_or(false)
+        };
+        let hidden = get_u64("llama.embedding_length");
+        let num_layers = get_u64("llama.block_count");
+        let num_heads = get_u64("llama.attention.head_count");
+        let num_kv_heads = get_u64("llama.attention.head_count_kv");
+        let intermediate = get_u64("llama.feed_forward_length");
+        let vocab = get_u64("llama.vocab_size");
+        let rope_theta = get_f32("llama.rope.freq_base");
+        let rms_epsilon = get_f32("llama.attention.layer_norm_rms_epsilon");
+        let tie_embeddings = get_bool("llama.attention.tie_qkv");
+        // Derive head_dim: hidden / num_heads
+        let head_dim = if num_heads > 0 { hidden / num_heads } else { 64 };
+        GgufConfig {
+            hidden: hidden.max(64),
+            num_layers: num_layers.max(1),
+            num_heads: num_heads.max(1),
+            num_kv_heads: num_kv_heads.max(1),
+            head_dim: head_dim.max(8),
+            intermediate: intermediate.max(hidden * 2),
+            vocab: vocab.max(256),
+            rope_theta: if rope_theta > 0.0 { rope_theta } else { 10000.0 },
+            rms_epsilon: if rms_epsilon > 0.0 { rms_epsilon } else { 1e-5 },
+            tie_embeddings,
+        }
+    }
+}
+
+/// Modelo alimentado por GGUF — auto-configura tudo a partir dos metadados.
 pub struct GgufBackedModel {
     file: GgufFile,
-    n_layers: usize,
-    hidden_dim: usize,
+    config: GgufConfig,
 }
 
 impl GgufBackedModel {
     pub fn new(file: GgufFile) -> Self {
-        let n_layers = file.metadata.iter()
-            .find(|m| m.key.contains("block_count") || m.key.contains("n_layers"))
-            .and_then(|m| m.value.parse().ok())
-            .unwrap_or(4);
-        let hidden_dim = dequantize_tensor_by_name(&file, "token_embd")
-            .map(|(_, cols, _)| cols)
-            .unwrap_or(64);
-        GgufBackedModel { file, n_layers, hidden_dim }
+        let config = GgufConfig::from_metadata(&file);
+        k_nano::slog_bin!("GGUF", "ok", "Auto-config: hidden={} layers={} heads={}/{} kv_heads={} intermediate={} vocab={} rope_theta={}",
+            config.hidden, config.num_layers, config.num_heads, config.head_dim,
+            config.num_kv_heads, config.intermediate, config.vocab, config.rope_theta);
+        GgufBackedModel { file, config }
+    }
+
+    /// Reads a per-layer float tensor (RMS norm weights) from GGUF.
+    fn read_layer_floats(&self, layer: usize, name_part: &str, expected: usize) -> Vec<f32> {
+        let hint = alloc::format!("blk.{}.{}", layer, name_part);
+        if let Some((vals, cols, _)) = dequantize_tensor_by_name(&self.file, &hint) {
+            if cols >= expected {
+                return vals[..expected].to_vec();
+            }
+            // Fewer elements than expected — pad with 1.0
+            let mut v = vals;
+            v.resize(expected, 1.0);
+            return v;
+        }
+        alloc::vec![1.0f32; expected]
     }
 
     fn try_build_transformer(&self) -> Option<crate::cortex::TransformerModel> {
-        let (vals, hidden, vocab) = dequantize_tensor_by_name(&self.file, "token_embd")?;
+        let c = &self.config;
+        let h = c.hidden;
+
+        // Embedding: (vocab, hidden) → transpose to (hidden, vocab) for packed ternary
+        let (embed_raw, embed_cols, embed_rows) = dequantize_tensor_by_name(&self.file, "token_embd")?;
         let embed = {
-            let mut vals_t = Vec::with_capacity(hidden * vocab);
-            for h in 0..hidden {
-                for v in 0..vocab {
-                    vals_t.push(vals[v * hidden + h]);
+            let mut t = Vec::with_capacity(h * embed_cols);
+            for hi in 0..h {
+                for vi in 0..embed_cols {
+                    t.push(embed_raw[vi * h + hi]);
                 }
             }
-            f32_to_ternary_packed(&vals_t, hidden, vocab)
+            f32_to_ternary_packed(&t, h, embed_cols)
         };
-        let mut layers = Vec::with_capacity(self.n_layers);
-        for i in 0..self.n_layers {
-            let hint = |s| alloc::format!("blk.{}.{}", i, s);
-            let (q, qc, qr) = dequantize_tensor_by_name(&self.file, &hint("attn_q"))?;
-            let (k, kc, kr) = dequantize_tensor_by_name(&self.file, &hint("attn_k"))?;
-            let (v, vc, vr) = dequantize_tensor_by_name(&self.file, &hint("attn_v"))?;
-            let (o, oc, or_) = dequantize_tensor_by_name(&self.file, &hint("attn_output"))?;
-            let (gate, gc, gr) = dequantize_tensor_by_name(&self.file, &hint("ffn_gate"))?;
-            let (up, uc, ur) = dequantize_tensor_by_name(&self.file, &hint("ffn_up"))?;
-            let (down, dc, dr) = dequantize_tensor_by_name(&self.file, &hint("ffn_down"))?;
-            let rms_default = alloc::vec![1.0f32; self.hidden_dim];
-            let ffn_dim = gc.max(gr) / 4 * 4; // approximate FFN intermediate dim
-            let rms_inner_attn = alloc::vec![1.0f32; self.hidden_dim];
-            let rms_ffn_norm = alloc::vec![1.0f32; ffn_dim];
+
+        let mut layers = Vec::with_capacity(c.num_layers);
+        for i in 0..c.num_layers {
+            let hint = |s: &str| alloc::format!("blk.{}.{}", i, s);
+
+            // Q/K/V/O projections — read shape from GGUF
+            let (q_vals, q_cols, q_rows) = dequantize_tensor_by_name(&self.file, &hint("attn_q"))?;
+            let (k_vals, k_cols, k_rows) = dequantize_tensor_by_name(&self.file, &hint("attn_k"))?;
+            let (v_vals, v_cols, v_rows) = dequantize_tensor_by_name(&self.file, &hint("attn_v"))?;
+            let (o_vals, o_cols, o_rows) = dequantize_tensor_by_name(&self.file, &hint("attn_output"))?;
+
+            // FFN gate/up/down
+            let (gate_vals, gc, gr) = dequantize_tensor_by_name(&self.file, &hint("ffn_gate"))?;
+            let (up_vals, uc, ur) = dequantize_tensor_by_name(&self.file, &hint("ffn_up"))?;
+            let (down_vals, dc, dr) = dequantize_tensor_by_name(&self.file, &hint("ffn_down"))?;
+
+            // RMS norm weights — read from GGUF, fallback to 1.0
+            let rms_attn = self.read_layer_floats(i, "attn_norm_weight", h);
+            let rms_ffn = self.read_layer_floats(i, "ffn_norm_weight", h);
+
+            // GQA: derive per-layer kv_dim from actual K tensor shape
+            let layer_kv_heads = k_cols / c.head_dim.max(1);
+            let kv_dim = layer_kv_heads * c.head_dim;
+            let ffn_dim = gc.max(1);
+            let ffn_group = (ffn_dim / c.head_dim.max(1)).max(1) * c.head_dim;
+
             layers.push(crate::cortex::LayerWeights {
-                rms_attn: rms_default.clone(),
-                q: f32_to_ternary_packed(&q, qr, qc),
+                rms_attn,
+                q: f32_to_ternary_packed(&q_vals, q_rows, q_cols),
                 q_scale: 1.0,
-                k: f32_to_ternary_packed(&k, kr, kc),
+                k: f32_to_ternary_packed(&k_vals, k_rows, k_cols),
                 k_scale: 1.0,
-                v: f32_to_ternary_packed(&v, vr, vc),
+                v: f32_to_ternary_packed(&v_vals, v_rows, v_cols),
                 v_scale: 1.0,
-                o: f32_to_ternary_packed(&o, or_, oc),
+                o: f32_to_ternary_packed(&o_vals, o_rows, o_cols),
                 o_scale: 1.0,
-                rms_ffn: rms_default,
-                rms_inner_attn,
-                rms_ffn_norm,
-                gate: f32_to_ternary_packed(&gate, gr, gc),
+                rms_ffn: rms_ffn.clone(),
+                rms_inner_attn: alloc::vec![1.0f32; h],
+                rms_ffn_norm: alloc::vec![1.0f32; ffn_dim],
+                gate: f32_to_ternary_packed(&gate_vals, gr, gc),
                 gate_scale: 1.0,
-                up: f32_to_ternary_packed(&up, ur, uc),
+                up: f32_to_ternary_packed(&up_vals, ur, uc),
                 up_scale: 1.0,
-                down: f32_to_ternary_packed(&down, dr, dc),
+                down: f32_to_ternary_packed(&down_vals, dr, dc),
                 down_scale: 1.0,
-                kv_dim: self.hidden_dim,
-                num_kv_heads: self.hidden_dim / 64,
+                kv_dim,
+                num_kv_heads: layer_kv_heads.max(1),
                 intermediate_size: ffn_dim,
-                ffn_group_size: ffn_dim,
+                ffn_group_size: ffn_group,
             });
         }
+
+        // Unembed (output projection)
         let unembed = dequantize_tensor_by_name(&self.file, "output.weight")
-            .or_else(|| dequantize_tensor_by_name(&self.file, "token_embd"))
-            .map(|(data, c, r)| f32_to_ternary_packed(&data, r, c))
+            .map(|(d, c, r)| f32_to_ternary_packed(&d, r, c))
             .unwrap_or_else(|| {
                 let mut seed = 42u32;
-                crate::cortex::random_ternary(&mut seed, self.hidden_dim, crate::cortex::VOCAB_SIZE as usize)
+                crate::cortex::random_ternary(&mut seed, h, c.vocab)
             });
-        let rms_final = alloc::vec![1.0f32; self.hidden_dim];
+
+        // Final RMS norm
+        let rms_final = dequantize_tensor_by_name(&self.file, "output_norm.weight")
+            .map(|(d, cols, _)| d[..cols.min(h)].to_vec())
+            .unwrap_or_else(|| alloc::vec![1.0f32; h]);
+
         Some(crate::cortex::TransformerModel {
             embed,
             embed_scale: 1.0,
@@ -1239,21 +1332,21 @@ impl GgufBackedModel {
             unembed,
             unembed_scale: 1.0,
             medusa_heads: Vec::new(),
-            vocab_size: crate::cortex::VOCAB_SIZE as u32,
-            hidden: self.hidden_dim,
-            num_layers: self.n_layers,
-            max_seq: crate::cortex::MAX_SEQ,
-            num_heads: self.hidden_dim / 64,
-            num_kv_heads: self.hidden_dim / 64,
-            head_dim: 64,
-            kv_dim: self.hidden_dim,
-            intermediate_size: self.hidden_dim * 4,
-            ffn_group_size: self.hidden_dim,
-            tie_embeddings: false,
-            act_type: 0,
+            vocab_size: c.vocab as u32,
+            hidden: h,
+            num_layers: c.num_layers,
+            max_seq: 4096, // Falcon3 1.58bit default ctx
+            num_heads: c.num_heads,
+            num_kv_heads: c.num_kv_heads,
+            head_dim: c.head_dim,
+            kv_dim: c.num_kv_heads * c.head_dim,
+            intermediate_size: c.intermediate,
+            ffn_group_size: c.intermediate,
+            tie_embeddings: c.tie_embeddings,
+            act_type: 0, // silu (Falcon3 default)
             embed_type: 0,
             embed_q6k: None,
-            rope_theta: 10000.0,
+            rope_theta: c.rope_theta,
             rope_cos: alloc::vec![],
             rope_sin: alloc::vec![],
         })
@@ -1269,23 +1362,23 @@ impl Model for GgufBackedModel {
             alloc::format!("[GGUF] Modelo carregado. {} camadas, {} hidden.\n\
                 Aviso: conversao de pesos nao disponivel para este formato.\n\
                 Use generacao fallback.\n{}\nPrompt: {}",
-                self.n_layers, self.hidden_dim, summary, prompt)
+                self.config.num_layers, self.config.hidden, summary, prompt)
         }
     }
 
     fn embed_dim(&self) -> usize {
-        self.hidden_dim
+        self.config.hidden
     }
 
     fn vocab_size(&self) -> u32 {
-        crate::cortex::VOCAB_SIZE as u32
+        self.config.vocab as u32
     }
 
     fn max_seq(&self) -> usize {
-        crate::cortex::MAX_SEQ
+        4096 // Falcon3 default ctx
     }
-    fn num_layers(&self) -> usize { self.n_layers }
-    fn hidden(&self) -> usize { self.hidden_dim }
+    fn num_layers(&self) -> usize { self.config.num_layers }
+    fn hidden(&self) -> usize { self.config.hidden }
 }
 
 /// Carrega modelo GGUF e registra como modelo ativo via set_model()
