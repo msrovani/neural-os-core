@@ -1,8 +1,6 @@
-# STATE — neural-os-core v1.9.99-s301 — Boot Fix: #PF + cognitive OOB
-#   SESSION_301: 2 milestones this session:
-#   1) #PF fix: kernel virtual ≠ HHDM — fórmula kernel_phys+(cr2-kvirt).
-#   2) cognitive.rs OOB fix: per-layer head_dim derivado de q.shape.1.
-#   ZERO #PFs, ZERO panics em boot QEMU TCG 4-core. FAT32 OK. SMP OK.
-#   Training loop roda (lento no TCG ~2min). Model loaded OK.
-#   Commits: b533364 (diagnostics), 67b4613 (#PF fix), 44f52e1 (docs),
-#            6d18405 (cognitive OOB fix), e2f7a14 (cognitive docs).
+# STATE — neural-os-core v1.9.99-s302 — Ring3 Onda 6 (ADR-0102)
+#   SESSION_302: isolamento CPL=3 wired em k_nano + bin facade.
+#   H1–H3 ✅ | N1–N5,N3,N6 ✅ | T-056 opcode verifier ✅ | ELF path ✅.
+#   register_native_ring gated: can_iretq + metal + ring3_mark_hw_gate_passed (T-053).
+#   wasmi (A) default em QEMU/TCG. Aceite HW T-052/053 pendente.
+#   cargo check --release -p neural-kernel → 0 erros.

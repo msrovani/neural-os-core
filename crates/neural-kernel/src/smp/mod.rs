@@ -1,6 +1,6 @@
 //! SMP bring-up — ADR-0055; fonte única `k_nano::smp::init_smp` (map+flags+wake).
+//! `percpu` canônico = `k_nano::smp::percpu` (espelho bin removido ADR-0102).
 
-pub mod percpu;
 pub mod trampoline;
 pub mod spsc;
 pub mod work_stealing;

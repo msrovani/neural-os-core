@@ -1,5 +1,22 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s302] - 2026-09-01 — Ring3 Onda 6: isolamento CPL=3 (ADR-0102)
+
+**Sandbox nativo B/C wired em `k_nano`; wasmi permanece default até T-053 HW.**
+
+### Ring3 (R0 + bin facade)
+- **`k_nano::ring3`:** mailbox USER syscall (N4), verificador opcode SSE/AVX (T-056), `ring3_can_register_native()` separado de `ring3_is_safe`, `publish_sandbox_fault` → `HEALTH_ISSUE`.
+- **Demos P6 reais:** `iretq`+CPL3, fault-containment, CapGate DMA/MMIO deny, SSE containment (H2).
+- **Gaps N1–N7:** `MAX_SANDBOXES=1`, GS.base zero, teardown frames, HHDM supervisor-only, IF=0 documentado.
+- **`set_bsp_rsp0`:** RSP0 no TSS carregado (`k_nano::interrupts`), não GDT fantasma `interrupts_ext`.
+- **ELF path:** `load_and_spawn` + `run_process` + mailbox no loader.
+- **`isolation_ring`:** `register_native_ring` quando `can_register_native()` (metal + HW gate); `hermes::app_factory` reativado.
+- **Limpeza:** removido `neural-kernel/src/smp/percpu.rs` (espelho divergente).
+
+### Validação
+- `cargo check --release -p neural-kernel` → 0 erros
+- `cargo test -p k-nano ring3` → 3 passed
+
 ## [1.9.99-s301] - 2026-09-01 — Boot Fix: #PF kernel virtual range + cognitive OOB
 
 **2 fixes milestones: #PF eliminated and cognitive.rs panics resolved in QEMU TCG 4-core.**

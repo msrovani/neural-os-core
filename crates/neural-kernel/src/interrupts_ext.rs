@@ -105,18 +105,14 @@ pub fn set_rsp0(stack_top: VirtAddr) {
     TSS_ARRAY[idx].set_rsp0(stack_top);
 }
 
-/// Switch to process TSS (loads new TSS selector via LTR).
-/// Called during context switch to Ring3 process.
+/// Switch to process TSS (updates RSP0 on the **live** BSP TSS — ADR-0102 R3-02).
 pub fn switch_to_proc_tss(proc_idx: usize) {
     if proc_idx >= MAX_PROCS {
         return;
     }
     CURRENT_PROC_IDX.store(proc_idx, Ordering::SeqCst);
-    // LTR with the TSS selector for this process
-    // Note: GDT has only one TSS entry; for true per-process TSS we'd need
-    // multiple TSS descriptors in GDT. For now, we update the single TSS's RSP0.
-    // True per-process TSS requires GDT expansion (future).
-    let _ = proc_idx;
+    let rsp0 = TSS_ARRAY[proc_idx].privilege_stack_table[0];
+    k_nano::interrupts::set_bsp_rsp0(rsp0);
 }
 
 /// Retorna referência ao TSS do processo atual para init da GDT.

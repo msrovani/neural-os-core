@@ -80,7 +80,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#545** Extrair kernel_boot em módulos (main.rs monolítico) | — | ⏳ | SESSION_299: boot_memory/storage/models/greeting (~500 LOC cada). |
 | **#546** Gate QEMU smokes com feature flag | — | ⏳ | SESSION_299: `full-smokes` ou `if !qemu`; boot QEMU ~30% mais rápido. |
 | **#547** Cross-boot NSGDB recall (BOOT.LOG → ingest_bootlog) | ADR-0091 | 🟡 | SESSION_299: segunda instância QEMU recall de boot anterior. |
-| **#548** Ring3 = um sandbox CPL=3 para nativo B/C (não Job/Handle/ExceptionChannel Fuchsia) | **ADR-0102** (não substitui **0077**) | 🟡 Onda 6 | Tree 2026-09-01: P6 stub; gaps N1–N7 (GS leak, IF=0, mailbox); T-056 = verificador opcode ou XSAVE; execução 4–8 sem realista. |
+| **#548** Ring3 = um sandbox CPL=3 para nativo B/C (não Job/Handle/ExceptionChannel Fuchsia) | **ADR-0102** (não substitui **0077**) | 🟡 Onda 6 | SESSION_302: H1–H3+N1–N7+T-056 wired; register gated T-053 HW; aceite notebook pendente. |
 | **#539** Observabilidade de boot (dmesg / 3 canais / placar) | **ADR-0092** | 🟡 fazendo | O0–O5 no código 2026-08-24. Serial QEMU de aceite + parse_boot_score no log real ainda. |
 
 | **#479** TLS 1.3 via embedded-tls no neural-os-core | ADR-0062 P1 / SESSION_157–158 | ✅ MVP (residual CertVerify/FAT) |

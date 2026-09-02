@@ -264,6 +264,15 @@ pub fn hhdm_mut<T>(frame: PhysFrame<Size4KiB>) -> *mut T {
 }
 
 pub fn create_sandbox_as() -> Result<AddressSpace, &'static str> {
+    fn supervisor_only(mut entry: x86_64::structures::paging::page_table::PageTableEntry) -> x86_64::structures::paging::page_table::PageTableEntry {
+        if entry.flags().contains(PageTableFlags::PRESENT) {
+            let addr = entry.addr();
+            let mut flags = entry.flags();
+            flags.remove(PageTableFlags::USER_ACCESSIBLE);
+            entry.set_addr(addr, flags);
+        }
+        entry
+    }
     let (kernel_l4, _) = Cr3::read();
     let kernel_l4_ptr = unsafe { &*frame_as_table(kernel_l4) };
     let l4_frame = alloc_zeroed_frame().ok_or("sandbox: sem frame L4")?;
@@ -273,18 +282,28 @@ pub fn create_sandbox_as() -> Result<AddressSpace, &'static str> {
     if !kernel_entry.flags().contains(PageTableFlags::PRESENT) {
         return Err("sandbox: P4[511] kernel ausente");
     }
-    l4_ptr[KERNEL_P4] = kernel_entry.clone();
+    l4_ptr[KERNEL_P4] = supervisor_only(kernel_entry.clone());
     let pm = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Acquire);
     if pm != 0 {
         let hhdm_p4 = ((pm >> 39) & 0x1ff) as usize;
         if hhdm_p4 != KERNEL_P4 {
             let e = &kernel_l4_ptr[hhdm_p4];
             if e.flags().contains(PageTableFlags::PRESENT) {
-                l4_ptr[hhdm_p4] = e.clone();
+                l4_ptr[hhdm_p4] = supervisor_only(e.clone());
             }
         }
     }
     Ok(AddressSpace { l4_frame })
+}
+
+/// Mapeia página USER da mailbox syscall (N4).
+pub fn map_user_mailbox(aspace: &mut AddressSpace) -> Result<PhysFrame<Size4KiB>, &'static str> {
+    let frame = alloc_frame()?;
+    unsafe {
+        aspace.map_user_page(VirtAddr::new(crate::ring3::USER_MAILBOX_VA), frame, user_data_flags())?;
+        core::ptr::write_bytes(hhdm_mut::<u8>(frame), 0, 4096);
+    }
+    Ok(frame)
 }
 
 pub fn kernel_cr3() -> (PhysFrame<Size4KiB>, Cr3Flags) { Cr3::read() }
@@ -414,7 +433,8 @@ pub fn user_arena_self_test() -> bool {
 
 pub const USER_CODE_VA: u64 = 0x0000_7000_0030_0000;
 pub const USER_STACK_VA: u64 = 0x0000_7000_0030_1000;
-pub const USER_MARKER_VA: u64 = 0x0000_7000_0030_2000;
+/// Alias histórico — mailbox canônica em `ring3::USER_MAILBOX_VA` (N4).
+pub const USER_MARKER_VA: u64 = crate::ring3::USER_MAILBOX_VA;
 pub const RING3_MAGIC: u64 = 0x0033_5249_4E47_0001;
 
 static DEMO_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -427,6 +447,10 @@ static STAGE_EXIT: AtomicBool = AtomicBool::new(true);
 static USE_MAILBOX: AtomicBool = AtomicBool::new(false);
 static SANDBOX_DMA_DENY: AtomicU64 = AtomicU64::new(0);
 static SANDBOX_MMIO_DENY: AtomicU64 = AtomicU64::new(0);
+
+static SANDBOX_BUSY: AtomicBool = AtomicBool::new(false);
+static SAVED_GS_BASE: AtomicU64 = AtomicU64::new(0);
+static RING3_CAN_IRETQ: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "ring3")]
 static mut SAVED_RIP: u64 = 0;
@@ -443,6 +467,129 @@ pub fn demo_active() -> bool { DEMO_ACTIVE.load(Ordering::SeqCst) || ABORTING.lo
 pub fn sandbox_syscalls() -> bool { demo_active() }
 #[inline]
 pub fn mailbox_syscalls() -> bool { USE_MAILBOX.load(Ordering::SeqCst) }
+pub fn set_use_mailbox(on: bool) { USE_MAILBOX.store(on, Ordering::SeqCst); }
+pub fn set_stage_exit(on: bool) { STAGE_EXIT.store(on, Ordering::SeqCst); }
+pub fn reset_sandbox_denies() {
+    SANDBOX_DMA_DENY.store(0, Ordering::SeqCst);
+    SANDBOX_MMIO_DENY.store(0, Ordering::SeqCst);
+}
+pub fn saved_cr0_store(v: u64) { SAVED_CR0.store(v, Ordering::SeqCst); }
+pub fn saved_cr0_take() -> u64 { SAVED_CR0.swap(0, Ordering::SeqCst) }
+pub fn syscall_staged() -> (u64, u64, u64) {
+    (
+        SYS_NR.load(Ordering::SeqCst),
+        SYS_ARG.load(Ordering::SeqCst),
+        SYS_CAP.load(Ordering::SeqCst),
+    )
+}
+pub fn syscall_stage(nr: u64, arg: u64, cap: Cap) { stage_syscall(nr, arg, cap); }
+pub fn syscall_finish_ok(v: u64) {
+    SYS_RESULT.store(v, Ordering::SeqCst);
+    SYS_STATUS.store(0, Ordering::SeqCst);
+    if mailbox_syscalls() {
+        unsafe { crate::ring3::write_user_mailbox_result(v, 0); }
+    }
+}
+pub fn syscall_finish_err() {
+    SYS_STATUS.store(1, Ordering::SeqCst);
+    if mailbox_syscalls() {
+        unsafe { crate::ring3::write_user_mailbox_result(0, 1); }
+    }
+}
+pub fn syscall_stage_from_mailbox(_mbox: u64) {
+    let m = unsafe { crate::ring3::read_user_mailbox() };
+    SYS_NR.store(m.nr, Ordering::SeqCst);
+    SYS_ARG.store(m.arg0, Ordering::SeqCst);
+    let cap_bits = if m.cap != 0 {
+        m.cap
+    } else {
+        match m.nr {
+            SYS_EXIT_USER => Cap::ENTER_USER.bits(),
+            SYS_PIN_DMA => Cap::PIN_DMA.bits(),
+            SYS_MAP_FB => Cap::MAP_FB.bits(),
+            SYS_MAP_DMA => Cap::MAP_DMA.bits(),
+            SYS_PRESENT_FB => Cap::WRITE_FB.bits(),
+            _ => 0,
+        }
+    };
+    SYS_CAP.store(cap_bits, Ordering::SeqCst);
+}
+pub fn syscall_try_regs_fallback() {
+    let (nr, _, cap_bits) = syscall_staged();
+    if nr != 0 || cap_bits != 0 {
+        return;
+    }
+    let reg_nr: u64;
+    let reg_arg: u64;
+    let reg_cap: u64;
+    unsafe {
+        core::arch::asm!(
+            "mov {nr}, rax",
+            "mov {arg}, rdi",
+            "mov {cap}, rdx",
+            nr = out(reg) reg_nr,
+            arg = out(reg) reg_arg,
+            cap = out(reg) reg_cap,
+            options(nostack, preserves_flags)
+        );
+    }
+    if reg_nr != 0 {
+        SYS_NR.store(reg_nr, Ordering::SeqCst);
+        SYS_ARG.store(reg_arg, Ordering::SeqCst);
+        SYS_CAP.store(reg_cap, Ordering::SeqCst);
+    }
+}
+pub fn ring3_can_iretq() -> bool { RING3_CAN_IRETQ.load(Ordering::Relaxed) }
+pub fn ring3_note_iretq_ok() { RING3_CAN_IRETQ.store(true, Ordering::Relaxed); }
+
+fn free_frame(frame: PhysFrame<Size4KiB>) {
+    unsafe { crate::memory::dealloc_physical_frame(frame); }
+}
+
+fn release_sandbox_slot() { SANDBOX_BUSY.store(false, Ordering::SeqCst); }
+
+fn zero_gs_base() {
+    unsafe {
+        core::arch::asm!(
+            "xor eax, eax",
+            "xor edx, edx",
+            "wrmsr",
+            in("ecx") 0xC0000101u32,
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
+fn restore_gs_base() {
+    let base = SAVED_GS_BASE.swap(0, Ordering::SeqCst);
+    if base == 0 {
+        return;
+    }
+    unsafe {
+        core::arch::asm!(
+            "wrmsr",
+            in("ecx") 0xC0000101u32,
+            in("eax") (base & 0xFFFFFFFF) as u32,
+            in("edx") (base >> 32) as u32,
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
+fn read_gs_base() -> u64 {
+    let lo: u32;
+    let hi: u32;
+    unsafe {
+        core::arch::asm!(
+            "rdmsr",
+            in("ecx") 0xC0000101u32,
+            out("eax") lo,
+            out("edx") hi,
+            options(nostack, preserves_flags)
+        );
+    }
+    ((hi as u64) << 32) | lo as u64
+}
 pub fn note_sandbox_cap_deny(nr: u64) {
     match nr {
         SYS_PIN_DMA | SYS_MAP_DMA => { SANDBOX_DMA_DENY.fetch_add(1, Ordering::SeqCst); }
@@ -475,8 +622,8 @@ pub fn fault_abort(msg: &'static str) -> ! {
     if ABORTING.swap(true, Ordering::SeqCst) { loop { x86_64::instructions::hlt(); } }
     DEMO_ACTIVE.store(false, Ordering::SeqCst);
     EXIT_OK.store(3, Ordering::SeqCst);
+    crate::ring3::publish_sandbox_fault(msg);
     puts(b"[P6] WARN fault abort - restore CR3 + skip iretq\n");
-    let _ = msg;
     unsafe { jump_back_to_kernel() }
 }
 pub fn return_from_user(ok: bool) -> ! {
@@ -486,6 +633,8 @@ pub fn return_from_user(ok: bool) -> ! {
 unsafe fn jump_back_to_kernel() -> ! {
     DEMO_ACTIVE.store(false, Ordering::SeqCst);
     USE_MAILBOX.store(false, Ordering::SeqCst);
+    release_sandbox_slot();
+    restore_gs_base();
     let cr3_addr = SAVED_CR3.load(Ordering::SeqCst);
     let cr3_flags = SAVED_CR3_FLAGS.load(Ordering::SeqCst);
     if cr3_addr != 0 {
@@ -538,6 +687,12 @@ pub unsafe fn enter_user_mode(
         return Err("EPERM: Cap::ENTER_USER");
     }
     if !TRY_ENTER_RING3 { return Err("P6: TRY_ENTER_RING3=false"); }
+    if SANDBOX_BUSY
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("sandbox: busy (MAX_SANDBOXES=1)");
+    }
     let (k_l4, k_flags) = kernel_cr3();
     SAVED_CR3.store(k_l4.start_address().as_u64(), Ordering::SeqCst);
     SAVED_CR3_FLAGS.store(k_flags.bits(), Ordering::SeqCst);
@@ -547,6 +702,7 @@ pub unsafe fn enter_user_mode(
     let uds = crate::interrupts::user_data_selector().0 as u64;
     let mut rflags: u64;
     core::arch::asm!("pushfq; pop {}", out(reg) rflags, options(nostack));
+    // N6: IF=0 + without_interrupts = DoS por loop infinito documentado (ADR-0102 §4.5).
     rflags &= !0x200;
     crate::slog_nano!("P6", "info", "A: save rsp");
     let rsp_val: u64;
@@ -566,6 +722,9 @@ pub unsafe fn enter_user_mode(
         );
     }
     DEMO_ACTIVE.store(true, Ordering::SeqCst);
+    USE_MAILBOX.store(true, Ordering::SeqCst);
+    SAVED_GS_BASE.store(read_gs_base(), Ordering::SeqCst);
+    zero_gs_base();
     crate::slog_nano!("P6", "info", "B: cr3->user");
     restore_cr3(user_l4, Cr3Flags::empty());
     crate::slog_nano!("P6", "info", "C: cr3 switched (CPL0)");
@@ -597,6 +756,8 @@ pub unsafe fn enter_user_mode(
     );
     crate::slog_nano!("P6", "info", "E: returned from CPL3");
     DEMO_ACTIVE.store(false, Ordering::SeqCst);
+    release_sandbox_slot();
+    restore_gs_base();
     core::arch::asm!("mov ss, ax", in("ax") 0u16, options(nostack, preserves_flags));
     match EXIT_OK.load(Ordering::SeqCst) {
         1 => Ok(()),
@@ -712,22 +873,233 @@ pub fn ring3_is_safe() -> bool {
 /// Blob-only native execution in Ring3 sandbox (W^X USER). ELF path stays in bin.
 pub fn ring3_run_native_blob(code: &[u8]) -> Result<i64, &'static str> {
     if code.is_empty() { return Err("ring3: code vazio"); }
+    crate::ring3::verify_blob_no_simd(code)?;
     let mut aspace = create_sandbox_as()?;
     let entry = unsafe { jit_write_exec_user(&mut aspace, code) }?;
-    // Stack USER 16 KiB (4 pages) — matches elf_loader::USER_STACK_SIZE
     const USER_STACK_BASE: u64 = 0x0000_7000_0040_0000;
     const USER_STACK_PAGES: usize = 4;
+    let mut stack_frames: [Option<PhysFrame<Size4KiB>>; 4] = [None, None, None, None];
+    let mut n_stack = 0usize;
+    let mailbox_frame = map_user_mailbox(&mut aspace)?;
     for j in 0..USER_STACK_PAGES {
         let va = USER_STACK_BASE + (j as u64) * 4096;
         let frame = alloc_frame()?;
+        stack_frames[j] = Some(frame);
+        n_stack = j + 1;
         unsafe { aspace.map_user_page(VirtAddr::new(va), frame, user_data_flags())?; }
     }
     let stack_top = USER_STACK_BASE + (USER_STACK_PAGES as u64) * 4096;
+    let code_frame = aspace.frame_for_virt(VirtAddr::new(entry)).ok_or("ring3: code leaf")?;
     crate::slog_nano!("ISO-RING", "info", "ring3_run_native_blob: blob @{:#x} stack @{:#x}", entry, stack_top);
     let result = unsafe { x86_64::instructions::interrupts::without_interrupts(|| enter_user_mode(entry, stack_top, aspace.l4_frame, Cap::ENTER_USER)) };
+    free_frame(code_frame);
+    free_frame(mailbox_frame);
+    for f in stack_frames[..n_stack].iter().flatten() {
+        free_frame(*f);
+    }
+    free_frame(aspace.l4_frame);
     match result { Ok(()) => Ok(0), Err(e) => Err(e) }
+}
+
+/// Re-export H3 gate separado de hypervisor vendor table.
+pub fn ring3_can_register_native() -> bool {
+    crate::ring3::ring3_can_register_native()
 }
 
 // Host SSE stub gated to avoid STATUS_ILLEGAL_INSTRUCTION soft-float (lesson SSE)
 #[cfg(all(x86_64, not(target_os="none")))]
 pub fn host_sse_stub() {}
+
+// ─── P6 demos (ADR-0102 H2) ───────────────────────────────────────────────
+
+fn demo_write_stub(code: PhysFrame<Size4KiB>) {
+    let mut buf = [0u8; 48];
+    let mut o = 0usize;
+    let result_va = USER_MARKER_VA + 32;
+    buf[o] = 0x48; buf[o + 1] = 0xB8; o += 2;
+    buf[o..o + 8].copy_from_slice(&result_va.to_le_bytes()); o += 8;
+    buf[o] = 0x48; buf[o + 1] = 0xB9; o += 2;
+    buf[o..o + 8].copy_from_slice(&RING3_MAGIC.to_le_bytes()); o += 8;
+    buf[o] = 0x48; buf[o + 1] = 0x89; buf[o + 2] = 0x08; o += 3;
+    buf[o] = 0xCD; buf[o + 1] = 0x90; o += 2;
+    buf[o] = 0xF4; o += 1;
+    let dst = hhdm_mut::<u8>(code);
+    unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, o); }
+}
+
+fn demo_write_fault_stub(code: PhysFrame<Size4KiB>, bad_va: u64) {
+    let mut buf = [0u8; 24];
+    let mut o = 0usize;
+    buf[o] = 0x48; buf[o + 1] = 0xB8; o += 2;
+    buf[o..o + 8].copy_from_slice(&bad_va.to_le_bytes()); o += 8;
+    buf[o] = 0x48; buf[o + 1] = 0x8B; buf[o + 2] = 0x00; o += 3;
+    buf[o] = 0xF4; o += 1;
+    let dst = hhdm_mut::<u8>(code);
+    unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, o); }
+}
+
+fn demo_write_capgate_stub(code: PhysFrame<Size4KiB>) {
+    let mut buf = [0u8; 80];
+    let mut o = 0usize;
+    buf[o] = 0x48; buf[o + 1] = 0xB8; o += 2;
+    buf[o..o + 8].copy_from_slice(&USER_MARKER_VA.to_le_bytes()); o += 8;
+    for nr in [SYS_PIN_DMA, SYS_MAP_FB, SYS_EXIT_USER] {
+        buf[o] = 0x48; buf[o + 1] = 0xC7; buf[o + 2] = 0x00; o += 3;
+        buf[o..o + 4].copy_from_slice(&(nr as u32).to_le_bytes()); o += 4;
+        buf[o] = 0xCD; buf[o + 1] = 0x90; o += 2;
+    }
+    buf[o] = 0xF4; o += 1;
+    let dst = hhdm_mut::<u8>(code);
+    unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, o); }
+}
+
+fn demo_write_sse_stub(code: PhysFrame<Size4KiB>) {
+    let mut buf = [0u8; 8];
+    buf[0] = 0x0F; buf[1] = 0x57; buf[2] = 0xC0; buf[3] = 0xF4;
+    let dst = hhdm_mut::<u8>(code);
+    unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, 4); }
+}
+
+fn demo_free_triplet(aspace: &AddressSpace, code: PhysFrame<Size4KiB>, stack: PhysFrame<Size4KiB>, marker: Option<PhysFrame<Size4KiB>>) {
+    free_frame(code);
+    free_frame(stack);
+    if let Some(m) = marker { free_frame(m); }
+    free_frame(aspace.l4_frame);
+}
+
+/// Demo non-fatal: Cap deny → iretq round-trip → marker → SYS_EXIT_USER.
+pub fn demo_ring3() -> Result<(), &'static str> {
+    if !TRY_ENTER_RING3 { return Ok(()); }
+    if phys_offset() == 0 {
+        crate::slog_nano!("P6", "info", "PHYS_MEM_OFFSET=0 — Ring3 demo SKIP");
+        return Ok(());
+    }
+    let deny = unsafe {
+        enter_user_mode(USER_CODE_VA, USER_STACK_VA + 0x1000, kernel_cr3().0, Cap::EMPTY)
+    };
+    if deny.is_ok() { return Err("P6: Cap vazia nao deveria entrar"); }
+
+    let mut as_user = create_sandbox_as()?;
+    let code_frame = alloc_frame()?;
+    let stack_frame = alloc_frame()?;
+    let marker_frame = alloc_frame()?;
+    demo_write_stub(code_frame);
+    unsafe {
+        as_user.map_user_page(VirtAddr::new(USER_CODE_VA), code_frame, user_code_flags())?;
+        as_user.map_user_page(VirtAddr::new(USER_STACK_VA), stack_frame, user_data_flags())?;
+        as_user.map_user_page(VirtAddr::new(USER_MARKER_VA), marker_frame, user_data_flags())?;
+        hhdm_mut::<u64>(marker_frame).write_volatile(0);
+    }
+    let stack_top = USER_STACK_VA + 0x1000;
+    x86_64::instructions::interrupts::without_interrupts(|| unsafe {
+        enter_user_mode(USER_CODE_VA, stack_top, as_user.l4_frame, Cap::ENTER_USER)
+    })?;
+    let marker = unsafe {
+        let base = hhdm_mut::<u8>(marker_frame);
+        core::ptr::read_volatile(base.add(32) as *const u64)
+    };
+    demo_free_triplet(&as_user, code_frame, stack_frame, Some(marker_frame));
+    if marker != RING3_MAGIC { return Err("P6: marker Ring3 nao escrito"); }
+    ring3_note_iretq_ok();
+    crate::slog_nano!("P6", "info", "SUCCESS iretq+CPL3 marker={:x}", marker);
+    Ok(())
+}
+
+pub fn demo_ring3_fault_containment() -> Result<(), &'static str> {
+    if !TRY_ENTER_RING3 { return Ok(()); }
+    const UNMAPPED_VA: u64 = 0x0000_7000_0040_0000;
+    let mut as_user = create_sandbox_as()?;
+    let code_frame = alloc_frame()?;
+    let stack_frame = alloc_frame()?;
+    demo_write_fault_stub(code_frame, UNMAPPED_VA);
+    unsafe {
+        as_user.map_user_page(VirtAddr::new(USER_CODE_VA), code_frame, user_code_flags())?;
+        as_user.map_user_page(VirtAddr::new(USER_STACK_VA), stack_frame, user_data_flags())?;
+    }
+    let r = x86_64::instructions::interrupts::without_interrupts(|| unsafe {
+        enter_user_mode(USER_CODE_VA, USER_STACK_VA + 0x1000, as_user.l4_frame, Cap::ENTER_USER)
+    });
+    demo_free_triplet(&as_user, code_frame, stack_frame, None);
+    match r {
+        Err(e) if e.contains("fault") || e.contains("P6") => {
+            crate::slog_nano!("P6", "info", "SUCCESS fault-containment ({})", e);
+            Ok(())
+        }
+        Ok(()) => Err("P6: fault stub nao gerou falta"),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn demo_ring3_capgate_dma_mmio() -> Result<(), &'static str> {
+    if !TRY_ENTER_RING3 { return Ok(()); }
+    reset_sandbox_denies();
+    let mut as_user = create_sandbox_as()?;
+    let code_frame = alloc_frame()?;
+    let stack_frame = alloc_frame()?;
+    let marker_frame = alloc_frame()?;
+    demo_write_capgate_stub(code_frame);
+    unsafe {
+        as_user.map_user_page(VirtAddr::new(USER_CODE_VA), code_frame, user_code_flags())?;
+        as_user.map_user_page(VirtAddr::new(USER_STACK_VA), stack_frame, user_data_flags())?;
+        as_user.map_user_page(VirtAddr::new(USER_MARKER_VA), marker_frame, user_data_flags())?;
+        hhdm_mut::<u64>(marker_frame).write_volatile(0);
+    }
+    set_use_mailbox(true);
+    set_stage_exit(false);
+    let r = x86_64::instructions::interrupts::without_interrupts(|| unsafe {
+        enter_user_mode(USER_CODE_VA, USER_STACK_VA + 0x1000, as_user.l4_frame, Cap::ENTER_USER)
+    });
+    set_use_mailbox(false);
+    set_stage_exit(true);
+    let dma = sandbox_dma_denies();
+    let mmio = sandbox_mmio_denies();
+    demo_free_triplet(&as_user, code_frame, stack_frame, Some(marker_frame));
+    r?;
+    if dma == 0 || mmio == 0 { return Err("P6: sandbox nao negou PIN_DMA/MAP_FB"); }
+    crate::slog_nano!("P6", "info", "SUCCESS CapGate deny PIN_DMA={} MAP_FB={}", dma, mmio);
+    Ok(())
+}
+
+pub fn demo_ring3_softfloat_sse() -> Result<(), &'static str> {
+    if !TRY_ENTER_RING3 { return Ok(()); }
+    let mut as_user = create_sandbox_as()?;
+    let code_frame = alloc_frame()?;
+    let stack_frame = alloc_frame()?;
+    demo_write_sse_stub(code_frame);
+    unsafe {
+        as_user.map_user_page(VirtAddr::new(USER_CODE_VA), code_frame, user_code_flags())?;
+        as_user.map_user_page(VirtAddr::new(USER_STACK_VA), stack_frame, user_data_flags())?;
+    }
+    let mut cr0: u64;
+    unsafe { core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nostack)); }
+    saved_cr0_store(cr0);
+    let em = cr0 | (1 << 2);
+    unsafe { core::arch::asm!("mov cr0, {}", in(reg) em, options(nostack)); }
+    let r = x86_64::instructions::interrupts::without_interrupts(|| unsafe {
+        enter_user_mode(USER_CODE_VA, USER_STACK_VA + 0x1000, as_user.l4_frame, Cap::ENTER_USER)
+    });
+    let cr0_now = saved_cr0_take();
+    if cr0_now != 0 {
+        unsafe { core::arch::asm!("mov cr0, {}", in(reg) cr0_now, options(nostack)); }
+    }
+    demo_free_triplet(&as_user, code_frame, stack_frame, None);
+    match r {
+        Err(e) if e.contains("fault") || e.contains("P6") => {
+            crate::slog_nano!("P6", "info", "SUCCESS soft-float SSE #UD contained ({})", e);
+            Ok(())
+        }
+        Ok(()) => Err("P6: xorps nao gerou #UD"),
+        Err(e) => Err(e),
+    }
+}
+
+/// H3: self-test de boot — roda demo_ring3 e cacheia resultado.
+pub fn ring3_self_test_iretq() -> bool {
+    match demo_ring3() {
+        Ok(()) => true,
+        Err(e) => {
+            crate::slog_nano!("P6", "warn", "ring3_self_test_iretq FAIL: {}", e);
+            false
+        }
+    }
+}

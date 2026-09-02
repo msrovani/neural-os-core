@@ -5,23 +5,33 @@ use k_hal::cap_gate::{ring3_is_safe, ring3_run_native as hal_run};
 
 pub use k_hal::cap_gate::ring3_is_safe as ring3_is_safe_pub;
 
-/// Called at boot. Registers native ring iff hypervisor is safe (KVM).
-/// Otherwise wasmi (A) stays active — port-safe gating.
+/// Called at boot. Registers native ring iff T-053 HW gate + metal + can_iretq.
+/// TCG/WHPX nunca registram — wasmi (A) permanece default.
 pub fn init_connectors() {
-    if ring3_is_safe() {
-        k_nano::slog_bin!("ISO-RING", "info", "Ring3 SAFE — registering native ring (B/C gated by HITL)");
-        // DEAD CODE: hermes_crate::app_factory::register_native_ring(ring3_run_native); // (HERMES_AUDIT.md)
+    let can_iretq = k_nano::paging::ring3_can_iretq();
+    let can_reg = k_nano::paging::ring3_can_register_native();
+    if can_reg {
+        k_nano::slog_bin!("ISO-RING", "ok", "register_native_ring (T-053 HW + can_iretq)");
+        hermes_crate::app_factory::register_native_ring(ring3_run_native);
     } else {
-        k_nano::slog_bin!("ISO-RING", "info", "Ring3 UNSAFE — native ring NOT registered; wasmi (A) active");
+        k_nano::slog_bin!(
+            "ISO-RING",
+            "info",
+            "Ring3 gated (safe={} can_iretq={} can_reg={}) — wasmi (A) active",
+            ring3_is_safe(),
+            can_iretq,
+            can_reg
+        );
     }
 }
 
-/// Native execution entry — delegates to R0 paging for blob, ELF via bin loader.
-pub fn ring3_run_native(code: &[u8], _caps: u32) -> Result<i64, &'static str> {
-    // DEAD CODE: elf_loader excluded (HERMES_AUDIT.md)
-    // if crate::elf_loader::ElfLoader::is_valid_elf(code) {
-    //     let pid = crate::elf_loader::load_and_spawn(code, "sandbox")?;
-    //     return match crate::user_mode::run_process(pid) { Ok(()) => Ok(0), Err(e) => Err(e) };
-    // }
-    hal_run(code, _caps)
+/// Native execution entry — ELF64 ou blob JIT em sandbox CPL=3.
+pub fn ring3_run_native(code: &[u8], caps: u32) -> Result<i64, &'static str> {
+    if crate::elf_loader::ElfLoader::is_valid_elf(code) {
+        let pid = crate::elf_loader::load_and_spawn(code, "sandbox")?;
+        crate::user_mode::run_process(pid)?;
+        let _ = caps;
+        return Ok(0);
+    }
+    hal_run(code, caps)
 }

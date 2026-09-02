@@ -109,6 +109,13 @@ pub fn user_data_selector() -> SegmentSelector {
     crate::gdt::sels().user_data_selector
 }
 
+/// Atualiza RSP0 no TSS **carregado** (GDT k_nano). ADR-0102 R3-02 — não usar `interrupts_ext::set_rsp0`.
+pub fn set_bsp_rsp0(top: VirtAddr) {
+    unsafe {
+        BSP_TSS_STORAGE.privilege_stack_table[0] = top;
+    }
+}
+
 /// DS Ring0.
 pub fn kernel_data_selector() -> SegmentSelector {
     crate::gdt::sels().data_selector

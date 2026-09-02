@@ -67,7 +67,7 @@ pub mod structured_decode;
 // pub mod wasi_host; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod wasmi_rt;
 pub mod wasm_build;
-// pub mod app_factory; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
+pub mod app_factory; // ADR-0102: register_native_ring seam (isolation_ring)
 pub mod dynskill;
 // pub mod gguf_wasm; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod micropython_wasm;

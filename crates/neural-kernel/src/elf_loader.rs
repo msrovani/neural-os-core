@@ -222,6 +222,10 @@ impl ElfLoader {
         }
         let stack_top = USER_STACK_BASE + USER_STACK_SIZE;
 
+        unsafe {
+            k_nano::paging::map_user_mailbox(aspace)?;
+        }
+
         Ok(ElfLoadResult { entry, stack_top })
     }
 

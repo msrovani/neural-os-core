@@ -123,6 +123,7 @@ pub mod virtio_blk;
 pub mod audio;
 pub mod xhci;
 pub mod paging;
+pub mod ring3;
 
 // Macros (serial_println!, println!, kjson!, klogc!, slog_bin!) are exported via
 // #[macro_export] from their respective source files.

@@ -41,7 +41,7 @@ jarbas-crate = { path = "../jarbas", package = "jarbas" }
 
 [features]
 default = ["ring3"]
-ring3 = []
+ring3 = ["k-nano/ring3"]
 # Sprint 107 QEMU HIT clima (STT-sim seed + lexicon constrained). Off = HW real.
 weather-e2e = []
 # Persiste BOOT.LOG no FAT32 (pendrive live USB / HW sem COM). Off por default
@@ -58,7 +58,7 @@ boot-trace = ["k-nano/boot-trace"]
 # em arrays Rust embutidos, sem runtime parsing.
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "fat-boot-log", "fat-boot-log-soft-reboot", "weather-e2e", "boot-trace"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "ring3", "fat-boot-log", "fat-boot-log-soft-reboot", "weather-e2e", "boot-trace"))'] }
 
 [package.metadata.bootimage]
 run-args = ["-m", "2G", "-serial", "stdio", "-nic", "user,model=rtl8139", "-smp", "2", "-accel", "whpx"]
