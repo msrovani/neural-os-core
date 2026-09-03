@@ -271,7 +271,8 @@ pub enum QemuNetMode {
     Static([u8;4]),
 }
 
-pub fn detect_qemu_net_mode() -> QemuNetMode {    let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+pub fn detect_qemu_net_mode() -> QemuNetMode {
+    let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     if pmoff == 0 {
         return QemuNetMode::User;
     }
@@ -280,17 +281,26 @@ pub fn detect_qemu_net_mode() -> QemuNetMode {    let pmoff = k_nano::memory::PH
             .load(core::sync::atomic::Ordering::Relaxed)
             .saturating_mul(1024 * 1024)
             .min(0x200000000);
-        if ram_end <= 0x100000000 {
-            return QemuNetMode::User;
-        }
-        let mut addr: u64 = ram_end;
-        while addr > 0x100000000 {
-            addr -= 0x100000;
+        // Endereços canônicos do run-qemu-p2p-mesh.ps1 (acima de 4GiB).
+        const CANDIDATES: &[u64] = &[
+            0x13E0_00000,
+            NETMODE_LOADER_PHYS,
+            0x1100_00000,
+            0x1200_00000,
+            0x1300_00000,
+            0x1400_00000,
+            0x1500_00000,
+            0x1600_00000,
+        ];
+        let try_flag = |addr: u64| -> Option<QemuNetMode> {
+            if addr < 0x100000000 || (ram_end > 0x100000000 && addr >= ram_end) {
+                return None;
+            }
             k_nano::apic::map_page_uc(addr, pmoff);
             let p = (addr + pmoff) as *const u8;
             let b = core::ptr::read_volatile(p);
             match b {
-                b'B' | b'b' => return QemuNetMode::Bridge,
+                b'B' | b'b' => Some(QemuNetMode::Bridge),
                 b'S' | b's' => {
                     let ip = [
                         core::ptr::read_volatile(p.add(1)),
@@ -299,10 +309,27 @@ pub fn detect_qemu_net_mode() -> QemuNetMode {    let pmoff = k_nano::memory::PH
                         core::ptr::read_volatile(p.add(4)),
                     ];
                     if ip[0] != 0 && ip[0] != 0xFF {
-                        return QemuNetMode::Static(ip);
+                        Some(QemuNetMode::Static(ip))
+                    } else {
+                        None
                     }
                 }
-                _ => {}
+                _ => None,
+            }
+        };
+        for &addr in CANDIDATES {
+            if let Some(m) = try_flag(addr) {
+                return m;
+            }
+        }
+        if ram_end <= 0x100000000 {
+            return QemuNetMode::User;
+        }
+        let mut addr: u64 = ram_end;
+        while addr > 0x100000000 {
+            addr -= 0x100000;
+            if let Some(m) = try_flag(addr) {
+                return m;
             }
         }
         QemuNetMode::User

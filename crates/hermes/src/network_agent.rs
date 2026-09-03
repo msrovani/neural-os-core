@@ -31,7 +31,8 @@ pub fn early_smoke_status() -> &'static str {
 }
 
 fn log(tick: u64, msg: &str) {
-    k_nano::slog_hermes!("Net", "tick", "t={} {}", tick, msg);
+    // "tick"/"info" → Sev::Trace (mudo no serial). Mesh/netmode precisam ser visíveis.
+    k_nano::slog_hermes!("Net", "ok", "t={} {}", tick, msg);
 }
 
 fn init_netstack(mac: [u8; 6]) {
@@ -179,6 +180,7 @@ pub fn bootstrap_early() {
 
     let net_mode = crate::net::detect_qemu_net_mode();
     s.bridge_mode = net_mode == QemuNetMode::Bridge;
+    let mesh_static = matches!(net_mode, QemuNetMode::Static(_));
     match net_mode {
         QemuNetMode::Bridge => {
             log(0, "bootstrap_early: netmode=BRIDGE (TAP) — DHCP, no static 10.0.2.15")
@@ -192,7 +194,7 @@ pub fn bootstrap_early() {
     }
 
     if !s.dev_env_detected {
-        let is_dev = crate::net::detect_dev_env() || k_nano::env::is_sandbox();
+        let is_dev = crate::net::detect_dev_env() || k_nano::env::is_sandbox() || mesh_static;
         NET_CONFIG.lock().is_dev_env = is_dev;
         s.dev_env_detected = true;
         if is_dev {
@@ -215,7 +217,7 @@ pub fn bootstrap_early() {
     s.phase = 1;
 
     let nic = has_ethernet_nic();
-    let is_dev = NET_CONFIG.lock().is_dev_env || k_nano::env::is_sandbox();
+    let is_dev = NET_CONFIG.lock().is_dev_env || k_nano::env::is_sandbox() || mesh_static;
 
     if !is_dev && !s.bridge_mode {
         set_early_smoke(5);
@@ -285,6 +287,14 @@ pub fn bootstrap_early() {
                 ),
             );
         }
+    }
+
+    // Socket P2P mesh: sem gateway 10.0.3.1 — skip ARP/DNS/HTTP smoke (honesto).
+    if mesh_static {
+        set_early_smoke(5);
+        log(0, "bootstrap_early: mesh STATIC — skip L3.5/L4/L5 (no slirp gw)");
+        s.phase = 7;
+        return;
     }
 
     if s.http.is_some() || s.phase >= 2 {

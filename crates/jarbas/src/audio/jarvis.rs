@@ -258,7 +258,13 @@ pub fn emit_hw_greeting_at_register() {
     crate::display::compositor::announce_welcome(&body);
     crate::display::fb::console_print(&line);
     crate::display::fb::boot_ckpt(50, "jarvis greet OK");
-    let pcm = crate::audio::skills::synthesize_tts(&body);
+    // TCG: formant (Piper 50k+ samples trava DisplayAgent por segundos).
+    // Metal: Piper se carregado.
+    let pcm = if k_nano::storage_bw::skip_measure() {
+        crate::audio::tts::synthesize(&body)
+    } else {
+        crate::audio::skills::synthesize_tts(&body)
+    };
     if !pcm.is_empty() {
         let n = pcm.len().min(2560);
         let _ = PLAYBACK_RING.push(&pcm[..n]);
@@ -269,12 +275,7 @@ pub fn emit_hw_greeting_at_register() {
             pcm.len()
         );
     }
-    let _ = k_nano::EVENT_BUS.publish(Event {
-        id: 0,
-        topic: String::from("HERMES_RESPONSE"),
-        payload: line.into_bytes(),
-        token: CapabilityToken::Legacy(1),
-    });
+    // NÃO republicar em HERMES_RESPONSE — já sintetizou; VoiceAgent refaria Piper e congela o orb.
 }
 
 impl Agent for JarbasAgent {

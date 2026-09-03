@@ -41,6 +41,8 @@ pub static FB_RGB_ORDER: AtomicBool = AtomicBool::new(false);
 /// IRQ side uses swap(true) — never blocks (skips draw if locked).
 /// Compositor side spins until lock acquired.
 pub static CURSOR_LOCK: AtomicBool = AtomicBool::new(false);
+/// Serializa consumo do buffer 8042 aux (IRQ12 vs poll) — dual-consumer dessincroniza o pacote e o mouse “morre”.
+static MOUSE_PORT_LOCK: AtomicBool = AtomicBool::new(false);
 static MOUSE_PHASE: AtomicU8 = AtomicU8::new(0);
 static MOUSE_B0: AtomicU8 = AtomicU8::new(0);
 static MOUSE_B1: AtomicU8 = AtomicU8::new(0);
@@ -255,10 +257,8 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     if ticks < 5 {
         puts(b"[TIMER] Interrupt fired! tick="); putdec(ticks as u64); putc(b'\n');
     }
-    // Poll PS/2 aux no PIT — não depende só do DisplayAgent (TTS/starvation).
-    if ticks & 1 == 0 {
-        mouse_poll_bytes();
-    }
+    // NÃO poll mouse aqui: IRQ12 + DisplayAgent já consomem 0x60.
+    // Dual-consumer no timer dessincroniza o pacote PS/2 → mouse trava após um tempo.
     // Só marca; o poll dos futures roda no idle do scheduler (fora do IRQ).
     crate::async_rt::request_wake_processing();
     send_eoi(32);
@@ -376,63 +376,18 @@ pub fn mouse_feed_byte(byte: u8) {
     }
 }
 
-/// Pinta seta mínima no FB físico (visível mesmo com Hermes bloqueado).
-fn mouse_paint_irq_cursor(x: u32, y: u32) {
-    // Try-lock from IRQ: skip if compositor is rendering (never spin in IRQ)
-    if CURSOR_LOCK.swap(true, Ordering::Acquire) {
-        return;
-    }
-    let addr = FB_ADDR.load(Ordering::Relaxed);
-    if addr == 0 {
-        return;
-    }
-    let stride = FB_STRIDE.load(Ordering::Relaxed) as usize;
-    let bpp = FB_BPP.load(Ordering::Relaxed) as usize;
-    if stride == 0 || bpp == 0 {
-        return;
-    }
-    let w = FB_W.load(Ordering::Relaxed) as usize;
-    let h = FB_H.load(Ordering::Relaxed) as usize;
-    let rgb_order = FB_RGB_ORDER.load(Ordering::Relaxed);
-    let ptr = addr as *mut u8;
-    // Bloco 8×12 branco com borda preta — barato no IRQ
-    for row in 0..12u32 {
-        for col in 0..8u32 {
-            let px = x.saturating_add(col) as usize;
-            let py = y.saturating_add(row) as usize;
-            if px >= w || py >= h {
-                continue;
-            }
-            let edge = row == 0 || col == 0 || row == 11 || col == 7 || col == row;
-            let (r, g, b) = if edge { (0u8, 0u8, 0u8) } else { (255, 255, 255) };
-            let off = py * stride + px * bpp;
-            unsafe {
-                if rgb_order {
-                    core::ptr::write_volatile(ptr.add(off), r);
-                    if bpp > 1 {
-                        core::ptr::write_volatile(ptr.add(off + 1), g);
-                    }
-                    if bpp > 2 {
-                        core::ptr::write_volatile(ptr.add(off + 2), b);
-                    }
-                } else {
-                    core::ptr::write_volatile(ptr.add(off), b);
-                    if bpp > 1 {
-                        core::ptr::write_volatile(ptr.add(off + 1), g);
-                    }
-                    if bpp > 2 {
-                        core::ptr::write_volatile(ptr.add(off + 2), r);
-                    }
-                }
-            }
-        }
-    }
-    CURSOR_LOCK.store(false, Ordering::Release);
-}
+/// Pinta seta no FB físico — **DESLIGADO**.
+/// Causava rastro: pintava sem apagar a posição anterior; quando o compositor
+/// atrasava (orb/TTS), o front buffer acumulava ghosts. Cursor = só compositor
+/// (underlay save/restore no back buffer).
+fn mouse_paint_irq_cursor(_x: u32, _y: u32) {}
 
 /// Poll do buffer aux (bit5) — fallback se IRQ12 falhar no QEMU/WHPX.
 pub fn mouse_poll_bytes() {
     use x86_64::instructions::port::Port;
+    if MOUSE_PORT_LOCK.swap(true, Ordering::Acquire) {
+        return;
+    }
     for _ in 0..16 {
         let status: u8 = unsafe { Port::<u8>::new(0x64).read() };
         if status & 0x01 == 0 {
@@ -445,6 +400,7 @@ pub fn mouse_poll_bytes() {
         let byte: u8 = unsafe { Port::<u8>::new(0x60).read() };
         mouse_feed_byte(byte);
     }
+    MOUSE_PORT_LOCK.store(false, Ordering::Release);
 }
 
 /// Log periódico do status 8042 (diagnóstico QEMU grab / IRQ).
@@ -463,10 +419,13 @@ pub fn mouse_log_status(tag: &str) {
 
 extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
     use x86_64::instructions::port::Port;
-    let status: u8 = unsafe { Port::<u8>::new(0x64).read() };
-    if status & 0x01 != 0 && status & 0x20 != 0 {
-        let byte: u8 = unsafe { Port::<u8>::new(0x60).read() };
-        mouse_feed_byte(byte);
+    if !MOUSE_PORT_LOCK.swap(true, Ordering::Acquire) {
+        let status: u8 = unsafe { Port::<u8>::new(0x64).read() };
+        if status & 0x01 != 0 && status & 0x20 != 0 {
+            let byte: u8 = unsafe { Port::<u8>::new(0x60).read() };
+            mouse_feed_byte(byte);
+        }
+        MOUSE_PORT_LOCK.store(false, Ordering::Release);
     }
     send_eoi(44);
 }

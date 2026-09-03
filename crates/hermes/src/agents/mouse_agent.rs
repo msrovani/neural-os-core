@@ -231,8 +231,8 @@ impl Agent for MouseAgent {
             self.inited = true;
         }
 
-        // Poll aux + IRQ — WHPX às vezes atrasa IRQ12
-        k_nano::interrupts::mouse_poll_bytes();
+        // Poll aux — DisplayAgent é o consumidor primário com MOUSE_PORT_LOCK;
+        // MouseAgent só publica EventBus a partir de LAST_MOUSE_PACKET.
         // ADR-0062 P24b: USB HID boot mouse -> mesmo path ABS/packet
         unsafe {
             let _ = k_nano::xhci::poll_mouse();

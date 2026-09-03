@@ -1,5 +1,22 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s306] - 2026-09-03 — Mesh 4c Master/Worker + slog P2P visível
+
+**Duas QEMU 4c em socket P2P elegem Master/Worker com evidência serial; cursor/orb Jarbas estabilizados.**
+
+### Mesh / net (ADR-0081)
+- **Slog P2P/Net:** `MESH_ENGINE`, heartbeat, TOFU, `mesh role=`, bootstrap netmode → `sub=ok` (antes `info`/`tick` = TRACE mudo).
+- **`detect_qemu_net_mode`:** candidatos canônicos ≥4 GiB (`0x13E000000` + script) dentro de `ram_end`.
+- **STATIC mesh:** aplica IP; **skip** L3.5 ARP / L4 DNS / L5 HTTP (sem gateway slirp no socket).
+- **Evidência:** A=`10.0.3.2` Master, B=`10.0.3.3` Worker, TOFU cruzado; Falcon dual adiado (RAM host).
+
+### Jarbas / input
+- Cursor só no compositor (sem paint IRQ → trails); lock 8042 único; `swap` sem spin em `CURSOR_LOCK`; dirty-rect; orb mais leve; TTS boot TCG formant.
+
+### Validação
+- Dual QEMU 4c / 5G / TCG / NoDisk / netmode STATIC ≥5 min → `GOAL2_election=true`
+- `TICKV backend=RAM` (NoDisk honesto)
+
 ## [1.9.99-s305] - 2026-09-02 — QEMU 4c loop: P6 iretq PASS + Jarbas greeting
 
 **Boot TCG 4 cores completa com saudação Jarbas, demo Ring3 iretq OK e NSGDB persistente no virtio-blk.**

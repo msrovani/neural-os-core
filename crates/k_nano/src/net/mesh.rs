@@ -901,7 +901,7 @@ fn peer_bind(node_id: u8, pk: [u8; PUBLIC_KEY_LEN]) {
     for slot in table.iter_mut() {
         if slot.is_none() {
             *slot = Some((node_id, pk, 0));
-            crate::slog_nano!("P2P", "info", "TOFU bind node={} (pk vinculada)", node_id);
+            crate::slog_nano!("P2P", "ok", "TOFU bind node={} (pk vinculada)", node_id);
             // Peer acabou de nos conhecer via HB — responde HB já para ele
             // vincular nossa pk antes de Sync/ROLE.
             FORCE_HEARTBEAT.store(true, Ordering::Release);
@@ -1638,7 +1638,7 @@ pub fn p2p_tick(_tick: u64) {
                 SimdWeight::None, false, false,
             );
             *eng = Some(BrainMeshEngine::new(caps));
-            crate::slog_nano!("P2P", "info", "MESH_ENGINE inicializado (ADR-0081) node_id={}", nid);
+            crate::slog_nano!("P2P", "ok", "MESH_ENGINE inicializado (ADR-0081) node_id={}", nid);
         }
     }
 
@@ -1690,7 +1690,7 @@ pub fn p2p_tick(_tick: u64) {
             match crate::net::udp_broadcast::sign_packet_authentic(&buf) {
                 Some(signed) => {
                     let ok = crate::net::udp_broadcast::udp_broadcast_send(&signed, P2P_PORT);
-                    crate::slog_nano!("P2P", "info", "TX heartbeat node={} t={} sent={}", node_id, now, ok);
+                    crate::slog_nano!("P2P", "ok", "TX heartbeat node={} t={} sent={}", node_id, now, ok);
                 }
 None => {
                     // Fail-closed: sem sessão não assina → não envia (peers dropariam).
@@ -1938,7 +1938,7 @@ None => {
                 engine.check_election();
                 let role = engine.local_role();
                 let count = engine.node_count();
-                crate::slog_nano!("P2P", "info", "mesh role={:?} nodes={}", role, count);
+                crate::slog_nano!("P2P", "ok", "mesh role={:?} nodes={}", role, count);
             }
         }
     }

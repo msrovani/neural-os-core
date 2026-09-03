@@ -355,7 +355,7 @@ impl NetStack {
             cfg.online = true;
         }
         k_nano::net::set_nic_config(crate::net::NET_CONFIG.lock().mac, ip_bytes);
-        k_nano::slog_hermes!("Net", "info",
+        k_nano::slog_hermes!("Net", "ok",
             "Static IP: {}.{}.{}.{}/24 gw={}.{}.{}.2 dns={}.{}.{}.3",
             ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3],
             ip_bytes[0], ip_bytes[1], gw_byte3,

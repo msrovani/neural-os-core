@@ -87,6 +87,8 @@ pub fn claim_graphics() {
             k_nano::interrupts::FB_W.store(gpu.fb_width, Ordering::Release);
             k_nano::interrupts::FB_H.store(gpu.fb_height, Ordering::Release);
             k_nano::interrupts::FB_RGB_ORDER.store(gpu.rgb_order, Ordering::Release);
+            // Libera lock legado (IRQ cursor podia sair cedo com lock=true → swap spin forever).
+            k_nano::interrupts::CURSOR_LOCK.store(false, Ordering::Release);
         }
     }
 }
@@ -822,6 +824,65 @@ impl DoubleBuffer {
         if bpp > 3 { self.back[offset + 3] = 0xFF; }
     }
 
+    /// Copia retângulo do back buffer para `dst` (layout packed bpp).
+    pub fn copy_rect_out(&self, x: usize, y: usize, w: usize, h: usize, dst: &mut [u8]) {
+        let bpp = self.info.bpp;
+        let need = w.saturating_mul(h).saturating_mul(bpp);
+        if dst.len() < need || w == 0 || h == 0 {
+            return;
+        }
+        let mut di = 0usize;
+        for row in 0..h {
+            let py = y + row;
+            if py >= self.info.height {
+                break;
+            }
+            for col in 0..w {
+                let px = x + col;
+                let off = if px < self.info.width {
+                    py * self.info.stride + px * bpp
+                } else {
+                    usize::MAX
+                };
+                if off != usize::MAX && off + bpp <= self.back.len() {
+                    dst[di..di + bpp].copy_from_slice(&self.back[off..off + bpp]);
+                } else {
+                    for b in 0..bpp {
+                        dst[di + b] = if b == 3 { 0xFF } else { 0 };
+                    }
+                }
+                di += bpp;
+            }
+        }
+    }
+
+    /// Escreve retângulo packed bpp de `src` no back buffer.
+    pub fn copy_rect_in(&mut self, x: usize, y: usize, w: usize, h: usize, src: &[u8]) {
+        let bpp = self.info.bpp;
+        let need = w.saturating_mul(h).saturating_mul(bpp);
+        if src.len() < need || w == 0 || h == 0 {
+            return;
+        }
+        self.dirty = true;
+        let mut si = 0usize;
+        for row in 0..h {
+            let py = y + row;
+            if py >= self.info.height {
+                break;
+            }
+            for col in 0..w {
+                let px = x + col;
+                if px < self.info.width {
+                    let off = py * self.info.stride + px * bpp;
+                    if off + bpp <= self.back.len() {
+                        self.back[off..off + bpp].copy_from_slice(&src[si..si + bpp]);
+                    }
+                }
+                si += bpp;
+            }
+        }
+    }
+
     /// Lê pixel do back buffer (software cursor underlay).
     pub fn get_pixel(&self, x: usize, y: usize) -> Option<(u8, u8, u8)> {
         if x >= self.info.width || y >= self.info.height {
@@ -1111,19 +1172,52 @@ impl DoubleBuffer {
         self.dirty = true;
     }
 
-    pub fn swap(&mut self) {
-        if !self.dirty { return; }
-        // Acquire cursor lock to prevent data race with IRQ cursor draw
-        while k_nano::interrupts::CURSOR_LOCK.swap(true, Ordering::Acquire) {
-            core::hint::spin_loop();
+    /// Copia retângulo back→front (sem spinlock). Preferível ao swap full no TCG.
+    pub fn swap_rect(&mut self, x: usize, y: usize, w: usize, h: usize) {
+        if w == 0 || h == 0 {
+            return;
         }
+        let bpp = self.info.bpp;
+        let stride = self.info.stride;
+        let fw = self.info.width;
+        let fh = self.info.height;
+        let x0 = x.min(fw);
+        let y0 = y.min(fh);
+        let x1 = (x + w).min(fw);
+        let y1 = (y + h).min(fh);
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let row_bytes = (x1 - x0) * bpp;
+        let front = self.info.addr as *mut u8;
+        unsafe {
+            for py in y0..y1 {
+                let off = py * stride + x0 * bpp;
+                if off + row_bytes > self.back.len() {
+                    break;
+                }
+                copy_nonoverlapping(
+                    self.back.as_ptr().add(off),
+                    front.add(off),
+                    row_bytes,
+                );
+            }
+        }
+    }
+
+    /// Full back→front. Sem spin em CURSOR_LOCK (causava freeze permanente).
+    pub fn swap(&mut self) {
+        if !self.dirty {
+            return;
+        }
+        // Cinto: limpa lock legado caso IRQ antigo tenha vazado.
+        k_nano::interrupts::CURSOR_LOCK.store(false, Ordering::Release);
         let addr = self.info.addr;
         let len = self.back.len();
         unsafe {
             copy_nonoverlapping(self.back.as_ptr(), addr as *mut u8, len);
         }
         self.dirty = false;
-        k_nano::interrupts::CURSOR_LOCK.store(false, Ordering::Release);
     }
 }
 

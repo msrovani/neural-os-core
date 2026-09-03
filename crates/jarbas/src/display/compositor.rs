@@ -22,11 +22,12 @@ use crate::display::notifications::NotificationQueue;
 const JARVIS_CYAN_R: u8 = 0;
 const JARVIS_CYAN_G: u8 = 212;
 const JARVIS_CYAN_B: u8 = 255;
-/// Software cursor: save/restore underlay (arrow 11×16 + click flash).
-const CURSOR_UNDER_W: usize = 40;
-const CURSOR_UNDER_H: usize = 40;
-const CURSOR_UNDER_OX: usize = 16; // hotspot offset inside underlay
-const CURSOR_UNDER_OY: usize = 16;
+/// Software cursor: underlay 24×24 (seta 11×16 + margem). Sem flash enorme.
+const CURSOR_UNDER_W: usize = 24;
+const CURSOR_UNDER_H: usize = 24;
+const CURSOR_UNDER_OX: usize = 2;
+const CURSOR_UNDER_OY: usize = 2;
+const CURSOR_UNDER_BYTES: usize = CURSOR_UNDER_W * CURSOR_UNDER_H * 4; // bpp≤4
 
 
 /// Tópico EventBus — botão de card (FeedbackAgent: `"id:idx"`).
@@ -223,6 +224,12 @@ pub struct JarbasDesktop {
     cursor_under_x: usize,
     cursor_under_y: usize,
     cursor_under_valid: bool,
+    /// Primeiro frame: swap full; depois só dirty-rects (anti-freeze TCG).
+    full_swap_pending: bool,
+    last_orb_x0: usize,
+    last_orb_y0: usize,
+    last_orb_w: usize,
+    last_orb_h: usize,
     // Notifications
     pub notifications: NotificationQueue,
 }
@@ -271,10 +278,15 @@ impl JarbasDesktop {
             mouse_x: 0,
             mouse_y: 0,
             mouse_buttons: 0,
-            cursor_under: alloc::vec![0u8; CURSOR_UNDER_W * CURSOR_UNDER_H * 3],
+            cursor_under: alloc::vec![0u8; CURSOR_UNDER_BYTES],
             cursor_under_x: 0,
             cursor_under_y: 0,
             cursor_under_valid: false,
+            full_swap_pending: true,
+            last_orb_x0: 0,
+            last_orb_y0: 0,
+            last_orb_w: 0,
+            last_orb_h: 0,
             notifications: NotificationQueue::new(),
         }
     }
@@ -501,6 +513,36 @@ impl JarbasDesktop {
             return;
         }
 
+        // Só cursor: restore+draw+dirty-rect — evita HUD/orb e swap full (TCG).
+        if self.dirty_cursor
+            && !self.dirty_orb
+            && !self.dirty_hud
+            && !self.dirty_windows
+            && !self.dirty_mesh
+            && !self.dirty_dialog
+        {
+            let prev_x = self.cursor_under_x;
+            let prev_y = self.cursor_under_y;
+            let had = self.cursor_under_valid;
+            self.restore_cursor_underlay();
+            let mx = MOUSE_X.load(core::sync::atomic::Ordering::Relaxed);
+            let my = MOUSE_Y.load(core::sync::atomic::Ordering::Relaxed);
+            self.save_cursor_underlay(mx, my);
+            draw_mouse_cursor(&mut self.fb, mx, my, w, h);
+            self.dirty_cursor = false;
+            if had {
+                self.fb.swap_rect(prev_x, prev_y, CURSOR_UNDER_W, CURSOR_UNDER_H);
+            }
+            self.fb.swap_rect(
+                self.cursor_under_x,
+                self.cursor_under_y,
+                CURSOR_UNDER_W,
+                CURSOR_UNDER_H,
+            );
+            self.fb.dirty = false;
+            return;
+        }
+
         let theme = crate::display::theme::current_theme();
         let mode = *FOCUS_MODE.lock();
 
@@ -536,18 +578,24 @@ impl JarbasDesktop {
         self.restore_cursor_underlay();
 
         // Only clear orb bounding box — NEVER full screen (anti-flicker).
-        // Background + grid are drawn once and persist across frames.
+        // Glow ~2.2r + particles até ~2.0r → margem generosa.
+        let mut orb_drawn = false;
         if self.dirty_orb || self.dirty_mesh {
-            let orb_cr = (self.soul_mirror.base_r * self.soul_mirror.state.size_scale * 3.5) as usize;
+            let orb_cr = (self.soul_mirror.base_r * self.soul_mirror.state.size_scale * 2.6) as usize;
             let ox = self.soul_mirror.cx as usize;
             let oy = self.soul_mirror.cy as usize;
             let x0 = ox.saturating_sub(orb_cr).min(w);
             let y0 = oy.saturating_sub(orb_cr).min(h);
-            let cw = (orb_cr * 2 + 16).min(w.saturating_sub(x0));  // +16 for particles
-            let ch = (orb_cr * 2 + 16).min(h.saturating_sub(y0));
+            let cw = (orb_cr * 2 + 24).min(w.saturating_sub(x0));
+            let ch = (orb_cr * 2 + 24).min(h.saturating_sub(y0));
             if cw > 0 && ch > 0 {
                 self.fb.fill_rect(x0, y0, cw, ch, 8, 12, 24);  // JARVIS_BG
+                self.last_orb_x0 = x0;
+                self.last_orb_y0 = y0;
+                self.last_orb_w = cw;
+                self.last_orb_h = ch;
             }
+            orb_drawn = true;
         }
 
         // Herói visual: Soul Mirror (brand).
@@ -555,6 +603,7 @@ impl JarbasDesktop {
         if self.avatar_visible && self.dirty_orb {
             self.draw_orb_layer(tick, w, h, avatar_state);
             self.dirty_orb = false;
+            orb_drawn = true;
         }
 
         // Mesh P2P
@@ -833,38 +882,60 @@ impl JarbasDesktop {
             draw_text(&mut self.fb, self.w - 60, 0, &alloc::format!("F{}", vcon_active + 1), self.w, 255, 255, 100);
         }
 
-        // Cursor do mouse (save underlay → draw → swap)
+        // Cursor do mouse (save underlay → draw → present dirty)
         let mx = MOUSE_X.load(core::sync::atomic::Ordering::Relaxed);
         let my = MOUSE_Y.load(core::sync::atomic::Ordering::Relaxed);
         self.save_cursor_underlay(mx, my);
         draw_mouse_cursor(&mut self.fb, mx, my, self.w, self.h);
         self.dirty_cursor = false;
-        self.fb.swap();
+        self.present_frame(self.dirty_windows || self.dirty_dialog || vcon_active != 0);
+        self.dirty_windows = false;
+        self.dirty_dialog = false;
+        self.dirty_hud = false;
+        let _ = orb_drawn;
+    }
+
+    /// 1º frame / janelas = swap full; orb animado = só dirty-rects (anti-freeze TCG).
+    fn present_frame(&mut self, need_full: bool) {
+        let w = self.w;
+        let sb_h = 28usize;
+        if self.full_swap_pending || need_full {
+            self.fb.swap();
+            self.full_swap_pending = false;
+            return;
+        }
+        // HUD bar (+ welcome strip)
+        self.fb.swap_rect(0, 0, w, sb_h + 28);
+        // Orb region
+        if self.last_orb_w > 0 && self.last_orb_h > 0 {
+            self.fb.swap_rect(
+                self.last_orb_x0,
+                self.last_orb_y0,
+                self.last_orb_w,
+                self.last_orb_h,
+            );
+        }
+        // Cursor underlay
+        self.fb.swap_rect(
+            self.cursor_under_x,
+            self.cursor_under_y,
+            CURSOR_UNDER_W,
+            CURSOR_UNDER_H,
+        );
+        self.fb.dirty = false;
     }
 
     fn restore_cursor_underlay(&mut self) {
         if !self.cursor_under_valid {
             return;
         }
-        let x0 = self.cursor_under_x;
-        let y0 = self.cursor_under_y;
-        for row in 0..CURSOR_UNDER_H {
-            let y = y0 + row;
-            if y >= self.h {
-                break;
-            }
-            for col in 0..CURSOR_UNDER_W {
-                let x = x0 + col;
-                if x >= self.w {
-                    break;
-                }
-                let i = (row * CURSOR_UNDER_W + col) * 3;
-                let r = self.cursor_under[i];
-                let g = self.cursor_under[i + 1];
-                let b = self.cursor_under[i + 2];
-                self.fb.set_pixel(x, y, r, g, b);
-            }
-        }
+        self.fb.copy_rect_in(
+            self.cursor_under_x,
+            self.cursor_under_y,
+            CURSOR_UNDER_W,
+            CURSOR_UNDER_H,
+            &self.cursor_under,
+        );
         self.cursor_under_valid = false;
     }
 
@@ -873,22 +944,7 @@ impl JarbasDesktop {
         let y0 = my.saturating_sub(CURSOR_UNDER_OY);
         self.cursor_under_x = x0;
         self.cursor_under_y = y0;
-        for row in 0..CURSOR_UNDER_H {
-            let y = y0 + row;
-            for col in 0..CURSOR_UNDER_W {
-                let x = x0 + col;
-                let i = (row * CURSOR_UNDER_W + col) * 3;
-                if let Some((r, g, b)) = self.fb.get_pixel(x, y) {
-                    self.cursor_under[i] = r;
-                    self.cursor_under[i + 1] = g;
-                    self.cursor_under[i + 2] = b;
-                } else {
-                    self.cursor_under[i] = 8;
-                    self.cursor_under[i + 1] = 12;
-                    self.cursor_under[i + 2] = 24;
-                }
-            }
-        }
+        self.fb.copy_rect_out(x0, y0, CURSOR_UNDER_W, CURSOR_UNDER_H, &mut self.cursor_under);
         self.cursor_under_valid = true;
     }
 
@@ -1463,19 +1519,15 @@ fn draw_window_fb(fb: &mut DoubleBuffer, win: &Window, theme: &Theme, scr_w: usi
 }
 
 fn draw_mouse_cursor(fb: &mut DoubleBuffer, mx: usize, my: usize, scr_w: usize, scr_h: usize) {
-    // Flash amarelo no clique (MOUSE_CLICK_FLASH decrementado por frame).
+    // Flash curto no clique — cabe no underlay 24×24 (sem rastro).
     let flash = k_nano::interrupts::MOUSE_CLICK_FLASH.load(core::sync::atomic::Ordering::Acquire);
     if flash > 0 {
         k_nano::interrupts::MOUSE_CLICK_FLASH.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
-        let r = 10 + (flash as usize);
+        let r = 4 + (flash as usize).min(8);
         let ox = mx.saturating_sub(r / 2);
         let oy = my.saturating_sub(r / 2);
-        fb.fill_rect(ox, oy, r.min(scr_w.saturating_sub(ox)), 2, 255, 220, 40);
-        fb.fill_rect(ox, oy, 2, r.min(scr_h.saturating_sub(oy)), 255, 220, 40);
-        let bx = mx.saturating_add(r / 2).min(scr_w.saturating_sub(1));
-        let by = my.saturating_add(r / 2).min(scr_h.saturating_sub(1));
-        fb.fill_rect(ox, by.saturating_sub(1), r.min(scr_w.saturating_sub(ox)), 2, 255, 220, 40);
-        fb.fill_rect(bx.saturating_sub(1), oy, 2, r.min(scr_h.saturating_sub(oy)), 255, 220, 40);
+        fb.fill_rect(ox, oy, r.min(scr_w.saturating_sub(ox)), 1, 255, 220, 40);
+        fb.fill_rect(ox, oy, 1, r.min(scr_h.saturating_sub(oy)), 255, 220, 40);
     }
 
     // Seta 11×16 (1=preto contorno, 2=branco fill) — legível no orb escuro.
@@ -1511,9 +1563,9 @@ fn draw_mouse_cursor(fb: &mut DoubleBuffer, mx: usize, my: usize, scr_w: usize, 
                 break;
             }
             if pix == 1 {
-                fb.fill_rect(x, y, 1, 1, 0, 0, 0);
+                fb.set_pixel(x, y, 0, 0, 0);
             } else {
-                fb.fill_rect(x, y, 1, 1, 255, 255, 255);
+                fb.set_pixel(x, y, 255, 255, 255);
             }
         }
     }
