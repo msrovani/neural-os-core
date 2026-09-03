@@ -1,5 +1,30 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s309] - 2026-09-03 — Falcon3 GGUF inferência wired (TQ2_0 + BF16 + auto-config)
+
+**Falcon3-3B-Instruct-1.58bit carrega no boot via GGUF e vira CURRENT_MODEL — conversa real no AIOS.**
+
+### GGUF loader (cortex)
+- **TQ2_0 (type 25):** dequant ternário 2-bit (f16 scale + 24B→32 f32) p/ GGUFs 1.58-bit (Falcon3, BitNet b1.58, PrismML Bonsai).
+- **BF16 (type 2):** descoberta — o GGUF `-1.58bit-q2b0` do Falcon3 **não é ternário no arquivo** (155 tensors BF16 + 45 F16); "1.58bit" = método de treinamento.
+- **Tensor type IDs corrigidos p/ spec padrão** (0=F32, 1=F16, 2=BF16, 3=Q4_0 …) — o enum antigo estava deslocado e quebraria qualquer GGUF real.
+- **Metadata value type IDs corrigidos** (6=FLOAT32, 8=STRING, 9=ARRAY, 10=FLOAT64) — bug que corrompia o offset em `llama.attention.layer_norm_rms_epsilon` ("n_dims fora de 1..=4").
+- **`GgufBackedModel` auto-config:** hidden/layers/heads/kv_heads/intermediate/vocab/rope_theta/RMS norm lidos da metadata (nada hardcoded) + GQA per-layer.
+- Chat prompt format (`<|system|>/<|user|>/<|assistant|>`) + KV-cache 512 p/ modelos grandes.
+
+### Boot (AIOS — auto-descoberta)
+- `register_bytes` GGUF cria `GgufBackedModel` e seta `CURRENT_MODEL` (antes só marcava slot).
+- Scan QEMU loader detecta magic `0x46554747` @0x100000000 → `GGUF LOADED -> CURRENT_MODEL`.
+- `tools/qemu_boot_stdio.py` descobre `.GGUF` em `target/` + `target/models/` (cap 2GB).
+
+### Validação
+- Host: 6/6 testes cortex (5 unit + 1 integration GGUF sintético, `tools/gen_test_gguf.py` com type IDs corretos).
+- QEMU 4c TCG: GGUF LOADED (~788MB/1109MB), 4/4 cores (s307/s308 sem regressão), JARBAS greeting 40s.
+
+### Residuals
+- `intermediate` veio 6144 (chave metadata divergente → fallback) — alinhar nomes de chave GGUF.
+- Tokenizer real (vocab 32678) + KV-cache 32K + pipeline GGUF→logits end-to-end.
+
 ## [1.9.99-s306] - 2026-09-03 — Mesh 4c Master/Worker + slog P2P visível
 
 **Duas QEMU 4c em socket P2P elegem Master/Worker com evidência serial; cursor/orb Jarbas estabilizados.**

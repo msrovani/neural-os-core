@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 309 | Falcon3 GGUF | GGUF/cortex | Falcon3 inferência GGUF | TQ2_0 (type 25) + BF16; type IDs corretos (spec padrão); metadata value IDs corrigidos (6=FLOAT32, 8=STRING, 9=ARRAY, 10=FLOAT64); GgufBackedModel auto-config; GGUF magic scan no boot; QEMU 4c GGUF LOADED→CURRENT_MODEL + greeting 40s |
 | 308 | SMP AIOS | ADR-0089 | Anti-churn + Memory N≥5 | should_redistribute; inflight; IPI 0→1; steal_burst half∩4; Net ring3; stats/64; HUD 32 |
 | 307 | SMP AIOS | ADR-0088/0089 | N-cores roles + runqueue | MAX_CORES=256 RQ; init_roles_from_pools; smp-runqueue default; affinity ring0/1/2; steal+affinity; online==madt slog |
 | 306 | Mesh/P2P | ADR-0081 + Jarbas | Dual QEMU 4c Master/Worker | slog P2P/Net `info`→TRACE mudo; STATIC skip L3.5; netmode @0x13E000000; A Master B Worker+TOFU; Falcon dual ❌ RAM; target1/uefi sync |
