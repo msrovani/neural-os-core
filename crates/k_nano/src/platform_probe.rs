@@ -416,8 +416,13 @@ pub fn detect_cache_topology() -> CacheTopology {
 pub fn build_gate(hv: HypervisorKind, isa: &CpuFeatures) -> FeatureGate {
     let (allow_smp, max_aps, prefer_serial) = match hv {
         HypervisorKind::None => (true, 255u8, false),
-        HypervisorKind::Kvm => (true, 4, true),
-        HypervisorKind::Tcg => (true, 4, true),
+        HypervisorKind::Kvm => (true, 255, true),
+        // SESSION_309: TCG com SIPI dirigido (ADR-0057 WS-A) acorda TODOS os
+        // vCPUs do QEMU (verificado -smp 8: 7/7 APs em 64-bit Rust). O cap 4
+        // era doutrina falsa (SESSION_279: "MAX_APS=7/.min(8) é doutrina falsa")
+        // e gerava falso aceite online!=madt_expected. MADT Enabled = observe,
+        // não teto: acorda o que o silício (ou o -smp) declarar.
+        HypervisorKind::Tcg => (true, 255, true),
         // SESSÃO_260 (AIOS auto-tudo): Windows 11 com VBS/Hyper-V reporta
         // MicrosoftHv — mas o Hyper-V expõe TODOS os vCPUs ao guest; o kernel
         // deve acordar e usar todos (premissa: usar o HW completo). O gate

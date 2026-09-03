@@ -54,6 +54,11 @@ Três bugs de compatibilidade impediam o Falcon3 GGUF de carregar:
 
 - [x] Host: `cargo test` cortex — 6/6 GGUF (5 unit + 1 integration) PASS
 - [x] `cargo check --release` 0 erros
+- [x] QEMU `-smp 8` TCG (`logs/boot_8c_inst0_20260903_191814.txt`):
+  - **8/8 núcleos** — `CorePools r0=1 r1=4 r2=3 total=8`, roles `sys=1 compute=4 worker=2 memory=1`, `smp_online=8`, 7/7 APs em 64-bit Rust
+  - **Fix doutrina falsa:** gate TCG tinha `max_aps=4` hardcoded (SESSION_279 condena "MAX_APS=7/.min(8)") → falso aceite `online=7 != madt_expected=4`. Wake sempre acordou todos os APs do MADT (SIPI dirigido ADR-0057); o cap só mentia no log. `HypervisorKind::Tcg => max_aps 255` — MADT Enabled = observe, não teto.
+  - IPI Reschedule ativo em CPU 2/4/5/6; `runqueue: 12 agents → APs`
+  - JARBAS greeting + TTS 168160 frames; GGUF LOADED → CURRENT_MODEL
 - [x] QEMU `-smp 4` TCG (`logs/qemu4c_inst0_*.txt`):
   - `GGUF magic 0x46554747 @0x100000000 — GGUF LOADED -> CURRENT_MODEL` (~788MB/1109MB)
   - **4/4 cores** com runqueue s307/s308 (`CorePools r0=1 r1=2 r2=1 total=4`,
