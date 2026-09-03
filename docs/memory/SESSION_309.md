@@ -54,6 +54,11 @@ Três bugs de compatibilidade impediam o Falcon3 GGUF de carregar:
 
 - [x] Host: `cargo test` cortex — 6/6 GGUF (5 unit + 1 integration) PASS
 - [x] `cargo check --release` 0 erros
+- [x] QEMU `-smp 16` TCG (`logs/boot_16c_inst0_20260903_192920.txt`):
+  - **16/16 núcleos** — `online==madt-1 criterion OK (aps=15)`, `CorePools r0=1 r1=8 r2=7 total=16`, roles `sys=1 compute=8 worker=5 memory=2`, `smp_online=16` — fix max_aps 255 valida 16c sem falso warning
+  - Saudacao suit-boot @register K44 + **TTS boot greeting 168160 frames** ✅
+  - GGUF LOADED → CURRENT_MODEL; NSGDB `ingest ramlog → SGDB L3 boot/0000000 (5935 bytes)`
+  - #PF/#UD restantes = demos P6 contenção Ring3 (esperados, non-fatal)
 - [x] QEMU `-smp 8` TCG (`logs/boot_8c_inst0_20260903_191814.txt`):
   - **8/8 núcleos** — `CorePools r0=1 r1=4 r2=3 total=8`, roles `sys=1 compute=4 worker=2 memory=1`, `smp_online=8`, 7/7 APs em 64-bit Rust
   - **Fix doutrina falsa:** gate TCG tinha `max_aps=4` hardcoded (SESSION_279 condena "MAX_APS=7/.min(8)") → falso aceite `online=7 != madt_expected=4`. Wake sempre acordou todos os APs do MADT (SIPI dirigido ADR-0057); o cap só mentia no log. `HypervisorKind::Tcg => max_aps 255` — MADT Enabled = observe, não teto.
