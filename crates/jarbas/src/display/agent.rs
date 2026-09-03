@@ -169,6 +169,9 @@ pub struct DisplayAgent {
     drag_off_y: isize,
     /// Arm do botão OFF (tick até quando o 2º clique confirma).
     power_armed_until: usize,
+    /// Última posição do mouse (para dirty_cursor só no movimento).
+    last_pointer_x: usize,
+    last_pointer_y: usize,
 }
 
 impl DisplayAgent {
@@ -205,7 +208,9 @@ impl DisplayAgent {
             drag_id: AppId::None,
             drag_off_x: 0,
             drag_off_y: 0,
-power_armed_until: 0,
+            power_armed_until: 0,
+            last_pointer_x: usize::MAX,
+            last_pointer_y: usize::MAX,
         }
     }
 
@@ -597,6 +602,13 @@ impl Agent for DisplayAgent {
             MOUSE_BUTTONS.store(btn, core::sync::atomic::Ordering::Relaxed);
             (mx, my, btn)
         };
+        if mx != self.last_pointer_x || my != self.last_pointer_y {
+            self.last_pointer_x = mx;
+            self.last_pointer_y = my;
+            if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                desktop.invalidate_cursor();
+            }
+        }
         // Clique confiável: edge no Display (nao so EventBus — pacotes intermediários
         // se perdem no AtomicU32 do LAST_MOUSE_PACKET).
         {

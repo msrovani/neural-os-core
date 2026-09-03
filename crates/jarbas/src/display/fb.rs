@@ -822,6 +822,23 @@ impl DoubleBuffer {
         if bpp > 3 { self.back[offset + 3] = 0xFF; }
     }
 
+    /// Lê pixel do back buffer (software cursor underlay).
+    pub fn get_pixel(&self, x: usize, y: usize) -> Option<(u8, u8, u8)> {
+        if x >= self.info.width || y >= self.info.height {
+            return None;
+        }
+        let bpp = self.info.bpp;
+        let offset = y * self.info.stride + x * bpp;
+        if offset + (bpp - 1) >= self.back.len() {
+            return None;
+        }
+        if self.info.rgb_order {
+            Some((self.back[offset], self.back[offset + 1], self.back[offset + 2]))
+        } else {
+            Some((self.back[offset + 2], self.back[offset + 1], self.back[offset]))
+        }
+    }
+
     pub fn clear(&mut self, r: u8, g: u8, b: u8) {
         self.fill_rect_fast(0, 0, self.info.width, self.info.height, r, g, b);
     }

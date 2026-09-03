@@ -57,6 +57,23 @@ fn is_fluent_boot_text(text: &str) -> bool {
 /// Template suit-boot (fallback honesto quando LLM mash / soft-float).
 /// Tom: upload confirmado + HUD + fleet + serviço — original Neural OS.
 
+/// Telemetria/HW/PnP — não falar (congela scheduler se Piper sintetizar em massa).
+fn text_is_tts_telemetry(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("[Hermes-PnP]")
+        || t.starts_with("[MEMORY NUDGE]")
+        || t.starts_with("[SECURITY]")
+        || t.starts_with("[Sec]")
+        || t.contains("observe_only family=")
+        || t.contains("bind_storage family=")
+        || t.contains("family=pci_bridge")
+        || t.contains("family=storage_ata")
+        || t.contains("family=qemu_vga")
+        || t.contains("Thoughtful. Precise. Alive")
+        || t.contains(hermes::hermes::HERMES_MOTTO)
+        || (t.contains("Hermes") && t.contains("Alive"))
+}
+
 /// Divide texto em frases para TTS streaming.
 fn split_into_sentences(text: &str) -> alloc::vec::Vec<alloc::string::String> {
     let mut sentences = alloc::vec::Vec::new();
@@ -354,7 +371,8 @@ impl Agent for JarbasAgent {
                     // Buffer drenado — pega próxima frase da queue
                     if !queue.is_empty() {
                         let next = queue.remove(0);
-                        let pcm = crate::audio::skills::synthesize_tts(&next);
+                        // Continuação: formant rápido — Piper neural-lite no TCG congela orb/mouse.
+                        let pcm = crate::audio::tts::synthesize(&next);
                         let total = pcm.len();
                         if total > 0 {
                             let cn = total.min(CHUNK);
@@ -416,77 +434,81 @@ impl Agent for JarbasAgent {
             });
         }
 
-        // --- HERMES_RESPONSE → streaming TTS por frases ---
-        while let Some(ev) = self.hermes_response.try_receive() {
-            let text = core::str::from_utf8(&ev.payload).unwrap_or("");
-            if text.is_empty()
-                || text.starts_with("[JARBAS] Escutando")
-                || text.starts_with("[JARBAS] 🎤")
-            {
-                continue;
-            }
+        // --- HERMES_RESPONSE → streaming TTS (1 síntese/tick; skip telemetria) ---
+        // Só drena quando Idle — senão try_receive dropa chat real enquanto Piper roda.
+        if matches!(self.stream_tts, StreamingTtsState::Idle) {
+            while let Some(ev) = self.hermes_response.try_receive() {
+                let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+                if text.is_empty()
+                    || text.starts_with("[JARBAS] Escutando")
+                    || text.starts_with("[JARBAS] 🎤")
+                    || text_is_tts_telemetry(text)
+                {
+                    continue; // telemetria: descarta; chat real: processa abaixo
+                }
 
-            let clean = text
-                .trim_start_matches("[JARBAS] ")
-                .trim_start_matches("JARVIS: ");
+                let clean = text
+                    .trim_start_matches("[JARBAS] ")
+                    .trim_start_matches("JARVIS: ");
 
-            // Divide em frases para síntese incremental
-            let sentences = split_into_sentences(clean);
-            if sentences.is_empty() {
-                continue;
-            }
-            k_nano::slog_jarbas!("Jarbas", "tts",
-                "TTS streaming: {} frases: {}",
-                sentences.len(),
-                clean.chars().take(60).collect::<alloc::string::String>());
+                let sentences = split_into_sentences(clean);
+                if sentences.is_empty() {
+                    break;
+                }
+                k_nano::slog_jarbas!(
+                    "Jarbas",
+                    "ok",
+                    "TTS streaming: {} frases: {}",
+                    sentences.len(),
+                    clean.chars().take(60).collect::<alloc::string::String>()
+                );
 
-            // Sintetiza a primeira frase imediatamente (curta ~50-200ms)
-            let first = &sentences[0];
-            let rest: alloc::vec::Vec<alloc::string::String> = sentences[1..].iter()
-                .map(|s| alloc::string::String::from(s.as_str()))
-                .collect();
-            let pcm = crate::audio::skills::synthesize_tts(first);
-            let total = pcm.len();
-            if total > 0 {
-                const CHUNK: usize = 2560;
-                let n = total.min(CHUNK);
-                let _ = PLAYBACK_RING.push(&pcm[..n]);
-                if total > n {
-                    if rest.is_empty() {
-                        self.stream_tts = StreamingTtsState::Streaming {
-                            buffer: pcm,
-                            pos: n,
-                            queue: alloc::vec::Vec::new(),
-                        };
-                    } else {
+                let first = &sentences[0];
+                let rest: alloc::vec::Vec<alloc::string::String> = sentences[1..]
+                    .iter()
+                    .map(|s| alloc::string::String::from(s.as_str()))
+                    .collect();
+                let pcm = crate::audio::skills::synthesize_tts(first);
+                let total = pcm.len();
+                if total > 0 {
+                    const CHUNK: usize = 2560;
+                    let n = total.min(CHUNK);
+                    let _ = PLAYBACK_RING.push(&pcm[..n]);
+                    if total > n {
                         self.stream_tts = StreamingTtsState::Streaming {
                             buffer: pcm,
                             pos: n,
                             queue: rest,
                         };
-                    }
-                } else if !rest.is_empty() {
-                    // Primeira frase cabe num chunk — sintetiza a próxima
-                    let next = &rest[0];
-                    let next_rest: alloc::vec::Vec<alloc::string::String> = rest[1..].iter()
-                        .map(|s| alloc::string::String::from(s.as_str()))
-                        .collect();
-                    let pcm2 = crate::audio::skills::synthesize_tts(next);
-                    if pcm2.is_empty() && next_rest.is_empty() {
-                        self.stream_tts = StreamingTtsState::Idle;
+                    } else if !rest.is_empty() {
+                        let next = &rest[0];
+                        let next_rest: alloc::vec::Vec<alloc::string::String> = rest[1..]
+                            .iter()
+                            .map(|s| alloc::string::String::from(s.as_str()))
+                            .collect();
+                        // Continuação imediata: formant (não Piper) — evita 2ª síntese pesada no mesmo tick.
+                        let pcm2 = crate::audio::tts::synthesize(next);
+                        if pcm2.is_empty() && next_rest.is_empty() {
+                            self.stream_tts = StreamingTtsState::Idle;
+                        } else {
+                            self.stream_tts = StreamingTtsState::Streaming {
+                                buffer: pcm2,
+                                pos: 0,
+                                queue: next_rest,
+                            };
+                        }
                     } else {
-                        self.stream_tts = StreamingTtsState::Streaming {
-                            buffer: pcm2,
-                            pos: 0,
-                            queue: next_rest,
-                        };
+                        self.stream_tts = StreamingTtsState::Idle;
                     }
-                } else {
-                    self.stream_tts = StreamingTtsState::Idle;
+                    k_nano::slog_jarbas!(
+                        "Jarbas",
+                        "ok",
+                        "Frase 1/{}: {} samples",
+                        sentences.len(),
+                        total
+                    );
                 }
-                k_nano::slog_jarbas!("Jarbas", "tts",
-                    "Frase 1/{}: {} samples",
-                    sentences.len(), total);
+                break; // no máximo 1 síntese por tick
             }
         }
 

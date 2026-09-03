@@ -594,14 +594,9 @@ impl Agent for HermesAgent {
         // #180: Greeting no primeiro boot
         if !self.boot_greeted {
             let greeting = crate::hermes::hermes_greeting();
-            k_nano::slog_hermes!("Log", "msg", "{}", greeting);
+            k_nano::slog_hermes!("Log", "ok", "{}", greeting);
             println!("{}", greeting);
-            let _ = EVENT_BUS.publish(Event {
-                id: 0, topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
-                payload: alloc::format!("{} v{} — {}", crate::hermes::HERMES_NAME,
-                    crate::hermes::HERMES_VERSION, crate::hermes::HERMES_MOTTO).into_bytes(),
-                token: CapabilityToken::Legacy(1),
-            });
+            // NÃO publicar motto em HERMES_RESPONSE — vira TTS Piper e congela Display/mouse no TCG.
             self.boot_greeted = true;
         }
 
@@ -736,13 +731,8 @@ impl Agent for HermesAgent {
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
             let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
             let d = crate::hw_pnp::hermes_decide_card(text, now);
-            k_nano::slog_hermes!("Log", "msg", "{}", d.ack);
-            let _ = EVENT_BUS.publish(Event {
-                id: 0,
-                topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
-                payload: d.ack.as_bytes().to_vec(),
-                token: CapabilityToken::Legacy(1),
-            });
+            // PnP ack = telemetria (slog) — NÃO HERMES_RESPONSE (vira TTS e congela orb/mouse).
+            k_nano::slog_hermes!("PnP", "ok", "{}", d.ack);
             if let Some(md) = d.auto_skill_md.as_ref() {
                 let mut storage = SKILL_STORAGE.lock();
                 match crate::self_evolve::verify_and_register(&mut storage, md) {

@@ -320,7 +320,11 @@ impl PiperEngine {
                     }
                 })
                 .collect();
-            let max_phonemes = 96.min(ids.len());
+            let max_phonemes = if k_nano::storage_bw::skip_measure() {
+                48.min(ids.len()) // TCG: menos fonemas → DisplayAgent respira
+            } else {
+                96.min(ids.len())
+            };
             let total: usize = durations.iter().take(max_phonemes).sum();
             let mut audio = vec![0i16; total];
             let mut phase = 0.0f32;

@@ -255,6 +255,10 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     if ticks < 5 {
         puts(b"[TIMER] Interrupt fired! tick="); putdec(ticks as u64); putc(b'\n');
     }
+    // Poll PS/2 aux no PIT — não depende só do DisplayAgent (TTS/starvation).
+    if ticks & 1 == 0 {
+        mouse_poll_bytes();
+    }
     // Só marca; o poll dos futures roda no idle do scheduler (fora do IRQ).
     crate::async_rt::request_wake_processing();
     send_eoi(32);
@@ -692,12 +696,10 @@ pub fn remap_pic_pit_fallback() {
         // ICW4: 8086 mode
         core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0x01u8, options(nostack, preserves_flags));
         core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0x01u8, options(nostack, preserves_flags));
-        // Mask: IRQ0 (PIT) + IRQ1 (teclado) + IRQ2 (cascade) abertos; resto mascarado.
-        // 0xF8 = 1111_1000 (bits 0,1,2 = 0). ANTES era 0xFA (1111_1010) — bit 1
-        // setado = IRQ1 do teclado MASCARADO → sendkey/scancode nunca chegava ao
-        // InputAgent (o mouse funciona por polling do status 0x64, não IRQ12).
+        // Mask: IRQ0+IRQ1+IRQ2 abertos no master; IRQ12 (mouse) aberto no slave.
+        // 0xEF no slave = bit4 limpo → IRQ12. Polling 0x64 continua como fallback.
         core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0xF8u8, options(nostack, preserves_flags));
-        core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0xFFu8, options(nostack, preserves_flags));
+        core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0xEFu8, options(nostack, preserves_flags));
     }
     unsafe { crate::apic::pit_init(); }
     crate::slog_nano!("PIC", "info", "Fallback 8259 remapado (IRQ0→vec32). PIT ativo.");

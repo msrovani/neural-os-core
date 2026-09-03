@@ -31,29 +31,28 @@ const MOUSE_MANIFEST: AgentManifest = AgentManifest {
     persist: true,
 };
 
-/// Verifica se o controlador 8042 existe lendo status e tentando self-test (0xAA).
+/// 8042 presente? Status ≠ 0xFF. **Não** rodar self-test 0xAA em runtime:
+/// destrói o stream já habilitado no boot (`mouse init cfg=… ack=0xfa`) e
+/// em TCG o 0xAA frequentemente TIMEOUT → falso "PS/2 ausente".
 fn ps2_check_exists() -> bool {
     unsafe {
         let st: u8 = Port::<u8>::new(0x64).read();
         if st == 0xFF {
-            k_nano::slog_hermes!("MOUSE", "info", "8042 status=0xFF — ausente");
+            k_nano::slog_hermes!("MOUSE", "ok", "8042 status=0xFF — ausente");
             return false;
         }
-        for _ in 0..3 {
-            Port::<u8>::new(0x64).write(0xAA);
+        // Probe leve: ler config (0x20). Resposta qualquer ≠ hole = controller vivo.
+        ps2_wait_write();
+        Port::<u8>::new(0x64).write(0x20);
+        if ps2_wait_read() {
+            let cfg: u8 = Port::<u8>::new(0x60).read();
+            k_nano::slog_hermes!("MOUSE", "ok", "8042 present cfg={:#04x} status={:#04x}", cfg, st);
+            true
+        } else {
+            // Boot já falou com o mouse (ack=0xfa) — status válido basta.
+            k_nano::slog_hermes!("MOUSE", "ok", "8042 present status={:#04x} (cfg read timeout)", st);
+            true
         }
-        for _ in 0..5000 {
-            let s: u8 = Port::<u8>::new(0x64).read();
-            if s & 0x01 != 0 {
-                let d: u8 = Port::<u8>::new(0x60).read();
-                let ok = d == 0x55;
-                k_nano::slog_hermes!("MOUSE", "info", "8042 self-test=0x{:02x} exist={}", d, ok);
-                Port::<u8>::new(0x64).write(0xAE);
-                return ok;
-            }
-        }
-        k_nano::slog_hermes!("MOUSE", "info", "8042 self-test TIMEOUT — ausente");
-        false
     }
 }
 
@@ -105,7 +104,7 @@ fn enable_ps2_mouse() {
         } else {
             0x47
         };
-        k_nano::slog_hermes!("MOUSE", "info", "8042 cfg_before={:#04x}", cfg);
+        k_nano::slog_hermes!("MOUSE", "ok", "8042 cfg_before={:#04x}", cfg);
         cfg |= 0x02; // IRQ12
         cfg |= 0x01; // IRQ1
         cfg &= !0x20; // mouse clock on
@@ -115,7 +114,7 @@ fn enable_ps2_mouse() {
         Port::<u8>::new(0x64).write(0x60);
         ps2_wait_write();
         Port::<u8>::new(0x60).write(cfg);
-        k_nano::slog_hermes!("MOUSE", "info", "8042 cfg_after={:#04x}", cfg);
+        k_nano::slog_hermes!("MOUSE", "ok", "8042 cfg_after={:#04x}", cfg);
 
         // Reset mouse: 0xD4 / 0xFF -> ACK FA, BAT AA, ID 00
         ps2_wait_write();
@@ -167,7 +166,7 @@ fn enable_ps2_mouse() {
             k_nano::slog_hermes!("MOUSE", "info", "re_enable_ack={:#04x}", ack);
         }
     }
-    k_nano::slog_hermes!("MOUSE", "info", "PS/2 mouse enabled (IRQ12 + stream).");
+    k_nano::slog_hermes!("MOUSE", "ok", "PS/2 mouse enabled (IRQ12 + stream).");
     k_nano::interrupts::mouse_log_status("after_enable");
 }
 
@@ -222,7 +221,7 @@ impl Agent for MouseAgent {
             if ps2_check_exists() {
                 enable_ps2_mouse();
             } else {
-                k_nano::slog_hermes!("MOUSE", "info", "PS/2 ausente — só USB HID mouse");
+                k_nano::slog_hermes!("MOUSE", "ok", "PS/2 ausente — so USB HID mouse");
             }
             let (mw, mh) = screen_max();
             self.x = mw / 2;

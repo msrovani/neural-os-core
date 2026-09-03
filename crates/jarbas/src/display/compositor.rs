@@ -22,6 +22,11 @@ use crate::display::notifications::NotificationQueue;
 const JARVIS_CYAN_R: u8 = 0;
 const JARVIS_CYAN_G: u8 = 212;
 const JARVIS_CYAN_B: u8 = 255;
+/// Software cursor: save/restore underlay (arrow 11×16 + click flash).
+const CURSOR_UNDER_W: usize = 40;
+const CURSOR_UNDER_H: usize = 40;
+const CURSOR_UNDER_OX: usize = 16; // hotspot offset inside underlay
+const CURSOR_UNDER_OY: usize = 16;
 
 
 /// Tópico EventBus — botão de card (FeedbackAgent: `"id:idx"`).
@@ -213,6 +218,11 @@ pub struct JarbasDesktop {
     pub mouse_x: i32,
     pub mouse_y: i32,
     pub mouse_buttons: u8,
+    /// RGB underlay sob o cursor (anti-rastro no back buffer persistente).
+    cursor_under: alloc::vec::Vec<u8>,
+    cursor_under_x: usize,
+    cursor_under_y: usize,
+    cursor_under_valid: bool,
     // Notifications
     pub notifications: NotificationQueue,
 }
@@ -261,6 +271,10 @@ impl JarbasDesktop {
             mouse_x: 0,
             mouse_y: 0,
             mouse_buttons: 0,
+            cursor_under: alloc::vec![0u8; CURSOR_UNDER_W * CURSOR_UNDER_H * 3],
+            cursor_under_x: 0,
+            cursor_under_y: 0,
+            cursor_under_valid: false,
             notifications: NotificationQueue::new(),
         }
     }
@@ -474,6 +488,12 @@ impl JarbasDesktop {
         if tick.wrapping_sub(last) < TARGET_FRAME_TICKS { return; }
         LAST_FRAME_TICK.store(tick, core::sync::atomic::Ordering::Relaxed);
 
+        // Orb: animação a cada 2 ticks (~9 Hz) — antes do early-exit.
+        if tick.wrapping_sub(self.last_orb_tick) >= 2 {
+            self.dirty_orb = true;
+            self.last_orb_tick = tick;
+        }
+
         // ── FASE 2: early-exit ──
         if !self.dirty_orb && !self.dirty_hud && !self.dirty_windows
             && !self.dirty_mesh && !self.dirty_cursor && !self.dirty_dialog
@@ -512,11 +532,9 @@ impl JarbasDesktop {
         // Só redesenha fundo+orb+mesh quando dirty_orb ou dirty_mesh.
         // Quando só cursor muda, pula 1M+ pixels de fill.
         // ═════════════════════════════════════════════════════════════
-        // Orb animation: invalidar a cada 2 ticks para manter pulsacao (audio FFT)
-        if tick % 2 == 0 {
-            self.dirty_orb = true;
-        }
-        
+        // Anti-rastro: restaura underlay ANTES de qualquer paint (cursor some do back).
+        self.restore_cursor_underlay();
+
         // Only clear orb bounding box — NEVER full screen (anti-flicker).
         // Background + grid are drawn once and persist across frames.
         if self.dirty_orb || self.dirty_mesh {
@@ -815,11 +833,63 @@ impl JarbasDesktop {
             draw_text(&mut self.fb, self.w - 60, 0, &alloc::format!("F{}", vcon_active + 1), self.w, 255, 255, 100);
         }
 
-        // Cursor do mouse
+        // Cursor do mouse (save underlay → draw → swap)
         let mx = MOUSE_X.load(core::sync::atomic::Ordering::Relaxed);
         let my = MOUSE_Y.load(core::sync::atomic::Ordering::Relaxed);
+        self.save_cursor_underlay(mx, my);
         draw_mouse_cursor(&mut self.fb, mx, my, self.w, self.h);
+        self.dirty_cursor = false;
         self.fb.swap();
+    }
+
+    fn restore_cursor_underlay(&mut self) {
+        if !self.cursor_under_valid {
+            return;
+        }
+        let x0 = self.cursor_under_x;
+        let y0 = self.cursor_under_y;
+        for row in 0..CURSOR_UNDER_H {
+            let y = y0 + row;
+            if y >= self.h {
+                break;
+            }
+            for col in 0..CURSOR_UNDER_W {
+                let x = x0 + col;
+                if x >= self.w {
+                    break;
+                }
+                let i = (row * CURSOR_UNDER_W + col) * 3;
+                let r = self.cursor_under[i];
+                let g = self.cursor_under[i + 1];
+                let b = self.cursor_under[i + 2];
+                self.fb.set_pixel(x, y, r, g, b);
+            }
+        }
+        self.cursor_under_valid = false;
+    }
+
+    fn save_cursor_underlay(&mut self, mx: usize, my: usize) {
+        let x0 = mx.saturating_sub(CURSOR_UNDER_OX);
+        let y0 = my.saturating_sub(CURSOR_UNDER_OY);
+        self.cursor_under_x = x0;
+        self.cursor_under_y = y0;
+        for row in 0..CURSOR_UNDER_H {
+            let y = y0 + row;
+            for col in 0..CURSOR_UNDER_W {
+                let x = x0 + col;
+                let i = (row * CURSOR_UNDER_W + col) * 3;
+                if let Some((r, g, b)) = self.fb.get_pixel(x, y) {
+                    self.cursor_under[i] = r;
+                    self.cursor_under[i + 1] = g;
+                    self.cursor_under[i + 2] = b;
+                } else {
+                    self.cursor_under[i] = 8;
+                    self.cursor_under[i + 1] = 12;
+                    self.cursor_under[i + 2] = 24;
+                }
+            }
+        }
+        self.cursor_under_valid = true;
     }
 
     /// Mesh P2P — arestas + satélites em torno do orb (brand = Soul Mirror).
