@@ -93,6 +93,10 @@ Mandamento 4 (nada bypassado): martelar E1000/ATA/xHCI “porque sempre foi assi
 
 Residual honesto (#513): `measure_bandwidth` + BMIDE 0xC8 — ordem e skip já no plano; medição ainda não escolhe o transporte. Residual SMP: aceite metal K23. **Fila executável:** ADR-0100 (ondas 0–10, T-001–T-075).
 
+**SMP N-cores (SESSION_279 + plano SMP AIOS):** inventário MADT → pools P/E →
+papéis proporcionais a N → `ap_pollable` → matmul/agents. Hardcode de quantidade
+ou índices de core (`MAX_APS=7`, tabela 0..3 como política) = bypass desta premissa.
+
 ## Planos Cursor implementados
 
 | Plano | Status | Evidência |

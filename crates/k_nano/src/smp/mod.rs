@@ -86,7 +86,7 @@ pub extern "C" fn ap_entry(_cpu_id: u64) -> ! {
     let expected = AP_EXPECTED.load(Ordering::Acquire);
     if ready == expected {
         set_ap_pollable(true);
-        crate::slog_nano!("SMP", "info", "All {} APs IDT ready — ap_pollable=true", expected);
+        crate::slog_nano!("SMP", "ok", "All {} APs IDT ready — ap_pollable=true", expected);
     }
 
     AP_ENTRY_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -454,6 +454,8 @@ pub unsafe fn init_smp() {
             "Nenhum AP detectado (MADT). SMP single-core."
         );
         corepools::init_from_boot(bsp_lapic_id, 0);
+        #[cfg(feature = "smp-runqueue")]
+        runqueue::init_roles_from_pools(1);
         return;
     }
 
@@ -583,9 +585,54 @@ pub unsafe fn init_smp() {
 
     crate::slog_nano!("SMP", "ok", "Brought up {} APs", ap_woke);
 
+    // Aceite AIOS (SESSION_279): online deve == madt_enabled-1 (dentro do gate env).
+    if ap_woke as u16 != ap_expected {
+        crate::slog_nano!(
+            "SMP",
+            "warn",
+            "online={} != madt_expected={} — residual wake/IDT (HITL metal)",
+            ap_woke,
+            ap_expected
+        );
+    } else {
+        crate::slog_nano!(
+            "SMP",
+            "ok",
+            "online==madt-1 criterion OK (aps={})",
+            ap_woke
+        );
+    }
+
     corepools::init_from_boot(bsp_lapic_id, ap_woke as u16);
+    #[cfg(feature = "smp-runqueue")]
+    {
+        let n = (ap_woke as usize).saturating_add(1);
+        if n > runqueue::MAX_CORES {
+            crate::slog_nano!(
+                "SMP",
+                "fail",
+                "MADT/n={} > MAX_CORES={} — HITL (RQ array); inventário não é truncado no wake",
+                n,
+                runqueue::MAX_CORES
+            );
+        }
+        runqueue::init_roles_from_pools(n);
+    }
     let workers = (ap_woke as usize).saturating_add(1);
     work_stealing::init_global_pool(workers);
+
+    // Hybrid Intel 0x1A: honesty — E-cores só em metal/KVM com allow_ep_core_detect.
+    if crate::platform_probe::gate().allow_ep_core_detect {
+        if let Some(p) = corepools::pools() {
+            crate::slog_nano!(
+                "SMP",
+                "ok",
+                "hybrid/0x1A pools P(r1)={} E(r2)={} (aceite HW: R1=P R2=E)",
+                p.ring1.len(),
+                p.ring2.len()
+            );
+        }
+    }
 }
 
 #[cfg(test)]

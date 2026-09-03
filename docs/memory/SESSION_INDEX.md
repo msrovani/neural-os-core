@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s308 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,8 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 308 | SMP AIOS | ADR-0089 | Anti-churn + Memory N≥5 | should_redistribute; inflight; IPI 0→1; steal_burst half∩4; Net ring3; stats/64; HUD 32 |
+| 307 | SMP AIOS | ADR-0088/0089 | N-cores roles + runqueue | MAX_CORES=256 RQ; init_roles_from_pools; smp-runqueue default; affinity ring0/1/2; steal+affinity; online==madt slog |
 | 306 | Mesh/P2P | ADR-0081 + Jarbas | Dual QEMU 4c Master/Worker | slog P2P/Net `info`→TRACE mudo; STATIC skip L3.5; netmode @0x13E000000; A Master B Worker+TOFU; Falcon dual ❌ RAM; target1/uefi sync |
 | 305 | Boot/QEMU | P6 + Jarbas greeting | QEMU 4c loop PASS | int 0x90 DPL=3 na IDT k_nano; marker P6 @+48 pós-mailbox; ring3_can_iretq=true; saudacao+TTS+desktop_ready TCG |
 | 302 | Ring3 | Onda 6 ADR-0102 | CPL=3 sandbox wired | k_nano::ring3 mailbox+T-056; P6 demos reais; register_native_ring gated T-053; 0 erros check |

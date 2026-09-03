@@ -177,6 +177,14 @@ pub fn ap_idle_loop(worker_id: usize) -> ! {
             continue;
         }
 
+        // ADR-0089: agents da run-queue (só se ap_pollable + feature).
+        #[cfg(feature = "smp-runqueue")]
+        {
+            if crate::smp::ap_pollable() && super::runqueue::try_run_one_agent(worker_id) {
+                continue;
+            }
+        }
+
         if use_mwait {
             unsafe { mwait_idle() };
         } else if x86_64::instructions::interrupts::are_enabled() {

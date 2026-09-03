@@ -24,7 +24,7 @@ pub struct GaugeSnapshot {
     pub hd_val: String,
     pub timer_at: usize,
     /// Load por core (0.0-1.0).
-    pub per_core_load: [f32; 16],
+    pub per_core_load: [f32; 32],
     pub core_count: u8,
     /// Trinity MoE routing telemetry.
     pub trinity_neural: u64,
@@ -45,7 +45,7 @@ impl GaugeSnapshot {
             gpu_val: String::from("-"),
             hd_val: String::from("-"),
             timer_at: 0,
-            per_core_load: [0.0; 16],
+            per_core_load: [0.0; 32],
             core_count: 0,
             trinity_neural: 0,
             trinity_keyword: 0,
@@ -65,7 +65,7 @@ static SNAPSHOT: Mutex<GaugeSnapshot> = Mutex::new(GaugeSnapshot {
     gpu_val: String::new(),
     hd_val: String::new(),
     timer_at: 0,
-    per_core_load: [0.0; 16],
+    per_core_load: [0.0; 32],
     core_count: 0,
     trinity_neural: 0,
     trinity_keyword: 0,
@@ -141,23 +141,24 @@ fn sample_hd() -> (f32, String) {
 /// Chamado pelo MetricsAgent (~0,5s) — amostra e publica snapshot.
 /// `log_serial`: true só na 1ª amostra / periodicamente (HW sem serial satura COM).
 
-/// Amostra load por-core via runqueue CpuStats.
+/// Amostra load por-core via runqueue CpuStats (até 32 cores no HUD).
 #[cfg(feature = "smp-runqueue")]
-fn sample_per_core_load() -> ([f32; 16], u8) {
+fn sample_per_core_load() -> ([f32; 32], u8) {
     let cores = k_nano::smp::percpu::CPU_COUNT.load(Ordering::Relaxed) as usize;
-    let mut load = [0.0f32; 16];
-    for c in 0..cores.min(16) {
+    let mut load = [0.0f32; 32];
+    let n = cores.min(32);
+    for c in 0..n {
         let stats = k_nano::smp::runqueue::cpu_stats(c);
         let running = stats.running.load(Ordering::Relaxed) as f32;
         let blocked = stats.blocked.load(Ordering::Relaxed) as f32;
         let total = running + blocked;
         load[c] = if total > 0.0 { (running / total).clamp(0.0, 1.0) } else { 0.0 };
     }
-    (load, cores.min(16) as u8)
+    (load, n as u8)
 }
 
 #[cfg(not(feature = "smp-runqueue"))]
-fn sample_per_core_load() -> ([f32; 16], u8) { ([0.0; 16], 0) }
+fn sample_per_core_load() -> ([f32; 32], u8) { ([0.0; 32], 0) }
 
 pub fn refresh_snapshot(log_serial: bool) {
     let (cpu_pct, cores) = sample_cpu();

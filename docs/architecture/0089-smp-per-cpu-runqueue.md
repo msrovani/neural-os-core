@@ -34,7 +34,7 @@ Criar `k_nano::smp::runqueue` com:
 
 ### 2. Reschedule-IPI Funcional
 - `send_reschedule_ipi_to(lapic_id)`: envia IPI vetor 0x80 para AP específico.
-- `wake_core_if_needed(core_id)`: verifica run-queue + AP_POLLABLE antes de IPI.
+- `wake_core_if_needed(core_id, was_empty)`: IPI só se fila passou 0→1.
 - Integrado ao `dispatch_to_core` existente no `spsc.rs`.
 
 ### 3. Work-Stealing de Agents
@@ -101,22 +101,42 @@ cargo build --release --features smp-runqueue -p neural-kernel
 # [SMP] AP 1: 2 agents executados (steal: 1)
 ```
 
-## 6. Core Role Mapping (ADR-0057 CorePair + ADR-0089)
+## 6. Core Role Mapping (ADR-0057 CorePools + AIOS N-cores)
 
-Mapeamento de papéis por core (configurável em boot):
+**Política (ADR-0088 / SESSION_279):** MADT Enabled = inventário. Papéis são
+**proporcionais a N e ao tipo P/E** (`assign_cores` / `init_roles_from_pools`).
+Hardcode de índices (`core 3 = Memory`) = **anti-AIOS** — deny.
 
-| Core | Papel | Ring | Agents |
-|------|-------|------|--------|
+**Exemplo ilustrativo** só para QEMU `-smp 4` (não é teto de produto):
+
+| Core | Papel | Ring | Agents (exemplo) |
+|------|-------|------|------------------|
 | 0 (BSP) | System | R0 | HwBridge, Input, Display, Cron, Security, Safety |
 | 1 (AP1) | Compute | R1 | CortexAgent (LLM decode), matmul workers |
 | 2 (AP2) | Worker | R2 | HermesAgent (orchestration), WASM sandbox |
-| 3 (AP3) | Memory | R2 | NetAgent, WifiAgent, SGDB, SelfHeal |
+| 3 (AP3) | Worker | R2 | NetAgent (ring3→Memory fallback Worker em N=4) |
+
+Com `N=2`: BSP System + 1 Compute. Com `N=4`: **Memory=0**, ≥1 Worker (não
+promover o único Worker). Com `N≥5`: Memory=1; `N≥8`: `floor(N/8)`. Hybrid
+Intel: R1←P, R2←E (CPUID 0x1A).
+`MAX_CORES=256` = bound do array RQ (LAPIC-class); MADT>256 → slog fail + HITL.
+
+**SESSION_308 (anti-churn AIOS):**
+- `should_redistribute`: pending==0 OR tick%32 OR imbalance>2
+- Inflight bitmap idx<256 (não duplicar slot vivo)
+- IPI só se fila 0→1; overflow → `blocked`/`OVERFLOW_TOTAL`
+- Slog `runqueue:` rate-limit; `stats` a cada 64 ticks
+- `steal_burst` half∩4 se local vazia; Net `affinity_ring=3` → Memory
+
+**Inspiração Redox** (não port EEVDF): Percpu + RQ local + steal + IPI +
+affinity soft. Neural = agents cooperativos + CorePools P/E + Observe MADT.
+EEVDF/vruntime = residual (Pendente), não pré-requisito de SMP real.
 
 Funções:
--  enum: System/Compute/Memory/Worker/Idle
--  / 
-- : configura baseado em CorePools (r0→System, r1→Compute, r2→Worker)
-- : distribui por papel + menor carga
+- `CoreRole`: System/Compute/Memory/Worker/Idle
+- `init_roles_from_pools(n)`: CorePools → papéis por conjunto
+- `resolve_target_core_for_role`: ring1 Compute / ring2 Worker / ring3 Memory→Worker
+- `steal_agent` / `steal_burst`: vítima `len>1`; burst half∩4
 
 ## 7. Relatório de Uso de Cores
 
@@ -128,20 +148,26 @@ Gargalos identificados:
 3. **SGDB sync compete com inference** por cache L2/L3
 4. **APs subutilizados** (~10% em média, 90% em idle)
 
+## 8. Apêndice Survey 2026-09 (padrões, zero deps)
+
+Filtro AIOS = **tick de Agent**. Adotado: Tokio/st3/smp-nostd half-steal +
+bounded overflow; Plinth ≠ CURRENT (inflight); ArceOS IPI-empty + steal local
+vazia + sem spin infinito remote. **Rejeitado:** EEVDF Redox, preempt Theseus,
+MCS/RCU Asterinas, HarSaRK RT, Ariel MCU, vendorizar crates.
+
 ## Pendente (Futuro)
 
-- **Objetivo 4 (Telemetria no HUD):** `MonitorAgent` lê `cpu_stats()` e
-  expõe no HUD do Jarbas. Requer integração com `jarbas/display/gauges.rs`.
-  Deixado como TODO — não bloqueia a feature.
 - **Preemptivo (ADR-0065 Fase 4):** Timer IPI para preempção de agents.
-  Requer IDT compartilhada + reschedule-IPI por timer. Complexidade alta.
-- **Work-stealing de agents com virtual-time:** Similar ao EEVDF do Redox.
-  Requer tracking de vruntime por agent. Adiado.
+- **Work-stealing com virtual-time:** EEVDF residual — adiado.
+- Aceite metal K23: `online==madt-1` + hybrid P/E.
 
 ## Referências
 
 - Redox OS: `kernel/scheduler/eevdf.rs` — per-CPU run-queues, work-stealing
 - Linux CFS: `kernel/sched/core.c` — per-CPU rq, load balancing
-- ADR-0055: FeatureGate pattern (default OFF)
+- Tokio scheduler 10× / st3 / smp-nostd — half-steal, bounded queues
+- ArceOS axtask — steal se local vazia; kick IPI; wake_handoff
+- ADR-0055: FeatureGate pattern
 - ADR-0057: Compute Dispatch SMP (AP workers)
 - ADR-0065: TSS/IST multi-AP (IDT compartilhada)
+- ADR-0088: Premissa Máxima AIOS-First

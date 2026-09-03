@@ -96,7 +96,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#489** ext4/btrfs/NTFS read-write | ADR própria (P8/P9/P10) | ⏳ | **NTFS read+list ✅ SESSION_253** ($MFT parse, resident data, root dir); NTFS/EXT write = defer honesto |
 | **#490** USB Storage driver | ADR-0062 P11 / SESSION_170 | ✅ MVP (bringup+BOT; residual hubs/SS) |
 | **#491** Vulkan driver | ADR própria (P12) | ⏳ |
-| **#492** SMP completo (trampoline + work-stealing) | ADR-0055/0057 (não ADR nova) | 🔄 SESSION_281 ICR x2APIC + GDT 1 TSS/CPU; residual ap_pollable/Vec PerCpu BSS 511; aceite metal K23 |
+| **#492** SMP completo (trampoline + work-stealing) | ADR-0055/0057/0089 (não ADR nova) | 🔄 SESSION_308: anti-churn + Memory N≥5 + steal_burst; residual EEVDF/metal K23 |
 | **#493** IPC MessageBus + Channels | ADR própria (P14) | 🔄 Fundido em #483 |
 | **#494** Linux binary compatibility | ADR própria (P15) | ⏳ |
 | **#495** Async executor híbrido | ADR própria (P16) | 🔄 Fundido em #484 |
@@ -1635,7 +1635,7 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-05 | **321** | **PerCpu dinâmico** — Alocar struct PerCpu por AP + GS.base individual via wrmsr. Hoje só BSP_PCPU estático existe, todos APs recebem o mesmo ponteiro. Base para scheduler multicore, slab local, métricas por core. | 🟡 Bloco 25 | Sprint N | ~300 LOC |
 | 2026-07-05 | **322** | **Work-stealing Chase-Lev scheduler** — Deques lock-free por core (Chase-Lev algoritmo). Quando queue local vazia, steal de core vizinho. Distribui agents entre 4 cores automaticamente. Referência: crossbeam-deque + fast-steal (crates.io no_std). | 🟡 Bloco 26 | Sprint N+1 | ~400 LOC |
 | 2026-07-05 | **323** | **Parallel-for AVX2 matmul** — Chunk hidden dimension (2560) em 4 partes, cada core processa um chunk, barreira atômica (AtomicU32 spin). Sem lock — só barreira. Speedup estimado: 2-3.5× sobre single-core. | 🟡 Bloco 26 | Sprint N+1 | ~300 LOC |
-| 2026-07-05 | **324** | **AgentScheduler multicore** — 4 run queues (uma por core), steal entre cores quando queue local vazia. AgentTier define affinity: Permanent→core fixo, UserDemand→work-stealing. RebalanceAgent monitora carga e move agents. | 🟡 Bloco 26 | Sprint N+1 | ~200 LOC |
+| 2026-07-05 | **324** | **AgentScheduler multicore** — N run queues (uma por core detectado), steal entre cores quando queue local vazia. Affinity ring0=BSP; ring≥1 migrável. **Não** hardcode 4 queues. SESSION_308 anti-churn / ADR-0089. | 🔄 fazendo | ADR-0089 | SESSION_308 | `k_nano/smp/runqueue.rs`, `agent-core` |
 | 2026-07-05 | **325** | **Per-CPU slab allocator** — Alocar sem lock no hot path. Slab local por core, lote de 64 frames quando vazio (lock curto no allocator global). Reduz contenção no LockedHeap compartilhado. | 🟡 Bloco 26 | Sprint N+1 | ~300 LOC |
 | 2026-07-05 | **326** | **GPU BAR0/BAR1 mapping UC** — Mapear PCI BARs da GPU como uncacheable (PWT|PCD) para MMIO direto. BAR0 = register file, BAR1 = VRAM aperture. Genérico: NVIDIA (nova-core), AMD (amdgpu), Intel (i915). | 🟡 Bloco 27 | Sprint N+2 | ~300 LOC |
 | 2026-07-05 | **327** | **GPU doorbell + SPSC job ring** — CPU escreve job descriptor no ring buffer, escreve doorbell register (BAR0 offset), GPU lê doorbell, executa job, atualiza tail. Ring com `alignas(64)` head/tail para false sharing prevention. | 🟡 Bloco 27 | Sprint N+2 | ~400 LOC |

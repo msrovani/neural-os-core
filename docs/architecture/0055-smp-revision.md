@@ -107,6 +107,11 @@ IDEA #20–41 e claims “AgentScheduler multicore ✅” voltam a `fazendo` at�
 - [ ] `parallel_matmul` speedup em HW (Fase B) — código wired; aceite HW
 - [ ] CorePools log em Intel hybrid (Fase B/C) — log P-only em QEMU; hybrid = HW
 
+**AIOS (ADR-0088 / SESSION_279):** `max_aps` TCG/KVM=4 é **gate de ambiente**,
+não teto de silício. Papéis por índice fixo (ex. core3=Memory) = deny. CorePools
+`Vec` + `init_roles_from_pools(N)` = política. RQ `MAX_CORES=256` = bound de array
+(LAPIC-class), não inventário. Inspiração Redox = Percpu/RQ/steal/IPI; EEVDF fora (§3).
+
 ---
 
 ## 5. Planos Cursor

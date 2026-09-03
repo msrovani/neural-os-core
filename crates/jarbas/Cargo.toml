@@ -20,5 +20,10 @@ k-hal = { path = "../k_hal" }
 cortex = { path = "../cortex" }
 hermes = { path = "../hermes" }
 
+[features]
+default = []
+# ADR-0089: HUD de cpu_stats na gauge bar.
+smp-runqueue = ["k-nano/smp-runqueue"]
+
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "smp-runqueue"))'] }

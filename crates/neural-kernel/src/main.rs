@@ -875,6 +875,16 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     agent_core::set_sched_metrics_hook(Some(sched_metrics_hook));
     // ADR-0060: BEI tick hook — runs every scheduler tick
     agent_core::set_bei_tick_hook(Some(bei_init::bei_tick));
+    // ADR-0089: registry ptr + offload hooks (só se feature; predicate = ap_pollable runtime).
+    agent_core::set_registry_ptr(registry);
+    #[cfg(feature = "smp-runqueue")]
+    {
+        agent_core::set_smp_offload_hooks(
+            Some(|| k_nano::smp::ap_pollable()),
+            Some(k_nano::smp::runqueue::distribute_batch),
+        );
+        k_nano::smp::runqueue::register_agent_tick_fn(agent_core::tick_agent_by_index);
+    }
     // SESSÃO_260: rastreio do 1º ciclo — loga cada agente ANTES do tick no
     // ramlog (dump ">>> BOOT.LOG (RAM) <<<" no FB). Se o HW real travar num
     // agente, o último nome no dump revela o alvo. Remove-se depois de achar.
@@ -3196,6 +3206,16 @@ pub(crate) fn kernel_boot(
     // Display: splash no 1º tick; sem urgency vira Pending eterno → rate-limit 80%
     // após 50 ticks e o compositor nunca substitui "Inicializando..." (HW real).
     registry.set_urgency("display", 220);
+    // ADR-0089: críticos BSP (ring0); migráveis ring≥1 com smp-runqueue + ap_pollable.
+    let _ = registry.set_affinity_ring("hw_bridge", 0);
+    let _ = registry.set_affinity_ring("input", 0);
+    let _ = registry.set_affinity_ring("mouse", 0);
+    let _ = registry.set_affinity_ring("display", 0);
+    let _ = registry.set_affinity_ring("security", 0);
+    let _ = registry.set_affinity_ring("cortex_llm", 1);
+    let _ = registry.set_affinity_ring("intent_router", 2);
+    // ring3 → CoreRole::Memory (fallback Worker em N=4 sem Memory).
+    let _ = registry.set_affinity_ring("network_agent", 3);
     k_nano::slog_bin!("Sched", "info", "urgency aplicada p/ interativos (hw_bridge/network_agent/input/mouse/display) — isentos de rate-limit");
 
     // SysInfoAgent — painel de debug com CPU/memória/agentes na tela

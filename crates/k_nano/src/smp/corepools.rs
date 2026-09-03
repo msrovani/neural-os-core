@@ -132,7 +132,7 @@ pub fn init_from_boot(bsp_lapic: u32, ap_count: u16) {
     POOLS_READY.store(true, core::sync::atomic::Ordering::Release);
     crate::slog_nano!(
         "SMP",
-        "info",
+        "ok",
         "CorePools r0={} r1={} r2={} bsp_type={} total={}",
         r0,
         r1,

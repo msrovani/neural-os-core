@@ -669,7 +669,7 @@ impl JarbasDesktop {
                 let bar_h = 10usize;
                 let gap = 2usize;
                 let base_x = 12 + 6 * 8 + 12;
-                for c in 0..n.min(16) {
+                for c in 0..n.min(32) {
                     let load = snap.per_core_load[c].clamp(0.0, 1.0);
                     let filled = (load * bar_h as f32) as usize;
                     let x = base_x + c * (bar_w + gap);

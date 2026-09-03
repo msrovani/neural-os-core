@@ -190,7 +190,10 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: **v1.9.99-s306 TEST** — Dual QEMU 4c mesh Master/Worker (ADR-0081) + slog P2P ok; s305 4c P6+Jarbas; s302 Ring3 Onda 6; Falcon dual / split IA residual (RAM);
+# Current Sprint: **v1.9.99-s308 TEST** — SMP anti-churn (redistribute/inflight/IPI0→1) + Memory N≥5 + steal_burst;
+# s307 SMP AIOS N-cores (roles∝N, MAX_CORES=256 RQ, smp-runqueue);
+
+# s306 Dual QEMU 4c mesh Master/Worker; s305 4c P6+Jarbas; s302 Ring3 Onda 6;
 # s294 compositor hot path (TTS streaming); s293 OVMF/Falcon3; s292 TTS sentence-level.
 # v279: SMP AIOS MADT inventário; trampoline jmp@IP=0; IDs u32 (s278 Ring3 TCG iretq+CPL3; B/C **não** liberados).
 # ADR-0081 mesh (SESSION_242): **REASSEMBLY 2→16 slots** + **ACK seletivo** (FRAG\0→FRACK\0 stop-and-wait, 3 retries, 50 ticks) + timeout 500→2000 ticks; **probe_node exponential backoff** 50→3200 ticks; **cleanup_peer_health_ttl** (>60s a cada 500 ticks); PeerHealth expandido (avg_rtt EWMA α=1/8, rtt_samples[32], `peer_p99_rtt` via `(count*99+99)/100` — no_std sem f32::ceil); **ARP cache** PEER_MAC_CACHE + `recv_*_with_mac` expõe src_mac; **capacity_weighted_assign health-aware** (unreachable→0, latency/p99 factors); **token bucket** rate limiting (1/tick, burst 20; heartbeat=1, ROLE=2, dados=3); **JSON dashboard**: `PeerHealth::to_json` + `publish_mesh_health` emite JSON array no tópico `MESH_HEALTH`, `mesh_health_json::parse` no_std no Jarbas + lazy subscribe no DisplayAgent. Transporte vive em **k_nano R0**. Commit 7a97556.

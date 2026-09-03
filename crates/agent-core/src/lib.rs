@@ -284,6 +284,17 @@ impl AgentRegistry {
         self.agents.iter_mut().find(|a| a.name == name)
     }
 
+    /// ADR-0055/0089: override affinity ring (0=BSP-only, 1=Compute, 2=Worker/event).
+    pub fn set_affinity_ring(&mut self, name: &str, ring: u8) -> bool {
+        match self.get_mut(name) {
+            Some(a) => {
+                a.affinity_ring = ring;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Goal-aware: agents com urgency > 0 NÃO são rate-limited pelo scheduler
     /// (rate-limit só atinge `urgency == 0 && consecutive_pending > 50`).
     /// Agentes interativos (input, hw_bridge, net, mouse) devem marcar urgency
@@ -480,12 +491,40 @@ impl AgentRegistry {
                     self.hooks.run(hooks::HookType::OnSpawn, name, tick_id);
                 }
             }
+
+            // ADR-0089: offload ring≥1 → per-CPU run-queues quando APs vivos.
+            let smp_offload = unsafe { SMP_OFFLOAD_PREDICATE.map(|p| p()).unwrap_or(false) };
+            if smp_offload {
+                if let Some(dist) = unsafe { SMP_DISTRIBUTE } {
+                    let mut batch: Vec<(u32, u8, u8, Option<usize>, u8)> = Vec::new();
+                    for (i, a) in self.agents.iter().enumerate() {
+                        if a.state != AgentState::Active || a.affinity_ring == 0 {
+                            continue;
+                        }
+                        batch.push((
+                            i as u32,
+                            a.affinity_ring,
+                            a.tier.priority(),
+                            a.coherence_partner,
+                            a.goal_urgency,
+                        ));
+                    }
+                    if !batch.is_empty() {
+                        let _ = dist(&batch, tick_id as u32);
+                    }
+                }
+            }
+
             let mut polled: u32 = 0;
             // Scheduler por affinity ring R0→R1→R2 (ADR-0055) + FlowTrigger
             let order = self.poll_order_by_affinity();
             for &i in &order {
                 let state = self.agents[i].state;
                 if state != AgentState::Active {
+                    continue;
+                }
+                // Offload: BSP não ticka ring≥1 — APs consomem a RQ.
+                if smp_offload && self.agents[i].affinity_ring >= 1 {
                     continue;
                 }
                 let flow = &self.agents[i].crew.flow;
@@ -522,9 +561,11 @@ impl AgentRegistry {
                     continue;
                 }
 
-                self.agents[i].tick_counter += 1;
-                let tc = self.agents[i].tick_counter;
-                let result = self.agents[i].agent.tick(tick_id, tc);
+                let result = with_agent_tick_lock(|| {
+                    self.agents[i].tick_counter += 1;
+                    let tc = self.agents[i].tick_counter;
+                    self.agents[i].agent.tick(tick_id, tc)
+                });
                 polled = polled.saturating_add(1);
 
                 // PostTick hook: always run, even after Pending
@@ -576,6 +617,66 @@ static mut SCHED_METRICS_HOOK: Option<fn(u64, usize, u32)> = None;
 
 /// Hook opcional para BEI tick (ADR-0060). Kernel registra via `set_bei_tick_hook`.
 static mut BEI_TICK_HOOK: Option<fn(u64)> = None;
+
+/// ADR-0089: se true, ring≥1 vão para run-queue AP (BSP só tick ring0).
+static mut SMP_OFFLOAD_PREDICATE: Option<fn() -> bool> = None;
+/// Batch: (idx, affinity_ring, priority, coherence_partner, urgency) → distributed count.
+static mut SMP_DISTRIBUTE: Option<fn(&[(u32, u8, u8, Option<usize>, u8)], u32) -> usize> = None;
+
+/// Spinlock cooperativa BSP↔AP sobre ticks de agent (zero-dep).
+/// Invariante AIOS/ArceOS wake_handoff: hold curto apenas em torno do `tick()` —
+/// sem spin infinito esperando remote `on_cpu` / handoff cross-core.
+static AGENT_TICK_BUSY: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+fn with_agent_tick_lock<R>(f: impl FnOnce() -> R) -> R {
+    while AGENT_TICK_BUSY.swap(true, core::sync::atomic::Ordering::AcqRel) {
+        core::hint::spin_loop();
+    }
+    let r = f();
+    AGENT_TICK_BUSY.store(false, core::sync::atomic::Ordering::Release);
+    r
+}
+
+/// Ponteiro do registry heap-pinned — AP tick via índice.
+static REGISTRY_PTR: AtomicPtr<AgentRegistry> = AtomicPtr::new(null_mut());
+
+pub fn set_registry_ptr(reg: &mut AgentRegistry) {
+    REGISTRY_PTR.store(reg as *mut AgentRegistry, core::sync::atomic::Ordering::Release);
+}
+
+pub fn set_smp_offload_hooks(
+    predicate: Option<fn() -> bool>,
+    distribute: Option<fn(&[(u32, u8, u8, Option<usize>, u8)], u32) -> usize>,
+) {
+    unsafe {
+        SMP_OFFLOAD_PREDICATE = predicate;
+        SMP_DISTRIBUTE = distribute;
+    }
+}
+
+/// Tick de um agent por índice (AP run-queue). Retorna true se tickou.
+pub fn tick_agent_by_index(idx: u32, tick_id: u32) -> bool {
+    let ptr = REGISTRY_PTR.load(core::sync::atomic::Ordering::Acquire);
+    if ptr.is_null() {
+        return false;
+    }
+    with_agent_tick_lock(|| {
+        // SAFETY: registry vive no leak do boot; exclusive via AGENT_TICK_BUSY.
+        let reg = unsafe { &mut *ptr };
+        let i = idx as usize;
+        if i >= reg.agents.len() {
+            return false;
+        }
+        if reg.agents[i].state != AgentState::Active {
+            return false;
+        }
+        reg.agents[i].tick_counter += 1;
+        let tc = reg.agents[i].tick_counter;
+        let _ = reg.agents[i].agent.tick(tick_id as u64, tc);
+        true
+    })
+}
 
 /// Snapshot para HUD Jarbas (atualizado a cada tick do scheduler).
 pub static LAST_SCHED_AGENTS: core::sync::atomic::AtomicUsize =
