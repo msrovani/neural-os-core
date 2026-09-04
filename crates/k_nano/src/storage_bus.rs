@@ -139,7 +139,10 @@ impl StorageBus {
                     crate::sgdb::publish_gpu();
                     crate::sgdb::publish_net();
                     crate::sgdb::publish_wifi();
-                    crate::dma::bmide_probe();
+                    // Live USB: BMIDE toca IDE legado → hang possível.
+                    if !crate::boot_logger::internal_disk_skipped() {
+                        crate::dma::bmide_probe();
+                    }
                 }
             }
         }

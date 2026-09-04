@@ -13,13 +13,37 @@ pub struct AtaAgent {
 }
 
 impl AtaAgent {
+    /// Não re-probe no boot: `AtaDriver::probe()` no metal (portas mortas / HD
+    /// interno) trava em PIO e congela em `BOOT: VFS+FS...` (init_fs_agents).
+    /// Reusa `ATA_DRIVER` global; live USB sem MSC → agent vazio (honesty).
     pub fn new() -> Self {
+        if crate::boot_logger::internal_disk_skipped() {
+            crate::slog_nano!(
+                "ATA",
+                "ok",
+                "AtaAgent skip probe (live USB — sem I/O HD interno)"
+            );
+            return AtaAgent {
+                ata: None,
+                ata_inited: false,
+            };
+        }
+        if let Some(existing) = crate::ATA_DRIVER.lock().as_ref() {
+            crate::slog_nano!("ATA", "ok", "AtaAgent reuse ATA_DRIVER (sem re-probe)");
+            return AtaAgent {
+                ata: Some(existing.clone()),
+                ata_inited: true,
+            };
+        }
         let ata = unsafe { AtaDriver::probe() };
         let inited = ata.is_some();
         if inited {
-            crate::slog_nano!("ATA", "FS", "ATA detectado. /mnt/hdd/ disponivel.");
+            crate::slog_nano!("ATA", "ok", "ATA detectado. /mnt/hdd/ disponivel.");
         }
-        AtaAgent { ata, ata_inited: inited }
+        AtaAgent {
+            ata,
+            ata_inited: inited,
+        }
     }
 }
 

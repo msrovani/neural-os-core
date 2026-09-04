@@ -479,7 +479,16 @@ fn heal_on_first_failure(detail: &str) {
         detail
     ));
     publish_bootlog_health(detail);
-    // Live USB: o stick é a verdade. ATA interno sem BOOT.LOG não deve ser martelado.
+    // Live USB sem MSC: NÃO re-init xHCI / probe MSC (EnableSlot timeout = hang
+    // em BOOT: self-tests via boot_ckpt→try_flush→heal). SESSION_309 HW.
+    let no_msc = crate::globals::USB_MSC
+        .try_lock()
+        .map(|g| g.is_none())
+        .unwrap_or(true);
+    if internal_disk_skipped() && no_msc {
+        log_no_flush("BOOT.LOG self-heal SKIP (live USB sem MSC — sem re-probe xHCI)");
+        return;
+    }
     let msc_ok = try_ensure_usb_msc();
     if msc_ok {
         BACKEND_SKIP.fetch_and(!SKIP_USB, Ordering::Relaxed);
@@ -723,24 +732,34 @@ fn storage_available() -> bool {
     {
         return true;
     }
-    if crate::globals::ATA_DRIVER
-        .try_lock()
-        .map(|g| g.is_some())
-        .unwrap_or(false)
+    // Live USB: SKIP_ATA/AHCI/NVME — driver global pode existir, mas NÃO é
+    // backend de BOOT.LOG (FAT walk no HD interno = hang).
+    let skip = BACKEND_SKIP.load(Ordering::Relaxed);
+    if skip & SKIP_ATA == 0
+        && crate::globals::ATA_DRIVER
+            .try_lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false)
     {
         return true;
     }
-    if crate::globals::AHCI_DRIVER
-        .try_lock()
-        .map(|g| g.is_some())
-        .unwrap_or(false)
+    if skip & SKIP_AHCI == 0
+        && crate::globals::AHCI_DRIVER
+            .try_lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false)
     {
         return true;
     }
-    crate::disk_agent::nvme::NVME_DRIVER
-        .try_lock()
-        .map(|g| g.is_some())
-        .unwrap_or(false)
+    if skip & SKIP_NVME == 0
+        && crate::disk_agent::nvme::NVME_DRIVER
+            .try_lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false)
+    {
+        return true;
+    }
+    false
 }
 
 /// Registra mensagem. Com fat-boot-log: buffer; flush só com BlockDevice pronto.
@@ -809,6 +828,15 @@ pub fn try_flush_ramlog() -> bool {
         return false;
     }
     if crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed) == 0 {
+        return false;
+    }
+    // Live USB sem MSC: nada a gravar — não dispara flush/heal (hang xHCI).
+    if internal_disk_skipped()
+        && crate::globals::USB_MSC
+            .try_lock()
+            .map(|g| g.is_none())
+            .unwrap_or(true)
+    {
         return false;
     }
     #[cfg(not(feature = "fat-boot-log"))]

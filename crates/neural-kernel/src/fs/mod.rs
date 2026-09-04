@@ -156,17 +156,27 @@ impl RingBufStore {
 }
 
 pub fn init_fs_agents() {
+    let live = k_nano::boot_logger::internal_disk_skipped();
+    let step = |msg: &str| {
+        if live {
+            crate::display::fb::boot_progress_line(msg);
+        }
+    };
+    step("BOOT: FS ata...");
     register_fs_agent(Box::new(ata_agent::AtaAgent::new()));
+    step("BOOT: FS ram/dev...");
     register_fs_agent(Box::new(dev_fs_agent::DevFsAgent::new()));
     register_fs_agent(Box::new(proc_fs_agent::ProcFsAgent::new()));
     register_fs_agent(Box::new(inference_fs_agent::InferenceFsAgent::new()));
     register_fs_agent(Box::new(hermes_fs_agent::HermesFsAgent::new()));
     register_fs_agent(Box::new(ram_fs_agent::RamFsAgent::new()));
     register_fs_agent(Box::new(log_fs_agent::LogFsAgent::new()));
-    // NeuralFS CoW — RAM 4MB format+mount (nao sobrescreve FAT)
+    // NeuralFS CoW — RAM 4MB format+mount (nao sobrescreve FAT); sem smokes boot.
+    step("BOOT: FS neural...");
     register_fs_agent(Box::new(
         crate::neural_fs::neural_fs_agent::NeuralFsAgent::new(),
     ));
+    step("BOOT: FS agents done");
 }
 
 // Adapter: NeuralFsAgent canônico (k_nano) → trait FilesystemAgent do bin.

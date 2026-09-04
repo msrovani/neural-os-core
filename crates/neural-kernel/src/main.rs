@@ -2148,6 +2148,9 @@ pub(crate) fn kernel_boot(
     // Labor 25: fd table após mounts
     let _ = k_nano::vfs::fd::boot_smoke();
 
+    if usb_live_fb {
+        crate::display::fb::boot_progress_line("BOOT: FS agents...");
+    }
     crate::display::fb::boot_ckpt(29, "FS agents");
     crate::fs::init_fs_agents();
     hermes_crate::globals::install_vfs_bridge(hermes_crate::globals::VfsBridge {
@@ -2167,6 +2170,9 @@ pub(crate) fn kernel_boot(
         crate::boot_logger::log("BOOT: ADR-0040 FS MVP markers");
     }
 
+    if usb_live_fb {
+        crate::display::fb::boot_progress_line("BOOT: ADR-0047...");
+    }
     crate::display::fb::boot_ckpt(30, "ADR-0047 gates");
     k_nano::slog_bin!("BOOT", "ok", "ADR-0047 gates begin");
     adr0047_mvp_gates();
@@ -2175,12 +2181,21 @@ pub(crate) fn kernel_boot(
     crate::display::fb::boot_ckpt(31, "DiskAgent");
     let mut disk_agent = crate::disk_agent::DiskIntelligenceAgent::new();
 
-    if let Some(ref ata) = *crate::ATA_DRIVER.lock() {
-        let ctrl = crate::disk_agent::controller::AtaCtrl::new(ata.clone());
-        disk_agent.register_controller(Box::new(ctrl));
-        crate::boot_logger::log("BOOT: DiskAgent ATA controller registered");
+    // Live USB sem MSC: NÃO registrar ATA/AHCI/NVMe no DiskAgent/StorageBus —
+    // register_probe lê MBR + scan EXT/NTFS/exFAT no HD interno = hang (SESSION_309).
+    let skip_internal_bus = k_nano::boot_logger::internal_disk_skipped();
+
+    if !skip_internal_bus {
+        if let Some(ref ata) = *crate::ATA_DRIVER.lock() {
+            let ctrl = crate::disk_agent::controller::AtaCtrl::new(ata.clone());
+            disk_agent.register_controller(Box::new(ctrl));
+            crate::boot_logger::log("BOOT: DiskAgent ATA controller registered");
+        } else {
+            crate::boot_logger::log("BOOT: No ATA device for DiskAgent");
+        }
     } else {
-        crate::boot_logger::log("BOOT: No ATA device for DiskAgent");
+        crate::boot_logger::log("BOOT: DiskAgent skip ATA (live USB)");
+        k_nano::slog_bin!("StorageBus", "ok", "skip internal disks (live USB)");
     }
 
     if crate::USB_MSC.lock().is_some() {
@@ -2188,8 +2203,11 @@ pub(crate) fn kernel_boot(
     }
 
     // StorageBus: registra o que o plano ja trouxe (sem re-probe NVMe).
+    if usb_live_fb {
+        crate::display::fb::boot_progress_line("BOOT: StorageBus...");
+    }
     crate::display::fb::boot_ckpt(32, "StorageBus register");
-    if k_nano::disk_agent::nvme::NVME_DRIVER.lock().is_some() {
+    if !skip_internal_bus && k_nano::disk_agent::nvme::NVME_DRIVER.lock().is_some() {
         {
             let mut g = k_nano::disk_agent::nvme::NVME_DRIVER.lock();
             if let Some(ref mut n) = *g {
@@ -2206,25 +2224,27 @@ pub(crate) fn kernel_boot(
     }
     {
         let mut bus = k_nano::storage_bus::STORAGE_BUS.lock();
-        {
-            let mut ahci_g = crate::AHCI_DRIVER.lock();
-            if let Some(ref mut ahci) = *ahci_g {
-                bus.register_probe(k_nano::storage_bus::BusKind::Ahci, "ahci0", ahci);
+        if !skip_internal_bus {
+            {
+                let mut ahci_g = crate::AHCI_DRIVER.lock();
+                if let Some(ref mut ahci) = *ahci_g {
+                    bus.register_probe(k_nano::storage_bus::BusKind::Ahci, "ahci0", ahci);
+                }
             }
-        }
-        {
-            let mut ata_g = crate::ATA_DRIVER.lock();
-            if let Some(ref mut ata) = *ata_g {
-                let skip_ata_bus = k_nano::storage_bw::skip_measure()
-                    && k_nano::virtio_blk::VIRTIO_BLK_DEV.lock().is_some();
-                if skip_ata_bus {
-                    k_nano::slog_nano!(
-                        "StorageBus",
-                        "reg",
-                        "ata0 skip probe (TCG + virtio-blk data disk)"
-                    );
-                } else {
-                    bus.register_probe(k_nano::storage_bus::BusKind::Ata, "ata0", ata);
+            {
+                let mut ata_g = crate::ATA_DRIVER.lock();
+                if let Some(ref mut ata) = *ata_g {
+                    let skip_ata_bus = k_nano::storage_bw::skip_measure()
+                        && k_nano::virtio_blk::VIRTIO_BLK_DEV.lock().is_some();
+                    if skip_ata_bus {
+                        k_nano::slog_nano!(
+                            "StorageBus",
+                            "reg",
+                            "ata0 skip probe (TCG + virtio-blk data disk)"
+                        );
+                    } else {
+                        bus.register_probe(k_nano::storage_bus::BusKind::Ata, "ata0", ata);
+                    }
                 }
             }
         }
@@ -2281,21 +2301,19 @@ pub(crate) fn kernel_boot(
         crate::display::fb::boot_progress_line("BOOT: self-tests...");
     }
 
-    crate::display::fb::boot_ckpt(33, "apps+audio+wasm");
-    crate::apps::init_apps();
-    crate::boot_logger::log("BOOT: Desktop apps OK");
-
-    audio::init_audio();
-    jarbas_bridge::log_bridge_status();
-
     // SESSÃO_260: checkpoints de progresso dentro do bloco K33 — cada self-test
     // loga um K próprio (33a..33h) para o boot HW real identificar QUAL trava
     // (sem serial, o K* no FB é o único canal). O cpuid do exec_arena corrigiu o
     // SMC; se ainda travar, o último K mostra o alvo exato.
-    crate::display::fb::boot_ckpt(33, "apps+audio+wasm");
+    // Live USB: boot_progress_line ANTES de cada passo (boot_ckpt = ramlog só).
     let mut k33 = 1u8;
     macro_rules! k33_step {
         ($tag:expr) => {{
+            if usb_live_fb {
+                crate::display::fb::boot_progress_line(
+                    alloc::format!("BOOT: K33 {}", $tag).as_str(),
+                );
+            }
             crate::display::fb::boot_ckpt(33, $tag);
             k_nano::slog_bin!("BOOT", "ok", "K33 {}", $tag);
             crate::boot_logger::log(alloc::format!("BOOT: K33[{}] {}", k33, $tag).as_str());
@@ -2303,49 +2321,67 @@ pub(crate) fn kernel_boot(
             let _ = k33;
         }};
     }
+    k33_step!("apps...");
     crate::apps::init_apps();
-    k33_step!("apps ok");
+    crate::boot_logger::log("BOOT: Desktop apps OK");
+    k33_step!("audio...");
     audio::init_audio();
+    jarbas_bridge::log_bridge_status();
     k33_step!("audio ok");
 
     let _skillopt = crate::structured_decode::SkillOptimizer::new();
+    k33_step!("micropython...");
     crate::micropython_wasm::try_init_at_boot();
     k33_step!("micropython");
     // ADR-0059: runtime WASM real (wasmi) + seletor de caminho (A/B/C) — self-tests.
+    k33_step!("wasmi...");
     let _ = hermes_crate::wasmi_rt::self_test();
     k33_step!("wasmi");
+    k33_step!("wasm_build...");
     let _ = hermes_crate::wasm_build::self_test(); // F4: op-IR→wasm→wasmi
     k33_step!("wasm_build");
     // DEAD CODE: let _ = hermes_crate::app_factory::self_test(); // F3: gera→monta→sandbox // (HERMES_AUDIT.md)
     k33_step!("app_factory");
     // ADR-0059 F7: arena W^X — execução de código nativo gerado on-device (base JIT).
+    k33_step!("exec_arena...");
     let _ = crate::exec_arena::self_test();
     k33_step!("exec_arena");
     // ADR-0081 Fase B + BEI: self-tests do transporte P2P (chunking CHK\0),
     // serialização .bitnet roundtrip (save_model) e aprendizado federado.
+    k33_step!("mesh_chunk...");
     let _ = k_nano::net::mesh::chunk_self_test();
     k33_step!("mesh_chunk");
+    k33_step!("roundtrip...");
     let _ = cortex_crate::cortex::model_save_roundtrip_self_test();
     k33_step!("roundtrip");
+    k33_step!("federated...");
     let _ = cortex_crate::federated::federated_self_test();
     k33_step!("federated");
-    // ADR-0083 §5.2: backprop — skip no TCG (minutos em 4c soft-float).
-    if !tcg_lite {
+    // ADR-0083 §5.2: backprop — skip TCG e live USB (minutos / sem serial).
+    k33_step!("trainer...");
+    if !tcg_lite && !usb_live_fb {
         let mut t = k_ai::cognitive::TransformerTrainer::new(16, 16, 1, 8);
         if t.self_test().is_ok() {
             k_nano::slog_bin!("TRAIN", "ok", "{}", t.status());
         }
     } else {
-        k_nano::slog_bin!("TRAIN", "ok", "trainer self_test SKIP (TCG gate)");
+        k_nano::slog_bin!(
+            "TRAIN",
+            "ok",
+            "trainer self_test SKIP ({})",
+            if tcg_lite { "TCG" } else { "live USB" }
+        );
     }
     k33_step!("trainer");
     // ADR-0081 tier cripto (Relativizado HMAC-SHA256): vetor RFC 4231 caso 1.
+    k33_step!("hmac...");
     let _ = k_nano::crypto::hmac_self_test();
     k33_step!("hmac");
     // ADR-0081 Tier F: AEAD X25519 DH + ChaCha20-Poly1305 — self-test com
     // keypairs fake (DH simétrico → chaves iguais; roundtrip; tamper→None;
     // nonce diverge por clock). Roda antes de init_session_identity (usa
     // keypair fake, não a seed da sessão).
+    k33_step!("aead...");
     let _ = k_nano::crypto::aead_self_test();
     k33_step!("aead");
     // ADR-0077: conectores do Ring3 isolation ring (ex-ADR-0060). NÃO registra ainda —
@@ -2353,6 +2389,7 @@ pub(crate) fn kernel_boot(
     crate::isolation_ring::init_connectors();
     k33_step!("connectors");
     // ADR-0063 F0/F1a: TickvLite mount + smoke (NVMe ou RAM)
+    k33_step!("tickv...");
     if k_nano::storage::tickv_smoke() {
         k_nano::slog_bin!(
             "TICKV",
@@ -2367,6 +2404,7 @@ pub(crate) fn kernel_boot(
     }
     k33_step!("tickv");
     // ADR-0063: facade + demo + Hamming dispatch
+    k33_step!("sgdb...");
     k_ai::sgdb::boot_init();
     k33_step!("sgdb_boot");
     // IDEA #539c: ramlog → memória L3 episódica (Remember entre boots). Roda

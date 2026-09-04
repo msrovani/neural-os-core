@@ -110,9 +110,12 @@ impl NeuralFsAgent {
             mount_point: String::from("/mnt/neural"),
             state: Mutex::new(None),
         };
+        // Live USB sem MSC: NÃO bootstrap ATA (HD interno PIO = hang em VFS+FS).
+        let skip_internal = crate::boot_logger::internal_disk_skipped();
         // QEMU/TCG: ata0 = uefi.img (boot) — NeuralFS format/mount PIO trava minutos.
-        let skip_ata_bootstrap = crate::storage_bw::skip_measure()
-            && crate::virtio_blk::VIRTIO_BLK_DEV.lock().is_some();
+        let skip_ata_bootstrap = skip_internal
+            || (crate::storage_bw::skip_measure()
+                && crate::virtio_blk::VIRTIO_BLK_DEV.lock().is_some());
         if !skip_ata_bootstrap && agent.try_bootstrap_ata() {
             agent.ensure_ecosystem_tree();
             Self::try_exfat_write_smoke();
@@ -127,7 +130,7 @@ impl NeuralFsAgent {
             crate::slog_nano!(
                 "NEURALFS",
                 "ok",
-                "ATA bootstrap skip (TCG+virtio-blk) — RAM 4MB"
+                "ATA bootstrap skip (live USB / TCG+virtio) — RAM 4MB"
             );
         }
         agent.bootstrap_ram();
@@ -138,8 +141,8 @@ impl NeuralFsAgent {
 
     /// IDEA #417 — write opt-in: `EXFAT_WRITE=1` no CONFIG.TXT do volume exFAT.
     fn try_exfat_write_smoke() {
-        if crate::storage_bw::skip_measure() {
-            crate::slog_nano!("EXFAT", "ok", "write smoke SKIP (TCG gate)");
+        if crate::storage_bw::skip_measure() || crate::boot_logger::internal_disk_skipped() {
+            crate::slog_nano!("EXFAT", "ok", "write smoke SKIP (TCG / live USB)");
             return;
         }
         let mut guard = crate::ATA_DRIVER.lock();
@@ -220,8 +223,8 @@ impl NeuralFsAgent {
 
     /// Carrega `system/trust/usb.tbl` e aplica `USB_TRUST_ENFORCE` do CONFIG.
     fn sync_usb_trust_table(&self) {
-        // Enforce via CONFIG no ATA (mesmo peek do EXFAT_WRITE).
-        {
+        // Live USB: NÃO peek CONFIG no ATA interno (FAT walk PIO = hang).
+        if !crate::boot_logger::internal_disk_skipped() {
             let mut guard = crate::ATA_DRIVER.lock();
             if let Some(ata) = guard.as_mut() {
                 if config_flag_true(ata, "USB_TRUST_ENFORCE") {
@@ -535,59 +538,31 @@ impl NeuralFsAgent {
         let mut disk = MemoryDisk::new(4 * 1024 * 1024);
         let total_lba = disk.sector_count();
         if !NeuralVolume::format(&mut disk, 0, total_lba) {
-            crate::slog_bin!("NEURALFS", "info", "format RAM FAILED");
+            crate::slog_bin!("NEURALFS", "warn", "format RAM FAILED");
             return;
         }
         let Some(mut vol) = NeuralVolume::mount(&mut disk, 0) else {
-            crate::slog_bin!("NEURALFS", "info", "mount RAM FAILED");
+            crate::slog_bin!("NEURALFS", "warn", "mount RAM FAILED");
             return;
         };
         if let Ok(ino) = vol.create_file(&mut disk, 1, "hello.txt") {
             let _ = vol.write_file(&mut disk, ino, b"NeuralFS online\n");
         }
-        crate::slog_bin!("NEURALFS", "info", "RAM 4MB mounted free_blocks={} inodes={}",
+        crate::slog_bin!(
+            "NEURALFS",
+            "ok",
+            "RAM 4MB mounted free_blocks={} inodes={}",
             vol.sb.free_blocks,
-            vol.sb.allocated_inodes);
+            vol.sb.allocated_inodes
+        );
         *self.state.lock() = Some(NeuralFsState {
             backend: Backend::Ram(disk),
             volume: vol,
         });
-        if crate::neural_fs::tests::smoke_ram_roundtrip() {
-            crate::slog_bin!("NEURALFS", "info", "smoke_ram_roundtrip=OK");
-        } else {
-            crate::slog_bin!("NEURALFS", "info", "smoke_ram_roundtrip=FAIL");
-        }
-        if crate::neural_fs::tests::smoke_reclaim() {
-            crate::slog_bin!("NEURALFS", "info", "smoke_reclaim=OK");
-        } else {
-            crate::slog_bin!("NEURALFS", "info", "smoke_reclaim=FAIL");
-        }
-        if crate::neural_fs::tests::smoke_split() {
-            crate::slog_bin!("NEURALFS", "info", "smoke_split=OK");
-        } else {
-            crate::slog_bin!("NEURALFS", "info", "smoke_split=FAIL");
-        }
-        // F14: level2 (B-tree nível ≥2, 4000 keys) e power_loss (journal recover
-        // via drop+remount) — os dois caminhos críticos antes só existiam sem
-        // caller. Com heap 512MB+ atual, os 64MB do level2 cabem.
-        if crate::neural_fs::tests::smoke_level2() {
-            crate::slog_bin!("NEURALFS", "info", "smoke_level2=OK");
-        } else {
-            crate::slog_bin!("NEURALFS", "info", "smoke_level2=FAIL");
-        }
-        if crate::neural_fs::tests::smoke_power_loss_soft() {
-            crate::slog_bin!("NEURALFS", "info", "smoke_power_loss_soft=OK");
-        } else {
-            crate::slog_bin!("NEURALFS", "info", "smoke_power_loss_soft=FAIL");
-        }
-        // F4/redoxfs: checksum de dados — write grava CRC no inode, read_file
-        // verifica e verify_file detecta bit-flip em bloco de dados.
-        if crate::neural_fs::tests::smoke_data_crc() {
-            crate::slog_bin!("NEURALFS", "info", "smoke_data_crc=OK");
-        } else {
-            crate::slog_bin!("NEURALFS", "info", "smoke_data_crc=FAIL");
-        }
-        // ponytail: smokes em RAM não cobrem flush real de disco (AWAITING_HW)
+        // Smokes pesados (smoke_level2 = 64MB + 4000 keys, reclaim/split/CRC…)
+        // vivem em `neural_fs::tests` host — NÃO no boot. Rodar aqui congelava
+        // live USB em `BOOT: FS agents...` (SESSION_309 HW).
+        crate::slog_bin!("NEURALFS", "ok", "boot smokes SKIP (host-only)");
     }
 
     fn parent_and_name(path: &str) -> (&str, &str) {
