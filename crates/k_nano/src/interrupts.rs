@@ -262,6 +262,15 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     // Só marca; o poll dos futures roda no idle do scheduler (fora do IRQ).
     crate::async_rt::request_wake_processing();
     send_eoi(32);
+    // SESSION_310: rearm timer after EOI — QEMU TCG one-shot mode doesn't
+    // auto-reload. Writing INIT_COUNT guarantees the next interrupt fires.
+    // Cost: one MMIO write per tick (~10ns), negligible vs ISR overhead.
+    unsafe { crate::apic::rearm_lapic_timer(); }
+    // SESSION_310: diagnostic — log rearm count at tick 4 and 20
+    if ticks == 4 || ticks == 20 {
+        let rearm = crate::apic::REARM_COUNT.load(Ordering::Relaxed);
+        puts(b"[TIMER_DBG] tick="); putdec(ticks as u64); puts(b" rearm="); putdec(rearm); putc(b'\n');
+    }
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {

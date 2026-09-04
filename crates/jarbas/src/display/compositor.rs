@@ -505,6 +505,11 @@ impl JarbasDesktop {
             self.dirty_orb = true;
             self.last_orb_tick = tick;
         }
+        // SESSION_310: HUD (clock/status) precisa atualizar a cada ~32 ticks
+        // (~0.5s @64Hz). Sem isso, dirty_hud só muda no hover → clock congela.
+        if tick % 32 == 0 {
+            self.dirty_hud = true;
+        }
 
         // ── FASE 2: early-exit ──
         if !self.dirty_orb && !self.dirty_hud && !self.dirty_windows

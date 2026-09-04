@@ -133,11 +133,12 @@ impl Lapic {
     }
 
     unsafe fn start_timer(&self) {
-        self.write(LAPIC_LVT_TIMER, 32 | 0x20000);
+        // SESSION_310: set divide BEFORE timer mode to avoid glitch in TCG.
         self.write(LAPIC_DIVIDE_CONFIG, 0b1011);
+        self.write(LAPIC_LVT_TIMER, 32 | 0x20000);
         self.write(LAPIC_INIT_COUNT, LAPIC_TIMER_INIT_COUNT_VAL);
 
-        crate::slog_nano!("APIC", "info", "LAPIC timer iniciado: vetor 32, count={}, div=1.", LAPIC_TIMER_INIT_COUNT_VAL);
+        crate::slog_nano!("APIC", "info", "LAPIC timer iniciado: vetor 32, count={}, div=16.", LAPIC_TIMER_INIT_COUNT_VAL);
     }
 }
 
@@ -668,6 +669,8 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
     ioapic.init(&info.iso_overrides);
 
     lapic.start_timer();
+    // SESSION_310: PIT channel 0 → IOAPIC GSI 0 → vec32 (backup timer)
+    crate::slog_nano!("APIC", "info", "LAPIC timer started + PIT→IOAPIC GSI0→vec32 (SESSION_310)");
 
     USING_APIC.store(true, Ordering::Release);
     // STI adiado para depois de init_smp — ver neural-kernel SESSION_139.
@@ -675,6 +678,15 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
 }
 
 /// Lê registrador LAPIC (compatível xAPIC/x2APIC)
+/// SESSION_310: rearm LAPIC timer — QEMU TCG periodic auto-reload may fail.
+/// Simply rewrite INIT_COUNT to reload the counter.
+pub static REARM_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub unsafe fn rearm_lapic_timer() {
+    REARM_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    // In periodic mode, writing INIT_COUNT reloads the counter.
+    lapic_write_reg(LAPIC_INIT_COUNT, LAPIC_TIMER_INIT_COUNT_VAL);
+}
+
 pub unsafe fn lapic_read_reg(reg: u64) -> u32 {
     if USING_X2APIC.load(Ordering::Relaxed) {
         x86_64::registers::model_specific::Msr::new(lapic_msr(reg)).read() as u32

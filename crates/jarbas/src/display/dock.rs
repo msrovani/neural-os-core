@@ -106,10 +106,12 @@ impl Dock {
 
 fn format_time() -> String {
     // TODO: usar RTC real quando disponível
-    // Por enquanto, tick-based aproximado
-    let ticks = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-    let hours = (ticks / 3600000) % 24; // assumindo 1000 ticks/sec
-    let mins = (ticks / 60000) % 60;
+    // SESSION_310: usa TIMER_HZ calibrado (64 Hz no QEMU TCG, não 1000).
+    let ticks = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    let hz = k_nano::interrupts::TIMER_HZ.load(core::sync::atomic::Ordering::Relaxed);
+    let secs = if hz > 0 { ticks / hz } else { ticks / 64 };
+    let hours = (secs / 3600) % 24;
+    let mins = (secs / 60) % 60;
     alloc::format!("{:02}:{:02}", hours, mins)
 }
 

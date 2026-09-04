@@ -527,6 +527,26 @@ impl Agent for DisplayAgent {
     }
 
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
+        // SESSION_310: raw serial counter — visible even with slog filter
+        static DISPLAY_TICKS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+        let dt = DISPLAY_TICKS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if dt < 3 || dt % 500 == 0 {
+            unsafe fn dsp_putc(c: u8) {
+                core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") c, options(nostack, preserves_flags));
+            }
+            unsafe fn dsp_putdec(mut n: u64) {
+                if n == 0 { dsp_putc(b'0'); return; }
+                let mut buf = [0u8; 20];
+                let mut i = 20;
+                while n > 0 { i -= 1; buf[i] = (n % 10) as u8 + b'0'; n /= 10; }
+                for &b in &buf[i..] { dsp_putc(b); }
+            }
+            unsafe {
+                for &c in b"[DSP_TICK] " { dsp_putc(c); }
+                dsp_putdec(dt);
+                dsp_putc(b'\n');
+            }
+        }
         if !self.gpu_inited {
             // Initialize GPU backend (k_hal GPU BE) — check compute state
             if let Err(e) = gpu_backend::init_gpu_backend() {
