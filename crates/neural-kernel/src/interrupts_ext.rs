@@ -350,12 +350,12 @@ pub unsafe fn init_pic_fallback_and_sti() {
     // ICW4: 8086 mode
     core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0x01u8, options(nostack, preserves_flags));
     core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0x01u8, options(nostack, preserves_flags));
-    // Mask: IRQ0 (PIT) + IRQ1 (teclado) + IRQ2 (cascade). 0xFA mascarava IRQ1
-    // (SESSION_252) — o overlay do bin ainda usava 0xFA; k_nano já está em 0xF8.
+    // Mask: IRQ0+IRQ1+IRQ2 master; IRQ12 (mouse) aberto no slave (0xEF).
+    // 0xFF no slave mascarava o mouse PS/2 (SESSION_315 Alienware).
     core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0xF8u8, options(nostack, preserves_flags));
-    core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0xFFu8, options(nostack, preserves_flags));
+    core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0xEFu8, options(nostack, preserves_flags));
 
     crate::apic::pit_init();
-    k_nano::slog_bin!("PIC", "info", "Fallback 8259 remapido (IRQ0→vec32). STI antes do scheduler.");
+    k_nano::slog_bin!("PIC", "info", "Fallback 8259 remapido (IRQ0→vec32, IRQ12 aberto). STI antes do scheduler.");
     k_nano::interrupts::enable_interrupts();
 }

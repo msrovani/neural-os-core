@@ -1,6 +1,6 @@
 //! USB Mass Storage via Bulk-Only Transport (BOT) + SCSI.
-//! Bring-up do stick: `xhci::bringup_boot_msc` (ADR-0062 P11) — sem Address Device
-//! o probe antigo (slot=2 fixo) falhava e BOOT.LOG nunca gravava no pendrive.
+//! Bring-up do stick: hook R1 `k_hal::usb` (hub+route+TT) → `xhci::bringup_boot_msc`.
+//! Sem Address Device o probe antigo (slot=2 fixo) falhava e BOOT.LOG nunca gravava.
 
 use crate::xhci::{self, BulkEndpoint};
 

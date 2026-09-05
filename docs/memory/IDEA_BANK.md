@@ -1,6 +1,6 @@
 ﻿# 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-09-01 — ADR-0102 (#548 Ring3 sandbox B/C; recusa Fuchsia process-OS).
+**Última atualização:** 2026-09-05 — ADR-0103 (#549 k_nano modular Fase 1; Redox=ref não process-OS).
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -81,6 +81,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#546** Gate QEMU smokes com feature flag | — | ⏳ | SESSION_299: `full-smokes` ou `if !qemu`; boot QEMU ~30% mais rápido. |
 | **#547** Cross-boot NSGDB recall (BOOT.LOG → ingest_bootlog) | ADR-0091 | 🟡 | SESSION_299: segunda instância QEMU recall de boot anterior. |
 | **#548** Ring3 = um sandbox CPL=3 para nativo B/C (não Job/Handle/ExceptionChannel Fuchsia) | **ADR-0102** (não substitui **0077**) | 🟡 Onda 6 | SESSION_302: H1–H3+N1–N7+T-056 wired; register gated T-053 HW; aceite notebook pendente. |
+| **#549** Emagreçer k_nano → anéis K³CHJ (Fase 1 modular; Fase 2 schemes só pós-Ring3 HW) | **ADR-0103** (não substitui **0075**/0102) | 🟡 fazendo | S0 ✅; S1 wired + budget 3s SESSION_315b; aceite BOOT.LOG Alienware AWAITING_OPERATOR; freeze S2+/Ring3. |
 | **#539** Observabilidade de boot (dmesg / 3 canais / placar) | **ADR-0092** | 🟡 fazendo | O0–O5 no código 2026-08-24. Serial QEMU de aceite + parse_boot_score no log real ainda. |
 
 | **#479** TLS 1.3 via embedded-tls no neural-os-core | ADR-0062 P1 / SESSION_157–158 | ✅ MVP (residual CertVerify/FAT) |

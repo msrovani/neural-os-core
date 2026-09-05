@@ -15,8 +15,42 @@ pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = 40;
 
 pub static TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Soft wall-clock quando IRQ timer não avança (hlt morto / LAPIC one-shot falhou).
+/// Dock/HUD usam `wall_ticks()` = TIMER_TICKS + isto.
+pub static SOFT_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
 /// Timer frequency em Hz (calibrado na inicializaçao). Fallback 18 Hz (PIT).
 pub static TIMER_HZ: AtomicU64 = AtomicU64::new(18);
+
+/// Ticks de parede para UI: IRQ timer + soft (quando hlt não acorda).
+#[inline]
+pub fn wall_ticks() -> u64 {
+    TIMER_TICKS.load(Ordering::Relaxed) as u64
+        + SOFT_TIMER_TICKS.load(Ordering::Relaxed) as u64
+}
+
+/// Idle do scheduler: hlt se o timer avança; senão soft-tick ~18 Hz (UI viva).
+pub fn scheduler_idle_halt() {
+    let before = TIMER_TICKS.load(Ordering::Relaxed);
+    x86_64::instructions::hlt();
+    let after = TIMER_TICKS.load(Ordering::Relaxed);
+    if after != before {
+        return;
+    }
+    // Timer morto / LAPIC sem rearm: não dormir eterno — orb/relógio/mouse precisam
+    // do próximo round do scheduler (SESSION_315 Alienware).
+    static WARNED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        crate::slog_nano!(
+            "TIMER",
+            "warn",
+            "IRQ timer nao avanca apos hlt — soft ~18Hz (UI liveness)"
+        );
+    }
+    SOFT_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    // ~55 ms ≈ 1 tick PIT (18.2 Hz)
+    crate::tsc::sleep_us(55_000);
+}
+
 pub static LAST_SCANCODE: AtomicU8 = AtomicU8::new(0);
 pub static LAST_MOUSE_PACKET: AtomicU32 = AtomicU32::new(0);
 pub static PAGE_FAULT_COUNT: AtomicU32 = AtomicU32::new(0);

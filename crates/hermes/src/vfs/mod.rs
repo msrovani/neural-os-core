@@ -247,7 +247,7 @@ impl VfsRegistry {
         };
         if entries.is_empty() { return Vec::new(); }
         let dim = query.len();
-        let mut hnsw = k_nano::hnsw::HnswIndex::new(dim);
+        let mut hnsw = cortex::hnsw::HnswIndex::new(dim);
         for (i, (_, emb)) in entries.iter().enumerate() {
             let mut v = emb.clone();
             if v.len() != dim { v.resize(dim, 0.0); }

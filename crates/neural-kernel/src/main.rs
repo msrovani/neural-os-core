@@ -914,7 +914,8 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
             k_nano::async_rt::drain_pending_wakes();
             // Governor ondemand tick — escala frequência por carga da fila de AP
             k_nano::cpufreq::ondemand_tick(k_nano::smp::ap_work::has_pending());
-            x86_64::instructions::hlt();
+            // hlt se timer vivo; soft ~18Hz se IRQ morto (orb/relógio/mouse).
+            k_nano::interrupts::scheduler_idle_halt();
         },
         || {
             let mut guard = RESPAWN_QUEUE.lock();
@@ -1746,33 +1747,46 @@ pub(crate) fn kernel_boot(
     );
 
     // ── Early BOOT.LOG (live USB / HW sem COM) ──────────────────────────
-    // Pós platform_sync (PCI). Micro-ckpts: se xHCI hangar, FB mostra K181/K182.
+    // boot_ckpt = ramlog só; phase_line = texto no FB (prova vivo pós-Limine).
+    crate::display::fb::boot_progress_line("BOOT: early USB...");
     crate::display::fb::boot_ckpt(18, "early USB BOOT.LOG");
     {
         let want_usb = k_nano::boot_bind::should_probe_usb_host();
         k_nano::slog_nano!("USB", "warn", "want_usb={}", want_usb);
         if !want_usb {
+            crate::display::fb::boot_progress_line("BOOT: USB skip (no plan)");
             crate::display::fb::boot_ckpt(18, "early USB skip (sem UsbHost no plano)");
             k_nano::slog_nano!("USB", "msc", "EARLY skip — DeviceTree sem xHCI");
         } else {
+        crate::display::fb::boot_progress_line("BOOT: xHCI init...");
         crate::display::fb::boot_ckpt(181, "early xhci init");
         unsafe { crate::xhci::init_xhci(); }
+        crate::display::fb::boot_progress_line("BOOT: xHCI done — MSC...");
         crate::display::fb::boot_ckpt(182, "early xhci done");
+        // R1 hub→MSC (route+TT): obrigatório p/ stick atrás de hub interno (Alienware).
+        // Budget 3s no bringup — sem isto: Limine → tela preta (hub EP0).
+        k_hal::usb::install_bringup_hooks();
         if crate::USB_MSC.lock().is_none() {
             crate::display::fb::boot_ckpt(183, "early MSC probe");
-            let msc = unsafe { k_nano::usb_msc::UsbMassStorage::probe() };
-            if msc.is_some() {
+            let ok = unsafe { k_hal::usb::probe_and_install() };
+            if ok {
+                crate::display::fb::boot_progress_line("BOOT: MSC OK (early)");
                 crate::display::fb::boot_ckpt(18, "early MSC OK");
-                k_nano::slog_nano!("USB", "msc", "EARLY bringup OK — BOOT.LOG path");
+                k_nano::slog_nano!("USB", "ok", "EARLY bringup OK — BOOT.LOG path (hub+root)");
             } else {
+                crate::display::fb::boot_progress_line("BOOT: MSC skip — cont.");
                 crate::display::fb::boot_ckpt(18, "early MSC skip");
                 k_nano::slog_nano!(
                     "USB",
-                    "msc",
-                    "EARLY AUSENTE — retry no DriverInit/SysInfo (CCS atrasado?)"
+                    "warn",
+                    "EARLY AUSENTE — retry no DriverInit (hub/CCS atrasado?)"
                 );
+                // Sem COM1: foto do ramlog USB no FB (SESSION_314 lateralização).
+                crate::display::fb::console_print("--- USB ramlog (MSC fail) ---");
+                k_nano::boot_ramlog::dump_usb_hint(|line| {
+                    crate::display::fb::console_print(line);
+                });
             }
-            *crate::USB_MSC.lock() = msc;
         }
         crate::boot_logger::log("BOOT: early USB path (pre-NIC)");
         if crate::USB_MSC.lock().is_some() {
@@ -1781,6 +1795,7 @@ pub(crate) fn kernel_boot(
                 crate::display::fb::console_print("LOG: BOOT.LOG early OK (USB)");
             }
         }
+        crate::display::fb::boot_progress_line("BOOT: early USB done");
         crate::display::fb::boot_ckpt(184, "early USB done");
         }
     }
@@ -2015,19 +2030,22 @@ pub(crate) fn kernel_boot(
                     crate::display::fb::boot_ckpt(16, "USB-MSC skip retry (qemu)");
                     k_nano::slog_nano!("USB", "msc", "QEMU skip re-probe apos early FAIL");
                 } else {
-                let msc = unsafe { k_nano::usb_msc::UsbMassStorage::probe() };
-                if msc.is_some() {
-                    k_nano::slog_nano!("USB", "msc", "stored for FAT model load (unified USB)");
+                let ok = unsafe { k_hal::usb::probe_and_install() };
+                if ok {
+                    k_nano::slog_nano!("USB", "ok", "stored for FAT model load (hub+root)");
                     crate::display::fb::boot_ckpt(16, "USB-MSC OK");
                 } else {
                     crate::display::fb::boot_ckpt(16, "USB-MSC AUSENTE");
                     k_nano::slog_nano!(
                         "USB",
-                        "msc",
-                        "AUSENTE — bringup/enum/BOT falhou; BOOT.LOG so ramlog (ADR-0062 P11 residual)"
+                        "warn",
+                        "AUSENTE — hub/enum/BOT falhou; BOOT.LOG so ramlog (ADR-0062 P11 residual)"
                     );
+                    crate::display::fb::console_print("--- USB ramlog (DriverInit MSC fail) ---");
+                    k_nano::boot_ramlog::dump_usb_hint(|line| {
+                        crate::display::fb::console_print(line);
+                    });
                 }
-                *crate::USB_MSC.lock() = msc;
                 }
             } else {
                 crate::display::fb::boot_ckpt(16, "USB-MSC OK (early)");
@@ -3255,6 +3273,12 @@ pub(crate) fn kernel_boot(
     registry.set_urgency("display", 220);
     // BOOT.LOG/NSGDB no stick: SysInfo deve rodar mesmo sob pressão do compositor.
     registry.set_urgency("sysinfo", 160);
+    // Orb = voz/mic: sem urgency, Continuous Pending → rate-limit → "Jarvis morto".
+    registry.set_urgency("jarvis_voice", 210);
+    registry.set_urgency("wakeword", 200);
+    registry.set_urgency("audio_pipeline", 190);
+    registry.set_urgency("audio_mixer", 190);
+    registry.set_urgency("JARBAS", 180);
     // ADR-0089: críticos BSP (ring0); migráveis ring≥1 com smp-runqueue + ap_pollable.
     let _ = registry.set_affinity_ring("hw_bridge", 0);
     let _ = registry.set_affinity_ring("input", 0);

@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s308 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s315 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,8 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 315 | HW real | Jarbas UI | Soft-halt + anti-black-screen | hlt→soft 18Hz; HID sem MSC; PIC IRQ12; compositor orb-only gate; MSC budget 3s + TSC EP0/reset; boot_progress_line FB |
+| 314 | HW real | P0/ADR-0103 | BOOT.LOG metal + k_hal USB BE | P0 = persistência no stick sem perder desktop; hub route+TT em k_hal; S0 multi_user→k_ai hnsw→cortex; aceite AWAITING_OPERATOR; freeze Ring3/S2+ |
 | 313 | HW real | xHCI/Jarbas | Persistência USB + UI liveness | Event Ring exigia `RTSOFF+0x20`; Normal TRB IOC estava no DWORD errado e CC Success=1 era rejeitado; takeover metal (BusMaster/handoff/CSZ/scratchpad/WPR/EHB); probe MSC proibido pós-UI; tick offload global gated |
 | 309 | Falcon3 GGUF | GGUF/cortex | Falcon3 inferência GGUF | TQ2_0 (type 25) + BF16; type IDs corretos (spec padrão); metadata value IDs corrigidos (6=FLOAT32, 8=STRING, 9=ARRAY, 10=FLOAT64); GgufBackedModel auto-config; GGUF magic scan no boot; QEMU 4c GGUF LOADED→CURRENT_MODEL + greeting 40s |
 | 308 | SMP AIOS | ADR-0089 | Anti-churn + Memory N≥5 | should_redistribute; inflight; IPI 0→1; steal_burst half∩4; Net ring3; stats/64; HUD 32 |

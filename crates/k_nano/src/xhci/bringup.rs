@@ -27,7 +27,14 @@ unsafe fn input_context_entry(base: *mut u8, dci: u32) -> *mut u32 {
 /// lia o índice 0 fixo — nunca via eventos depois do 1º comando consumido.
 /// Retorna true se CC == Success (1) ou Short Packet (13).
 unsafe fn wait_transfer_event(timeout: u32) -> bool {
-    for _ in 0..timeout {
+    // Metal Alienware: spin puro × N EP0 hub = minutos de tela preta pós-Limine.
+    // Budget TSC 50ms (igual wait_cmd_completion); `timeout` = teto de spins se TSC=0.
+    let hz = crate::tsc::tsc_hz();
+    let budget = if hz > 1_000_000 { hz / 20 } else { 0 };
+    let t0 = crate::tsc::rdtsc();
+    let spin_cap = timeout.min(80_000);
+    let mut spins = 0u32;
+    loop {
         let mut g = XHCI_STATE.lock();
         let Some(st) = g.as_mut() else { return false };
         for _ in 0..256 {
@@ -43,8 +50,14 @@ unsafe fn wait_transfer_event(timeout: u32) -> bool {
         }
         drop(g);
         core::hint::spin_loop();
+        spins = spins.saturating_add(1);
+        if budget > 0 && crate::tsc::rdtsc().wrapping_sub(t0) > budget {
+            return false;
+        }
+        if budget == 0 && spins >= spin_cap {
+            return false;
+        }
     }
-    false
 }
 
 /// Resultado do bring-up do pendrive bootável (dados FAT / BOOT.LOG).
@@ -57,10 +70,79 @@ pub struct MscDevice {
     pub max_packet: u16,
 }
 
-/// Enumera portas CCS e configura bulk MSC na **primeira** que completar
-/// Address+Configure EP. Notebooks (Alienware etc.) têm webcam/BT/hub na
-/// 1ª porta — pegar só `break` no 1º CCS deixava o stick sem BOOT.LOG.
+/// Localização xHCI (Redox PortId / Chitti DevLoc): route + TT p/ hub.
+#[derive(Clone, Copy, Debug)]
+pub struct DevLoc {
+    pub root_port: u8,
+    pub route: u32,
+    pub speed: u8,
+    pub parent_slot: u8,
+    pub parent_port: u8,
+    pub tt: bool,
+    /// MTT no slot do filho LS/FS quando o hub HS é Multi-TT (Linux/U-Boot DEV_MTT).
+    pub mtt: bool,
+}
+
+impl DevLoc {
+    pub fn root(port: u8, speed: u8) -> Self {
+        Self {
+            root_port: port,
+            route: 0,
+            speed,
+            parent_slot: 0,
+            parent_port: 0,
+            tt: false,
+            mtt: false,
+        }
+    }
+}
+
+pub fn ep0_mps_for_speed(speed: u8) -> u16 {
+    match speed {
+        1 => 64,
+        2 => 8,
+        3 => 64,
+        4 => 512,
+        _ => 64,
+    }
+}
+
+pub fn push_route(parent_route: u32, hub_port: u8) -> Option<u32> {
+    if hub_port == 0 || hub_port > 15 {
+        return None;
+    }
+    for i in 0..5 {
+        let shift = i * 4;
+        if (parent_route >> shift) & 0xF == 0 {
+            return Some(parent_route | ((hub_port as u32) << shift));
+        }
+    }
+    None
+}
+
+type MscBringupFn = unsafe fn() -> Option<MscDevice>;
+static MSC_BRINGUP_HOOK: spin::Mutex<Option<MscBringupFn>> = spin::Mutex::new(None);
+
+/// R1 (`k_hal::usb`) registra o bring-up com hub; R0 só despacha.
+pub fn register_msc_bringup(f: MscBringupFn) {
+    *MSC_BRINGUP_HOOK.lock() = Some(f);
+}
+
+/// Enumera MSC: prefer hook R1 (hub+route+TT); fallback root-only legado.
 pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
+    if let Some(f) = *MSC_BRINGUP_HOOK.lock() {
+        return f();
+    }
+    crate::slog_nano!(
+        "USB",
+        "warn",
+        "MSC bringup sem hook R1 — fallback root-only (hub interno = FAIL)"
+    );
+    bringup_boot_msc_root_only()
+}
+
+/// Fallback R0: só root CCS (sem hub). Preferir `k_hal::usb::install_bringup_hooks`.
+pub unsafe fn bringup_boot_msc_root_only() -> Option<MscDevice> {
     let max_ports = {
         let g = XHCI_STATE.lock();
         g.as_ref()?.max_ports
@@ -122,7 +204,7 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
 
 static MSC_SKIP_PORTS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
-fn msc_port_skipped(port: u8) -> bool {
+pub fn msc_port_skipped(port: u8) -> bool {
     if port == 0 || port > 31 {
         return true;
     }
@@ -224,7 +306,7 @@ unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
     }
 
     let Some((ep_in, ep_out)) =
-        configure_msc_endpoints_cmd(slot, port, speed, bulk_mps, ep_in_addr, ep_out_addr)
+        configure_msc_endpoints_cmd(slot, DevLoc::root(port, speed), bulk_mps, ep_in_addr, ep_out_addr)
     else {
         crate::slog_nano!("USB", "msc", "Configure Endpoint MSC FAIL port={}", port);
         let _ = cmd_disable_slot(slot);
@@ -269,23 +351,48 @@ pub unsafe fn bringup_hid_mouse() -> bool {
 static HID_DEFER_DONE: AtomicBool = AtomicBool::new(false);
 
 /// Boot USB unificado: HID adiado no DriverInit (MSC no mesmo xHCI).
+///
+/// Alienware / live USB **sem** MSC: o path antigo exigia `USB_MSC` e marcava
+/// `HID_DEFER_DONE` mesmo ao skipar → teclado/mouse USB nunca subiam e o orb
+/// ficava sem ponteiro (SESSION_315). Agora tenta com ou sem MSC; só marca
+/// done após a tentativa real.
 pub unsafe fn try_deferred_hid_bringup() -> bool {
-    if HID_DEFER_DONE.swap(true, Ordering::AcqRel) {
+    if HID_DEFER_DONE.load(Ordering::Acquire) {
         return false;
     }
-    if crate::globals::USB_MSC.lock().is_none() {
+    // Não competir com enum MSC no 1º frame — Display deve pintar primeiro.
+    if !crate::boot_logger::ui_is_live() {
         return false;
     }
+    let has_msc = crate::globals::USB_MSC
+        .try_lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false);
+    crate::slog_nano!(
+        "USB",
+        "ok",
+        "deferred HID bringup start (msc={})",
+        has_msc as u8
+    );
+    // Marca só agora — falhas de timeout ainda contam como "tentou" (evita
+    // EnableSlot a cada tick). Retry manual: clear via clear_hid_defer_flag.
+    HID_DEFER_DONE.store(true, Ordering::Release);
     let kb = bringup_hid_keyboard();
     let ms = bringup_hid_mouse();
     crate::slog_nano!(
         "USB",
-        "hid",
-        "deferred P24a/P24b kb={} mouse={}",
-        kb,
-        ms
+        "ok",
+        "deferred P24a/P24b kb={} mouse={} msc={}",
+        kb as u8,
+        ms as u8,
+        has_msc as u8
     );
     kb || ms
+}
+
+/// Permite re-tentar HID (SelfHeal / SysInfo) se o 1º bringup falhou.
+pub fn clear_hid_defer_flag() {
+    HID_DEFER_DONE.store(false, Ordering::Release);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -781,7 +888,12 @@ unsafe fn reset_port(port: u8, speed_hint: u8) -> bool {
     w32(st.base, off, v);
     drop(g);
 
-    for _ in 0..2_000_000 {
+    // TSC 100ms — 2M spins sem teto = freeze preto no metal (SESSION_315).
+    let hz = crate::tsc::tsc_hz();
+    let budget = if hz > 1_000_000 { hz / 10 } else { 0 };
+    let t0 = crate::tsc::rdtsc();
+    let mut spins = 0u32;
+    loop {
         let g = XHCI_STATE.lock();
         let Some(st) = g.as_ref() else { return false };
         let Some(addr) = portsc_addr(st, port) else { return false };
@@ -804,9 +916,16 @@ unsafe fn reset_port(port: u8, speed_hint: u8) -> bool {
             w32(st.base, addr - st.base, clr);
             return ped || reset_change;
         }
+        drop(g);
         core::hint::spin_loop();
+        spins = spins.saturating_add(1);
+        if budget > 0 && crate::tsc::rdtsc().wrapping_sub(t0) > budget {
+            return false;
+        }
+        if budget == 0 && spins >= 80_000 {
+            return false;
+        }
     }
-    false
 }
 
 unsafe fn ring_cmd_doorbell() {
@@ -994,6 +1113,11 @@ unsafe fn issue_address_or_config_cmd(input_ctx_pa: u64, slot: u8, trb_type: u32
 }
 
 unsafe fn address_device(slot: u8, port: u8, speed: u8, ep0_mps: u16) -> bool {
+    address_device_loc(slot, DevLoc::root(port, speed), ep0_mps)
+}
+
+/// Address Device com route string + TT (hub children — k_hal::usb).
+pub unsafe fn address_device_loc(slot: u8, loc: DevLoc, ep0_mps: u16) -> bool {
     let ctx = match alloc_phys(2) {
         Some(c) => c,
         None => return false,
@@ -1026,10 +1150,24 @@ unsafe fn address_device(slot: u8, port: u8, speed: u8, ep0_mps: u16) -> bool {
 
     // Slot/EP offsets seguem HCCPARAMS1.CSZ (32 ou 64 bytes).
     let slot_ctx = input_context_entry(ctx.1, 0);
-    // DW0: Context Entries=1, Speed
-    slot_ctx.add(0).write_volatile(((1u32) << 27) | ((speed as u32) << 20));
+    // DW0: Route | Speed | MTT(25) se LS/FS atrás Multi-TT | Context Entries=1
+    let mut dw0 = (1u32 << 27) | ((loc.speed as u32) << 20) | (loc.route & 0xF_FFFF);
+    if loc.mtt {
+        dw0 |= 1u32 << 25;
+    }
+    slot_ctx.add(0).write_volatile(dw0);
     // DW1: Root Hub Port Number
-    slot_ctx.add(1).write_volatile((port as u32) << 16);
+    slot_ctx
+        .add(1)
+        .write_volatile((loc.root_port as u32) << 16);
+    // DW2: TT Hub Slot + TT Port (Linux xhci_setup_addressable_virt_dev)
+    if loc.tt {
+        slot_ctx.add(2).write_volatile(
+            (loc.parent_slot as u32) | ((loc.parent_port as u32) << 8),
+        );
+    } else {
+        slot_ctx.add(2).write_volatile(0);
+    }
 
     let ep0 = input_context_entry(ctx.1, 1);
     // DW0: EP State=0
@@ -1054,8 +1192,7 @@ unsafe fn address_device(slot: u8, port: u8, speed: u8, ep0_mps: u16) -> bool {
 
 unsafe fn configure_msc_endpoints_cmd(
     slot: u8,
-    port: u8,
-    speed: u8,
+    loc: DevLoc,
     max_packet: u16,
     ep_in_addr: u8,
     ep_out_addr: u8,
@@ -1087,10 +1224,21 @@ unsafe fn configure_msc_endpoints_cmd(
     icc.add(1).write_volatile(add);
 
     let slot_ctx = input_context_entry(ctx.1, 0);
+    let mut dw0 = (max_dci << 27) | ((loc.speed as u32) << 20) | (loc.route & 0xF_FFFF);
+    if loc.mtt {
+        dw0 |= 1u32 << 25;
+    }
+    slot_ctx.add(0).write_volatile(dw0);
     slot_ctx
-        .add(0)
-        .write_volatile((max_dci << 27) | ((speed as u32) << 20));
-    slot_ctx.add(1).write_volatile((port as u32) << 16);
+        .add(1)
+        .write_volatile((loc.root_port as u32) << 16);
+    if loc.tt {
+        slot_ctx.add(2).write_volatile(
+            (loc.parent_slot as u32) | ((loc.parent_port as u32) << 8),
+        );
+    } else {
+        slot_ctx.add(2).write_volatile(0);
+    }
 
     // EP OUT context
     let ep_out = input_context_entry(ctx.1, dci_out);
@@ -1139,15 +1287,16 @@ unsafe fn configure_msc_endpoints_cmd(
 }
 
 /// MSC BOT: interface class 0x08 + bulk IN/OUT (SESSION_170 residual fechado).
-struct MscEpInfo {
-    config_value: u8,
-    iface: u8,
-    ep_in: u8,
-    ep_out: u8,
-    max_packet: u16,
+#[derive(Clone, Copy, Debug)]
+pub struct MscEpInfo {
+    pub config_value: u8,
+    pub iface: u8,
+    pub ep_in: u8,
+    pub ep_out: u8,
+    pub max_packet: u16,
 }
 
-fn parse_msc_config(cfg: &[u8]) -> Option<MscEpInfo> {
+pub fn parse_msc_config(cfg: &[u8]) -> Option<MscEpInfo> {
     if cfg.len() < 9 || cfg[1] != 0x02 {
         return None;
     }
@@ -2089,6 +2238,128 @@ unsafe fn configure_uvc_on_slot(
         format: info.format,
         max_packet: info.max_packet,
     })
+}
+
+// ── Host API R0 → R1 (k_hal::usb) ──────────────────────────────────────────
+
+pub fn host_max_ports() -> Option<u8> {
+    XHCI_STATE.lock().as_ref().map(|s| s.max_ports)
+}
+
+pub unsafe fn host_port_ccs(port: u8) -> Option<(u8, u32)> {
+    let g = XHCI_STATE.lock();
+    let st = g.as_ref()?;
+    let addr = portsc_addr(st, port)?;
+    let v = r32(st.base, addr - st.base);
+    if v & 1 == 0 {
+        return None;
+    }
+    let speed = ((v >> 10) & 0xF) as u8;
+    let speed = if speed == 0 { 3 } else { speed };
+    Some((speed, v))
+}
+
+pub unsafe fn host_reset_port(port: u8, speed: u8) -> bool {
+    reset_port(port, speed)
+}
+
+pub unsafe fn host_enable_slot(port: u8) -> Option<u8> {
+    cmd_enable_slot(port)
+}
+
+pub unsafe fn host_disable_slot(slot: u8) -> bool {
+    cmd_disable_slot(slot)
+}
+
+pub unsafe fn host_address_device(slot: u8, loc: DevLoc, ep0_mps: u16) -> bool {
+    address_device_loc(slot, loc, ep0_mps)
+}
+
+pub unsafe fn host_device_class(slot: u8, ep0_mps: u16) -> Option<u8> {
+    ep0_get_device_class(slot, ep0_mps)
+}
+
+pub unsafe fn host_ep0_control_in(
+    slot: u8,
+    ep0_mps: u16,
+    bm: u8,
+    req: u8,
+    value: u16,
+    index: u16,
+    data: &mut [u8],
+) -> bool {
+    ep0_control_in(slot, ep0_mps, bm, req, value, index, data)
+}
+
+pub unsafe fn host_set_configuration(slot: u8, ep0_mps: u16, cfg: u8) -> bool {
+    ep0_set_configuration(slot, ep0_mps, cfg)
+}
+
+pub unsafe fn host_ep0_class_nodata(
+    slot: u8,
+    ep0_mps: u16,
+    bm: u8,
+    req: u8,
+    value: u16,
+    index: u16,
+) -> bool {
+    ep0_class_no_data(slot, ep0_mps, bm, req, value, index)
+}
+
+pub unsafe fn host_configure_msc(
+    slot: u8,
+    loc: DevLoc,
+    max_packet: u16,
+    ep_in: u8,
+    ep_out: u8,
+) -> Option<(BulkEndpoint, BulkEndpoint)> {
+    configure_msc_endpoints_cmd(slot, loc, max_packet, ep_in, ep_out)
+}
+
+pub fn host_ep0_tr_va() -> u64 {
+    XHCI_STATE
+        .lock()
+        .as_ref()
+        .map(|s| s.tr_va)
+        .unwrap_or(0)
+}
+
+pub fn host_restore_ep0(tr_va: u64, slot: u8) {
+    let mut g = XHCI_STATE.lock();
+    if let Some(st) = g.as_mut() {
+        st.tr_va = tr_va;
+        st.slot = slot;
+    }
+}
+
+pub fn host_set_msc_port(port: u8) {
+    let mut g = XHCI_STATE.lock();
+    if let Some(st) = g.as_mut() {
+        st.msc_port = port;
+    }
+}
+
+pub unsafe fn host_mark_hub(slot: u8, loc: DevLoc, nbr_ports: u8, ttt: u32, mtt: bool) -> bool {
+    let ctx = match alloc_phys(2) {
+        Some(c) => c,
+        None => return false,
+    };
+    core::ptr::write_bytes(ctx.1, 0, 8192);
+    let icc = ctx.1 as *mut u32;
+    icc.add(1).write_volatile(0x1);
+    let slot_ctx = input_context_entry(ctx.1, 0);
+    // DW0: Hub(26) | MTT(25) | Speed | Route — U-Boot/Linux: MTT p/ Multi-TT hubs
+    let mut dw0 =
+        (1u32 << 27) | (1u32 << 26) | ((loc.speed as u32) << 20) | (loc.route & 0xF_FFFF);
+    if mtt {
+        dw0 |= 1u32 << 25;
+    }
+    slot_ctx.add(0).write_volatile(dw0);
+    slot_ctx
+        .add(1)
+        .write_volatile(((nbr_ports as u32) << 24) | ((loc.root_port as u32) << 16));
+    slot_ctx.add(2).write_volatile((ttt & 0x3) << 16);
+    issue_address_or_config_cmd(ctx.0, slot, 12)
 }
 
 #[cfg(test)]

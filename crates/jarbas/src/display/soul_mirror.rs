@@ -230,7 +230,7 @@ impl SoulMirrorRenderer {
             }
         }
 
-        // Arc brilhante principal
+        // Arc brilhante: set_pixel (não micro-gradient ×40 — barato no metal).
         let arc_r = (final_r + 3.0) as isize;
         let arc_steps = ((arc_r as f32 * 0.55) as u32).max(10).min(40);
         for i in 0..=arc_steps {
@@ -238,10 +238,10 @@ impl SoulMirrorRenderer {
             let px = cx + (cosf(t) * arc_r as f32) as isize;
             let py = cy + (sinf(t) * arc_r as f32) as isize;
             if px >= 0 && py >= 0 && px < fw && py < fh {
-                fb.fill_circle_gradient_scanline(
-                    px, py, 2,
-                    JARVIS_CYAN.0, JARVIS_CYAN.1, JARVIS_CYAN.2, 4,
-                );
+                fb.set_pixel(px as usize, py as usize, JARVIS_CYAN.0, JARVIS_CYAN.1, JARVIS_CYAN.2);
+                if px + 1 < fw {
+                    fb.set_pixel((px + 1) as usize, py as usize, JARVIS_CYAN.0, JARVIS_CYAN.1, JARVIS_CYAN.2);
+                }
             }
         }
 

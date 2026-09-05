@@ -114,7 +114,8 @@ pub(crate) fn clock_parts(ticks: u64, hz_raw: u64) -> (u64, u64, u64) {
 
 fn format_time() -> String {
     // TODO: RTC real quando disponível. Até 1h mostra mm:ss (visível a cada segundo).
-    let ticks = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    // wall_ticks = IRQ + soft (hlt morto no metal não deixa 00:00 eterno).
+    let ticks = k_nano::interrupts::wall_ticks();
     let hz = k_nano::interrupts::TIMER_HZ.load(core::sync::atomic::Ordering::Relaxed);
     let (hours, mins, secs) = clock_parts(ticks, hz);
     if hours == 0 {

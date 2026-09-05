@@ -258,8 +258,9 @@ pub fn draw_status_gauges(fb: &mut DoubleBuffer, screen_w: usize) {
     }
 
     // Uptime ao vivo (barato); métricas dos gauges vêm do snapshot 0,5s.
-    let ticks = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
-    let secs = ticks / 18;
+    let ticks = k_nano::interrupts::wall_ticks() as usize;
+    let hz = k_nano::interrupts::TIMER_HZ.load(Ordering::Relaxed).max(1) as usize;
+    let secs = ticks / hz;
     let up = alloc::format!("T{}s", secs);
     draw_text(
         fb,

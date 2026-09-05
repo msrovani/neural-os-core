@@ -10,9 +10,17 @@ mod hub;
 pub use bringup::{
     bringup_boot_msc, bringup_hid_keyboard, bringup_hid_mouse, bringup_uac, bringup_uvc,
     clear_msc_port_skips, disable_slot, mark_msc_port_failed, try_deferred_hid_bringup,
+    clear_hid_defer_flag,
+    address_device_loc, ep0_mps_for_speed, host_address_device, host_configure_msc,
+    host_device_class, host_disable_slot, host_enable_slot, host_ep0_class_nodata,
+    host_ep0_control_in, host_ep0_tr_va, host_mark_hub, host_max_ports, host_port_ccs,
+    host_reset_port, host_restore_ep0, host_set_configuration, host_set_msc_port,
+    msc_port_skipped, parse_msc_config, push_route, register_msc_bringup, DevLoc, MscDevice,
+    MscEpInfo,
 };
 pub use hub::{
     hub_address_boot_smoke, hub_address_ok, hub_child_ok, hub_ok, hub_ports, mark_hub_address_device,
+    mark_hub_child, mark_hub_ok,
 };
 
 pub struct XhciDev {
@@ -489,6 +497,9 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     // Programar ERST em RT+0x08 escrevia área reservada: no metal nenhum
     // Command/Transfer Event chegava, logo MSC nunca podia subir.
     let ir0 = base + rtsoff + 0x20;
+    // IMAN: clear IP (RW1C) + IE — Linux/Redox/Chitti armam o interrupter;
+    // alguns HCs metal só publicam Event TRBs com IE=1 mesmo em poll.
+    w32(ir0, 0x00, (1 << 1) | (1 << 0));
     w32(ir0, 0x08, 1);
     w32(ir0, 0x10, erst_mem.0 as u32);
     w32(ir0, 0x14, (erst_mem.0 >> 32) as u32);
@@ -502,7 +513,8 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     };
     w32(op, 0x38, slots as u32);
 
-    w32(op, 0, r32(op, 0) | 0x01);
+    // Run + INTE (bit2): espelha xhci_run; poll ainda consome o Event Ring.
+    w32(op, 0, r32(op, 0) | 0x01 | (1 << 2));
     if !wait_op_bit(op, 0x04, 1, false, 1000) {
         crate::slog_nano!("USB", "warn", "xHCI[{}] run TIMEOUT", index);
         return false;

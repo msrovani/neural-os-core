@@ -46,8 +46,8 @@ pub fn mark_hub_address_device(port: u8) {
     HUB_ADDR.store(true, Ordering::Relaxed);
     crate::slog_nano!(
         "USB",
-        "hub",
-        "hub=ADDR port={} VERDICT=PARTIAL reason=address_device_mvp (TT residual)",
+        "ok",
+        "hub=ADDR port={} VERDICT=OK reason=address_device_route_tt (k_hal::usb)",
         port
     );
 }

@@ -5,18 +5,19 @@
 Ring 1 of the K³CHJ stack (ADR-0041 §9, "L1 sensório-motor"): the hardware abstraction
 layer between R0 silicon (k_nano) and the R3 agents (hermes/jarbas). Owns device
 discovery (PCI → `DeviceCap`/DeviceTree), the `HalOffer` capability/bind API, per-class
-FE ports (compute/net/display/audio/video), MMIO backends for GPU (blit/ring/intel/
-nvidia/amd), audio (Intel HDA), WiFi (ath10k/iwlwifi/generic), the VirtIO transport
-(MMIO + PCI QUEUE_NOTIFY), the DeviceRecipe trust table (ADR-0056), UnlockDAG tokens,
-HW-GATE residual tracking, and NPU detection. No persona, no LLM, no Trust policy — only
-silicon and queues. `no_std`; logging via `slog_hal!` → `[R1] [k-hal]` lines.
+FE ports (compute/net/display/audio/video), **USB host BE** (`usb/` — hub route/TT → MSC),
+MMIO backends for GPU (blit/ring/intel/nvidia/amd), audio (Intel HDA), WiFi
+(ath10k/iwlwifi/generic), the VirtIO transport (MMIO + PCI QUEUE_NOTIFY), the DeviceRecipe
+trust table (ADR-0056), UnlockDAG tokens, HW-GATE residual tracking, and NPU detection.
 
 **Dependency rule (hard):** k_hal consumes R0 singletons exclusively through
 `k_nano::memory::{GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET}`, `k_nano::pci`, `k_nano::apic`
 (`map_page_uc`/`map_region_uc_2mb`), `k_nano::ATA_DRIVER`+`fat32`/`exfat`,
-`k_nano::xhci`, `k_nano::EVENT_BUS`, `k_nano::slog_hal!`/`slog_bin!` — never
-`crate::memory::` (does not resolve; k_hal is a separate crate). `cortex::tensor::Tensor`
-is used only in the compute ABI.
+`k_nano::xhci` **host primitives** (rings/TRB/MMIO — não política de enum), 
+`k_nano::EVENT_BUS`, `k_nano::slog_hal!`/`slog_bin!` — never `crate::memory::`.
+
+**USB:** política hub→MSC em `k_hal::usb` (registra hook em `init_h1`). R0
+`bringup_boot_msc` só despacha o hook; fallback root-only é degradado.
 
 ## Design
 

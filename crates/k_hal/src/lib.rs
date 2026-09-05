@@ -34,6 +34,7 @@ pub mod net;
 pub mod audio;
 pub mod gpu;
 pub mod npu;
+pub mod usb;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -45,6 +46,7 @@ static H1_RAN: AtomicBool = AtomicBool::new(false);
 pub fn init_h1() -> usize {
     if H1_RAN.load(Ordering::Relaxed) {
         offer::refresh_from_tree();
+        crate::usb::install_bringup_hooks();
         return discovery::device_count();
     }
     let n = discovery::populate_from_pci();
@@ -52,6 +54,8 @@ pub fn init_h1() -> usize {
     unlock_dag::boot_platform_tokens(n > 0, fat);
     offer::refresh_from_tree();
     H1_RAN.store(true, Ordering::Relaxed);
+    // USB host BE: hub→MSC vive em k_hal; registra hook antes do DriverInit probe.
+    crate::usb::install_bringup_hooks();
     k_nano::slog_hal!(
         "DeviceCap",
         "ready",

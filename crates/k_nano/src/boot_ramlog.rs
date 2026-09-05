@@ -262,6 +262,39 @@ unsafe fn soft_reboot() -> ! {
 /// Ponytail: dump não-bloqueante do ramlog phys no FB/serial (K22/K137 hang).
 /// Mantém em RAM quando pendrive não pronto; FB mostra foto para usuário.
 pub fn dump() {
+    for_each_line(40, |line| {
+        crate::slog_nano!("RAMLOG", "dump", "{}", line);
+    });
+}
+
+/// Emite linhas USB/hub/MSC do ramlog (foto no Alienware sem COM1).
+pub fn dump_usb_hint(mut emit: impl FnMut(&str)) {
+    let mut n = 0usize;
+    for_each_line(200, |line| {
+        let l = line;
+        if n >= 24 {
+            return;
+        }
+        let lower_ok = l.contains("USB")
+            || l.contains("usb")
+            || l.contains("hub")
+            || l.contains("MSC")
+            || l.contains("msc")
+            || l.contains("xhci")
+            || l.contains("XHCI")
+            || l.contains("BOOT.LOG")
+            || l.contains("CCS");
+        if lower_ok {
+            emit(l);
+            n += 1;
+        }
+    });
+    if n == 0 {
+        emit("USB: ramlog sem linhas hub/MSC (probe nao chegou?)");
+    }
+}
+
+fn for_each_line(max: usize, mut emit: impl FnMut(&str)) {
     if crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed) == 0 {
         return;
     }
@@ -273,9 +306,8 @@ pub fn dump() {
         }
         let slice = core::slice::from_raw_parts(data_ptr(), len);
         if let Ok(s) = core::str::from_utf8(slice) {
-            // Slog já vai para serial; boot_ckpt FB já mostra Ks, mas dump completo ajuda foto.
-            for line in s.lines().take(40) {
-                crate::slog_nano!("RAMLOG", "dump", "{}", line);
+            for line in s.lines().take(max) {
+                emit(line);
             }
         }
     }

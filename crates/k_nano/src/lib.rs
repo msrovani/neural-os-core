@@ -60,7 +60,7 @@ pub mod hal;
 pub mod hardware;
 pub mod hw_profiler;
 // hw_change: removido (dead code, 0 callers — audit k_nano 2026-08-24)
-pub mod hnsw;
+// hnsw: movido p/ cortex (Fase 1 microkernel — ANN = inference)
 // kernel_hnsw: removido (dead code, 0 callers — audit k_nano 2026-08-24)
 pub mod hw_rng;
 pub mod identity;
@@ -73,7 +73,7 @@ pub mod limine;
 pub mod memory;
 pub mod mhi;
 pub mod mpmc;
-pub mod multi_user;
+// multi_user: movido p/ k_ai (Fase 1 microkernel — personas = cognitiva)
 pub mod net;
 pub mod mesh;
 pub mod nic_globals;

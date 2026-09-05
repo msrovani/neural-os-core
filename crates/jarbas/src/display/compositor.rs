@@ -500,8 +500,9 @@ impl JarbasDesktop {
         if tick.wrapping_sub(last) < TARGET_FRAME_TICKS { return; }
         LAST_FRAME_TICK.store(tick, core::sync::atomic::Ordering::Relaxed);
 
-        // Orb: animação a cada 2 ticks (~9 Hz) — antes do early-exit.
-        if tick.wrapping_sub(self.last_orb_tick) >= 2 {
+        // Orb: animação a cada 3 ticks (~6 Hz @18) — 2 era ~9 Hz e re-pintava
+        // HUD/dock no mesmo path (bug SESSION_315). Menos CPU no metal soft-halt.
+        if tick.wrapping_sub(self.last_orb_tick) >= 3 {
             self.dirty_orb = true;
             self.last_orb_tick = tick;
         }
@@ -517,6 +518,11 @@ impl JarbasDesktop {
         {
             return;
         }
+
+        // SESSION_315: orb-only NÃO repinta HUD/dock/janelas (era o gap de CPU).
+        let paint_hud = self.dirty_hud || self.dirty_dialog;
+        let paint_windows = self.dirty_windows;
+        let paint_dock = self.dirty_hud || self.dirty_windows || self.dirty_dialog;
 
         // Só cursor: restore+draw+dirty-rect — evita HUD/orb e swap full (TCG).
         if self.dirty_cursor
@@ -594,7 +600,7 @@ impl JarbasDesktop {
             let cw = (orb_cr * 2 + 24).min(w.saturating_sub(x0));
             let ch = (orb_cr * 2 + 24).min(h.saturating_sub(y0));
             if cw > 0 && ch > 0 {
-                self.fb.fill_rect(x0, y0, cw, ch, 8, 12, 24);  // JARVIS_BG
+                self.fb.fill_rect_fast(x0, y0, cw, ch, 8, 12, 24);  // JARVIS_BG
                 self.last_orb_x0 = x0;
                 self.last_orb_y0 = y0;
                 self.last_orb_w = cw;
@@ -618,9 +624,10 @@ impl JarbasDesktop {
         }
 
         // ═════════════════════════════════════════════════════════════
-        // CAMADA 1: HUD mínimo — marca JARBAS + status compacto
+        // CAMADA 1: HUD mínimo — só quando dirty_hud/dialog (não a cada orb)
         // ═════════════════════════════════════════════════════════════
         let sb_h = 28usize;
+        if paint_hud {
         self.fb.fill_rect_fast(0, 0, w, sb_h, 8, 12, 24);  // JARVIS_BG
         self.fb.fill_rect_fast(0, sb_h - 1, w, 1, JARVIS_CYAN_R, JARVIS_CYAN_G, JARVIS_CYAN_B);
 
@@ -724,7 +731,7 @@ impl JarbasDesktop {
         // Suit-boot welcome — linha centrada sob a barra (some após WELCOME_UNTIL)
         {
             let until = WELCOME_UNTIL.load(core::sync::atomic::Ordering::Relaxed);
-            let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            let now = k_nano::interrupts::wall_ticks();
             if now < until {
                 if let Some(ref line) = *WELCOME_BANNER.lock() {
                     let max_chars = (w / 8).saturating_sub(4).max(16);
@@ -761,6 +768,7 @@ impl JarbasDesktop {
                 *WELCOME_BANNER.lock() = None;
             }
         }
+        } // paint_hud
 
         // Dock pinta uma vez, depois das janelas (Z-order: dock por cima).
 
@@ -770,6 +778,7 @@ impl JarbasDesktop {
         let dock_h = if self.dock.visible { self.dock.height as usize } else { 0 };
         let panel_h = h.saturating_sub(sb_h + gap * 2 + dock_h);
         let left_w = w.saturating_sub(gap * 2); // margens laterais pequenas (painel Hermes removido)
+        if paint_windows {
         let window_updates = {
             let ws = self.workspaces.active();
             let screen_rect = Rect {
@@ -803,21 +812,26 @@ impl JarbasDesktop {
                 render_app_content(&mut self.fb, &self.windows[idx], self.w, self.h);
             }
         }
+        } // paint_windows
 
         // ═════════════════════════════════════════════════════════════
         // CAMADA 4: Notificações + foco + power dialog
         // ═════════════════════════════════════════════════════════════
         // Overlay H2/H5 + RENDER_WINDOW — depois do fill, antes do swap (SESSION_261).
-        self.paint_overlays(theme);
+        if paint_windows || paint_hud {
+            self.paint_overlays(theme);
+        }
 
-        if self.dock.visible {
+        if self.dock.visible && paint_dock {
             self.dock.render(&mut self.fb, theme);
         }
 
-        self.notifications.render(&mut self.fb, theme, Rect { x: 0, y: 0, width: w as u32, height: h as u32 }, self.tick);
+        if paint_hud || paint_windows {
+            self.notifications.render(&mut self.fb, theme, Rect { x: 0, y: 0, width: w as u32, height: h as u32 }, self.tick);
+        }
 
         // Modo Chat: hint discreto (Ambient = silêncio — orb é o sinal)
-        if mode == FocusMode::Chat {
+        if paint_hud && mode == FocusMode::Chat {
             let hint_y = if self.dock.visible {
                 h.saturating_sub(self.dock.height as usize + 16)
             } else {
@@ -836,7 +850,7 @@ impl JarbasDesktop {
         }
 
         // Diálogo de energia (modal central) — 3 opções
-        if self.power_dialog {
+        if self.power_dialog && self.dirty_dialog {
             let (dx, dy, dw, dh) = power_dialog_rect(self.w, self.h);
             // Sombra
             self.fb.fill_rect(dx + 4, dy + 4, dw, dh, 0, 0, 0);
@@ -893,15 +907,15 @@ impl JarbasDesktop {
         self.save_cursor_underlay(mx, my);
         draw_mouse_cursor(&mut self.fb, mx, my, self.w, self.h);
         self.dirty_cursor = false;
-        self.present_frame(self.dirty_windows || self.dirty_dialog || vcon_active != 0);
+        let need_full = self.dirty_windows || self.dirty_dialog || vcon_active != 0;
+        self.present_frame(need_full, paint_hud || paint_dock, orb_drawn);
         self.dirty_windows = false;
         self.dirty_dialog = false;
         self.dirty_hud = false;
-        let _ = orb_drawn;
     }
 
     /// 1º frame / janelas = swap full; orb animado = só dirty-rects (anti-freeze TCG).
-    fn present_frame(&mut self, need_full: bool) {
+    fn present_frame(&mut self, need_full: bool, swap_hud: bool, swap_orb: bool) {
         let w = self.w;
         let sb_h = 28usize;
         if self.full_swap_pending || need_full {
@@ -909,16 +923,17 @@ impl JarbasDesktop {
             self.full_swap_pending = false;
             return;
         }
-        // HUD bar (+ welcome strip)
-        self.fb.swap_rect(0, 0, w, sb_h + 28);
-        // Dock + clock (faixa inferior — sem isto o timer fica 00:00 no 1º frame)
-        if self.dock.visible {
-            let dh = self.dock.height as usize;
-            let h = self.h;
-            self.fb.swap_rect(0, h.saturating_sub(dh), w, dh);
+        // HUD / dock só se foram pintados neste frame (orb-only = skip)
+        if swap_hud {
+            self.fb.swap_rect(0, 0, w, sb_h + 28);
+            if self.dock.visible {
+                let dh = self.dock.height as usize;
+                let h = self.h;
+                self.fb.swap_rect(0, h.saturating_sub(dh), w, dh);
+            }
         }
         // Orb region
-        if self.last_orb_w > 0 && self.last_orb_h > 0 {
+        if swap_orb && self.last_orb_w > 0 && self.last_orb_h > 0 {
             self.fb.swap_rect(
                 self.last_orb_x0,
                 self.last_orb_y0,

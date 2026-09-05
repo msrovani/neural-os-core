@@ -1,5 +1,23 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s315] - 2026-09-05 — Jarbas UI liveness + anti-black-screen (Alienware)
+
+**Desktop vivo no metal + early USB sem hang silencioso pós-Limine.**
+
+### UI / scheduler
+- `scheduler_idle_halt` + `SOFT_TIMER_TICKS` / `wall_ticks()` quando IRQ timer não avança
+- HID deferred sem exigir `USB_MSC`; PIC slave `0xEF` (IRQ12); urgency voz/mic/JARBAS
+- Compositor: orb-only não repinta HUD/dock; Soul Mirror arc em `set_pixel`
+
+### USB / boot FB
+- `k_hal::usb` hub→MSC (route+TT) R1 BE
+- MSC bring-up budget **3s**; EP0/`host_reset_port` com teto TSC 50–100ms
+- `boot_progress_line` no FB (boot_ckpt continua ramlog-only — ADR-0092)
+
+### Aceite
+- `target/usb_hw.img` 6271MB · kernel ESP sha `8dbde4ea822aca58` · PACK_LLM=falcon3
+- Flash: `docs/memory/HW_FLASH_s314.md`
+
 ## [1.9.99-s309] - 2026-09-03 — Falcon3 GGUF inferência wired (TQ2_0 + BF16 + auto-config)
 
 **Falcon3-3B-Instruct-1.58bit carrega no boot via GGUF e vira CURRENT_MODEL — conversa real no AIOS.**

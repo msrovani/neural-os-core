@@ -1,6 +1,7 @@
 //! HNSW (Hierarchical Navigable Small World) index para busca aproximada.
 //! Multi-layer graph, O(log N) search. Baseado em Malkov & Yashunin (2016).
-//! Moved from k_nano — search/heuristics is part of the inference engine.
+//!
+//! Canônico em cortex (inference). Removido de k_nano na Fase 1 microkernel.
 
 use alloc::vec::Vec;
 use alloc::vec;

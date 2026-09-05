@@ -1,4 +1,3 @@
-// Legacy re-export wrapper -- prefer direct use k_nano::module over crate::module
-//! HNSW — re-exported from k_nano.
+//! HNSW — re-export canônico de cortex (Fase 1 microkernel).
 #[allow(unused_imports)]
-pub use k_nano::hnsw::*;
+pub use cortex_crate::hnsw::*;

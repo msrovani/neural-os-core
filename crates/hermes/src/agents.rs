@@ -166,8 +166,14 @@ impl InputAgent {
 impl Agent for InputAgent {
     fn manifest(&self) -> &AgentManifest { &INPUT_MANIFEST }
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
-        if tick == 50 {
-            unsafe { k_nano::xhci::try_deferred_hid_bringup(); }
+        // T+50 clássico; + retry T+120 se o 1º skipou (UI ainda não live / MSC).
+        if tick == 50 || tick == 120 {
+            if tick == 120 {
+                k_nano::xhci::clear_hid_defer_flag();
+            }
+            unsafe {
+                k_nano::xhci::try_deferred_hid_bringup();
+            }
         }
         // PS/2 keyboard (IRQ-driven)
         if let Some(event) = self.receiver.try_receive() {
