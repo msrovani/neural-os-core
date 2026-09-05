@@ -103,9 +103,11 @@ impl UsbMassStorage {
             crate::slog_nano!(
                 "USB",
                 "warn",
-                "SCSI falhou port={} — skip e tenta outra porta",
-                msc_dev.port
+                "SCSI falhou port={} slot={} — Disable Slot + skip",
+                msc_dev.port,
+                msc.slot
             );
+            unsafe { xhci::disable_slot(msc.slot) };
             xhci::mark_msc_port_failed(msc_dev.port);
         }
         crate::slog_nano!("USB", "msc", "SCSI falhou em todas as portas — MSC ignorado");

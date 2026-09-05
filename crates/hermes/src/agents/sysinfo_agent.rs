@@ -30,10 +30,10 @@ impl Agent for SysInfoAgent {
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
         let fat_ok = k_nano::boot_logger::FAT_READY.load(Ordering::Relaxed);
         if !fat_ok {
-            // A cada ~16 tentativas (~800 ticks) limpa skip de portas MSC
-            // (webcam falhou cedo; stick pode enumerar tarde).
+            // A cada ~32 tentativas (~1600 ticks SysInfo) limpa skip de portas —
+            // com rate-limit 200 ticks no ensure_persisted, evita martelar xHCI.
             let n = MSC_RETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
-            if n > 0 && n % 16 == 0 {
+            if n > 0 && n % 32 == 0 {
                 k_nano::xhci::clear_msc_port_skips();
             }
             let ok = k_nano::boot_logger::ensure_persisted();

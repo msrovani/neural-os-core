@@ -163,6 +163,7 @@ unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
 
     if !address_device(slot, port, speed, max_packet) {
         crate::slog_nano!("USB", "msc", "Address Device FAIL slot={} port={}", slot, port);
+        let _ = cmd_disable_slot(slot);
         return None;
     }
     crate::slog_nano!("USB", "msc", "Address Device OK slot={} port={}", slot, port);
@@ -175,6 +176,7 @@ unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
     let bulk_mps: u16 = if speed >= 3 { 512 } else { 64 };
     let Some((ep_in, ep_out)) = configure_msc_endpoints_cmd(slot, port, speed, bulk_mps) else {
         crate::slog_nano!("USB", "msc", "Configure Endpoint MSC FAIL port={}", port);
+        let _ = cmd_disable_slot(slot);
         return None;
     };
 
@@ -193,6 +195,14 @@ unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
         ep_out,
         max_packet: bulk_mps,
     })
+}
+
+/// Libera slot após SCSI/BOT falhar (evita leak no retry multi-porta).
+pub unsafe fn disable_slot(slot: u8) {
+    if slot == 0 {
+        return;
+    }
+    let _ = cmd_disable_slot(slot);
 }
 
 /// ADR-0062 P24a: HID boot keyboard em porta CCS distinta do MSC.
@@ -763,6 +773,46 @@ unsafe fn cmd_enable_slot() -> Option<u8> {
     core::arch::asm!("sfence", options(nostack, preserves_flags));
     ring_cmd_doorbell();
     wait_cmd_completion().map(|(slot, _cc)| slot)
+}
+
+/// xHCI Disable Slot (TRB type 10) — libera slot após bring-up falho.
+unsafe fn cmd_disable_slot(slot: u8) -> bool {
+    if slot == 0 {
+        return false;
+    }
+    {
+        let mut g = XHCI_STATE.lock();
+        let Some(st) = g.as_mut() else { return false };
+        let idx = st.cmd_enqueue as usize;
+        let cycle = st.cmd_cycle;
+        let trb = (st.cmd_ring_va as *mut u32).add(idx * 4);
+        trb.add(0).write_volatile(0);
+        trb.add(1).write_volatile(0);
+        trb.add(2).write_volatile(0);
+        // Type=10 Disable Slot, SlotID bits 24..31
+        trb.add(3).write_volatile(
+            (10u32 << 10) | ((slot as u32) << 24) | if cycle { 1 } else { 0 },
+        );
+        st.cmd_enqueue = st.cmd_enqueue.wrapping_add(1);
+        if st.cmd_enqueue >= 255 {
+            let link = (st.cmd_ring_va as *mut u32).add(255 * 4);
+            link.add(0).write_volatile(st.cmd_ring_pa as u32);
+            link.add(1).write_volatile((st.cmd_ring_pa >> 32) as u32);
+            link.add(2).write_volatile(0);
+            link.add(3).write_volatile((6u32 << 10) | (1 << 1) | if cycle { 1 } else { 0 });
+            st.cmd_enqueue = 0;
+            st.cmd_cycle = !st.cmd_cycle;
+        }
+    }
+    core::arch::asm!("sfence", options(nostack, preserves_flags));
+    ring_cmd_doorbell();
+    let ok = wait_cmd_completion().is_some();
+    if ok {
+        crate::slog_nano!("USB", "ok", "Disable Slot slot={}", slot);
+    } else {
+        crate::slog_nano!("USB", "warn", "Disable Slot FAIL slot={}", slot);
+    }
+    ok
 }
 
 unsafe fn wait_cmd_completion() -> Option<(u8, u8)> {

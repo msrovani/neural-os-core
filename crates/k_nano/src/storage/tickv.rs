@@ -706,32 +706,70 @@ pub fn is_ready() -> bool {
     TICKV.lock().as_ref().map(|k| k.is_ready()).unwrap_or(false)
 }
 
-/// Após MSC: promove FileFlash e remonta TickvLite (NSGDB no stick).
+/// Após MSC: promove FileFlash, **migra** chaves RAM → stick, remonta TickvLite.
 pub fn remount_after_usb_msc() -> bool {
+    // Snapshot KV enquanto backend ainda é RAM (antes de trocar FLASH).
+    let mut pending: alloc::vec::Vec<(alloc::string::String, alloc::vec::Vec<u8>)> =
+        alloc::vec::Vec::new();
+    {
+        let mut g = TICKV.lock();
+        if let Some(kv) = g.as_mut() {
+            if kv.backend == "ram" && kv.ready {
+                let keys: alloc::vec::Vec<alloc::string::String> =
+                    kv.index.keys().cloned().collect();
+                for k in keys {
+                    if let Ok(v) = kv.get(&k) {
+                        pending.push((k, v));
+                    }
+                }
+                crate::slog_nano!(
+                    "TICKV",
+                    "ok",
+                    "migrate snapshot ram_keys={}",
+                    pending.len()
+                );
+            } else if kv.backend == "file" {
+                return true;
+            }
+        }
+    }
+
     if !crate::storage::flash::try_promote_usb_file_flash() {
         return false;
     }
+
     let mut g = TICKV.lock();
     let kv = g.get_or_insert_with(TickvLite::new);
     kv.ready = false;
     kv.index.clear();
     kv.append_off = 0;
-    match kv.mount() {
-        Ok(()) => {
-            crate::slog_nano!(
-                "TICKV",
-                "ok",
-                "remount USB FileFlash backend={} keys={}",
-                kv.backend(),
-                kv.live_keys()
-            );
-            true
+    if let Err(e) = kv.mount() {
+        crate::slog_nano!("TICKV", "warn", "remount USB FAIL {}", e);
+        return false;
+    }
+
+    let mut migrated = 0usize;
+    for (k, v) in pending.iter() {
+        // Não sobrescrever chave já presente no NSGDB do stick (ckpt prior).
+        if kv.get(k).is_ok() {
+            continue;
         }
-        Err(e) => {
-            crate::slog_nano!("TICKV", "warn", "remount USB FAIL {}", e);
-            false
+        if kv.put(k, v).is_ok() {
+            migrated += 1;
         }
     }
+    if migrated > 0 {
+        let _ = kv.write_ckpt();
+    }
+    crate::slog_nano!(
+        "TICKV",
+        "ok",
+        "remount USB FileFlash backend={} keys={} migrated={}",
+        kv.backend(),
+        kv.live_keys(),
+        migrated
+    );
+    true
 }
 
 pub fn backend_name() -> &'static str {

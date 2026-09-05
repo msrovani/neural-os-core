@@ -43,6 +43,7 @@ Fix: live USB sem MSC não flush/heal; `storage_available` respeita SKIP_*; FB `
 ### Fix 2026-09-04 — BOOT.LOG/NSGDB no pendrive (urgente)
 Causa: `bringup_boot_msc` pegava só a **1ª porta CCS** (webcam/BT) → stick sem MSC.
 Fix: varrer todas as portas CCS (SS>HS); SCSI fail → skip porta; SysInfo promove FileFlash/NSGDB após FAT_READY.
+Bugbot follow-up: **Disable Slot** em falha; migrate RAM→File antes remount; rate-limit MSC probe (~200 ticks).
 
 **Não fecha só com stick:** WiFi RF sem rádio, GPU sem silicon, TLS PKI, EEVDF, gate v2.0.0 sem OK maintainer + residual defer.
 

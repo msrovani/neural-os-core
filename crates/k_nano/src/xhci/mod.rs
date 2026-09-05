@@ -9,7 +9,7 @@ mod bringup;
 mod hub;
 pub use bringup::{
     bringup_boot_msc, bringup_hid_keyboard, bringup_hid_mouse, bringup_uac, bringup_uvc,
-    clear_msc_port_skips, mark_msc_port_failed, try_deferred_hid_bringup,
+    clear_msc_port_skips, disable_slot, mark_msc_port_failed, try_deferred_hid_bringup,
 };
 pub use hub::{
     hub_address_boot_smoke, hub_address_ok, hub_child_ok, hub_ok, hub_ports, mark_hub_address_device,

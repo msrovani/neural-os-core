@@ -902,11 +902,26 @@ pub fn ensure_persisted() -> bool {
     let skip_msc_retry = crate::storage_bw::skip_measure()
         && crate::virtio_blk::VIRTIO_BLK_DEV.lock().is_some();
     if !skip_msc_retry {
-        let msc = try_ensure_usb_msc();
-        if msc {
-            // Stick voltou → libera skip USB p/ nova tentativa.
-            BACKEND_SKIP.fetch_and(!SKIP_USB, Ordering::Relaxed);
-            let _ = crate::storage::remount_after_usb_msc();
+        let has_msc = crate::globals::USB_MSC
+            .try_lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false);
+        // Live USB sem MSC: multi-porta xHCI é caro — no máx. 1 probe / ~200 ticks
+        // (~11s @18Hz). Evita freeze no desktop (Bugbot / SESSION_310 HW).
+        const MSC_PROBE_MIN_TICKS: u64 = 200;
+        static LAST_MSC_PROBE_TICK: AtomicU64 = AtomicU64::new(0);
+        let now = now_tick();
+        let last = LAST_MSC_PROBE_TICK.load(Ordering::Relaxed);
+        let due = has_msc
+            || last == 0
+            || now.saturating_sub(last) >= MSC_PROBE_MIN_TICKS;
+        if due {
+            LAST_MSC_PROBE_TICK.store(now, Ordering::Relaxed);
+            let msc = try_ensure_usb_msc();
+            if msc {
+                BACKEND_SKIP.fetch_and(!SKIP_USB, Ordering::Relaxed);
+                let _ = crate::storage::remount_after_usb_msc();
+            }
         }
     } else {
         crate::slog_nano!("LOG", "ok", "ensure_persisted: skip MSC retry (TCG+virtio-blk)");
