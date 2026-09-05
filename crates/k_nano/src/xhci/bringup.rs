@@ -48,24 +48,30 @@ pub struct MscDevice {
     pub max_packet: u16,
 }
 
-/// Enumera a 1ª porta com device conectado e configura bulk MSC.
+/// Enumera portas CCS e configura bulk MSC na **primeira** que completar
+/// Address+Configure EP. Notebooks (Alienware etc.) têm webcam/BT/hub na
+/// 1ª porta — pegar só `break` no 1º CCS deixava o stick sem BOOT.LOG.
 pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
     let max_ports = {
         let g = XHCI_STATE.lock();
         g.as_ref()?.max_ports
     };
 
-    let mut found: Option<(u8, u8)> = None; // (port, speed)
+    // Coleta (port, speed); prefere SuperSpeed > High > Full.
+    let mut ccs: alloc::vec::Vec<(u8, u8)> = alloc::vec::Vec::new();
     for port in 1..=max_ports {
+        if msc_port_skipped(port) {
+            continue;
+        }
         let g = XHCI_STATE.lock();
         let Some(st) = g.as_ref() else { return None };
         let Some(addr) = portsc_addr(st, port) else { continue };
         let v = r32(st.base, addr - st.base);
-        let ccs = v & 1 != 0;
-        if !ccs {
+        if v & 1 == 0 {
             continue;
         }
         let speed = ((v >> 10) & 0xF) as u8;
+        let speed = if speed == 0 { 3 } else { speed };
         crate::slog_nano!(
             "USB",
             "msc",
@@ -74,14 +80,64 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
             speed,
             v
         );
-        found = Some((port, if speed == 0 { 3 } else { speed }));
-        break;
+        ccs.push((port, speed));
     }
-    let Some((port, speed)) = found else {
+    if ccs.is_empty() {
         crate::slog_nano!("USB", "msc", "nenhuma porta CCS — stick ausente?");
         return None;
-    };
+    }
+    ccs.sort_by(|a, b| b.1.cmp(&a.1));
 
+    for (port, speed) in ccs {
+        match try_msc_on_port(port, speed) {
+            Some(dev) => {
+                crate::slog_nano!(
+                    "USB",
+                    "ok",
+                    "MSC bringup OK port={} slot={} speed={}",
+                    dev.port,
+                    dev.slot,
+                    speed
+                );
+                return Some(dev);
+            }
+            None => {
+                mark_msc_port_skip(port);
+                crate::slog_nano!("USB", "warn", "MSC bringup FAIL port={} — tenta proxima", port);
+            }
+        }
+    }
+    crate::slog_nano!("USB", "warn", "MSC bringup FAIL em todas as portas CCS");
+    None
+}
+
+static MSC_SKIP_PORTS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+fn msc_port_skipped(port: u8) -> bool {
+    if port == 0 || port > 31 {
+        return true;
+    }
+    MSC_SKIP_PORTS.load(Ordering::Relaxed) & (1u32 << port) != 0
+}
+
+fn mark_msc_port_skip(port: u8) {
+    if port == 0 || port > 31 {
+        return;
+    }
+    MSC_SKIP_PORTS.fetch_or(1u32 << port, Ordering::Relaxed);
+}
+
+/// SysInfo/retry: limpa skips p/ nova varredura (stick atrasado / re-plug).
+pub fn clear_msc_port_skips() {
+    MSC_SKIP_PORTS.store(0, Ordering::Relaxed);
+}
+
+/// SCSI falhou nesta porta — não reincidir no mesmo CCS (webcam/BT).
+pub fn mark_msc_port_failed(port: u8) {
+    mark_msc_port_skip(port);
+}
+
+unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
     if !reset_port(port) {
         crate::slog_nano!("USB", "msc", "port {} reset FAIL", port);
         return None;
@@ -91,11 +147,11 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
     let slot = match cmd_enable_slot() {
         Some(s) if s > 0 => s,
         _ => {
-            crate::slog_nano!("USB", "msc", "Enable Slot FAIL");
+            crate::slog_nano!("USB", "msc", "Enable Slot FAIL port={}", port);
             return None;
         }
     };
-    crate::slog_nano!("USB", "msc", "Enable Slot → slot={}", slot);
+    crate::slog_nano!("USB", "msc", "Enable Slot → slot={} port={}", slot, port);
 
     let max_packet: u16 = match speed {
         1 => 64,  // Full
@@ -106,7 +162,7 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
     };
 
     if !address_device(slot, port, speed, max_packet) {
-        crate::slog_nano!("USB", "msc", "Address Device FAIL slot={}", slot);
+        crate::slog_nano!("USB", "msc", "Address Device FAIL slot={} port={}", slot, port);
         return None;
     }
     crate::slog_nano!("USB", "msc", "Address Device OK slot={} port={}", slot, port);
@@ -118,7 +174,7 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
 
     let bulk_mps: u16 = if speed >= 3 { 512 } else { 64 };
     let Some((ep_in, ep_out)) = configure_msc_endpoints_cmd(slot, port, speed, bulk_mps) else {
-        crate::slog_nano!("USB", "msc", "Configure Endpoint MSC FAIL");
+        crate::slog_nano!("USB", "msc", "Configure Endpoint MSC FAIL port={}", port);
         return None;
     };
 

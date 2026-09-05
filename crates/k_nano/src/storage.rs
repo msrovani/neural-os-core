@@ -9,9 +9,9 @@ pub mod tickv;
 pub use flash::{init_flash, ActiveFlash, FileFlash, FlashController, FLASH};
 pub use tickv::{
     backend_name, corrupt_smoke, crc32, dump_flash, encode_record, gc_smoke, get_blob,
-    install_ram_flash, is_ready, power_loss_smoke, put_blob, record_size, scan_volume,
-    smoke as tickv_smoke, status_line as tickv_status, stress_gc_smoke, with_tickv, CKPT_KEY,
-    HEADER, MAGIC, ScanResult, TickvLite, TickvStats, TICKV,
+    install_ram_flash, is_ready, power_loss_smoke, put_blob, record_size, remount_after_usb_msc,
+    scan_volume, smoke as tickv_smoke, status_line as tickv_status, stress_gc_smoke, with_tickv,
+    CKPT_KEY, HEADER, MAGIC, ScanResult, TickvLite, TickvStats, TICKV,
 };
 
 /// T-007 helper canônico — `k_nano::storage::measure_bandwidth(&mut dyn BlockDevice) -> u64` (B/s, TSC).

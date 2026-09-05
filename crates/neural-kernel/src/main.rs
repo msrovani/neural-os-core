@@ -3244,6 +3244,8 @@ pub(crate) fn kernel_boot(
     // Display: splash no 1º tick; sem urgency vira Pending eterno → rate-limit 80%
     // após 50 ticks e o compositor nunca substitui "Inicializando..." (HW real).
     registry.set_urgency("display", 220);
+    // BOOT.LOG/NSGDB no stick: SysInfo deve rodar mesmo sob pressão do compositor.
+    registry.set_urgency("sysinfo", 160);
     // ADR-0089: críticos BSP (ring0); migráveis ring≥1 com smp-runqueue + ap_pollable.
     let _ = registry.set_affinity_ring("hw_bridge", 0);
     let _ = registry.set_affinity_ring("input", 0);

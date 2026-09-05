@@ -599,6 +599,34 @@ pub fn init_flash() -> &'static str {
     }
 }
 
+/// Live USB: MSC apareceu tarde → troca backend RAM por FileFlash (`NSGDB.BIN`).
+/// Retorna true se o backend ativo é `file`.
+pub fn try_promote_usb_file_flash() -> bool {
+    if crate::globals::USB_MSC.lock().is_none() {
+        return false;
+    }
+    {
+        let g = FLASH.lock();
+        if matches!(g.as_ref(), Some(ActiveFlash::File(_))) {
+            return true;
+        }
+    }
+    let Some(ff) = FileFlash::probe() else {
+        crate::slog_nano!("TICKV", "warn", "promote FileFlash FAIL (NSGDB.BIN?)");
+        return false;
+    };
+    crate::slog_nano!(
+        "TICKV",
+        "ok",
+        "promote backend=file lba={} dev={} cap={}KB",
+        ff.first_lba(),
+        ff.dev_name(),
+        ff.size_bytes() / 1024
+    );
+    *FLASH.lock() = Some(ActiveFlash::File(ff));
+    true
+}
+
 #[cfg(test)]
 mod file_flash_tests {
     use super::*;

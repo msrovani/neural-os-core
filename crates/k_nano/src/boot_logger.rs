@@ -906,6 +906,7 @@ pub fn ensure_persisted() -> bool {
         if msc {
             // Stick voltou → libera skip USB p/ nova tentativa.
             BACKEND_SKIP.fetch_and(!SKIP_USB, Ordering::Relaxed);
+            let _ = crate::storage::remount_after_usb_msc();
         }
     } else {
         crate::slog_nano!("LOG", "ok", "ensure_persisted: skip MSC retry (TCG+virtio-blk)");

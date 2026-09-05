@@ -35,69 +35,81 @@ impl UsbMassStorage {
             }
         }
 
-        let msc_dev = match xhci::bringup_boot_msc() {
-            Some(d) => d,
-            None => {
-                crate::slog_nano!("USB", "msc", "bringup_boot_msc FAIL — sem stick/enum");
-                return None;
-            }
-        };
+        // Até 8 portas CCS: bringup falha em webcam/BT → skip porta → próxima.
+        for attempt in 0..8u8 {
+            let msc_dev = match xhci::bringup_boot_msc() {
+                Some(d) => d,
+                None => {
+                    if attempt == 0 {
+                        crate::slog_nano!("USB", "msc", "bringup_boot_msc FAIL — sem stick/enum");
+                    }
+                    return None;
+                }
+            };
 
-        crate::slog_nano!(
-            "USB",
-            "msc",
-            "bringup OK slot={} port={} speed={} mps={}",
-            msc_dev.slot,
-            msc_dev.port,
-            msc_dev.speed,
-            msc_dev.max_packet
-        );
-
-        let mut msc = UsbMassStorage {
-            slot: msc_dev.slot,
-            tag: 1,
-            max_lba: 0,
-            sector_size: 512,
-            bulk_in: msc_dev.ep_in,
-            bulk_out: msc_dev.ep_out,
-            model: [0u8; 36],
-        };
-
-        // Flash drives: TUR + sense antes de INQUIRY (Unit Attention).
-        let _ = msc.scsi_test_unit_ready();
-        let _ = msc.scsi_request_sense();
-        let _ = msc.scsi_test_unit_ready();
-
-        let mut scsi_ok = false;
-        if let Some(inq) = msc.scsi_inquiry() {
-            msc.model = inq;
-            let vendor = core::str::from_utf8(&inq[8..16]).unwrap_or("?");
-            let product = core::str::from_utf8(&inq[16..32]).unwrap_or("?");
-            crate::slog_nano!("USB", "msc", "{} {}", vendor.trim(), product.trim());
-            scsi_ok = true;
-        }
-
-        if let Some((lba, blk_sz)) = msc.scsi_read_capacity() {
-            msc.max_lba = lba;
-            msc.sector_size = if blk_sz == 0 { 512 } else { blk_sz };
-            let gb = (lba as u128 * msc.sector_size as u128) / (1024 * 1024 * 1024);
             crate::slog_nano!(
                 "USB",
                 "msc",
-                "Capacidade: {} setores x {}B = {}GB",
-                lba,
-                msc.sector_size,
-                gb
+                "bringup OK slot={} port={} speed={} mps={} try={}",
+                msc_dev.slot,
+                msc_dev.port,
+                msc_dev.speed,
+                msc_dev.max_packet,
+                attempt
             );
-            scsi_ok = true;
-        }
 
-        if !scsi_ok {
-            crate::slog_nano!("USB", "msc", "SCSI falhou apos bringup — MSC ignorado");
-            return None;
-        }
+            let mut msc = UsbMassStorage {
+                slot: msc_dev.slot,
+                tag: 1,
+                max_lba: 0,
+                sector_size: 512,
+                bulk_in: msc_dev.ep_in,
+                bulk_out: msc_dev.ep_out,
+                model: [0u8; 36],
+            };
 
-        Some(msc)
+            // Flash drives: TUR + sense antes de INQUIRY (Unit Attention).
+            let _ = msc.scsi_test_unit_ready();
+            let _ = msc.scsi_request_sense();
+            let _ = msc.scsi_test_unit_ready();
+
+            let mut scsi_ok = false;
+            if let Some(inq) = msc.scsi_inquiry() {
+                msc.model = inq;
+                let vendor = core::str::from_utf8(&inq[8..16]).unwrap_or("?");
+                let product = core::str::from_utf8(&inq[16..32]).unwrap_or("?");
+                crate::slog_nano!("USB", "msc", "{} {}", vendor.trim(), product.trim());
+                scsi_ok = true;
+            }
+
+            if let Some((lba, blk_sz)) = msc.scsi_read_capacity() {
+                msc.max_lba = lba;
+                msc.sector_size = if blk_sz == 0 { 512 } else { blk_sz };
+                let gb = (lba as u128 * msc.sector_size as u128) / (1024 * 1024 * 1024);
+                crate::slog_nano!(
+                    "USB",
+                    "msc",
+                    "Capacidade: {} setores x {}B = {}GB",
+                    lba,
+                    msc.sector_size,
+                    gb
+                );
+                scsi_ok = true;
+            }
+
+            if scsi_ok {
+                return Some(msc);
+            }
+            crate::slog_nano!(
+                "USB",
+                "warn",
+                "SCSI falhou port={} — skip e tenta outra porta",
+                msc_dev.port
+            );
+            xhci::mark_msc_port_failed(msc_dev.port);
+        }
+        crate::slog_nano!("USB", "msc", "SCSI falhou em todas as portas — MSC ignorado");
+        None
     }
 
     unsafe fn bot_transfer(&mut self, cbw_data: &[u8], dir_in: bool, data_buf: &mut [u8]) -> bool {

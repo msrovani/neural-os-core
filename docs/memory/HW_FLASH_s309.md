@@ -32,7 +32,17 @@
 ### Fix 2026-09-03/04 — hang `BOOT: self-tests...`
 Causa: `boot_ckpt` → `try_flush_ramlog` → flush falha → `heal` re-probe xHCI/MSC = hang.
 Fix: live USB sem MSC não flush/heal; `storage_available` respeita SKIP_*; FB `BOOT: K33 …` por passo; trainer skip no live USB.
-Regrave `usb_hw.img`.
+
+### Run Alienware 2026-09-04 (Core 7 240H / 16c / RTX 3050)
+- Operador: chegou **desktop UI** → **freeze**.
+- Stick `E:\BOOT.LOG` = **placeholder**; `E:\NSGDB.BIN` = **zeros** (sem MSC → sem persist).
+- Relatório: `logs/hw_alienware_s310/REPORT.md`.
+- **OK (imagem pré-pull s310 / ~`8573fa0`)**: boot metal até **desktop/UI** no Alienware 240H.
+- Reteste com HEAD atual + fix MSC multi-porta (webcam≠stick) para gravar BOOT.LOG/NSGDB.
+
+### Fix 2026-09-04 — BOOT.LOG/NSGDB no pendrive (urgente)
+Causa: `bringup_boot_msc` pegava só a **1ª porta CCS** (webcam/BT) → stick sem MSC.
+Fix: varrer todas as portas CCS (SS>HS); SCSI fail → skip porta; SysInfo promove FileFlash/NSGDB após FAT_READY.
 
 **Não fecha só com stick:** WiFi RF sem rádio, GPU sem silicon, TLS PKI, EEVDF, gate v2.0.0 sem OK maintainer + residual defer.
 

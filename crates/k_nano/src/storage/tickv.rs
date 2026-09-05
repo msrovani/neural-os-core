@@ -706,6 +706,34 @@ pub fn is_ready() -> bool {
     TICKV.lock().as_ref().map(|k| k.is_ready()).unwrap_or(false)
 }
 
+/// Após MSC: promove FileFlash e remonta TickvLite (NSGDB no stick).
+pub fn remount_after_usb_msc() -> bool {
+    if !crate::storage::flash::try_promote_usb_file_flash() {
+        return false;
+    }
+    let mut g = TICKV.lock();
+    let kv = g.get_or_insert_with(TickvLite::new);
+    kv.ready = false;
+    kv.index.clear();
+    kv.append_off = 0;
+    match kv.mount() {
+        Ok(()) => {
+            crate::slog_nano!(
+                "TICKV",
+                "ok",
+                "remount USB FileFlash backend={} keys={}",
+                kv.backend(),
+                kv.live_keys()
+            );
+            true
+        }
+        Err(e) => {
+            crate::slog_nano!("TICKV", "warn", "remount USB FAIL {}", e);
+            false
+        }
+    }
+}
+
 pub fn backend_name() -> &'static str {
     let g = TICKV.lock();
     match g.as_ref().map(|k| k.backend) {
