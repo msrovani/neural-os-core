@@ -28,6 +28,41 @@ unsafe impl Send for UsbMassStorage {}
 
 impl UsbMassStorage {
     pub unsafe fn probe() -> Option<Self> {
+        let n = xhci::xhci_controller_count();
+        let n = if n == 0 { 1 } else { n };
+        for ci in 0..n {
+            // Rebind se ainda não há state, ou se vamos para o próximo HC.
+            let need_bind = xhci::XHCI_STATE.lock().is_none()
+                || (ci > 0 && xhci::xhci_selected_index() != ci);
+            if need_bind {
+                if !xhci::init_xhci_select(ci) {
+                    continue;
+                }
+            }
+            xhci::clear_msc_port_skips();
+            crate::slog_nano!(
+                "USB",
+                "msc",
+                "probe MSC em xHCI[{}/{}]",
+                ci,
+                n
+            );
+            if let Some(msc) = Self::probe_current_hc() {
+                return Some(msc);
+            }
+            crate::slog_nano!(
+                "USB",
+                "warn",
+                "MSC FAIL xHCI[{}] — tenta próximo controller",
+                ci
+            );
+        }
+        crate::slog_nano!("USB", "warn", "MSC FAIL em todos os xHCI");
+        None
+    }
+
+    /// Varre portas CCS do HC atualmente bound (até 8 tentativas SCSI).
+    unsafe fn probe_current_hc() -> Option<Self> {
         {
             let state = xhci::XHCI_STATE.lock();
             if state.is_none() {
@@ -35,7 +70,6 @@ impl UsbMassStorage {
             }
         }
 
-        // Até 8 portas CCS: bringup falha em webcam/BT → skip porta → próxima.
         for attempt in 0..8u8 {
             let msc_dev = match xhci::bringup_boot_msc() {
                 Some(d) => d,
@@ -50,12 +84,14 @@ impl UsbMassStorage {
             crate::slog_nano!(
                 "USB",
                 "msc",
-                "bringup OK slot={} port={} speed={} mps={} try={}",
+                "bringup OK slot={} port={} speed={} mps={} try={} dci_in={} dci_out={}",
                 msc_dev.slot,
                 msc_dev.port,
                 msc_dev.speed,
                 msc_dev.max_packet,
-                attempt
+                attempt,
+                msc_dev.ep_in.dci,
+                msc_dev.ep_out.dci
             );
 
             let mut msc = UsbMassStorage {
@@ -110,7 +146,7 @@ impl UsbMassStorage {
             unsafe { xhci::disable_slot(msc.slot) };
             xhci::mark_msc_port_failed(msc_dev.port);
         }
-        crate::slog_nano!("USB", "msc", "SCSI falhou em todas as portas — MSC ignorado");
+        crate::slog_nano!("USB", "msc", "SCSI falhou em todas as portas deste HC");
         None
     }
 

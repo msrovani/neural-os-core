@@ -168,13 +168,55 @@ unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
     }
     crate::slog_nano!("USB", "msc", "Address Device OK slot={} port={}", slot, port);
 
-    // SET_CONFIGURATION(1) via EP0 — necessário antes do BOT na maioria dos sticks.
-    if !ep0_set_configuration(slot, max_packet, 1) {
+    // SET_CONFIGURATION + Configure EP a partir do config descriptor (não EP1 fixo).
+    let mut cfg = [0u8; 512];
+    let msc_eps = if ep0_control_in(slot, max_packet, 0x80, 0x06, 0x0200, 0, &mut cfg) {
+        parse_msc_config(&cfg)
+    } else {
+        None
+    };
+    let (cfg_val, ep_in_addr, ep_out_addr, bulk_mps) = match msc_eps {
+        Some(info) => {
+            crate::slog_nano!(
+                "USB",
+                "ok",
+                "MSC desc cfg={} iface={} ep_in={:#x} ep_out={:#x} mps={}",
+                info.config_value,
+                info.iface,
+                info.ep_in,
+                info.ep_out,
+                info.max_packet
+            );
+            (
+                info.config_value.max(1),
+                info.ep_in,
+                info.ep_out,
+                if info.max_packet >= 64 {
+                    info.max_packet
+                } else if speed >= 3 {
+                    512
+                } else {
+                    64
+                },
+            )
+        }
+        None => {
+            crate::slog_nano!(
+                "USB",
+                "warn",
+                "MSC config desc ausente/parse fail — fallback EP1 IN/OUT"
+            );
+            (1u8, 0x81u8, 0x01u8, if speed >= 3 { 512u16 } else { 64u16 })
+        }
+    };
+
+    if !ep0_set_configuration(slot, max_packet, cfg_val) {
         crate::slog_nano!("USB", "msc", "SET_CONFIGURATION warn — tenta Configure EP mesmo assim");
     }
 
-    let bulk_mps: u16 = if speed >= 3 { 512 } else { 64 };
-    let Some((ep_in, ep_out)) = configure_msc_endpoints_cmd(slot, port, speed, bulk_mps) else {
+    let Some((ep_in, ep_out)) =
+        configure_msc_endpoints_cmd(slot, port, speed, bulk_mps, ep_in_addr, ep_out_addr)
+    else {
         crate::slog_nano!("USB", "msc", "Configure Endpoint MSC FAIL port={}", port);
         let _ = cmd_disable_slot(slot);
         return None;
@@ -969,7 +1011,22 @@ unsafe fn configure_msc_endpoints_cmd(
     port: u8,
     speed: u8,
     max_packet: u16,
+    ep_in_addr: u8,
+    ep_out_addr: u8,
 ) -> Option<(BulkEndpoint, BulkEndpoint)> {
+    let ep_in_num = (ep_in_addr & 0x0F) as u32;
+    let ep_out_num = (ep_out_addr & 0x0F) as u32;
+    if ep_in_num == 0 || ep_out_num == 0 {
+        return None;
+    }
+    // DCI: OUT = 2*n, IN = 2*n+1 (xHCI 4.5.1)
+    let dci_out = ep_out_num * 2;
+    let dci_in = ep_in_num * 2 + 1;
+    let max_dci = dci_in.max(dci_out);
+    if max_dci > 31 {
+        return None;
+    }
+
     let tr_in = alloc_phys(1)?;
     let tr_out = alloc_phys(1)?;
     core::ptr::write_bytes(tr_in.1, 0, 4096);
@@ -979,26 +1036,33 @@ unsafe fn configure_msc_endpoints_cmd(
     core::ptr::write_bytes(ctx.1, 0, 8192);
 
     let icc = ctx.1 as *mut u32;
-    // Add EP1 OUT (DCI2) + EP1 IN (DCI3); also update slot (A0)
-    icc.add(1).write_volatile(0xD); // bits 0,2,3
+    // A0 (slot) + A(dci_out) + A(dci_in)
+    let add = 1u32 | (1u32 << dci_out) | (1u32 << dci_in);
+    icc.add(1).write_volatile(add);
 
     let slot_ctx = ctx.1.add(0x20) as *mut u32;
-    slot_ctx.add(0).write_volatile(((3u32) << 27) | ((speed as u32) << 20));
+    slot_ctx
+        .add(0)
+        .write_volatile((max_dci << 27) | ((speed as u32) << 20));
     slot_ctx.add(1).write_volatile((port as u32) << 16);
 
-    // EP1 OUT @ DCI2 → offset 0x20 + 2*0x20 = 0x60
-    let ep_out = ctx.1.add(0x60) as *mut u32;
+    // EP OUT context
+    let ep_out = ctx.1.add(0x20 + (dci_out as usize) * 0x20) as *mut u32;
     ep_out.add(0).write_volatile(0);
     // Bulk OUT type=2
-    ep_out.add(1).write_volatile((3u32 << 1) | (2u32 << 3) | ((max_packet as u32) << 16));
+    ep_out
+        .add(1)
+        .write_volatile((3u32 << 1) | (2u32 << 3) | ((max_packet as u32) << 16));
     ep_out.add(2).write_volatile(tr_out.0 as u32 | 1);
     ep_out.add(3).write_volatile((tr_out.0 >> 32) as u32);
 
-    // EP1 IN @ DCI3 → offset 0x80
-    let ep_in = ctx.1.add(0x80) as *mut u32;
+    // EP IN context
+    let ep_in = ctx.1.add(0x20 + (dci_in as usize) * 0x20) as *mut u32;
     ep_in.add(0).write_volatile(0);
     // Bulk IN type=6
-    ep_in.add(1).write_volatile((3u32 << 1) | (6u32 << 3) | ((max_packet as u32) << 16));
+    ep_in
+        .add(1)
+        .write_volatile((3u32 << 1) | (6u32 << 3) | ((max_packet as u32) << 16));
     ep_in.add(2).write_volatile(tr_in.0 as u32 | 1);
     ep_in.add(3).write_volatile((tr_in.0 >> 32) as u32);
 
@@ -1013,6 +1077,7 @@ unsafe fn configure_msc_endpoints_cmd(
             enqueue_idx: 0,
             cycle: true,
             max_entries: 256,
+            dci: dci_in as u8,
         },
         BulkEndpoint {
             trb_pa: tr_out.0,
@@ -1020,8 +1085,97 @@ unsafe fn configure_msc_endpoints_cmd(
             enqueue_idx: 0,
             cycle: true,
             max_entries: 256,
+            dci: dci_out as u8,
         },
     ))
+}
+
+/// MSC BOT: interface class 0x08 + bulk IN/OUT (SESSION_170 residual fechado).
+struct MscEpInfo {
+    config_value: u8,
+    iface: u8,
+    ep_in: u8,
+    ep_out: u8,
+    max_packet: u16,
+}
+
+fn parse_msc_config(cfg: &[u8]) -> Option<MscEpInfo> {
+    if cfg.len() < 9 || cfg[1] != 0x02 {
+        return None;
+    }
+    let config_value = cfg[5];
+    let total = u16::from_le_bytes([cfg[2], cfg[3]]) as usize;
+    let end = total.min(cfg.len());
+    let mut iface = 0u8;
+    let mut in_msc = false;
+    let mut ep_in = 0u8;
+    let mut ep_out = 0u8;
+    let mut max_packet = 0u16;
+    let mut i = 0usize;
+    while i + 2 <= end {
+        let blen = cfg[i] as usize;
+        if blen < 2 || i + blen > end {
+            break;
+        }
+        let dtype = cfg[i + 1];
+        match dtype {
+            0x04 if blen >= 9 => {
+                // Novo INTERFACE — se já temos par bulk MSC, fecha.
+                if in_msc && ep_in != 0 && ep_out != 0 {
+                    return Some(MscEpInfo {
+                        config_value,
+                        iface,
+                        ep_in,
+                        ep_out,
+                        max_packet,
+                    });
+                }
+                iface = cfg[i + 2];
+                let if_class = cfg[i + 5];
+                let if_sub = cfg[i + 6];
+                let if_proto = cfg[i + 7];
+                // Mass Storage; prefer BOT (0x50) / SCSI (0x06), aceita class 08 genérico.
+                in_msc = if_class == 0x08
+                    && (if_sub == 0x06 || if_sub == 0x05 || if_sub == 0x01 || if_sub == 0x00)
+                    && (if_proto == 0x50 || if_proto == 0x00 || if_proto == 0x01 || if_proto == 0x62);
+                if if_class == 0x08 && !in_msc {
+                    // class 08 com sub/proto atípicos — ainda tenta se tiver bulk.
+                    in_msc = true;
+                }
+                ep_in = 0;
+                ep_out = 0;
+                max_packet = 0;
+                let _ = if_proto;
+            }
+            0x05 if blen >= 7 && in_msc => {
+                let addr = cfg[i + 2];
+                let attr = cfg[i + 3];
+                if attr & 0x03 == 0x02 {
+                    // Bulk
+                    let maxp = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]);
+                    max_packet = max_packet.max(maxp);
+                    if addr & 0x80 != 0 {
+                        ep_in = addr;
+                    } else {
+                        ep_out = addr;
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += blen;
+    }
+    if in_msc && ep_in != 0 && ep_out != 0 {
+        Some(MscEpInfo {
+            config_value,
+            iface,
+            ep_in,
+            ep_out,
+            max_packet,
+        })
+    } else {
+        None
+    }
 }
 
 /// SET_CONFIGURATION via 3-stage control transfer no EP0.
@@ -1887,4 +2041,83 @@ unsafe fn configure_uvc_on_slot(
         format: info.format,
         max_packet: info.max_packet,
     })
+}
+
+#[cfg(test)]
+mod msc_desc_tests {
+    use super::parse_msc_config;
+
+    #[test]
+    fn parse_msc_bot_ep1() {
+        // Config + Interface MSC BOT + EP1 OUT + EP1 IN
+        let mut cfg = [0u8; 64];
+        cfg[0] = 9;
+        cfg[1] = 0x02;
+        cfg[2] = 39;
+        cfg[3] = 0; // wTotalLength
+        cfg[4] = 1; // bNumInterfaces
+        cfg[5] = 1; // bConfigurationValue
+        // Interface
+        cfg[9] = 9;
+        cfg[10] = 0x04;
+        cfg[11] = 0; // bInterfaceNumber
+        cfg[12] = 0; // alt
+        cfg[13] = 2; // endpoints
+        cfg[14] = 0x08; // Mass Storage
+        cfg[15] = 0x06; // SCSI
+        cfg[16] = 0x50; // BOT
+        // EP OUT 0x01 bulk mps=512
+        cfg[18] = 7;
+        cfg[19] = 0x05;
+        cfg[20] = 0x01;
+        cfg[21] = 0x02;
+        cfg[22] = 0x00;
+        cfg[23] = 0x02; // 512
+        cfg[24] = 0;
+        // EP IN 0x81 bulk
+        cfg[25] = 7;
+        cfg[26] = 0x05;
+        cfg[27] = 0x81;
+        cfg[28] = 0x02;
+        cfg[29] = 0x00;
+        cfg[30] = 0x02;
+        cfg[31] = 0;
+        let info = parse_msc_config(&cfg).expect("msc");
+        assert_eq!(info.config_value, 1);
+        assert_eq!(info.ep_out, 0x01);
+        assert_eq!(info.ep_in, 0x81);
+        assert_eq!(info.max_packet, 512);
+    }
+
+    #[test]
+    fn parse_msc_bot_ep2_ep3() {
+        let mut cfg = [0u8; 64];
+        cfg[0] = 9;
+        cfg[1] = 0x02;
+        cfg[2] = 39;
+        cfg[3] = 0;
+        cfg[5] = 1;
+        cfg[9] = 9;
+        cfg[10] = 0x04;
+        cfg[11] = 0;
+        cfg[13] = 2;
+        cfg[14] = 0x08;
+        cfg[15] = 0x06;
+        cfg[16] = 0x50;
+        cfg[18] = 7;
+        cfg[19] = 0x05;
+        cfg[20] = 0x02; // EP2 OUT
+        cfg[21] = 0x02;
+        cfg[22] = 64;
+        cfg[23] = 0;
+        cfg[25] = 7;
+        cfg[26] = 0x05;
+        cfg[27] = 0x83; // EP3 IN
+        cfg[28] = 0x02;
+        cfg[29] = 64;
+        cfg[30] = 0;
+        let info = parse_msc_config(&cfg).expect("msc ep2/3");
+        assert_eq!(info.ep_out, 0x02);
+        assert_eq!(info.ep_in, 0x83);
+    }
 }

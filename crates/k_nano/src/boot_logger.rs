@@ -279,10 +279,17 @@ fn fat32_parts(dev: &mut dyn BlockDevice) -> Vec<crate::fat32::Partition> {
 /// SESSION_269: retorna `OverwriteResult` tipado p/ self-heal (skip vs backoff).
 unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> OverwriteResult {
     let want = encode_83(BOOT_LOG_NAME);
-    let parts = fat32_parts(dev);
+    let mut parts = fat32_parts(dev);
     if parts.is_empty() {
         return OverwriteResult::NoFatParts;
     }
+    // Prefere volume de dados (0x0C/0x0B) sobre ESP (0xEF) — BOOT.LOG vive no NEURAL-OS.
+    parts.sort_by_key(|p| match p.type_code {
+        0x0C | 0x0B | 0x1C => 0u8,
+        0x73 => 1u8,
+        0xEF => 2u8,
+        _ => 3u8,
+    });
     let mut saw_fat = false;
     let mut saw_missing = false;
     let mut saw_io = false;

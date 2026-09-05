@@ -52,8 +52,47 @@ fn hid_to_scancode(usage: u8) -> Option<u8> {
     }
 }
 
-/// Global xHCI driver state — inicializado uma vez no boot
+/// Global xHCI driver state — rebindável (multi-HC Alienware / SESSION_311).
 pub static XHCI_STATE: spin::Mutex<Option<XhciState>> = spin::Mutex::new(None);
+
+/// Índice do xHCI PCI atualmente bound (`init_xhci_select`).
+static XHCI_SELECT: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+/// Controllers USB3 xHCI (`class=0x0C subclass=0x03 prog_if=0x30`).
+/// Sem `prog_if` filtro o 1º HCI pode ser EHCI → MSC nunca sobe (Alienware).
+fn xhci_pci_candidates() -> alloc::vec::Vec<crate::pci::PciDevice> {
+    let all = unsafe { crate::pci::scan_pci() };
+    let mut v: alloc::vec::Vec<_> = all
+        .iter()
+        .copied()
+        .filter(|d| d.class == 0x0C && d.subclass == 0x03 && d.prog_if == 0x30)
+        .collect();
+    if v.is_empty() {
+        v = all
+            .into_iter()
+            .filter(|d| d.class == 0x0C && d.subclass == 0x03)
+            .collect();
+        if !v.is_empty() {
+            crate::slog_nano!(
+                "USB",
+                "warn",
+                "xHCI prog_if=0x30 ausente — fallback {} HCI 0x0C/0x03 (risco EHCI)",
+                v.len()
+            );
+        }
+    }
+    v
+}
+
+/// Quantos xHCI PCI o metal expõe (após filtro).
+pub fn xhci_controller_count() -> usize {
+    xhci_pci_candidates().len()
+}
+
+pub fn xhci_selected_index() -> usize {
+    XHCI_SELECT.load(Ordering::Relaxed)
+}
 
 // ── Isochronous (USB Audio) ────────────────────────────────────────────────
 // ADR-0045 UAC: TRBs isócronos (Type 5, NÃO 8 — o work order dizia 8; o layout
@@ -197,173 +236,231 @@ pub struct XhciState {
     pub(crate) uac_ep0_tr_va: u64,
 }
 
+/// Bind do 1º xHCI (idempotente se já up). Preferir `init_xhci_select` no probe MSC.
 pub unsafe fn init_xhci() {
     if XHCI_STATE.lock().is_some() {
-        return; // already up (early BOOT.LOG path)
-    }
-    let devs = crate::pci::scan_pci();
-    for d in &devs {
-        if d.class != 0x0C || d.subclass != 0x03 { continue; }
-        let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
-        let mmio = (d.bar0 & !0xF) as u64;
-        // xHCI BAR cobre Cap+Op+Runtime+Doorbell (~64KB). Mapeia TODAS as páginas
-        // UC com map_page_uc (cria o mapeamento). set_page_uc só seta flags em
-        // mapeamento EXISTENTE — sem map, o 1º r32() dá #PF (exposto sob TCG;
-        // WHPX mascarava. Ver SESSION_237).
-        for page in 0..16 {
-            crate::apic::map_page_uc(mmio + page * 0x1000, pmoff);
-        }
-        let base = mmio + pmoff;
-        let capl = r32(base, 0) as u64 & 0xFF;
-        let op = base + capl;
-
-        // Cap space (NÃO Operational): HCSPARAMS1, DBOFF, RTSOFF
-        let hcs1 = r32(base, 0x04);
-        let max_slots = (hcs1 & 0xFF) as u8;
-        let max_ports = ((hcs1 >> 24) & 0xFF) as u8;
-        let db_off = (r32(base, 0x14) & !0x3) as u64;
-        let rtsoff = (r32(base, 0x18) & !0x1F) as u64;
-
-        // Halt controller
-        w32(op, 0, r32(op, 0) & !0x01);
-        for _ in 0..100_000 {
-            if r32(op, 0x04) & 0x01 != 0 { break; } // HCH
-            core::hint::spin_loop();
-        }
-
-        // HCRST
-        w32(op, 0, r32(op, 0) | 0x02);
-        for _ in 0..100_000 {
-            if r32(op, 0) & 0x02 == 0 { break; }
-            core::hint::spin_loop();
-        }
-
-        let dcbaa = match alloc_phys(1) {
-            Some(p) => p,
-            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (DCBAA)"); continue; }
-        };
-        core::ptr::write_bytes(dcbaa.1, 0, 4096);
-        // DCBAAP @ Op+0x30
-        w32(op, 0x30, dcbaa.0 as u32);
-        w32(op, 0x34, (dcbaa.0 >> 32) as u32);
-
-        // Command ring @ Op+0x18 (CRCR)
-        let cmd = match alloc_phys(1) {
-            Some(p) => p,
-            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (CRCR)"); continue; }
-        };
-        core::ptr::write_bytes(cmd.1, 0, 4096);
-        w32(op, 0x18, cmd.0 as u32 | 0x1); // RCS=1
-        w32(op, 0x1C, (cmd.0 >> 32) as u32);
-
-        // Event ring + ERST @ Runtime (Cap+RTSOFF)
-        let erst_mem = match alloc_phys(1) {
-            Some(p) => p,
-            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (ERST)"); continue; }
-        };
-        let er = match alloc_phys(1) {
-            Some(p) => p,
-            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (Event Ring)"); continue; }
-        };
-        core::ptr::write_bytes(erst_mem.1, 0, 4096);
-        core::ptr::write_bytes(er.1, 0, 4096);
-        // ERST entry: addr + size (TRBs)
-        let erst = erst_mem.1 as *mut u64;
-        erst.write_volatile(er.0);
-        erst.add(1).write_volatile(256u64);
-        let rt = base + rtsoff;
-        w32(rt, 0x08, 1); // ERSTSZ (Interrupter 0)
-        w32(rt, 0x10, erst_mem.0 as u32); // ERSTBA (Interrupter 0)
-        w32(rt, 0x14, (erst_mem.0 >> 32) as u32);
-        w32(rt, 0x18, er.0 as u32); // ERDP (Interrupter 0)
-        w32(rt, 0x1C, (er.0 >> 32) as u32);
-
-        // CONFIG MaxSlotsEn
-        let slots = if max_slots == 0 { 8 } else { max_slots.min(64) };
-        w32(op, 0x38, slots as u32);
-
-        // Run
-        w32(op, 0, r32(op, 0) | 0x01);
-        for _ in 0..100_000 {
-            if r32(op, 0x04) & 0x01 == 0 { break; }
-            core::hint::spin_loop();
-        }
-
-        let tr = match alloc_phys(1) {
-            Some(p) => p,
-            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (TR)"); continue; }
-        };
-        core::ptr::write_bytes(tr.1, 0, 4096);
-        let report = match alloc_phys(1) {
-            Some(p) => p,
-            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (report)"); continue; }
-        };
-        core::ptr::write_bytes(report.1, 0, 4096);
-
-        *XHCI_STATE.lock() = Some(XhciState {
-            op, capl, base, pmoff,
-            dcbaa_va: dcbaa.0 + pmoff,
-            er_va: er.0 + pmoff,
-            slot: 1,
-            db_off,
-            tr_va: tr.0 + pmoff,
-            report_va: report.0 + pmoff,
-            last_report: [0; 8],
-            cmd_ring_pa: cmd.0,
-            cmd_ring_va: cmd.0 + pmoff,
-            cmd_enqueue: 0,
-            cmd_cycle: true,
-            max_slots: slots,
-            max_ports: if max_ports == 0 { 8 } else { max_ports },
-            er_dequeue: 0,
-            msc_port: 0,
-            hid_ready: false,
-            hid_slot: 0,
-            hid_port: 0,
-            hid_tr_va: 0,
-            hid_report_va: 0,
-            hid_last_usage: 0,
-            mouse_ready: false,
-            mouse_slot: 0,
-            mouse_port: 0,
-            mouse_tr_va: 0,
-            mouse_report_va: 0,
-            mouse_last: [0; 4],
-            uac_ready: false,
-            uac_slot: 0,
-            uac_port: 0,
-            uac_speed: 0,
-            uac_vid: 0,
-            uac_did: 0,
-            uac_capture_ep: 0,
-            uac_playback_ep: 0,
-            uac_sample_rate: 0,
-            uac_cfg: [0; 512],
-            uac_cfg_len: 0,
-            uvc_ready: false,
-            uvc_slot: 0,
-            uvc_port: 0,
-            uvc_vid: 0,
-            uvc_did: 0,
-            uvc_ep: 0,
-            uvc_width: 0,
-            uvc_height: 0,
-            uvc_fps: 0,
-            uvc_format: 1,
-            uvc_max_packet: 0,
-            uac_ep0_tr_va: 0,
-        });
-        crate::slog_nano!(
-            "USB",
-            "xhci",
-            "Inicializado. slots={} ports={} db_off={:#x} rtsoff={:#x}",
-            slots,
-            max_ports,
-            db_off,
-            rtsoff
-        );
         return;
     }
+    let _ = init_xhci_select(0);
+}
+
+/// Soft-unbind + bind do xHCI PCI no índice `index` (0-based).
+/// Páginas do HC anterior ficam leaked (boot-only; poucos frames).
+pub unsafe fn init_xhci_select(index: usize) -> bool {
+    let cands = xhci_pci_candidates();
+    if cands.is_empty() {
+        crate::slog_nano!("USB", "warn", "nenhum USB HCI PCI 0x0C/0x03");
+        *XHCI_STATE.lock() = None;
+        return false;
+    }
+    if index >= cands.len() {
+        return false;
+    }
+    *XHCI_STATE.lock() = None;
+    clear_msc_port_skips();
+    let d = cands[index];
+    let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+    let mmio = (d.bar0 & !0xF) as u64;
+    // xHCI BAR cobre Cap+Op+Runtime+Doorbell (~64KB). Mapeia TODAS as páginas
+    // UC com map_page_uc (cria o mapeamento). set_page_uc só seta flags em
+    // mapeamento EXISTENTE — sem map, o 1º r32() dá #PF (exposto sob TCG;
+    // WHPX mascarava. Ver SESSION_237).
+    for page in 0..16 {
+        crate::apic::map_page_uc(mmio + page * 0x1000, pmoff);
+    }
+    let base = mmio + pmoff;
+    let capl = r32(base, 0) as u64 & 0xFF;
+    if capl < 0x20 || capl > 0x100 {
+        crate::slog_nano!(
+            "USB",
+            "warn",
+            "xHCI[{}] {:02x}:{:02x}.{} prog_if={:#x} CAPLENGTH={:#x} suspeito — skip",
+            index,
+            d.bus,
+            d.device,
+            d.function,
+            d.prog_if,
+            capl
+        );
+        return false;
+    }
+    let op = base + capl;
+
+    let hcs1 = r32(base, 0x04);
+    let max_slots = (hcs1 & 0xFF) as u8;
+    let max_ports = ((hcs1 >> 24) & 0xFF) as u8;
+    let db_off = (r32(base, 0x14) & !0x3) as u64;
+    let rtsoff = (r32(base, 0x18) & !0x1F) as u64;
+
+    w32(op, 0, r32(op, 0) & !0x01);
+    for _ in 0..100_000 {
+        if r32(op, 0x04) & 0x01 != 0 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+
+    w32(op, 0, r32(op, 0) | 0x02);
+    for _ in 0..100_000 {
+        if r32(op, 0) & 0x02 == 0 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+
+    let dcbaa = match alloc_phys(1) {
+        Some(p) => p,
+        None => {
+            crate::slog_nano!("USB", "xhci", "alloc_phys falhou (DCBAA)");
+            return false;
+        }
+    };
+    core::ptr::write_bytes(dcbaa.1, 0, 4096);
+    w32(op, 0x30, dcbaa.0 as u32);
+    w32(op, 0x34, (dcbaa.0 >> 32) as u32);
+
+    let cmd = match alloc_phys(1) {
+        Some(p) => p,
+        None => {
+            crate::slog_nano!("USB", "xhci", "alloc_phys falhou (CRCR)");
+            return false;
+        }
+    };
+    core::ptr::write_bytes(cmd.1, 0, 4096);
+    w32(op, 0x18, cmd.0 as u32 | 0x1);
+    w32(op, 0x1C, (cmd.0 >> 32) as u32);
+
+    let erst_mem = match alloc_phys(1) {
+        Some(p) => p,
+        None => {
+            crate::slog_nano!("USB", "xhci", "alloc_phys falhou (ERST)");
+            return false;
+        }
+    };
+    let er = match alloc_phys(1) {
+        Some(p) => p,
+        None => {
+            crate::slog_nano!("USB", "xhci", "alloc_phys falhou (Event Ring)");
+            return false;
+        }
+    };
+    core::ptr::write_bytes(erst_mem.1, 0, 4096);
+    core::ptr::write_bytes(er.1, 0, 4096);
+    let erst = erst_mem.1 as *mut u64;
+    erst.write_volatile(er.0);
+    erst.add(1).write_volatile(256u64);
+    let rt = base + rtsoff;
+    w32(rt, 0x08, 1);
+    w32(rt, 0x10, erst_mem.0 as u32);
+    w32(rt, 0x14, (erst_mem.0 >> 32) as u32);
+    w32(rt, 0x18, er.0 as u32);
+    w32(rt, 0x1C, (er.0 >> 32) as u32);
+
+    let slots = if max_slots == 0 {
+        8
+    } else {
+        max_slots.min(64)
+    };
+    w32(op, 0x38, slots as u32);
+
+    w32(op, 0, r32(op, 0) | 0x01);
+    for _ in 0..100_000 {
+        if r32(op, 0x04) & 0x01 == 0 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+
+    let tr = match alloc_phys(1) {
+        Some(p) => p,
+        None => {
+            crate::slog_nano!("USB", "xhci", "alloc_phys falhou (TR)");
+            return false;
+        }
+    };
+    core::ptr::write_bytes(tr.1, 0, 4096);
+    let report = match alloc_phys(1) {
+        Some(p) => p,
+        None => {
+            crate::slog_nano!("USB", "xhci", "alloc_phys falhou (report)");
+            return false;
+        }
+    };
+    core::ptr::write_bytes(report.1, 0, 4096);
+
+    *XHCI_STATE.lock() = Some(XhciState {
+        op,
+        capl,
+        base,
+        pmoff,
+        dcbaa_va: dcbaa.0 + pmoff,
+        er_va: er.0 + pmoff,
+        slot: 1,
+        db_off,
+        tr_va: tr.0 + pmoff,
+        report_va: report.0 + pmoff,
+        last_report: [0; 8],
+        cmd_ring_pa: cmd.0,
+        cmd_ring_va: cmd.0 + pmoff,
+        cmd_enqueue: 0,
+        cmd_cycle: true,
+        max_slots: slots,
+        max_ports: if max_ports == 0 { 8 } else { max_ports },
+        er_dequeue: 0,
+        msc_port: 0,
+        hid_ready: false,
+        hid_slot: 0,
+        hid_port: 0,
+        hid_tr_va: 0,
+        hid_report_va: 0,
+        hid_last_usage: 0,
+        mouse_ready: false,
+        mouse_slot: 0,
+        mouse_port: 0,
+        mouse_tr_va: 0,
+        mouse_report_va: 0,
+        mouse_last: [0; 4],
+        uac_ready: false,
+        uac_slot: 0,
+        uac_port: 0,
+        uac_speed: 0,
+        uac_vid: 0,
+        uac_did: 0,
+        uac_capture_ep: 0,
+        uac_playback_ep: 0,
+        uac_sample_rate: 0,
+        uac_cfg: [0; 512],
+        uac_cfg_len: 0,
+        uvc_ready: false,
+        uvc_slot: 0,
+        uvc_port: 0,
+        uvc_vid: 0,
+        uvc_did: 0,
+        uvc_ep: 0,
+        uvc_width: 0,
+        uvc_height: 0,
+        uvc_fps: 0,
+        uvc_format: 1,
+        uvc_max_packet: 0,
+        uac_ep0_tr_va: 0,
+    });
+    XHCI_SELECT.store(index, Ordering::Relaxed);
+    crate::slog_nano!(
+        "USB",
+        "ok",
+        "xHCI[{}/{}] {:02x}:{:02x}.{} prog_if={:#x} slots={} ports={} vid={:04x} did={:04x}",
+        index,
+        cands.len(),
+        d.bus,
+        d.device,
+        d.function,
+        d.prog_if,
+        slots,
+        max_ports,
+        d.vendor_id,
+        d.device_id
+    );
+    true
 }
 
 /// Poll do teclado USB HID boot — InputAgent. Requer `bringup_hid_keyboard` (P24a).
@@ -887,12 +984,14 @@ pub struct BulkEndpoint {
     pub enqueue_idx: u16,
     pub cycle: bool,
     pub max_entries: u16,
+    /// Doorbell DCI = 2*ep_num (+1 se IN). Não hardcodar EP1 (SESSION_170/311).
+    pub dci: u8,
 }
 
 unsafe impl Send for BulkEndpoint {}
 unsafe impl Sync for BulkEndpoint {}
 
-/// Configura bulk endpoints (EP1 IN, EP2 OUT) para USB MSC
+/// Configura bulk endpoints (legacy EP1) — preferir bringup com descriptor parse.
 pub unsafe fn configure_msc_endpoints(slot: u8, max_packet: u16) -> Option<(BulkEndpoint, BulkEndpoint)> {
     let state = XHCI_STATE.lock();
     let st = state.as_ref()?;
@@ -935,20 +1034,34 @@ pub unsafe fn configure_msc_endpoints(slot: u8, max_packet: u16) -> Option<(Bulk
     crate::slog_nano!("USB", "xhci", "Bulk endpoints OK. slot={} tr_in={:#x} tr_out={:#x}", slot, tr_in.0, tr_out.0);
 
     Some((
-        BulkEndpoint { trb_pa: tr_in.0, trb_va: tr_in.1 as *mut u32, enqueue_idx: 0, cycle: true, max_entries },
-        BulkEndpoint { trb_pa: tr_out.0, trb_va: tr_out.1 as *mut u32, enqueue_idx: 0, cycle: true, max_entries },
+        BulkEndpoint {
+            trb_pa: tr_in.0,
+            trb_va: tr_in.1 as *mut u32,
+            enqueue_idx: 0,
+            cycle: true,
+            max_entries,
+            dci: 3,
+        },
+        BulkEndpoint {
+            trb_pa: tr_out.0,
+            trb_va: tr_out.1 as *mut u32,
+            enqueue_idx: 0,
+            cycle: true,
+            max_entries,
+            dci: 2,
+        },
     ))
 }
 
 /// Executa transferencia bulk com gerenciamento de ring + IOC + ERDP advance.
-/// direction: 0=OUT (host→device), 1=IN (device→host)
+/// direction: 0=OUT (host→device), 1=IN (device→host) — só documentação; DCI vem de `ep.dci`.
 pub unsafe fn bulk_transfer(
     slot: u8,
     _endpoint: u8,
     ep: &mut BulkEndpoint,
     data_pa: u64,
     len: u32,
-    direction: u8,
+    _direction: u8,
 ) -> bool {
     let state = XHCI_STATE.lock();
     let st = match state.as_ref() { Some(s) => s, None => return false };
@@ -985,8 +1098,8 @@ pub unsafe fn bulk_transfer(
     ep.enqueue_idx = if next == max - 1 { 0 } else { next as u16 };
     if next == max - 1 { ep.cycle = !ep.cycle; }
 
-    // Ring doorbell[Slot] = DCI (xHCI 4.2.1)
-    let dci = if direction == 0 { 2u32 } else { 3u32 }; // EP1 OUT=2, EP1 IN=3
+    // Ring doorbell[Slot] = DCI do endpoint real (não EP1 fixo)
+    let dci = if ep.dci == 0 { 2u32 } else { ep.dci as u32 };
     w32(st.base, st.db_off + (slot as u64) * 4, dci);
 
     // Wait for completion event: varre de er_dequeue (padrão wait_cmd_completion)

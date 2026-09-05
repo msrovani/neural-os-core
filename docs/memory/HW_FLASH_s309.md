@@ -36,16 +36,36 @@ Fix: live USB sem MSC não flush/heal; `storage_available` respeita SKIP_*; FB `
 ### Run Alienware 2026-09-04 (Core 7 240H / 16c / RTX 3050)
 - Operador: chegou **desktop UI** → **freeze**.
 - Stick `E:\BOOT.LOG` = **placeholder**; `E:\NSGDB.BIN` = **zeros** (sem MSC → sem persist).
-- Relatório: `logs/hw_alienware_s310/REPORT.md`.
+- Relatório: `logs/hw_alienware_s310/REPORT.md` (se existir) / histórico s310.
 - **OK (imagem pré-pull s310 / ~`8573fa0`)**: boot metal até **desktop/UI** no Alienware 240H.
-- Reteste com HEAD atual + fix MSC multi-porta (webcam≠stick) para gravar BOOT.LOG/NSGDB.
 
 ### Fix 2026-09-04 — BOOT.LOG/NSGDB no pendrive (urgente)
 Causa: `bringup_boot_msc` pegava só a **1ª porta CCS** (webcam/BT) → stick sem MSC.
 Fix: varrer todas as portas CCS (SS>HS); SCSI fail → skip porta; SysInfo promove FileFlash/NSGDB após FAT_READY.
-Bugbot follow-up: **Disable Slot** em falha; migrate RAM→File antes remount; rate-limit MSC probe (~200 ticks).
+Bugbot follow-up: **Disable Slot** em falha; migrate RAM→File antes remount; rate-limit MSC probe (~200 ticks). Commit `22acf7a`.
 
-**Não fecha só com stick:** WiFi RF sem rádio, GPU sem silicon, TLS PKI, EEVDF, gate v2.0.0 sem OK maintainer + residual defer.
+### Run Alienware 2026-09-05 (pós-`22acf7a`, imagem 23:49)
+- Operador: de novo **desktop UI** → **freeze**.
+- Stick `E:\BOOT.LOG` = **ainda só placeholder** (167 B); `E:\NSGDB.BIN` = **ainda 8 MiB zeros**.
+- Relatório: `logs/hw_alienware_s311/REPORT.md`.
+- **Veredito:** UI metal = PASS parcial; **persist MSC = FAIL** — multi-porta não bastou.
+
+### Fix 2026-09-05 — raiz persist metal (SESSION_311)
+**Raciocínio:** Desktop não precisa de MSC (Limine já leu ESP). BOOT.LOG/NSGDB precisam de `USB_MSC` vivo. Multi-porta só varre o **HC já bound**.
+
+Causas (código):
+1. `init_xhci` pegava o **1º PCI 0x0C/0x03** sem `prog_if==0x30` → pode ser **EHCI**; stick no 2º xHCI invisível.
+2. Bulk MSC **EP1 hardcoded** + doorbell DCI 2/3 → SCSI falha se o stick usa EP2/EP3 (SESSION_170 residual).
+3. `live_usb_no_msc` bloqueia ATA/AHCI (anti-hang correto) → sem MSC = zero persist.
+
+Fix em `k_nano`:
+- Filtrar/`fallback` xHCI `prog_if=0x30`; **`init_xhci_select(i)`** + probe MSC em **todos** os HCs.
+- Parse Configuration Descriptor (class 08 BOT) → Configure EP + `BulkEndpoint.dci` real.
+- `overwrite_boot_log` prioriza partição dados `0x0C` antes de ESP `0xEF`.
+
+**Reteste:** nova `usb_hw.img` → Alienware → `E:\BOOT.LOG` deve ter `[T+]`/`Knn` (não placeholder).
+
+**Não fecha só com stick:** WiFi RF, GPU canary, HDA, UAC, Ring3 H2, SMP K23, TLS, gate v2.0.0.
 
 ## Não usar
 - Esta imagem como disco único no QEMU (continuar `uefi.img` + `disk_qemu.raw`)
