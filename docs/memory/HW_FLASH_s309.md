@@ -65,6 +65,42 @@ Fix em `k_nano`:
 
 **Reteste:** nova `usb_hw.img` → Alienware → `E:\BOOT.LOG` deve ter `[T+]`/`Knn` (não placeholder).
 
+### Run Alienware 2026-09-05 ~00:48 (pós-`494b965`)
+- Operador: **desktop UI** → **freeze** (de novo).
+- Stick: `BOOT.LOG` **ainda placeholder**; `NSGDB` **ainda zeros**.
+- `D:\kernel.elf` 21139656 B (imagem nova confirmada no stick).
+- Relatório: `logs/hw_alienware_s312/REPORT.md`.
+- **Veredito:** multi-xHCI+EP parse **não bastou**; a auditoria seguinte encontrou
+  violações determinísticas no Event Ring e no Normal TRB (SESSION_313).
+
+### Fix 2026-09-05 — desktop trava, timer 00:00 (SESSION_312)
+Dois bugs no mesmo sintoma:
+
+1. **Scheduler:** SysInfo (`urgency` 160, `PollEvery` last_poll=0) rodava **no tick 1**, no mesmo ciclo do 1º frame. `UsbMassStorage::probe` fazia `init_xhci_select` em **todos** os HCs (reset) + `clear_msc_port_skips` + EnableSlot em webcam/BT → tick não volta → orb congelado.
+2. **Clock:** `present_frame` dirty-rect pintava HUD/orb mas **não o dock**. O `{:02}:{:02}` era HH:MM; mesmo com timer vivo ficava `00:00` no 1º minuto.
+
+Fix inicial: `mark_ui_live()` após o 1º render; SysInfo skip `tick<64`; dock
+`swap_rect` + relógio `mm:ss` (hz clamp 8..=256).
+
+### Fix 2026-09-05 — xHCI metal + liveness (SESSION_313)
+
+Auditoria contra xHCI 1.2 encontrou as causas de raiz:
+
+1. Interrupter Set 0 começa em **`RTSOFF+0x20`**, mas ERST/ERDP eram escritos
+   em `RTSOFF` reservado; comandos não produziam eventos válidos no metal.
+2. Normal TRB colocava **IOC no DWORD 2**, corrompendo length em +32; IOC é
+   DWORD 3 bit 5.
+3. Completion `Success=1` era rejeitado; o código aceitava `0`.
+4. Faltavam Bus Master, UEFI ownership handoff, CSZ 64B, scratchpads, WPR
+   SuperSpeed, PAGESIZE/CNR e ERDP.EHB.
+5. Probe MSC pós-desktop foi bloqueado integralmente (não apenas rebind):
+   enumeração síncrona não pertence ao scheduler cooperativo.
+6. `smp-runqueue` de ticks fica gated até lock por-agent; AP compute continua.
+   Orb/cursor usam tick do scheduler, não dependem do LAPIC/PIT.
+
+**Reteste s313:** aguardar 2 minutos no desktop; depois verificar
+`E:\BOOT.LOG` não-placeholder e `E:\NSGDB.BIN` não-zero.
+
 **Não fecha só com stick:** WiFi RF, GPU canary, HDA, UAC, Ring3 H2, SMP K23, TLS, gate v2.0.0.
 
 ## Não usar

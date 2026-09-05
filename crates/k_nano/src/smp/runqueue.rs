@@ -175,6 +175,16 @@ static INFLIGHT: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
 static LAST_RQ_SLOG_TICK: AtomicU32 = AtomicU32::new(u32::MAX);
 static LAST_DIST_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+/// Gate de segurança para executar `Agent::tick` em APs.
+///
+/// A RQ distribui corretamente, mas `agent-core` ainda protege o Registry com
+/// um único `AGENT_TICK_BUSY`. Um tick longo de Cortex/Hermes em AP segura esse
+/// lock e congela Display/Input no BSP. APs continuam disponíveis para kernels
+/// de compute; ticks de agents ficam BSP-only até haver isolamento por-agent.
+pub fn agent_tick_offload_safe() -> bool {
+    false
+}
+
 pub fn cpu_stats(core_id: usize) -> &'static CpuStats {
     &CPU_STATS[core_id.min(MAX_CORES - 1)]
 }

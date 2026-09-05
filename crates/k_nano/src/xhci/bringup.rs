@@ -2,8 +2,25 @@
 //! Address Device → Configure Endpoint (bulk) → devolve slot+EPs para BOT/SCSI.
 //! Sem isto, `usb_msc::probe` usava slot=2 fantasma e BOOT.LOG nunca gravava.
 
-use super::{alloc_phys, portsc_addr, r32, w32, BulkEndpoint, XHCI_STATE};
+use super::{alloc_phys, pop_event, portsc_addr, r32, w32, BulkEndpoint, XHCI_STATE};
 use core::sync::atomic::{AtomicBool, Ordering};
+
+fn hc_context_size() -> usize {
+    XHCI_STATE
+        .lock()
+        .as_ref()
+        .map(|s| s.context_size)
+        .unwrap_or(32)
+}
+
+fn input_context_offset(dci: u32, context_size: usize) -> usize {
+    (dci as usize + 1) * context_size
+}
+
+/// Input Context: índice 0=Input Control; entrada seguinte é Slot, depois DCI1...
+unsafe fn input_context_entry(base: *mut u8, dci: u32) -> *mut u32 {
+    base.add(input_context_offset(dci, hc_context_size())) as *mut u32
+}
 
 /// Espera um Transfer Event (type 32) no anel de eventos, varrendo a partir de
 /// `er_dequeue` (padrão wait_cmd_completion) e avançando o ERDP. O poll antigo
@@ -13,23 +30,15 @@ unsafe fn wait_transfer_event(timeout: u32) -> bool {
     for _ in 0..timeout {
         let mut g = XHCI_STATE.lock();
         let Some(st) = g.as_mut() else { return false };
-        let evt = st.er_va as *const u32;
-        for look in 0..16u16 {
-            let i = ((st.er_dequeue as u32 + look as u32) % 256) as usize;
-            let dw2 = evt.add(i * 4 + 2).read_volatile();
-            let dw3 = evt.add(i * 4 + 3).read_volatile();
+        for _ in 0..256 {
+            let Some([_, _, dw2, dw3]) = pop_event(st) else {
+                break;
+            };
             let trb_type = (dw3 >> 10) & 0x3F;
             if trb_type != 32 {
                 continue;
             }
             let cc = ((dw2 >> 24) & 0xFF) as u8;
-            st.er_dequeue = ((i as u32 + 1) % 256) as u16;
-            let er_pa = st.er_va - st.pmoff;
-            let rtsoff = (r32(st.base, 0x18) & !0x1F) as u64;
-            let rt = st.base + rtsoff;
-            let erdp = er_pa + (st.er_dequeue as u64) * 16;
-            w32(rt, 0x18, erdp as u32);
-            w32(rt, 0x1C, (erdp >> 32) as u32);
             return cc == 1 || cc == 13;
         }
         drop(g);
@@ -138,13 +147,13 @@ pub fn mark_msc_port_failed(port: u8) {
 }
 
 unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
-    if !reset_port(port) {
+    if !reset_port(port, speed) {
         crate::slog_nano!("USB", "msc", "port {} reset FAIL", port);
         return None;
     }
     crate::slog_nano!("USB", "msc", "port {} reset+PED OK", port);
 
-    let slot = match cmd_enable_slot() {
+    let slot = match cmd_enable_slot(port) {
         Some(s) if s > 0 => s,
         _ => {
             crate::slog_nano!("USB", "msc", "Enable Slot FAIL port={}", port);
@@ -334,7 +343,7 @@ unsafe fn bringup_hid_boot(kind: HidBootKind) -> bool {
                 for _ in 0..500_000 { core::hint::spin_loop(); }
                 for p in 1..=max_ports {
                     if p == msc_port || p == hid_port || p == mouse_port { continue; }
-                    let _ = reset_port(p);
+                    let _ = reset_port(p, 0);
                 }
                 reset_done = true;
                 // Re-read CCS for this port
@@ -361,12 +370,12 @@ unsafe fn bringup_hid_boot(kind: HidBootKind) -> bool {
         };
         crate::slog_nano!("USB", "hid", "{} tentando porta {} speed={}", tag, port, speed);
 
-        if !reset_port(port) {
+        if !reset_port(port, speed) {
             crate::slog_nano!("USB", "warn", "{} port {} reset FAIL (skip)", tag, port);
             continue;
         }
         crate::slog_nano!("USB", "warn", "{} port {} reset OK, EnableSlot...", tag, port);
-        let slot = match cmd_enable_slot() {
+        let slot = match cmd_enable_slot(port) {
             Some(s) if s > 0 => s,
             _ => {
                 crate::slog_nano!("USB", "warn", "{} port {} EnableSlot FAIL", tag, port);
@@ -707,13 +716,13 @@ unsafe fn configure_hid_interrupt_ep(
     // Add EP1 IN (DCI3) + slot (A0)
     icc.add(1).write_volatile(0x9); // bits 0 and 3
 
-    let slot_ctx = ctx.1.add(0x20) as *mut u32;
+    let slot_ctx = input_context_entry(ctx.1, 0);
     // contextEntries=3 (EP0 + EP1 OUT unused + EP1 IN)
     slot_ctx.add(0).write_volatile((3u32 << 27) | ((speed as u32) << 20));
     slot_ctx.add(1).write_volatile((port as u32) << 16);
 
     // EP1 IN interrupt @ DCI3 offset 0x80
-    let ep_in = ctx.1.add(0x80) as *mut u32;
+    let ep_in = input_context_entry(ctx.1, 3);
     ep_in.add(0).write_volatile(0);
     // EP Type Interrupt IN = 7, CErr=3, MaxPacketSize
     ep_in.add(1).write_volatile((3u32 << 1) | (7u32 << 3) | ((max_packet as u32) << 16));
@@ -749,14 +758,26 @@ unsafe fn configure_hid_interrupt_ep(
     true
 }
 
-unsafe fn reset_port(port: u8) -> bool {
+unsafe fn reset_port(port: u8, speed_hint: u8) -> bool {
     let g = XHCI_STATE.lock();
     let Some(st) = g.as_ref() else { return false };
     let Some(addr) = portsc_addr(st, port) else { return false };
     let off = addr - st.base;
     let mut v = r32(st.base, off);
-    // W1C change bits + set PR (bit 4)
-    v |= (1 << 17) | (1 << 18) | (1 << 21) | (1 << 4);
+    let speed = if speed_hint == 0 {
+        ((v >> 10) & 0xF) as u8
+    } else {
+        speed_hint
+    };
+    v |= 1 << 9; // Port Power; ignorado por HCs sem PPC.
+    // SuperSpeed usa Warm Port Reset (WPR/WRC); PR/PRC é o reset USB2.
+    // CAS também exige warm reset para retreinar o link após takeover do UEFI.
+    let warm = speed >= 4 || v & (1 << 24) != 0;
+    if warm {
+        v |= (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21) | (1 << 31);
+    } else {
+        v |= (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21) | (1 << 4);
+    }
     w32(st.base, off, v);
     drop(g);
 
@@ -765,15 +786,23 @@ unsafe fn reset_port(port: u8) -> bool {
         let Some(st) = g.as_ref() else { return false };
         let Some(addr) = portsc_addr(st, port) else { return false };
         let v = r32(st.base, addr - st.base);
-        let prc = v & (1 << 21) != 0;
+        let reset_change = if warm {
+            v & (1 << 19) != 0 // WRC
+        } else {
+            v & (1 << 21) != 0 // PRC
+        };
         let ped = v & 2 != 0;
-        let pr = v & (1 << 4) != 0;
-        if prc || (ped && !pr) {
-            // Clear PRC
+        let reset_active = if warm {
+            v & (1 << 31) != 0
+        } else {
+            v & (1 << 4) != 0
+        };
+        if reset_change || (ped && !reset_active) {
+            // Clear WRC/PRC (W1C).
             let mut clr = v;
-            clr |= 1 << 21;
+            clr |= if warm { 1 << 19 } else { 1 << 21 };
             w32(st.base, addr - st.base, clr);
-            return ped || prc;
+            return ped || reset_change;
         }
         core::hint::spin_loop();
     }
@@ -786,10 +815,34 @@ unsafe fn ring_cmd_doorbell() {
     w32(st.base, st.db_off, 0); // Doorbell 0 = Command Ring
 }
 
-unsafe fn cmd_enable_slot() -> Option<u8> {
+/// Slot Type vem da Supported Protocol Capability que cobre a root port.
+unsafe fn protocol_slot_type(base: u64, port: u8) -> u8 {
+    let hcc1 = r32(base, 0x10);
+    let mut off = (((hcc1 >> 16) & 0xFFFF) as u64) * 4;
+    for _ in 0..64 {
+        if off == 0 {
+            break;
+        }
+        let hdr = r32(base, off);
+        let next = ((hdr >> 8) & 0xFF) as u64;
+        if (hdr & 0xFF) as u8 == 2 {
+            let ports = r32(base, off + 0x08);
+            let first = (ports & 0xFF) as u8;
+            let count = ((ports >> 8) & 0xFF) as u8;
+            if port >= first && port < first.saturating_add(count) {
+                return (r32(base, off + 0x0C) & 0x1F) as u8;
+            }
+        }
+        off = if next == 0 { 0 } else { off + next * 4 };
+    }
+    0
+}
+
+unsafe fn cmd_enable_slot(port: u8) -> Option<u8> {
     let (trb_va, idx, cycle) = {
         let mut g = XHCI_STATE.lock();
         let st = g.as_mut()?;
+        let slot_type = protocol_slot_type(st.base, port);
         let idx = st.cmd_enqueue as usize;
         let cycle = st.cmd_cycle;
         let trb = (st.cmd_ring_va as *mut u32).add(idx * 4);
@@ -797,7 +850,9 @@ unsafe fn cmd_enable_slot() -> Option<u8> {
         trb.add(1).write_volatile(0);
         trb.add(2).write_volatile(0);
         // Type=9 Enable Slot, C=cycle
-        trb.add(3).write_volatile((9u32 << 10) | if cycle { 1 } else { 0 });
+        trb.add(3).write_volatile(
+            (9u32 << 10) | ((slot_type as u32) << 16) | if cycle { 1 } else { 0 },
+        );
         st.cmd_enqueue = st.cmd_enqueue.wrapping_add(1);
         if st.cmd_enqueue >= 255 {
             // Link TRB wrap
@@ -867,22 +922,14 @@ unsafe fn wait_cmd_completion() -> Option<(u8, u8)> {
     loop {
         let mut g = XHCI_STATE.lock();
         let Some(st) = g.as_mut() else { return None };
-        let evt = st.er_va as *const u32;
-        for look in 0..16u16 {
-            let i = ((st.er_dequeue + look) % 256) as usize;
-            let dw2 = evt.add(i * 4 + 2).read_volatile();
-            let dw3 = evt.add(i * 4 + 3).read_volatile();
+        for _ in 0..256 {
+            let Some([_, _, dw2, dw3]) = pop_event(st) else {
+                break;
+            };
             let trb_type = (dw3 >> 10) & 0x3F;
             if trb_type == 33 {
                 let cc = ((dw2 >> 24) & 0xFF) as u8;
                 let slot = ((dw3 >> 24) & 0xFF) as u8;
-                st.er_dequeue = ((i as u16) + 1) % 256;
-                let er_pa = st.er_va - st.pmoff;
-                let rtsoff = (r32(st.base, 0x18) & !0x1F) as u64;
-                let rt = st.base + rtsoff;
-                let erdp = er_pa + (st.er_dequeue as u64) * 16;
-                w32(rt, 0x18, erdp as u32);
-                w32(rt, 0x1C, (erdp >> 32) as u32);
                 if cc == 1 {
                     return Some((slot, cc));
                 }
@@ -977,15 +1024,14 @@ unsafe fn address_device(slot: u8, port: u8, speed: u8, ep0_mps: u16) -> bool {
     // Input Control: A0|A1 (slot + EP0)
     icc.add(1).write_volatile(0x3);
 
-    // Slot Context @ +0x20 (32-byte contexts)
-    let slot_ctx = ctx.1.add(0x20) as *mut u32;
+    // Slot/EP offsets seguem HCCPARAMS1.CSZ (32 ou 64 bytes).
+    let slot_ctx = input_context_entry(ctx.1, 0);
     // DW0: Context Entries=1, Speed
     slot_ctx.add(0).write_volatile(((1u32) << 27) | ((speed as u32) << 20));
     // DW1: Root Hub Port Number
     slot_ctx.add(1).write_volatile((port as u32) << 16);
 
-    // EP0 Context @ +0x40
-    let ep0 = ctx.1.add(0x40) as *mut u32;
+    let ep0 = input_context_entry(ctx.1, 1);
     // DW0: EP State=0
     ep0.add(0).write_volatile(0);
     // DW1: CErr=3, EP Type=Control(4), Max Packet Size
@@ -1040,14 +1086,14 @@ unsafe fn configure_msc_endpoints_cmd(
     let add = 1u32 | (1u32 << dci_out) | (1u32 << dci_in);
     icc.add(1).write_volatile(add);
 
-    let slot_ctx = ctx.1.add(0x20) as *mut u32;
+    let slot_ctx = input_context_entry(ctx.1, 0);
     slot_ctx
         .add(0)
         .write_volatile((max_dci << 27) | ((speed as u32) << 20));
     slot_ctx.add(1).write_volatile((port as u32) << 16);
 
     // EP OUT context
-    let ep_out = ctx.1.add(0x20 + (dci_out as usize) * 0x20) as *mut u32;
+    let ep_out = input_context_entry(ctx.1, dci_out);
     ep_out.add(0).write_volatile(0);
     // Bulk OUT type=2
     ep_out
@@ -1055,9 +1101,10 @@ unsafe fn configure_msc_endpoints_cmd(
         .write_volatile((3u32 << 1) | (2u32 << 3) | ((max_packet as u32) << 16));
     ep_out.add(2).write_volatile(tr_out.0 as u32 | 1);
     ep_out.add(3).write_volatile((tr_out.0 >> 32) as u32);
+    ep_out.add(4).write_volatile(max_packet as u32);
 
     // EP IN context
-    let ep_in = ctx.1.add(0x20 + (dci_in as usize) * 0x20) as *mut u32;
+    let ep_in = input_context_entry(ctx.1, dci_in);
     ep_in.add(0).write_volatile(0);
     // Bulk IN type=6
     ep_in
@@ -1065,6 +1112,7 @@ unsafe fn configure_msc_endpoints_cmd(
         .write_volatile((3u32 << 1) | (6u32 << 3) | ((max_packet as u32) << 16));
     ep_in.add(2).write_volatile(tr_in.0 as u32 | 1);
     ep_in.add(3).write_volatile((tr_in.0 >> 32) as u32);
+    ep_in.add(4).write_volatile(max_packet as u32);
 
     if !issue_address_or_config_cmd(ctx.0, slot, 12) {
         return None;
@@ -1318,7 +1366,7 @@ fn parse_uac_config(cfg: &[u8]) -> Option<UacEpInfo> {
 
 /// Escreve o Endpoint Context isócrono (32B) no input context, DCI dado.
 unsafe fn write_ep_ctx(ctx: *mut u8, dci: u32, ep_type: u32, max_packet: u16, interval: u8, ring_pa: u64) {
-    let ep = ctx.add(0x20 + (dci as usize) * 0x20) as *mut u32;
+    let ep = input_context_entry(ctx, dci);
     // DW0: Interval (log2 µframes, bits 23:16) + EP state 0
     ep.add(0).write_volatile((interval as u32) << 16);
     // DW1: CErr=3 | EP type (1=isoc OUT, 5=isoc IN) | MaxPacketSize
@@ -1360,7 +1408,7 @@ unsafe fn configure_isoc_endpoints(
     icc.add(1).write_volatile(add); // Add flags (DW1 do input control ctx)
 
     let max_dci = dci_in.unwrap_or(0).max(dci_out.unwrap_or(0));
-    let slot_ctx = ctx.1.add(0x20) as *mut u32;
+    let slot_ctx = input_context_entry(ctx.1, 0);
     slot_ctx.add(0).write_volatile((max_dci << 27) | ((speed as u32) << 20));
     slot_ctx.add(1).write_volatile((port as u32) << 16);
 
@@ -1477,10 +1525,10 @@ pub unsafe fn bringup_uac() -> Option<super::UacDevice> {
         };
         crate::slog_nano!("USB", "uac", "tentando porta {} speed={}", port, speed);
 
-        if !reset_port(port) {
+        if !reset_port(port, speed) {
             continue;
         }
-        let slot = match cmd_enable_slot() {
+        let slot = match cmd_enable_slot(port) {
             Some(s) if s > 0 => s,
             _ => continue,
         };
@@ -1768,7 +1816,7 @@ unsafe fn configure_uvc_endpoint(
     let icc = ctx.1 as *mut u32;
     icc.add(1).write_volatile(1 | (1 << dci)); // slot + EP do vídeo
 
-    let slot_ctx = ctx.1.add(0x20) as *mut u32;
+    let slot_ctx = input_context_entry(ctx.1, 0);
     slot_ctx.add(0).write_volatile((last_ctx << 27) | ((speed as u32) << 20));
     slot_ctx.add(1).write_volatile((port as u32) << 16);
 
@@ -1904,10 +1952,10 @@ pub unsafe fn bringup_uvc() -> Option<super::UvcDevice> {
         };
         crate::slog_nano!("USB", "uvc", "tentando porta {} speed={}", port, speed);
 
-        if !reset_port(port) {
+        if !reset_port(port, speed) {
             continue;
         }
-        let slot = match cmd_enable_slot() {
+        let slot = match cmd_enable_slot(port) {
             Some(s) if s > 0 => s,
             _ => continue,
         };
@@ -2045,7 +2093,17 @@ unsafe fn configure_uvc_on_slot(
 
 #[cfg(test)]
 mod msc_desc_tests {
-    use super::parse_msc_config;
+    use super::{input_context_offset, parse_msc_config};
+
+    #[test]
+    fn context_offsets_follow_hccparams_csz() {
+        assert_eq!(input_context_offset(0, 32), 0x20); // Slot
+        assert_eq!(input_context_offset(1, 32), 0x40); // EP0
+        assert_eq!(input_context_offset(3, 32), 0x80); // EP1 IN
+        assert_eq!(input_context_offset(0, 64), 0x40);
+        assert_eq!(input_context_offset(1, 64), 0x80);
+        assert_eq!(input_context_offset(3, 64), 0x100);
+    }
 
     #[test]
     fn parse_msc_bot_ep1() {

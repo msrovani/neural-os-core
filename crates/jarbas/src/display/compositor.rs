@@ -505,9 +505,9 @@ impl JarbasDesktop {
             self.dirty_orb = true;
             self.last_orb_tick = tick;
         }
-        // SESSION_310: HUD (clock/status) precisa atualizar a cada ~32 ticks
-        // (~0.5s @64Hz). Sem isso, dirty_hud só muda no hover → clock congela.
-        if tick % 32 == 0 {
+        // HUD + dock clock: ~1s @18Hz (PIT) / ~0.5s @64Hz. Sem dirty_hud o
+        // present_frame não apresenta o dock e o relógio fica 00:00.
+        if tick % 16 == 0 {
             self.dirty_hud = true;
         }
 
@@ -911,6 +911,12 @@ impl JarbasDesktop {
         }
         // HUD bar (+ welcome strip)
         self.fb.swap_rect(0, 0, w, sb_h + 28);
+        // Dock + clock (faixa inferior — sem isto o timer fica 00:00 no 1º frame)
+        if self.dock.visible {
+            let dh = self.dock.height as usize;
+            let h = self.h;
+            self.fb.swap_rect(0, h.saturating_sub(dh), w, dh);
+        }
         // Orb region
         if self.last_orb_w > 0 && self.last_orb_h > 0 {
             self.fb.swap_rect(

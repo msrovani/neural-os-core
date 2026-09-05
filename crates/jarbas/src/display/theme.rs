@@ -285,6 +285,10 @@ mod tests {
             comp_src.contains("render_card"),
             "compositor::render must call render_card (allowed painting site)"
         );
+        assert!(
+            comp_src.contains("self.dock.height") && comp_src.contains("swap_rect"),
+            "present_frame must swap dock band or clock stays 00:00"
+        );
         // card.rs deve usar FbTarget (DrawTarget reuse, T-070)
         let eg_src = include_str!("eg.rs");
         assert!(eg_src.contains("DrawTarget"), "eg.rs must expose DrawTarget");

@@ -175,6 +175,8 @@ pub struct XhciState {
     pub(crate) capl: u64,
     pub(crate) base: u64,
     pub(crate) pmoff: u64,
+    /// Tamanho de Slot/Endpoint Context: HCCPARAMS1.CSZ ? 64 : 32.
+    pub(crate) context_size: usize,
     pub(crate) dcbaa_va: u64,
     pub(crate) er_va: u64,
     pub(crate) slot: u8,
@@ -190,6 +192,7 @@ pub struct XhciState {
     pub(crate) max_slots: u8,
     pub(crate) max_ports: u8,
     pub(crate) er_dequeue: u16,
+    pub(crate) er_cycle: bool,
     /// Porta reservada pelo MSC (0 = nenhuma) — HID não rouba o stick.
     pub(crate) msc_port: u8,
     /// HID boot keyboard ready
@@ -244,6 +247,112 @@ pub unsafe fn init_xhci() {
     let _ = init_xhci_select(0);
 }
 
+/// Handoff xHCI do firmware para o OS (xHCI 1.2 §4.2 / §7.1).
+///
+/// UEFI pode deixar BIOS Owned=1. Resetar o HC antes de pedir OS Owned causa
+/// controller mudo em silício, embora QEMU aceite.
+unsafe fn claim_firmware_ownership(base: u64, hcc1: u32) {
+    let mut off = (((hcc1 >> 16) & 0xFFFF) as u64) * 4;
+    let mut walked = 0u8;
+    while off != 0 && walked < 64 {
+        walked += 1;
+        let hdr = r32(base, off);
+        let cap_id = (hdr & 0xFF) as u8;
+        let next = ((hdr >> 8) & 0xFF) as u64;
+        if cap_id == 1 {
+            let mut legsup = hdr | (1 << 24); // OS Owned Semaphore
+            w32(base, off, legsup);
+            let hz = crate::tsc::tsc_hz();
+            let start = crate::tsc::rdtsc();
+            let budget = if hz > 1_000_000 { hz / 2 } else { 0 };
+            let mut spins = 0u32;
+            loop {
+                legsup = r32(base, off);
+                if legsup & (1 << 16) == 0 {
+                    // USBLEGCTLSTS: preserva campos definidos, desliga SMI
+                    // enables e limpa eventos RW1C (mesmo padrão do Linux).
+                    const LEGACY_PRESERVE: u32 =
+                        (0x7 << 1) | (0xFF << 5) | (0x7 << 17);
+                    const LEGACY_SMI_EVENTS: u32 = 0x7 << 29;
+                    let ctl = r32(base, off + 4);
+                    w32(
+                        base,
+                        off + 4,
+                        (ctl & LEGACY_PRESERVE) | LEGACY_SMI_EVENTS,
+                    );
+                    crate::slog_nano!("USB", "ok", "xHCI firmware handoff OK");
+                    return;
+                }
+                spins = spins.saturating_add(1);
+                if (budget > 0 && crate::tsc::rdtsc().wrapping_sub(start) >= budget)
+                    || (budget == 0 && spins >= 1_000_000)
+                {
+                    crate::slog_nano!(
+                        "USB",
+                        "warn",
+                        "xHCI firmware handoff TIMEOUT legsup={:#x}",
+                        legsup
+                    );
+                    return;
+                }
+                core::hint::spin_loop();
+            }
+        }
+        off = if next == 0 { 0 } else { off + next * 4 };
+    }
+}
+
+/// Espera bit de registrador operacional assumir o estado esperado.
+unsafe fn wait_op_bit(op: u64, reg: u64, bit: u32, set: bool, timeout_ms: u64) -> bool {
+    let hz = crate::tsc::tsc_hz();
+    let start = crate::tsc::rdtsc();
+    let budget = if hz > 1_000_000 {
+        hz.saturating_mul(timeout_ms) / 1000
+    } else {
+        0
+    };
+    let mut spins = 0u32;
+    loop {
+        let matches = (r32(op, reg) & bit != 0) == set;
+        if matches {
+            return true;
+        }
+        spins = spins.saturating_add(1);
+        if (budget > 0 && crate::tsc::rdtsc().wrapping_sub(start) >= budget)
+            || (budget == 0 && spins >= 2_000_000)
+        {
+            return false;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+fn max_scratchpads(hcs2: u32) -> usize {
+    let hi = ((hcs2 >> 21) & 0x1F) as usize;
+    let lo = ((hcs2 >> 27) & 0x1F) as usize;
+    (hi << 5) | lo
+}
+
+/// DCBAA[0] deve apontar para o Scratchpad Buffer Array quando MaxScratchpad>0.
+unsafe fn init_scratchpads(dcbaa_va: *mut u64, hcs2: u32) -> Option<usize> {
+    let count = max_scratchpads(hcs2);
+    if count == 0 {
+        return Some(0);
+    }
+    let array_pages = (count * core::mem::size_of::<u64>() + 4095) / 4096;
+    let array = alloc_phys(array_pages)?;
+    let buffers = alloc_phys(count)?;
+    core::ptr::write_bytes(array.1, 0, array_pages * 4096);
+    for i in 0..count {
+        (array.1 as *mut u64)
+            .add(i)
+            .write_volatile(buffers.0 + (i as u64) * 4096);
+    }
+    dcbaa_va.write_volatile(array.0);
+    crate::slog_nano!("USB", "ok", "xHCI scratchpads={} initialized", count);
+    Some(count)
+}
+
 /// Soft-unbind + bind do xHCI PCI no índice `index` (0-based).
 /// Páginas do HC anterior ficam leaked (boot-only; poucos frames).
 pub unsafe fn init_xhci_select(index: usize) -> bool {
@@ -259,6 +368,8 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     *XHCI_STATE.lock() = None;
     clear_msc_port_skips();
     let d = cands[index];
+    // xHCI usa DMA para DCBAA/rings: Memory Space + Bus Master são obrigatórios.
+    crate::pci::enable_pci_bus_master(&d);
     let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     let mmio = (d.bar0 & !0xF) as u64;
     // xHCI BAR cobre Cap+Op+Runtime+Doorbell (~64KB). Mapeia TODAS as páginas
@@ -287,25 +398,46 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     let op = base + capl;
 
     let hcs1 = r32(base, 0x04);
+    let hcs2 = r32(base, 0x08);
+    let hcc1 = r32(base, 0x10);
     let max_slots = (hcs1 & 0xFF) as u8;
     let max_ports = ((hcs1 >> 24) & 0xFF) as u8;
+    let context_size = if hcc1 & (1 << 2) != 0 { 64 } else { 32 };
     let db_off = (r32(base, 0x14) & !0x3) as u64;
     let rtsoff = (r32(base, 0x18) & !0x1F) as u64;
 
+    claim_firmware_ownership(base, hcc1);
+
     w32(op, 0, r32(op, 0) & !0x01);
-    for _ in 0..100_000 {
-        if r32(op, 0x04) & 0x01 != 0 {
-            break;
-        }
-        core::hint::spin_loop();
+    if !wait_op_bit(op, 0x04, 1, true, 100) {
+        crate::slog_nano!("USB", "warn", "xHCI[{}] halt TIMEOUT", index);
+        return false;
     }
 
     w32(op, 0, r32(op, 0) | 0x02);
-    for _ in 0..100_000 {
-        if r32(op, 0) & 0x02 == 0 {
-            break;
-        }
-        core::hint::spin_loop();
+    if !wait_op_bit(op, 0, 1 << 1, false, 1000)
+        || !wait_op_bit(op, 0x04, 1 << 11, false, 1000)
+    {
+        crate::slog_nano!(
+            "USB",
+            "warn",
+            "xHCI[{}] reset/CNR TIMEOUT usbcmd={:#x} usbsts={:#x}",
+            index,
+            r32(op, 0),
+            r32(op, 0x04)
+        );
+        return false;
+    }
+    let pagesize = r32(op, 0x08);
+    if pagesize & 1 == 0 {
+        crate::slog_nano!(
+            "USB",
+            "warn",
+            "xHCI[{}] sem suporte a página 4K PAGESIZE={:#x}",
+            index,
+            pagesize
+        );
+        return false;
     }
 
     let dcbaa = match alloc_phys(1) {
@@ -316,6 +448,10 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
         }
     };
     core::ptr::write_bytes(dcbaa.1, 0, 4096);
+    if init_scratchpads(dcbaa.1 as *mut u64, hcs2).is_none() {
+        crate::slog_nano!("USB", "warn", "alloc_phys falhou (scratchpads)");
+        return false;
+    }
     w32(op, 0x30, dcbaa.0 as u32);
     w32(op, 0x34, (dcbaa.0 >> 32) as u32);
 
@@ -349,12 +485,15 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     let erst = erst_mem.1 as *mut u64;
     erst.write_volatile(er.0);
     erst.add(1).write_volatile(256u64);
-    let rt = base + rtsoff;
-    w32(rt, 0x08, 1);
-    w32(rt, 0x10, erst_mem.0 as u32);
-    w32(rt, 0x14, (erst_mem.0 >> 32) as u32);
-    w32(rt, 0x18, er.0 as u32);
-    w32(rt, 0x1C, (er.0 >> 32) as u32);
+    // Runtime +0x00 é MFINDEX; Interrupter Register Set 0 começa em +0x20.
+    // Programar ERST em RT+0x08 escrevia área reservada: no metal nenhum
+    // Command/Transfer Event chegava, logo MSC nunca podia subir.
+    let ir0 = base + rtsoff + 0x20;
+    w32(ir0, 0x08, 1);
+    w32(ir0, 0x10, erst_mem.0 as u32);
+    w32(ir0, 0x14, (erst_mem.0 >> 32) as u32);
+    w32(ir0, 0x18, er.0 as u32);
+    w32(ir0, 0x1C, (er.0 >> 32) as u32);
 
     let slots = if max_slots == 0 {
         8
@@ -364,11 +503,9 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     w32(op, 0x38, slots as u32);
 
     w32(op, 0, r32(op, 0) | 0x01);
-    for _ in 0..100_000 {
-        if r32(op, 0x04) & 0x01 == 0 {
-            break;
-        }
-        core::hint::spin_loop();
+    if !wait_op_bit(op, 0x04, 1, false, 1000) {
+        crate::slog_nano!("USB", "warn", "xHCI[{}] run TIMEOUT", index);
+        return false;
     }
 
     let tr = match alloc_phys(1) {
@@ -393,6 +530,7 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
         capl,
         base,
         pmoff,
+        context_size,
         dcbaa_va: dcbaa.0 + pmoff,
         er_va: er.0 + pmoff,
         slot: 1,
@@ -407,6 +545,7 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
         max_slots: slots,
         max_ports: if max_ports == 0 { 8 } else { max_ports },
         er_dequeue: 0,
+        er_cycle: true,
         msc_port: 0,
         hid_ready: false,
         hid_slot: 0,
@@ -448,13 +587,14 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     crate::slog_nano!(
         "USB",
         "ok",
-        "xHCI[{}/{}] {:02x}:{:02x}.{} prog_if={:#x} slots={} ports={} vid={:04x} did={:04x}",
+        "xHCI[{}/{}] {:02x}:{:02x}.{} prog_if={:#x} ctx={} slots={} ports={} vid={:04x} did={:04x}",
         index,
         cands.len(),
         d.bus,
         d.device,
         d.function,
         d.prog_if,
+        context_size,
         slots,
         max_ports,
         d.vendor_id,
@@ -493,7 +633,11 @@ pub unsafe fn poll_keyboard() -> Option<u8> {
 
 /// Poll HID boot mouse — injeta no path PS/2 canônico (`mouse_inject_hid_boot`).
 pub unsafe fn poll_mouse() -> bool {
-    let mut state_lock = XHCI_STATE.lock();
+    // Display/Input nunca devem esperar atrás de enumeração ou I/O xHCI.
+    // Se o HC estiver ocupado, o próximo tick tenta novamente.
+    let Some(mut state_lock) = XHCI_STATE.try_lock() else {
+        return false;
+    };
     let state = match &mut *state_lock {
         Some(s) if s.mouse_ready => s,
         _ => return false,
@@ -623,10 +767,34 @@ pub(crate) unsafe fn isoc_arm_trb(ring: &mut IsochRing, buf_idx: usize, len: u16
 pub(crate) unsafe fn erdp_sync(st: &XhciState) {
     let er_pa = st.er_va - st.pmoff;
     let rtsoff = (r32(st.base, 0x18) & !0x1F) as u64;
-    let rt = st.base + rtsoff;
+    let rt = st.base + rtsoff + 0x20; // Interrupter Set 0
     let erdp = er_pa + (st.er_dequeue as u64) * 16;
-    w32(rt, 0x18, erdp as u32);
+    w32(rt, 0x18, erdp as u32 | (1 << 3)); // EHB RW1C
     w32(rt, 0x1C, (erdp >> 32) as u32);
+}
+
+/// Consome exatamente o próximo Event TRB respeitando Producer Cycle State.
+/// Nunca varre slots já consumidos: isso evita reutilizar completion antiga.
+pub(crate) unsafe fn pop_event(st: &mut XhciState) -> Option<[u32; 4]> {
+    let i = st.er_dequeue as usize;
+    let evt = st.er_va as *const u32;
+    let dw3 = evt.add(i * 4 + 3).read_volatile();
+    if (dw3 & 1 != 0) != st.er_cycle {
+        return None;
+    }
+    let event = [
+        evt.add(i * 4).read_volatile(),
+        evt.add(i * 4 + 1).read_volatile(),
+        evt.add(i * 4 + 2).read_volatile(),
+        dw3,
+    ];
+    st.er_dequeue += 1;
+    if st.er_dequeue >= 256 {
+        st.er_dequeue = 0;
+        st.er_cycle = !st.er_cycle;
+    }
+    erdp_sync(st);
+    Some(event)
 }
 
 /// Roteia UM Transfer Event (type 32) para o ring isócrono dono (match por
@@ -689,36 +857,20 @@ unsafe fn route_isoc_event(eslot: u8, epid: u8, trb_ptr: u64, len: u16) -> bool 
 /// `er_dequeue` por cima de eventos de outros rings (perda de re-arm). Bounded
 /// (ISOC_SLOTS*3 eventos por chamada). Retorna nº de eventos processados.
 pub(crate) unsafe fn drain_isoc_events(st: &mut XhciState) -> u16 {
-    let evt = st.er_va as *const u32;
     let mut consumed = 0u16;
     for _ in 0..(ISOC_SLOTS * 3) {
-        let mut found = false;
-        for look in 0..16u16 {
-            let i = ((st.er_dequeue as u32 + look as u32) % 256) as usize;
-            let dw0 = evt.add(i * 4).read_volatile();
-            let dw1 = evt.add(i * 4 + 1).read_volatile();
-            let dw2 = evt.add(i * 4 + 2).read_volatile();
-            let dw3 = evt.add(i * 4 + 3).read_volatile();
-            let ty = (dw3 >> 10) & 0x3F;
-            if ty != 32 {
-                continue; // Command/Port Status events ficam para outros consumidores
-            }
+        let Some([dw0, dw1, dw2, dw3]) = pop_event(st) else {
+            break;
+        };
+        let ty = (dw3 >> 10) & 0x3F;
+        if ty == 32 {
             let eslot = ((dw3 >> 24) & 0xFF) as u8;
             let epid = ((dw3 >> 16) & 0x1F) as u8;
             let trb_ptr = (dw0 as u64) | ((dw1 as u64) << 32);
             let len = (dw2 & 0xFFFFFF) as u16;
             let _ = route_isoc_event(eslot, epid, trb_ptr, len);
-            st.er_dequeue = ((i as u32 + 1) % 256) as u16;
-            consumed += 1;
-            found = true;
-            break;
         }
-        if !found {
-            break;
-        }
-    }
-    if consumed > 0 {
-        erdp_sync(st);
+        consumed += 1;
     }
     consumed
 }
@@ -991,6 +1143,18 @@ pub struct BulkEndpoint {
 unsafe impl Send for BulkEndpoint {}
 unsafe impl Sync for BulkEndpoint {}
 
+fn normal_trb_status(len: u32) -> u32 {
+    len & 0x1_FFFF
+}
+
+fn normal_trb_control(cycle: bool) -> u32 {
+    (1u32 << 10) | (1u32 << 5) | u32::from(cycle)
+}
+
+fn transfer_completion_ok(code: u8) -> bool {
+    code == 1 || code == 13
+}
+
 /// Configura bulk endpoints (legacy EP1) — preferir bringup com descriptor parse.
 pub unsafe fn configure_msc_endpoints(slot: u8, max_packet: u16) -> Option<(BulkEndpoint, BulkEndpoint)> {
     let state = XHCI_STATE.lock();
@@ -1073,12 +1237,12 @@ pub unsafe fn bulk_transfer(
     let trb = ep.trb_va.add(idx * 4);
     trb.add(0).write_volatile(data_pa as u32);
     trb.add(1).write_volatile((data_pa >> 32) as u32);
-    // IOC=1 (bit 5), TD size=1 (bits 17-31), chain=0
-    trb.add(2).write_volatile(len | (1u32 << 5) | (1u32 << 17));
+    // DW2: Transfer Length bits 0..16; TD Size=0 (um único TRB).
+    trb.add(2).write_volatile(normal_trb_status(len));
     // Normal TRB: type=1 nos bits 10–15, Cycle no bit 0 (xHCI 6.4.1).
     // 0x1 só setava Cycle — Intel xHCI no metal ignora TRB sem tipo.
-    let c = if ep.cycle { 1u32 } else { 0 };
-    trb.add(3).write_volatile((1u32 << 10) | c);
+    // DW3: Type=Normal, IOC=1 (bit 5), Cycle.
+    trb.add(3).write_volatile(normal_trb_control(ep.cycle));
 
     // Fence write before doorbell
     core::arch::asm!("sfence", options(nostack, preserves_flags));
@@ -1109,27 +1273,31 @@ pub unsafe fn bulk_transfer(
     let my_trb_pa = ep.trb_pa + (idx as u64) * 16;
     let mut comp = 0u8;
     let mut done = false;
-    for _ in 0..80_000 {
+    let hz = crate::tsc::tsc_hz();
+    let started = crate::tsc::rdtsc();
+    let budget = if hz > 1_000_000 { hz } else { 0 }; // 1s (MSC flash/cache)
+    let mut spins = 0u32;
+    loop {
         let mut g = XHCI_STATE.lock();
         let st = match g.as_mut() { Some(s) => s, None => return false };
-        let evt = st.er_va as *const u32;
         let mut found = false;
-        for look in 0..16u16 {
-            let i = st.er_dequeue.wrapping_add(look) % 256;
-            let dw0 = evt.add(i as usize * 4).read_volatile();
-            let dw1 = evt.add(i as usize * 4 + 1).read_volatile();
-            let dw3 = evt.add(i as usize * 4 + 3).read_volatile();
+        for _ in 0..256 {
+            let Some([dw0, dw1, dw2, dw3]) = pop_event(st) else {
+                break;
+            };
             let trb_type = (dw3 >> 10) & 0x3F;
             if trb_type != 32 {
                 continue;
             }
             let ev_ptr = (dw0 as u64) | ((dw1 as u64) << 32);
             if ev_ptr != my_trb_pa {
+                let eslot = ((dw3 >> 24) & 0xFF) as u8;
+                let epid = ((dw3 >> 16) & 0x1F) as u8;
+                let actual_len = (dw2 & 0xFF_FFFF) as u16;
+                let _ = route_isoc_event(eslot, epid, ev_ptr, actual_len);
                 continue;
             }
-            comp = ((evt.add(i as usize * 4 + 2).read_volatile() >> 24) & 0xFF) as u8;
-            st.er_dequeue = i.wrapping_add(1) % 256;
-            erdp_sync(st);
+            comp = ((dw2 >> 24) & 0xFF) as u8;
             found = true;
             break;
         }
@@ -1139,9 +1307,15 @@ pub unsafe fn bulk_transfer(
             break;
         }
         core::hint::spin_loop();
+        spins = spins.saturating_add(1);
+        if (budget > 0 && crate::tsc::rdtsc().wrapping_sub(started) >= budget)
+            || (budget == 0 && spins >= 2_000_000)
+        {
+            break;
+        }
     }
     if done {
-        if comp == 0 {
+        if transfer_completion_ok(comp) {
             return true;
         }
         crate::slog_nano!("USB", "xhci", "Bulk err: comp={}", comp);
@@ -1230,4 +1404,32 @@ pub unsafe fn disable_untrusted_ports() -> u8 {
         }
     }
     n
+}
+
+#[cfg(test)]
+mod transfer_trb_tests {
+    use super::{max_scratchpads, normal_trb_control, normal_trb_status, transfer_completion_ok};
+
+    #[test]
+    fn normal_trb_places_ioc_in_control_dword() {
+        let status = normal_trb_status(512);
+        let control = normal_trb_control(true);
+        assert_eq!(status, 512);
+        assert_eq!((control >> 10) & 0x3F, 1);
+        assert_ne!(control & (1 << 5), 0);
+        assert_ne!(control & 1, 0);
+    }
+
+    #[test]
+    fn completion_codes_match_xhci_spec() {
+        assert!(transfer_completion_ok(1));
+        assert!(transfer_completion_ok(13));
+        assert!(!transfer_completion_ok(0));
+    }
+
+    #[test]
+    fn scratchpad_count_combines_hi_and_lo_fields() {
+        let hcs2 = (2u32 << 21) | (3u32 << 27);
+        assert_eq!(max_scratchpads(hcs2), 67);
+    }
 }

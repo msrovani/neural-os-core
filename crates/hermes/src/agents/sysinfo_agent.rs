@@ -28,12 +28,23 @@ impl Agent for SysInfoAgent {
     }
 
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
+        // PollEvery(50) com last_poll==0 dispara no tick 1 — no mesmo ciclo
+        // do 1º frame do Display. xHCI multi-porta aí congela o orb em 00:00.
+        if tick < 64 {
+            return AgentTickResult::Pending;
+        }
         let fat_ok = k_nano::boot_logger::FAT_READY.load(Ordering::Relaxed);
         if !fat_ok {
-            // A cada ~32 tentativas (~1600 ticks SysInfo) limpa skip de portas —
-            // com rate-limit 200 ticks no ensure_persisted, evita martelar xHCI.
+            // Scheduler cooperativo: enumeração xHCI/BOT é síncrona e pode levar
+            // centenas de ms ou não retornar em silício. Depois do 1º frame isso
+            // congelava Display/Input enquanto IRQs/APs continuavam vivos.
+            // O MSC deve ser resolvido no DriverInit; runtime só observa.
+            if k_nano::boot_logger::ui_is_live() {
+                return AgentTickResult::Pending;
+            }
             let n = MSC_RETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
-            if n > 0 && n % 32 == 0 {
+            // Desktop vivo: não reabre skips (webcam/BT) — EnableSlot no tick trava.
+            if n > 0 && n % 64 == 0 && !k_nano::boot_logger::ui_is_live() {
                 k_nano::xhci::clear_msc_port_skips();
             }
             let ok = k_nano::boot_logger::ensure_persisted();

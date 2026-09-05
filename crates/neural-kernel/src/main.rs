@@ -880,10 +880,19 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     #[cfg(feature = "smp-runqueue")]
     {
         agent_core::set_smp_offload_hooks(
-            Some(|| k_nano::smp::ap_pollable()),
+            Some(|| {
+                k_nano::smp::ap_pollable()
+                    && k_nano::smp::runqueue::agent_tick_offload_safe()
+            }),
             Some(k_nano::smp::runqueue::distribute_batch),
         );
         k_nano::smp::runqueue::register_agent_tick_fn(agent_core::tick_agent_by_index);
+        k_nano::slog_bin!(
+            "SMP",
+            "warn",
+            "agent tick offload gated={} (AP compute permanece ativo)",
+            k_nano::smp::runqueue::agent_tick_offload_safe()
+        );
     }
     // SESSÃO_260: rastreio do 1º ciclo — loga cada agente ANTES do tick no
     // ramlog (dump ">>> BOOT.LOG (RAM) <<<" no FB). Se o HW real travar num

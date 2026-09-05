@@ -47,6 +47,18 @@ impl Write for StackBuf {
 
 pub static SESSION_FILENAME: Mutex<Option<String>> = Mutex::new(None);
 pub static FAT_READY: AtomicBool = AtomicBool::new(false);
+/// Desktop já pintou o 1º frame — MSC retry não pode resetar xHCI (trava o orb).
+static UI_LIVE: AtomicBool = AtomicBool::new(false);
+
+/// DisplayAgent chama após claim_graphics + 1º render.
+pub fn mark_ui_live() {
+    UI_LIVE.store(true, Ordering::Release);
+}
+
+pub fn ui_is_live() -> bool {
+    UI_LIVE.load(Ordering::Acquire)
+}
+
 /// Heap talc jÃ¡ inicializado â€” obrigatÃ³rio antes de qualquer alloc no logger.
 static HEAP_READY: AtomicBool = AtomicBool::new(false);
 
@@ -919,6 +931,12 @@ pub fn ensure_persisted() -> bool {
         static LAST_MSC_PROBE_TICK: AtomicU64 = AtomicU64::new(0);
         let now = now_tick();
         let last = LAST_MSC_PROBE_TICK.load(Ordering::Relaxed);
+        // Pós-desktop: o 1º ensure_persisted NÃO pode varrer xHCI no mesmo
+        // tick do 1º frame (SysInfo urgency 160 — SESSION_312 Alienware).
+        if ui_is_live() && last == 0 {
+            LAST_MSC_PROBE_TICK.store(now, Ordering::Relaxed);
+            return flush();
+        }
         let due = has_msc
             || last == 0
             || now.saturating_sub(last) >= MSC_PROBE_MIN_TICKS;

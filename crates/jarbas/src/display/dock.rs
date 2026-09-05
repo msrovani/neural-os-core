@@ -104,15 +104,40 @@ impl Dock {
     }
 }
 
+/// Partes do relógio do dock. `hz` fora de 8..=256 vira 18 (PIT) — calibração
+/// LAPIC absurda deixava o display em 00:00 por minutos.
+pub(crate) fn clock_parts(ticks: u64, hz_raw: u64) -> (u64, u64, u64) {
+    let hz = if !(8..=256).contains(&hz_raw) { 18 } else { hz_raw };
+    let secs = ticks / hz;
+    ((secs / 3600) % 24, (secs / 60) % 60, secs % 60)
+}
+
 fn format_time() -> String {
-    // TODO: usar RTC real quando disponível
-    // SESSION_310: usa TIMER_HZ calibrado (64 Hz no QEMU TCG, não 1000).
+    // TODO: RTC real quando disponível. Até 1h mostra mm:ss (visível a cada segundo).
     let ticks = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
     let hz = k_nano::interrupts::TIMER_HZ.load(core::sync::atomic::Ordering::Relaxed);
-    let secs = if hz > 0 { ticks / hz } else { ticks / 64 };
-    let hours = (secs / 3600) % 24;
-    let mins = (secs / 60) % 60;
-    alloc::format!("{:02}:{:02}", hours, mins)
+    let (hours, mins, secs) = clock_parts(ticks, hz);
+    if hours == 0 {
+        alloc::format!("{:02}:{:02}", mins, secs)
+    } else {
+        alloc::format!("{:02}:{:02}", hours, mins)
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::clock_parts;
+
+    #[test]
+    fn hz_absurdo_nao_congela_em_zero() {
+        // 1_000_000 Hz + 180 ticks (10s @18Hz) não pode ser 00:00.
+        let (h, m, s) = clock_parts(180, 1_000_000);
+        assert_eq!((h, m, s), (0, 0, 10));
+        let (h0, m0, s0) = clock_parts(0, 18);
+        assert_eq!((h0, m0, s0), (0, 0, 0));
+        let (h1, m1, s1) = clock_parts(18, 18);
+        assert_eq!((h1, m1, s1), (0, 0, 1));
+    }
 }
 
 fn draw_system_tray(target: &mut super::fb::DoubleBuffer, theme: &super::theme::Theme, dock_rect: Rect) {

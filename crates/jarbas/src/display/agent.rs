@@ -588,10 +588,11 @@ impl Agent for DisplayAgent {
                 // (Hermes/LLM pode bloquear minutos — SESSION_168 / HW real freeze no splash).
                 if let Some(ref mut desktop) = *COMPOSITOR.lock() {
                     desktop.invalidate_all();
-                    let now = k_nano::interrupts::TIMER_TICKS
-                        .load(core::sync::atomic::Ordering::Relaxed) as u64;
-                    desktop.render(now, self.avatar.as_mut(), self.avatar_state_label);
+                    // Animação usa tick do scheduler: se o IRQ timer falhar, a UI
+                    // continua responsiva enquanto o runtime ainda progride.
+                    desktop.render(tick, self.avatar.as_mut(), self.avatar_state_label);
                 }
+                k_nano::boot_logger::mark_ui_live();
                 k_nano::slog_jarbas!("Jarbas", "info", "Desktop iniciado @ {}x{}", fw, fh);
                 k_nano::interrupts::mouse_log_status("desktop_ready");
             }
@@ -990,6 +991,9 @@ impl Agent for DisplayAgent {
             if let Some((card_id, btn_idx)) = desktop.take_card_hit_button() {
                 self.handle_card_button(card_id, btn_idx);
             }
+            // Render/liveness não dependem do LAPIC/PIT; relógio do dock lê
+            // TIMER_TICKS separadamente. Assim mouse/orb não congelam se o
+            // timer de parede degradar, mas o scheduler continuar acordando.
             desktop.render(tick, self.avatar.as_mut(), self.avatar_state_label);
         }
         drop(comp);

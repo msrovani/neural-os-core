@@ -28,6 +28,12 @@ unsafe impl Send for UsbMassStorage {}
 
 impl UsbMassStorage {
     pub unsafe fn probe() -> Option<Self> {
+        // Runtime: NUNCA enumerar/rebindar de forma síncrona no scheduler
+        // cooperativo. Mesmo o HC atual pode travar em EnableSlot/BOT.
+        if crate::boot_logger::ui_is_live() {
+            crate::slog_nano!("USB", "warn", "MSC probe bloqueado: UI live");
+            return None;
+        }
         let n = xhci::xhci_controller_count();
         let n = if n == 0 { 1 } else { n };
         for ci in 0..n {
