@@ -356,11 +356,38 @@ impl Agent for CortexAgent {
                 }
             }
             agent_core::tick_stage(2);
-            let expert = {
-                let t = crate::globals::TRINITY.lock();
-                t.classify_intent(user_text).name
+            // Freeze s323: watchdog pré-lock. TicketLock layout:
+            // {ticket: AtomicUsize, serving: AtomicUsize, data}. Se a lock já
+            // está disputada (serving != ticket) ALGUÉM segura — estampa o
+            // estado no FB e degrada p/ fallback (o tick sobrevive, AIOS).
+            let trinity_ptr = &crate::globals::TRINITY as *const _ as *const u64;
+            let (tk, sv) = unsafe {
+                (
+                    core::ptr::read_volatile(trinity_ptr),
+                    core::ptr::read_volatile(trinity_ptr.add(1)),
+                )
             };
-            agent_core::tick_stage(3);
+            let expert = if tk != sv {
+                let mut buf = [0u8; 32];
+                let mut n = 0usize;
+                for &b in b"TRINITY BUSY t=" {
+                    if n < buf.len() { buf[n] = b; n += 1; }
+                }
+                k_nano::interrupts::push_hex_fb(&mut buf, &mut n, tk as u64);
+                for &b in b" s=" {
+                    if n < buf.len() { buf[n] = b; n += 1; }
+                }
+                k_nano::interrupts::push_hex_fb(&mut buf, &mut n, sv as u64);
+                k_nano::interrupts::exception_fb_stamp(&buf[..n]);
+                "generator"
+            } else {
+                let t = crate::globals::TRINITY.lock();
+                agent_core::tick_stage(3); // lock adquirido
+                let e = t.classify_intent(user_text).name;
+                drop(t);
+                agent_core::tick_stage(4); // classify feito
+                e
+            };
             k_nano::slog_cortex!(
                 "LLM",
                 "info",
@@ -395,12 +422,12 @@ impl Agent for CortexAgent {
                 let system_prompt = alloc::format!("{} [LLM: Falcon3-3B-Instruct-1.58bit]", SKILL_STORAGE.lock().build_system_prompt_for(user_text));
                 alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text)
             };
-            agent_core::tick_stage(4);
+            agent_core::tick_stage(5);
             k_nano::slog_cortex!("LLM", "info", "Calling Falcon3-3B-Instruct-1.58bit via generate_via_model...");
             let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             // F4: structured decode when pattern is recognized
             let pattern = recognize(&user_text);
-            agent_core::tick_stage(5);
+            agent_core::tick_stage(6);
             let output = match pattern {
                 crate::decode_harness::SkillPattern::Add => {
                     let mut dec = StructuredDecoder::new(DecodeMode::Number);
@@ -431,7 +458,7 @@ impl Agent for CortexAgent {
                     cortex::cortex::generate_via_model(&prompt)
                 }
             };
-            agent_core::tick_stage(6);
+            agent_core::tick_stage(7);
             let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             k_nano::slog_cortex!("LLM", "info", "generate_via_model took {} ticks (~{}s)", t1 - t0, (t1 - t0) / 100);
             let output = if output == cortex::cortex::NO_MODEL_MSG || output.trim().is_empty() {
@@ -445,7 +472,7 @@ impl Agent for CortexAgent {
                 id: 0, topic: alloc::string::String::from(cortex::cortex::TOPIC_LLM_RESPONSE),
                 payload: output.clone().into_bytes(), token: CapabilityToken::Legacy(1),
             });
-            agent_core::tick_stage(7);
+            agent_core::tick_stage(8);
             // ADR-0058: se output e JSON de card valido, publica em UI_SPEC
             if pattern == crate::decode_harness::SkillPattern::Card
                 && output.contains("\"body\"")
