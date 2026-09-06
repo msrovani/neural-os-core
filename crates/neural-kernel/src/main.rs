@@ -1435,6 +1435,10 @@ pub(crate) fn kernel_boot(
         k_nano::slog_bin!("MEM", "info", "reserva stack via RSP {:#x} len=8MB (rsp_phys={:#x})", stack_base, rsp_phys);
         kjson!("DBG", "MEM", "usable_regions", "n", n as u64, "boot", boot_tag);
     });
+    // Pool DMA do HDA (freeze s322): buffers em phys fixos baixos (0x102000-
+    // 0x108000) sobrepunham a imagem do kernel — o DMA da saudação corrompia
+    // .text/.data no metal (QEMU mascarava com HDA inerte).
+    k_nano::memory::reserve_hda_dma_pool();
     // Pool de page tables DEPOIS das reservas (kernel/heap/stack ocupados).
     // Sem isto, map_page_direct pega frames do PMM geral — e se o .kheap
     // ainda estava USABLE, a PT era escrita em cima de nós BTree.

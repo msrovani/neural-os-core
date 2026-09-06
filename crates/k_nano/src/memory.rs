@@ -510,6 +510,53 @@ pub unsafe fn dealloc_pt_frame(frame: PhysFrame<Size4KiB>) {
     }
 }
 
+/// Pool DMA do HDA (freeze s322): base física de 64KB contíguos reservados do
+/// PMM (frames garantidamente não-vivos — ora-1 exclui kernel/heap/stack).
+/// Os buffers antigos em phys FIXOS baixos (0x102000-0x108000) sobrepunham a
+/// imagem do kernel em metal real: o DMA da saudação escrevia áudio sobre
+/// .text/.data — e o BDL apontava para o PRÓPRIO buffer de amostras (o
+/// controlador lia amostras como ponteiro de DMA!). QEMU mascarava (HDA
+/// meio-morto, DMA inerte). 0 = pool não reservada → HDA usa fallback formant.
+pub static HDA_DMA_BASE: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+/// Reserva 64KB contíguos (<4GB) do PMM p/ o pool DMA do HDA. Idempotente.
+/// Chamar uma vez no boot (pós-PMM init). Falha = HDA fica sem DMA (honesto).
+pub fn reserve_hda_dma_pool() {
+    if HDA_DMA_BASE.load(core::sync::atomic::Ordering::Relaxed) != 0 {
+        return;
+    }
+    const FRAMES: usize = 16; // 64KB
+    for _attempt in 0..3 {
+        let mut frames = [0u64; FRAMES];
+        let mut ok = true;
+        for f in frames.iter_mut() {
+            match alloc_pt_frame() {
+                Some(fr) => *f = fr.start_address().as_u64(),
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            for i in 1..FRAMES {
+                if frames[i] != frames[i - 1] + 0x1000 {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            // Frames já alocados = não-vivos por definição; base contígua.
+            HDA_DMA_BASE.store(frames[0], core::sync::atomic::Ordering::Relaxed);
+            return;
+        }
+        // Não contíguo: frames alocados ficam retidos (sem free no bitmap);
+        // cap 3 tentativas — no boot cedo o PMM quase sempre é contíguo.
+    }
+}
+
 /// Frames livres restantes na pool de page tables (telemetria HUD/SelfHeal).
 pub fn pt_pool_available() -> usize {
     let guard = GLOBAL_ALLOCATOR.lock();

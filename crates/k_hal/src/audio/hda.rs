@@ -42,9 +42,19 @@ const SD1_BDLPU: u64 = 0xB4;
 static HDA_INIT_DONE: AtomicBool = AtomicBool::new(false);
 static HDA_BAR: AtomicU64 = AtomicU64::new(0);
 
-// Buffer fisico: 0x103000 = capture, 0x104000 = playback
-const CAPTURE_BUF: u64 = 0x100000 + 0x3000;
-const PLAYBACK_BUF: u64 = 0x100000 + 0x4000;
+// Pool DMA reservada do PMM (k_nano::memory::HDA_DMA_BASE — freeze s322).
+// Layout: CORB=+0x000 (1KB) RIRB=+0x400 (2KB) BDL_P=+0x800 BDL_C=+0x900
+//         PLAYBACK=+0x1000 (16KB) CAPTURE=+0x5000 (16KB) — sem sobreposição.
+// ANTES: phys fixos 0x102000-0x108000 DENTRO da imagem do kernel em metal.
+fn dma_base() -> u64 {
+    k_nano::memory::HDA_DMA_BASE.load(Ordering::Relaxed)
+}
+const OFF_CORB: u64 = 0x000;
+const OFF_RIRB: u64 = 0x400;
+const OFF_BDL_P: u64 = 0x800;
+const OFF_BDL_C: u64 = 0x900;
+const OFF_PLAYBACK: u64 = 0x1000;
+const OFF_CAPTURE: u64 = 0x5000;
 const BUF_SIZE: u32 = 16384;
 
 const HDA_MANIFEST: AgentManifest = AgentManifest {
@@ -76,6 +86,12 @@ unsafe fn w32(bar: u64, off: u64, v: u32) { core::ptr::write_volatile(reg32(bar,
 
 unsafe fn init_hda() -> bool {
     if HDA_INIT_DONE.load(Ordering::Relaxed) { return true; }
+    let db = dma_base();
+    if db == 0 {
+        k_nano::slog_hal!("HDA", "warn", "sem pool DMA (HDA_DMA_BASE=0) — fallback formant");
+        HDA_INIT_DONE.store(true, Ordering::Relaxed);
+        return true; // HDA_BAR fica 0 → poll/write no-op honesto
+    }
     let devices = pci::scan_pci();
     for dev in &devices {
         if dev.class == 0x04 && dev.subclass == 0x03 {
@@ -94,14 +110,14 @@ unsafe fn init_hda() -> bool {
             for _ in 0..200 { core::hint::spin_loop(); }
 
             // CORB
-            w32(bar, HDA_CORB_BASE, (0x100000 + 0x2000) as u32);
+            w32(bar, HDA_CORB_BASE, (db + OFF_CORB) as u32);
             w32(bar, HDA_CORB_BASE + 4, 0u32);
             w32(bar, HDA_CORB_WP, 0);
             w32(bar, HDA_CORB_RP, 0);
             w32(bar, HDA_CORB_CTL, 0x8002);
 
             // RIRB
-            w32(bar, HDA_RIRB_BASE, (0x100000 + 0x2800) as u32);
+            w32(bar, HDA_RIRB_BASE, (db + OFF_RIRB) as u32);
             w32(bar, HDA_RIRB_BASE + 4, 0u32);
             w32(bar, HDA_RIRB_CTL, 0x8002);
 
@@ -112,8 +128,20 @@ unsafe fn init_hda() -> bool {
                 if resp != 0 && resp != 0xFFFFFFFF {
                     k_nano::slog_hal!("HDA", "info", "Codec {}: vendor={:#08x}", cad, resp);
 
+                    // BDL próprio (16B/entry: ptr u64 + len u32 + flags u32).
+                    // O esquema antigo apontava o BDL pro PRÓPRIO buffer de
+                    // amostras: o controlador lia amostras como ponteiro DMA!
+                    let bdlp = (db + OFF_BDL_P) as *mut u8;
+                    core::ptr::write_volatile(bdlp as *mut u64, db + OFF_PLAYBACK);
+                    core::ptr::write_volatile(bdlp.add(8) as *mut u32, BUF_SIZE);
+                    core::ptr::write_volatile(bdlp.add(12) as *mut u32, 0u32);
+                    let bdlc = (db + OFF_BDL_C) as *mut u8;
+                    core::ptr::write_volatile(bdlc as *mut u64, db + OFF_CAPTURE);
+                    core::ptr::write_volatile(bdlc.add(8) as *mut u32, BUF_SIZE);
+                    core::ptr::write_volatile(bdlc.add(12) as *mut u32, 0u32);
+
                     // SD0: Capture
-                    w32(bar, SD0_BDLPL, CAPTURE_BUF as u32);
+                    w32(bar, SD0_BDLPL, (db + OFF_BDL_C) as u32);
                     w32(bar, SD0_BDLPU, 0u32);
                     w32(bar, SD0_CBL, BUF_SIZE);
                     w32(bar, SD0_LVI, 0);
@@ -123,7 +151,7 @@ unsafe fn init_hda() -> bool {
                     w32(bar, SD0_CTL, 0x82);
 
                     // SD1: Playback (mesmo formato: 16-bit, 48kHz, mono)
-                    w32(bar, SD1_BDLPL, PLAYBACK_BUF as u32);
+                    w32(bar, SD1_BDLPL, (db + OFF_BDL_P) as u32);
                     w32(bar, SD1_BDLPU, 0u32);
                     w32(bar, SD1_CBL, BUF_SIZE);
                     w32(bar, SD1_LVI, 0);
@@ -132,7 +160,7 @@ unsafe fn init_hda() -> bool {
                     for _ in 0..100 { core::hint::spin_loop(); }
                     w32(bar, SD1_CTL, 0x82);
 
-                    k_nano::slog_hal!("HDA", "info", "Capture SD0 @ 0x{:x} + Playback SD1 @ 0x{:x}", CAPTURE_BUF, PLAYBACK_BUF);
+                    k_nano::slog_hal!("HDA", "info", "Capture SD0 @ {:#x} + Playback SD1 @ {:#x} (pool DMA PMM)", db + OFF_CAPTURE, db + OFF_PLAYBACK);
                     HDA_BAR.store(bar, Ordering::Relaxed);
                 }
             }
@@ -152,7 +180,7 @@ pub fn poll_hda_audio() {
     let sts = unsafe { r32(bar, SD0_STS) };
     if sts & 0x04 != 0 {
         unsafe { w32(bar, SD0_STS, sts | 0x04); }
-        let buf_ptr = (CAPTURE_BUF + k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *const i16;
+        let buf_ptr = ((dma_base() + OFF_CAPTURE) + k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *const i16;
         let samples = 8192;
         let mut audio_buf = alloc::vec::Vec::with_capacity(samples * 2);
         for i in 0..samples {
@@ -177,7 +205,7 @@ pub fn write_hda_playback(samples: &[i16]) {
     if sts & 0x04 != 0 {
         unsafe { w32(bar, SD1_STS, sts | 0x04); }
         let count = samples.len().min(BUF_SIZE as usize / 2);
-        let buf_ptr = (PLAYBACK_BUF + k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut i16;
+        let buf_ptr = ((dma_base() + OFF_PLAYBACK) + k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut i16;
         for i in 0..count {
             unsafe { core::ptr::write_volatile(buf_ptr.add(i), samples[i]); }
         }
