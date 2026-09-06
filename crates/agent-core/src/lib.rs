@@ -566,11 +566,21 @@ impl AgentRegistry {
                 let wdt_clock = unsafe { TICK_CLOCK_HOOK };
                 let wdt_slow = unsafe { SLOW_TICK_HOOK };
                 let wdt_t0 = wdt_clock.map(|c| c()).unwrap_or(0);
+                // Stamp p/ HUD ao vivo: tick em curso + agente (freeze s317).
+                if wdt_clock.is_some() {
+                    TICK_ENTERED_MS.store(wdt_t0, core::sync::atomic::Ordering::Relaxed);
+                    CUR_AGENT_PTR.store(
+                        agent_name.as_ptr() as u64,
+                        core::sync::atomic::Ordering::Relaxed,
+                    );
+                    CUR_AGENT_LEN.store(agent_name.len(), core::sync::atomic::Ordering::Relaxed);
+                }
                 let result = with_agent_tick_lock(|| {
                     self.agents[i].tick_counter += 1;
                     let tc = self.agents[i].tick_counter;
                     self.agents[i].agent.tick(tick_id, tc)
                 });
+                TICK_ENTERED_MS.store(0, core::sync::atomic::Ordering::Relaxed);
                 if let (Some(c), Some(report)) = (wdt_clock, wdt_slow) {
                     let dt = c().wrapping_sub(wdt_t0);
                     if dt > TICK_WATCHDOG_MS {
@@ -638,6 +648,38 @@ static mut SLOW_TICK_HOOK: Option<fn(&str, u64)> = None;
 /// Limiar do watchdog de tick (ms). Acima disso o agente bloqueou o scheduler
 /// cooperativo — é exatamente o sintoma do freeze pós-1º-frame no metal.
 pub const TICK_WATCHDOG_MS: u64 = 500;
+
+/// Stamp de entrada no tick (ms via clock hook) + agente corrente.
+/// 0 = fora de tick. HUD do jarbas lê ao vivo p/ diagnóstico de freeze (s317).
+pub static TICK_ENTERED_MS: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+static CUR_AGENT_PTR: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+static CUR_AGENT_LEN: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+/// (agente corrente, ms de entrada) se um tick está em curso; None fora.
+///
+/// SAFETY: ptr/len são gravados no `run()` a partir de `&'static str`
+/// (manifestos de agente — vivem no .rodata do binário); a leitura reconstrói
+/// o &str sem cópia. Fora de tick (stamp 0) retorna None.
+pub fn tick_in_progress() -> Option<(&'static str, u64)> {
+    let entered = TICK_ENTERED_MS.load(core::sync::atomic::Ordering::Relaxed);
+    if entered == 0 {
+        return None;
+    }
+    let ptr = CUR_AGENT_PTR.load(core::sync::atomic::Ordering::Relaxed) as *const u8;
+    let len = CUR_AGENT_LEN.load(core::sync::atomic::Ordering::Relaxed);
+    if ptr.is_null() || len == 0 || len > 64 {
+        return None;
+    }
+    Some(unsafe {
+        (
+            core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len)),
+            entered,
+        )
+    })
+}
 
 /// ADR-0089: se true, ring≥1 vão para run-queue AP (BSP só tick ring0).
 static mut SMP_OFFLOAD_PREDICATE: Option<fn() -> bool> = None;

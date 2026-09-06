@@ -65,7 +65,12 @@ static WELCOME_UNTIL: core::sync::atomic::AtomicU64 = core::sync::atomic::Atomic
 /// Cached HUD status line — recomputed only when values change.
 /// Elimina alloc de String por frame no render loop (60Hz).
 static HUD_CACHE_MEM: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(u64::MAX);
-static HUD_CACHE_STR: spin::Mutex<alloc::string::String> = spin::Mutex::new(alloc::string::String::new());
+    static HUD_CACHE_STR: spin::Mutex<alloc::string::String> = spin::Mutex::new(alloc::string::String::new());
+
+/// Ticks do DisplayAgent que chegaram ao render (diagnóstico freeze s317):
+/// valor pintado no HUD; se a tela congelar, o último frame mostra até onde
+/// o render chegou e qual agent estava em tick.
+pub static RENDER_N: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Publica a fala de boas-vindas no HUD (~8s a 60Hz ≈ 480 ticks).
 pub fn announce_welcome(body: &str) {
@@ -495,6 +500,7 @@ impl JarbasDesktop {
 
     pub fn render(&mut self, tick: u64, avatar: Option<&mut crate::display::avatar8::Avatar8>, avatar_state: Option<&str>) {
         self.tick = tick; let (w, h) = (self.w, self.h);
+        RENDER_N.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
 
         // ── FPS control ──
         let last = LAST_FRAME_TICK.load(core::sync::atomic::Ordering::Relaxed);
@@ -700,6 +706,32 @@ impl JarbasDesktop {
                     }
                 }
             }
+        }
+
+        // Diagnóstico freeze (s317): ticks de render + tick de agent em curso.
+        // Se a tela congelar, o último frame pintado mostra o culpado ao vivo.
+        {
+            let rn = RENDER_N.load(core::sync::atomic::Ordering::Relaxed);
+            let s = match agent_core::tick_in_progress() {
+                Some((name, entered)) => alloc::format!(
+                    "T{} IN:{} {}s",
+                    rn,
+                    name,
+                    k_nano::tsc::now_ms().saturating_sub(entered) / 1000
+                ),
+                None => alloc::format!("T{}", rn),
+            };
+            let dx = 12 + 6 * 8 + 12 + 32 * (3 + 2) + 12;
+            draw_text(
+                &mut self.fb,
+                dx,
+                6,
+                &s,
+                self.w,
+                theme.fg_muted.0,
+                theme.fg_muted.1,
+                theme.fg_muted.2,
+            );
         }
 
 // Botão OFF — canto SD
