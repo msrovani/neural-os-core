@@ -799,6 +799,12 @@ static DIAG_FB_WIDTH: core::sync::atomic::AtomicU32 = core::sync::atomic::Atomic
 /// Marca de estágio (1..=8): n barras no canto sup. direito do FB REAL.
 /// Apaga a faixa antes (última marca vence). No-op pré-graphics.
 pub fn diag_mark(n: u8) {
+    diag_mark_at(0, n);
+}
+
+/// Marca de estágio em linha arbitrária (freeze s321): row y0=0 = barras do
+/// display; y0=32 = sub-estágios do tick em curso (ex: Cortex). Volatile.
+pub fn diag_mark_at(y0: usize, n: u8) {
     let addr = DIAG_FB_ADDR.load(core::sync::atomic::Ordering::Relaxed);
     if addr == 0 || n == 0 || n > 9 {
         return;
@@ -816,7 +822,7 @@ pub fn diag_mark(n: u8) {
     unsafe {
         // apaga a faixa inteira (preto) — última marca vence
         for dy in 0..bh {
-            let off = dy * stride + x0 * bpp;
+            let off = (y0 + dy) * stride + x0 * bpp;
             for b in 0..strip_w * bpp {
                 base.add(off + b).write_volatile(0);
             }
@@ -825,7 +831,7 @@ pub fn diag_mark(n: u8) {
         for i in 0..n as usize {
             let bx = x0 + 2 + i * (bw + gap);
             for dy in 0..bh {
-                let off = dy * stride + bx * bpp;
+                let off = (y0 + dy) * stride + bx * bpp;
                 for b in 0..bpp {
                     let c = match b {
                         0 => 0xFFu8,
@@ -838,6 +844,11 @@ pub fn diag_mark(n: u8) {
             }
         }
     }
+}
+
+/// Wrapper p/ o bridge agent-core: sub-estágios na linha 2 (y=32).
+pub fn diag_stage_row1(n: u8) {
+    diag_mark_at(32, n);
 }
 
 /// Stamp do agente em curso (freeze s319): escreve o NOME direto no FB real

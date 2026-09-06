@@ -592,6 +592,9 @@ impl Agent for DisplayAgent {
                 k_nano::interrupts::set_exception_fb_fn(Some(
                     crate::display::fb::diag_stamp_exception,
                 ));
+                // Bisector v4 (s321): sub-estágios do tick em curso (linha 2
+                // de barras, y=32) — agentes marcam progresso via tick_stage.
+                agent_core::set_tick_stage_fn(Some(crate::display::fb::diag_stage_row1));
                 // 1º frame imediato: splash no tick 1; sem render+swap aqui depende do tick 2
                 // (Hermes/LLM pode bloquear minutos — SESSION_168 / HW real freeze no splash).
                 if let Some(ref mut desktop) = *COMPOSITOR.lock() {

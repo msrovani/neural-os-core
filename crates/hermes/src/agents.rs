@@ -342,6 +342,8 @@ impl Agent for CortexAgent {
     fn manifest(&self) -> &AgentManifest { &CORTEX_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         if let Some(event) = self.receiver.try_receive() {
+            // Sub-estágios (freeze s321): barras linha 2 = progresso do tick.
+            agent_core::tick_stage(1);
             let user_text = core::str::from_utf8(&event.payload).unwrap_or("");
             // EmotionAnalyzer: analisa input do usuario e feed no AFFECT_SNAPSHOT
             {
@@ -353,10 +355,12 @@ impl Agent for CortexAgent {
                     snap.uncertainty *= 0.8;
                 }
             }
+            agent_core::tick_stage(2);
             let expert = {
                 let t = crate::globals::TRINITY.lock();
                 t.classify_intent(user_text).name
             };
+            agent_core::tick_stage(3);
             k_nano::slog_cortex!(
                 "LLM",
                 "info",
@@ -391,10 +395,12 @@ impl Agent for CortexAgent {
                 let system_prompt = alloc::format!("{} [LLM: Falcon3-3B-Instruct-1.58bit]", SKILL_STORAGE.lock().build_system_prompt_for(user_text));
                 alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text)
             };
+            agent_core::tick_stage(4);
             k_nano::slog_cortex!("LLM", "info", "Calling Falcon3-3B-Instruct-1.58bit via generate_via_model...");
             let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             // F4: structured decode when pattern is recognized
             let pattern = recognize(&user_text);
+            agent_core::tick_stage(5);
             let output = match pattern {
                 crate::decode_harness::SkillPattern::Add => {
                     let mut dec = StructuredDecoder::new(DecodeMode::Number);
@@ -425,6 +431,7 @@ impl Agent for CortexAgent {
                     cortex::cortex::generate_via_model(&prompt)
                 }
             };
+            agent_core::tick_stage(6);
             let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             k_nano::slog_cortex!("LLM", "info", "generate_via_model took {} ticks (~{}s)", t1 - t0, (t1 - t0) / 100);
             let output = if output == cortex::cortex::NO_MODEL_MSG || output.trim().is_empty() {
@@ -438,6 +445,7 @@ impl Agent for CortexAgent {
                 id: 0, topic: alloc::string::String::from(cortex::cortex::TOPIC_LLM_RESPONSE),
                 payload: output.clone().into_bytes(), token: CapabilityToken::Legacy(1),
             });
+            agent_core::tick_stage(7);
             // ADR-0058: se output e JSON de card valido, publica em UI_SPEC
             if pattern == crate::decode_harness::SkillPattern::Card
                 && output.contains("\"body\"")

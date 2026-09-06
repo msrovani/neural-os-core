@@ -687,6 +687,30 @@ pub fn set_tick_stamp_fn(f: Option<fn(&[u8])>) {
     TICK_STAMP_FN.store(v, core::sync::atomic::Ordering::Relaxed);
 }
 
+/// Sub-estágios do tick em curso (freeze s321): fn registrada pela crate de
+/// display; agentes (ex: Cortex) marcam progresso fino via `tick_stage(n)`.
+static TICK_STAGE_FN: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+/// Registra a fn de sub-estágio (None = desativa).
+pub fn set_tick_stage_fn(f: Option<fn(u8)>) {
+    let v = match f {
+        Some(g) => g as usize as u64,
+        None => 0,
+    };
+    TICK_STAGE_FN.store(v, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Marca sub-estágio n do tick em curso (no-op sem registro). Lock-free.
+pub fn tick_stage(n: u8) {
+    let f = TICK_STAGE_FN.load(core::sync::atomic::Ordering::Relaxed);
+    if f != 0 {
+        // SAFETY: ponteiro registrado via set_tick_stage_fn.
+        let g: fn(u8) = unsafe { core::mem::transmute(f as usize) };
+        g(n);
+    }
+}
+
 /// (agente corrente, ms de entrada) se um tick está em curso; None fora.
 ///
 /// SAFETY: ptr/len são gravados no `run()` a partir de `&'static str`
