@@ -4,7 +4,7 @@
 **Sintoma:** desktop chega ao 1º frame e congela (orb/relógio/mouse); `BOOT.LOG`
 placeholder; `NSGDB.BIN` zerado; runtime/IRQs/APs vivos em background.
 
-## Instrumentação incluída (s316)
+## Instrumentação incluída (s316 + s317)
 
 | Item | Arquivo | O que faz |
 |------|---------|-----------|
@@ -12,6 +12,28 @@ placeholder; `NSGDB.BIN` zerado; runtime/IRQs/APs vivos em background.
 | Report no kernel | `neural-kernel/src/main.rs` | `[Sched] [warn] "tick lento: <agent> levou N ms"` |
 | TSC visível | `k_nano/src/tsc.rs` | Calibração HPET/PIT = `ok`; estimativa CPUID = `warn` (antes: trace mudo) |
 | TIMEOUT com ms | `k_nano/src/xhci/bringup.rs` | `cmd TIMEOUT ms=N edq=… evt=…` |
+| **HUD ao vivo (s317)** | `agent-core` + `jarbas/compositor.rs` | HUD pinta `T<renders> IN:<agent> <s>s` — tick em curso + contador, visíveis no FB **depois** do compositor assumir |
+
+## Leitura do HUD no freeze (s317 — foto da tela basta)
+
+A linha ao lado das barras de core, formato `T123 IN:input_agent 4s`:
+
+| O que aparece no frame congelado | Diagnóstico |
+|----------------------------------|-------------|
+| `IN:<agent> Ns` com N ≥ 3 | **Tick preso** nesse agente — IRQ vivo, scheduler travado nele (H1/H2) |
+| `T<n>` com n pequeno (~dezenas) e sem `IN:` | Render morreu cedo — suspeitar P6 demos Ring3 pós-JARVIS (main.rs:3054+) |
+| `T<n>` alto e estável entre boots, tela estática | Render rodava e pixels pararam — H5 (FB UC lento no metal) |
+| `T<n>` diferente a cada boot no freeze | Morte em ponto variável — correlacionar com o que mudou |
+
+## Evidência do boot s316 (Alienware, 2026-09-06)
+
+- **16 CPU cores online, 15780MB RAM** — SMP metal aceso (marco Onda 2).
+- `MSC FAIL em todos os xHCI` (00:0d.0 portas=4; 00:14.0 portas=16) — falha de
+  **enumeração** (portas CCS/hub), ANTES de comandos: nenhum `cmd TIMEOUT` no FB.
+- `E:\BOOT.LOG` placeholder (timestamp FAT 1600 = nunca escrito); `E:\NSGDB.BIN`
+  8MB **todo zero** — persistência nunca rodou (coerente com MSC FAIL).
+- Freeze do orb logo após `JARVIS online and ready` — sem evidência pós-graphics
+  no FB (gap corrigido no s317 pelo HUD ao vivo).
 
 Custo: 2 `rdtsc` + 2 divisões por agent tick — desprezível. Sem registro dos
 hooks, watchdog = no-op (branch previsível).
