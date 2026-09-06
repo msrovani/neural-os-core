@@ -206,7 +206,7 @@ pub fn calibrate_tsc() -> u64 {
                 TSC_SOURCE.store(1, Ordering::Release);
                 crate::slog_nano!(
                     "TSC",
-                    "info",
+                    "ok",
                     "calibrado {} MHz via HPET (independente do emulador)",
                     hz / 1_000_000
                 );
@@ -217,7 +217,7 @@ pub fn calibrate_tsc() -> u64 {
                 TSC_SOURCE.store(2, Ordering::Release);
                 crate::slog_nano!(
                     "TSC",
-                    "info",
+                    "ok",
                     "calibrado {} MHz via PIT 8254 (independente do emulador)",
                     hz / 1_000_000
                 );
@@ -232,7 +232,7 @@ pub fn calibrate_tsc() -> u64 {
     let hz = cpuid_estimate();
     TSC_HZ.store(hz, Ordering::Release);
     TSC_SOURCE.store(3, Ordering::Release);
-    crate::slog_nano!("TSC", "info", "frequência estimada via CPUID: {} Hz", hz);
+    crate::slog_nano!("TSC", "warn", "tsc_hz={} Hz via cpuid (estimativa — budgets podem derivar errado)", hz);
     hz
 }
 

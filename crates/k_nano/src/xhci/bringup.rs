@@ -1068,7 +1068,9 @@ unsafe fn wait_cmd_completion() -> Option<(u8, u8)> {
                     let p1 = evt2.add((st2.er_dequeue as usize) * 4 + 1).read_volatile();
                     let p2 = evt2.add((st2.er_dequeue as usize) * 4 + 2).read_volatile();
                     let p3 = evt2.add((st2.er_dequeue as usize) * 4 + 3).read_volatile();
-                    crate::slog_nano!("USB", "warn", "cmd TIMEOUT edq={} evt={:#x} {:#x} {:#x} {:#x}", st2.er_dequeue, p0, p1, p2, p3);
+                    let khz = hz / 1000;
+                    let ms = if khz > 0 { crate::tsc::rdtsc().wrapping_sub(t0) / khz } else { 0 };
+                    crate::slog_nano!("USB", "warn", "cmd TIMEOUT ms={} edq={} evt={:#x} {:#x} {:#x} {:#x}", ms, st2.er_dequeue, p0, p1, p2, p3);
                 }
             }
             return None;

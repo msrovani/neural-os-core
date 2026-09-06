@@ -561,11 +561,22 @@ impl AgentRegistry {
                     continue;
                 }
 
+                // Watchdog de tick lento (freeze metal): mede ms em torno do
+                // tick. Hooks não registrados = custo zero (branch previsível).
+                let wdt_clock = unsafe { TICK_CLOCK_HOOK };
+                let wdt_slow = unsafe { SLOW_TICK_HOOK };
+                let wdt_t0 = wdt_clock.map(|c| c()).unwrap_or(0);
                 let result = with_agent_tick_lock(|| {
                     self.agents[i].tick_counter += 1;
                     let tc = self.agents[i].tick_counter;
                     self.agents[i].agent.tick(tick_id, tc)
                 });
+                if let (Some(c), Some(report)) = (wdt_clock, wdt_slow) {
+                    let dt = c().wrapping_sub(wdt_t0);
+                    if dt > TICK_WATCHDOG_MS {
+                        report(agent_name, dt);
+                    }
+                }
                 polled = polled.saturating_add(1);
 
                 // PostTick hook: always run, even after Pending
@@ -617,6 +628,16 @@ static mut SCHED_METRICS_HOOK: Option<fn(u64, usize, u32)> = None;
 
 /// Hook opcional para BEI tick (ADR-0060). Kernel registra via `set_bei_tick_hook`.
 static mut BEI_TICK_HOOK: Option<fn(u64)> = None;
+
+/// Watchdog de tick lento (diagnóstico freeze metal). `clock` devolve ms
+/// monotônico (kernel registra `k_nano::tsc::now_ms`); `slow` reporta
+/// (agent, ms) quando um tick ultrapassa `TICK_WATCHDOG_MS`. Sem hooks = no-op.
+static mut TICK_CLOCK_HOOK: Option<fn() -> u64> = None;
+static mut SLOW_TICK_HOOK: Option<fn(&str, u64)> = None;
+
+/// Limiar do watchdog de tick (ms). Acima disso o agente bloqueou o scheduler
+/// cooperativo — é exatamente o sintoma do freeze pós-1º-frame no metal.
+pub const TICK_WATCHDOG_MS: u64 = 500;
 
 /// ADR-0089: se true, ring≥1 vão para run-queue AP (BSP só tick ring0).
 static mut SMP_OFFLOAD_PREDICATE: Option<fn() -> bool> = None;
@@ -689,6 +710,15 @@ pub const SCHED_METRICS_PERIOD: u64 = 32;
 
 pub fn set_sched_metrics_hook(hook: Option<fn(u64, usize, u32)>) {
     unsafe { SCHED_METRICS_HOOK = hook; }
+}
+
+/// Registra clock (ms monotônico) + reporter de tick lento (watchdog).
+/// Sem registro = medição desligada (custo zero no loop).
+pub fn set_tick_watchdog_hooks(clock: Option<fn() -> u64>, slow: Option<fn(&str, u64)>) {
+    unsafe {
+        TICK_CLOCK_HOOK = clock;
+        SLOW_TICK_HOOK = slow;
+    }
 }
 
 /// Registra hook para BEI tick (ADR-0060). Chamado a cada tick do scheduler.

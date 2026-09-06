@@ -875,6 +875,14 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     agent_core::set_sched_metrics_hook(Some(sched_metrics_hook));
     // ADR-0060: BEI tick hook — runs every scheduler tick
     agent_core::set_bei_tick_hook(Some(bei_init::bei_tick));
+    // Watchdog de tick lento (freeze metal): transforma "compositor congelou"
+    // em "agent X bloqueou N ms" — disambigua xHCI timeout (H1) vs TSC pathology (H2).
+    agent_core::set_tick_watchdog_hooks(
+        Some(|| k_nano::tsc::now_ms()),
+        Some(|name, ms| {
+            k_nano::slog_bin!("Sched", "warn", "tick lento: {} levou {} ms", name, ms);
+        }),
+    );
     // ADR-0089: registry ptr + offload hooks (só se feature; predicate = ap_pollable runtime).
     agent_core::set_registry_ptr(registry);
     #[cfg(feature = "smp-runqueue")]

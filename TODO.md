@@ -144,6 +144,8 @@
 | T-052 iretq metal | 0102 | Depende de Onda 2 SMP metal |
 | Fase 2 schemes | 0103 | Depende de 0102 aceite HW |
 
+**Diagnóstico instrumentado (s316):** watchdog de tick lento (`[Sched] warn`), TSC visível (`ok`/`warn`), `cmd TIMEOUT ms=` — próximo boot no metal disambigua H1–H6. Checklist: `docs/memory/HW_DIAG_s316.md`.
+
 ## ⚡ LANES PARALELAS (código, sem HW — rodam agora)
 
 | Lane | ADR | Crate(s) | Escopo |
