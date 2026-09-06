@@ -44,6 +44,24 @@ back/swap). O frame congelado mostra o **último estágio completo** do tick:
 Leitura: freeze com **k barras** → o hang está no estágio k+1. Ex.: 4 barras →
 travou dentro do render (orb/HUD); 7 barras → travou no present/swap.
 
+## Bisector v2 (s319) — NOME do agente travado (topo-direita, abaixo das barras)
+
+O scheduler agora carimba o **agente em curso direto no FB real** a cada troca
+de agente (`diag_stamp_agent`, bridge fn-pointer agent-core→jarbas). O frame
+congelado mostra o **AGENTE TRAVADO** — fecha o blind spot da linha `IN:` do
+HUD (que só mostra o último PAINT do display, não quem travou depois).
+
+Leitura do frame congelado s319:
+- **Barras** (y=0..12): último estágio completo do tick do display
+- **Nome** (y=14..30, ciano): agente em curso quando travou
+- Ex.: barras=8 + nome=`hermes_agent` → o render do display completou (tick 1)
+  e o hang é no tick do Hermes (ou entre ticks — o nome mostra quem estava
+  com o tick em curso)
+
+Nota: o "quadriculado azul" 64×64 no canto sup-esquerdo era o patch demo do
+P4 (`draw_checker` em jarbas_fb.rs) — **removido no s319** (present escreve
+zeros; prova Cap intacta). Não deve mais aparecer.
+
 ## Evidência do boot s316 (Alienware, 2026-09-06)
 
 - **16 CPU cores online, 15780MB RAM** — SMP metal aceso (marco Onda 2).
