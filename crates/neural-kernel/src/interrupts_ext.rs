@@ -166,6 +166,18 @@ fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Opt
         putc(b' '); puthex(v);
     }
     putc(b'\n');
+    // Stamp FB (freeze s320): exceção visível na tela congelada (o dump
+    // serial é invisível no metal). Volatile, lock-free, IRQ-safe.
+    let mut buf = [0u8; 56];
+    let mut n = 0usize;
+    for &b in name.as_bytes() { if n < buf.len() { buf[n] = b; n += 1; } }
+    for &b in b" ip=" { if n < buf.len() { buf[n] = b; n += 1; } }
+    k_nano::interrupts::push_hex_fb(&mut buf, &mut n, stack_frame.instruction_pointer.as_u64());
+    if let Some(code) = error_code {
+        for &b in b" err=" { if n < buf.len() { buf[n] = b; n += 1; } }
+        k_nano::interrupts::push_hex_fb(&mut buf, &mut n, code);
+    }
+    k_nano::interrupts::exception_fb_stamp(&buf[..n]);
 }
 
 // --------------------------------------------------------------------------

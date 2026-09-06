@@ -896,6 +896,60 @@ pub fn diag_stamp_agent(name: &[u8]) {
     }
 }
 
+/// Stamp de exceção (freeze s320): escreve o NOME+ip da exceção DIRETO no FB
+/// real (vermelho, y=48, esquerda) — o dump serial é invisível no metal.
+/// Chamada de IRQ context (dump_exception) — volatile, lock-free, sem alloc.
+pub fn diag_stamp_exception(text: &[u8]) {
+    let addr = DIAG_FB_ADDR.load(core::sync::atomic::Ordering::Relaxed);
+    if addr == 0 {
+        return;
+    }
+    let stride = DIAG_FB_STRIDE.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    let bpp = DIAG_FB_BPP.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    let width = DIAG_FB_WIDTH.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    if stride == 0 || bpp == 0 || width < 500 {
+        return;
+    }
+    const MAX_CHARS: usize = 52;
+    let (cw, ch) = (8usize, 16usize);
+    let n = text.len().min(MAX_CHARS);
+    let strip_w = MAX_CHARS * (cw + 1) + 8;
+    let (x0, y0) = (8usize, 48usize);
+    let base = addr as *mut u8;
+    unsafe {
+        // apaga a faixa (preto)
+        for dy in 0..ch {
+            let off = (y0 + dy) * stride + x0 * bpp;
+            for b in 0..strip_w * bpp {
+                base.add(off + b).write_volatile(0);
+            }
+        }
+        // desenha o texto (vermelho — BGR: B=0x3C G=0x3C R=0xFF)
+        for (i, &c) in text.iter().take(n).enumerate() {
+            let Some(glyph) = crate::display::font::get_char_bitmap(c as char) else {
+                continue;
+            };
+            let gx = x0 + 4 + i * (cw + 1);
+            for (dy, &row) in glyph.iter().enumerate() {
+                for dx in 0..cw {
+                    if (row >> (7 - dx)) & 1 == 1 {
+                        let off = (y0 + dy) * stride + (gx + dx) * bpp;
+                        for b in 0..bpp {
+                            let v = match b {
+                                0 => 0x3Cu8,
+                                1 => 0x3Cu8,
+                                2 => 0xFFu8,
+                                _ => 0xFFu8,
+                            };
+                            base.add(off + b).write_volatile(v);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl DoubleBuffer {
     /// Constrói o double-buffer a partir do GpuDevice já probeado (fonte dinâmica).
     pub fn from_gpu(gpu: &GpuDevice) -> Self {

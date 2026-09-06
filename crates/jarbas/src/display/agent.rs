@@ -587,6 +587,11 @@ impl Agent for DisplayAgent {
                 // Bisector v2 (s319): scheduler carimba o agente em curso
                 // direto no FB — frame congelado mostra o agente travado.
                 agent_core::set_tick_stamp_fn(Some(crate::display::fb::diag_stamp_agent));
+                // Bisector v3 (s320): exceções (#UD/#GP/#PF) estampadas no FB —
+                // o dump serial é invisível no metal; hlt loop = freeze.
+                k_nano::interrupts::set_exception_fb_fn(Some(
+                    crate::display::fb::diag_stamp_exception,
+                ));
                 // 1º frame imediato: splash no tick 1; sem render+swap aqui depende do tick 2
                 // (Hermes/LLM pode bloquear minutos — SESSION_168 / HW real freeze no splash).
                 if let Some(ref mut desktop) = *COMPOSITOR.lock() {

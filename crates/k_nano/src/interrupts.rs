@@ -194,6 +194,30 @@ fn putdec(mut n: u64) {
     for &c in &buf[i..] { putc(c); }
 }
 
+// Bridge FB p/ dump de exceção (freeze s320): a crate de display registra um
+// writer raw (volatile, lock-free, IRQ-safe); dump_exception chama antes do
+// hlt loop — o dump serial é invisível no metal, o FB não. Padrão SESSION_241.
+static EXC_FB_FN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Registra a fn de stamp FB de exceção (None = desativa).
+pub fn set_exception_fb_fn(f: Option<fn(&[u8])>) {
+    let v = match f {
+        Some(g) => g as usize as u64,
+        None => 0,
+    };
+    EXC_FB_FN.store(v, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Stamp FB da exceção em curso (no-op sem registro). IRQ-safe.
+pub fn exception_fb_stamp(text: &[u8]) {
+    let f = EXC_FB_FN.load(core::sync::atomic::Ordering::Relaxed);
+    if f != 0 {
+        // SAFETY: ponteiro registrado via set_exception_fb_fn.
+        let g: fn(&[u8]) = unsafe { core::mem::transmute(f as usize) };
+        g(text);
+    }
+}
+
 fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Option<u64>) {
     puts(b"[EXC] ");
     puts(name.as_bytes());
@@ -220,6 +244,38 @@ fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Opt
         putc(b' '); puthex(v);
     }
     putc(b'\n');
+    // Stamp FB (freeze s320): exceção visível na tela congelada.
+    let mut buf = [0u8; 56];
+    let mut n = 0usize;
+    for &b in name.as_bytes() { if n < buf.len() { buf[n] = b; n += 1; } }
+    for &b in b" ip=" { if n < buf.len() { buf[n] = b; n += 1; } }
+    push_hex_fb(&mut buf, &mut n, stack_frame.instruction_pointer.as_u64());
+    if let Some(code) = error_code {
+        for &b in b" err=" { if n < buf.len() { buf[n] = b; n += 1; } }
+        push_hex_fb(&mut buf, &mut n, code);
+    }
+    exception_fb_stamp(&buf[..n]);
+}
+
+/// Hex em buffer de stack (sem alloc — IRQ context).
+pub fn push_hex_fb(buf: &mut [u8], n: &mut usize, mut v: u64) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut tmp = [0u8; 16];
+    let mut m = 0usize;
+    if v == 0 {
+        tmp[0] = b'0';
+        m = 1;
+    }
+    while v > 0 && m < 16 {
+        tmp[m] = HEX[(v & 0xF) as usize];
+        v >>= 4;
+        m += 1;
+    }
+    while m > 0 && *n < buf.len() {
+        m -= 1;
+        buf[*n] = tmp[m];
+        *n += 1;
+    }
 }
 
 extern "x86-interrupt" fn divide_error_handler(f: InterruptStackFrame) { dump_exception("#DE", &f, None); loop { x86_64::instructions::hlt(); } }
