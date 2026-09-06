@@ -77,6 +77,25 @@ Leitura do frame congelado s320: **barras** (estágio do display) + **nome
 ciano** (agente em curso) + **exceção vermelha** (o motivo). Com os três, o
 gatilho é cirúrgico.
 
+## Bisector v4 (s321) — sub-estágios do tick (linha 2 de barras, y=32)
+
+**s320 negativo valioso: SEM exceção estampada = o freeze NÃO é fault — é
+hang genuíno** (loop infinito/spinlock) na janela do agente. O s321 adiciona
+sub-estágios do tick via bridge agent-core (`tick_stage(n)`):
+
+| Barras linha 2 | Estágio completo por último (CortexAgent::tick) |
+|----------------|--------------------------------------------------|
+| (vazia) | entrada do tick / try_receive / pós-tick do scheduler |
+| 1 | evento LLM_REQUEST recebido |
+| 2 | pós EmotionAnalyzer + AFFECT_SNAPSHOT |
+| 3 | pós TRINITY classify |
+| 4 | pós prompt build (SKILL_STORAGE) |
+| 5 | pós recognize |
+| 6 | pós generate_via_model |
+| 7 | pós publish LLM_RESPONSE |
+
+Leitura: congelado com **k barras na linha 2** → travou no estágio k+1.
+
 ## Evidência do boot s316 (Alienware, 2026-09-06)
 
 - **16 CPU cores online, 15780MB RAM** — SMP metal aceso (marco Onda 2).
