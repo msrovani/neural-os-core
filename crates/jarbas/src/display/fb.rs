@@ -824,6 +824,74 @@ impl DoubleBuffer {
         if bpp > 3 { self.back[offset + 3] = 0xFF; }
     }
 
+    /// §3.1 (ADR-0090 Tier 1): unchecked pixel write — caller guarantees
+    /// `x < width && y < height`. Skips bounds checks; sets `dirty`.
+    /// Grid blit (§3.2) pre-clips positions at build, so per-frame cost
+    /// is one raw write per dot.
+    pub fn set_pixel_unchecked(&mut self, x: usize, y: usize, r: u8, g: u8, b: u8) {
+        self.dirty = true;
+        let bpp = self.info.bpp;
+        let offset = y * self.info.stride + x * bpp;
+        unsafe {
+            let back = self.back.as_mut_ptr().add(offset);
+            if self.info.rgb_order {
+                *back = r;
+                *back.add(1) = g;
+                *back.add(2) = b;
+            } else {
+                *back = b;
+                *back.add(1) = g;
+                *back.add(2) = r;
+            }
+            if bpp > 3 { *back.add(3) = 0xFF; }
+        }
+    }
+
+    /// §3.1 (ADR-0090 Tier 1): glyph row blit — 1 row of 8 px, MSB-first,
+    /// transparent background. One clip check per row; set bits drained via
+    /// `leading_zeros` (no per-pixel fn call, no branch on empty pixels).
+    /// Pixel-identical to the `set_pixel` loop in `draw_text_scaled(scale=1)`.
+    pub fn blit_glyph_row(&mut self, x: usize, y: usize, bits: u32, r: u8, g: u8, b: u8) {
+        if bits == 0 || y >= self.info.height || x >= self.info.width {
+            return;
+        }
+        self.dirty = true;
+        let bpp = self.info.bpp;
+        let base = y * self.info.stride + x * bpp;
+        let back_len = self.back.len();
+        let rgb = self.info.rgb_order;
+        let ptr = self.back.as_mut_ptr();
+        let mut w = bits;
+        while w != 0 {
+            let dx = w.leading_zeros() as usize;
+            if dx >= 8 {
+                break;
+            }
+            w &= !(0x8000_0000u32 >> dx);
+            if x + dx >= self.info.width {
+                continue;
+            }
+            let off = base + dx * bpp;
+            if off + bpp > back_len {
+                continue;
+            }
+            unsafe {
+                if rgb {
+                    *ptr.add(off) = r;
+                    *ptr.add(off + 1) = g;
+                    *ptr.add(off + 2) = b;
+                } else {
+                    *ptr.add(off) = b;
+                    *ptr.add(off + 1) = g;
+                    *ptr.add(off + 2) = r;
+                }
+                if bpp > 3 {
+                    *ptr.add(off + 3) = 0xFF;
+                }
+            }
+        }
+    }
+
     /// Copia retângulo do back buffer para `dst` (layout packed bpp).
     pub fn copy_rect_out(&self, x: usize, y: usize, w: usize, h: usize, dst: &mut [u8]) {
         let bpp = self.info.bpp;

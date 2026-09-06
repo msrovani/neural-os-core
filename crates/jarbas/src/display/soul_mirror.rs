@@ -5,6 +5,7 @@
 
 use core::f32::consts::PI;
 use libm::{sinf, cosf};
+use spin::Mutex;
 use crate::display::fb::DoubleBuffer;
 
 const JARVIS_CYAN: (u8, u8, u8) = (0, 212, 255);
@@ -67,7 +68,6 @@ impl SoulMirrorState {
 }
 
 const NUM_PARTICLES: usize = 12;
-
 struct Particle {
     angle: f32,
     dist: f32,
@@ -95,6 +95,112 @@ const PARTICLES: [Particle; NUM_PARTICLES] = [
     Particle::new(1.9, 1.10, 0.021, 2),
     Particle::new(3.8, 1.65, 0.012, 1),
 ];
+
+// ── §3.2 (ADR-0090 Tier 1): grid pre-render ─────────────────────────────
+// Dot geometry depends only on (cx, cy, fw, fh) — tick only gates the dim
+// pulse visibility. Positions + distance fade are computed once per resize
+// into GRID_BUF; per frame blit_grid() walks the list with unchecked writes.
+// (ADR names compositor.rs; the grid has lived in soul_mirror.rs since the
+// SESSION_29x refactor — cache sits next to the code it serves.)
+const GRID_SPACING: isize = 56;
+// ponytail: fixed cap 4096 dots (~1080p needs ~260); beyond it extra dots drop.
+const GRID_MAX_PTS: usize = 4096;
+
+#[derive(Clone, Copy)]
+struct GridDot {
+    x: u16,
+    y: u16,
+    /// Distance fade 0.0–1.0 (`1 - (d²/max_d).min(1)`), stored to replay the
+    /// exact legacy gating expression per frame.
+    fade: f32,
+}
+
+struct GridCache {
+    dots: [GridDot; GRID_MAX_PTS],
+    len: usize,
+    cx: isize,
+    cy: isize,
+    fw: isize,
+    fh: isize,
+}
+
+static GRID_BUF: Mutex<GridCache> = Mutex::new(GridCache {
+    dots: [GridDot { x: 0, y: 0, fade: 0.0 }; GRID_MAX_PTS],
+    len: 0,
+    cx: 0,
+    cy: 0,
+    fw: 0,
+    fh: 0,
+});
+
+/// Render grid dots once per geometry into GRID_BUF. Same lattice + radius
+/// gate as the legacy per-frame loop; no-op when geometry is unchanged.
+pub fn init_grid_buffer(cx: isize, cy: isize, fw: isize, fh: isize) {
+    {
+        let c = GRID_BUF.lock();
+        if c.len > 0 && c.cx == cx && c.cy == cy && c.fw == fw && c.fh == fh {
+            return;
+        }
+    }
+    let spacing = GRID_SPACING;
+    let hex_h = (spacing as f32 * 0.866) as isize;
+    let max_d = (fw * fw + fh * fh) as f32 * 0.22;
+    let mut cache = GRID_BUF.lock();
+    cache.len = 0;
+    cache.cx = cx;
+    cache.cy = cy;
+    cache.fw = fw;
+    cache.fh = fh;
+    let mut row = 0isize;
+    let mut y = -spacing;
+    while y < fh + spacing {
+        let offset_x = if row % 2 == 1 { spacing / 2 } else { 0 };
+        let mut x = -spacing + offset_x;
+        while x < fw + spacing {
+            if x >= 0 && y >= 0 && x < fw && y < fh {
+                let dx = x - cx;
+                let dy = y - cy;
+                let d_sq = (dx * dx + dy * dy) as f32;
+                if d_sq < max_d {
+                    if cache.len < GRID_MAX_PTS {
+                        let dist_fade = 1.0 - (d_sq / max_d).min(1.0);
+                        let n = cache.len;
+                        cache.dots[n] = GridDot { x: x as u16, y: y as u16, fade: dist_fade };
+                        cache.len = n + 1;
+                    }
+                }
+            }
+            x += spacing;
+        }
+        y += hex_h;
+        row += 1;
+    }
+}
+
+/// Blit cached grid dots for `tick`. Gating expression is the legacy one
+/// (`(10·fade·pulsing) as u8 >= 3`), so output is pixel-identical; per-dot
+/// cost is one float mul + unchecked write instead of the full lattice walk.
+pub fn blit_grid(fb: &mut DoubleBuffer, tick: u64) {
+    let cache = GRID_BUF.lock();
+    if cache.len == 0 {
+        return;
+    }
+    let pulsing = sinf((tick % 80) as f32 / 80.0 * PI) * 0.25 + 0.75;
+    let (dw, dh) = (fb.info.width, fb.info.height);
+    for i in 0..cache.len {
+        let d = &cache.dots[i];
+        let a = (10.0 * d.fade * pulsing) as u8;
+        if a >= 3 {
+            let (x, y) = (d.x as usize, d.y as usize);
+            if x < dw && y < dh {
+                fb.set_pixel_unchecked(
+                    x, y,
+                    JARVIS_CYAN_DIM.0, JARVIS_CYAN_DIM.1, JARVIS_CYAN_DIM.2,
+                );
+            }
+        }
+    }
+}
 
 pub struct SoulMirrorRenderer {
     pub state: SoulMirrorState,
@@ -173,8 +279,10 @@ impl SoulMirrorRenderer {
         let final_r = pulse_r + fft_boost;
 
         // Hex grid só a cada 4 frames (custo alto, quase estático).
+        // §3.2: geometria em cache (rebuild só no resize) + blit por frame.
         if tick % 4 == 0 {
-            self.draw_hex_grid(fb, tick, fw, fh);
+            init_grid_buffer(cx, cy, fw, fh);
+            blit_grid(fb, tick);
         }
 
         // Outer glow (2.1× — antes 2.8 matava TCG)
@@ -275,7 +383,31 @@ impl SoulMirrorRenderer {
         }
     }
 
-    fn draw_hex_grid(&self, fb: &mut DoubleBuffer, tick: u64, fw: isize, fh: isize) {
+    fn lerp_color(a: (u8, u8, u8), b: (u8, u8, u8), t: u8) -> (u8, u8, u8) {
+        let inv = 24u16.saturating_sub(t as u16);
+        let t = t as u16;
+        (
+            ((a.0 as u16 * inv + b.0 as u16 * t) / 24) as u8,
+            ((a.1 as u16 * inv + b.1 as u16 * t) / 24) as u8,
+            ((a.2 as u16 * inv + b.2 as u16 * t) / 24) as u8,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::display::fb::{DoubleBuffer, GpuDevice};
+
+    /// GRID_BUF é global — os dois testes de grid serializam nele.
+    static GRID_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn test_fb(w: usize, h: usize) -> DoubleBuffer {
+        DoubleBuffer::from_gpu(&GpuDevice::from_probe(0, w as u32, h as u32, w as u32, 4, true))
+    }
+
+    /// Referência: o loop legado por-frame que o cache substitui.
+    fn legacy_hex_grid(fb: &mut DoubleBuffer, tick: u64, cx: isize, cy: isize, fw: isize, fh: isize) {
         let spacing = 56isize;
         let hex_h = (spacing as f32 * 0.866) as isize;
         let pulsing = sinf((tick % 80) as f32 / 80.0 * PI) * 0.25 + 0.75;
@@ -286,8 +418,8 @@ impl SoulMirrorRenderer {
             let mut x = -spacing + offset_x;
             while x < fw + spacing {
                 if x >= 0 && y >= 0 && x < fw && y < fh {
-                    let dx = x - self.cx;
-                    let dy = y - self.cy;
+                    let dx = x - cx;
+                    let dy = y - cy;
                     let d_sq = (dx * dx + dy * dy) as f32;
                     let max_d = (fw * fw + fh * fh) as f32 * 0.22;
                     if d_sq < max_d {
@@ -308,13 +440,51 @@ impl SoulMirrorRenderer {
         }
     }
 
-    fn lerp_color(a: (u8, u8, u8), b: (u8, u8, u8), t: u8) -> (u8, u8, u8) {
-        let inv = 24u16.saturating_sub(t as u16);
-        let t = t as u16;
-        (
-            ((a.0 as u16 * inv + b.0 as u16 * t) / 24) as u8,
-            ((a.1 as u16 * inv + b.1 as u16 * t) / 24) as u8,
-            ((a.2 as u16 * inv + b.2 as u16 * t) / 24) as u8,
-        )
+    #[test]
+    fn grid_blit_matches_legacy_pixel_identical() {
+        let _guard = GRID_TEST_LOCK.lock();
+        for (fw, fh) in [(320usize, 200usize), (640, 360), (1280, 720)] {
+            let (cx, cy) = (fw as isize / 2, fh as isize / 2);
+            init_grid_buffer(cx, cy, fw as isize, fh as isize);
+            assert!(GRID_BUF.lock().len > 0, "grid vazio em {fw}x{fh}");
+            for tick in (0..160u64).step_by(4) {
+                let mut a = test_fb(fw, fh);
+                let mut b = test_fb(fw, fh);
+                blit_grid(&mut a, tick);
+                legacy_hex_grid(&mut b, tick, cx, cy, fw as isize, fh as isize);
+                for y in 0..fh {
+                    for x in 0..fw {
+                        assert_eq!(a.get_pixel(x, y), b.get_pixel(x, y), "grid ({x},{y}) tick {tick} {fw}x{fh}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grid_bench_print() {
+        let _guard = GRID_TEST_LOCK.lock();
+        let (fw, fh) = (640usize, 360usize);
+        let (cx, cy) = (fw as isize / 2, fh as isize / 2);
+        let mut a = test_fb(fw, fh);
+        let t0 = std::time::Instant::now();
+        for tick in (0..400u64).step_by(4) {
+            legacy_hex_grid(&mut a, tick, cx, cy, fw as isize, fh as isize);
+        }
+        let t_old = t0.elapsed();
+        init_grid_buffer(cx, cy, fw as isize, fh as isize);
+        let mut b = test_fb(fw, fh);
+        let t1 = std::time::Instant::now();
+        for tick in (0..400u64).step_by(4) {
+            blit_grid(&mut b, tick);
+        }
+        let t_new = t1.elapsed();
+        eprintln!(
+            "BENCH grid dots={} old={:?} new={:?} speedup={:.2}x",
+            GRID_BUF.lock().len,
+            t_old,
+            t_new,
+            t_old.as_secs_f64() / t_new.as_secs_f64().max(1e-9)
+        );
     }
 }

@@ -142,7 +142,8 @@ pub fn hit_power_button(cx: usize, cy: usize, scr_w: usize) -> bool {
 }
 
 pub fn draw_text(fb: &mut DoubleBuffer, x: usize, y: usize, text: &str, scr_w: usize, r: u8, g: u8, b: u8) {
-    crate::display::font::draw_text_scaled(fb, x, y, text, 1, scr_w, r, g, b);
+    // §3.1 (ADR-0090 Tier 1): blit table — pixel-idêntico ao scale=1, zero set_pixel.
+    crate::display::font::draw_text_blit(fb, x, y, text, scr_w, r, g, b);
 }
 
 // FASE 4.3: Hover zone detection

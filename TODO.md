@@ -37,8 +37,8 @@
 **Goal:** um sandbox CPL=3 para blob B/C; `isolation_ring_available()==false` ⇒ só wasmi.
 
 - [x] **H1** — Feature `ring3 = ["k-nano/ring3"]` propaga no bin
-- [ ] **H2** — Restaurar demos P6 reais (iretq, fault, CapGate) — 2–5d
-- [ ] **H3** — `ring3_can_iretq()` self-test de boot + `can_register_native()` separado — ~1d
+- [x] **H2** — Demos P6 reais no tree (`demo_ring3*` em `k_nano::paging`; SESSION_302)
+- [x] **H3** — `ring3_can_iretq()` + `can_register_native()` cindidos + self-test wired no boot
 - [ ] **T-051** — Separar `#GP` OVMF de `#GP` kernel (WHPX = `int 0x90`)
 - [ ] **T-052** — Metal: iretq+CPL3 + fault-containment (🔴 depende Onda 2 SMP metal)
 - [ ] **T-053** — Checklist 0077 §6 em HW
@@ -50,8 +50,9 @@
 ### 3. ADR-0101 — Falcon3-3B Cognitive Lab
 **Goal:** decode m=1 do 3B faz ADD/SUB/SKIP packed no SIMD do `x86_64-unknown-none`.
 
-- [ ] **Onda 0** — Prova forward ternário-nativo + `FALCON3.V6` 3B-first (header 3072/22L/12H/kv4/9216/vocab131072/silu)
-- [ ] **Onda 0** — AVX2 no target `none` **ou** SSE skip-native documentado (gap: metal→scalar)
+- [x] **Onda 0** — Inventário 3B-first (`falcon3_boot_names`, `fat_names_for(Active)` com `FALCON3.V6`)
+- [x] **Onda 0** — SSE2 skip-native + scalar ternário-nativo (`bitnet_sse.rs`, paridade vs scalar)
+- [ ] **Onda 0** — AVX2 no target `none` (defer explícito da ADR; metal→scalar documentado, não reescrever ainda)
 - [ ] **Onda 0** — Inventário FAT 3B-first (`falcon3_boot_names`, `fat_names_for(Active)`)
 - [ ] **Onda 1** — Shortlist logits + n-gram/Medusa wired no 3B + KV H2O medido
 - [ ] **Onda 2** — Difficulty gate no `generate_next`; early-exit só com KL treinado
@@ -112,7 +113,7 @@
 ### 9. ADR-0090 — Jarbas Desktop v2.0
 **Goal:** desktop production-grade (4 Tiers / 15 features).
 
-- [ ] **Tier 1** — Glyph cache, grid pre-render, LUT seno, dock real (~4d)
+- [x] **Tier 1** — Glyph cache + grid pre-render (LUT seno ✅ e dock ✅ já no tree; `cargo check -p jarbas` 0 erros, 57 testes)
 - [ ] **Tier 2** — Window animations, chat scrollback, hover states, voice waveform (~12d)
 - [ ] **Tier 3** — Per-window back buffers, desktop real (~20d)
 - [ ] **Tier 4** — Transformacional (~30d)
