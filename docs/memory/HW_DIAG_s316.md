@@ -25,6 +25,25 @@ A linha ao lado das barras de core, formato `T123 IN:input_agent 4s`:
 | `T<n>` alto e estável entre boots, tela estática | Render rodava e pixels pararam — H5 (FB UC lento no metal) |
 | `T<n>` diferente a cada boot no freeze | Morte em ponto variável — correlacionar com o que mudou |
 
+## Bisector de estágio (s318) — barras no canto sup. direito do FB
+
+`diag_mark(n)` escreve **n barras direto no FB real** (volatile, bypass
+back/swap). O frame congelado mostra o **último estágio completo** do tick:
+
+| Barras | Estágio completo por último |
+|--------|----------------------------|
+| 1 | pós `mouse_poll_bytes` + `poll_mouse` |
+| 2 | pós drenos EventBus (ui/llm/stt/render) |
+| 3 | pós subscribes lazy (LATENT/MESH) + drenos latent/mesh |
+| 4 | pós key/echo/mouse/click/drag/install (pré-render) |
+| 5 | pós draw_orb_layer |
+| 6 | pós HUD (diag line pintada) |
+| 7 | pré-present (windows/dock/cursor prontos) |
+| 8 | pós present_frame (swap completo) |
+
+Leitura: freeze com **k barras** → o hang está no estágio k+1. Ex.: 4 barras →
+travou dentro do render (orb/HUD); 7 barras → travou no present/swap.
+
 ## Evidência do boot s316 (Alienware, 2026-09-06)
 
 - **16 CPU cores online, 15780MB RAM** — SMP metal aceso (marco Onda 2).
