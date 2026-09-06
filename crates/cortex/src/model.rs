@@ -215,3 +215,69 @@ pub fn load_model_v6(data: &[u8]) -> Option<ModelView> {
 pub fn v6_file_size(data: &[u8]) -> Option<usize> {
     parse_model_header(data).map(|h| h.file_size)
 }
+
+// ── T-064 (ADR-0100 Onda 7): PPL por unigramas ──────────────────────────
+
+/// Limiar fixo de aceitação: PPL < 50 = "aceitável" (texto coerente).
+pub const PPL_ACCEPT_THRESHOLD: u32 = 50;
+
+/// Estimativa de perplexidade por modelo unigrama (frequentista, com
+/// suavização add-one sobre o vocabulário observado no próprio texto).
+/// Retorna ceil(ppl) como u32; texto vazio/single-token → u32::MAX.
+/// ponytail: heurística barata sem LLM — upgrade path = PPL real via modelo.
+pub fn ppl_estimate(text: &str) -> u32 {
+    let mut counts: alloc::vec::Vec<(u64, u32)> = alloc::vec::Vec::new();
+    let mut total: u64 = 0;
+    for w in text.split(|c: char| c.is_whitespace()) {
+        if w.is_empty() { continue; }
+        total += 1;
+        // hash FNV-1a 64 da palavra (normalizada lowercase ASCII)
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in w.bytes() { h = (h ^ (b | 0x20) as u64).wrapping_mul(0x100000001b3); }
+        match counts.iter_mut().find(|(k, _)| *k == h) {
+            Some((_, c)) => *c += 1,
+            None => counts.push((h, 1)),
+        }
+    }
+    let vocab = counts.len() as u64;
+    if total < 2 || vocab == 0 { return u32::MAX; }
+    // ppl = exp( (1/total) * Σ -log( (c+1) / (total+vocab) ) )
+    let denom = (total + vocab) as f32;
+    let mut sum = 0.0f32;
+    for (_, c) in &counts {
+        let p = (*c as f32 + 1.0) / denom;
+        sum -= unsafe { libm::logf(p) } * (*c as f32);
+    }
+    let ppl = unsafe { libm::expf(sum / total as f32) };
+    if ppl.is_nan() || ppl < 0.0 { return u32::MAX; }
+    (ppl as u64).saturating_add(1).min(u32::MAX as u64) as u32
+}
+
+/// Gate fixo do T-064: true se o texto é "aceitável" (PPL < 50).
+pub fn ppl_acceptable(text: &str) -> bool {
+    ppl_estimate(text) < PPL_ACCEPT_THRESHOLD
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ppl_repeated_text_is_low() {
+        // texto altamente repetitivo → perplexidade baixa
+        assert!(ppl_acceptable("ola ola ola ola ola ola ola ola mundo mundo mundo mundo"));
+    }
+
+    #[test]
+    fn ppl_distinct_tokens_is_high() {
+        // 60 tokens distintos: ppl ≈ vocab+1 → acima do threshold
+        let t: alloc::string::String = (0..60u32)
+            .map(|i| alloc::format!("tok{} ", i)).collect();
+        assert!(!ppl_acceptable(&t));
+    }
+
+    #[test]
+    fn ppl_empty_is_max() {
+        assert_eq!(ppl_estimate(""), u32::MAX);
+    }
+}

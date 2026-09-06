@@ -1098,7 +1098,71 @@ mod tests {
         assert!((out[2] - 0.0).abs() < 1e-5, "TQ2_0[2] = {} want 0.0", out[2]);
         assert!((out[3] - 2.0).abs() < 1e-5, "TQ2_0[3] = {} want 2.0", out[3]);
     }
-}pub fn dequantize_raw(qtype: GgufType, data: &[u8], rows: usize, cols: usize) -> Option<Vec<f32>> {
+
+    /// T-061 roundtrip: f32 -> adaptive ternary packed -> get_weight bate o sinal
+    /// esperado para pesos acima/abaixo do threshold adaptativo.
+    #[test]
+    fn ternary_adaptive_roundtrip() {
+        // 80 pequenos (0.01) + 15 medios (0.5) + 4 grandes (2.0) + 1 grande neg:
+        // p85 (idx 85 de 100, ascending) = 0.5 -> so |v| > 0.5 viram +/-1
+        let mut data: Vec<f32> = vec![0.01; 80];
+        data.extend(vec![0.5f32; 15]);
+        data.extend(vec![2.0f32; 4]);
+        data.push(-2.0);
+        let t = f32_to_ternary_packed_adaptive(&data, 10, 10);
+        assert_eq!(t.shape, (10, 10));
+        assert_eq!(t.get_weight(95), 1, "2.0 -> +1");
+        assert_eq!(t.get_weight(99), -1, "-2.0 -> -1");
+        assert_eq!(t.get_weight(0), 0, "0.01 -> 0");
+        assert_eq!(t.get_weight(80), 0, "0.5 == p85 -> 0 (strict)");
+        // tensor todo-zero: threshold min 0.01, nenhum peso vira != 0
+        let z = f32_to_ternary_packed_adaptive(&[0.0; 4], 2, 2);
+        for i in 0..4 { assert_eq!(z.get_weight(i), 0); }
+    }
+
+    /// T-063 (ADR-0100 Onda 7): GGUF V3 sintetico com 1 tensor F32 parseado por
+    /// load_gguf + decode (dequantize) dos pesos; argmax = "1 token decodificado".
+    #[test]
+    fn gguf_synthetic_parse_and_decode() {
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(b"GGUF");
+        buf.extend_from_slice(&3u32.to_le_bytes());      // version 3
+        buf.extend_from_slice(&1u64.to_le_bytes());      // tensor_count = 1
+        buf.extend_from_slice(&0u64.to_le_bytes());      // metadata_kv_count = 0
+        let name = b"token_embd.weight";
+        buf.extend_from_slice(&(name.len() as u64).to_le_bytes());
+        buf.extend_from_slice(name);
+        buf.extend_from_slice(&2u32.to_le_bytes());      // n_dims = 2
+        buf.extend_from_slice(&2u64.to_le_bytes());      // dims[0]
+        buf.extend_from_slice(&2u64.to_le_bytes());      // dims[1]
+        buf.extend_from_slice(&0u32.to_le_bytes());      // type 0 = F32 (spec ID)
+        buf.extend_from_slice(&0u64.to_le_bytes());      // tensor offset = 0
+        let pad = (32 - (buf.len() % 32)) % 32;
+        buf.resize(buf.len() + pad, 0);
+        let weights = [0.1f32, 0.2f32, 0.9f32, -0.5f32];
+        for w in weights { buf.extend_from_slice(&w.to_le_bytes()); }
+
+        let file = load_gguf(&buf).expect("parse GGUF sintetico");
+        assert_eq!(file.header.version, 3);
+        assert_eq!(file.tensors.len(), 1);
+        assert_eq!(file.tensors[0].name, "token_embd.weight");
+        assert_eq!(file.tensors[0].dims, vec![2u64, 2u64]);
+
+        let info = &file.tensors[0];
+        let vals = dequantize_raw(info.tensor_type, &file.data, 2, 2)
+            .expect("dequant F32");
+        for (i, w) in weights.iter().enumerate() {
+            assert!((vals[i] - w).abs() < 1e-6, "w[{}]: {} vs {}", i, vals[i], w);
+        }
+        // "decode 1 token": argmax dos logits do embedding
+        let (tok, _) = vals.iter().enumerate()
+            .fold((0usize, f32::NEG_INFINITY), |(bi, bv), (i, &v)| {
+                if v > bv { (i, v) } else { (bi, bv) }
+            });
+        assert_eq!(tok, 2, "argmax token");
+    }
+}
+pub fn dequantize_raw(qtype: GgufType, data: &[u8], rows: usize, cols: usize) -> Option<Vec<f32>> {
     let ne = rows * cols;
     match qtype {
         GgufType::F32 => {
@@ -1186,6 +1250,13 @@ pub fn f32_to_ternary_packed(data: &[f32], rows: usize, cols: usize) -> PackedTe
     }
     let packed = PackedTernaryTensor::pack_weights(&vals);
     PackedTernaryTensor { shape: (rows, cols), packed_data: packed }
+}
+
+/// T-061 (ADR-0100 Onda 7): alias explícito da quantização 1.58-bit com
+/// threshold adaptativo (percentil 85 por tensor). Mesma função de
+/// `f32_to_ternary_packed` — nome canônico do backlog.
+pub fn f32_to_ternary_packed_adaptive(data: &[f32], rows: usize, cols: usize) -> PackedTernaryTensor {
+    f32_to_ternary_packed(data, rows, cols)
 }
 
 /// Dequantiza o primeiro tensor encontrado pelo nome que contém `name_hint`

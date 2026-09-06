@@ -73,7 +73,7 @@ scale = 1.5
 f16_scale = f16_encode(scale)
 data += struct.pack('<H', f16_scale)
 data += bytes([0xA5, 0x90, 0x61, 0x24])  # 0x61 not 0x41: w10=-1(10) at bits[5:4]
-data += bytes(18)  # pad to 24 bytes
+data += bytes(60)  # pad to 66 bytes: TQ2_0 = 1 block (256 w) = 2B scale + 64B quants (GGUF spec)
 
 out_path = os.path.join(ROOT, 'target', 'test_tq2_0.gguf')
 os.makedirs(os.path.dirname(out_path), exist_ok=True)

@@ -83,12 +83,7 @@ scheduler para orb/cursor e mantém o timer somente como fonte do relógio.
 - `cargo test -p agent-core --lib`: **1/1 PASS**.
 - Testes Jarbas: PASS.
 
-## Gate de metal
+## Handoff → SESSION_314
 
-Ainda exige novo boot no Alienware. Aceite:
-
-1. desktop continua animado e mouse responde por pelo menos 2 minutos;
-2. `E:\BOOT.LOG` começa com BOM + `[S] neural-os-core` e contém checkpoints;
-3. `E:\NSGDB.BIN` deixa de ser todo zero e sobrevive ao reboot;
-4. se MSC ainda falhar, capturar serial com as linhas `xHCI firmware handoff`,
-   `ctx=`, `scratchpads=`, `cmd CC/TIMEOUT` e `Bulk err/TIMEOUT`.
+Cutover USB BE (`k_hal::usb`) + P0 governança + checklist aceite:
+ver `docs/memory/SESSION_314.md` e `docs/memory/HW_FLASH_s314.md`.
