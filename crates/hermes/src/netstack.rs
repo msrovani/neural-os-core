@@ -126,6 +126,8 @@ use smoltcp::phy::{Checksum, ChecksumCapabilities, Device, DeviceCapabilities, M
 
 static NET_TX_COUNT: AtomicU64 = AtomicU64::new(0);
 static NET_RX_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Freeze s324: iterações ZERO-delay cortadas pelo cap (diagnóstico do spin).
+pub static POLL_LOOP_CAP: AtomicU64 = AtomicU64::new(0);
 pub fn net_tx_count() -> u64 { NET_TX_COUNT.load(Ordering::Relaxed) }
 pub fn net_rx_count() -> u64 { NET_RX_COUNT.load(Ordering::Relaxed) }
 
@@ -370,10 +372,17 @@ impl NetStack {
     pub fn poll(&mut self, now_ms: i64) {
         let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
         let now = Instant::from_millis(now_ms);
-        loop {
+        // Freeze s324: poll_delay()==ZERO para sempre quando um socket tem
+        // trabalho cuja resposta nunca sai (TX quebrado em HW real + tráfego
+        // LAN real). Cap converte o spin eterno em poll limitado + contador
+        // (AIOS: degrada, nao congela).
+        for _ in 0..64 {
             let _ = iface.poll(now, phy, sockets);
             match iface.poll_delay(now, sockets) {
-                Some(smoltcp::time::Duration::ZERO) => continue,
+                Some(smoltcp::time::Duration::ZERO) => {
+                    POLL_LOOP_CAP.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
                 _ => break,
             }
         }
@@ -385,10 +394,13 @@ impl NetStack {
     pub fn dhcp_poll(&mut self, now_ms: i64) -> (bool, [u8; 4], [u8; 4]) {
         let Self { ref mut iface, ref mut phy, ref mut sockets, ref mut dhcp_done, .. } = self;
         let now = Instant::from_millis(now_ms);
-        loop {
+        for _ in 0..64 {
             let _ = iface.poll(now, phy, sockets);
             match iface.poll_delay(now, sockets) {
-                Some(smoltcp::time::Duration::ZERO) => continue,
+                Some(smoltcp::time::Duration::ZERO) => {
+                    POLL_LOOP_CAP.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
                 _ => break,
             }
         }

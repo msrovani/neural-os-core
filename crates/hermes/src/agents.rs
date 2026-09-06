@@ -356,11 +356,14 @@ impl Agent for CortexAgent {
                 }
             }
             agent_core::tick_stage(2);
-            // Freeze s323: watchdog pré-lock. TicketLock layout:
+            // Freeze s323/s324: watchdog pré-lock. TicketLock layout:
             // {ticket: AtomicUsize, serving: AtomicUsize, data}. Se a lock já
             // está disputada (serving != ticket) ALGUÉM segura — estampa o
             // estado no FB e degrada p/ fallback (o tick sobrevive, AIOS).
-            let trinity_ptr = &crate::globals::TRINITY as *const _ as *const u64;
+            // s324: &TRINITY apontava pro wrapper ZST do lazy_static (leu
+            // estáticas adjacentes — t=0xffffffff807f293d era lixo). Deref
+            // real: &*TRINITY → &TicketLock.
+            let trinity_ptr = &*crate::globals::TRINITY as *const _ as *const u64;
             let (tk, sv) = unsafe {
                 (
                     core::ptr::read_volatile(trinity_ptr),
@@ -368,7 +371,7 @@ impl Agent for CortexAgent {
                 )
             };
             let expert = if tk != sv {
-                let mut buf = [0u8; 32];
+                let mut buf = [0u8; 64];
                 let mut n = 0usize;
                 for &b in b"TRINITY BUSY t=" {
                     if n < buf.len() { buf[n] = b; n += 1; }

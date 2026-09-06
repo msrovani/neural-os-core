@@ -487,11 +487,13 @@ pub fn bootstrap_early() {
 
 pub fn network_agent_tick() {
     let _ = crate::async_io::poll_budget(4);
+    agent_core::tick_stage(1); // pós poll_budget
 
     let mut s = NET_STATE.lock();
     let tick = s.tick;
     s.tick = tick.wrapping_add(1);
     let ms = tick * 55;
+    agent_core::tick_stage(2); // pós NET_STATE.lock
 
     if !CONTINUOUS_ANNOUNCED.swap(true, Ordering::Relaxed) {
         k_nano::slog_hermes!("Net", "info", "Continuous active pós-init (SelfHeal/Disk Done) — gate=e1000 [smoltcp/NIC]");
@@ -509,7 +511,9 @@ pub fn network_agent_tick() {
     }
 
     if let Some(ref mut ns) = *NETSTACK.lock() {
+        agent_core::tick_stage(3); // pré ns.poll — SE CONGELAR AQUI: dentro do poll (RX/TX e1000)
         ns.poll(ms as i64);
+        agent_core::tick_stage(4); // pós ns.poll
         if tick % 50 == 0 {
             log(
                 tick,
@@ -550,6 +554,7 @@ pub fn network_agent_tick() {
                 _ => {}
             }
         }
+        agent_core::tick_stage(5); // pós http_poll
     } else if tick % 10 == 0 {
         log(tick, "NETSTACK not initialized");
     }
@@ -718,4 +723,5 @@ pub fn network_agent_tick() {
             }
         }
     }
+    agent_core::tick_stage(6); // tick completo
 }
