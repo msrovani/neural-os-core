@@ -120,20 +120,33 @@ conferido vs build). Hang determinístico em `TRINITY.lock()` (TicketLock —
 FIFO por tickets, SEM reentrância: double-lock no mesmo contexto =
 self-deadlock eterno).
 
-## Bisector v5 (s323) — watchdog pré-lock no TRINITY
+## Bisector v6 (s324) — ROOT CAUSE: spin do poll smoltcp + 2º hang
 
-O tick agora lê `ticket/serving` RAW antes de lockar. Se disputada
-(`serving != ticket`): estampa **`TRINITY BUSY t=<tk> s=<sv>`** no FB e
-degrada p/ fallback — **o tick sobrevive** (AIOS: degrada, não congela).
+**Evidência s323 (fotos 06/09 20:24):** o tick SOBREVIVEU ao cortex
+(fallback) — o sistema rodou até **tick 1370** e congelou em
+**`network_agent`** — um SEGUNDO hang, downstream, antes inalcançável.
+O stamp `t=ffffffff807f293d` era lixo do MEU instrumento (`&TRINITY`
+apontava pro wrapper ZST do lazy_static, lia estáticas adjacentes).
+
+**ROOT CAUSE (network):** `NetStack::poll()`/`dhcp_poll()` giravam
+enquanto `poll_delay()==ZERO` — socket com trabalho cuja resposta nunca
+sai (TX degradado em HW real + tráfego LAN real: broadcast/ARP/mDNS).
+QEMU/slirp nunca entregava esse tráfego; o 1º pacote real (~tick 1370)
+disparava o spin eterno.
+
+Fix (`8b47fcc0`): cap 64 iterações + contador `POLL_LOOP_CAP` (o tick
+sobrevive); `tick_stage` 1–6 no network_agent (3=pré-poll — congelou
+com 3 barras = dentro do poll); instrumento TRINITY corrigido
+(`&*TRINITY` deref real + buf 64B, `s=` agora imprime).
 
 Leitura do próximo boot:
-- **Desktop vivo + `TRINITY BUSY t=X s=Y`** → alguém segura a lock (s<X);
-  caçar o holder
-- **Freeze idêntico (2 barras, cortex_llm, sem stamp novo)** → o hang é
-  ANTES da leitura = contexto de IRQ (deadlock IRQ-vs-TicketLock) →
-  instrumentar os handlers de IRQ
-- Estágios renumerados: 3=pos-lock, 4=pos-classify, 5=pos-prompt,
-  6=pos-recognize, 7=pos-generate, 8=pos-publish
+- **Desktop vivo** → o cap segurou; caçar o TX degradado (por que a
+  resposta nunca sai) com o contador POLL_LOOP_CAP
+- **Congela com 3 barras + network_agent** → dentro de `ns.poll()` —
+  o loop do smoltcp ou o RX do e1000
+- **Congela com 1/2 barras** → `poll_budget`/`NET_STATE.lock()`
+- **`TRINITY BUSY t=X s=Y` com valores pequenos** → a lock do cortex
+  REALMENTE disputada (agora lendo o endereço certo)
 
 ## Evidência do boot s316 (Alienware, 2026-09-06)
 
