@@ -62,6 +62,21 @@ Nota: o "quadriculado azul" 64×64 no canto sup-esquerdo era o patch demo do
 P4 (`draw_checker` em jarbas_fb.rs) — **removido no s319** (present escreve
 zeros; prova Cap intacta). Não deve mais aparecer.
 
+## Bisector v3 (s320) — EXCEÇÃO estampada no FB (vermelho, y=48, esquerda)
+
+Mecanismo fechado no s319: **exceção durante o tick do agente → dump só na
+serial (invisível no metal) → hlt loop = freeze permanente**. O s320 estampa
+a exceção DIRETO no FB (`diag_stamp_exception`, bridge k_nano←jarbas):
+
+- **Texto vermelho em y=48** (abaixo do nome do agente): `#UD ip=… err=…`
+- #UD = instrução ilegal (AVX/SSE sem CR4 pronto, código corrompido)
+- #GP = proteção (segmento/privilegio/MSR)
+- #PF = página (CR2 no serial; o ip localiza a instrução)
+
+Leitura do frame congelado s320: **barras** (estágio do display) + **nome
+ciano** (agente em curso) + **exceção vermelha** (o motivo). Com os três, o
+gatilho é cirúrgico.
+
 ## Evidência do boot s316 (Alienware, 2026-09-06)
 
 - **16 CPU cores online, 15780MB RAM** — SMP metal aceso (marco Onda 2).
