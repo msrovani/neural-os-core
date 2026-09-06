@@ -840,6 +840,62 @@ pub fn diag_mark(n: u8) {
     }
 }
 
+/// Stamp do agente em curso (freeze s319): escreve o NOME direto no FB real
+/// (topo-direita, abaixo das barras de estágio). Chamada pelo scheduler a cada
+/// TROCA de agente — o frame congelado mostra o AGENTE TRAVADO, não o último
+/// paint do display (que é o que a linha IN: do HUD mostra). Volatile, lock-free.
+pub fn diag_stamp_agent(name: &[u8]) {
+    let addr = DIAG_FB_ADDR.load(core::sync::atomic::Ordering::Relaxed);
+    if addr == 0 {
+        return;
+    }
+    let stride = DIAG_FB_STRIDE.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    let bpp = DIAG_FB_BPP.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    let width = DIAG_FB_WIDTH.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    if stride == 0 || bpp == 0 || width < 200 {
+        return;
+    }
+    const MAX_CHARS: usize = 16;
+    let (cw, ch) = (8usize, 16usize);
+    let n = name.len().min(MAX_CHARS);
+    let strip_w = MAX_CHARS * (cw + 1) + 4;
+    let x0 = width - strip_w - 2;
+    let y0 = 14usize; // abaixo das barras de estágio (0..12)
+    let base = addr as *mut u8;
+    unsafe {
+        // apaga a faixa (preto) — último stamp vence
+        for dy in 0..ch {
+            let off = (y0 + dy) * stride + x0 * bpp;
+            for b in 0..strip_w * bpp {
+                base.add(off + b).write_volatile(0);
+            }
+        }
+        // desenha o nome (ciano, MSB-first — mesma lógica de draw_text_scaled)
+        for (i, &c) in name.iter().take(n).enumerate() {
+            let Some(glyph) = crate::display::font::get_char_bitmap(c as char) else {
+                continue;
+            };
+            let gx = x0 + 2 + i * (cw + 1);
+            for (dy, &row) in glyph.iter().enumerate() {
+                for dx in 0..cw {
+                    if (row >> (7 - dx)) & 1 == 1 {
+                        let off = (y0 + dy) * stride + (gx + dx) * bpp;
+                        for b in 0..bpp {
+                            let v = match b {
+                                0 => 0xFFu8,
+                                1 => 0xD4u8,
+                                2 => 0x00u8,
+                                _ => 0xFFu8,
+                            };
+                            base.add(off + b).write_volatile(v);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl DoubleBuffer {
     /// Constrói o double-buffer a partir do GpuDevice já probeado (fonte dinâmica).
     pub fn from_gpu(gpu: &GpuDevice) -> Self {

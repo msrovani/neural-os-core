@@ -154,6 +154,7 @@ impl JarbasDoubleBuffer {
         }
     }
 
+    #[allow(dead_code)] // checker removido do demo (s319) — confundia o diagnóstico de freeze no metal
     pub fn draw_checker(&mut self, c0: (u8, u8, u8), c1: (u8, u8, u8)) {
         let bpp = self.contract.bpp as usize;
         let stride = self.contract.stride as usize;
@@ -307,7 +308,6 @@ pub fn demo_jarbas_fb() -> Result<(), &'static str> {
     if db.present(Cap::EMPTY).is_ok() {
         return Err("p4: Cap vazia nao deveria present");
     }
-    db.draw_checker((0, 180, 255), (20, 20, 40));
     db.present(Cap::WRITE_FB.union(Cap::MAP_FB))?;
 
     // Apaga o checker residual (senão fica o bloco 64×64 no canto até o DisplayAgent).

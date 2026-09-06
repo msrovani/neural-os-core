@@ -584,6 +584,9 @@ impl Agent for DisplayAgent {
                 MOUSE_X.store((fw / 2) as usize, core::sync::atomic::Ordering::Relaxed);
                 MOUSE_Y.store((fh / 2) as usize, core::sync::atomic::Ordering::Relaxed);
                 crate::display::fb::claim_graphics();
+                // Bisector v2 (s319): scheduler carimba o agente em curso
+                // direto no FB — frame congelado mostra o agente travado.
+                agent_core::set_tick_stamp_fn(Some(crate::display::fb::diag_stamp_agent));
                 // 1º frame imediato: splash no tick 1; sem render+swap aqui depende do tick 2
                 // (Hermes/LLM pode bloquear minutos — SESSION_168 / HW real freeze no splash).
                 if let Some(ref mut desktop) = *COMPOSITOR.lock() {

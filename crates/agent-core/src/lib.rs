@@ -575,6 +575,18 @@ impl AgentRegistry {
                     );
                     CUR_AGENT_LEN.store(agent_name.len(), core::sync::atomic::Ordering::Relaxed);
                 }
+                // Stamp FB direto na troca de agente (freeze s319): o frame
+                // congelado mostra o AGENTE TRAVADO, não o último paint do
+                // display. Throttle: só na troca (mesmo &str = mesmo ptr).
+                let stamp_f = TICK_STAMP_FN.load(core::sync::atomic::Ordering::Relaxed);
+                if stamp_f != 0 {
+                    let key = agent_name.as_ptr() as u64;
+                    if LAST_STAMPED_AGENT.swap(key, core::sync::atomic::Ordering::Relaxed) != key {
+                        // SAFETY: ponteiro registrado via set_tick_stamp_fn.
+                        let g: fn(&[u8]) = unsafe { core::mem::transmute(stamp_f as usize) };
+                        g(agent_name.as_bytes());
+                    }
+                }
                 let result = with_agent_tick_lock(|| {
                     self.agents[i].tick_counter += 1;
                     let tc = self.agents[i].tick_counter;
@@ -657,6 +669,23 @@ static CUR_AGENT_PTR: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(0);
 static CUR_AGENT_LEN: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);
+
+/// Stamp FB do agente em curso (freeze s319): fn registrada pela crate de
+/// display; o scheduler chama a cada TROCA de agente. Bridge fn-pointer
+/// (padrão SESSION_241) — agent-core não conhece FB.
+static TICK_STAMP_FN: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+static LAST_STAMPED_AGENT: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+/// Registra a fn de stamp FB (None = desativa). Chamada uma vez pós-graphics.
+pub fn set_tick_stamp_fn(f: Option<fn(&[u8])>) {
+    let v = match f {
+        Some(g) => g as usize as u64,
+        None => 0,
+    };
+    TICK_STAMP_FN.store(v, core::sync::atomic::Ordering::Relaxed);
+}
 
 /// (agente corrente, ms de entrada) se um tick está em curso; None fora.
 ///
