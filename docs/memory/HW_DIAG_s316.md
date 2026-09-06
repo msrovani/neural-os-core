@@ -115,6 +115,26 @@ Fix (commit `499a5f28`): pool DMA de 64KB contíguos reservada do PMM
 próprio (ptr u64 + len + flags), capture/playback sem sobreposição, sem pool
 = fallback formant honesto.
 
+**s322 refutou o HDA como trigger** (boot idêntico — hash do pendrive
+conferido vs build). Hang determinístico em `TRINITY.lock()` (TicketLock —
+FIFO por tickets, SEM reentrância: double-lock no mesmo contexto =
+self-deadlock eterno).
+
+## Bisector v5 (s323) — watchdog pré-lock no TRINITY
+
+O tick agora lê `ticket/serving` RAW antes de lockar. Se disputada
+(`serving != ticket`): estampa **`TRINITY BUSY t=<tk> s=<sv>`** no FB e
+degrada p/ fallback — **o tick sobrevive** (AIOS: degrada, não congela).
+
+Leitura do próximo boot:
+- **Desktop vivo + `TRINITY BUSY t=X s=Y`** → alguém segura a lock (s<X);
+  caçar o holder
+- **Freeze idêntico (2 barras, cortex_llm, sem stamp novo)** → o hang é
+  ANTES da leitura = contexto de IRQ (deadlock IRQ-vs-TicketLock) →
+  instrumentar os handlers de IRQ
+- Estágios renumerados: 3=pos-lock, 4=pos-classify, 5=pos-prompt,
+  6=pos-recognize, 7=pos-generate, 8=pos-publish
+
 ## Evidência do boot s316 (Alienware, 2026-09-06)
 
 - **16 CPU cores online, 15780MB RAM** — SMP metal aceso (marco Onda 2).
