@@ -96,6 +96,25 @@ sub-estágios do tick via bridge agent-core (`tick_stage(n)`):
 
 Leitura: congelado com **k barras na linha 2** → travou no estágio k+1.
 
+## ROOT CAUSE (s322) — DMA do HDA sobre a imagem do kernel
+
+Cadeia de evidência s319→s321: agente `cortex_llm`, **sem exceção** (s320
+negativo), hang com **2 barras** (s321) = `TRINITY.lock()` nunca adquire.
+
+Causa raiz: os buffers DMA do HDA estavam em **phys fixos baixos**
+(CORB=0x102000, RIRB=0x102800, capture=0x103000, playback=0x104000) —
+**dentro da imagem do kernel** (Limine carrega higher-half em phys ~0x100000).
+O DMA da saudação TTS escrevia amostras de áudio sobre .text/.data em
+execução. Pior: o **BDL apontava para o próprio buffer de amostras** (LVI=0)
+— o controlador lia amostras como {ponteiro u64, len} = DMA para endereço
+aleatório. Corrupção → palavra da mutex/código vizinho → spinlock eterno.
+QEMU mascarava (HDA half-broken, DMA inerte — SESSION_286).
+
+Fix (commit `499a5f28`): pool DMA de 64KB contíguos reservada do PMM
+(`k_nano::memory::HDA_DMA_BASE` + `reserve_hda_dma_pool()` no boot), BDL
+próprio (ptr u64 + len + flags), capture/playback sem sobreposição, sem pool
+= fallback formant honesto.
+
 ## Evidência do boot s316 (Alienware, 2026-09-06)
 
 - **16 CPU cores online, 15780MB RAM** — SMP metal aceso (marco Onda 2).
