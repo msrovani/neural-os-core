@@ -605,6 +605,7 @@ impl Agent for DisplayAgent {
         unsafe {
             let _ = k_nano::xhci::poll_mouse();
         }
+        crate::display::fb::diag_mark(1);
         // Expira arm do OFF
         {
             let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
@@ -734,6 +735,7 @@ impl Agent for DisplayAgent {
                 &ev.payload,
             );
         }
+        crate::display::fb::diag_mark(2);
 
         // ── RENDER_WINDOW: snapshot no overlay (render() pinta) ──
         for _ in 0..DRAIN_CAP {
@@ -810,7 +812,10 @@ impl Agent for DisplayAgent {
                 Some(k_nano::LATENT_BUS.subscribe(event_bus::TOPIC_THOUGHT_LLM));
         }
         if let Some(ref rx) = self.latent_receiver {
-            while let Some(pkt) = rx.try_receive() {
+            let mut drained = 0;
+            while drained < DRAIN_CAP {
+                let Some(pkt) = rx.try_receive() else { break; };
+                drained += 1;
             let norm = f32::from_bits(pkt.norm_bits);
             if let Some(ref mut avatar8) = self.avatar {
                 let st = if norm > 8.0 {
@@ -849,7 +854,10 @@ impl Agent for DisplayAgent {
             self.mesh_health_receiver = Some(EVENT_BUS.subscribe(TOPIC_MESH_HEALTH));
         }
         if let Some(ref rx) = self.mesh_health_receiver {
-            while let Some(ev) = rx.try_receive() {
+            let mut drained = 0;
+            while drained < DRAIN_CAP {
+                let Some(ev) = rx.try_receive() else { break; };
+                drained += 1;
                 let json_str = core::str::from_utf8(&ev.payload).unwrap_or("");
                 let peers = mesh_health_json::parse(json_str);
                 let mut graph = MESH_GRAPH.lock();
@@ -865,6 +873,7 @@ impl Agent for DisplayAgent {
                 drop(graph);
             }
         }
+        crate::display::fb::diag_mark(3);
 
         // Process keyboard shortcuts via WmAction dispatch (ADR-0065 FASE 1.1 — FIX 1)
         // Drena KEY_EVENT do InputAgent (payload: [scancode, ctrl, alt, shift, super_key, pressed]).
@@ -984,6 +993,7 @@ impl Agent for DisplayAgent {
             }
         }
 
+        crate::display::fb::diag_mark(4);
         // Render desktop: orb circular no compositor (avatar partículas após clear interno)
         let mut comp = COMPOSITOR.lock();
         if let Some(ref mut desktop) = *comp {

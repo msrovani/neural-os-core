@@ -623,6 +623,7 @@ impl JarbasDesktop {
             self.dirty_orb = false;
             orb_drawn = true;
         }
+        crate::display::fb::diag_mark(5);
 
         // Mesh P2P
         if self.dirty_mesh {
@@ -733,6 +734,7 @@ impl JarbasDesktop {
                 theme.fg_muted.2,
             );
         }
+        crate::display::fb::diag_mark(6);
 
 // Botão OFF — canto SD
         {
@@ -941,7 +943,9 @@ impl JarbasDesktop {
         draw_mouse_cursor(&mut self.fb, mx, my, self.w, self.h);
         self.dirty_cursor = false;
         let need_full = self.dirty_windows || self.dirty_dialog || vcon_active != 0;
+        crate::display::fb::diag_mark(7);
         self.present_frame(need_full, paint_hud || paint_dock, orb_drawn);
+        crate::display::fb::diag_mark(8);
         self.dirty_windows = false;
         self.dirty_dialog = false;
         self.dirty_hud = false;

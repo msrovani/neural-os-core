@@ -788,11 +788,63 @@ pub struct DoubleBuffer {
     pub dirty: bool,
 }
 
+/// Diagnóstico freeze (s318): geom do FB real p/ marcas de estágio. Escrita
+/// volatile DIRETA (bypass back/swap) — o frame congelado mostra o último
+/// estágio completo do tick do DisplayAgent. Lock-free.
+pub static DIAG_FB_ADDR: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static DIAG_FB_STRIDE: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static DIAG_FB_BPP: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static DIAG_FB_WIDTH: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Marca de estágio (1..=8): n barras no canto sup. direito do FB REAL.
+/// Apaga a faixa antes (última marca vence). No-op pré-graphics.
+pub fn diag_mark(n: u8) {
+    let addr = DIAG_FB_ADDR.load(core::sync::atomic::Ordering::Relaxed);
+    if addr == 0 || n == 0 || n > 9 {
+        return;
+    }
+    let stride = DIAG_FB_STRIDE.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    let bpp = DIAG_FB_BPP.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    let width = DIAG_FB_WIDTH.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    if stride == 0 || bpp == 0 || width < 64 {
+        return;
+    }
+    let (bw, bh, gap) = (2usize, 12usize, 2usize);
+    let strip_w = 9 * (bw + gap) + 4;
+    let x0 = width - strip_w - 2;
+    let base = addr as *mut u8;
+    unsafe {
+        // apaga a faixa inteira (preto) — última marca vence
+        for dy in 0..bh {
+            let off = dy * stride + x0 * bpp;
+            for b in 0..strip_w * bpp {
+                base.add(off + b).write_volatile(0);
+            }
+        }
+        // desenha n barras
+        for i in 0..n as usize {
+            let bx = x0 + 2 + i * (bw + gap);
+            for dy in 0..bh {
+                let off = dy * stride + bx * bpp;
+                for b in 0..bpp {
+                    let c = match b {
+                        0 => 0xFFu8,
+                        1 => 0xD4u8,
+                        2 => 0x00u8,
+                        _ => 0xFFu8,
+                    };
+                    base.add(off + b).write_volatile(c);
+                }
+            }
+        }
+    }
+}
+
 impl DoubleBuffer {
     /// Constrói o double-buffer a partir do GpuDevice já probeado (fonte dinâmica).
     pub fn from_gpu(gpu: &GpuDevice) -> Self {
         let size = (gpu.fb_height as usize).saturating_mul(gpu.stride_bytes());
-        DoubleBuffer {
+        let db = DoubleBuffer {
             info: FramebufferInfo {
                 addr: gpu.fb_addr as usize,
                 width: gpu.fb_width as usize,
@@ -803,7 +855,12 @@ impl DoubleBuffer {
             },
             back: alloc::vec![0u8; size],
             dirty: true,
-        }
+        };
+        DIAG_FB_ADDR.store(gpu.fb_addr as u64, core::sync::atomic::Ordering::Relaxed);
+        DIAG_FB_STRIDE.store(gpu.stride_bytes() as u32, core::sync::atomic::Ordering::Relaxed);
+        DIAG_FB_BPP.store(gpu.bytes_per_pixel() as u32, core::sync::atomic::Ordering::Relaxed);
+        DIAG_FB_WIDTH.store(gpu.fb_width as u32, core::sync::atomic::Ordering::Relaxed);
+        db
     }
 
     pub fn set_pixel(&mut self, x: usize, y: usize, r: u8, g: u8, b: u8) {
