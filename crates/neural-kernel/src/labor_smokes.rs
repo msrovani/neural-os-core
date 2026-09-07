@@ -129,25 +129,19 @@ pub fn run_deferred(boot_tag: &str) {
     hermes_crate::ntp::residual_boot_smoke();
     let _ = hermes_crate::theme_bridge::boot_smoke();
     let _ = jarbas_crate::clipboard_notify::boot_smoke();
-    k_nano::boot_chime::boot_smoke();
     let _ = jarbas_crate::vconsole::boot_smoke();
     let _ = jarbas_crate::screensaver::boot_smoke();
     let _ = hermes_crate::manpages::boot_smoke();
     let _ = jarbas_crate::image_viewer::boot_smoke();
     let _ = k_nano::fts_search::boot_smoke();
-    let _ = k_nano::user_accounts::boot_smoke();
-    let _ = k_nano::fw_cfg::boot_smoke();
     // DEAD CODE: hermes_crate::cf_challenge::boot_smoke(); // (HERMES_AUDIT.md)
     k_nano::xhci::hub_address_boot_smoke();
-    k_nano::btrfs_reader::boot_smoke();
-    k_nano::luks_open::boot_smoke();
     ext4_multiblock_smoke();
     vfs_storage_bridge_smoke();
     k_nano::smp::try_enable_ap_workers_from_feature();
     note_gpu_or_i225_smoke();
     hda_multistream_smoke();
     acpi_s3_smoke();
-    let _ = k_nano::firewall::boot_smoke();
     // DEAD CODE: let _ = hermes_crate::ipc_bus::capgate_boot_smoke(); // (HERMES_AUDIT.md)
     bt_hci_smoke();
     // DEAD CODE: let _ = hermes_crate::elf_loader::elf_thin_boot_smoke(); // (HERMES_AUDIT.md)

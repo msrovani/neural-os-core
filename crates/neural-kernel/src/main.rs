@@ -184,11 +184,8 @@ mod gpt;
 
 mod fs_driver;
 
-mod ext2_reader;
-mod io_scheduler;
 mod storage_manager;
 mod netfs;
-mod disk_power;
 
 mod disk_agent;
 
@@ -1586,9 +1583,7 @@ pub(crate) fn kernel_boot(
     let _ = hermes_crate::theme_bridge::boot_smoke();
     crate::display::fb::boot_ckpt(133, "clipboard_notify:boot_smoke");
     let _ = jarbas_crate::clipboard_notify::boot_smoke();
-    crate::display::fb::boot_ckpt(133, "boot_chime:boot_smoke");
-    k_nano::boot_chime::boot_smoke();
-    crate::display::fb::boot_ckpt(133, "vconsole:boot_smoke");
+        crate::display::fb::boot_ckpt(133, "vconsole:boot_smoke");
     let _ = jarbas_crate::vconsole::boot_smoke();
     crate::display::fb::boot_ckpt(133, "screensaver:boot_smoke");
     let _ = jarbas_crate::screensaver::boot_smoke();
@@ -1598,11 +1593,7 @@ pub(crate) fn kernel_boot(
     let _ = jarbas_crate::image_viewer::boot_smoke();
     crate::display::fb::boot_ckpt(133, "fts_search:boot_smoke");
     let _ = k_nano::fts_search::boot_smoke();
-    crate::display::fb::boot_ckpt(133, "user_accounts:boot_smoke");
-    let _ = k_nano::user_accounts::boot_smoke();
-    crate::display::fb::boot_ckpt(133, "fw_cfg:boot_smoke");
-    let _ = k_nano::fw_cfg::boot_smoke();
-    crate::display::fb::boot_ckpt(134, "smokes4 ok");
+            crate::display::fb::boot_ckpt(134, "smokes4 ok");
     // Initialize async runtime (P16)
     crate::display::fb::boot_ckpt(134, "async_rt:init_async_rt");
     k_nano::async_rt::init_async_rt();
@@ -1610,11 +1601,7 @@ pub(crate) fn kernel_boot(
     // DEAD CODE: hermes_crate::cf_challenge::boot_smoke(); // (HERMES_AUDIT.md)
     crate::display::fb::boot_ckpt(134, "xhci:hub_address_boot_smoke");
     k_nano::xhci::hub_address_boot_smoke();
-    crate::display::fb::boot_ckpt(134, "btrfs_reader:boot_smoke");
-    k_nano::btrfs_reader::boot_smoke();
-    crate::display::fb::boot_ckpt(134, "luks_open:boot_smoke");
-    k_nano::luks_open::boot_smoke();
-    crate::display::fb::boot_ckpt(134, "ext4_multiblock_smoke");
+            crate::display::fb::boot_ckpt(134, "ext4_multiblock_smoke");
     labor_smokes::ext4_multiblock_smoke();
     crate::display::fb::boot_ckpt(134, "vfs_storage_bridge_smoke");
     labor_smokes::vfs_storage_bridge_smoke();
@@ -1626,9 +1613,7 @@ pub(crate) fn kernel_boot(
     labor_smokes::hda_multistream_smoke();
     crate::display::fb::boot_ckpt(134, "acpi_s3_smoke");
     labor_smokes::acpi_s3_smoke();
-    crate::display::fb::boot_ckpt(134, "firewall:boot_smoke");
-    let _ = k_nano::firewall::boot_smoke();
-    // DEAD CODE: 134, "ipc_bus:capgate_boot_smoke" (HERMES_AUDIT.md)
+        // DEAD CODE: 134, "ipc_bus:capgate_boot_smoke" (HERMES_AUDIT.md)
     // DEAD CODE: let _ = hermes_crate::ipc_bus::capgate_boot_smoke(); // (HERMES_AUDIT.md)
     crate::display::fb::boot_ckpt(134, "bt_hci_smoke");
     labor_smokes::bt_hci_smoke();

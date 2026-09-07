@@ -81,8 +81,6 @@ impl StorageBus {
             Vec::new()
         } else {
             let mut m = detect_exfat(dev, kind);
-            m.extend(detect_ext(dev, kind));
-            m.extend(detect_ntfs(dev, kind));
             m
         };
         for m in &mounts {
@@ -152,105 +150,6 @@ impl StorageBus {
     pub fn publish_all_storage(&self) {
         crate::sgdb::publish_storage();
     }
-}
-
-fn detect_ext(dev: &mut dyn BlockDevice, kind: BusKind) -> Vec<StorageMount> {
-    let mut out = Vec::new();
-    let mut mbr = [0u8; 512];
-    if !dev.read_sectors(0, &mut mbr) || mbr[0x1FE] != 0x55 || mbr[0x1FF] != 0xAA {
-        return out;
-    }
-    let parts = crate::fat32::parse_mbr_sector(&mbr);
-    let mut lbas: Vec<u64> = parts.iter().map(|p| p.lba_start as u64).collect();
-    if !lbas.contains(&0) {
-        lbas.insert(0, 0);
-    }
-    let mp: &'static str = match kind {
-        BusKind::Nvme => "/mnt/ext",
-        BusKind::Ahci => "/mnt/ext",
-        BusKind::Ata => "/mnt/ext",
-        BusKind::Usb => "/mnt/ext",
-        BusKind::VirtioBlk => "/mnt/ext",
-    };
-    for start_lba in lbas {
-        if let Some(mut fs) = crate::ext2_reader::Ext2Reader::detect(dev, start_lba) {
-            match fs.mount(dev, start_lba) {
-                Ok(info) => {
-                    let n = fs.list("/").map(|v| v.len()).unwrap_or(0);
-                    crate::slog_nano!(
-                        "EXT4",
-                        "info",
-                        "step=list status=OK entries={} fs={} label={} lba={}",
-                        n,
-                        info.fs_type,
-                        info.label.as_str(),
-                        start_lba
-                    );
-                    out.push(StorageMount {
-                        mount_point: mp,
-                        fs_type: info.fs_type,
-                        start_lba,
-                        label: info.label,
-                    });
-                    break; // first EXT only
-                }
-                Err(e) => {
-                    crate::slog_nano!(
-                        "EXT4",
-                        "info",
-                        "step=mount status=FAIL reason={} lba={}",
-                        e,
-                        start_lba
-                    );
-                }
-            }
-        }
-    }
-    out
-}
-
-fn detect_ntfs(dev: &mut dyn BlockDevice, kind: BusKind) -> Vec<StorageMount> {
-    use crate::fs_driver::FilesystemDriver;
-    let mut out = Vec::new();
-    let mut mbr = [0u8; 512];
-    if !dev.read_sectors(0, &mut mbr) || mbr[0x1FE] != 0x55 || mbr[0x1FF] != 0xAA {
-        return out;
-    }
-    let parts = crate::fat32::parse_mbr_sector(&mbr);
-    let mut lbas: Vec<u64> = parts.iter().map(|p| p.lba_start as u64).collect();
-    if !lbas.contains(&0) {
-        lbas.insert(0, 0);
-    }
-    let mp: &'static str = "/mnt/ntfs";
-    let _ = kind;
-    for start_lba in lbas {
-        if let Some(fs) = crate::ntfs_reader::NtfsReader::detect(dev, start_lba) {
-            crate::slog_nano!(
-                "NTFS",
-                "info",
-                "step=detect status=OK label={} lba={} VERDICT=PARTIAL",
-                fs.name(),
-                start_lba
-            );
-            out.push(StorageMount {
-                mount_point: mp,
-                fs_type: "ntfs",
-                start_lba,
-                label: String::from("ntfs"),
-            });
-            // btrfs probe same LBA (orthogonal)
-            if crate::btrfs_reader::probe_super(dev, start_lba).is_some() {
-                crate::slog_nano!(
-                    "BTRFS",
-                    "info",
-                    "step=detect status=OK lba={} VERDICT=PARTIAL",
-                    start_lba
-                );
-            }
-            break;
-        }
-    }
-    out
 }
 
 fn detect_exfat(dev: &mut dyn BlockDevice, kind: BusKind) -> Vec<StorageMount> {
