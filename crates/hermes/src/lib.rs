@@ -9,7 +9,6 @@ extern crate alloc;
 // Agent framework, intent routing, network stack, WASM runtime, skills
 // Depends on k_nano, cortex, and k_ia.
 
-// pub mod adaptation; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod agents;
 pub mod approval;
 pub mod hitl_ui;
@@ -29,18 +28,14 @@ pub mod netdiag;
 pub mod netfs;
 pub mod netstack;
 pub mod network_agent;
-// pub mod orchestrator; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod plugin_hub;
-// pub mod safety; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod security;
 pub mod self_update;
-// pub mod sgdb_agent; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod shell;
 pub mod skill_gen;
 pub mod skill_loader;
 pub mod skill_manifest;
 pub mod skill_market;
-// pub mod skill_marketplace; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod memory_store;
 pub mod memory;
 pub mod marketplace;
