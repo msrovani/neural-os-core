@@ -1672,6 +1672,13 @@ pub fn react_loop() -> &'static spin::Mutex<ReActLoop> {
     &GLOBAL_REACT
 }
 
+/// Run a full ReAct loop on the global instance.
+pub fn react_run(goal: &str) -> alloc::string::String {
+    GLOBAL_REACT.lock().run(goal)
+}
+
+
+
 static GLOBAL_MCP: spin::Lazy<spin::Mutex<McpServer>> = spin::Lazy::new(|| {
     spin::Mutex::new(McpServer::new())
 });
@@ -1704,5 +1711,15 @@ static GLOBAL_SUCCESS: spin::Lazy<spin::Mutex<SuccessEngine>> = spin::Lazy::new(
 /// Access to the global SuccessEngine (cognitive).
 pub fn success_engine() -> &'static spin::Mutex<SuccessEngine> {
     &GLOBAL_SUCCESS
+}
+
+/// Global CodebookVQ for KV tensor compression.
+static GLOBAL_CODEBOOK: spin::Lazy<spin::Mutex<CodebookVQ>> = spin::Lazy::new(|| {
+    spin::Mutex::new(CodebookVQ::new(64, 256))
+});
+
+/// Access to the global CodebookVQ.
+pub fn codebook() -> &'static spin::Mutex<CodebookVQ> {
+    &GLOBAL_CODEBOOK
 }
 

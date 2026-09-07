@@ -3580,7 +3580,25 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
 
     let mut step = 0usize;
     while step < max_gen {
-        if tokens.len() >= max_seq { break; }
+        // H2O: evict old KV entries when near capacity instead of hard-clipping
+        if tokens.len() >= max_seq {
+            let evict_target = max_seq / 2; // keep half for generation headroom
+            let h2o_heavy = evict_target / 3; // keep top 1/3 as heavy hitters
+            let dropped = crate::kv_h2o::h2o_evict(&mut cache, 8, h2o_heavy);
+            if dropped > 0 {
+                k_nano::slog_cortex!("GEN", "info", "h2o evict: dropped={} cache_len={}", dropped, cache.len);
+            }
+            // After eviction, update tokens to match cache
+            if dropped > 0 && tokens.len() > cache.len {
+                tokens.drain(..tokens.len() - cache.len);
+                recent_u16.clear();
+                if let Some(&last) = tokens.last() { recent_u16.push(last as u16); }
+                tokens_u16.clear();
+                tokens_u16.extend(tokens.iter().map(|&t| t as u16));
+            }
+            // Re-check after eviction
+            if tokens.len() >= max_seq { break; }
+        }
 
         // F0: dump top-16 logits on first step for parity
         if step == 0 && use_bpe { dump_logits_top(&last_logits, 16); }

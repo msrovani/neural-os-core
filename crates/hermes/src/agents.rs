@@ -1648,6 +1648,11 @@ impl Agent for HermesAgent {
                             let steps = k_ai::cognitive::plan_global(msg);
                             k_nano::slog_hermes!("PLANNER", "info", "plan for '{}': {} steps", msg, steps.len());
                         }
+                        // ReAct: reason about the request before sending to LLM
+                        {
+                            let react_result = k_ai::cognitive::react_run(msg);
+                            k_nano::slog_hermes!("REACT", "info", "react for '{}': {}", msg, react_result);
+                        }
                                     crate::cognitive_bridge::session_record(
                                         "user", msg, tick_now,
                                     );

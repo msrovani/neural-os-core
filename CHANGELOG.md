@@ -1,5 +1,47 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s317] - 2026-09-07 — k_ai + Cortex optimization: ReAct, H2O, CodebookVQ
+
+**Plano de otimização ADR-0103: 4 FASEs completas — wire semântico, completar 100%, dead code, Cortex extreme.**
+
+### FASE 1: Wire Semântico
+- `ContextWindow`: `GLOBAL_CONTEXT_WINDOW` singleton com `add_global()`, `build_prompt_global()`, `curated_context_global()`, `set_system_global()`
+- `CortexAgent`: tracks user input + assistant responses in ContextWindow
+- `Economy`: `GLOBAL_BUDGET` singleton — token budget gate, compression adaptation
+- `FeedbackAgent`: publishes `HEALTH_ISSUE` when approval_rate < 30%
+- `AgentRegistry`: `apply_priority_hints()` + `active_agent_count()`
+- `DataCollector`: throttle 5000 → 500 ticks
+
+### FASE 2: Completar 100%
+- `IntentPlanner`: `GLOBAL_PLANNER` singleton, `plan_global()` chamado antes de LLM
+- `ReActLoop`: `react_run()` — think→act→observe pipeline no HermesAgent antes do LLM
+- `McpServer`: `GLOBAL_MCP` singleton + `mcp_global()`
+- `NeuralCache`: `GLOBAL_NCACHE` singleton
+- `SuccessEngine`: `GLOBAL_SUCCESS` singleton
+- `CodebookVQ`: `GLOBAL_CODEBOOK` singleton (64 codes × 256 dim)
+
+### FASE 3: Dead Code Removal
+- Removidos: `fine_tuning_pipeline`, `workflow_learner`, `self_heal_disk`, `agency_importer`
+- `native_agent_seed`: stubbed para compatibilidade package_hub
+
+### FASE 4: Cortex Extreme
+- **Trinity MoE**: neural threshold 0.15 → 0.08 + keyword fallback warning
+- **KV-Cache H2O**: `h2o_evict()` chamado em `generate_speculative()` quando cache ≥ max_seq — evict mid-context, keep recent 8 + top 1/3 heavy hitters
+
+### Arquivos modificados
+| Arquivo | Mudança |
+|---------|--------|
+| `k_ai/src/context_window.rs` | GLOBAL_CONTEXT_WINDOW singleton |
+| `k_ai/src/cognitive.rs` | GLOBAL_PLANNER, GLOBAL_REACT, GLOBAL_MCP, GLOBAL_NCACHE, GLOBAL_SUCCESS, GLOBAL_CODEBOOK, react_run(), plan_global(), mcp_handle() |
+| `k_ai/src/economy.rs` | GLOBAL_BUDGET singleton |
+| `k_ai/src/feedback_agent.rs` | HEALTH_ISSUE on approval_rate < 30% |
+| `k_ai/src/self_learning.rs` | DataCollector throttle 5000→500 |
+| `k_ai/src/lib.rs` | Dead code removal (4 modules) |
+| `hermes/src/agents.rs` | ContextWindow tracking, IntentPlanner, ReActLoop |
+| `agent-core/src/lib.rs` | apply_priority_hints(), active_agent_count() |
+| `cortex/src/cortex.rs` | H2O eviction in generate_speculative() |
+| `cortex/src/trinity.rs` | MoE threshold 0.15→0.08 |
+
 ## [1.9.99-s316] - 2026-09-07 — Self-Heal AIOS: closed-loop + NSGDB + security detectors
 
 **Pipeline de self-healing completo: unificação → RESPAWN → LLM loop → security → NSGDB → user notification.**
