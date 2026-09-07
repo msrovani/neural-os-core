@@ -178,6 +178,7 @@ Se Fase 2 nunca compensar o custo, este ADR **permanece válido só com Fase 1**
 - [x] S0 dedupe multi_user/hnsw  
 - [~] S1: hub→MSC em k_hal **wired** (SESSION_314); evidência HW BOOT.LOG **AWAITING_OPERATOR** (`HW_FLASH_s314.md`)  
 - [x] S0.5: Dead code deletion — 13 módulos mortos removidos (~1800 LOC); k_nano 88→87 módulos, ~27k→25.5k LOC (commit `6e789960`)
+- [x] S0.6: NIC drivers → k_hal::net (fasade pattern, 4 drivers: e1000/rtl8139/i225/virtio_net); k_nano mantém nic_globals statics (commit `030e4bf0`)
 - [ ] ≥2 slices S2–S5 merged com boot check verde — **FREEZE** até 2 boots com log  
 - [x] INDEX lifecycle → `fazendo`; `completa` (Fase 1) só após S1 PASS metal; Fase 2 pode ficar `pesquisa`  
 
@@ -215,6 +216,7 @@ Se Fase 2 nunca compensar o custo, este ADR **permanece válido só com Fase 1**
 |---|---|---|---|
 | TODO-0103-0 | S0.5: Dead code deletion (verify, disk_power, io_scheduler, fw_cfg, ext2, btrfs, ntfs, user_accounts, luks_open, self_check, suspend_resume, rollback, firewall) — ✅ FEITO commit `6e789960` | maint. | — |
 | TODO-0103-1 | S1: wiring completa em k_hal::usb + early hook registado no boot (SESSION_314) | squada (USB) | aceite metal BOOT.LOG |
+| TODO-0103-2 | S0.6: NIC drivers → k_hal::net (fasade pattern, 4 drivers) | maint. | ✅ FEITO commit `030e4bf0` |
 | TODO-0103-2 | S2: pick one NIC/device com política em k_hal + stub MMIO em k_nano; provar com boot + log | squada (net) | manter e1000 como canónico (no stdout QEMU) |
 | TODO-0103-3 | S3: triage FS readers órfãos (ntfs/btrfs/ext2) — mover para crate k_ai ou deletar se 0 callers | squada (fs) | contagem de callers reais |
 | TODO-0103-4 | S4: storage cognitivo (tickv FE/UI) → libs próprias; backend raw em k_nano fino | squada (sgdb) | NSGDB persiste OK |
