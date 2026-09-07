@@ -218,12 +218,44 @@ unsafe fn nic_recv() -> Option<Vec<u8>> {
         }
     });
     if let Some(pkt) = wifi_pkt {
+        detect_and_publish_icmp(&pkt);
         return Some(pkt);
     }
     if let Some(pkt) = k_nano::slip::recv() {
+        detect_and_publish_icmp(&pkt);
         return Some(pkt);
     }
     None
+}
+
+/// Scan raw Ethernet frame for ICMP echo requests (type 8) and publish
+/// `NET_EVENT ICMP src_ip=X.X.X.X` to feed SecurityAgent's PingFloodDetector.
+/// Called from nic_recv() on every received frame.
+fn detect_and_publish_icmp(pkt: &[u8]) {
+    // Ethernet frame: [dst_mac(6)] [src_mac(6)] [EtherType(2)] [IP header...]
+    // Minimum: 14 (eth) + 20 (IP) + 8 (ICMP) = 42 bytes
+    if pkt.len() < 42 {
+        return;
+    }
+    // EtherType at offset 12-13: 0x0800 = IPv4
+    let ethertype = u16::from_be_bytes([pkt[12], pkt[13]]);
+    if ethertype != 0x0800 {
+        return;
+    }
+    // IP header starts at offset 14
+    // Protocol at offset 23 (byte 9 of IP header): 1 = ICMP
+    let protocol = pkt[23];
+    if protocol != 1 {
+        return;
+    }
+    // ICMP type at offset 34 (byte 0 of ICMP header): 8 = Echo Request
+    let icmp_type = pkt[34];
+    if icmp_type != 8 {
+        return;
+    }
+    // Source IP at offset 26-29 (bytes 12-15 of IP header)
+    let src_ip = [pkt[26], pkt[27], pkt[28], pkt[29]];
+    crate::security::publish_net_event("ICMP", src_ip, 0, None);
 }
 
 pub struct NetPhy;
@@ -417,6 +449,8 @@ impl NetStack {
                     let gw = config.router.map(|r| r.octets()).unwrap_or([0; 4]);
                     let dns = config.dns_servers.first().map(|s| s.octets()).unwrap_or([10, 0, 2, 3]);
                     *dhcp_done = true;
+                    // Wire security: publish SYSTEM_EVENT for DhcpStarvationDetector
+                    crate::security::publish_system_event("DHCP_LEASE");
                     return (true, gw, dns);
                 }
                 DhcpEvent::Deconfigured => {
@@ -1058,6 +1092,8 @@ impl NetStack {
         port: u16,
         now: u64,
     ) -> Option<SocketHandle> {
+        // Wire security: publish NET_EVENT for PortScanDetector
+        crate::security::publish_net_event("CONNECT", host, port, None);
         let tcp_rx = tcp::SocketBuffer::new(vec![0u8; 16_384]);
         let tcp_tx = tcp::SocketBuffer::new(vec![0u8; 16_384]);
         let tcp = TcpSocket::new(tcp_rx, tcp_tx);

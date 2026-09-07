@@ -4,8 +4,15 @@
 //! Security Pipeline — EventBus → Detector → Correlation → Response.
 //! #260: 5 detectores iniciais para ameaças de rede e sistema.
 //! Conectado ao EventBus: subscribe NET_EVENT + SYSTEM_EVENT, publish SECURITY_ALERT.
+//!
+//! NET_EVENT payload format (structured):
+//!   `CONNECT src_ip=X.X.X.X dst_port=N`
+//!   `ICMP src_ip=X.X.X.X`
+//!   `ARP src_ip=X.X.X.X src_mac=XX:XX:XX:XX:XX:XX`
+//!   `DHCP_DISCOVER src_mac=XX:XX:XX:XX:XX:XX`
 
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use k_nano::interrupts::TIMER_TICKS;
@@ -24,21 +31,145 @@ pub const TOPIC_NET_EVENT: &str = "NET_EVENT";
 pub const TOPIC_SYSTEM_EVENT: &str = "SYSTEM_EVENT";
 pub const TOPIC_SECURITY_ALERT: &str = "SECURITY_ALERT";
 
-/// Evento de segurança detectado
-pub struct SecurityEvent {
-    pub detector: &'static str,
-    pub severity: u8,        // 1-5 (5 = crítico)
-    pub description: String,
-    pub tick: u64,
+// ── Helper: network code calls this to publish structured NET_EVENT ────────
+
+/// Publish a structured network event to the security pipeline.
+/// Network code (TCP, ARP, ICMP) calls this so SecurityAgent's real detectors fire.
+pub fn publish_net_event(event_type: &str, src_ip: [u8; 4], dst_port: u16, src_mac: Option<[u8; 6]>) {
+    let mut payload = String::new();
+    match event_type {
+        "CONNECT" => {
+            // PortScanDetector: needs src_ip + dst_port
+            payload.push_str("CONNECT src_ip=");
+            push_ip(&mut payload, src_ip);
+            payload.push_str(" dst_port=");
+            push_port(&mut payload, dst_port);
+        }
+        "ICMP" => {
+            // PingFloodDetector: needs src_ip
+            payload.push_str("ICMP src_ip=");
+            push_ip(&mut payload, src_ip);
+        }
+        "ARP" => {
+            // ArpSpoofDetector: needs src_ip + src_mac
+            payload.push_str("ARP src_ip=");
+            push_ip(&mut payload, src_ip);
+            if let Some(mac) = src_mac {
+                payload.push_str(" src_mac=");
+                push_mac(&mut payload, mac);
+            }
+        }
+        "DHCP_DISCOVER" => {
+            // DhcpStarvationDetector: needs src_mac
+            payload.push_str("DHCP_DISCOVER src_mac=");
+            if let Some(mac) = src_mac {
+                push_mac(&mut payload, mac);
+            }
+        }
+        _ => return,
+    }
+    let _ = EVENT_BUS.publish(Event {
+        id: 0,
+        topic: String::from(TOPIC_NET_EVENT),
+        payload: payload.into_bytes(),
+        token: CapabilityToken::Legacy(1),
+    });
 }
+
+/// Publish a system event (e.g. timer tick for anomaly detection).
+pub fn publish_system_event(event_type: &str) {
+    let tick = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    let mut payload = String::new();
+    match event_type {
+        "TIMER" => {
+            payload.push_str("TIMER tick=");
+            push_u64(&mut payload, tick);
+        }
+        "DHCP_LEASE" => {
+            payload.push_str("DHCP_LEASE");
+        }
+        _ => return,
+    }
+    let _ = EVENT_BUS.publish(Event {
+        id: 0,
+        topic: String::from(TOPIC_SYSTEM_EVENT),
+        payload: payload.into_bytes(),
+        token: CapabilityToken::Legacy(1),
+    });
+}
+
+fn push_ip(buf: &mut String, ip: [u8; 4]) {
+    let s = alloc::format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
+    buf.push_str(&s);
+}
+
+fn push_port(buf: &mut String, port: u16) {
+    buf.push_str(&alloc::format!("{}", port));
+}
+
+fn push_mac(buf: &mut String, mac: [u8; 6]) {
+    buf.push_str(&alloc::format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    ));
+}
+
+fn push_u64(buf: &mut String, v: u64) {
+    buf.push_str(&alloc::format!("{}", v));
+}
+
+// ── Parse helpers ───────────────────────────────────────────────────────────
+
+/// Parse `src_ip=X.X.X.X` from payload. Returns None if not found.
+fn parse_src_ip(payload: &str) -> Option<[u8; 4]> {
+    let start = payload.find("src_ip=")? + 7;
+    let end = payload[start..].find(char::is_whitespace).unwrap_or(payload[start..].len()) + start;
+    let ip_str = &payload[start..end];
+    let mut parts = [0u8; 4];
+    for (i, p) in ip_str.split('.').enumerate() {
+        parts[i] = p.parse().ok()?;
+    }
+    Some(parts)
+}
+
+/// Parse `src_mac=XX:XX:XX:XX:XX:XX` from payload. Returns None if not found.
+fn parse_src_mac(payload: &str) -> Option<[u8; 6]> {
+    let start = payload.find("src_mac=")? + 8;
+    let end = payload[start..].find(char::is_whitespace).unwrap_or(payload[start..].len()) + start;
+    let mac_str = &payload[start..end];
+    let mut mac = [0u8; 6];
+    for (i, p) in mac_str.split(':').enumerate() {
+        if i >= 6 { break; }
+        mac[i] = u8::from_str_radix(p, 16).ok()?;
+    }
+    Some(mac)
+}
+
+/// Parse `dst_port=N` from payload. Returns None if not found.
+fn parse_dst_port(payload: &str) -> Option<u16> {
+    let start = payload.find("dst_port=")? + 9;
+    let end = payload[start..].find(char::is_whitespace).unwrap_or(payload[start..].len()) + start;
+    payload[start..end].parse().ok()
+}
+
+/// Parse `src_mac=XX:XX:XX:XX:XX:XX` for DHCP_DISCOVER (same as ARP but MAC-only).
+fn parse_dhcp_mac(payload: &str) -> Option<[u8; 6]> {
+    parse_src_mac(payload) // Same format, re-use parser
+}
+
+// ── SecurityAgent ───────────────────────────────────────────────────────────
 
 pub struct SecurityAgent {
     net_receiver: event_bus::Receiver,
     sys_receiver: event_bus::Receiver,
-    events: Vec<SecurityEvent>,
-    port_scan_counter: u64,
-    ping_flood_counter: u64,
-    last_arp_check: u64,
+    // Real detectors from k_ai
+    port_scan: k_ai::security_detectors::PortScanDetector,
+    arp_spoof: k_ai::security_detectors::ArpSpoofDetector,
+    ping_flood: k_ai::security_detectors::PingFloodDetector,
+    dhcp_starvation: k_ai::security_detectors::DhcpStarvationDetector,
+    timer_anomaly: k_ai::security_detectors::TimerAnomalyDetector,
+    // Correlation buffer
+    alerts: Vec<k_ai::security_detectors::SecurityAlert>,
 }
 
 impl SecurityAgent {
@@ -46,136 +177,123 @@ impl SecurityAgent {
         SecurityAgent {
             net_receiver: EVENT_BUS.subscribe(TOPIC_NET_EVENT),
             sys_receiver: EVENT_BUS.subscribe(TOPIC_SYSTEM_EVENT),
-            events: Vec::new(),
-            port_scan_counter: 0,
-            ping_flood_counter: 0,
-            last_arp_check: 0,
+            port_scan: k_ai::security_detectors::PortScanDetector::new(),
+            arp_spoof: k_ai::security_detectors::ArpSpoofDetector::new(),
+            ping_flood: k_ai::security_detectors::PingFloodDetector::new(),
+            dhcp_starvation: k_ai::security_detectors::DhcpStarvationDetector::new(),
+            timer_anomaly: k_ai::security_detectors::TimerAnomalyDetector::new(),
+            alerts: Vec::new(),
         }
     }
 
-    /// Processa eventos de rede recebidos via EventBus
-    fn process_net_event(&mut self, payload: &[u8], tick: u64) {
-        let text = core::str::from_utf8(payload).unwrap_or("");
-        if text.contains("SYN") || text.contains("connect") {
-            self.detect_port_scan(tick, payload);
-        }
-        if text.contains("ICMP") || text.contains("ping") {
-            self.detect_ping_flood(tick);
-        }
-        if text.contains("ARP") {
-            self.detect_arp_spoof(tick);
-        }
-    }
-
-    /// Processa eventos de sistema recebidos via EventBus
-    fn process_sys_event(&mut self, payload: &[u8], tick: u64) {
-        let text = core::str::from_utf8(payload).unwrap_or("");
-        if text.contains("timer") || text.contains("drift") {
-            self.detect_timer_anomaly(tick);
-        }
-        if text.contains("dhcp") || text.contains("lease") {
-            self.detect_dhcp_starvation(tick);
-        }
-    }
-
-    /// Publica alerta de segurança no EventBus
-    fn publish_alert(&self, event: &SecurityEvent) {
-        let msg = alloc::format!("[SECURITY] {} severidade={}: {}",
-            event.detector, event.severity, event.description);
+    /// Publish a structured alert to SECURITY_ALERT + Hermes
+    fn publish_alert(&self, alert: &k_ai::security_detectors::SecurityAlert) {
+        let msg = alloc::format!(
+            "[SECURITY] {} (sev={:?}): {}",
+            alert.detector,
+            alert.severity,
+            alert.message
+        );
         let _ = EVENT_BUS.publish(Event {
-            id: event.tick,
+            id: alert.timestamp,
             topic: String::from(TOPIC_SECURITY_ALERT),
             payload: msg.into_bytes(),
             token: CapabilityToken::Legacy(1),
         });
     }
 
-    fn detect_port_scan(&mut self, tick: u64, _payload: &[u8]) {
-        self.port_scan_counter += 1;
-        if self.port_scan_counter > 50 {
-            let event = SecurityEvent {
-                detector: "PortScan",
-                severity: 4,
-                description: alloc::format!("Port scan detectado: {} acessos", self.port_scan_counter),
-                tick,
-            };
-            self.publish_alert(&event);
-            self.events.push(event);
-            self.port_scan_counter = 0;
-        }
-    }
+    /// Feed a NET_EVENT payload to the appropriate real detector.
+    /// Returns Some(alert) if the detector found something suspicious.
+    fn feed_net_event(&mut self, payload: &[u8], tick: u64) {
+        let text = match core::str::from_utf8(payload) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
 
-    fn detect_arp_spoof(&mut self, tick: u64) {
-        if tick > self.last_arp_check + 200 {
-            self.last_arp_check = tick;
-            let cfg = crate::net::NET_CONFIG.lock();
-            let gw_mac = cfg.gateway_mac;
-            drop(cfg);
-            if gw_mac != [0; 6] {
-                // Em producao: comparar com ARP cache
+        if let Some(rest) = text.strip_prefix("CONNECT ") {
+            // PortScanDetector: src_ip + dst_port
+            if let Some(src_ip) = parse_src_ip(rest) {
+                let ip_u32 = u32::from_be_bytes(src_ip);
+                let dst_port = parse_dst_port(rest).unwrap_or(0);
+                if let Some(alert) = self.port_scan.feed(ip_u32, dst_port, tick) {
+                    self.publish_alert(&alert);
+                    self.alerts.push(alert);
+                }
+            }
+        } else if let Some(rest) = text.strip_prefix("ICMP ") {
+            // PingFloodDetector: src_ip
+            if let Some(src_ip) = parse_src_ip(rest) {
+                let ip_u32 = u32::from_be_bytes(src_ip);
+                if let Some(alert) = self.ping_flood.feed(ip_u32, tick) {
+                    self.publish_alert(&alert);
+                    self.alerts.push(alert);
+                }
+            }
+        } else if let Some(rest) = text.strip_prefix("ARP ") {
+            // ArpSpoofDetector: src_ip + src_mac
+            if let Some(src_ip) = parse_src_ip(rest) {
+                let ip_u32 = u32::from_be_bytes(src_ip);
+                let mac = parse_src_mac(rest).unwrap_or([0u8; 6]);
+                if let Some(alert) = self.arp_spoof.feed(ip_u32, mac, tick) {
+                    self.publish_alert(&alert);
+                    self.alerts.push(alert);
+                }
+            }
+        } else if let Some(rest) = text.strip_prefix("DHCP_DISCOVER ") {
+            // DhcpStarvationDetector: src_mac
+            if let Some(mac) = parse_dhcp_mac(rest) {
+                if let Some(alert) = self.dhcp_starvation.feed(mac, tick) {
+                    self.publish_alert(&alert);
+                    self.alerts.push(alert);
+                }
             }
         }
     }
 
-    fn detect_ping_flood(&mut self, tick: u64) {
-        self.ping_flood_counter += 1;
-        if self.ping_flood_counter > 100 {
-            let event = SecurityEvent {
-                detector: "PingFlood",
-                severity: 3,
-                description: alloc::format!("Ping flood: {} pacotes ICMP", self.ping_flood_counter),
-                tick,
-            };
-            self.publish_alert(&event);
-            self.events.push(event);
-            self.ping_flood_counter = 0;
-        }
-    }
+    /// Feed a SYSTEM_EVENT payload to the appropriate real detector.
+    fn feed_sys_event(&mut self, payload: &[u8], tick: u64) {
+        let text = match core::str::from_utf8(payload) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
 
-    fn detect_dhcp_starvation(&mut self, tick: u64) {
-        // Monitora taxa de renovacao DHCP — picos indicam starvation
-        let ns = unsafe { crate::net::NETSTACK.lock() };
-        if let Some(ref netstack) = *ns {
-            let rx = netstack.rx_count;
-            let tx = netstack.tx_count;
-            drop(ns);
-            // Se tx >>> rx por periodo prolongado, pode ser flood DHCP
-            if tx > 1000 && rx < 10 && tx % 100 == 0 {
-                let event = SecurityEvent {
-                    detector: "DHCPStarvation",
-                    severity: 3,
-                    description: alloc::format!("Tx={} Rx={} — possivel ataque DHCP", tx, rx),
-                    tick,
-                };
-                self.publish_alert(&event);
-                self.events.push(event);
+        if text.starts_with("TIMER ") {
+            // TimerAnomalyDetector: call with tick
+            if let Some(alert) = self.timer_anomaly.feed(tick) {
+                self.publish_alert(&alert);
+                self.alerts.push(alert);
             }
-        } else { drop(ns); }
-    }
-
-    fn detect_timer_anomaly(&mut self, tick: u64) {
-        if tick > 1000 && tick % 1000 == 0 {
-            let expected = tick;
-            let actual = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-            if expected.abs_diff(actual) > 10 {
-                let event = SecurityEvent {
-                    detector: "TimerAnomaly",
-                    severity: 2,
-                    description: alloc::format!("Timer drift: esperado={} real={}", expected, actual),
-                    tick,
-                };
-                self.publish_alert(&event);
-                self.events.push(event);
+        } else if text.starts_with("DHCP_LEASE") {
+            // DhcpStarvationDetector: track lease frequency
+            if let Some(alert) = self.dhcp_starvation.feed_lease(tick) {
+                self.publish_alert(&alert);
+                self.alerts.push(alert);
             }
         }
     }
 
+    /// Correlate multiple alerts: if 3+ alerts in short window, escalate.
     fn correlate(&mut self, tick: u64) {
-        if self.events.len() >= 3 {
-            let sev: u8 = self.events.iter().map(|e| e.severity).max().unwrap_or(0);
-            k_nano::slog_hermes!("Sec", "info", "Correlacao: {} eventos, severidade max={}", self.events.len(), sev);
-            if sev >= 4 {
-                let msg = alloc::format!("ALERTA: {} eventos detectados, severidade {}", self.events.len(), sev);
+        if self.alerts.len() >= 3 {
+            use k_ai::security_detectors::AlertSeverity;
+            let max_sev = self.alerts.iter().map(|a| match a.severity {
+                AlertSeverity::Critical => 5,
+                AlertSeverity::High => 4,
+                AlertSeverity::Medium => 3,
+                AlertSeverity::Low => 2,
+            }).max().unwrap_or(0);
+
+            k_nano::slog_hermes!(
+                "Sec", "warn",
+                "Correlacao: {} alertas, severidade max={}",
+                self.alerts.len(), max_sev
+            );
+
+            if max_sev >= 4 {
+                let msg = alloc::format!(
+                    "ALERTA CRÍTICO: {} alertas correlacionados, severidade {}",
+                    self.alerts.len(), max_sev
+                );
                 let _ = EVENT_BUS.publish(Event {
                     id: tick,
                     topic: String::from(TOPIC_SECURITY_ALERT),
@@ -186,11 +304,14 @@ impl SecurityAgent {
                 let _ = EVENT_BUS.publish(Event {
                     id: tick,
                     topic: String::from(crate::hermes::TOPIC_HERMES_RESPONSE),
-                    payload: alloc::format!("[SECURITY] Correlacao: {} eventos, severidade {}", self.events.len(), sev).into_bytes(),
+                    payload: alloc::format!(
+                        "[SECURITY] Correlacao: {} alertas, severidade {}",
+                        self.alerts.len(), max_sev
+                    ).into_bytes(),
                     token: CapabilityToken::Legacy(1),
                 });
             }
-            self.events.clear();
+            self.alerts.clear();
         }
     }
 }
@@ -201,19 +322,25 @@ impl Agent for SecurityAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         let tick = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
 
-        // Poll EventBus por eventos de rede e sistema
+        // Poll EventBus for NET_EVENT (TCP, ARP, ICMP, DHCP)
         while let Some(event) = self.net_receiver.try_receive() {
-            self.process_net_event(&event.payload, tick);
+            self.feed_net_event(&event.payload, tick);
         }
+
+        // Poll EventBus for SYSTEM_EVENT (timer drift)
         while let Some(event) = self.sys_receiver.try_receive() {
-            self.process_sys_event(&event.payload, tick);
+            self.feed_sys_event(&event.payload, tick);
         }
 
-        // Poll detectores legacy
-        self.detect_arp_spoof(tick);
-        self.detect_dhcp_starvation(tick);
-        self.detect_timer_anomaly(tick);
+        // Periodic timer anomaly check (every 1000 ticks, self-contained)
+        if tick > 1000 && tick % 1000 == 0 {
+            if let Some(alert) = self.timer_anomaly.feed(tick) {
+                self.publish_alert(&alert);
+                self.alerts.push(alert);
+            }
+        }
 
+        // Correlate alerts every 100 ticks
         if tick % 100 == 0 {
             self.correlate(tick);
         }
@@ -288,9 +415,3 @@ pub static SECURITY_POLICY: PathPolicy = PathPolicy::new(
     &["/system/secure/", "/system/keys/", "//"],
     &["sk-", "-----BEGIN", "AKIA", "ghp_"],
 );
-
-
-
-
-
-

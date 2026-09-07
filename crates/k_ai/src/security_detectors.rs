@@ -148,11 +148,15 @@ impl PingFloodDetector {
 
 pub struct DhcpStarvationDetector {
     requests: Vec<([u8; 6], u64, u32)>, // (mac, tick_window, count)
+    /// Lease count per time window (feeds from SYSTEM_EVENT DHCP_LEASE)
+    lease_count: u32,
+    lease_window_start: u64,
 }
 
 impl DhcpStarvationDetector {
-    pub fn new() -> Self { Self { requests: Vec::new() } }
+    pub fn new() -> Self { Self { requests: Vec::new(), lease_count: 0, lease_window_start: 0 } }
 
+    /// Feed a DHCP DISCOVER (with MAC). Classic starvation: >50 DISCOVERs from same MAC.
     pub fn feed(&mut self, mac: [u8; 6], tick: u64) -> Option<SecurityAlert> {
         for &mut (ref m, ref mut last_tick, ref mut count) in &mut self.requests {
             if m == &mac {
@@ -177,6 +181,30 @@ impl DhcpStarvationDetector {
             }
         }
         self.requests.push((mac, tick, 1));
+        None
+    }
+
+    /// Feed a DHCP LEASE event (from SYSTEM_EVENT). Tracks lease frequency:
+    /// >10 leases in 200 ticks = abnormal (possible starvation or renewal storm).
+    pub fn feed_lease(&mut self, tick: u64) -> Option<SecurityAlert> {
+        if self.lease_window_start == 0 || tick.wrapping_sub(self.lease_window_start) > 200 {
+            self.lease_window_start = tick;
+            self.lease_count = 1;
+        } else {
+            self.lease_count += 1;
+            if self.lease_count > 10 {
+                let count = self.lease_count;
+                self.lease_count = 0;
+                return Some(SecurityAlert {
+                    detector: "DhcpStarvationDetector",
+                    severity: AlertSeverity::High,
+                    message: alloc::format!("DHCP lease storm: {} leases in {} ticks",
+                        count, 200),
+                    source: None,
+                    timestamp: tick,
+                });
+            }
+        }
         None
     }
 }

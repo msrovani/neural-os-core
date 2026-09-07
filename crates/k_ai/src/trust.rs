@@ -182,6 +182,12 @@ impl TrustCache {
         self.exempt_tokens.contains(&token)
     }
 
+    /// Safety invariant I3: number of active trust entries.
+    /// Zero entries post-boot indicates possible mass revocation.
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
     pub fn add_exempt_token(&mut self, token: u64) {
         self.exempt_tokens.insert(token);
         k_nano::slog_kai!("Trust", "info", "exempt token={} (sistema)", token);
@@ -317,4 +323,14 @@ impl SyscallClass {
     pub fn requires_approval(&self) -> bool {
         matches!(self, SyscallClass::Persistent | SyscallClass::Hardware)
     }
+}
+
+/// Global trust entry count for safety invariant I3.
+/// Returns 0 if TRUST_CACHE is not yet initialized (pre-boot).
+pub fn global_trust_entry_count() -> usize {
+    // TRUST_CACHE lives in hermes::globals — k_ai cannot depend on hermes.
+    // This is a stub that returns 0; the real check is done by SafetyInvariants
+    // which runs in the SecurityAgent (hermes ring) and can access TRUST_CACHE.
+    // For now, return 0 to indicate "not checked" (pre-boot).
+    0
 }

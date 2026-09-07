@@ -19,7 +19,7 @@ use crate::memory_store;
 use k_ai::conversation;
 use k_nano::{println, kjson};
 use crate::globals::{EVENT_BUS, SKILL_REGISTRY, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
-            CONVERSATION_TRACKER, PENDING_SKILL, SELF_HEAL, BITNET_TRAINER, TRINITY,
+            CONVERSATION_TRACKER, PENDING_SKILL, BITNET_TRAINER, TRINITY,
             APPROVAL_GATE, boot_log_agent, agency, hw_agents, inventory};
 use crate::structured_decode::{StructuredDecoder, DecodeMode};
 use crate::decode_harness::recognize;
@@ -320,6 +320,7 @@ const CORTEX_MANIFEST: AgentManifest = AgentManifest {
 
 pub struct CortexAgent {
     receiver: Receiver,
+    healing_receiver: Receiver,
 }
 
 impl CortexAgent {
@@ -334,7 +335,10 @@ impl CortexAgent {
         }
         // ponytail: boot carrega modelo via load_model() → set_model(). Se não carregou,
         // não criar toy — o sistema opera honestamente sem AI.
-        CortexAgent { receiver: EVENT_BUS.subscribe(cortex::cortex::TOPIC_LLM_REQUEST) }
+        CortexAgent {
+            receiver: EVENT_BUS.subscribe(cortex::cortex::TOPIC_LLM_REQUEST),
+            healing_receiver: EVENT_BUS.subscribe(k_ai::self_heal::TOPIC_HEALING_LLM_REQUEST),
+        }
     }
 }
 
@@ -489,6 +493,32 @@ impl Agent for CortexAgent {
                 k_nano::slog_cortex!("LLM", "info", "Card JSON published to UI_SPEC");
             }
         }
+
+        // Phase 3: Process HEALING_LLM_REQUEST from SelfHealAgent.
+        // Uses healing-specific prompt to get AI diagnosis for error recovery.
+        if let Some(event) = self.healing_receiver.try_receive() {
+            let healing_prompt = core::str::from_utf8(&event.payload).unwrap_or("");
+            if !healing_prompt.is_empty() {
+                k_nano::slog_cortex!("LLM", "info", "HEALING_LLM_REQUEST: {}", healing_prompt);
+                let healing_system = alloc::format!(
+                    "You are the AIOS self-healing engine. Diagnose the error and recommend a recovery action. Respond ONLY with JSON: {{\"action\":\"<restart_daemon|checkpoint_restore|create_skill|log_continue>\",\"reason\":\"<brief explanation>\",\"params\":{{}}}}"
+                );
+                let full_prompt = alloc::format!("{}\n{}", healing_system, healing_prompt);
+                let output = cortex::cortex::generate_via_model(&full_prompt);
+                let output = if output == cortex::cortex::NO_MODEL_MSG || output.trim().is_empty() {
+                    // Fallback: heuristic diagnosis without LLM
+                    alloc::format!("{{\"action\":\"log_continue\",\"reason\":\"LLM unavailable — heuristic fallback\"}}")
+                } else { output };
+                k_nano::slog_cortex!("LLM", "info", "HEALING response: {}", output);
+                let _ = EVENT_BUS.publish(Event {
+                    id: 0,
+                    topic: alloc::string::String::from(k_ai::self_heal::TOPIC_HEALING_LLM_RESPONSE),
+                    payload: output.into_bytes(),
+                    token: CapabilityToken::Legacy(1),
+                });
+            }
+        }
+
         AgentTickResult::Pending
     }
 }
@@ -1845,7 +1875,10 @@ const SELFHEAL_MANIFEST: AgentManifest = AgentManifest {
 impl Agent for BootSelfHealAgent {
     fn manifest(&self) -> &AgentManifest { &SELFHEAL_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        SELF_HEAL.lock();
+        // Phase 1: use canonical GLOBAL_SELF_HEAL from k_ai.
+        // Lock is acquired to ensure initialization; all subsequent
+        // accesses (including boot_log_agent) go through the same instance.
+        let _guard = k_ai::self_heal::GLOBAL_SELF_HEAL.lock();
         kjson!("AGENT", "SelfHeal", "ready", "tick", _tick);
 
         // ADR-0042 N2: Trust (token, agent, skill) + inventário VID-gated
@@ -1890,7 +1923,7 @@ impl Agent for BootSelfHealAgent {
                 if fw_n == 0 {
                     k_nano::slog_kai!("Gate", "n2", "HEALTH_ISSUE: honest noop (fw_gated=0 — no known VID needs FW)");
                 }
-                let mut heal = SELF_HEAL.lock();
+                let mut heal = k_ai::self_heal::GLOBAL_SELF_HEAL.lock();
                 let report = heal.run_vid_gated_scan(&triples);
                 k_nano::slog_kai!("Gate", "ok", "gate complete heal={} noop={} HEALTH_ISSUE={} (k_ai)",
                     report.heal_issues,
@@ -1942,7 +1975,7 @@ impl Agent for BootSelfHealAgent {
                                 daemon: alloc::string::String::from("boot_self_heal"),
                                 tick: _tick,
                             };
-                            let mut heal = SELF_HEAL.lock();
+                            let mut heal = k_ai::self_heal::GLOBAL_SELF_HEAL.lock();
                             heal.analyze(&ctx, true);
                             // U4 ADR-0086: kernel novo falhou → volta o slot bom
                             if crate::self_update::SelfUpdate::rollback() {

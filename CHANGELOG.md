@@ -1,5 +1,48 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s316] - 2026-09-07 — Self-Heal AIOS: closed-loop + NSGDB + security detectors
+
+**Pipeline de self-healing completo: unificação → RESPAWN → LLM loop → security → NSGDB → user notification.**
+
+### Self-Heal Phase 1: Unificação
+- 3 instâncias `SELF_HEAL` isoladas → 1 canônico `GLOBAL_SELF_HEAL: spin::Lazy<IrqSafeLock<SelfHeal>>` em `k_ai`
+- Boot (`boot_log_agent`) e runtime (`SelfHealAgent`) compartilham `lessons[]` e `pending_fixes[]`
+- Removido `SELF_HEAL` de `main.rs` e `hermes/globals.rs`
+
+### Self-Heal Phase 2: RESPAWN Wiring
+- `RestartDaemon` → `push_respawn()` → `RESPAWN_QUEUE` → scheduler cria nova instância
+- `BudgetedRecovery` enforcement: 10 ações/janela, `consume()` + `maybe_reset()`
+
+### Self-Heal Phase 3: Closed-Loop LLM (Falcon3 3B)
+- `HEALING_LLM_REQUEST` / `HEALING_LLM_RESPONSE` — loop fechado com CortexAgent
+- `analyze()` estendido: ExecutionFault→CheckpointRestore, LogicFault/ExternalFault→AwaitLLM
+- `SafetyInvariants I2`: contagem real via `agent_stats::current_agent_count()`
+
+### Self-Heal Phase 4: Security Detectors Wired
+- 5 detectores reais de `k_ai::security_detectors` instanciados no SecurityAgent
+- `NET_EVENT` publicado por TCP connect (`netstack.rs`) e mesh ARP (`peer_set_mac`)
+- ICMP Echo Request interceptado em `nic_recv()` (`detect_and_publish_icmp`)
+- DHCP lease → `SYSTEM_EVENT DHCP_LEASE` + `DhcpStarvationDetector::feed_lease()`
+
+### Self-Heal Phase 5: NSGDB Integration + User Notification
+- `ingest_error_to_nsgdb()`: toda falha gravada como `md/L3/selfheal/{tick:07}`
+- `query_nsgdb_for_patterns()`: busca lexical por erros históricos do mesmo daemon
+- `query_nsgdb_for_successful_recoveries()`: recuperações passadas bem-sucedidas
+- `notify_user()`: publica em `HERMES_RESPONSE` + `SELFHEAL_USER_NOTIFY`
+- `ingest_recovery_to_nsgdb()`: resultado de cada recovery gravado no NSGDB
+
+### Arquivos modificados (16)
+- `k_ai/src/self_heal.rs`, `self_heal_agent.rs`, `agent_stats.rs` (novo), `safety_invariants.rs`, `trust.rs`, `lib.rs`, `security_detectors.rs`
+- `hermes/src/agents.rs`, `globals.rs`, `security.rs`, `netstack.rs`
+- `k_nano/src/net/mesh.rs`
+- `neural-kernel/src/main.rs`, `boot_log_agent.rs`
+- `agent-core/src/lib.rs`
+
+### Aceite
+- `cargo check --release` — 0 erros
+- 5/5 security detectors wired (PortScan, ArpSpoof, PingFlood, DhcpStarvation, TimerAnomaly)
+- NSGDB ingest + query + user notification operacional
+
 ## [1.9.99-s315] - 2026-09-05 — Jarbas UI liveness + anti-black-screen (Alienware)
 
 **Desktop vivo no metal + early USB sem hang silencioso pós-Limine.**

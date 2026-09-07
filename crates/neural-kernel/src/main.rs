@@ -605,7 +605,8 @@ impl Skill for HwIdentifySkill {
 
 lazy_static! {
 
-    // Locks IRQ-safe: SELF_HEAL e RESPAWN_QUEUE são acessados de handlers de exceção
+    // Locks IRQ-safe: RESPAWN_QUEUE é acessado de handlers de exceção.
+    // SELF_HEAL unificado em k_ai::self_heal::GLOBAL_SELF_HEAL (Phase 1).
 
     // P001: SKILL_REGISTRY canônico agora em k_nano::globals (cross-crate).
     // Skills builtin registrados via register_builtin_skills() no boot.
@@ -620,9 +621,11 @@ lazy_static! {
 
     static ref CONVERSATION_TRACKER: ticket_lock::TicketLock<hermes::ConversationTracker> = ticket_lock::TicketLock::new(hermes::ConversationTracker::new());
 
-    static ref SELF_HEAL: crate::sync::irq_lock::IrqSafeLock<self_heal::SelfHeal> = crate::sync::irq_lock::IrqSafeLock::new(self_heal::SelfHeal::new());
+    // SELF_HEAL removido — unificado em k_ai::self_heal::GLOBAL_SELF_HEAL
 
     static ref RESPAWN_QUEUE: crate::sync::irq_lock::IrqSafeLock<alloc::vec::Vec<alloc::string::String>> = crate::sync::irq_lock::IrqSafeLock::new(alloc::vec::Vec::new());
+
+
 
     static ref APPROVAL_GATE: ticket_lock::TicketLock<crate::approval::ApprovalGate> = ticket_lock::TicketLock::new(crate::approval::ApprovalGate::new());
 
@@ -843,10 +846,24 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 // ponytail: runs scheduler on heap-allocated stack (avoids bootloader v0.11 stack boundary #PF)
 fn sched_metrics_hook(tick: u64, n_agents: usize, polled: u32) {
+    // Phase 3: Update agent count for safety invariant I2
+    k_ai::agent_stats::update_agent_count(n_agents);
     k_nano::slog_bin!("SCHED", "info", "tick={} agents={} polled={}", tick, n_agents, polled);
 }
 
+/// Bridge function for SelfHeal → RESPAWN_QUEUE.
+/// Called by k_ai::self_heal::push_respawn() when RestartDaemon recovery
+/// is selected. This closes the loop: Error → Classify → Restart → Respawn.
+fn push_respawn_bridge(name: &str) {
+    let mut q = RESPAWN_QUEUE.lock();
+    q.push(alloc::string::String::from(name));
+}
+
 fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
+    // Phase 1: register RESPAWN bridge so SelfHealAgent can restart daemons.
+    k_ai::self_heal::register_respawn_bridge(push_respawn_bridge);
+    k_nano::slog_bin!("BOOT", "ok", "SelfHeal RESPAWN bridge registered");
+
     // init_phase AQUI (stack é 2MB): round-robin Oneshot + timeout — seguro com System/Monitor
     k_nano::slog_bin!("BOOT", "info", "init_phase (heap stack, round-robin)...");
     let n = registry.agents.len();

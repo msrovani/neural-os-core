@@ -8,7 +8,6 @@ use ticket_lock::TicketLock;
 use k_ai::conversation::EventLog;
 use k_ai::trust::TrustCache;
 use k_ai::usage::UsageTracker;
-use k_ai::self_heal::SelfHeal;
 use k_ai::audit::AuditTrail;
 use k_ai::inventory::SystemArchitecture;
 use crate::executive::ExecutiveSupervisor;
@@ -85,17 +84,8 @@ lazy_static! {
     pub static ref CONVERSATION_TRACKER: TicketLock<crate::hermes::ConversationTracker> =
         TicketLock::new(crate::hermes::ConversationTracker::new());
     pub static ref PENDING_SKILL: TicketLock<Option<(String, String)>> = TicketLock::new(None);
-    // P08: Duas instâncias SelfHeal são INTENCIONAIS:
-    // - neural-kernel: IrqSafeLock (boot_log_agent roda em contexto de exceção)
-    // - hermes: TicketLock (agent ticks, contexto normal)
-    // Unificar exige bridge IRQ-safe→normal; documentado mas NÃO unificado
-    // para preservar garantia de IRQ-safety do boot path.
-    // P08: Duas instâncias SelfHeal são INTENCIONAIS:
-    // - neural-kernel: IrqSafeLock (boot_log_agent roda em contexto de exceção)
-    // - hermes: TicketLock (agent ticks, contexto normal)
-    // Unificar exige bridge IRQ-safe→normal; documentado mas NÃO unificado
-    // para preservar garantia de IRQ-safety do boot path.
-    pub static ref SELF_HEAL: TicketLock<SelfHeal> = TicketLock::new(SelfHeal::new());
+    // Phase 1: SELF_HEAL unificado em k_ai::self_heal::GLOBAL_SELF_HEAL.
+    // Removido: 3 instâncias isoladas → 1 canonical IrqSafeLock.
     pub static ref BITNET_TRAINER: TicketLock<BitNetTrainer> =
         TicketLock::new(BitNetTrainer::new());
     pub static ref SYSTEM_ARCH: Mutex<Option<SystemArchitecture>> = Mutex::new(None);

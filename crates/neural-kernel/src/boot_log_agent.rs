@@ -279,7 +279,7 @@ impl Agent for BootLogAgent {
                             daemon: alloc::string::String::from("boot_log_agent"),
                             tick: _tick,
                         };
-                        let mut heal = crate::SELF_HEAL.lock();
+                        let mut heal = k_ai::self_heal::GLOBAL_SELF_HEAL.lock();
                         heal.analyze(&ctx, true);
                         drop(heal);
                     }

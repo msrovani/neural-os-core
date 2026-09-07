@@ -23,7 +23,21 @@ impl BudgetedRecovery {
     }
     
     pub fn can_execute(&self) -> bool {
-        true
+        self.budget > 0
+    }
+
+    /// Decrement budget on each recovery action. Reset on window boundary.
+    pub fn consume(&mut self) {
+        if self.budget > 0 {
+            self.budget -= 1;
+        }
+    }
+
+    /// Reset budget if window has elapsed.
+    pub fn maybe_reset(&mut self) {
+        if self.tick > 0 && self.tick % HEALING_BUDGET_WINDOW == 0 {
+            self.budget = HEALING_BUDGET_MAX;
+        }
     }
 }
 
@@ -267,6 +281,23 @@ pub enum RecoveryAction {
     CheckpointRestore,
     AwaitLLM(String),
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// PHASE 3: Closed-loop AIOS healing via Falcon3 3B
+// ══════════════════════════════════════════════════════════════════════
+// SelfHealAgent publishes HEALING_LLM_REQUEST → CortexAgent processes
+// with healing-specific prompt → publishes HEALING_LLM_RESPONSE →
+// SelfHealAgent receives AI diagnosis and applies recovery strategy.
+
+/// EventBus topic: SelfHealAgent → CortexAgent (healing request).
+pub const TOPIC_HEALING_LLM_REQUEST: &str = "HEALING_LLM_REQUEST";
+/// EventBus topic: CortexAgent → SelfHealAgent (healing diagnosis).
+pub const TOPIC_HEALING_LLM_RESPONSE: &str = "HEALING_LLM_RESPONSE";
+
+/// Maximum healing LLM requests per budget window.
+const HEALING_BUDGET_MAX: u64 = 10;
+/// Budget window in ticks (reset every ~100s at 1Hz).
+const HEALING_BUDGET_WINDOW: u64 = 100_000;
 
 pub struct SelfHeal {
     pub pending_fixes: Vec<(String, String)>,
@@ -568,46 +599,63 @@ impl SelfHeal {
     pub fn record_failure(&mut self, msg: String, action: String, tick: u64) {
         k_nano::slog_kai!("SELF", "HEAL", "Falha registrada: '{}' + '{}'", msg, action);
         self.lessons.push(FailedStrategy { error_msg: msg, attempted_action: action, tick });
-    }
-
-    pub fn analyze(&mut self, ctx: &ErrorContext, recover: bool) -> RecoveryAction {
+    }    pub fn analyze(&mut self, ctx: &ErrorContext, recover: bool) -> RecoveryAction {
         let class = FailureClass::classify(ctx.kind, &ctx.message);
         k_nano::slog_kai!("SELF", "HEAL", "{:?}: {} daemon '{}' ({} lessons)", class, ctx.kind, ctx.daemon, self.lessons.len());
 
         if !recover { return RecoveryAction::LogAndContinue; }
 
-        if class == FailureClass::MemoryFault && !self.already_tried(&ctx.message, "restart") {
-            self.lessons.push(FailedStrategy { error_msg: ctx.message.clone(), attempted_action: String::from("restart"), tick: ctx.tick });
-            return RecoveryAction::RestartDaemon(ctx.daemon.clone(), None);
+        // Phase 3: Build error history string for AI diagnosis
+        let history_str = {
+            let mut s = alloc::string::String::new();
+            for (i, l) in self.lessons.iter().enumerate() {
+                if i > 0 { s.push_str("; "); }
+                s.push_str(&l.error_msg);
+                s.push_str("→");
+                s.push_str(&l.attempted_action);
+            }
+            s
+        };
+
+        // Phase 3: Publish HEALING_LLM_REQUEST for Falcon3 3B diagnosis
+        // (except for LogAndContinue — no point asking LLM to diagnose something we ignore)
+        let healing_prompt = alloc::format!(
+            "HEALING_DIAGNOSIS: Error class={:?} kind='{}' message='{}' daemon='{}' ring={} tick={}. History: [{}]. Available recovery: restart_daemon, create_skill, checkpoint_restore, log_continue. Respond with JSON: {{\"action\":\"<name>\",\"reason\":\"<brief>\",\"params\":{{}}}}",
+            class, ctx.kind, ctx.message, ctx.daemon, ctx.ring, ctx.tick, history_str
+        );
+        let _ = k_nano::EVENT_BUS.publish(Event {
+            id: 0,
+            topic: TOPIC_HEALING_LLM_REQUEST.into(),
+            payload: healing_prompt.into_bytes(),
+            token: CapabilityToken::Legacy(1),
+        });
+        k_nano::slog_kai!("SELF", "HEAL", "HEALING_LLM_REQUEST published for {:?}", class);
+
+        match class {
+            FailureClass::MemoryFault if !self.already_tried(&ctx.message, "restart") => {
+                self.lessons.push(FailedStrategy { error_msg: ctx.message.clone(), attempted_action: String::from("restart"), tick: ctx.tick });
+                RecoveryAction::RestartDaemon(ctx.daemon.clone(), None)
+            }
+            FailureClass::ExecutionFault if !self.already_tried(&ctx.message, "checkpoint_restore") => {
+                self.lessons.push(FailedStrategy { error_msg: ctx.message.clone(), attempted_action: String::from("checkpoint_restore"), tick: ctx.tick });
+                RecoveryAction::CheckpointRestore
+            }
+            FailureClass::ResourceFault if !self.already_tried(&ctx.message, "create") => {
+                let fix = alloc::format!("AI-heal: {}", ctx.message);
+                self.pending_fixes.push((ctx.daemon.clone(), fix.clone()));
+                self.lessons.push(FailedStrategy { error_msg: ctx.message.clone(), attempted_action: String::from("create"), tick: ctx.tick });
+                RecoveryAction::CreateSkill(ctx.daemon.clone(), fix, None)
+            }
+            FailureClass::LogicFault | FailureClass::ExternalFault => {
+                // Log and let LLM diagnose asynchronously via HEALING_LLM_RESPONSE
+                self.lessons.push(FailedStrategy { error_msg: ctx.message.clone(), attempted_action: String::from("log_await_llm"), tick: ctx.tick });
+                RecoveryAction::AwaitLLM(ctx.daemon.clone())
+            }
+            _ => {
+                // Already tried or unknown — log only, await LLM response
+                RecoveryAction::AwaitLLM(ctx.daemon.clone())
+            }
         }
-        if class == FailureClass::ResourceFault && !self.already_tried(&ctx.message, "create") {
-            let fix = format!("Criar: {}", ctx.message);
-            self.pending_fixes.push((ctx.daemon.clone(), fix.clone()));
-            self.lessons.push(FailedStrategy { error_msg: ctx.message.clone(), attempted_action: String::from("create"), tick: ctx.tick });
-            
-            // Corrective Prompting: publish LLM_REQUEST with error context
-            let prompt = alloc::format!(
-                "Error '{}' in '{}'. Context: daemon={}, ring={}, tick={}. History: {}. Generate minimal recovery skill or fix.",
-                ctx.message, ctx.file, ctx.daemon, ctx.ring, ctx.tick,
-                {
-                    let mut s = alloc::string::String::new();
-                    for (i, l) in self.lessons.iter().enumerate() {
-                        if i > 0 { s.push_str("; "); }
-                        s.push_str(&l.error_msg);
-                    }
-                    s
-                }
-            );
-            let _ = k_nano::EVENT_BUS.publish(Event {
-                id: 0,
-                topic: "LLM_REQUEST".into(),
-                payload: prompt.into_bytes(),
-                token: CapabilityToken::Legacy(1),
-            });
-            
-            return RecoveryAction::CreateSkill(ctx.daemon.clone(), fix, None);
-        }
-        RecoveryAction::LogAndContinue
     }
 
     pub fn list_pending(&self) -> Vec<String> {
@@ -641,5 +689,51 @@ pub fn classify_by_code(code: u32) -> FailureClass {
         _ => FailureClass::ExternalFault,
     }
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// CANONICAL SINGLETON — single source of truth for all SelfHeal state
+// ══════════════════════════════════════════════════════════════════════
+//
+// Before: 3 isolated instances (bin IrqSafeLock, hermes TicketLock,
+// k_ai struct) that never shared lessons/state.
+// After: 1 canonical IrqSafeLock<SelfHeal> here in k_ai, accessible
+// from boot (boot_log_agent), hermes (BootSelfHealAgent), and runtime
+// (SelfHealAgent).  Lessons learned at boot inform runtime decisions.
+//
+// IrqSafeLock is used because boot_log_agent runs in exception context
+// where normal locks would deadlock.
+
+use core::sync::atomic::AtomicPtr;
+
+/// Push a daemon name into the bin's RESPAWN_QUEUE.
+/// Registered at boot by neural-kernel; called by SelfHealAgent when
+/// RecoveryAction::RestartDaemon is selected.
+type PushRespawnFn = fn(&str);
+static PUSH_RESPAWN_FN: AtomicPtr<PushRespawnFn> =
+    AtomicPtr::new(core::ptr::null_mut());
+
+/// Register the RESPAWN_QUEUE push bridge.
+/// Called once at boot by neural-kernel after RESPAWN_QUEUE is initialized.
+pub fn register_respawn_bridge(push_fn: PushRespawnFn) {
+    PUSH_RESPAWN_FN.store(push_fn as *mut PushRespawnFn, Ordering::Release);
+}
+
+/// Push a daemon name to RESPAWN_QUEUE via the bridge.
+/// Returns true if the bridge was registered and the push succeeded.
+pub fn push_respawn(daemon_name: &str) -> bool {
+    let ptr = PUSH_RESPAWN_FN.load(Ordering::Acquire);
+    if ptr.is_null() {
+        return false;
+    }
+    let f: PushRespawnFn = unsafe { core::ptr::read_volatile(ptr) };
+    f(daemon_name);
+    true
+}
+
+/// Canonical SelfHeal singleton — IrqSafeLock for exception-context safety.
+/// All 3 former instances (bin, hermes, k_ai) converge here.
+/// Uses spin::Lazy because SelfHeal::new() is not const (Vec::new()).
+pub static GLOBAL_SELF_HEAL: spin::Lazy<k_nano::sync::IrqSafeLock<SelfHeal>> =
+    spin::Lazy::new(|| k_nano::sync::IrqSafeLock::new(SelfHeal::new()));
 
 

@@ -54,6 +54,7 @@ pub mod usage;
 pub mod workflow_learner;
 pub mod ternary;
 pub mod router;
+pub mod agent_stats;
 pub mod safety_invariants;
 pub mod security_detectors;
 pub mod self_optimizing_scheduler;

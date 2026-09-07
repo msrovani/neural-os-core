@@ -858,11 +858,26 @@ pub fn peer_mac(node_id: u8) -> Option<[u8; 6]> {
 
 /// Atualiza/insere MAC address de um peer no cache.
 /// Chamado ao receber heartbeat (src MAC do frame Ethernet) ou ARP reply.
+/// Publica NET_EVENT para SecurityAgent (ArpSpoofDetector).
 pub fn peer_set_mac(node_id: u8, mac: [u8; 6]) {
     let mut table = PEER_MAC_CACHE.lock();
+    let mut is_new = false;
     for slot in table.iter_mut() {
         if let Some((nid, _)) = slot {
             if *nid == node_id {
+                let old_mac = slot.as_ref().map(|s| s.1).unwrap_or([0u8; 6]);
+                if old_mac != [0u8; 6] && old_mac != mac {
+                    // MAC changed for same node_id — potential ARP spoof!
+                    let _ = crate::EVENT_BUS.publish(event_bus::Event {
+                        id: 0,
+                        topic: alloc::string::String::from("NET_EVENT"),
+                        payload: alloc::format!(
+                            "ARP src_ip=10.0.{}.1 src_mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                            node_id, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+                        ).into_bytes(),
+                        token: event_bus::CapabilityToken::Legacy(1),
+                    });
+                }
                 *slot = Some((node_id, mac));
                 return;
             }
@@ -871,8 +886,21 @@ pub fn peer_set_mac(node_id: u8, mac: [u8; 6]) {
     for slot in table.iter_mut() {
         if slot.is_none() {
             *slot = Some((node_id, mac));
-            return;
+            is_new = true;
+            break;
         }
+    }
+    // Publish ARP event for new peer (feeds ArpSpoofDetector)
+    if is_new {
+        let _ = crate::EVENT_BUS.publish(event_bus::Event {
+            id: 0,
+            topic: alloc::string::String::from("NET_EVENT"),
+            payload: alloc::format!(
+                "ARP src_ip=10.0.{}.1 src_mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                node_id, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+            ).into_bytes(),
+            token: event_bus::CapabilityToken::Legacy(1),
+        });
     }
 }
 fn peer_pk(node_id: u8) -> Option<[u8; PUBLIC_KEY_LEN]> {
