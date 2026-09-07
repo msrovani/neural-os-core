@@ -1,8 +1,10 @@
-# STATE — neural-os-core v1.9.99-s320 — k_nano microkernel slimming
+# STATE — neural-os-core v1.9.99-s321 — k_nano microkernel slimming complete
 
-#   PISTA ATIVA: k_nano microkernel slimming (ADR-0103 FASE A)
-#   SESSION_320: Dead code deletion — 13 modules removed (~1800 LOC)
+#   PISTA ATIVA: k_nano microkernel slimming (ADR-0103 FASE A-H)
+#   SESSION_321: FASE A-H analysis complete — 7 commits, 4 facades created
 #   k_nano: 87 modules, ~25.5k LOC (was 88/~27k)
+#   k_hal: 22 modules (was 21) — NIC + FS + Storage facades added
+#   FASE G+H: analisados, nao migrados (dependencias k_nano + risco)
 #   SESSION_319: Emotion unification + Soul delegation + SER→Affect + LoopPhase→Display
 #   SESSION_318: FASE 1-4 complete — KvCache, MoE, Emotion, Soul, MCP, HNSW, dead code
 #   SESSION_317: ReActLoop + H2O eviction + CodebookVQ + dead code removal

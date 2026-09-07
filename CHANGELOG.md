@@ -1,22 +1,40 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
-## [1.9.99-s320] - 2026-09-07 — k_nano microkernel slimming (13 dead modules deleted, ~1800 LOC)
+## [1.9.99-s321] - 2026-09-08 — k_nano microkernel slimming complete (FASE A-H analysis + NIC/FS/Storage facades)
 
-**FASE A completa: dead code deletion. k_nano: 88→87 módulos, ~27k→25.5k LOC.**
+**FASE A: 13 dead modules deleted (~1800 LOC)**
+- verify, disk_power, io_scheduler, fw_cfg, ext2/btrfs/ntfs readers, user_accounts, luks_open, self_check, suspend_resume, rollback, firewall
 
-### Deleted modules (0 callers or stub-only)
-- verify.rs (OpCode VM, replaced by WASM)
-- disk_power.rs (stubs only)
-- io_scheduler.rs (re-export, never instantiated)
-- fw_cfg.rs (QEMU-only smoke test)
-- ext2_reader.rs, btrfs_reader.rs, ntfs_reader.rs (0 callers)
-- user_accounts.rs, luks_open.rs, self_check.rs, rollback.rs (0 callers)
-- suspend_resume.rs (AWAITING_HW stub)
-- firewall.rs (smoke test only)
+**FASE B: NIC drivers → k_hal::net (façade pattern)**
+- e1000, rtl8139, i225, virtio_net — 4 drivers re-exported from k_nano
+- k_nano nic_globals retains statics (bin-only)
 
-### Cleaned
-- storage_bus.rs: removed ext2/ntfs/btrfs detection code
-- main.rs, labor_smokes.rs: removed dead smoke test calls
+**FASE C: FS primitivos → k_hal::fat_assets canônico**
+- Partition scanning API + device_has_storage_fs + legacy read_mbr re-exports
+- fat32/exfat permanecem em k_nano como primitivos MMIO
+
+**FASE D: sgdb + telemetry assessment**
+- k_ai::sgdb já canônico (16 sub-módulos, full NSGDB)
+- k_nano::sgdb (148 LOC) apenas HW publish — storage_bus usa
+- telemetry (440 LOC) 8 callers em hermes — mantido R0
+
+**FASE E: storage_bus → k_hal::storage_port facade (44 LOC)**
+- device_count(), publish_all_storage(), register_probe(), bus_report()
+- STORAGE_BUS static permanece em k_nano (32 callers)
+
+**FASE F: segurança assessment**
+- firewall: já deletado FASE A
+- usb_trust (283 LOC): mantido — USB hardware policy domain, não IA trust
+
+**FASE G: agentes assessment — não migrado**
+- installer_agent (275 LOC) + sys_installer (344 LOC)
+- Bloqueado por: Agent trait, hw_profiler, neural_fs, block_dev (todos k_nano)
+
+**FASE H: display/audio assessment — não migrado**
+- display.rs (50 LOC): boot_ckpt usado por k_hal::usb + jarbas::display::agent
+- audio/ (996 LOC hda.rs): driver HDA real — não é stub
+
+### Total: k_nano 88→87 módulos, ~27k→25.5k LOC (-1.5k). k_hal 21→22 módulos.
 
 ## [1.9.99-s319] - 2026-09-07 — hermes + jarbas unification (Emotion, Soul, SER→Affect, LoopPhase)
 
