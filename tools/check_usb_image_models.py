@@ -53,5 +53,6 @@ with open(img, "rb") as f:
         print(f"  {nm:20s} {size / 1048576:9.1f} MB")
     print("--- alvo ---")
     for want in ("HWEXPRT4.BIN", "HWEXPRT.BIN", "HW_EXPERT.BITNET", "BITNET2B.BIN", "BITNET850.BIN"):
-        hit = [(nm, size) for nm, size in entries if nm == want]
+        # dirent 8.3 não tem ponto ("HWEXPRT4BIN"); LFN guarda o nome longo.
+        hit = [(nm, size) for nm, size in entries if nm == want.replace(".", "") or nm == want]
         print(f"  {want}: {hit if hit else 'AUSENTE'}")
