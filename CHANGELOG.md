@@ -1,5 +1,49 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s318] - 2026-09-07 — hermes + cortex complete optimization (FASE 1-4)
+
+**Otimização completa: 17 tasks implementadas, 17 dead modules removidos, ~1000 LOC líquido removido.**
+
+### FASE 1: Optimize Functional (7 tasks)
+- **Persistent KvCache**: `GLOBAL_KV_CACHE` singleton, reutilizado entre `generate_speculative()` calls
+- **MoE Neural Routing**: threshold 0.08→0.05, warmup 100 ticks keyword-only
+- **Emotion→Affect**: `EmotionAnalyzer::analyze()` alimenta `AffectRegulator` automaticamente
+- **Soul→LLM**: `SoulEngine` personality injetada no system prompt do LLM
+- **BeiInit→Hermes**: `LoopPhase` modula latência (Think=200, Execute=50, Learn=150)
+- **PonderNet Gate**: 3 inference calls per tick max
+- **LoopPhase Event**: `publish_phase()` publica `LOOP_PHASE` no EventBus
+
+### FASE 2: Complete Semi-Functional (6 tasks)
+- **MCP Dynamic Tools**: `tools/list` descobre skills do `SKILL_REGISTRY` (até 32)
+- **SkillGen→PackageHub**: auto-skill persiste via `PackageHub::stage_create()` após 3 usos
+- **Marketplace CONFIG.TXT**: allowlist carrega `MARKET_HOST=` de `/mnt/neural/CONFIG.TXT`
+- **VectorClock Dedup**: mesh knowledge skip docs mais antigos que versão local
+- **HNSW Session Search**: busca semântica com projeção 64D + fallback substring
+- **LoopPhase Event**: `publish_phase()` publica fase no EventBus
+
+### FASE 3: Dead Code Removal (17 modules)
+- Removidos: `actor_registry`, `app_store`, `elf_loader`, `email_agent`, `expert_skills`, `gguf_wasm`, `intent_bus`, `ipc_bus`, `link_watcher`, `native_agents`, `optimizer`, `quarantine`, `rss_agent`, `search_agent`, `wasi_host`, `wifi_agent`, `wpa2_hs`
+
+### FASE 4: Connect Ecosystem (3 tasks)
+- **Cortex→Hermes Feedback**: `LLM_FEEDBACK` event após resposta do LLM
+- **HNSW Memory**: `memory_search_hnsw()` para recall semântico via cognitive_bridge
+- **Federated Health**: health check antes de broadcast de weights
+
+### Arquivos modificados
+| Arquivo | Mudança |
+|---------|--------|
+| `cortex/src/cortex.rs` | GLOBAL_KV_CACHE, reuse entre generate calls |
+| `cortex/src/trinity.rs` | MoE threshold 0.05, warmup |
+| `cortex/src/federated.rs` | Mesh health check antes de broadcast |
+| `hermes/src/agents.rs` | Emotion→Affect, Soul→LLM, PonderNet gate, LLM feedback |
+| `hermes/src/executive.rs` | current_phase(), publish_phase(), LoopPhase event |
+| `hermes/src/mcp.rs` | Dynamic tools discovery from SKILL_REGISTRY |
+| `hermes/src/skill_gen.rs` | PackageHub persistence para auto-skills |
+| `hermes/src/marketplace.rs` | CONFIG.TXT allowlist loading |
+| `hermes/src/mesh_knowledge.rs` | VectorClock dedup |
+| `hermes/src/cognitive_bridge.rs` | HNSW session search + memory_search_hnsw |
+| `hermes/src/lib.rs` | 17 dead modules removed |
+
 ## [1.9.99-s317] - 2026-09-07 — k_ai + Cortex optimization: ReAct, H2O, CodebookVQ
 
 **Plano de otimização ADR-0103: 4 FASEs completas — wire semântico, completar 100%, dead code, Cortex extreme.**
