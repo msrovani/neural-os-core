@@ -226,6 +226,7 @@ Se Fase 2 nunca compensar o custo, este ADR **permanece valido so com Fase 1** (
 | TODO-0103-5 | S5: podar lib.rs morto + codemap; rodar check_duplication.py como gate | maint. | sem regredir boot |
 TODO-0103-7 | FASE F: seguranca -> k_ai (firewall deletado FASE A; usb_trust manter em k_nano) | maint. | FEITO analise -- usb_trust dominio USB hardware policy, nao IA trust |
 TODO-0103-8 | FASE G: agentes -> hermes (installer_agent 275 LOC + sys_installer 344 LOC) | squada (installer) | NAO MIGRADO -- dependencias k_nano (hw_profiler, sys_installer, neural_fs) + Agent trait |
+TODO-0103-9 | FASE H: display/audio -> jarbas | jarbas (display/audio) | NAO MIGRADO -- display.rs (boot_ckpt) usado por k_hal::usb e jarbas::display::agent; audio/ ja existe como jarbas::audio, k_nano audio/ = HDA stub 996 LOC |
 TODO-0103-9 | FASE H: display/audio -> jarbas (display.rs 50 LOC + audio/) | jarbas (display/audio) | NAO MIGRADO -- display.rs usado por k_hal boot_ckpt; audio/ ja que existe em jarbas
 TODO-0103-7 | FASE F: seguranca -> k_ai (firewall deletado FASE A; usb_trust manter em k_nano) | maint. | FEITO analise -- usb_trust dominio USB hardware policy, nao IA trust |
 TODO-0103-8 | FASE G: agentes -> hermes (installer_agent 275 LOC + sys_installer 344 LOC) | squada (installer) | NAO MIGRADO -- dependencias k_nano (hw_profiler, sys_installer, neural_fs) + Agent trait |
