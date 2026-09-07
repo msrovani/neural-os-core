@@ -254,6 +254,23 @@ impl AgentRegistry {
         idx
     }
 
+    /// Apply workflow-based priority hints: adjust goal_urgency of agents by name.
+    /// Called by SelfOptimizingScheduler (k_ai) via main.rs boot.
+    pub fn apply_priority_hints(&mut self, hints: &[(&str, u8)]) {
+        for &(name, urgency) in hints {
+            for agent in &mut self.agents {
+                if agent.name == name {
+                    agent.goal_urgency = urgency;
+                }
+            }
+        }
+    }
+
+    /// Get agent count (for SafetyInvariants I2).
+    pub fn active_agent_count(&self) -> usize {
+        self.agents.iter().filter(|a| a.state == AgentState::Active).count()
+    }
+
     pub fn activate(&mut self, idx: usize) {
         if idx < self.agents.len() {
             self.agents[idx].state = AgentState::Active;

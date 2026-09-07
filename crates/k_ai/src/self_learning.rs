@@ -23,7 +23,7 @@ use crate::training_agent::TrainingAgent;
 const MANIFEST: AgentManifest = AgentManifest {
     name: "self-learning",
     kind: AgentKind::System,
-    schedule: ScheduleKind::PollEvery(5000),
+    schedule: ScheduleKind::PollEvery(500),
     auto_start: true,
     persist: false,
 };

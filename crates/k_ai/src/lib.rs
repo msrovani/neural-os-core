@@ -11,7 +11,6 @@ extern crate alloc;
 
 pub mod boot_metrics;
 pub mod agency;
-pub mod agency_importer;
 pub mod arch;
 pub mod audit;
 pub mod boot_log_agent;
@@ -37,13 +36,11 @@ pub mod memory_systems;
 pub mod multi_user;
 pub mod vision;
 
-pub mod native_agent_seed;
 pub mod profile;
+pub mod native_agent_seed;
 pub mod self_heal;
 pub mod self_heal_agent;
-pub mod self_heal_disk;
 pub mod training_agent;
-pub mod fine_tuning_pipeline;
 /// ADR-0081 C5: Federated Gradient Sharing (#312f).
 pub mod fl_trainer;
 pub use fl_trainer::FederatedTrainer;
@@ -51,7 +48,6 @@ pub mod fs;
 pub mod trust;
 pub mod shutdown;
 pub mod usage;
-pub mod workflow_learner;
 pub mod ternary;
 pub mod router;
 pub mod agent_stats;

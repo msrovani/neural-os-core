@@ -349,6 +349,8 @@ impl Agent for CortexAgent {
             // Sub-estágios (freeze s321): barras linha 2 = progresso do tick.
             agent_core::tick_stage(1);
             let user_text = core::str::from_utf8(&event.payload).unwrap_or("");
+            // ContextWindow: track user input for conversation history
+            k_ai::context_window::add_global("user", user_text, 5);
             // EmotionAnalyzer: analisa input do usuario e feed no AFFECT_SNAPSHOT
             {
                 let emo = crate::emotion::EmotionAnalyzer::analyze(user_text);
@@ -430,6 +432,19 @@ impl Agent for CortexAgent {
                 alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text)
             };
             agent_core::tick_stage(5);
+            // Budget gate: check token budget before inference
+            let estimated_tokens = (user_text.len() / 4 + 256) as u64; // rough estimate
+            if !k_ai::economy::has_token_budget(estimated_tokens) {
+                k_nano::slog_cortex!("LLM", "warn", "token budget exhausted ({} est), skipping inference", estimated_tokens);
+                let _ = EVENT_BUS.publish(Event {
+                    id: 0, topic: alloc::string::String::from(cortex::cortex::TOPIC_LLM_RESPONSE),
+                    payload: alloc::format!("[budget exceeded - {} tokens used]", k_ai::economy::budget_manager().lock().tokens_used.load(core::sync::atomic::Ordering::Relaxed)).into_bytes(),
+                    token: CapabilityToken::Legacy(1),
+                });
+                agent_core::tick_stage(8);
+                return AgentTickResult::Pending;
+            }
+            k_ai::economy::record_inference();
             k_nano::slog_cortex!("LLM", "info", "Calling Falcon3-3B-Instruct-1.58bit via generate_via_model...");
             let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             // F4: structured decode when pattern is recognized
@@ -467,6 +482,8 @@ impl Agent for CortexAgent {
             };
             agent_core::tick_stage(7);
             let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            // Record actual tokens consumed
+            k_ai::economy::record_tokens(estimated_tokens);
             k_nano::slog_cortex!("LLM", "info", "generate_via_model took {} ticks (~{}s)", t1 - t0, (t1 - t0) / 100);
             let output = if output == cortex::cortex::NO_MODEL_MSG || output.trim().is_empty() {
                 alloc::format!(
@@ -475,6 +492,8 @@ impl Agent for CortexAgent {
                 )
             } else { output };
             k_nano::slog_cortex!("LLM", "info", "Generated: \"{}\"", output);
+            // ContextWindow: track assistant response for conversation history
+            k_ai::context_window::add_global("assistant", &output, 5);
             let _ = EVENT_BUS.publish(Event {
                 id: 0, topic: alloc::string::String::from(cortex::cortex::TOPIC_LLM_RESPONSE),
                 payload: output.clone().into_bytes(), token: CapabilityToken::Legacy(1),
@@ -492,6 +511,11 @@ impl Agent for CortexAgent {
                 });
                 k_nano::slog_cortex!("LLM", "info", "Card JSON published to UI_SPEC");
             }
+        }
+
+        // Periodic compression adaptation
+        if _tick % 100 == 0 {
+            k_ai::economy::adapt_compression();
         }
 
         // Phase 3: Process HEALING_LLM_REQUEST from SelfHealAgent.

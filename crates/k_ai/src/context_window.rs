@@ -51,9 +51,8 @@ impl ContextWindow {
         loop {
             let used = self.estimated_tokens();
             if used <= self.max_tokens { break; }
-            // Remove a mensagem de menor prioridade (mais antiga, prioridade mais baixa)
             let idx = self.messages.iter().enumerate()
-                .filter(|(_, m)| m.priority < 10) // nunca remove critical
+                .filter(|(_, m)| m.priority < 10)
                 .min_by_key(|(_, m)| (m.priority, m.tick))
                 .map(|(i, _)| i);
             if let Some(i) = idx {
@@ -86,6 +85,23 @@ impl ContextWindow {
         prompt
     }
 
+    /// Curated context: retorna as ultimas N exchanges formatadas para LLM.
+    pub fn curated_context(&self, max_chars: usize) -> String {
+        let mut ctx = String::new();
+        for msg in self.messages.iter().rev().take(10) {
+            let prefix = match msg.role.as_str() {
+                "user" => "User: ",
+                "assistant" => "Assistant: ",
+                _ => continue,
+            };
+            let line = alloc::format!("{}{}
+", prefix, msg.content);
+            if ctx.len() + line.len() > max_chars { break; }
+            ctx.push_str(&line);
+        }
+        ctx
+    }
+
     fn estimated_tokens(&self) -> usize {
         let total_chars: usize = self.messages.iter().map(|m| m.content.len()).sum::<usize>()
             + self.system_prompt.len();
@@ -95,4 +111,34 @@ impl ContextWindow {
     pub fn status(&self) -> String {
         alloc::format!("[CTX] {} msgs, ~{} tokens / {} max", self.messages.len(), self.estimated_tokens(), self.max_tokens)
     }
+}
+
+/// Global singleton - acessivel por CortexAgent, HermesAgent, e qualquer modulo.
+static CONTEXT_WINDOW: spin::Lazy<spin::Mutex<ContextWindow>> = spin::Lazy::new(|| {
+    spin::Mutex::new(ContextWindow::new())
+});
+
+/// Acesso global ao ContextWindow.
+pub fn context_window() -> &'static spin::Mutex<ContextWindow> {
+    &CONTEXT_WINDOW
+}
+
+/// Convenience: build_prompt lock-free snapshot.
+pub fn build_prompt_global() -> String {
+    CONTEXT_WINDOW.lock().build_prompt()
+}
+
+/// Convenience: curated context for LLM prompt enrichment.
+pub fn curated_context_global(max_chars: usize) -> String {
+    CONTEXT_WINDOW.lock().curated_context(max_chars)
+}
+
+/// Convenience: add message to global context window.
+pub fn add_global(role: &str, content: &str, priority: u8) {
+    CONTEXT_WINDOW.lock().add(role, content, priority);
+}
+
+/// Convenience: set system prompt on global context window.
+pub fn set_system_global(prompt: &str) {
+    CONTEXT_WINDOW.lock().set_system(prompt);
 }

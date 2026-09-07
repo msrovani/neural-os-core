@@ -180,3 +180,45 @@ impl BudgetManager {
         self.temperature
     }
 }
+
+
+/// Global budget manager singleton.
+static GLOBAL_BUDGET: spin::Lazy<spin::Mutex<BudgetManager>> = spin::Lazy::new(|| {
+    spin::Mutex::new(BudgetManager::new(512 * 1024 * 1024)) // 512MB heap budget
+});
+
+/// Access to the global BudgetManager.
+pub fn budget_manager() -> &'static spin::Mutex<BudgetManager> {
+    &GLOBAL_BUDGET
+}
+
+/// Check if we have budget for N tokens. Returns true if within budget.
+pub fn has_token_budget(n: u64) -> bool {
+    GLOBAL_BUDGET.lock().has_budget_for(n)
+}
+
+/// Record N tokens consumed. Returns true if still within budget.
+pub fn record_tokens(n: u64) -> bool {
+    GLOBAL_BUDGET.lock().record_tokens(n)
+}
+
+/// Record an inference cycle.
+pub fn record_inference() {
+    GLOBAL_BUDGET.lock().record_inference_cycle();
+}
+
+/// Adapt compression tier based on current load.
+pub fn adapt_compression() {
+    GLOBAL_BUDGET.lock().adapt_compression();
+}
+
+/// Get current compression tier.
+pub fn current_compression() -> CompressionTier {
+    GLOBAL_BUDGET.lock().compression_tier()
+}
+
+/// Reset token budget for new session.
+pub fn reset_token_budget() {
+    GLOBAL_BUDGET.lock().reset_session();
+}
+
