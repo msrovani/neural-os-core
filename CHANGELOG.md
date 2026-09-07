@@ -1,5 +1,23 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s320] - 2026-09-07 — k_nano microkernel slimming (13 dead modules deleted, ~1800 LOC)
+
+**FASE A completa: dead code deletion. k_nano: 88→87 módulos, ~27k→25.5k LOC.**
+
+### Deleted modules (0 callers or stub-only)
+- verify.rs (OpCode VM, replaced by WASM)
+- disk_power.rs (stubs only)
+- io_scheduler.rs (re-export, never instantiated)
+- fw_cfg.rs (QEMU-only smoke test)
+- ext2_reader.rs, btrfs_reader.rs, ntfs_reader.rs (0 callers)
+- user_accounts.rs, luks_open.rs, self_check.rs, rollback.rs (0 callers)
+- suspend_resume.rs (AWAITING_HW stub)
+- firewall.rs (smoke test only)
+
+### Cleaned
+- storage_bus.rs: removed ext2/ntfs/btrfs detection code
+- main.rs, labor_smokes.rs: removed dead smoke test calls
+
 ## [1.9.99-s319] - 2026-09-07 — hermes + jarbas unification (Emotion, Soul, SER→Affect, LoopPhase)
 
 **Unificação completa: duplicatas eliminadas, pipelines wireados, HNSW boot populate.**

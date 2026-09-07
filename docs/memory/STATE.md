@@ -1,6 +1,8 @@
-# STATE — neural-os-core v1.9.99-s319 — hermes + jarbas unification
+# STATE — neural-os-core v1.9.99-s320 — k_nano microkernel slimming
 
-#   PISTA ATIVA: hermes + jarbas unification (SESSION_313/319)
+#   PISTA ATIVA: k_nano microkernel slimming (ADR-0103 FASE A)
+#   SESSION_320: Dead code deletion — 13 modules removed (~1800 LOC)
+#   k_nano: 87 modules, ~25.5k LOC (was 88/~27k)
 #   SESSION_319: Emotion unification + Soul delegation + SER→Affect + LoopPhase→Display
 #   SESSION_318: FASE 1-4 complete — KvCache, MoE, Emotion, Soul, MCP, HNSW, dead code
 #   SESSION_317: ReActLoop + H2O eviction + CodebookVQ + dead code removal
