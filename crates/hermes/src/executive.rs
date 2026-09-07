@@ -23,6 +23,18 @@ impl LoopPhase {
         }
     }
 
+    pub fn label(&self) -> &'static str {
+        match self {
+            LoopPhase::Observe => "observe",
+            LoopPhase::Think => "think",
+            LoopPhase::Plan => "plan",
+            LoopPhase::Build => "build",
+            LoopPhase::Execute => "execute",
+            LoopPhase::Verify => "verify",
+            LoopPhase::Learn => "learn",
+        }
+    }
+
     pub fn rotation_deg(&self) -> u32 {
         (*self as u32) * 360 / 7
     }
@@ -47,6 +59,18 @@ pub fn current_phase() -> LoopPhase {
         6 => LoopPhase::Learn,
         _ => LoopPhase::Observe,
     }
+}
+
+/// FASE 2.6: Publish LOOP_PHASE event on EventBus for system-wide awareness.
+pub fn publish_phase(phase: LoopPhase) {
+    CURRENT_PHASE.store(phase as u8, core::sync::atomic::Ordering::Relaxed);
+    let payload = phase.label().as_bytes();
+    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+        id: 0,
+        topic: alloc::string::String::from("LOOP_PHASE"),
+        payload: payload.to_vec(),
+        token: event_bus::CapabilityToken::Legacy(1),
+    });
 }
 
 

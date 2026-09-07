@@ -309,6 +309,20 @@ pub fn fed_tick(role: NodeRole, node_count: u8) -> bool {
                 for &w in &merged {
                     payload.push(w as u8);
                 }
+                // FASE 4.3: Mesh health check before federated broadcast
+                let healthy_peers = {
+                    let engine = k_nano::net::mesh::MESH_ENGINE.lock();
+                    engine.as_ref().map_or(0, |e| {
+                        e.online_nodes().filter(|n| {
+                            k_nano::net::mesh::peer_health(n.capabilities.node_id[0])
+                                .map_or(false, |h| h.reachable)
+                        }).count()
+                    })
+                };
+                if healthy_peers == 0 {
+                    k_nano::slog_cortex!("FED", "warn", "no healthy peers, skip broadcast");
+                    return false;
+                }
                 let sent = mesh::mesh_send_large(&payload);
                 k_nano::slog_cortex!(
                     "FED", "info",

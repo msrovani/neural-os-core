@@ -9,13 +9,29 @@ use crate::package_hub::{
     resign_imported, sign_artifact_md, PackageKind, PackageHub, ECOSYSTEM_ROOT, PACKAGE_HUB,
 };
 
-/// Hosts permitidos para fetch (MVP). IP literals ou hostnames resolvidos offline.
-pub const ALLOWLIST_HOSTS: &[&str] = &[
-    "127.0.0.1",
-    "10.0.2.2",
-    "raw.githubusercontent.com",
-    "cdn.jsdelivr.net",
-];
+/// Hosts permitidos para fetch — carregado de CONFIG.TXT ou fallback hardcoded.
+pub fn allowlist_hosts() -> alloc::vec::Vec<alloc::string::String> {
+    let mut list = alloc::vec![
+        alloc::string::String::from("127.0.0.1"),
+        alloc::string::String::from("10.0.2.2"),
+        alloc::string::String::from("raw.githubusercontent.com"),
+        alloc::string::String::from("cdn.jsdelivr.net"),
+    ];
+    if let Ok(data) = crate::globals::read_vfs("/mnt/neural/CONFIG.TXT") {
+        if let Ok(text) = core::str::from_utf8(&data) {
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("MARKET_HOST=") {
+                    let host = &trimmed["MARKET_HOST=".len()..];
+                    if !host.is_empty() && !list.iter().any(|h| h == host) {
+                        list.push(alloc::string::String::from(host));
+                    }
+                }
+            }
+        }
+    }
+    list
+}
 
 pub fn list_local() -> String {
     let hub = PACKAGE_HUB.lock();
@@ -126,7 +142,7 @@ pub fn remove(kind: PackageKind, name: &str) -> Result<(ApprovalLevel, u64), &'s
 
 pub fn host_allowed(host: &str) -> bool {
     let h = host.trim().to_ascii_lowercase();
-    ALLOWLIST_HOSTS.iter().any(|a| *a == h)
+    allowlist_hosts().iter().any(|a| *a == h)
 }
 
 /// Parse URL http://host[:port]/path or https://host[:port]/path.

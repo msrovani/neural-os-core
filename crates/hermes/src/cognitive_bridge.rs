@@ -155,6 +155,26 @@ pub fn session_record(role: &str, text: &str, tick: u64) {
     let _ = crate::globals::write_vfs("/mnt/neural/SESSION.log", &prev);
 }
 
+
+/// FASE 4.2: HNSW-backed memory search (semantic recall).
+pub fn memory_search_hnsw(query: &str, top_k: usize) -> alloc::vec::Vec<(alloc::string::String, f32)> {
+    let mut hnsw_guard = SESSION_HNSW.lock();
+    if let Some(ref mut hnsw) = *hnsw_guard {
+        let query_vec = session_project(query);
+        let results = hnsw.search(&query_vec, top_k.min(8));
+        let log = SESSION.lock();
+        let mut out = alloc::vec::Vec::new();
+        for (dist, id) in results {
+            if (id as usize) < log.entries.len() {
+                out.push((log.entries[id as usize].text.clone(), dist));
+            }
+        }
+        out
+    } else {
+        alloc::vec::Vec::new()
+    }
+}
+
 pub fn session_search(query: &str, top_k: usize) -> String {
     let q = query.trim().to_ascii_lowercase();
     if q.is_empty() {
