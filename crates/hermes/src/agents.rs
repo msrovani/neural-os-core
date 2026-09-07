@@ -1630,7 +1630,7 @@ impl Agent for HermesAgent {
                                                 *PENDING_LEARNER_INPUT.lock() = Some(String::from(msg));
                                     // FASE 1.5: Soul personality injection into LLM prompt
                                     let soul = crate::soul::SoulEngine::default();
-                                    let soul_prefix = alloc::format!(
+                                    let _soul_prefix = alloc::format!(
                                         "[SOUL: {} tone={:?} formality={:.1} empathy={:.1}]
 ",
                                         soul.name, soul.tone, soul.formality, soul.empathy
@@ -1675,7 +1675,7 @@ impl Agent for HermesAgent {
                                     *PENDING_LEARNER_INPUT.lock() = Some(String::from(msg));
                                     // FASE 1.5: Soul personality injection into LLM prompt
                                     let soul = crate::soul::SoulEngine::default();
-                                    let soul_prefix = alloc::format!(
+                                    let _soul_prefix = alloc::format!(
                                         "[SOUL: {} tone={:?} formality={:.1} empathy={:.1}]
 ",
                                         soul.name, soul.tone, soul.formality, soul.empathy

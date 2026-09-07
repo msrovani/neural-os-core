@@ -9,10 +9,8 @@ extern crate alloc;
 // Agent framework, intent routing, network stack, WASM runtime, skills
 // Depends on k_nano, cortex, and k_ia.
 
-// pub mod actor_registry; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 // pub mod adaptation; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod agents;
-// pub mod app_store; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod approval;
 pub mod hitl_ui;
 pub mod apps;
@@ -21,7 +19,6 @@ pub mod cron; // T-026: Cron/LogAgent POST /api/logs com backoff
 pub mod ota; // T-022/T-030: OTA facade (net_bridge) + ChromeOS tries
 pub mod provision; // T-024: NET_READY + first_boot gate
 pub mod cross_os;
-// pub mod elf_loader; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod hermes;
 pub mod hub;
 pub mod mcp;
@@ -32,12 +29,9 @@ pub mod netdiag;
 pub mod netfs;
 pub mod netstack;
 pub mod network_agent;
-// pub mod optimizer; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 // pub mod orchestrator; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod plugin_hub;
-// pub mod rss_agent; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 // pub mod safety; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
-// pub mod search_agent; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod security;
 pub mod self_update;
 // pub mod sgdb_agent; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
@@ -51,11 +45,8 @@ pub mod memory_store;
 pub mod memory;
 pub mod marketplace;
 pub mod membrane;
-// pub mod native_agents; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
-// pub mod intent_bus; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod cognitive_bridge;
 pub mod executive;
-// pub mod expert_skills; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod skill_observer;
 pub mod self_evolve;
 pub mod evolve;
@@ -63,15 +54,12 @@ pub mod hw_pnp;
 pub mod hal_offer;
 pub mod package_hub;
 pub mod permission_gate;
-// pub mod quarantine; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod decode_harness;
 pub mod structured_decode;
-// pub mod wasi_host; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod wasmi_rt;
 pub mod wasm_build;
 pub mod app_factory; // ADR-0102: register_native_ring seam (isolation_ring)
 pub mod dynskill;
-// pub mod gguf_wasm; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod micropython_wasm;
 pub mod affect;
 pub mod emotion;
@@ -84,17 +72,12 @@ pub use soul::*;
 pub mod skill_opt;
 // pub mod skill_sync; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod mesh_knowledge;
-// pub mod email_agent; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod fs;
 pub mod neural_fs;
 pub mod vfs;
-// pub mod link_watcher; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod globals;
 pub mod runtime_observe;
-// pub mod wifi_agent; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod wifi_protocol;
-// pub mod wpa2_hs; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
-// pub mod ipc_bus; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod ntp;
 pub mod async_io;
 // pub mod git_thin; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
