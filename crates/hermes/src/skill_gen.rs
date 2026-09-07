@@ -71,9 +71,21 @@ pub fn generate_skill(name: &str) -> Option<String> {
 pub fn maybe_auto_skill(name: &str) -> Option<String> {
     let patterns = TASK_PATTERNS.lock();
     let pattern = patterns.get(name)?;
-    if pattern.uses >= 3 { // após 3 usos, vira skill
+    if pattern.uses >= 3 {
         drop(patterns);
-        return generate_skill(name);
+        let skill_md = generate_skill(name)?;
+        // FASE 2.2: Persist via PackageHub
+        let signed = crate::package_hub::sign_artifact_md(&skill_md).unwrap_or_else(|_| skill_md.clone());
+        let hub = crate::package_hub::PACKAGE_HUB.lock();
+        match hub.stage_create(crate::package_hub::PackageKind::Skill, name, &signed, "auto-gen") {
+            Ok((_level, _op)) => {
+                k_nano::slog_hermes!("SKILLGEN", "ok", "auto-skill persisted via PackageHub");
+            }
+            Err(e) => {
+                k_nano::slog_hermes!("SKILLGEN", "warn", "auto-skill persist failed: {}", e);
+            }
+        }
+        return Some(skill_md);
     }
     None
 }

@@ -33,15 +33,30 @@ impl McpAgent {
         self.inbox.push(String::from(line));
     }
 
-    fn tools_list_json() -> String {
-        String::from(
-            "{\"jsonrpc\":\"2.0\",\"result\":{\"tools\":[\
-{\"name\":\"skills_list\",\"description\":\"L0 skill index\"},\
-{\"name\":\"skill_view\",\"description\":\"L1 full SKILL.md\"},\
-{\"name\":\"market_search\",\"description\":\"Search local marketplace\"},\
-{\"name\":\"remember\",\"description\":\"Append MEMORY.md fact\"},\
-{\"name\":\"user_intent\",\"description\":\"Route text to Hermes\"}\
-]},\"id\":1}",
+        fn tools_list_json() -> String {
+        // FASE 2.1: Dynamic tool discovery from SKILL_REGISTRY
+        let mut tools = alloc::vec![
+            alloc::format!("{{\"name\":\"skills_list\",\"description\":\"L0 skill index\"}}"),
+            alloc::format!("{{\"name\":\"skill_view\",\"description\":\"L1 full SKILL.md\"}}"),
+            alloc::format!("{{\"name\":\"market_search\",\"description\":\"Search local marketplace\"}}"),
+            alloc::format!("{{\"name\":\"remember\",\"description\":\"Append MEMORY.md fact\"}}"),
+            alloc::format!("{{\"name\":\"user_intent\",\"description\":\"Route text to Hermes\"}}"),
+        ];
+        // Add registered skills as tools
+        {
+            let reg = k_nano::SKILL_REGISTRY.lock();
+            for (name, _policy) in reg.list_skills().into_iter().take(32) {
+                let short = if name.len() > 40 { &name[..40] } else { &name };
+                tools.push(alloc::format!(
+                    "{{\"name\":\"skill:{}\",\"description\":\"{}\"}}",
+                    short, short
+                ));
+            }
+        }
+        let tools_json = tools.join(",");
+        alloc::format!(
+            "{{\"jsonrpc\":\"2.0\",\"result\":{{\"tools\": [{}]}},\"id\":1}}",
+            tools_json
         )
     }
 

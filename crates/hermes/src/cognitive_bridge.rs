@@ -106,6 +106,26 @@ lazy_static! {
     static ref NUDGE_QUEUE: TicketLock<Vec<String>> = TicketLock::new(Vec::new());
 }
 
+
+/// HNSW index for semantic session search (FASE 2.5).
+static SESSION_HNSW: spin::Lazy<spin::Mutex<Option<cortex::hnsw::HnswIndex>>> = spin::Lazy::new(|| {
+    spin::Mutex::new(Some(cortex::hnsw::HnswIndex::new(64))) // 64D projection
+});
+
+/// Simple hash-based projection for session text (no BGE dependency).
+fn session_project(text: &str) -> alloc::vec::Vec<f32> {
+    let mut vec = alloc::vec![0.0f32; 64];
+    for (i, b) in text.bytes().enumerate() {
+        vec[i % 64] += (b as f32) / 256.0;
+    }
+    // Normalize
+    let mut norm = 0.0f32;
+    for v in &vec { norm += v * v; }
+    norm = libm::sqrtf(norm).max(1e-8);
+    for v in vec.iter_mut() { *v /= norm; }
+    vec
+}
+
 pub fn session_record(role: &str, text: &str, tick: u64) {
     let mut log = SESSION.lock();
     log.entries.push(SessionEntry {
@@ -116,6 +136,14 @@ pub fn session_record(role: &str, text: &str, tick: u64) {
     if log.entries.len() > SESSION_CAP {
         let drain = log.entries.len() - SESSION_CAP;
         log.entries.drain(0..drain);
+    }
+    // FASE 2.5: Add to HNSW index
+    {
+        let mut hnsw_guard = SESSION_HNSW.lock();
+        if let Some(ref mut hnsw) = *hnsw_guard {
+            let vec = session_project(&text);
+            hnsw.insert(log.entries.len() as u32, vec);
+        }
     }
     // Persistência leve: append SESSION.log
     let mut prev = crate::globals::read_vfs("/mnt/neural/SESSION.log").unwrap_or_default();
@@ -132,14 +160,31 @@ pub fn session_search(query: &str, top_k: usize) -> String {
     if q.is_empty() {
         return String::from("[SESSION] search <query>");
     }
+    // FASE 2.5: Try HNSW semantic search first
     let log = SESSION.lock();
-    let mut hits: Vec<&SessionEntry> = log
-        .entries
-        .iter()
-        .filter(|e| e.text.to_ascii_lowercase().contains(&q) || e.role.contains(&q))
-        .collect();
-    hits.reverse();
-    hits.truncate(top_k.max(1).min(16));
+    let mut hits: Vec<&SessionEntry> = Vec::new();
+    {
+        let mut hnsw_guard = SESSION_HNSW.lock();
+        if let Some(ref mut hnsw) = *hnsw_guard {
+            let query_vec = session_project(query);
+            let results = hnsw.search(&query_vec, top_k.max(1).min(16));
+            for (_dist, id) in results {
+                if (id as usize) < log.entries.len() {
+                    hits.push(&log.entries[id as usize]);
+                }
+            }
+        }
+    }
+    // Fallback to substring if HNSW empty
+    if hits.is_empty() {
+        hits = log
+            .entries
+            .iter()
+            .filter(|e| e.text.to_ascii_lowercase().contains(&q) || e.role.contains(&q))
+            .collect();
+        hits.reverse();
+        hits.truncate(top_k.max(1).min(16));
+    }
     if hits.is_empty() {
         // Fallback BGE se disponível
         let sem = k_ai::memory_systems::semantic_search(query, top_k.min(5));
@@ -194,6 +239,14 @@ pub fn session_load() {
     if log.entries.len() > SESSION_CAP {
         let drain = log.entries.len() - SESSION_CAP;
         log.entries.drain(0..drain);
+    }
+    // FASE 2.5: Add to HNSW index
+    {
+        let mut hnsw_guard = SESSION_HNSW.lock();
+        if let Some(ref mut hnsw) = *hnsw_guard {
+            let vec = session_project(&text);
+            hnsw.insert(log.entries.len() as u32, vec);
+        }
     }
     k_nano::slog_hermes!("session", "load", "{} entries from SESSION.log", log.entries.len());
 }
