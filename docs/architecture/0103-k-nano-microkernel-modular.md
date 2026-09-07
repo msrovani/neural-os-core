@@ -224,6 +224,8 @@ Se Fase 2 nunca compensar o custo, este ADR **permanece valido so com Fase 1** (
 | TODO-0103-5 | S3: triage FS readers orfaos (ntfs/btrfs/ext2) -- mover para crate k_ai ou deletar se 0 callers | squada (fs) | contagem de callers reais |
 | TODO-0103-4 | S4: storage cognitivo (tickv FE/UI) -> libs proprias; backend raw em k_nano fino | squada (sgdb) | NSGDB persiste OK |
 | TODO-0103-5 | S5: podar lib.rs morto + codemap; rodar check_duplication.py como gate | maint. | sem regredir boot |
+TODO-0103-7 | FASE F: seguranca -> k_ai (firewall deletado FASE A; usb_trust manter em k_nano) | maint. | FEITO analise -- usb_trust dominio USB hardware policy, nao IA trust |
+TODO-0103-8 | FASE G: agentes -> hermes (installer_agent 275 LOC + sys_installer 344 LOC) | squada (installer) | NAO MIGRADO -- dependencias k_nano (hw_profiler, sys_installer, neural_fs) + Agent trait |
 TODO-0103-7 | FASE F: segurana -> k_ai (firewall deletado FASE A; usb_trust manter em k_nano) | maint. | FEITO analise -- usb_trust dominio USB hardware policy, nao IA trust |
 | TODO-0103-6 | S6: esqueleto `k_nano/src/{arch,memory,scheduler}/` sem mover logica -- so documentar layout proposto | maint. | opcional; nao obrigatorio |
 
