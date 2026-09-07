@@ -8,7 +8,8 @@ use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult}
 use alloc::string::String;
 use event_bus::{CapabilityToken, Event, Receiver};
 use core::sync::atomic::{AtomicBool, Ordering};
-use crate::jarvis::{JarbasEngine, Emotion, EmotionAnalysis};
+use crate::jarvis::JarbasEngine;
+use hermes::emotion::{Emotion, EmotionAnalyzer};
 use crate::audio::context::build_emotional_context;
 use crate::audio::voice::PLAYBACK_RING;
 
@@ -517,8 +518,8 @@ impl Agent for JarbasAgent {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             k_nano::slog_jarbas!("Jarbas", "info", "\"{}\"", text);
 
-            let text_emotion = EmotionAnalysis::analyze(text);
-            self.last_text_emotion = Some(text_emotion.dominant());
+            let text_emotion = hermes::emotion::EmotionAnalyzer::analyze(text);
+            self.last_text_emotion = Some(text_emotion.primary);
             self.engine.process_input(text);
 
             let emotional_ctx = build_emotional_context(self.last_text_emotion);

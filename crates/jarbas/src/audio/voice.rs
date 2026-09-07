@@ -139,6 +139,25 @@ impl Agent for JarbasVoiceAgent {
                             let new_val = emotion as u8 as f32;
                             let smoothed = prev * 0.7 + new_val * 0.3;
                             LAST_VOICE_EMOTION.store(smoothed as u8, Ordering::Relaxed);
+                            // FASE 4: Wire SER -> Affect pipeline
+                            {
+                                let valence = match emotion {
+                                    hermes::emotion::Emotion::Joy => 0.8,
+                                    hermes::emotion::Emotion::Sadness => -0.7,
+                                    hermes::emotion::Emotion::Anger => -0.8,
+                                    hermes::emotion::Emotion::Fear => -0.6,
+                                    hermes::emotion::Emotion::Surprise => 0.3,
+                                    hermes::emotion::Emotion::Disgust => -0.5,
+                                    hermes::emotion::Emotion::Sarcasm => 0.2,
+                                    _ => 0.0,
+                                };
+                                let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+                                    id: 0,
+                                    topic: alloc::string::String::from("VOICE_EMOTION"),
+                                    payload: alloc::format!("valence={:.2} emotion={:?}", valence, emotion).into_bytes(),
+                                    token: event_bus::CapabilityToken::Legacy(1),
+                                });
+                            }
                             k_nano::slog_jarbas!("Jarbas", "info", "Emocao: {:?} (pitch={:.0}Hz, energy={:.0})",
                                 emotion,
                                 features.pitch_hz,

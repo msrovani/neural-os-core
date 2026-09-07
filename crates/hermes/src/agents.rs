@@ -573,6 +573,7 @@ pub struct HermesAgent {
     pnp_receiver: Receiver,
     cap_receiver: Receiver,
     latent_receiver: LatentReceiver,
+    voice_emotion_receiver: Receiver,
     latent_recv_total: u64,
     cortex: cortex::cortex::Cortex,
     state: HermesState,
@@ -606,6 +607,7 @@ impl HermesAgent {
             pnp_receiver: EVENT_BUS.subscribe(k_ai::hw_capability::TOPIC_HW_PNP_ACTION),
             cap_receiver: EVENT_BUS.subscribe(k_ai::hw_capability::TOPIC_HW_CAPABILITY),
             latent_receiver: k_nano::globals::LATENT_BUS.subscribe(TOPIC_THOUGHT_LLM),
+            voice_emotion_receiver: k_nano::EVENT_BUS.subscribe("VOICE_EMOTION"),
             latent_recv_total: 0,
             cortex: cortex::cortex::Cortex::new(),
             state: HermesState::Idle,
@@ -708,6 +710,22 @@ impl Agent for HermesAgent {
             ));
             if self.latent_recv_total <= 3 || self.latent_recv_total % 32 == 0 {
                 k_nano::slog_hermes!("HERMES", "LATENT", "recv id={} norm={:.3} total={}", pkt.id, norm, self.latent_recv_total);
+            }
+        }
+
+        // FASE 4: Process voice emotion events
+        while let Some(ev) = self.voice_emotion_receiver.try_receive() {
+            if let Ok(text) = core::str::from_utf8(&ev.payload) {
+                if let Some(valence_str) = text.strip_prefix("valence=") {
+                    if let Some(valence) = valence_str.split_whitespace().next() {
+                        if let Ok(valence) = valence.parse::<f32>() {
+                            let mut reg = crate::affect::AffectRegulator::new();
+                            reg.incorporate(crate::affect::AffectEvent::UserSatisfaction(valence));
+                            crate::globals::sync_affect_snapshot(&reg.affect, 0);
+                            k_nano::slog_hermes!("VOICE", "affect", "valence={:.2}", valence);
+                        }
+                    }
+                }
             }
         }
 

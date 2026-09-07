@@ -14,6 +14,7 @@ pub enum Emotion {
     Surprise,   // surpresa
     Disgust,    // nojo/desgosto
     Neutral,    // neutro
+    Sarcasm,    // sarcasmo
 }
 
 /// Resultado da análise emocional.
@@ -96,6 +97,7 @@ impl EmotionAnalyzer {
             Emotion::Fear => (-0.6, 0.8),
             Emotion::Surprise => (0.3, 0.9),
             Emotion::Disgust => (-0.5, 0.3),
+            Emotion::Sarcasm => (0.2, 0.4),
             Emotion::Neutral => (0.0, 0.1),
         };
 

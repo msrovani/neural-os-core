@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 use skill_registry::{Skill, McpManifest, OutputSchema};
-use crate::jarvis::Emotion;
+use hermes::emotion::Emotion;
 use crate::audio::voice::LAST_VOICE_EMOTION;
 use crate::audio::vad::VAD_ENERGY;
 

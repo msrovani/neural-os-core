@@ -27,7 +27,19 @@ pub struct SoulProfile {
 }
 
 impl SoulProfile {
-    pub fn default_jarbas() -> Self { SoulProfile { name: String::from("JARBAS"), tone: String::from("witty"), humor_level: 0.5, formality: 0.3, empathy: 0.8 } }
+    pub fn from_hermes(eng: &hermes::soul::SoulEngine) -> Self {
+        SoulProfile {
+            name: eng.name.clone(),
+            tone: alloc::format!("{:?}", eng.tone),
+            humor_level: eng.creativity,
+            formality: eng.formality,
+            empathy: eng.empathy,
+        }
+    }
+}
+
+impl SoulProfile {
+    pub fn default_jarbas() -> Self { Self::from_hermes(&hermes::soul::SoulEngine::default()) }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

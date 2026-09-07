@@ -136,6 +136,11 @@ const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
     persist: true,
 };
 
+/// Current cognitive phase for adaptive rendering (FASE 5).
+static COGNITIVE_PHASE: spin::Lazy<spin::Mutex<alloc::string::String>> = spin::Lazy::new(|| {
+    spin::Mutex::new(alloc::string::String::from("observe"))
+});
+
 pub struct DisplayAgent {
     receiver: event_bus::Receiver,
     echo_receiver: event_bus::Receiver,
@@ -155,6 +160,7 @@ pub struct DisplayAgent {
     latent_receiver: Option<event_bus::LatentReceiver>,
     llm_stream_receiver: event_bus::Receiver,
     mesh_health_receiver: Option<event_bus::Receiver>,
+    phase_recv: event_bus::Receiver,
     /// ADR-0086 A5: receiver para solicitação de UI de seleção de disco.
     install_ui_receiver: Option<event_bus::Receiver>,
     gpu_inited: bool,
@@ -198,6 +204,7 @@ impl DisplayAgent {
             render_window_receiver: EVENT_BUS.subscribe(crate::display::render_registry::TOPIC_RENDER_WINDOW),
             latent_receiver: None,
             mesh_health_receiver: None,
+            phase_recv: k_nano::EVENT_BUS.subscribe("LOOP_PHASE"),
             install_ui_receiver: None,
             gpu_inited: false,
             demo_ui_sent: false,

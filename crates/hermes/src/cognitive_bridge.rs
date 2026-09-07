@@ -268,6 +268,17 @@ pub fn session_load() {
             hnsw.insert(log.entries.len() as u32, vec);
         }
     }
+    // FASE 7: Populate HNSW index at boot
+    {
+        let mut hnsw_guard = SESSION_HNSW.lock();
+        if let Some(ref mut hnsw) = *hnsw_guard {
+            for (i, entry) in log.entries.iter().enumerate() {
+                let vec = session_project(&entry.text);
+                hnsw.insert(i as u32, vec);
+            }
+            k_nano::slog_hermes!("session", "hnsw", "populated {} entries", log.entries.len());
+        }
+    }
     k_nano::slog_hermes!("session", "load", "{} entries from SESSION.log", log.entries.len());
 }
 

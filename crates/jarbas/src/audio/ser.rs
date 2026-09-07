@@ -4,7 +4,7 @@
 use alloc::vec::Vec;
 use alloc::string::String;
 use skill_registry::{Skill, McpManifest, OutputSchema};
-use crate::jarvis::Emotion;
+use hermes::emotion::Emotion;
 use crate::audio::settings;
 use libm::sqrtf;
 
