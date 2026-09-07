@@ -120,33 +120,29 @@ conferido vs build). Hang determinístico em `TRINITY.lock()` (TicketLock —
 FIFO por tickets, SEM reentrância: double-lock no mesmo contexto =
 self-deadlock eterno).
 
-## Bisector v6 (s324) — ROOT CAUSE: spin do poll smoltcp + 2º hang
+## Bisector v7 (s326) — heartbeat do timer + dígito de estágio
 
-**Evidência s323 (fotos 06/09 20:24):** o tick SOBREVIVEU ao cortex
-(fallback) — o sistema rodou até **tick 1370** e congelou em
-**`network_agent`** — um SEGUNDO hang, downstream, antes inalcançável.
-O stamp `t=ffffffff807f293d` era lixo do MEU instrumento (`&TRINITY`
-apontava pro wrapper ZST do lazy_static, lia estáticas adjacentes).
+**Evidência s325 (fotos 06/09 ~23:20):** boot COMPLETO (todas as fases +
+saudação "Upload complete. JARVAS online and ready"), freeze
+determinístico de novo em **network_agent @ tick 1370** COM o cap do
+poll ativo → o freeze não é (só) o loop ZERO-delay. Stamp TRINITY com
+`s=` presente mas valores = VAs de kernel → **repr(Rust) reordena
+campos** — o read cru pegava bytes do `data`, não os contadores.
 
-**ROOT CAUSE (network):** `NetStack::poll()`/`dhcp_poll()` giravam
-enquanto `poll_delay()==ZERO` — socket com trabalho cuja resposta nunca
-sai (TX degradado em HW real + tráfego LAN real: broadcast/ARP/mDNS).
-QEMU/slirp nunca entregava esse tráfego; o 1º pacote real (~tick 1370)
-disparava o spin eterno.
+s326 (`b684a786`):
+- **`#[repr(C)]` no TicketLock** — ticket@0/serving@8 fixos; se o stamp
+  continuar mostrando VA = corrupção real
+- **Dígito `S<n>` em y=64** — o estágio do tick em curso, legível em foto
+- **Heartbeat `T=<hex8>` em y=80** a cada tick do timer IRQ —
+  **discriminador vivo-vs-morto**:
+  - Tela congelada + **T avançando** = thread girando com IRQ viva
+  - T congelado = freeze DENTRO de IRQ (ou IF=0)
 
-Fix (`8b47fcc0`): cap 64 iterações + contador `POLL_LOOP_CAP` (o tick
-sobrevive); `tick_stage` 1–6 no network_agent (3=pré-poll — congelou
-com 3 barras = dentro do poll); instrumento TRINITY corrigido
-(`&*TRINITY` deref real + buf 64B, `s=` agora imprime).
-
-Leitura do próximo boot:
-- **Desktop vivo** → o cap segurou; caçar o TX degradado (por que a
-  resposta nunca sai) com o contador POLL_LOOP_CAP
-- **Congela com 3 barras + network_agent** → dentro de `ns.poll()` —
-  o loop do smoltcp ou o RX do e1000
-- **Congela com 1/2 barras** → `poll_budget`/`NET_STATE.lock()`
-- **`TRINITY BUSY t=X s=Y` com valores pequenos** → a lock do cortex
-  REALMENTE disputada (agora lendo o endereço certo)
+Leitura do próximo boot (fotos: canto sup. direito + linha vermelha):
+- **S<n>** = estágio exato do freeze no network_agent (3=dentro do
+  ns.poll, 5=dentro do dhcp/static, ≤2=lock)
+- **T avançando vs congelado** = thread-spin vs IRQ-deadlock
+- **TRINITY BUSY t/s pequenos** = lock realmente disputada
 
 ## Evidência do boot s316 (Alienware, 2026-09-06)
 
