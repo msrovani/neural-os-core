@@ -1643,3 +1643,66 @@ mod tests {
         assert!(t.self_test().is_ok(), "trainer self_test must pass");
     }
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Global singletons for FASE 2 wiring
+// ═══════════════════════════════════════════════════════════════════════════════
+
+static GLOBAL_PLANNER: spin::Lazy<spin::Mutex<IntentPlanner>> = spin::Lazy::new(|| {
+    spin::Mutex::new(IntentPlanner::new())
+});
+
+/// Access to the global IntentPlanner.
+pub fn planner() -> &'static spin::Mutex<IntentPlanner> {
+    &GLOBAL_PLANNER
+}
+
+/// Plan a goal and return the skill steps.
+pub fn plan_global(goal: &str) -> Vec<SkillStep> {
+    GLOBAL_PLANNER.lock().plan(goal)
+}
+
+static GLOBAL_REACT: spin::Lazy<spin::Mutex<ReActLoop>> = spin::Lazy::new(|| {
+    spin::Mutex::new(ReActLoop::new(3))
+});
+
+/// Access to the global ReActLoop.
+pub fn react_loop() -> &'static spin::Mutex<ReActLoop> {
+    &GLOBAL_REACT
+}
+
+static GLOBAL_MCP: spin::Lazy<spin::Mutex<McpServer>> = spin::Lazy::new(|| {
+    spin::Mutex::new(McpServer::new())
+});
+
+/// Access to the global McpServer.
+pub fn mcp_server() -> &'static spin::Mutex<McpServer> {
+    &GLOBAL_MCP
+}
+
+/// Handle an MCP request via the global server.
+pub fn mcp_handle(method: &str, params: &str) -> String {
+    GLOBAL_MCP.lock().handle_request(method, params)
+}
+
+/// Global NeuralCache for inference caching.
+static GLOBAL_NCACHE: spin::Lazy<spin::Mutex<NeuralCache>> = spin::Lazy::new(|| {
+    spin::Mutex::new(NeuralCache::new())
+});
+
+/// Access to the global NeuralCache.
+pub fn ncache() -> &'static spin::Mutex<NeuralCache> {
+    &GLOBAL_NCACHE
+}
+
+/// Global SuccessEngine (the one in cognitive.rs, tracking win/loss streaks).
+static GLOBAL_SUCCESS: spin::Lazy<spin::Mutex<SuccessEngine>> = spin::Lazy::new(|| {
+    spin::Mutex::new(SuccessEngine::new())
+});
+
+/// Access to the global SuccessEngine (cognitive).
+pub fn success_engine() -> &'static spin::Mutex<SuccessEngine> {
+    &GLOBAL_SUCCESS
+}
+

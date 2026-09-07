@@ -955,6 +955,9 @@ impl Agent for HermesAgent {
             k_nano::slog_hermes!("Log", "msg", "{}", intent_info.display());
             self.show_sdd(intent_name);
 
+            // ContextWindow: set system prompt on first Chat
+            k_ai::context_window::set_system_global("You are Jarbas, the Neural OS voice assistant. Reply concisely.");
+
             // #191: Council deliberation para comandos ambíguos (ex: Chat)
             if matches!(cmd, hermes::Command::Chat(_)) {
                 let (opt, skep, prag) = crate::hermes::council_deliberate(text);
@@ -1640,6 +1643,11 @@ impl Agent for HermesAgent {
                                     k_nano::slog_cortex!("LLM", "info", "Enviando: \"{}\" (trinity: {})",
                                         msg,
                                         route.expert);
+                        // IntentPlanner: generate plan before LLM request
+                        {
+                            let steps = k_ai::cognitive::plan_global(msg);
+                            k_nano::slog_hermes!("PLANNER", "info", "plan for '{}': {} steps", msg, steps.len());
+                        }
                                     crate::cognitive_bridge::session_record(
                                         "user", msg, tick_now,
                                     );
