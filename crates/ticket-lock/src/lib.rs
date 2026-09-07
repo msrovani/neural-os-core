@@ -4,6 +4,10 @@ use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+/// repr(C): ticket/serving em offsets fixos (0/8) — instrumentos de diagnóstico
+/// leem os contadores via ponteiro cru; repr(Rust) pode reordenar e o read
+/// pegaria bytes do `data` (freeze s325: t/s eram VAs de kernel = data).
+#[repr(C)]
 pub struct TicketLock<T> {
     ticket: AtomicUsize,
     serving: AtomicUsize,

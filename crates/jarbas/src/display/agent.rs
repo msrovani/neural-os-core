@@ -595,6 +595,11 @@ impl Agent for DisplayAgent {
                 // Bisector v4 (s321): sub-estágios do tick em curso (linha 2
                 // de barras, y=32) — agentes marcam progresso via tick_stage.
                 agent_core::set_tick_stage_fn(Some(crate::display::fb::diag_stage_row1));
+                // Bisector v6 (s326): heartbeat do timer no FB (y=80) —
+                // discriminador vivo-vs-morto no frame congelado.
+                k_nano::interrupts::set_heartbeat_fb_fn(Some(
+                    crate::display::fb::heartbeat_stamp,
+                ));
                 // 1º frame imediato: splash no tick 1; sem render+swap aqui depende do tick 2
                 // (Hermes/LLM pode bloquear minutos — SESSION_168 / HW real freeze no splash).
                 if let Some(ref mut desktop) = *COMPOSITOR.lock() {

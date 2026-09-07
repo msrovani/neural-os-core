@@ -218,6 +218,31 @@ pub fn exception_fb_stamp(text: &[u8]) {
     }
 }
 
+/// Heartbeat do timer no FB (freeze s326): discriminador vivo-vs-morto.
+/// Tela congelada + T avançando = thread girando com IRQ viva; T congelado =
+/// freeze DENTRO de IRQ (ou IF=0). Mesmo padrão do bridge EXC_FB_FN.
+static HEARTBEAT_FB_FN: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+/// Registra a fn de heartbeat FB (None = desativa).
+pub fn set_heartbeat_fb_fn(f: Option<fn(u64)>) {
+    let v = match f {
+        Some(g) => g as usize as u64,
+        None => 0,
+    };
+    HEARTBEAT_FB_FN.store(v, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Heartbeat FB do tick em curso (no-op sem registro). IRQ-safe.
+pub fn heartbeat_fb(ticks: u64) {
+    let f = HEARTBEAT_FB_FN.load(core::sync::atomic::Ordering::Relaxed);
+    if f != 0 {
+        // SAFETY: ponteiro registrado via set_heartbeat_fb_fn.
+        let g: fn(u64) = unsafe { core::mem::transmute(f as usize) };
+        g(ticks);
+    }
+}
+
 fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Option<u64>) {
     puts(b"[EXC] ");
     puts(name.as_bytes());
@@ -344,6 +369,9 @@ fn send_eoi(vector: u8) {
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     let ticks = TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    // Freeze s326: heartbeat no FB — discriminador vivo-vs-morto (18Hz,
+    // ~10 glyphs volatile = custo desprezível vs ISR).
+    heartbeat_fb(ticks as u64);
     if ticks < 5 {
         puts(b"[TIMER] Interrupt fired! tick="); putdec(ticks as u64); putc(b'\n');
     }

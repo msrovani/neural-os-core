@@ -846,9 +846,11 @@ pub fn diag_mark_at(y0: usize, n: u8) {
     }
 }
 
-/// Wrapper p/ o bridge agent-core: sub-estágios na linha 2 (y=32).
+/// Wrapper p/ o bridge agent-core: sub-estágios na linha 2 (y=32) + dígito
+/// "S<n>" em y=64 (s326 — barras são ilegíveis em foto).
 pub fn diag_stage_row1(n: u8) {
     diag_mark_at(32, n);
+    diag_stamp_stage(n);
 }
 
 /// Stamp do agente em curso (freeze s319): escreve o NOME direto no FB real
@@ -950,6 +952,115 @@ pub fn diag_stamp_exception(text: &[u8]) {
                                 0 => 0x3Cu8,
                                 1 => 0x3Cu8,
                                 2 => 0xFFu8,
+                                _ => 0xFFu8,
+                            };
+                            base.add(off + b).write_volatile(v);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Dígito do estágio (freeze s326): escreve "S<n>" (ciano, y=64, direita) —
+/// barras são ilegíveis em foto; o dígito é inequívoco. Volatile, lock-free.
+pub fn diag_stamp_stage(n: u8) {
+    let addr = DIAG_FB_ADDR.load(core::sync::atomic::Ordering::Relaxed);
+    if addr == 0 {
+        return;
+    }
+    let stride = DIAG_FB_STRIDE.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    let bpp = DIAG_FB_BPP.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    let width = DIAG_FB_WIDTH.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    if stride == 0 || bpp == 0 || width < 64 {
+        return;
+    }
+    let text = [b'S', if n >= 10 { b'?' } else { b'0' + n }];
+    const CHARS: usize = 2;
+    let (cw, ch) = (8usize, 16usize);
+    let strip_w = CHARS * (cw + 1) + 4;
+    let (x0, y0) = (width - strip_w - 2, 64usize);
+    let base = addr as *mut u8;
+    unsafe {
+        for dy in 0..ch {
+            let off = (y0 + dy) * stride + x0 * bpp;
+            for b in 0..strip_w * bpp {
+                base.add(off + b).write_volatile(0);
+            }
+        }
+        for (i, &c) in text.iter().enumerate() {
+            let Some(glyph) = crate::display::font::get_char_bitmap(c as char) else {
+                continue;
+            };
+            let gx = x0 + 2 + i * (cw + 1);
+            for (dy, &row) in glyph.iter().enumerate() {
+                for dx in 0..cw {
+                    if (row >> (7 - dx)) & 1 == 1 {
+                        let off = (y0 + dy) * stride + (gx + dx) * bpp;
+                        for b in 0..bpp {
+                            let v = match b {
+                                0 => 0xFFu8,
+                                1 => 0xD4u8,
+                                2 => 0x00u8,
+                                _ => 0xFFu8,
+                            };
+                            base.add(off + b).write_volatile(v);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Heartbeat do timer (freeze s326): escreve "T=<hex8>" (ciano, y=80, direita)
+/// a CADA tick do timer IRQ. Discriminador vivo-vs-morto: tela congelada + T
+/// avançando = thread girando com IRQ viva; T congelado = freeze DENTRO de IRQ
+/// (ou IF=0). Volatile, lock-free, sem alloc — seguro em IRQ context.
+pub fn heartbeat_stamp(ticks: u64) {
+    let addr = DIAG_FB_ADDR.load(core::sync::atomic::Ordering::Relaxed);
+    if addr == 0 {
+        return;
+    }
+    let stride = DIAG_FB_STRIDE.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    let bpp = DIAG_FB_BPP.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    let width = DIAG_FB_WIDTH.load(core::sync::atomic::Ordering::Relaxed) as usize;
+    if stride == 0 || bpp == 0 || width < 128 {
+        return;
+    }
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut text = [b'T'; 10];
+    text[1] = b'=';
+    for i in 0..8 {
+        text[2 + i] = HEX[((ticks >> (60 - 4 * i)) & 0xF) as usize];
+    }
+    const CHARS: usize = 10;
+    let (cw, ch) = (8usize, 16usize);
+    let strip_w = CHARS * (cw + 1) + 4;
+    let (x0, y0) = (width - strip_w - 2, 80usize);
+    let base = addr as *mut u8;
+    unsafe {
+        for dy in 0..ch {
+            let off = (y0 + dy) * stride + x0 * bpp;
+            for b in 0..strip_w * bpp {
+                base.add(off + b).write_volatile(0);
+            }
+        }
+        for (i, &c) in text.iter().enumerate() {
+            let Some(glyph) = crate::display::font::get_char_bitmap(c as char) else {
+                continue;
+            };
+            let gx = x0 + 2 + i * (cw + 1);
+            for (dy, &row) in glyph.iter().enumerate() {
+                for dx in 0..cw {
+                    if (row >> (7 - dx)) & 1 == 1 {
+                        let off = (y0 + dy) * stride + (gx + dx) * bpp;
+                        for b in 0..bpp {
+                            let v = match b {
+                                0 => 0xFFu8,
+                                1 => 0xD4u8,
+                                2 => 0x00u8,
                                 _ => 0xFFu8,
                             };
                             base.add(off + b).write_volatile(v);
