@@ -69,6 +69,12 @@ unsafe fn probe_usb_msc() {
     let ok = msc.is_some();
     *USB_MSC.lock() = msc;
     crate::slog_nano!("USB", "msc", "plan probe ok={}", ok);
+    // K190 no ramlog: transição None→Some com [T+tick] (foto em HW sem COM).
+    // Flush seguro aqui (fora do path persist) — MSC recém-vivo pode gravar cedo.
+    crate::display::fb::boot_ckpt(
+        190,
+        if ok { "USB-MSC plan probe OK" } else { "USB-MSC plan probe FAIL" },
+    );
 }
 
 /// AHCI: 1º controlador 01:06. Idempotente.

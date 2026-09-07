@@ -541,6 +541,14 @@ fn is_skipped(bit: u8) -> bool {
     BACKEND_SKIP.load(Ordering::Relaxed) & bit != 0
 }
 
+/// K192 (1ª vez): prova no ramlog de que o chain persist chegou ao fim —
+/// visível em HW sem COM quando o operador pergunta "gravou?".
+fn note_persist_ok() {
+    if !FAT_READY.swap(true, Ordering::Relaxed) {
+        crate::display::fb::boot_ckpt_noflush(192, "BOOT.LOG gravado (FAT ok)");
+    }
+}
+
 #[cfg(feature = "fat-boot-log")]
 fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
     if !persist_allowed_now() {
@@ -553,7 +561,7 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
         let ok = persist_timestamped_vfs(&content);
         if ok {
             DISK_WRITES.fetch_add(1, Ordering::Relaxed);
-            FAT_READY.store(true, Ordering::Relaxed);
+            note_persist_ok();
             SINCE_FLUSH.store(0, Ordering::Relaxed);
             clear_breaker_on_success();
         } else {
@@ -563,6 +571,10 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
                 publish_bootlog_health("timestamped_vfs_fail");
                 log_no_flush(
                     "BOOT.LOG skipped (Installed=produto); persist timestamped /logs/ falhou (backoff)",
+                );
+                crate::display::fb::boot_ckpt_noflush(
+                    191,
+                    "BOOT.LOG fail: timestamped /logs/ (produto)",
                 );
             }
             schedule_backoff();
@@ -697,6 +709,12 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
                         detail,
                         bootlog_backoff_ticks(FAIL_STREAK.load(Ordering::Relaxed))
                     ));
+                    // K191 no ramlog: o reason só em serial+buffer do BOOT.LOG
+                    // (que falhou) era invisível em HW sem COM.
+                    crate::display::fb::boot_ckpt_noflush(191, &alloc::format!(
+                        "BOOT.LOG fail: {}",
+                        detail
+                    ));
                 }
             }
         }
@@ -704,7 +722,7 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
     };
     if ok {
         DISK_WRITES.fetch_add(1, Ordering::Relaxed);
-        FAT_READY.store(true, Ordering::Relaxed);
+        note_persist_ok();
         SINCE_FLUSH.store(0, Ordering::Relaxed);
         clear_breaker_on_success();
         let _ = session_name_for_persist(); // grava BOOT.LOG ou timestamp no SESSION_FILENAME
@@ -900,6 +918,8 @@ pub fn try_ensure_usb_msc() -> bool {
         if ok {
             *crate::globals::USB_MSC.lock() = msc;
             crate::slog_nano!("LOG", "info", "try_ensure_usb_msc: MSC OK (retry)");
+            // noflush: chamado de dentro do heal/persist (recursão via try_flush).
+            crate::display::fb::boot_ckpt_noflush(190, "USB-MSC retry OK (self-heal)");
         }
         ok
     }

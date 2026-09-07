@@ -39,5 +39,9 @@ pub unsafe fn probe_and_install() -> bool {
     } else {
         k_nano::slog_hal!("USB", "warn", "MSC probe FAIL (hub/root)");
     }
+    k_nano::display::fb::boot_ckpt(
+        190,
+        if ok { "USB-MSC k_hal OK (hub+root)" } else { "USB-MSC k_hal FAIL (hub/root)" },
+    );
     ok
 }
