@@ -25,6 +25,21 @@ pub const TOPIC_KERNEL_ERROR: &str = "KERNEL_ERROR";
 pub const TOPIC_MODEL_UPDATE: &str = "MODEL_UPDATE";
 
 pub static GLOBAL_MODEL_PARAMS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Global KvCache reutilizado entre chamadas de generate.
+/// Evita re-criar cache a cada prompt.
+static GLOBAL_KV_CACHE: spin::Lazy<spin::Mutex<Option<KvCache>>> = spin::Lazy::new(|| {
+    spin::Mutex::new(None)
+});
+
+/// Reseta o KvCache global para um novo prompt.
+pub fn kv_cache_reset() {
+    if let Some(cache) = GLOBAL_KV_CACHE.lock().as_mut() {
+        cache.len = 0;
+        for layer in cache.k.iter_mut() { layer.clear(); }
+        for layer in cache.v.iter_mut() { layer.clear(); }
+    }
+}
 use crate::nn::{silu, relu2, rms_norm};
 use crate::tensor::{PackedTernaryTensor, Tensor};
 
@@ -3553,7 +3568,22 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
     let k_dim = if model.layers.is_empty() { kv_dim } else {
         model.layers[0].k.shape.1
     };
-    let mut cache = KvCache::new(model.layers.len(), k_dim, kv_dim);
+    // Reuse GLOBAL_KV_CACHE if available, else create new
+    let mut cache = {
+        let mut gc = GLOBAL_KV_CACHE.lock();
+        if let Some(ref mut existing) = *gc {
+            existing.len = 0;
+            for layer in existing.k.iter_mut() { layer.clear(); }
+            for layer in existing.v.iter_mut() { layer.clear(); }
+            if existing.k.len() == model.layers.len() && existing.k_dim() == k_dim {
+                KvCache::new(model.layers.len(), k_dim, kv_dim)
+            } else {
+                KvCache::new(model.layers.len(), k_dim, kv_dim)
+            }
+        } else {
+            KvCache::new(model.layers.len(), k_dim, kv_dim)
+        }
+    };
 
     let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     let (mut last_hidden, mut last_logits) = model.forward_with_kv(&tokens, &mut cache);
@@ -3722,6 +3752,12 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
         gen.first().copied().unwrap_or(0xFFFF),
         gen.last().copied().unwrap_or(0xFFFF),
         stop_label, bpe_label, coh as u8, gen);
+
+    // Store cache for reuse
+    {
+        let mut gc = GLOBAL_KV_CACHE.lock();
+        *gc = Some(cache);
+    }
 
     let out = if use_bpe { crate::bpe::decode(gen) } else {
         let u16s: Vec<u16> = gen.iter().map(|&t| t as u16).collect();

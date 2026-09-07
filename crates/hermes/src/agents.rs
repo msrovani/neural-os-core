@@ -742,6 +742,15 @@ impl Agent for HermesAgent {
 
         // ── Processamento de eventos (o trabalho real) ──
         let mut had_work = false;
+        // FASE 1.6: BeiInit LoopPhase modulation
+        let phase = crate::executive::current_phase();
+        let latency_tolerance = match phase {
+            crate::executive::LoopPhase::Think => 200,   // more time for reasoning
+            crate::executive::LoopPhase::Execute => 50,   // fast execution
+            crate::executive::LoopPhase::Learn => 150,    // memory recall
+            _ => 100,                                      // default
+        };
+        let _ = latency_tolerance; // used implicitly by budget
         let mut responded = String::new();
         let awaiting = matches!(self.state, HermesState::AwaitingLLM);
 
@@ -1619,6 +1628,13 @@ impl Agent for HermesAgent {
                                                     "user", msg, tick_now,
                                                 );
                                                 *PENDING_LEARNER_INPUT.lock() = Some(String::from(msg));
+                                    // FASE 1.5: Soul personality injection into LLM prompt
+                                    let soul = crate::soul::SoulEngine::default();
+                                    let soul_prefix = alloc::format!(
+                                        "[SOUL: {} tone={:?} formality={:.1} empathy={:.1}]
+",
+                                        soul.name, soul.tone, soul.formality, soul.empathy
+                                    );
                                                 self.workflow_engine.start();
                                                 let _ = EVENT_BUS.publish(Event {
                                                     id: 0,
@@ -1657,6 +1673,13 @@ impl Agent for HermesAgent {
                                         "user", msg, tick_now,
                                     );
                                     *PENDING_LEARNER_INPUT.lock() = Some(String::from(msg));
+                                    // FASE 1.5: Soul personality injection into LLM prompt
+                                    let soul = crate::soul::SoulEngine::default();
+                                    let soul_prefix = alloc::format!(
+                                        "[SOUL: {} tone={:?} formality={:.1} empathy={:.1}]
+",
+                                        soul.name, soul.tone, soul.formality, soul.empathy
+                                    );
                                     self.workflow_engine.start();
                                     let _ = EVENT_BUS.publish(Event {
                                         id: 0,

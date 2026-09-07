@@ -28,6 +28,28 @@ impl LoopPhase {
     }
 }
 
+/// Current meta-cognitive phase (global, lock-free).
+static CURRENT_PHASE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// Update the global phase.
+pub fn set_current_phase(phase: LoopPhase) {
+    CURRENT_PHASE.store(phase as u8, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Get the current meta-cognitive phase.
+pub fn current_phase() -> LoopPhase {
+    match CURRENT_PHASE.load(core::sync::atomic::Ordering::Relaxed) {
+        1 => LoopPhase::Think,
+        2 => LoopPhase::Plan,
+        3 => LoopPhase::Build,
+        4 => LoopPhase::Execute,
+        5 => LoopPhase::Verify,
+        6 => LoopPhase::Learn,
+        _ => LoopPhase::Observe,
+    }
+}
+
+
 // ─── Ego Layer: domain confidence with EMA ────────────────────────────
 
 #[derive(Debug, Clone)]

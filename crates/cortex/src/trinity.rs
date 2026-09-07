@@ -273,7 +273,7 @@ impl TrinityRouter {
                             best_score = s;
                         }
                     }
-                    if best_score > 0.08 {
+                    if best_score > 0.05 {
                         if let Some(trace) = crate::r3::record_router_trace(
                             arena,
                             &embedding,
@@ -347,7 +347,7 @@ impl TrinityRouter {
                             best_score = s;
                         }
                     }
-                    if best_score > 0.08 {
+                    if best_score > 0.05 {
                         self.stats_neural.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                         k_nano::slog_cortex!(
                             "TRINITY",
@@ -364,7 +364,7 @@ impl TrinityRouter {
         }
         self.stats_keyword.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         if self.router_trained {
-            k_nano::slog_cortex!("TRINITY", "warn", "neural router fallback to keyword (best_score < 0.08)");
+            k_nano::slog_cortex!("TRINITY", "warn", "neural router fallback to keyword (best_score < 0.05)");
         }
         self.classify_keywords(text)
     }
