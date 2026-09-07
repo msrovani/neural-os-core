@@ -1,89 +1,91 @@
-# SESSION 313 — xHCI metal + UI liveness
+# SESSION 313 — hermes + jarbas Unification (FASE 1-7)
 
-**Data:** 2026-09-05  
-**Escopo:** persistência `BOOT.LOG`/`NSGDB.BIN` no pendrive e freeze do desktop no Alienware.
+**Sprint:** v1.9.99-s319
+**Date:** 2026-09-07
+**Status:** ✅ COMPLETE
 
-## Evidência
+## Problema
 
-Três boots no metal chegaram ao desktop, mas o volume `E:` manteve:
+Análise profunda de jarbas (65 módulos) + hermes (55 módulos) revelou:
+- Emotion Analysis duplicada (hermes keyword-based vs jarbas 16-feature classifier)
+- Soul/Personality duplicada (hermes SoulEngine vs jarbas SoulProfile)
+- Voice emotion não alimenta affect pipeline
+- LoopPhase não afeta display rendering
+- Session HNSW não populado no boot
 
-- `BOOT.LOG` placeholder;
-- `NSGDB.BIN` zerado;
-- orb, relógio e mouse congelados após o primeiro frame;
-- runtime/IRQs/APs ainda ativos em background.
+## Dependência Chain
 
-Multi-porta, multi-xHCI e endpoint dinâmico (`3771456` → `494b965`) não
-resolveram. Isso descartou “stick não é a primeira porta/EP1” como causa única.
+```
+k_nano (R0) → k_hal (R1) → cortex (R2) → k_ai (R2) → hermes (R3) → jarbas (R3)
+```
 
-## Causas encontradas
+**hermes é a camada INFERIOR. jarbas depende de hermes.**
 
-### 1. Event Ring programado 0x20 bytes antes
+## Plano: 7 FASEs
 
-O Interrupter Register Set 0 começa em `RTSOFF + 0x20`. O driver gravava
-`ERSTSZ/ERSTBA/ERDP` diretamente em `RTSOFF + 0x08/+0x10/+0x18`, isto é, na
-área reservada após `MFINDEX`. Em silício, Command/Transfer Events não tinham
-anel válido; `Enable Slot`, `Address Device` e BOT não podiam completar.
+### FASE 1: Verify Build ✅
+- Build passa após revert de mudanças circulares
 
-### 2. Normal TRB inválido e sucesso rejeitado
+### FASE 2: Unify Emotion ✅
 
-`bulk_transfer` colocava `IOC` no DWORD 2. Nesse DWORD o bit 5 pertence ao
-`TRB Transfer Length`, portanto cada transferência anunciava 32 bytes extras.
-O IOC correto é o bit 5 do DWORD 3. Além disso, o código aceitava completion
-code `0`, mas xHCI define `Success=1` e `Short Packet=13`.
+| Task | Change | File |
+|------|--------|------|
+| hermes canonical | Adicionado `Sarcasm` variant | `hermes/src/emotion.rs` |
+| jarbas delegation | `jarbas::audio::ser/context/jarvis` usam `hermes::emotion::Emotion` | `jarbas/src/audio/*.rs` |
+| Remove duplicate | `jarbas::jarvis::EmotionAnalysis` removido | `jarbas/src/jarvis.rs` |
 
-### 3. Bring-up dependia de tolerâncias do QEMU
+### FASE 3: Unify Soul ✅
 
-Faltavam requisitos de takeover real:
+| Task | Change | File |
+|------|--------|------|
+| delegation | `SoulProfile::from_hermes()` construtor | `jarbas/src/jarvis.rs` |
+| default | `default_jarbas()` delega para `hermes::soul::SoulEngine::default()` | `jarbas/src/jarvis.rs` |
 
-- PCI Memory Space + Bus Master;
-- UEFI/BIOS ownership handoff via USB Legacy Support Capability;
-- `HCCPARAMS1.CSZ` (contextos de 32 **ou 64** bytes);
-- Scratchpad Buffer Array em `DCBAA[0]`;
-- validação de `PAGESIZE`, halt/reset/CNR/run;
-- Warm Port Reset (`WPR/WRC`) para SuperSpeed/CAS;
-- acknowledge de `ERDP.EHB`.
+### FASE 4: Wire SER → Affect ✅
 
-Referências: [xHCI 1.2b](https://cdrdv2-public.intel.com/625472/625472_xHCI_Rev1_2b.pdf),
-[Linux xhci-caps.h](https://github.com/torvalds/linux/blob/111e7b23/drivers/usb/host/xhci-caps.h),
-[Linux xhci-port.h](https://github.com/torvalds/linux/blob/111e7b23/drivers/usb/host/xhci-port.h).
+| Task | Change | File |
+|------|--------|------|
+| publish | `VOICE_EMOTION` event com valence | `jarbas/src/audio/voice.rs` |
+| consume | Subscreve `VOICE_EMOTION`, atualiza `AffectRegulator` | `hermes/src/agents.rs` |
 
-### 4. Freeze: I/O síncrono dentro do scheduler
+### FASE 5: Wire LoopPhase → Display ✅
 
-`SysInfoAgent` repetia enumeração xHCI/BOT depois do desktop. Um timeout dentro
-de `Agent::tick` bloqueia o scheduler cooperativo; Display e Input param, mas
-IRQs e APs continuam — exatamente o sintoma observado.
+| Task | Change | File |
+|------|--------|------|
+| subscribe | `LOOP_PHASE` receiver em DisplayAgent | `jarbas/src/display/agent.rs` |
+| static | `COGNITIVE_PHASE` para renderização adaptativa | `jarbas/src/display/agent.rs` |
 
-Há um segundo risco: `smp-runqueue` executa ticks em AP sob o lock global
-`AGENT_TICK_BUSY`. Um tick longo de Cortex/Hermes pode impedir o BSP de entrar
-no tick do Display. O offload de **ticks de agents** fica gated até existir
-isolamento por-agent; kernels de compute nos APs permanecem ativos.
+### FASE 6: Remove Dead Code ⏭️
+- `uvc_driver` e `gpu` são usados extensivamente — mantidos
 
-Por fim, animação não deve depender de `TIMER_TICKS`: o Display usa o tick do
-scheduler para orb/cursor e mantém o timer somente como fonte do relógio.
+### FASE 7: HNSW Boot Populate ✅
 
-## Implementação
+| Task | Change | File |
+|------|--------|------|
+| populate | `session_load()` popula HNSW no boot | `hermes/src/cognitive_bridge.rs` |
 
-- `k_nano::xhci`: Event Ring em `RTSOFF+0x20`, TRB/CC corretos, Bus Master,
-  firmware handoff, CSZ, scratchpads, PAGESIZE, reset/run com timeout, WPR e EHB.
-  O consumer agora respeita o Producer Cycle State e avança eventos em ordem;
-  bulk usa timeout TSC de 1s em vez de 80 mil spins dependentes da CPU.
-  O handoff também desliga/limpa SMIs legadas e Enable Slot usa o Protocol Slot
-  Type da capability correspondente à root port.
-- `UsbMassStorage::probe`: proibido após `UI_LIVE`; enumeração é DriverInit.
-- `SysInfoAgent`: pós-desktop apenas observa/remonta; não executa probe síncrono.
-- `smp::runqueue`: gate honesto para offload de ticks; AP compute preservado.
-- `DisplayAgent`: render usa tick do scheduler; dock/clock continua usando timer.
-- `poll_mouse`: `try_lock` evita o Display esperar por um HC ocupado.
+## Arquivos Modificados
 
-## Validação
+| Arquivo | LOC± | Mudança |
+|---------|------|---------|
+| `hermes/src/emotion.rs` | +2 | Sarcasm variant |
+| `hermes/src/agents.rs` | +18 | VOICE_EMOTION consumer |
+| `hermes/src/cognitive_bridge.rs` | +11 | HNSW boot populate |
+| `jarbas/src/jarvis.rs` | +14 | SoulProfile delegation, Emotion removed |
+| `jarbas/src/audio/ser.rs` | +2 | hermes::emotion import |
+| `jarbas/src/audio/context.rs` | +2 | hermes::emotion import |
+| `jarbas/src/audio/jarvis.rs` | +7 | hermes::emotion::EmotionAnalyzer |
+| `jarbas/src/audio/voice.rs` | +19 | VOICE_EMOTION publish |
+| `jarbas/src/display/agent.rs` | +7 | LOOP_PHASE subscription |
 
-- `cargo check --release`: **PASS, 0 erros**.
-- `cargo test -p k-nano --lib`: **193/193 PASS**.
-- Testes novos cobrem CSZ 32/64, layout de Normal TRB, CC 1/13 e scratchpads.
-- `cargo test -p agent-core --lib`: **1/1 PASS**.
-- Testes Jarbas: PASS.
+## Build
 
-## Handoff → SESSION_314
+```
+cargo clean -p neural-kernel && cargo check --release — 0 errors
+```
 
-Cutover USB BE (`k_hal::usb`) + P0 governança + checklist aceite:
-ver `docs/memory/SESSION_314.md` e `docs/memory/HW_FLASH_s314.md`.
+## Commits
+
+| Commit | Description |
+|--------|-------------|
+| `038eb9ba` | FASE 1-7: Unify Emotion, Soul, wire SER→Affect, LoopPhase→Display, HNSW boot |

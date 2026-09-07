@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s318 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s319 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -11,6 +11,7 @@
 | 315 | HW real | Jarbas UI | Soft-halt + anti-black-screen | hlt→soft 18Hz; HID sem MSC; PIC IRQ12; compositor orb-only gate; MSC budget 3s + TSC EP0/reset; boot_progress_line FB |
 | 314 | HW real | P0/ADR-0103 | BOOT.LOG metal + k_hal USB BE | P0 = persistência no stick sem perder desktop; hub route+TT em k_hal; S0 multi_user→k_ai hnsw→cortex; aceite AWAITING_OPERATOR; freeze Ring3/S2+ |
 | 313 | HW real | xHCI/Jarbas | Persistência USB + UI liveness | Event Ring exigia `RTSOFF+0x20`; Normal TRB IOC estava no DWORD errado e CC Success=1 era rejeitado; takeover metal (BusMaster/handoff/CSZ/scratchpad/WPR/EHB); probe MSC proibido pós-UI; tick offload global gated |
+| 319 | hermes+jarbas | ADR-0103 | hermes + jarbas unification: Emotion, Soul, SER→Affect, LoopPhase→Display | hermes::emotion canonical (Sarcasm) + SoulProfile delegates hermes + VOICE_EMOTION event + LOOP_PHASE subscription + HNSW boot populate |
 | 318 | hermes+cortex | ADR-0103 | hermes + cortex complete optimization: FASE 1-4 | Persistent KvCache + MoE 0.05 + Emotion->Affect + Soul->LLM + BeiInit + PonderNet + MCP dynamic + SkillGen persist + HNSW search + VectorClock dedup + 17 dead modules removed + LLM feedback + Federated health |
 | 317 | k_ai+cortex | ADR-0103 | k_ai + Cortex optimization: FASE 1-4 complete | ContextWindow + Budget + IntentPlanner + ReAct + MCP + CodebookVQ + H2O eviction + MoE neural 0.08 + dead code removal |
 | 310 | Self-Heal | ADR-0088 | Self-Heal AIOS: 4 fases (unificação→RESPAWN→LLM loop→security) | 3 SELF_HEAL → 1 canônico; RestartDaemon→RESPAWN_QUEUE; HEALING_LLM_REQUEST/RESPONSE (Falcon3 3B); BudgetedRecovery enforcement; agent_stats I2 real; NET_EVENT→PortScan/ArpSpoof/Timer; security detectors reais |

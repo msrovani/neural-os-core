@@ -1,5 +1,42 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s319] - 2026-09-07 — hermes + jarbas unification (Emotion, Soul, SER→Affect, LoopPhase)
+
+**Unificação completa: duplicatas eliminadas, pipelines wireados, HNSW boot populate.**
+
+### FASE 2: Unify Emotion
+- `hermes::emotion::Emotion` é canônico (adicionado variante `Sarcasm`)
+- `jarbas::jarvis::EmotionAnalysis` removido — jarbas usa `hermes::emotion`
+- `jarbas::audio::ser/context/jarvis` atualizados para `hermes::emotion::Emotion`
+
+### FASE 3: Unify Soul
+- `jarbas::jarvis::SoulProfile` delega para `hermes::soul::SoulEngine`
+- Adicionado construtor `from_hermes()` para SoulProfile
+
+### FASE 4: Wire SER → Affect
+- `jarbas::audio::voice` publica evento `VOICE_EMOTION` com valence
+- `hermes::agents` consome e atualiza `AffectRegulator`
+
+### FASE 5: Wire LoopPhase → Display
+- `DisplayAgent` assina `LOOP_PHASE` no EventBus
+- `COGNITIVE_PHASE` static para renderização adaptativa
+
+### FASE 7: HNSW Boot Populate
+- `session_load()` popula índice HNSW no boot a partir de SESSION.log
+
+### Arquivos modificados
+| Arquivo | Mudança |
+|---------|--------|
+| `hermes/src/emotion.rs` | Adicionado Sarcasm variant |
+| `hermes/src/agents.rs` | Consumidor VOICE_EMOTION |
+| `hermes/src/cognitive_bridge.rs` | HNSW boot populate |
+| `jarbas/src/jarvis.rs` | SoulProfile delega hermes, Emotion removido |
+| `jarbas/src/audio/ser.rs` | Usa hermes::emotion::Emotion |
+| `jarbas/src/audio/context.rs` | Usa hermes::emotion::Emotion |
+| `jarbas/src/audio/jarvis.rs` | Usa hermes::emotion::EmotionAnalyzer |
+| `jarbas/src/audio/voice.rs` | Publica VOICE_EMOTION event |
+| `jarbas/src/display/agent.rs` | Assina LOOP_PHASE |
+
 ## [1.9.99-s318] - 2026-09-07 — hermes + cortex complete optimization (FASE 1-4)
 
 **Otimização completa: 17 tasks implementadas, 17 dead modules removidos, ~1000 LOC líquido removido.**
