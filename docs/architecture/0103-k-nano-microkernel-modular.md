@@ -100,6 +100,8 @@ hooks registáveis ←── register_*_bringup
 | ata/ahci/nvme/virtio_blk MMIO | **KEEP** até slice estável | Cap/status → k_hal storage port | Early FAT pode depender |
 | fat32/exfat **read** early | **KEEP** até path BOOT.LOG estável | assets/recipes → k_hal `fat_assets` | Depois: facade |
 | neural_fs, tickv, sgdb core | avaliar | FE/API → hermes/k_ai; blob I/O pode ficar R0 | ADR-0063/0091 |
+| ext2/btrfs/ntfs readers | ✅ DELETADO | 0 callers (commit `6e789960`) | FASE A completa |
+| firewall, verify, rollback, self_check | ✅ DELETADO | stubs/mortos (commit `6e789960`) | FASE A completa |
 | e1000/rtl/virtio_net MMIO | **KEEP** curto prazo | oferta net → k_hal; smoltcp bridge → hermes | Net gate = e1000 |
 | mesh/p2p transporte | **KEEP** (0081) | dashboard → jarbas | — |
 | crypto/tpm verify | mínimo R0 p/ boot trust | políticas/contas → k_ai/hermes | Não esvaziar verify_trusted |
@@ -175,6 +177,7 @@ Se Fase 2 nunca compensar o custo, este ADR **permanece válido só com Fase 1**
 
 - [x] S0 dedupe multi_user/hnsw  
 - [~] S1: hub→MSC em k_hal **wired** (SESSION_314); evidência HW BOOT.LOG **AWAITING_OPERATOR** (`HW_FLASH_s314.md`)  
+- [x] S0.5: Dead code deletion — 13 módulos mortos removidos (~1800 LOC); k_nano 88→87 módulos, ~27k→25.5k LOC (commit `6e789960`)
 - [ ] ≥2 slices S2–S5 merged com boot check verde — **FREEZE** até 2 boots com log  
 - [x] INDEX lifecycle → `fazendo`; `completa` (Fase 1) só após S1 PASS metal; Fase 2 pode ficar `pesquisa`  
 
@@ -210,6 +213,7 @@ Se Fase 2 nunca compensar o custo, este ADR **permanece válido só com Fase 1**
 
 | ID | O quê | Owner | Blocker |
 |---|---|---|---|
+| TODO-0103-0 | S0.5: Dead code deletion (verify, disk_power, io_scheduler, fw_cfg, ext2, btrfs, ntfs, user_accounts, luks_open, self_check, suspend_resume, rollback, firewall) — ✅ FEITO commit `6e789960` | maint. | — |
 | TODO-0103-1 | S1: wiring completa em k_hal::usb + early hook registado no boot (SESSION_314) | squada (USB) | aceite metal BOOT.LOG |
 | TODO-0103-2 | S2: pick one NIC/device com política em k_hal + stub MMIO em k_nano; provar com boot + log | squada (net) | manter e1000 como canónico (no stdout QEMU) |
 | TODO-0103-3 | S3: triage FS readers órfãos (ntfs/btrfs/ext2) — mover para crate k_ai ou deletar se 0 callers | squada (fs) | contagem de callers reais |
