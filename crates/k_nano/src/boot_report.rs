@@ -1,5 +1,8 @@
 //! BootReport + BOOT SCORE (ADR-0092).
 //! EventBus `BOOT_REPORT` + `BOOT_AI` (ADR-0100 T-001–T-004).
+//!
+//! Placar inclui bloco `--- topology (ADR-0103 s321) ---` com `home=`/`facade=`
+//! para IA correlacionar slog ↔ crate real pós-emagreçer.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -153,7 +156,12 @@ pub fn note_ai_verify() {
 pub fn publish_boot_ai() {
     let c = snapshot_ai();
     let line = c.line();
-    crate::slog_bin!("BOOT", "ok", "{}", line);
+    crate::slog_bin!(
+        "BOOT",
+        "ok",
+        "home=k_nano::boot_report | {}",
+        line
+    );
     let _ = crate::globals::EVENT_BUS.publish(event_bus::Event {
         id: 0,
         topic: alloc::string::String::from("BOOT_AI"),
@@ -193,7 +201,7 @@ pub fn emit_phase_banner(n: u8, name: &str, status: &str) {
     crate::slog_bin!(
         "BOOT",
         "ok",
-        "=== PHASE n={} name={} status={} ===",
+        "home=nk::boot ref=ADR-0039 | === PHASE n={} name={} status={} ===",
         n,
         name,
         status
@@ -321,6 +329,13 @@ audio_stt_tts {}\n\
 gpu           {}\n\
 wifi          await\n\
 attention     {}\n\
+--- topology (ADR-0103 s321) ---\n\
+k3chj         k-nano=R0 k-hal=R1 k-ai=R2 cortex=R2 hermes=R3 jarbas=R3 nk=wire\n\
+net_nic       home=k_nano::e1000 facade=k_hal::net::e1000\n\
+usb_msc       home=k_hal::usb::hub_msc hook=k_nano::xhci\n\
+fat32         home=k_nano::fat32 assets=k_hal::fat_assets\n\
+storage_bus   home=k_nano::storage_bus facade=k_hal::storage_port\n\
+slog          home=k_nano::slog ref=ADR-0092\n\
 ===",
         qemu,
         ram,
@@ -415,10 +430,16 @@ mod tests {
 
     #[test]
     fn score_template_has_required_keys() {
-        let s = "=== BOOT SCORE qemu=true ram_mb=6144 smp_online=8 ===\nattention     none\n===";
+        let s = "=== BOOT SCORE qemu=true ram_mb=6144 smp_online=8 ===\n\
+attention     none\n\
+--- topology (ADR-0103 s321) ---\n\
+k3chj         k-nano=R0 k-hal=R1\n\
+===";
         assert!(s.contains("BOOT SCORE"));
         assert!(s.contains("qemu="));
         assert!(s.contains("attention"));
+        assert!(s.contains("topology"));
+        assert!(s.contains("k3chj"));
     }
 
     #[test]

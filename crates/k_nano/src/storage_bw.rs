@@ -22,7 +22,24 @@ pub fn skip_measure() -> bool {
 /// T-010 BMIDE 0xC8 — VERDICT=UNSUPPORTED honesto (não PIO eterno).
 /// Chame no boot se detectar PCI class 01/01 prog_if 0x8a.
 pub fn bmide_verdict_unsupported() {
-    crate::slog_nano!("BMIDE", "warn", "VERDICT=UNSUPPORTED DMA BMIDE 0xC8 not implemented — use AHCI/NVMe/USB");
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static ONCE: AtomicBool = AtomicBool::new(false);
+    if ONCE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let profile = if crate::platform_probe::probe_done()
+        && crate::platform_probe::hypervisor().is_sandbox()
+    {
+        "qemu"
+    } else {
+        "hw"
+    };
+    crate::slog_nano!(
+        "BMIDE",
+        "ok",
+        "home=k_nano::storage_bw profile={} | VERDICT=UNSUPPORTED DMA 0xC8 — use AHCI/NVMe/USB",
+        profile
+    );
 }
 
 /// T-007 — mede banda do BlockDevice via TSC (calibrado). Retorna B/s (u64, sem f32).

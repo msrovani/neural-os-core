@@ -1443,7 +1443,8 @@ impl GgufBackedModel {
                 crate::cortex::random_ternary(&mut seed, h, c.vocab)
             });
 
-        // Final RMS norm
+        // Final RMS norm
+
         let rms_final = dequantize_tensor_by_name(&self.file, "output_norm.weight")
             .map(|(d, cols, _)| d[..cols.min(h)].to_vec())
             .unwrap_or_else(|| alloc::vec![1.0f32; h]);
@@ -1559,6 +1560,7 @@ pub fn load_gguf_header_from_disk(path: &str) -> Option<GgufFile> {
             if file_size == 0 { return None; }
 
             // Progressive header window — tensor_info can exceed 4KB on large GGUF.
+            // Magic inválido: aborta já na 1ª janela (não ler 256K+1MB de .V6/.BIN).
             const TRIES: [usize; 3] = [64 * 1024, 256 * 1024, 1024 * 1024];
             for &want in &TRIES {
                 let header_bytes = file_size.min(want);
@@ -1569,6 +1571,7 @@ pub fn load_gguf_header_from_disk(path: &str) -> Option<GgufFile> {
                             name, file_size, header_bytes, file.tensors.len(), file.data_start);
                         return Some(file);
                     }
+                    Err(e) if e.contains("magic") => return None,
                     Err(_) => continue,
                 }
             }

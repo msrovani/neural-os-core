@@ -793,8 +793,15 @@ impl<'a> Fat32Reader<'a> {
         let data_lba = fat_lba + fat_count as u64 * sectors_per_fat32 as u64;
 
         if !FAT32_BPB_LOGGED.swap(true, Ordering::Relaxed) {
-            crate::slog_nano!("FAT32", "ok", "mount bps={} spc={} root={}",
-                bytes_per_sector, sectors_per_cluster, root_cluster);
+            crate::slog_nano_home!(
+                "FAT32",
+                "ok",
+                "k_nano::fat32 assets=k_hal::fat_assets",
+                "mount bps={} spc={} root={}",
+                bytes_per_sector,
+                sectors_per_cluster,
+                root_cluster
+            );
         }
         crate::slog_nano!("FAT32", "trace", "BPB: bps={} spc={} fats={} spf={} root_cluster={}",
             bytes_per_sector, sectors_per_cluster, fat_count, sectors_per_fat32, root_cluster);

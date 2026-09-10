@@ -103,6 +103,23 @@ Auditoria contra xHCI 1.2 encontrou as causas de raiz:
 
 **Não fecha só com stick:** WiFi RF, GPU canary, HDA, UAC, Ring3 H2, SMP K23, TLS, gate v2.0.0.
 
+### Fix 2026-09-09 — UI + mic/speaker (SESSION_316)
+
+Causas de áudio morto + UI “congelada” sob carga:
+
+1. **`k_hal::audio::hda` re-resetava o controller** depois do bring-up canônico em
+   `k_nano` → mic/speaker path destruído. Agora é facade (`poll`/`write`/`is_ready`).
+2. **Playback sem unmute**: SD1 BDL existia sem DAC/pin OUT; Pin Widget bits
+   estavam errados vs HDA 1.0a (In=0x20 Out=0x40 HP=0x80). Amp usava bit7=Mute
+   como “unmute”. SDCTL sem Stream Number ≠ Converter Stream Tag.
+3. **Mic gate**: `force_wake_open` só mexia em `WAKE_LISTEN_TICKS`; voice lia
+   `wake_window` local. Pós-desktop: `enable_open_mic()` + `OPEN_MIC`.
+4. **Scheduler**: voz/mixer affinity ring0; `network_agent` poll leve 1/4 tick
+   quando `ui_is_live()` para não engolir o BSP.
+
+Aceite metal: orb anima, relógio avança, mouse move, TTS no speaker, fala sem
+só wakeword. Rebuild: `cargo build --release -p boot` + `python tools/build_image.py --hw --unified`.
+
 ## Não usar
 - Esta imagem como disco único no QEMU (continuar `uefi.img` + `disk_qemu.raw`)
 - Rufus modo ISO / “escrever em partições”

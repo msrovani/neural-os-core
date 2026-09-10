@@ -185,6 +185,11 @@ pub fn ap_idle_loop(worker_id: usize) -> ! {
             }
         }
 
+        // Full Infer D+B+C: poll_slice fora de AGENT_TICK_BUSY (hook cortex).
+        if crate::smp::try_infer_poll_slice() {
+            continue;
+        }
+
         if use_mwait {
             unsafe { mwait_idle() };
         } else if x86_64::instructions::interrupts::are_enabled() {
@@ -202,4 +207,14 @@ pub fn bump_epoch() -> u32 {
 pub fn clear_queue() {
     HEAD.store(0, Ordering::Release);
     TAIL.store(0, Ordering::Release);
+}
+
+/// Acorda APs em `hlt`/`mwait` sem job de matmul (InferQueue submit).
+pub fn notify_idle_wake() {
+    MONITOR_FLAG
+        .0
+        .store(
+            MONITOR_FLAG.0.load(Ordering::Relaxed).wrapping_add(1),
+            Ordering::Release,
+        );
 }

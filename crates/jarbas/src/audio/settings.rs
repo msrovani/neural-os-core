@@ -13,6 +13,8 @@ pub static CURRENT_VOICE: spin::Mutex<Option<String>> = spin::Mutex::new(None);
 
 /// Janela de escuta pós-WAKEWORD em ticks do agente (~1 tick ≈ 1 frame scheduler).
 pub static WAKE_LISTEN_TICKS: AtomicU32 = AtomicU32::new(800);
+/// Mic aberto após desktop live (sem exigir "Jarvis" a cada frase).
+pub static OPEN_MIC: AtomicBool = AtomicBool::new(false);
 /// Threshold VAD base (RMS). Noise-floor adaptativo ajusta em cima disso.
 pub static VAD_THRESHOLD: AtomicU32 = AtomicU32::new(300);
 /// Score mínimo do MLP wakeword (0–100 → /100.0).
@@ -51,9 +53,22 @@ pub fn wake_gate_bypassed() -> bool {
     cfg!(feature = "weather-e2e")
 }
 
+/// Mic sempre escuta (pós-UI ou barge-in).
+pub fn open_mic_enabled() -> bool {
+    OPEN_MIC.load(Ordering::Relaxed)
+}
+
+/// Abre mic após o compositor marcar UI live — voz responsiva sem wakeword.
+pub fn enable_open_mic() {
+    OPEN_MIC.store(true, Ordering::Relaxed);
+    WAKE_LISTEN_TICKS.store(800, Ordering::Relaxed);
+}
+
 /// Forca wake window aberta (chamado por barge-in para voltar a escutar).
 pub fn force_wake_open() {
-    WAKE_LISTEN_TICKS.store(800, Ordering::Relaxed);
+    enable_open_mic();
+    // Full Infer D+B+C: cancela generate em andamento no próximo yield.
+    cortex::infer_queue::cancel_active();
 }
 
 pub struct AudioGetSettingsSkill;
@@ -76,7 +91,7 @@ impl Skill for AudioGetSettingsSkill {
         let voice = CURRENT_VOICE.lock();
         let voice_name = voice.as_deref().unwrap_or("default");
         let info = alloc::format!(
-            "Volume: {}%\nVoice: {}\nWake Word: Jarvis\nSensitivity: {}\nWakeListenTicks: {}\nVadThreshold: {}\nWakeMl: {}\nVoice Clone: {}\nWakeGateBypass: {}",
+            "Volume: {}%\nVoice: {}\nWake Word: Jarvis\nSensitivity: {}\nWakeListenTicks: {}\nVadThreshold: {}\nWakeMl: {}\nVoice Clone: {}\nWakeGateBypass: {}\nOpenMic: {}",
             AUDIO_VOLUME.load(Ordering::Relaxed),
             voice_name,
             WAKEWORD_SENSITIVITY.load(Ordering::Relaxed),
@@ -85,6 +100,7 @@ impl Skill for AudioGetSettingsSkill {
             WAKE_ML_THRESHOLD.load(Ordering::Relaxed),
             if VOICE_CLONE_ENABLED.load(Ordering::Relaxed) { "on" } else { "off" },
             wake_gate_bypassed(),
+            if open_mic_enabled() { "on" } else { "off" },
         );
         Ok(info.into_bytes())
     }

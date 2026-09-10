@@ -78,7 +78,7 @@ static SESSION_BODY: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 static DISK_WRITES: AtomicUsize = AtomicUsize::new(0);
 /// Mensagens desde o último flush bem-sucedido (USB MSC é lento: não reescreve a cada linha).
 static SINCE_FLUSH: AtomicUsize = AtomicUsize::new(0);
-const FLUSH_EVERY: usize = 16;
+const FLUSH_EVERY: usize = 48;
 
 /// Circuit breaker / self-heal (SESSION_269).
 /// Bits: 1=USB 2=ATA 4=AHCI 8=NVMe — backend sem BOOT.LOG ou inadequado.
@@ -622,11 +622,9 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
             }
         }
 
-        if !ok
-            && skip & SKIP_ATA == 0
-            && !crate::storage_bw::skip_measure()
-            && crate::boot_bind::storage_includes(crate::boot_bind::StorageKind::Ata)
-        {
+        // ATA: SESSION_299 — skip_measure() é só benchmark, NÃO bloqueia BOOT.LOG
+        // (~4KB). Live USB sem MSC já marca SKIP_ATA. Driver vivo = Act.
+        if !ok && skip & SKIP_ATA == 0 {
             if let Some(mut g) = crate::globals::ATA_DRIVER.try_lock() {
                 if let Some(ref mut ata) = *g {
                     any_tried = true;
@@ -739,6 +737,9 @@ fn persist_now(_dev: Option<&mut dyn BlockDevice>) -> bool {
 pub fn init(ata: Option<&crate::ata::AtaDriver>, _parts: &[crate::fat32::Partition]) {
     #[cfg(feature = "fat-boot-log")]
     {
+        // Storage acabou de ficar usável (ATA/FAT) — limpa backoff da falha early
+        // (init_after_usb sem backend) para o 1º flush pós-ATA poder gravar.
+        clear_breaker_on_success();
         if let Some(a) = ata {
             let _ = a;
             let ok = persist_now(None);
@@ -746,7 +747,7 @@ pub fn init(ata: Option<&crate::ata::AtaDriver>, _parts: &[crate::fat32::Partiti
                 ok,
                 DISK_WRITES.load(Ordering::Relaxed));
             if !ok {
-                crate::slog_nano!("LOG", "info", "WARN: BOOT.LOG nÃ£o gravado â€” confira FAT32 no stick");
+                crate::slog_nano!("LOG", "info", "WARN: BOOT.LOG nao gravado — confira FAT32 no stick");
             }
         } else {
             let ok = persist_now(None);

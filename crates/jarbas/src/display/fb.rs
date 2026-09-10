@@ -228,7 +228,7 @@ pub fn probe_raw_framebuffer(
     rgb_order: bool,
 ) {
     if addr == 0 || width == 0 || height == 0 {
-        k_nano::slog_jarbas!("Display", "info", "Sem framebuffer raw — VGA text mode.");
+        k_nano::slog_jarbas!("Display", "ok", "home=jarbas::display::fb | Sem framebuffer raw — VGA text mode.");
         return;
     }
     let reported_bpp = ((bpp_bits as u32) + 7) / 8;
@@ -242,8 +242,8 @@ pub fn probe_raw_framebuffer(
     let fb_stride = gpu.fb_stride;
     k_nano::slog_jarbas!(
         "Display",
-        "info",
-        "Limine/raw fb: {}x{} bpp={} stride={} pitch={} @{:x} rgb={}",
+        "ok",
+        "home=jarbas::display::fb | Limine/raw fb: {}x{} bpp={} stride={} pitch={} @{:x} rgb={}",
         gpu.fb_width,
         gpu.fb_height,
         bpp,
@@ -262,7 +262,8 @@ pub fn probe_raw_framebuffer(
     // Ideia Redox graphical_debug: pintar no T+0 SEM limpar o FB inteiro
     // (write_volatile em 1080p UC parece freeze no splash Limine) e SEM slog/ramlog.
     paint_t0_banner(addr, w, h, stride, bpp, rgb);
-    CONSOLE_LINE.store(4, Ordering::Relaxed);
+    // Banner ~72px → começar linhas de progresso abaixo (5 × 16).
+    CONSOLE_LINE.store(5, Ordering::Relaxed);
     CONSOLE_INITED.store(true, Ordering::Relaxed);
 }
 
@@ -485,7 +486,7 @@ pub fn _print(args: core::fmt::Arguments) {
 }
 
 fn clear_fb_pixels(addr: usize, h: usize, stride: usize, bpp: usize, rgb: bool) {
-    let (tr, tg, tb) = (8u8, 8u8, 12u8);
+    let (tr, tg, tb) = (8u8, 12u8, 24u8); // JARVIS navy
     let (c0, c1, c2) = if rgb { (tr, tg, tb) } else { (tb, tg, tr) };
     let clear_size = h.saturating_mul(stride);
     unsafe {
@@ -528,10 +529,16 @@ fn draw_console_line(
     if y0 + ch > h {
         return;
     }
+    // Navy product row + cyan accent 3px à esquerda (canal B ADR-0092).
     let (bg0, bg1, bg2) = if rgb {
-        (8u8, 8u8, 12u8)
+        (8u8, 12u8, 24u8)
     } else {
-        (12u8, 8u8, 8u8)
+        (24u8, 12u8, 8u8)
+    };
+    let (acc0, acc1, acc2) = if rgb {
+        (0u8, 212u8, 255u8)
+    } else {
+        (255u8, 212u8, 0u8)
     };
     let clear_size = h * stride;
     unsafe {
@@ -542,9 +549,14 @@ fn draw_console_line(
                 if off + bpp > clear_size {
                     continue;
                 }
-                write_volatile(ptr.add(off), bg0);
-                write_volatile(ptr.add(off + 1), bg1);
-                write_volatile(ptr.add(off + 2), bg2);
+                let (c0, c1, c2) = if x < 3 {
+                    (acc0, acc1, acc2)
+                } else {
+                    (bg0, bg1, bg2)
+                };
+                write_volatile(ptr.add(off), c0);
+                write_volatile(ptr.add(off + 1), c1);
+                write_volatile(ptr.add(off + 2), c2);
                 if bpp > 3 {
                     write_volatile(ptr.add(off + 3), 0xFF);
                 }
@@ -552,11 +564,11 @@ fn draw_console_line(
         }
     }
     let (fg0, fg1, fg2) = if rgb {
-        (230u8, 240u8, 255u8)
+        (220u8, 235u8, 250u8)
     } else {
-        (255u8, 240u8, 230u8)
+        (250u8, 235u8, 220u8)
     };
-    let mut x = 4usize;
+    let mut x = 12usize;
     for c in text.chars() {
         if x + cw > w {
             break;
@@ -586,7 +598,19 @@ fn draw_console_line(
 }
 
 /// Checkpoint de boot — ramlog + slog TRACE (ADR-0092: nunca pintar K* no FB).
+/// **Sem** `try_flush_ramlog` a cada K* (ATA/USB-MSC PIO no path quente = minutes no
+/// metal e no QEMU). Flush só em marcos: fases, `init_after_usb`, fim K33, SCORE.
 pub fn boot_ckpt(n: u8, msg: &str) {
+    boot_ckpt_noflush(n, msg);
+}
+
+/// Igual a `boot_ckpt` + flush oportunista (marcos raros — não usar em loops).
+pub fn boot_ckpt_and_flush(n: u8, msg: &str) {
+    boot_ckpt_noflush(n, msg);
+    let _ = k_nano::boot_logger::try_flush_ramlog();
+}
+
+fn boot_ckpt_noflush(n: u8, msg: &str) {
     let mut buf = [0u8; 100];
     let mut pos = 0usize;
     buf[pos] = b'K';
@@ -616,23 +640,59 @@ pub fn boot_ckpt(n: u8, msg: &str) {
     k_nano::slog_jarbas!("BOOT", "trace", "{}", s);
     k_nano::boot_ramlog::set_last_ckpt(n);
     k_nano::boot_ramlog::append(s);
-    let _ = k_nano::boot_logger::try_flush_ramlog();
 }
 
 /// Canal B (ADR-0092): uma linha de fase no FB só antes do compositor.
+/// Formato produto: sem K*, sem dump — texto curto e legível (ASCII font).
 pub fn phase_line(s: &str) {
     if !GRAPHICS_OWNED.load(Ordering::Relaxed) {
-        console_print(s);
+        let t = s.trim();
+        if t.starts_with("PHASE")
+            || t.starts_with("BOOT")
+            || t.starts_with("NEURAL")
+            || t.starts_with("> ")
+        {
+            console_print(t);
+            return;
+        }
+        let mut buf = [0u8; 96];
+        buf[0] = b'>';
+        buf[1] = b' ';
+        let src = t.as_bytes();
+        let n = src.len().min(buf.len() - 2);
+        buf[2..2 + n].copy_from_slice(&src[..n]);
+        if let Ok(out) = core::str::from_utf8(&buf[..2 + n]) {
+            console_print(out);
+        } else {
+            console_print(t);
+        }
     }
 }
 
 /// Progresso de boot visível no FB (live USB / sem compositor ainda).
+/// Prefixo estável para IA correlacionar com slog `src=BOOT`.
 pub fn boot_progress_line(msg: &str) {
-    phase_line(msg);
+    let m = msg.trim();
+    if m.starts_with("BOOT:") || m.starts_with("PHASE") {
+        phase_line(m);
+        return;
+    }
+    let mut buf = [0u8; 100];
+    let prefix = b"BOOT: ";
+    buf[..prefix.len()].copy_from_slice(prefix);
+    let src = m.as_bytes();
+    let n = src.len().min(buf.len() - prefix.len());
+    buf[prefix.len()..prefix.len() + n].copy_from_slice(&src[..n]);
+    if let Ok(out) = core::str::from_utf8(&buf[..prefix.len() + n]) {
+        phase_line(out);
+    } else {
+        phase_line(m);
+    }
 }
 
-/// Faixa T+0 (Redox DebugDisplay): prova visual de que o ELF entrou.
-/// Limine permanece na tela se esta funcao nunca rodou.
+/// Faixa T+0 profissional (ADR-0092 canal B): marca + estado, sem K*/dump.
+/// Navy JARVIS (#080C18) + accent cyan (#00D4FF). Sem limpar o FB inteiro
+/// (write UC em 1080p parece freeze no Limine).
 fn paint_t0_banner(
     addr: usize,
     width: usize,
@@ -644,16 +704,28 @@ fn paint_t0_banner(
     if bpp == 0 || width == 0 || height == 0 {
         return;
     }
-    let bar_h = 56usize.min(height);
-    let (c0, c1, c2) = if rgb {
+    let bar_h = 72usize.min(height);
+    // Accent strip (cyan) 4px no topo + corpo navy.
+    let (acc0, acc1, acc2) = if rgb {
         (0u8, 212u8, 255u8)
     } else {
         (255u8, 212u8, 0u8)
     };
+    let (n0, n1, n2) = if rgb {
+        (8u8, 12u8, 24u8)
+    } else {
+        (24u8, 12u8, 8u8)
+    };
+    let accent_h = 4usize.min(bar_h);
     unsafe {
         let ptr = addr as *mut u8;
         for y in 0..bar_h {
             let row = ptr.add(y * stride);
+            let (c0, c1, c2) = if y < accent_h {
+                (acc0, acc1, acc2)
+            } else {
+                (n0, n1, n2)
+            };
             if bpp == 4 {
                 let pix = u32::from_le_bytes([c0, c1, c2, 0xFF]);
                 let mut x = 0usize;
@@ -674,14 +746,46 @@ fn paint_t0_banner(
         }
         core::arch::asm!("sfence", options(nostack, preserves_flags));
     }
-    // Texto navy sobre faixa ciano (fonte 8x16 estatica, zero alloc).
-    let (n0, n1, n2) = if rgb {
-        (8u8, 12u8, 24u8)
+    // Texto: brand + linha de estado (produto, não dmesg).
+    let (fg0, fg1, fg2) = if rgb {
+        (230u8, 245u8, 255u8)
     } else {
-        (24u8, 12u8, 8u8)
+        (255u8, 245u8, 230u8)
     };
-    splash_draw_text_fg(addr, width, height, stride, bpp, 16, 8, "NEURAL KERNEL", n0, n1, n2);
-    splash_draw_text_fg(addr, width, height, stride, bpp, 16, 28, "boot=limine T+0", n0, n1, n2);
+    let (dim0, dim1, dim2) = if rgb {
+        (140u8, 170u8, 200u8)
+    } else {
+        (200u8, 170u8, 140u8)
+    };
+    splash_draw_text_fg(
+        addr, width, height, stride, bpp, 20, 16, "NEURAL OS", fg0, fg1, fg2,
+    );
+    splash_draw_text_fg(
+        addr,
+        width,
+        height,
+        stride,
+        bpp,
+        20,
+        36,
+        "AIOS bring-up  |  K3CHJ",
+        dim0,
+        dim1,
+        dim2,
+    );
+    splash_draw_text_fg(
+        addr,
+        width,
+        height,
+        stride,
+        bpp,
+        20,
+        52,
+        "serial=dmesg  fb=product  score=BOOT SCORE",
+        dim0,
+        dim1,
+        dim2,
+    );
     unsafe {
         core::arch::asm!("sfence", options(nostack, preserves_flags));
     }

@@ -60,7 +60,9 @@ impl JarbasVoiceAgent {
     }
 
     fn can_listen(&self) -> bool {
-        settings::wake_gate_bypassed() || self.wake_window > 0
+        settings::wake_gate_bypassed()
+            || settings::open_mic_enabled()
+            || self.wake_window > 0
             || crate::display::chat_window::MIC_ACTIVE.load(core::sync::atomic::Ordering::Relaxed)
     }
 }
@@ -226,8 +228,10 @@ impl Agent for JarbasVoiceAgent {
                 continue;
             }
 
-            // Resposta recebida: reabre wake window para continuar conversando
-            if self.wake_window == 0 && !settings::wake_gate_bypassed() {
+            if !settings::open_mic_enabled()
+                && self.wake_window == 0
+                && !settings::wake_gate_bypassed()
+            {
                 self.wake_window = settings::wake_listen_ticks();
                 k_nano::slog_jarbas!("Jarbas", "info", "resposta recebida — wake window reaberta");
             }

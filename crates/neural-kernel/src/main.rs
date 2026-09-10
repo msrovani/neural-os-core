@@ -2042,7 +2042,11 @@ pub(crate) fn kernel_boot(
             if crate::USB_MSC.lock().is_none() {
                 if qemu_usb {
                     crate::display::fb::boot_ckpt(16, "USB-MSC skip retry (qemu)");
-                    k_nano::slog_nano!("USB", "msc", "QEMU skip re-probe apos early FAIL");
+                    k_nano::slog_nano!(
+                        "USB",
+                        "ok",
+                        "home=k_hal::usb profile=qemu | skip re-probe apos early FAIL (sem stick MSC — aceite=HW)"
+                    );
                 } else {
                 let ok = unsafe { k_hal::usb::probe_and_install() };
                 if ok {
@@ -2398,19 +2402,29 @@ pub(crate) fn kernel_boot(
     k33_step!("federated...");
     let _ = cortex_crate::federated::federated_self_test();
     k33_step!("federated");
-    // ADR-0083 §5.2: backprop — skip TCG e live USB (minutos / sem serial).
+    // ADR-0083 §5.2: backprop — metal only. Hypervisor (QEMU/WHPX/TCG) e live USB
+    // = DEV/TEST ou stick sem serial: skip (AIOS adapta; aceite = HW real).
     k33_step!("trainer...");
-    if !tcg_lite && !usb_live_fb {
+    let hv_sandbox = k_nano::platform_probe::probe_done()
+        && k_nano::platform_probe::hypervisor().is_sandbox();
+    if !tcg_lite && !usb_live_fb && !hv_sandbox {
         let mut t = k_ai::cognitive::TransformerTrainer::new(16, 16, 1, 8);
         if t.self_test().is_ok() {
             k_nano::slog_bin!("TRAIN", "ok", "{}", t.status());
         }
     } else {
+        let why = if usb_live_fb {
+            "live USB"
+        } else if tcg_lite {
+            "TCG"
+        } else {
+            "hypervisor sandbox (QEMU/WHPX)"
+        };
         k_nano::slog_bin!(
             "TRAIN",
             "ok",
-            "trainer self_test SKIP ({})",
-            if tcg_lite { "TCG" } else { "live USB" }
+            "home=k_ai::cognitive | trainer self_test SKIP ({}) — aceite=HW real",
+            why
         );
     }
     k33_step!("trainer");
@@ -2494,6 +2508,13 @@ pub(crate) fn kernel_boot(
         }
     }
     k33_step!("tickv_smokes");
+    // Um flush no fim do bloco K33 (ramlog acumulado) — não a cada passo.
+    crate::display::fb::boot_ckpt_and_flush(33, "K33 done — BOOT.LOG sync");
+    k_nano::slog_bin!(
+        "BOOT",
+        "ok",
+        "home=nk::boot | K33 self-tests done — single BOOT.LOG flush"
+    );
     if usb_live_fb {
         crate::display::fb::boot_progress_line("BOOT: tests ok — hub...");
     }
@@ -3251,6 +3272,11 @@ pub(crate) fn kernel_boot(
     crate::display::fb::boot_ckpt(48, "CortexAgent register");
 
     registry.register(Box::new(cortex_agent));
+    // Full Infer D+B+C: worker drena InferQueue (BSP + AP idle hook).
+    registry.register(Box::new(agents::InferWorker::new()));
+    registry.set_urgency("infer_worker", 200);
+    let _ = registry.set_affinity_ring("infer_worker", 1);
+    registry.set_urgency("cortex_llm", 170);
 
     // Runtime agents — HermesAgent acorda logo apos o Cortex
 
@@ -3299,11 +3325,18 @@ pub(crate) fn kernel_boot(
     let _ = registry.set_affinity_ring("mouse", 0);
     let _ = registry.set_affinity_ring("display", 0);
     let _ = registry.set_affinity_ring("security", 0);
+    // Voz/mic no BSP: sem affinity, APs podem roubar e a UI parece "morta".
+    let _ = registry.set_affinity_ring("jarvis_voice", 0);
+    let _ = registry.set_affinity_ring("wakeword", 0);
+    let _ = registry.set_affinity_ring("audio_pipeline", 0);
+    let _ = registry.set_affinity_ring("audio_mixer", 0);
+    let _ = registry.set_affinity_ring("JARBAS", 0);
     let _ = registry.set_affinity_ring("cortex_llm", 1);
+    let _ = registry.set_affinity_ring("infer_worker", 1);
     let _ = registry.set_affinity_ring("intent_router", 2);
     // ring3 → CoreRole::Memory (fallback Worker em N=4 sem Memory).
     let _ = registry.set_affinity_ring("network_agent", 3);
-    k_nano::slog_bin!("Sched", "info", "urgency aplicada p/ interativos (hw_bridge/network_agent/input/mouse/display) — isentos de rate-limit");
+    k_nano::slog_bin!("Sched", "info", "urgency+affinity UI/voz ring0; net ring3");
 
     // SysInfoAgent — painel de debug com CPU/memória/agentes na tela
     registry.register(Box::new(agents::sysinfo_agent::SysInfoAgent::new()));
@@ -3435,12 +3468,11 @@ pub(crate) fn kernel_boot(
             })
             .unwrap_or((None, None))
         };
-        // QEMU dev (≤6GB RAM): pula o LLM probe/copy (989MB OOMa a heap 512MB
-        // sob TCG) — o boot prossegue sem modelo para validar NSGDB/ingest.
-        let qemu_dev_skip_models = k_nano::platform_probe::hypervisor().is_sandbox()
-            && k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) <= 6144;
+        // QEMU/WHPX = DEV/TEST: pula LLM probe/copy (aceite = HW real ou
+        // QEMU-loader explícito). RAM≥8GB ainda é sandbox — não PIO de 770MB.
+        let qemu_dev_skip_models = k_nano::platform_probe::hypervisor().is_sandbox();
         if qemu_dev_skip_models {
-            k_nano::slog_bin!("Asset", "skip", "QEMU dev (≤6GB RAM) — LLM probe/copy pulado (dev/test NSGDB path)");
+            k_nano::slog_bin!("Asset", "skip", "sandbox (profile=qemu) — LLM probe/copy pulado (dev/test; aceite=HW)");
         } else if mem_has_4gb {
             k_nano::slog_bin!("Asset", "ok", "LLM probe: mem_has_4gb=true, probing @0x{load_addr:x}…");
             let probe_ptr = (load_addr + pm_offset) as *const u8;
@@ -3608,7 +3640,14 @@ pub(crate) fn kernel_boot(
 
     if !model_loaded {
         // FAT: preferir 2B só se ≤48MB (PIO). >48MB = PRESENT (loader/HW).
-        // MICRO fallback para boot QEMU sem travar TCG.
+        // Sandbox: não AirLLM/PIO em FALCON3.V6 770MB (travava boot pós "skip full PIO").
+        if k_nano::platform_probe::hypervisor().is_sandbox() {
+            k_nano::slog_nano!(
+                "FAT",
+                "ok",
+                "sandbox skip FAT LLM PIO/AirLLM (profile=qemu) — aceite=HW ou QEMU-loader"
+            );
+        } else {
         unsafe {
             let ata_guard = crate::ATA_DRIVER.lock();
             if let Some(ref ata) = *ata_guard {
@@ -3705,17 +3744,21 @@ pub(crate) fn kernel_boot(
                                     name,
                                     sz / 1024,
                                     pio_cap / (1024 * 1024));
-                                if let Ok(sm) = crate::gguf_streaming::StreamingModel::from_fat(name) {
-                                    cortex_crate::cortex::set_streaming_model(
-                                        alloc::boxed::Box::new(sm));
-                                    k_nano::slog_nano!("FAT", "info",
-                                        "AirLLM/GGUF: streaming {} (layer-wise)", name);
-                                    model_loaded = true;
-                                    pack_used_mb = pack_used_mb.saturating_add(256);
-                                    if let Some(k) = kind {
-                                        kinds_have |= cortex_crate::model_fit::kind_mask_bit(k);
+                                // AirLLM só em GGUF — .V6/.BIN fazem 64K→1MB PIO inútil.
+                                let is_gguf = name.as_bytes().windows(4).any(|w| w.eq_ignore_ascii_case(b"GGUF"));
+                                if is_gguf {
+                                    if let Ok(sm) = crate::gguf_streaming::StreamingModel::from_fat(name) {
+                                        cortex_crate::cortex::set_streaming_model(
+                                            alloc::boxed::Box::new(sm));
+                                        k_nano::slog_nano!("FAT", "info",
+                                            "AirLLM/GGUF: streaming {} (layer-wise)", name);
+                                        model_loaded = true;
+                                        pack_used_mb = pack_used_mb.saturating_add(256);
+                                        if let Some(k) = kind {
+                                            kinds_have |= cortex_crate::model_fit::kind_mask_bit(k);
+                                        }
+                                        continue;
                                     }
-                                    continue;
                                 }
                                 k_nano::slog_nano!("FAT", "info",
                                     "{} grande e não-GGUF — próximo candidato (v6 AirLLM = residual)", name);
@@ -3761,6 +3804,7 @@ pub(crate) fn kernel_boot(
                 }
             }
         }
+        } // else !sandbox FAT LLM
         // USB-MSC: mesmo stick unificado (boot ESP + dados) quando nao ha ATA/IDE
         if !k_nano::platform_probe::hypervisor().is_sandbox() {
             unsafe {
@@ -4343,14 +4387,11 @@ pub(crate) fn kernel_boot(
             }
         }
         // I5: NeuralFS do disco instalado primeiro (Residente), depois FAT32 (pendrive/live).
-        // Em QEMU dev/test (<=6GB RAM) o loader OOMa a heap 512MB antes de
-        // completar o pipeline — pulamos o load de modelos para deixar o boot
-        // chegar ate o NSGDB/ingest e validar persistencia. Em HW real
-        // mantemos o pipeline completo.
-        let qemu_dev_skip_models = k_nano::platform_probe::hypervisor().is_sandbox()
-            && k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) <= 6144;
+        // Sandbox QEMU/WHPX = DEV/TEST — pula hub FAT (RERANKER/AGENT 100–700MB).
+        // Aceite de modelos = HW real ou QEMU-loader explícito.
+        let qemu_dev_skip_models = k_nano::platform_probe::hypervisor().is_sandbox();
         if qemu_dev_skip_models {
-            k_nano::slog_bin!("HUB", "skip", "QEMU dev (≤6GB RAM) — modelos nao carregados (dev/test NSGDB path)");
+            k_nano::slog_bin!("HUB", "skip", "sandbox (profile=qemu) — modelos hub nao carregados (aceite=HW)");
             // Pula para apos do bloco de model loading (cai no proximo `}`)
         } else {
         for s in [

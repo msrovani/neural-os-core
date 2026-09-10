@@ -495,6 +495,15 @@ pub fn network_agent_tick() {
     let ms = tick * 55;
     agent_core::tick_stage(2); // pós NET_STATE.lock
 
+    // UI live: não engolir o BSP a cada tick — poll leve 1/4; HTTP/DHCP no full.
+    let ui_live = k_nano::boot_logger::ui_is_live();
+    if ui_live && (tick % 4) != 0 {
+        if let Some(ref mut ns) = *NETSTACK.lock() {
+            ns.poll(ms as i64);
+        }
+        return;
+    }
+
     if !CONTINUOUS_ANNOUNCED.swap(true, Ordering::Relaxed) {
         k_nano::slog_hermes!("Net", "info", "Continuous active pós-init (SelfHeal/Disk Done) — gate=e1000 [smoltcp/NIC]");
         drop(s);

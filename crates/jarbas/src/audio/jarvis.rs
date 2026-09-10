@@ -15,6 +15,8 @@ use crate::audio::voice::PLAYBACK_RING;
 
 /// Saudacao HW emitida no register (K44) — evita depender do scheduler (hang pos-K44).
 static HW_GREET_EMITTED: AtomicBool = AtomicBool::new(false);
+/// InferQueue já falou frases via INFER_TTS_PARTIAL — pular TTS do HERMES_RESPONSE completo.
+static SKIP_NEXT_FULL_TTS: AtomicBool = AtomicBool::new(false);
 
 /// True se a saudacao de boot (template) ja foi emitida — nao chamar LLM no mesmo boot.
 pub fn hw_greet_emitted() -> bool {
@@ -157,6 +159,8 @@ pub struct JarbasAgent {
     user_receiver: Receiver,
     llm_response: Receiver,
     hermes_response: Receiver,
+    /// Frases parciais do InferQueue (TTS antes do LLM_RESPONSE final).
+    infer_tts_partial: Receiver,
     engine: JarbasEngine,
     last_text_emotion: Option<Emotion>,
     greeted: bool,
@@ -178,6 +182,7 @@ impl JarbasAgent {
             user_receiver: k_nano::EVENT_BUS.subscribe("USER_INTENT"),
             llm_response: k_nano::EVENT_BUS.subscribe("LLM_RESPONSE"),
             hermes_response: k_nano::EVENT_BUS.subscribe("HERMES_RESPONSE"),
+            infer_tts_partial: k_nano::EVENT_BUS.subscribe("INFER_TTS_PARTIAL"),
             engine: JarbasEngine::new(),
             last_text_emotion: None,
             greeted: false,
@@ -436,6 +441,50 @@ impl Agent for JarbasAgent {
             });
         }
 
+        // --- INFER_TTS_PARTIAL: frases fechadas durante generate fatiado ---
+        if matches!(self.stream_tts, StreamingTtsState::Idle) {
+            while let Some(ev) = self.infer_tts_partial.try_receive() {
+                let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+                if text.is_empty() {
+                    continue;
+                }
+                let clean = text
+                    .trim_start_matches("[JARBAS] ")
+                    .trim_start_matches("JARVIS: ");
+                SKIP_NEXT_FULL_TTS.store(true, Ordering::Relaxed);
+                let sentences = split_into_sentences(clean);
+                if sentences.is_empty() {
+                    continue;
+                }
+                k_nano::slog_jarbas!(
+                    "Jarbas",
+                    "ok",
+                    "TTS partial (InferQ): {}",
+                    clean.chars().take(48).collect::<alloc::string::String>()
+                );
+                let first = &sentences[0];
+                let rest: alloc::vec::Vec<alloc::string::String> = sentences[1..]
+                    .iter()
+                    .map(|s| alloc::string::String::from(s.as_str()))
+                    .collect();
+                let pcm = crate::audio::skills::synthesize_tts(first);
+                let total = pcm.len();
+                if total > 0 {
+                    const CHUNK: usize = 2560;
+                    let n = total.min(CHUNK);
+                    let _ = PLAYBACK_RING.push(&pcm[..n]);
+                    if total > n || !rest.is_empty() {
+                        self.stream_tts = StreamingTtsState::Streaming {
+                            buffer: pcm,
+                            pos: n.min(total),
+                            queue: rest,
+                        };
+                        break;
+                    }
+                }
+            }
+        }
+
         // --- HERMES_RESPONSE → streaming TTS (1 síntese/tick; skip telemetria) ---
         // Só drena quando Idle — senão try_receive dropa chat real enquanto Piper roda.
         if matches!(self.stream_tts, StreamingTtsState::Idle) {
@@ -447,6 +496,15 @@ impl Agent for JarbasAgent {
                     || text_is_tts_telemetry(text)
                 {
                     continue; // telemetria: descarta; chat real: processa abaixo
+                }
+
+                if SKIP_NEXT_FULL_TTS.swap(false, Ordering::Relaxed) {
+                    k_nano::slog_jarbas!(
+                        "Jarbas",
+                        "ok",
+                        "TTS full skip — já falou via InferQ partial"
+                    );
+                    continue;
                 }
 
                 let clean = text

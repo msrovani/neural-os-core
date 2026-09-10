@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s319 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s328 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 328 | Infer | ADR-0057 WS-H | Full Infer D+B+C | InferQueue; Cortex submit-only; poll_slice AP/BSP fora AGENT_TICK_BUSY; LLM_STREAM+TTS parcial; cancel barge-in; residual: NÃO GPU/NPU agora; NÃO offload_safe; Prefill=sprint+1; CPU≠GPU W2A8 |
 | 316 | HW real | Freeze bisector + MSC | Escada de instrumentos FB s318→s327 | diag_mark→agent stamp→exc stamp→tick_stage→heartbeat T (vivo-vs-morto); TicketLock sem reentrância = self-deadlock; lazy_static ZST wrapper + repr(Rust) reordena (repr(C) p/ read cru); smoltcp poll ZERO-delay spin (cap 64); xHCI HCRST deixa PP=0 → CCS=0 eterno (fix RMW PP); estudo Redox xhcid/usbhubd (lib-1) |
 | 315 | HW real | Jarbas UI | Soft-halt + anti-black-screen | hlt→soft 18Hz; HID sem MSC; PIC IRQ12; compositor orb-only gate; MSC budget 3s + TSC EP0/reset; boot_progress_line FB |
 | 314 | HW real | P0/ADR-0103 | BOOT.LOG metal + k_hal USB BE | P0 = persistência no stick sem perder desktop; hub route+TT em k_hal; S0 multi_user→k_ai hnsw→cortex; aceite AWAITING_OPERATOR; freeze Ring3/S2+ |

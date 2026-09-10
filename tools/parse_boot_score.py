@@ -24,9 +24,41 @@ KEYS = (
     "attention",
 )
 
+# ADR-0103 s321 — homes/facades (informativo; não falha o placar)
+TOPOLOGY_KEYS = (
+    "k3chj",
+    "net_nic",
+    "usb_msc",
+    "fat32",
+    "storage_bus",
+    "slog",
+)
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def _payload(line: str) -> str:
+    """Strip ANSI + slog prefix (`… [ok] - `) → body do placar."""
+    s = _ANSI.sub("", line).strip()
+    if " - " in s:
+        tail = s.rsplit(" - ", 1)[-1].strip()
+        if (
+            tail.startswith("===")
+            or tail.startswith("---")
+            or any(tail.startswith(k) for k in KEYS + TOPOLOGY_KEYS)
+        ):
+            return tail
+    return s
+
 
 def extract_block(text: str) -> str | None:
-    m = re.search(r"=== BOOT SCORE .+?===\n(?:.*\n)*?===", text)
+    text = _ANSI.sub("", text)
+    m = re.search(
+        r"=== BOOT SCORE .+?===\n(?:.*\n)*?(?:^|\n)[^\n]*===",
+        text,
+        re.MULTILINE,
+    )
     return m.group(0) if m else None
 
 
@@ -35,16 +67,27 @@ def parse(text: str) -> dict[str, str]:
     if not block:
         return {}
     out: dict[str, str] = {}
+    # Mais longos primeiro — evita net ⊂ net_nic, storage ⊂ storage_bus
+    score_keys = sorted(KEYS, key=len, reverse=True)
+    topo_keys = sorted(TOPOLOGY_KEYS, key=len, reverse=True)
     for line in block.splitlines():
-        s = line.strip()
-        if s.startswith("=== BOOT SCORE"):
+        s = _payload(line)
+        if "=== BOOT SCORE" in s:
             for key in ("qemu", "ram_mb", "smp_online"):
                 mm = re.search(rf"{key}=(\S+)", s)
                 if mm:
                     out[key] = mm.group(1)
             continue
-        for key in KEYS:
-            if s.startswith(key):
+        matched = False
+        for key in topo_keys:
+            if s.startswith(key) and (len(s) == len(key) or s[len(key)].isspace()):
+                out[f"topo.{key}"] = s[len(key) :].strip()
+                matched = True
+                break
+        if matched:
+            continue
+        for key in score_keys:
+            if s.startswith(key) and (len(s) == len(key) or s[len(key)].isspace()):
                 out[key] = s[len(key) :].strip()
                 break
     return out

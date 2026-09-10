@@ -21,7 +21,6 @@ use k_nano::{println, kjson};
 use crate::globals::{EVENT_BUS, SKILL_REGISTRY, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
             CONVERSATION_TRACKER, PENDING_SKILL, BITNET_TRAINER, TRINITY,
             APPROVAL_GATE, boot_log_agent, agency, hw_agents, inventory};
-use crate::structured_decode::{StructuredDecoder, DecodeMode};
 use crate::decode_harness::recognize;
 
 /// Input pendente aguardando resposta do LLM — alimenta o SelfLearningAgent
@@ -445,22 +444,10 @@ impl Agent for CortexAgent {
                 return AgentTickResult::Pending;
             }
             k_ai::economy::record_inference();
-            k_nano::slog_cortex!("LLM", "info", "Calling Falcon3-3B-Instruct-1.58bit via generate_via_model...");
-            let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            // F4: structured decode when pattern is recognized
+            // Full Infer D+B+C: enfileira — generate NUNCA no tick (AGENT_TICK_BUSY).
             let pattern = recognize(&user_text);
-            agent_core::tick_stage(6);
-            let output = match pattern {
-                crate::decode_harness::SkillPattern::Add => {
-                    let mut dec = StructuredDecoder::new(DecodeMode::Number);
-                    cortex::cortex::generate_via_model_with_decoder(&prompt, &mut dec)
-                }
-                crate::decode_harness::SkillPattern::Echo => {
-                    let mut dec = StructuredDecoder::new(DecodeMode::Alpha);
-                    cortex::cortex::generate_via_model_with_decoder(&prompt, &mut dec)
-                }
+            let submit_prompt = match pattern {
                 crate::decode_harness::SkillPattern::Card => {
-                    // ADR-0058: card JSON grammar - LLM gera UiDeclaration
                     const CARD_SCHEMA: &str = concat!(
                         "Responda SO com um card JSON: {\"id\":N,\"title\":\"..\",\"w\":N,\"h\":N,\"body\":[",
                         "{\"t\":\"text\",\"s\":\"..\"}|{\"t\":\"kv\",\"k\":\"..\",\"v\":\"..\"}|",
@@ -468,49 +455,44 @@ impl Agent for CortexAgent {
                         "{\"t\":\"bars\",\"label\":\"..\",\"v\":[N,..]}|{\"t\":\"list\",\"items\":[\"..\"]}|",
                         "{\"t\":\"panel\",\"label\":\"..\",\"h\":N}|{\"t\":\"btn\",\"label\":\"..\"}|{\"t\":\"div\"}]}"
                     );
-                    let card_prompt = alloc::format!(
-                        "{}\n{}",
-                        prompt,
-                        CARD_SCHEMA
-                    );
-                    let mut dec = StructuredDecoder::new(DecodeMode::Json);
-                    cortex::cortex::generate_via_model_with_decoder(&card_prompt, &mut dec)
+                    alloc::format!("{}\n{}", prompt, CARD_SCHEMA)
                 }
-                crate::decode_harness::SkillPattern::Default => {
-                    cortex::cortex::generate_via_model(&prompt)
-                }
+                _ => prompt,
             };
-            agent_core::tick_stage(7);
-            let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            // Record actual tokens consumed
-            k_ai::economy::record_tokens(estimated_tokens);
-            k_nano::slog_cortex!("LLM", "info", "generate_via_model took {} ticks (~{}s)", t1 - t0, (t1 - t0) / 100);
-            let output = if output == cortex::cortex::NO_MODEL_MSG || output.trim().is_empty() {
-                alloc::format!(
-                    "(sem LLM gerador — {})",
-                    cortex::model_hub::hub_status()
-                )
-            } else { output };
-            k_nano::slog_cortex!("LLM", "info", "Generated: \"{}\"", output);
-            // ContextWindow: track assistant response for conversation history
-            k_ai::context_window::add_global("assistant", &output, 5);
-            let _ = EVENT_BUS.publish(Event {
-                id: 0, topic: alloc::string::String::from(cortex::cortex::TOPIC_LLM_RESPONSE),
-                payload: output.clone().into_bytes(), token: CapabilityToken::Legacy(1),
-            });
-            agent_core::tick_stage(8);
-            // ADR-0058: se output e JSON de card valido, publica em UI_SPEC
-            if pattern == crate::decode_harness::SkillPattern::Card
-                && output.contains("\"body\"")
-            {
-                let _ = EVENT_BUS.publish(Event {
-                    id: 0,
-                    topic: alloc::string::String::from("UI_SPEC"),
-                    payload: output.into_bytes(),
-                    token: CapabilityToken::Legacy(1),
-                });
-                k_nano::slog_cortex!("LLM", "info", "Card JSON published to UI_SPEC");
+            agent_core::tick_stage(6);
+            match cortex::infer_queue::submit(
+                submit_prompt,
+                cortex::infer_queue::InferMode::Plain,
+                cortex::cortex::TOPIC_LLM_RESPONSE,
+            ) {
+                Ok(id) => {
+                    k_nano::slog_cortex!(
+                        "LLM",
+                        "ok",
+                        "InferQueue submit id={} (Falcon3 off BSP)",
+                        id
+                    );
+                }
+                Err(cortex::infer_queue::SubmitErr::Full) => {
+                    let _ = EVENT_BUS.publish(Event {
+                        id: 0,
+                        topic: alloc::string::String::from(cortex::cortex::TOPIC_LLM_RESPONSE),
+                        payload: b"[infer queue full - tente de novo]".to_vec(),
+                        token: CapabilityToken::Legacy(1),
+                    });
+                }
+                Err(_) => {
+                    let _ = EVENT_BUS.publish(Event {
+                        id: 0,
+                        topic: alloc::string::String::from(cortex::cortex::TOPIC_LLM_RESPONSE),
+                        payload: b"[infer submit failed]".to_vec(),
+                        token: CapabilityToken::Legacy(1),
+                    });
+                }
             }
+            agent_core::tick_stage(8);
+            // Card JSON chega via LLM_RESPONSE → Hermes/UI; UI_SPEC fica no consumer.
+            let _ = pattern;
         }
 
         // Periodic compression adaptation
@@ -518,8 +500,7 @@ impl Agent for CortexAgent {
             k_ai::economy::adapt_compression();
         }
 
-        // Phase 3: Process HEALING_LLM_REQUEST from SelfHealAgent.
-        // Uses healing-specific prompt to get AI diagnosis for error recovery.
+        // Phase 3: HEALING → mesma fila (atrás do chat; 1 in-flight).
         if let Some(event) = self.healing_receiver.try_receive() {
             let healing_prompt = core::str::from_utf8(&event.payload).unwrap_or("");
             if !healing_prompt.is_empty() {
@@ -528,21 +509,66 @@ impl Agent for CortexAgent {
                     "You are the AIOS self-healing engine. Diagnose the error and recommend a recovery action. Respond ONLY with JSON: {{\"action\":\"<restart_daemon|checkpoint_restore|create_skill|log_continue>\",\"reason\":\"<brief explanation>\",\"params\":{{}}}}"
                 );
                 let full_prompt = alloc::format!("{}\n{}", healing_system, healing_prompt);
-                let output = cortex::cortex::generate_via_model(&full_prompt);
-                let output = if output == cortex::cortex::NO_MODEL_MSG || output.trim().is_empty() {
-                    // Fallback: heuristic diagnosis without LLM
-                    alloc::format!("{{\"action\":\"log_continue\",\"reason\":\"LLM unavailable — heuristic fallback\"}}")
-                } else { output };
-                k_nano::slog_cortex!("LLM", "info", "HEALING response: {}", output);
-                let _ = EVENT_BUS.publish(Event {
-                    id: 0,
-                    topic: alloc::string::String::from(k_ai::self_heal::TOPIC_HEALING_LLM_RESPONSE),
-                    payload: output.into_bytes(),
-                    token: CapabilityToken::Legacy(1),
-                });
+                match cortex::infer_queue::submit(
+                    full_prompt,
+                    cortex::infer_queue::InferMode::Healing,
+                    k_ai::self_heal::TOPIC_HEALING_LLM_RESPONSE,
+                ) {
+                    Ok(id) => {
+                        k_nano::slog_cortex!("LLM", "ok", "HEALING queued id={}", id);
+                    }
+                    Err(_) => {
+                        let _ = EVENT_BUS.publish(Event {
+                            id: 0,
+                            topic: alloc::string::String::from(
+                                k_ai::self_heal::TOPIC_HEALING_LLM_RESPONSE,
+                            ),
+                            payload: alloc::format!(
+                                "{{\"action\":\"log_continue\",\"reason\":\"infer queue full/unavailable\"}}"
+                            )
+                            .into_bytes(),
+                            token: CapabilityToken::Legacy(1),
+                        });
+                    }
+                }
             }
         }
 
+        AgentTickResult::Pending
+    }
+}
+
+// ---------------------------------------------------------------------------
+// InferWorker — drena InferQueue (1 slice/tick). Fallback BSP se APs idle.
+// Generate NUNCA segura AGENT_TICK_BUSY além deste tick curto.
+// ---------------------------------------------------------------------------
+
+const INFER_WORKER_MANIFEST: AgentManifest = AgentManifest {
+    name: "infer_worker",
+    kind: AgentKind::Inference,
+    schedule: ScheduleKind::Continuous,
+    auto_start: true,
+    persist: false,
+};
+
+pub struct InferWorker;
+
+impl InferWorker {
+    pub fn new() -> Self {
+        // Hook AP idle → poll_slice (sem AGENT_TICK_BUSY).
+        k_nano::smp::install_infer_poll_fn(cortex::infer_queue::poll_slice);
+        InferWorker
+    }
+}
+
+impl Agent for InferWorker {
+    fn manifest(&self) -> &AgentManifest {
+        &INFER_WORKER_MANIFEST
+    }
+
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        // Sempre 1 slice no BSP: single-core / !ap_pollable; com APs, SLICE_BUSY serializa.
+        let _ = cortex::infer_queue::poll_slice();
         AgentTickResult::Pending
     }
 }
@@ -1953,10 +1979,12 @@ const SELFHEAL_MANIFEST: AgentManifest = AgentManifest {
 impl Agent for BootSelfHealAgent {
     fn manifest(&self) -> &AgentManifest { &SELFHEAL_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        // Phase 1: use canonical GLOBAL_SELF_HEAL from k_ai.
-        // Lock is acquired to ensure initialization; all subsequent
-        // accesses (including boot_log_agent) go through the same instance.
-        let _guard = k_ai::self_heal::GLOBAL_SELF_HEAL.lock();
+        // NÃO segurar GLOBAL_SELF_HEAL no escopo inteiro — spin::Mutex não é
+        // reentrante. Antes: lock no topo + run_vid_gated_scan() = deadlock
+        // (CPU spin, log parado em DeviceTree, DisplayAgent nunca tick).
+        {
+            let _ = k_ai::self_heal::GLOBAL_SELF_HEAL.lock();
+        }
         kjson!("AGENT", "SelfHeal", "ready", "tick", _tick);
 
         // ADR-0042 N2: Trust (token, agent, skill) + inventário VID-gated
@@ -1994,7 +2022,7 @@ impl Agent for BootSelfHealAgent {
                         k_ai::self_heal::SelfHeal::device_needs_fw(vid, did, class, subclass)
                     })
                     .count();
-                k_nano::slog_kai!("Gate", "n2", "inventory triples={} fw_gated={} trust=OK ata={}",
+                k_nano::slog_kai!("Gate", "ok", "inventory triples={} fw_gated={} trust=OK ata={}",
                     triples.len(),
                     fw_n,
                     has_ata);

@@ -32,6 +32,16 @@ static GLOBAL_KV_CACHE: spin::Lazy<spin::Mutex<Option<KvCache>>> = spin::Lazy::n
     spin::Mutex::new(None)
 });
 
+/// Take ownership of global KV cache (InferQueue prefill).
+pub fn global_kv_cache_take() -> Option<KvCache> {
+    GLOBAL_KV_CACHE.lock().take()
+}
+
+/// Store KV cache after sliced generate.
+pub fn global_kv_cache_store(cache: KvCache) {
+    *GLOBAL_KV_CACHE.lock() = Some(cache);
+}
+
 /// Reseta o KvCache global para um novo prompt.
 pub fn kv_cache_reset() {
     if let Some(cache) = GLOBAL_KV_CACHE.lock().as_mut() {
@@ -43,8 +53,8 @@ pub fn kv_cache_reset() {
 use crate::nn::{silu, relu2, rms_norm};
 use crate::tensor::{PackedTernaryTensor, Tensor};
 
-const BOS: u16 = 0;
-const EOS: u16 = 1;
+pub const BOS: u16 = 0;
+pub const EOS: u16 = 1;
 const PAD: u16 = 2;
 const CHAR_OFFSET: u16 = 3;
 pub const VOCAB_SIZE: u16 = 99;
@@ -3805,6 +3815,10 @@ pub trait Model: Send {
     fn max_seq(&self) -> usize;
     fn num_layers(&self) -> usize { 0 }
     fn hidden(&self) -> usize { 0 }
+    /// Downcast para generate fatiado (InferQueue D+B+C).
+    fn as_transformer(&self) -> Option<&TransformerModel> {
+        None
+    }
 }
 
 pub static CURRENT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
@@ -3922,13 +3936,23 @@ pub fn infer_in_flight() -> bool {
 }
 
 fn infer_guard() -> InferGuard {
-    INFER_IN_FLIGHT.store(true, core::sync::atomic::Ordering::Relaxed);
+    infer_guard_begin();
     InferGuard
 }
+
+/// InferQueue: marca busy sem RAII (slice dura vários ticks).
+pub fn infer_guard_begin() {
+    INFER_IN_FLIGHT.store(true, core::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn infer_guard_end() {
+    INFER_IN_FLIGHT.store(false, core::sync::atomic::Ordering::Relaxed);
+}
+
 struct InferGuard;
 impl Drop for InferGuard {
     fn drop(&mut self) {
-        INFER_IN_FLIGHT.store(false, core::sync::atomic::Ordering::Relaxed);
+        infer_guard_end();
     }
 }
 
@@ -4133,6 +4157,9 @@ pub fn generate_via_hwexpert(prompt: &str) -> String {
 // Wrap TransformerModel as Model
 impl Model for TransformerModel {
     fn generate(&self, prompt: &str) -> String { generate_text(self, prompt) }
+    fn as_transformer(&self) -> Option<&TransformerModel> {
+        Some(self)
+    }
     fn embed_dim(&self) -> usize { self.hidden }
     fn vocab_size(&self) -> u32 { self.vocab_size }
     fn max_seq(&self) -> usize { self.max_seq }

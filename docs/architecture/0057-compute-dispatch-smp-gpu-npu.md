@@ -123,10 +123,27 @@ antes** do HW (regra IDEA_BANK Camada S).
 - [x] QEMU `-smp 4`: 3 APs online (retry) + CorePools `r0=1 r1=2 r2=1`.
 - [x] Dispatcher wired; `[COMPUTE]`/`[NPU-HW]` honestos; `[DECODE] self-test PASS`; sem panics.
 - [x] WS-B deadlock-proof: gated por `ap_pollable` (BSP faz matmul enquanto APs parked).
+- [x] **WS-H InferQueue Full D+B+C (SESSION_328):** CortexAgent só `submit`; `infer_worker` + AP `poll_slice` fora de `AGENT_TICK_BUSY`; stream `LLM_STREAM` + TTS parcial; cancel barge-in.
 - [ ] **HW real:** WS-F on-demand AP wake (IDT/IPI) → `ap_pollable=true`; speedup WS-B; GPU `Ready`+W2A8 (WS-D).
 - [ ] **Modelo:** WS-G residual (Medusa/FlashAttention/…) valida com geração real.
 - [ ] **Sponsor:** XDNA/Intel NPU golden (WS-E).
 
 ## 6. Referências
 - ADR-0055 (SMP), ADR-0048/0049/0050 (GPU), ADR-0014 (§NPU/CorePools), ADR-0022 (#211).
-- Código: `crates/k_nano/src/{apic.rs,smp/*}`, `crates/cortex/src/{compute.rs,parallel_matmul.rs,bitnet_avx2.rs,tensor.rs}`, `crates/k_hal/src/{npu.rs,gpu/compute_dispatch.rs}`, `crates/neural-kernel/src/smp/mod.rs`.
+- Código: `crates/k_nano/src/{apic.rs,smp/*}`, `crates/cortex/src/{compute.rs,parallel_matmul.rs,infer_queue.rs,bitnet_avx2.rs,tensor.rs}`, `crates/k_hal/src/{npu.rs,gpu/compute_dispatch.rs}`, `crates/neural-kernel/src/smp/mod.rs`.
+
+### WS-H — InferQueue Full D+B+C (SESSION_328)
+
+- **D:** `cortex::infer_queue` — MPMC profundidade 8, 1 job in-flight, `submit`/`cancel`/`poll_slice`.
+- **B:** `install_infer_poll_fn` + `ap_idle_loop` chama `poll_slice` sem `AGENT_TICK_BUSY`; matmul AP permanece gated `ap_pollable`.
+- **C:** 1 token/slice; `LLM_STREAM` MSG_DELTA; `INFER_TTS_PARTIAL` por frase; `force_wake_open` → `cancel_active`.
+- **Proibido:** `generate_via_model*` dentro de `CortexAgent::tick` (runtime). Boot demos sync pré-Runtime OK.
+
+#### Decisão pós-WS-H (não expandir o entregável)
+
+| Item | Veredito | Nota |
+|------|----------|------|
+| Prefill AirLLM layer-yield | Residual → **sprint seguinte** candidata | Hiccup de prompt; fora do Full D+B+C |
+| GPU/NPU no mesmo InferJob | **Não agora** | Dispatcher já é o ponto; falta `Ready`/KernelPack/FW. Sem backend = zero ganho. WS-D/E continuam Layer S/HW |
+| `agent_tick_offload_safe` | Continua **false** | Offload genérico ≠ InferQueue; lock global |
+| CPU W2A8 (`bitnet_w2a8`) | **≠** GPU WS-D | Não vender maddubs CPU como aceleração device |

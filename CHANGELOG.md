@@ -1,5 +1,23 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s328] - 2026-09-09 — Full Infer D+B+C (Falcon3 off BSP)
+
+**Contrato:** Display/voz/mic no BSP nunca esperam o generate terminar.
+
+- **D** `cortex::infer_queue`: fila MPMC (8), 1 in-flight, `submit`/`cancel`/`poll_slice`
+- **CortexAgent** só enfileira (`LLM_REQUEST` / healing); proibido `generate_*` no tick
+- **InferWorker** + AP `ap_idle_loop` → `poll_slice` **fora** de `AGENT_TICK_BUSY`
+- **C** 1 token/slice; `LLM_STREAM` MessageDelta; `INFER_TTS_PARTIAL` → TTS por frase
+- **Cancel:** `force_wake_open` / barge-in → `cancel_active`
+- Affinity: `infer_worker`/`cortex_llm` ring1; UI/voz ring0
+- Docs: SESSION_328, ADR-0057 WS-H
+- Aceite metal: orb+mouse+mic durante Falcon3; 1ª frase TTS antes do `LLM_RESPONSE`
+- **Decisão residual (honesta):** não empacotar GPU/NPU device no mesmo
+  entregável (dispatcher já existe; falta Ready/KernelPack/FW); não flipar
+  `agent_tick_offload_safe`; Prefill layer-yield = sprint seguinte; CPU W2A8 ≠ GPU W2A8
+- **Próximo (roadmap):** aceite metal → Prefill yield → métricas/budget TSC → Layer S
+  (SESSION_328 § Roadmap)
+
 ## [1.9.99-s327] - 2026-09-09 — freeze bisector s318→s327 + MSC Port Power (SESSION_316)
 
 **Escada de instrumentos FB (bisector HW real — serial invisível no metal)**

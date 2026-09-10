@@ -6,6 +6,7 @@ pub use hermes_crate::agents::BootSelfHealAgent;
 pub use hermes_crate::agents::BootTrustAgent;
 pub use hermes_crate::agents::ConsoleAgent;
 pub use hermes_crate::agents::CortexAgent;
+pub use hermes_crate::agents::InferWorker;
 pub use hermes_crate::agents::DiagnosticSkill;
 pub use hermes_crate::agents::FsBridgeAgent;
 pub use hermes_crate::agents::GpuDriverAgent;

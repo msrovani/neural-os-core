@@ -1,11 +1,20 @@
-//! Log estruturado K³CHJ (ADR-0041 anéis + ADR-0092 severidade).
+//! Log estruturado K³CHJ (ADR-0041 anéis + ADR-0092 severidade + ADR-0103 homes).
 //!
 //! Formato canónico (tick vem do `serial::_print`):
 //! ```text
-//! [T+N] [Rn] [k-xxx] [src] [sev] - texto
+//! [T+N] [Rn] [k-xxx] [src] [sev] - home=<crate::mod> | texto
 //! ```
 //!
 //! `sev` ∈ {ok, warn, fail, trace}. Desconhecido → `trace` (mudo na consola).
+//!
+//! **Contrato para IA (grep):**
+//! - `[src]` = subsistema estável (`Net`, `USB`, `SMP`, `FAT32`, `BOOT`)
+//! - `home=` = módulo onde a verdade vive pós-emagreçer (ADR-0103)
+//! - `facade=` = re-export fino (opcional) quando o bin/crate espelha
+//! - `ref=ADR-NNNN` = decisão arquitectural quando o evento é normativo
+//!
+//! Exemplo:
+//! `[T+12] [R1] [k-hal] [USB] [ok] - home=k_hal::usb::hub_msc | MSC bringup OK port=5`
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -53,10 +62,12 @@ impl Sev {
 
     pub fn from_sub(sub: &str) -> Self {
         match sub {
-            "ok" | "OK" | "pass" | "PASS" => Sev::Ok,
-            "warn" | "WARN" | "warning" | "degraded" => Sev::Warn,
+            // Canónicos + aliases pós-s321 (evita TRACE mudo por "info"/subsistema no slot sev).
+            "ok" | "OK" | "pass" | "PASS" | "ready" | "bound" | "grant" | "refresh"
+            | "info" | "INFO" => Sev::Ok,
+            "warn" | "WARN" | "warning" | "degraded" | "skip" | "absent" | "msc" => Sev::Warn,
             "fail" | "FAIL" | "error" | "panic" => Sev::Fail,
-            "trace" | "TRACE" | "debug" | "ckpt" => Sev::Trace,
+            "trace" | "TRACE" | "debug" | "ckpt" | "mmIO" | "mmio" => Sev::Trace,
             _ => Sev::Trace,
         }
     }
@@ -156,6 +167,48 @@ macro_rules! slog_bin {
     };
 }
 
+/// slog com `home=` explícito (ADR-0103) — preferir em bring-up / facades.
+#[macro_export]
+macro_rules! slog_home {
+    ($ring:expr, $krate:expr, $item:expr, $sub:expr, $home:expr, $($arg:tt)*) => {
+        $crate::slog::emit(
+            $ring,
+            $krate,
+            $item,
+            $sub,
+            format_args!("home={} | {}", $home, format_args!($($arg)*)),
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! slog_nano_home {
+    ($item:expr, $sub:expr, $home:expr, $($arg:tt)*) => {
+        $crate::slog_home!(
+            $crate::slog::R0,
+            $crate::slog::K_NANO,
+            $item,
+            $sub,
+            $home,
+            $($arg)*
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! slog_hal_home {
+    ($item:expr, $sub:expr, $home:expr, $($arg:tt)*) => {
+        $crate::slog_home!(
+            $crate::slog::R1,
+            $crate::slog::K_HAL,
+            $item,
+            $sub,
+            $home,
+            $($arg)*
+        )
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,7 +225,8 @@ mod tests {
     fn trace_hidden_on_default_console() {
         set_console_min_sev(CONSOLE_OK);
         assert!(!console_allows(Sev::Trace));
-        assert!(!console_allows(Sev::from_sub("info")));
+        // "info" é alias de ok (s321: k_hal usava info → TRACE mudo).
+        assert!(console_allows(Sev::from_sub("info")));
         assert!(!console_allows(Sev::from_sub("e1000")));
         assert_eq!(Sev::from_sub("ok"), Sev::Ok);
     }
@@ -182,5 +236,13 @@ mod tests {
         assert_eq!(Sev::from_sub("ckpt"), Sev::Trace);
         assert_eq!(Sev::from_sub("msg"), Sev::Trace);
         assert!(!file_allows(Sev::Trace) || cfg!(feature = "boot-trace"));
+    }
+
+    #[test]
+    fn migration_aliases_visible() {
+        assert_eq!(Sev::from_sub("info"), Sev::Ok);
+        assert_eq!(Sev::from_sub("bound"), Sev::Ok);
+        assert_eq!(Sev::from_sub("msc"), Sev::Warn);
+        assert_eq!(Sev::from_sub("skip"), Sev::Warn);
     }
 }

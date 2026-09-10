@@ -107,7 +107,7 @@ pub fn emit_tagged(
     to_file: bool,
 ) {
     use fmt::Write;
-    let mut buf = [0u8; 256];
+    let mut buf = [0u8; 384];
     let n = {
         let mut w = LogBuf(&mut buf, 0);
         let _ = write!(&mut w, "[{}] [{}] [{}] [{}] - {}\n", ring, krate, item, sev, args);

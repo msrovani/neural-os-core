@@ -197,6 +197,24 @@ impl<const N: usize> PhysicalBuffer<N> {
 // VERDICT=UNSUPPORTED honesto, sem PIO eterno. ATA PIO é o fallback (amostra 4 setores, skip TCG).
 pub const BMIDE_CMD_PORT: u16 = 0xC8;
 pub fn bmide_probe() {
-    crate::slog_nano!("BMIDE", "warn", "VERDICT=UNSUPPORTED BMIDE 0xC8 DMA not implemented — use AHCI/NVMe/USB (skip PIO eterno)");
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static ONCE: AtomicBool = AtomicBool::new(false);
+    if ONCE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let profile = if crate::platform_probe::probe_done()
+        && crate::platform_probe::hypervisor().is_sandbox()
+    {
+        "qemu"
+    } else {
+        "hw"
+    };
+    // T-010: honesty. Não é bug — path canônico = AHCI/NVMe/USB/ATA PIO.
+    crate::slog_nano!(
+        "BMIDE",
+        "ok",
+        "home=k_nano::dma profile={} | VERDICT=UNSUPPORTED DMA 0xC8 — use AHCI/NVMe/USB (skip PIO eterno)",
+        profile
+    );
 }
 pub fn bmide_is_supported() -> bool { false }

@@ -37,9 +37,10 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
             continue;
         }
         if let Some((speed, portsc)) = xhci::host_port_ccs(port) {
-            k_nano::slog_hal!(
+            k_nano::slog_hal_home!(
                 "USB",
-                "msc",
+                "ok",
+                "k_hal::usb::hub_msc",
                 "porta {} CCS speed={} PORTSC={:#x}",
                 port,
                 speed,
@@ -49,7 +50,12 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
         }
     }
     if ccs.is_empty() {
-        k_nano::slog_hal!("USB", "msc", "nenhuma porta CCS — stick ausente?");
+        k_nano::slog_hal_home!(
+            "USB",
+            "warn",
+            "k_hal::usb::hub_msc",
+            "nenhuma porta CCS — stick ausente?"
+        );
         MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
         return None;
     }
@@ -66,9 +72,10 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
         }
         match try_msc_on_port(port, speed) {
             Some(dev) => {
-                k_nano::slog_hal!(
+                k_nano::slog_hal_home!(
                     "USB",
                     "ok",
+                    "k_hal::usb::hub_msc",
                     "MSC bringup OK port={} slot={} speed={}",
                     dev.port,
                     dev.slot,
@@ -95,14 +102,14 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
 
 unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
     if !xhci::host_reset_port(port, speed) {
-        k_nano::slog_hal!("USB", "msc", "port {} reset FAIL", port);
+        k_nano::slog_hal!("USB", "warn", "port {} reset FAIL", port);
         return None;
     }
     let loc = xhci::DevLoc::root(port, speed);
     let slot = match xhci::host_enable_slot(port) {
         Some(s) if s > 0 => s,
         _ => {
-            k_nano::slog_hal!("USB", "msc", "Enable Slot FAIL port={}", port);
+            k_nano::slog_hal!("USB", "warn", "Enable Slot FAIL port={}", port);
             return None;
         }
     };
@@ -110,7 +117,7 @@ unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
     if !xhci::host_address_device(slot, loc, mps) {
         k_nano::slog_hal!(
             "USB",
-            "msc",
+            "warn",
             "Address Device FAIL slot={} port={}",
             slot,
             port

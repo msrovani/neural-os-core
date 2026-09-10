@@ -4,12 +4,16 @@
 //! Keeps SMP observable on Core 7 240H hybrid when display crate not yet wired.
 
 pub mod fb {
-    /// Checkpoint K<n>: slog + ramlog (FB console is no-op if not yet probed).
-    /// Ponytail: oportunista flush para pendrive (USB-MSC ou ATA fallback) sem hang.
+    /// Checkpoint K<n>: slog + ramlog. **Sem** flush a cada K* (HW-first:
+    /// USB-MSC/ATA PIO no path quente congela bring-up). Use `boot_ckpt_and_flush`
+    /// só em marcos (fase, pós-USB, fim K33, SCORE).
     pub fn boot_ckpt(n: u8, msg: &str) {
         boot_ckpt_noflush(n, msg);
-        // Ponytail: tenta pendrive se já houver backend (USB-MSC ou ATA) sem bloquear.
-        // try_lock + backoff → nunca hang em K22 (SMP) nem K137 (TSC).
+    }
+
+    /// Checkpoint + flush oportunista (marcos raros).
+    pub fn boot_ckpt_and_flush(n: u8, msg: &str) {
+        boot_ckpt_noflush(n, msg);
         let _ = crate::boot_logger::try_flush_ramlog();
     }
 

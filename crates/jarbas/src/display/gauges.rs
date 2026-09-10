@@ -213,7 +213,7 @@ pub fn refresh_snapshot(log_serial: bool) {
 
 /// Desenha a barra a partir do snapshot (sem reamostrar).
 pub fn draw_status_gauges(fb: &mut DoubleBuffer, screen_w: usize) {
-    fb.fill_rect(0, 0, screen_w, STATUS_BAR_H, 12, 16, 24);
+    fb.fill_rect(0, 0, screen_w, STATUS_BAR_H, 8, 12, 24);
 
     let snap = if SNAPSHOT_READY.load(Ordering::Acquire) {
         SNAPSHOT.lock().clone()

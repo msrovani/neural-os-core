@@ -22,15 +22,20 @@ use crate::net_port::{self, NetPortStatus};
 pub fn register_net_bound(bus: u8, dev: u8, func: u8, wifi: bool) {
     discovery::mark_bound(bus, dev, func, true);
     net_port::set_status(NetPortStatus::Bound);
-    k_nano::slog_hal!("NET", "info", "bound bus={}:{}:{} class={}",
+    k_nano::slog_hal_home!(
+        "NET",
+        "ok",
+        "k_hal::net",
+        "bound bus={}:{}:{} class={}",
         bus,
         dev,
         func,
         if wifi {
-        DeviceClass::Wifi.as_str()
+            DeviceClass::Wifi.as_str()
         } else {
-        DeviceClass::Net.as_str()
-        });
+            DeviceClass::Net.as_str()
+        }
+    );
 }
 
 pub fn set_link_up() {

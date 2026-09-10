@@ -616,6 +616,8 @@ impl Agent for DisplayAgent {
                     desktop.render(tick, self.avatar.as_mut(), self.avatar_state_label);
                 }
                 k_nano::boot_logger::mark_ui_live();
+                // Mic aberto pós-desktop: STT/VAD sem depender só do wakeword.
+                crate::audio::settings::enable_open_mic();
                 k_nano::slog_jarbas!("Jarbas", "info", "Desktop iniciado @ {}x{}", fw, fh);
                 k_nano::interrupts::mouse_log_status("desktop_ready");
             }

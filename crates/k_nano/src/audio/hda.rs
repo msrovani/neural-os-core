@@ -86,7 +86,20 @@ const SD_CTL_SRST: u32 = 1 << 1;  // Stream Reset
 const SD_CTL_IOCE: u32 = 1 << 2;  // Interrupt on Completion Enable
 const SD_CTL_FEIE: u32 = 1 << 3;  // FIFO Error Interrupt Enable
 const SD_CTL_DEIE: u32 = 1 << 4;  // Descriptor Error Interrupt Enable
-const SD_CTL_STRIPE_MASK: u32 = 0x7 << 16; // Stripe control
+/// Stream Number nos bits 19:16 do SDCTL (deve casar com Converter Stream Tag).
+const fn sd_ctl_strm(n: u32) -> u32 {
+    (n & 0xF) << 16
+}
+const CAPTURE_STREAM_TAG: u32 = 1;
+const PLAYBACK_STREAM_TAG: u32 = 2;
+
+// Amp Gain/Mute payload (HDA §7.3.3.7) — bit7=Mute; L/R/In/Out nos bits altos.
+const AMP_SET_OUTPUT: u32 = 1 << 15;
+const AMP_SET_INPUT: u32 = 1 << 14;
+const AMP_SET_LEFT: u32 = 1 << 13;
+const AMP_SET_RIGHT: u32 = 1 << 12;
+const AMP_UNMUTE_OUT: u32 = AMP_SET_OUTPUT | AMP_SET_LEFT | AMP_SET_RIGHT;
+const AMP_UNMUTE_IN: u32 = AMP_SET_INPUT | AMP_SET_LEFT | AMP_SET_RIGHT;
 
 // SDx_STS
 const SD_STS_FIFORDY: u32 = 1 << 0; // FIFO Ready
@@ -115,6 +128,7 @@ const VERB_SET_CONVERTER_STREAM_CHANNEL: u32 = 0x706;
 const VERB_GET_PIN_SENSE: u32 = 0xF09;
 const VERB_GET_CONFIG_DEFAULT: u32 = 0xF1C;
 const VERB_GET_SUBSYSTEM_ID: u32 = 0xF20;
+const VERB_SET_POWER_STATE: u32 = 0x705;
 
 // Parameter IDs
 const PARAM_VENDOR_ID: u32 = 0x00;
@@ -143,15 +157,15 @@ const WIDGET_TYPE_VOLUME_KNOB: u32 = 0x6;
 const WIDGET_TYPE_BEEP_GENERATOR: u32 = 0x7;
 const WIDGET_TYPE_VENDOR_DEFINED: u32 = 0xF;
 
-// Pin Widget Control bits
+// Pin Widget Control (HDA 1.0a §7.3.3.13): bit5=In, bit6=Out, bit7=HP, bits2:0=VRef.
 const PIN_VREF_HIZ: u32 = 0x00;
 const PIN_VREF_50: u32 = 0x01;
 const PIN_VREF_GND: u32 = 0x02;
-const PIN_VREF_80: u32 = 0x04;    // 80% = 0x24 (VREF_EN=1, VREF=80%)
+const PIN_VREF_80: u32 = 0x04;
 const PIN_VREF_100: u32 = 0x05;
-const PIN_IN_EN: u32 = 0x10;
-const PIN_OUT_EN: u32 = 0x20;
-const PIN_HP_EN: u32 = 0x40;
+const PIN_IN_EN: u32 = 0x20;
+const PIN_OUT_EN: u32 = 0x40;
+const PIN_HP_EN: u32 = 0x80;
 
 // ============================================================================
 // Audio Format (16-bit, 48kHz, stereo)
@@ -374,6 +388,8 @@ struct CodecInfo {
     audio_fg_nid: u8,
     mic_pin_nid: u8,
     adc_nid: u8,
+    speaker_pin_nid: u8,
+    dac_nid: u8,
 }
 
 static mut CODECS: [CodecInfo; 8] = [CodecInfo {
@@ -385,6 +401,8 @@ static mut CODECS: [CodecInfo; 8] = [CodecInfo {
     audio_fg_nid: 0,
     mic_pin_nid: 0,
     adc_nid: 0,
+    speaker_pin_nid: 0,
+    dac_nid: 0,
 }; 8];
 
 /// Enumerate codecs and discover widgets.
@@ -420,6 +438,8 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
             audio_fg_nid: 0,
             mic_pin_nid: 0,
             adc_nid: 0,
+            speaker_pin_nid: 0,
+            dac_nid: 0,
         };
         
         // Enumerate widgets
@@ -469,23 +489,33 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
                 }
             }
             
-            // Check for microphone pin (Pin Complex with input capability)
+            // Pin Complex: mic (IN) e speaker/HP (OUT) via PCAP + Config Default.
+            // PCAP §7.3.4.9: bit4=OutputCapable, bit5=InputCapable.
+            // Config Default device §7.3.3.31: 0=LineOut 1=Speaker 2=HP 4=Mic 0xA=LineIn.
             if widget_type == WIDGET_TYPE_PIN_COMPLEX {
-                let pin_cap_resp = icw_send(bar, cad, nid, VERB_GET_PARAMETER | PARAM_PCAP);
-                if let Some(pin_cap) = pin_cap_resp {
-                    let location = (pin_cap >> 30) & 0x3;
-                    let is_input = (pin_cap >> 24) & 0x1;
-                    // Location: 0=external, 1=internal, 2=separate, 3=other
-                    // Look for internal mic (location=1) or external mic (location=0) with input capability
-                    if is_input == 1 && (location == 0 || location == 1) {
+                let pin_cap = icw_send(bar, cad, nid, VERB_GET_PARAMETER | PARAM_PCAP).unwrap_or(0);
+                let input_cap = (pin_cap >> 5) & 1;
+                let output_cap = (pin_cap >> 4) & 1;
+                let cfg = icw_send(bar, cad, nid, VERB_GET_CONFIG_DEFAULT).unwrap_or(0);
+                let device = (cfg >> 20) & 0xF;
+                if input_cap == 1 {
+                    if device == 0x4 || codec.mic_pin_nid == 0 {
+                        codec.mic_pin_nid = nid;
+                    } else if device == 0xA && codec.mic_pin_nid == 0 {
                         codec.mic_pin_nid = nid;
                     }
                 }
+                if output_cap == 1 {
+                    if device == 0x1 || codec.speaker_pin_nid == 0 {
+                        codec.speaker_pin_nid = nid;
+                    } else if (device == 0x2 || device == 0x0) && codec.speaker_pin_nid == 0 {
+                        codec.speaker_pin_nid = nid;
+                    }
+                }
             }
-            
-            // Check for ADC (Audio Input widget)
+
+            // ADC (Audio Input)
             if widget_type == WIDGET_TYPE_AUDIO_INPUT {
-                // Prefer ADC connected to our mic pin
                 if codec.mic_pin_nid != 0 {
                     for i in 0..widget.num_connections as usize {
                         if widget.connections[i] == codec.mic_pin_nid {
@@ -495,8 +525,13 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
                     }
                 }
                 if codec.adc_nid == 0 {
-                    codec.adc_nid = nid; // fallback to first ADC
+                    codec.adc_nid = nid;
                 }
+            }
+
+            // DAC (Audio Output) — fallback; refine após enum via speaker pin.
+            if widget_type == WIDGET_TYPE_AUDIO_OUTPUT && codec.dac_nid == 0 {
+                codec.dac_nid = nid;
             }
             
             codec.widgets[widget_idx] = widget;
@@ -504,6 +539,7 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
         }
         
         codec.num_widgets = widget_idx as u8;
+        resolve_dac_from_speaker(&mut codec);
         CODECS[cad as usize] = codec;
         HDA_CODEC_MASK.fetch_or(1 << cad, Ordering::Release);
         found_codec = true;
@@ -512,47 +548,211 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
     found_codec
 }
 
+fn find_widget(codec: &CodecInfo, nid: u8) -> Option<&WidgetInfo> {
+    codec.widgets[..codec.num_widgets as usize]
+        .iter()
+        .find(|w| w.nid == nid)
+}
+
+fn connection_index(w: &WidgetInfo, target_nid: u8) -> u32 {
+    for i in 0..w.num_connections as usize {
+        if w.connections[i] == target_nid {
+            return i as u32;
+        }
+    }
+    0
+}
+
+/// Speaker/HP pin → DAC (via mixer/selector se necessário).
+fn resolve_dac_from_speaker(codec: &mut CodecInfo) {
+    let pin = codec.speaker_pin_nid;
+    if pin == 0 {
+        return;
+    }
+    let Some(pin_w) = find_widget(codec, pin) else {
+        return;
+    };
+    let conns: [u8; 8] = pin_w.connections;
+    let n = pin_w.num_connections as usize;
+    for i in 0..n {
+        let nid = conns[i];
+        if let Some(w) = find_widget(codec, nid) {
+            if w.widget_type == WIDGET_TYPE_AUDIO_OUTPUT {
+                codec.dac_nid = nid;
+                return;
+            }
+            if w.widget_type == WIDGET_TYPE_AUDIO_MIXER
+                || w.widget_type == WIDGET_TYPE_AUDIO_SELECTOR
+            {
+                for j in 0..w.num_connections as usize {
+                    let dn = w.connections[j];
+                    if let Some(dw) = find_widget(codec, dn) {
+                        if dw.widget_type == WIDGET_TYPE_AUDIO_OUTPUT {
+                            codec.dac_nid = dn;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Configure the microphone pin and ADC for capture.
 unsafe fn configure_capture_path(bar: u64) -> bool {
-    // Find first codec with valid mic pin and ADC
     for cad in 0..8u8 {
         if HDA_CODEC_MASK.load(Ordering::Acquire) & (1 << cad) == 0 {
             continue;
         }
-        
+
         let codec = CODECS[cad as usize];
         if codec.mic_pin_nid == 0 || codec.adc_nid == 0 {
             continue;
         }
-        
-        slog_nano!("HDA", "info", "Configuring capture: CAD={} PIN={} ADC={}", cad, codec.mic_pin_nid, codec.adc_nid);
-        
-        // 1. Set Pin Widget Control: VREF_EN=80% (0x24) + IN_EN (0x10) = 0x34
-        let pin_ctl = PIN_VREF_80 | PIN_IN_EN; // 0x24 | 0x10 = 0x34
-        let _ = corb_write_and_wait(bar, cad, codec.mic_pin_nid, VERB_SET_PIN_WIDGET_CONTROL | pin_ctl);
-        
-        // 2. Set Connection Select on ADC to connect to mic pin
-        let _ = corb_write_and_wait(bar, cad, codec.adc_nid, VERB_SET_CONNECTION_SELECT | (codec.mic_pin_nid as u32));
-        
-        // 3. Set Converter Format: 16-bit, 48kHz, stereo
-        let _ = corb_write_and_wait(bar, cad, codec.adc_nid, VERB_SET_CONVERTER_FORMAT | FMT_16BIT_48KHZ_STEREO);
-        
-        // 4. Set Stream/Channel on ADC (stream tag 1, channel 0)
-        let stream_channel = (1u32 << 4) | 0u32; // stream=1, channel=0
-        let _ = corb_write_and_wait(bar, cad, codec.adc_nid, VERB_SET_CONVERTER_STREAM_CHANNEL | stream_channel);
-        
-        // 5. Set Amplifier Gain/Mute on mic pin (unmute, 0dB gain)
-        let amp_gain = (1u32 << 7) | (0u32 << 8); // output amp, mute=0, gain=0
-        let _ = corb_write_and_wait(bar, cad, codec.mic_pin_nid, VERB_SET_AMP_GAIN_MUTE | amp_gain);
-        
-        // 6. Set Amplifier on ADC input (unmute, 0dB)
-        let amp_gain_adc = (0u32 << 7) | (0u32 << 8); // input amp, mute=0, gain=0
-        let _ = corb_write_and_wait(bar, cad, codec.adc_nid, VERB_SET_AMP_GAIN_MUTE | amp_gain_adc);
-        
-        slog_nano!("HDA", "info", "Capture path configured for CAD {}", cad);
+
+        slog_nano!(
+            "HDA",
+            "ok",
+            "capture CAD={} PIN={} ADC={}",
+            cad,
+            codec.mic_pin_nid,
+            codec.adc_nid
+        );
+
+        if codec.audio_fg_nid != 0 {
+            let _ = corb_write_and_wait(bar, cad, codec.audio_fg_nid, VERB_SET_POWER_STATE | 0);
+        }
+
+        // Pin Widget Control: IN_EN + VREF 80% (HDA 1.0a bits).
+        let pin_ctl = PIN_VREF_80 | PIN_IN_EN;
+        let _ = corb_write_and_wait(
+            bar,
+            cad,
+            codec.mic_pin_nid,
+            VERB_SET_PIN_WIDGET_CONTROL | pin_ctl,
+        );
+
+        // Connection Select = índice na lista do ADC, NÃO o NID.
+        let conn_idx = find_widget(&codec, codec.adc_nid)
+            .map(|w| connection_index(w, codec.mic_pin_nid))
+            .unwrap_or(0);
+        let _ = corb_write_and_wait(
+            bar,
+            cad,
+            codec.adc_nid,
+            VERB_SET_CONNECTION_SELECT | conn_idx,
+        );
+
+        let _ = corb_write_and_wait(
+            bar,
+            cad,
+            codec.adc_nid,
+            VERB_SET_CONVERTER_FORMAT | FMT_16BIT_48KHZ_STEREO,
+        );
+
+        let stream_channel = (CAPTURE_STREAM_TAG << 4) | 0;
+        let _ = corb_write_and_wait(
+            bar,
+            cad,
+            codec.adc_nid,
+            VERB_SET_CONVERTER_STREAM_CHANNEL | stream_channel,
+        );
+
+        let _ = corb_write_and_wait(
+            bar,
+            cad,
+            codec.mic_pin_nid,
+            VERB_SET_AMP_GAIN_MUTE | AMP_UNMUTE_IN,
+        );
+        let _ = corb_write_and_wait(
+            bar,
+            cad,
+            codec.adc_nid,
+            VERB_SET_AMP_GAIN_MUTE | AMP_UNMUTE_IN,
+        );
+
+        slog_nano!("HDA", "ok", "capture path ready CAD {}", cad);
         return true;
     }
-    
+
+    false
+}
+
+/// Speaker/HP pin + DAC → stream tag de playback (SD1).
+unsafe fn configure_playback_path(bar: u64) -> bool {
+    for cad in 0..8u8 {
+        if HDA_CODEC_MASK.load(Ordering::Acquire) & (1 << cad) == 0 {
+            continue;
+        }
+
+        let codec = CODECS[cad as usize];
+        if codec.speaker_pin_nid == 0 || codec.dac_nid == 0 {
+            continue;
+        }
+
+        slog_nano!(
+            "HDA",
+            "ok",
+            "playback CAD={} PIN={} DAC={}",
+            cad,
+            codec.speaker_pin_nid,
+            codec.dac_nid
+        );
+
+        // OUT_EN + HP_EN (seguro em speaker e headphone).
+        let pin_ctl = PIN_OUT_EN | PIN_HP_EN;
+        let _ = corb_write_and_wait(
+            bar,
+            cad,
+            codec.speaker_pin_nid,
+            VERB_SET_PIN_WIDGET_CONTROL | pin_ctl,
+        );
+
+        // Se o pin tem lista, seleciona DAC/mixer conectado.
+        if let Some(pin_w) = find_widget(&codec, codec.speaker_pin_nid) {
+            if pin_w.num_connections > 0 {
+                let idx = connection_index(pin_w, codec.dac_nid);
+                // Se DAC não está direto, idx=0 (primeiro conn = mixer típico).
+                let _ = corb_write_and_wait(
+                    bar,
+                    cad,
+                    codec.speaker_pin_nid,
+                    VERB_SET_CONNECTION_SELECT | idx,
+                );
+            }
+        }
+
+        let _ = corb_write_and_wait(
+            bar,
+            cad,
+            codec.dac_nid,
+            VERB_SET_CONVERTER_FORMAT | FMT_16BIT_48KHZ_STEREO,
+        );
+        let stream_channel = (PLAYBACK_STREAM_TAG << 4) | 0;
+        let _ = corb_write_and_wait(
+            bar,
+            cad,
+            codec.dac_nid,
+            VERB_SET_CONVERTER_STREAM_CHANNEL | stream_channel,
+        );
+
+        let _ = corb_write_and_wait(
+            bar,
+            cad,
+            codec.dac_nid,
+            VERB_SET_AMP_GAIN_MUTE | AMP_UNMUTE_OUT,
+        );
+        let _ = corb_write_and_wait(
+            bar,
+            cad,
+            codec.speaker_pin_nid,
+            VERB_SET_AMP_GAIN_MUTE | AMP_UNMUTE_OUT,
+        );
+
+        slog_nano!("HDA", "ok", "playback path ready CAD {}", cad);
+        return true;
+    }
+
     false
 }
 
@@ -638,8 +838,12 @@ unsafe fn init_sd0_capture(bar: u64) -> bool {
     // Clear status
     w16(bar, sd0_sts, 0xFFFF); // Write 1 to clear
     
-    // Enable stream: RUN + IOCE (interrupt on completion)
-    w8(bar, sd0_ctl, SD_CTL_RUN as u8 | SD_CTL_IOCE as u8);
+    // Enable stream: STRM=1 (casa com ADC tag) + RUN + IOCE
+    w32(
+        bar,
+        sd0_ctl,
+        sd_ctl_strm(CAPTURE_STREAM_TAG) | SD_CTL_RUN | SD_CTL_IOCE,
+    );
     
     // Wait for FIFO ready
     for _ in 0..10000 {
@@ -706,7 +910,12 @@ unsafe fn init_sd1_playback(bar: u64) -> bool {
     w16(bar, lvi, 15);
     w16(bar, fmt, FMT_16BIT_48KHZ_STEREO as u16);
     w16(bar, sts, 0xFFFF);
-    w8(bar, ctl, SD_CTL_RUN as u8 | SD_CTL_IOCE as u8);
+    // STRM=2 casa com DAC Converter Stream Tag
+    w32(
+        bar,
+        ctl,
+        sd_ctl_strm(PLAYBACK_STREAM_TAG) | SD_CTL_RUN | SD_CTL_IOCE,
+    );
 
     slog_nano!("HDA", "info", "SD1 playback: BDL @ 0x{:x} buf @ 0x{:x}", bdl_phys, audio_phys);
     true
@@ -875,7 +1084,26 @@ pub fn init_hda() -> bool {
         
         // Enumerate codecs and discover widgets
         if !enumerate_codecs(bar) {
-            slog_nano!("HDA", "warn", "No codecs found");
+            let profile = if crate::platform_probe::probe_done()
+                && crate::platform_probe::hypervisor().is_sandbox()
+            {
+                "qemu"
+            } else {
+                "hw"
+            };
+            // QEMU intel-hda: GCTL OK, CORB/RIRB frequentemente mudo (SESSION_286).
+            // Aceite de áudio = HW real — não inventar codec no emulador.
+            slog_nano!(
+                "HDA",
+                if profile == "qemu" { "ok" } else { "warn" },
+                "home=k_nano::audio::hda profile={} | No codecs found{}",
+                profile,
+                if profile == "qemu" {
+                    " (degraded expected — aceite=HW)"
+                } else {
+                    ""
+                }
+            );
             return false;
         }
         
@@ -890,7 +1118,10 @@ pub fn init_hda() -> bool {
             return false;
         }
 
-        // Playback SD1 — best-effort (AWAITING_HW se codec não tem DAC).
+        // Playback: unmute DAC/speaker ANTES de armar SD1.
+        if !configure_playback_path(bar) {
+            slog_nano!("HDA", "warn", "playback path absent — TTS formant-only / no speaker");
+        }
         if !init_sd1_playback(bar) {
             slog_nano!("HDA", "warn", "SD1 playback not armed — write_hda_playback no-op");
         }

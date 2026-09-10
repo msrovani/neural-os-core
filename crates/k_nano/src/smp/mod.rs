@@ -40,7 +40,13 @@ pub extern "C" fn ap_entry(_cpu_id: u64) -> ! {
     let cpu_id = percpu::CPU_COUNT.fetch_add(1, Ordering::SeqCst);
     percpu::AP_ONLINE.fetch_add(1, Ordering::SeqCst);
     crate::slog_nano!("SMP", "trace", "AP_READY rust cpu={}", cpu_id);
-    crate::slog_nano!("SMP", "ok", "AP {} entrou em modo 64-bit Rust!", cpu_id);
+    crate::slog_nano_home!(
+        "SMP",
+        "ok",
+        "k_nano::smp",
+        "AP {} entrou em modo 64-bit Rust!",
+        cpu_id
+    );
 
     unsafe {
         if apic::USING_X2APIC.load(Ordering::Relaxed) {
@@ -156,6 +162,24 @@ pub unsafe fn wake_aps() {
         let f: unsafe fn() = core::mem::transmute::<*const (), unsafe fn()>(s as *const ());
         f();
     }
+}
+
+/// Full Infer D+B+C: cortex registra `poll_slice` — APs chamam sem AGENT_TICK_BUSY.
+static INFER_POLL_FN: AtomicUsize = AtomicUsize::new(0);
+
+pub fn install_infer_poll_fn(f: fn() -> bool) {
+    INFER_POLL_FN.store(f as usize, Ordering::Release);
+}
+
+/// Executa um slice de inferência. Retorna true se houve trabalho.
+pub fn try_infer_poll_slice() -> bool {
+    let s = INFER_POLL_FN.load(Ordering::Acquire);
+    if s == 0 {
+        return false;
+    }
+    let f: fn() -> bool =
+        unsafe { core::mem::transmute::<*const (), fn() -> bool>(s as *const ()) };
+    f()
 }
 
 fn busy_wait_us(us: u64) {
@@ -583,7 +607,13 @@ pub unsafe fn init_smp() {
         apic::wait_for_ipi_delivery,
     );
 
-    crate::slog_nano!("SMP", "ok", "Brought up {} APs", ap_woke);
+    crate::slog_nano_home!(
+        "SMP",
+        "ok",
+        "k_nano::smp",
+        "Brought up {} APs",
+        ap_woke
+    );
 
     // Aceite AIOS (SESSION_279): online deve == madt_enabled-1 (dentro do gate env).
     if ap_woke as u16 != ap_expected {

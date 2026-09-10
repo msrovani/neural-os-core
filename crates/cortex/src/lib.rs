@@ -57,5 +57,6 @@ pub mod hnsw;
 pub mod mesh_distrib;
 pub mod federated;
 pub mod speculative;
+pub mod infer_queue;
 
 
