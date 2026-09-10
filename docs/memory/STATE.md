@@ -19,7 +19,8 @@
 #   SESSION_318: FASE 1-4 complete — KvCache, MoE, Emotion, Soul, MCP, HNSW, dead code
 #   SESSION_317: ReActLoop + H2O eviction + CodebookVQ + dead code removal
 #   FREEZE até aceite: Ring3 Onda 6, 0103 S2–S6, Falcon3 sprint, 0089
-#   HW: target/usb_hw.img 6271MB READY (PACK_LLM=falcon3)
+#   HW: target/usb_hw.img 6271MB READY (PACK_LLM=falcon3, kernel sha256=8c7a49179a4d5d6e, pós-s328)
+#     FALCON3.V6 pack ~2045MB (target1 FALCON3.BIN path; stub 0B V6 ignorado por find_large)
 #   hermes: Emotion canonical + Soul canonical + VOICE_EMOTION + LoopPhase + HNSW boot
 #   jarbas: SoulProfile delegates hermes; TTS InferQ partial (INFER_TTS_PARTIAL)
 #   cortex: InferQueue + Persistent KvCache + H2O + MoE 0.05 + Federated health
