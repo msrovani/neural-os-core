@@ -120,6 +120,35 @@ conferido vs build). Hang determinístico em `TRINITY.lock()` (TicketLock —
 FIFO por tickets, SEM reentrância: double-lock no mesmo contexto =
 self-deadlock eterno).
 
+## Track MSC (s327) — Port Power pós-HCRST (estudo Redox lib-1)
+
+**Sintoma no metal:** ambos xHCI (00:0d.0 did=a71e ports=4; 00:14.0
+did=51ed ports=16) leem parâmetros estruturais corretos (MMIO OK) mas
+**CCS=0 em TODAS as portas** → "nenhuma porta CCS — stick ausente?".
+
+**Estudo Redox (`redox-os/drivers` usb/xhcid, lib-1):**
+- Redox NUNCA seta PP — mas VERIFICA e panica se PP=0 com CCS=1;
+  nosso driver lia CCS de porta morta silenciosamente
+- PORTSC write = RMW preservando CCS/PLS/SPEED; RW1C escritos como 1
+- USB3: CSC só chega com PED já setado; hub port power/reset = class
+  requests ao hub device (usbhubd), não PORTSC
+- Route string no slot context (bit 26 Hub + NumberPorts slot.b),
+  parent hub slot/port no slot context C; TTT/MTT = TODO no Redox
+- Interrupter Set 0 = RTSOFF+0x20 (já fixado SESSION_313 ✓)
+
+**Fix (`511791c4`):** após run OK, RMW em todas as portas: PP(9)=1 +
+RW1C CSC/PEC/WRC/PRC limpos; dump PORTSC pre/pos-PP no slog "ok"
+(visível no FB console).
+
+Leitura do próximo boot (console FB, sub "ok"):
+- **PORTSC pre-PP com PP=0 (bit 9) e pos-PP com PP=1 + CCS=1** → root
+  cause confirmada; MSC deve subir
+- **pos-PP ainda CCS=0** → porta sem device real (stick atrás de hub
+  interno — o hub é o device na root port; precisa hub enumeration)
+- **PORTSC = 0xffffffff/lixo** → MMIO/BAR problem
+
+## Evidência do boot s316 (Alienware, 2026-09-06)
+
 ## Bisector v7 (s326) — heartbeat do timer + dígito de estágio
 
 **Evidência s325 (fotos 06/09 ~23:20):** boot COMPLETO (todas as fases +
