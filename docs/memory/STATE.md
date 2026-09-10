@@ -1,6 +1,12 @@
-# STATE — neural-os-core v1.9.99-s321 — k_nano microkernel slimming complete
+# STATE — neural-os-core v1.9.99-s327 — freeze bisector s318→s327 + MSC Port Power
 
-#   PISTA ATIVA: k_nano microkernel slimming (ADR-0103 FASE A-H)
+#   PISTA ATIVA: freeze HW real @ tick 1370 network_agent + MSC CCS=0
+#   SESSION_316: escada de instrumentos FB (s318→s327) — ver docs/memory/SESSION_316.md
+#   Freeze: boot completo → desktop → congela @tick 1370 em network_agent (determinístico)
+#   Instrumentos: diag_mark/agent stamp/exc stamp/tick_stage/heartbeat T + dígito S<n>
+#   Fixes: HDA DMA pool PMM (refutado), cap poll ZERO-delay, watchdog TRINITY, repr(C) TicketLock
+#   MSC: PP=1 RMW pós-HCRST (estudo Redox lib-1) — aguardando boot s327
+#   PISTA ANTERIOR: k_nano microkernel slimming (ADR-0103 FASE A-H) — SESSION_321
 #   SESSION_321: FASE A-H analysis complete — 7 commits, 4 facades created
 #   k_nano: 87 modules, ~25.5k LOC (was 88/~27k)
 #   k_hal: 22 modules (was 21) — NIC + FS + Storage facades added

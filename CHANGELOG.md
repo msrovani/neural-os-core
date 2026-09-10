@@ -1,5 +1,28 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s327] - 2026-09-09 — freeze bisector s318→s327 + MSC Port Power (SESSION_316)
+
+**Escada de instrumentos FB (bisector HW real — serial invisível no metal)**
+- s318 diag_mark (barras 1–8) · s319 diag_stamp_agent · s320 diag_stamp_exception
+  (bridge EXC_FB_FN) · s321 tick_stage (bridge TICK_STAGE_FN) · s323 watchdog
+  pré-lock TRINITY (estampa t/s + degrada) · s326 heartbeat T (timer IRQ, y=80)
+  + dígito S<n> (y=64) — discriminador vivo-vs-morto no frame congelado
+
+**Fixes**
+- HDA DMA: pool 64KB contígua do PMM (HDA_DMA_BASE) — buffers saíram da imagem
+  do kernel; BDL próprio (refutado como trigger do freeze, mas o bug era real)
+- smoltcp poll()/dhcp_poll(): cap 64 iterações no loop ZERO-delay + contador
+  POLL_LOOP_CAP (spin eterno com TX degradado + tráfego LAN real)
+- TicketLock: #[repr(C)] (ticket@0/serving@8 fixos p/ instrumentos de read cru)
+- xHCI: PP=1 RMW em todas as portas pós-HCRST + dump PORTSC pre/pos (estudo
+  Redox lib-1: HCRST pode deixar PP=0 → CCS lê 0 para sempre no metal)
+
+**Descobertas**
+- TicketLock sem reentrância: double-lock = self-deadlock eterno
+- lazy_static wrapper ZST: &TRINITY ≠ &*TRINITY (read cru lia estáticas adjacentes)
+- Freeze determinístico @ tick 1370 em network_agent — ABERTO (aguardando
+  discriminador heartbeat do s326)
+
 ## [1.9.99-s321] - 2026-09-08 — k_nano microkernel slimming complete (FASE A-H analysis + NIC/FS/Storage facades)
 
 **FASE A: 13 dead modules deleted (~1800 LOC)**

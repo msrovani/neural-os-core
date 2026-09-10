@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 316 | HW real | Freeze bisector + MSC | Escada de instrumentos FB s318→s327 | diag_mark→agent stamp→exc stamp→tick_stage→heartbeat T (vivo-vs-morto); TicketLock sem reentrância = self-deadlock; lazy_static ZST wrapper + repr(Rust) reordena (repr(C) p/ read cru); smoltcp poll ZERO-delay spin (cap 64); xHCI HCRST deixa PP=0 → CCS=0 eterno (fix RMW PP); estudo Redox xhcid/usbhubd (lib-1) |
 | 315 | HW real | Jarbas UI | Soft-halt + anti-black-screen | hlt→soft 18Hz; HID sem MSC; PIC IRQ12; compositor orb-only gate; MSC budget 3s + TSC EP0/reset; boot_progress_line FB |
 | 314 | HW real | P0/ADR-0103 | BOOT.LOG metal + k_hal USB BE | P0 = persistência no stick sem perder desktop; hub route+TT em k_hal; S0 multi_user→k_ai hnsw→cortex; aceite AWAITING_OPERATOR; freeze Ring3/S2+ |
 | 313 | HW real | xHCI/Jarbas | Persistência USB + UI liveness | Event Ring exigia `RTSOFF+0x20`; Normal TRB IOC estava no DWORD errado e CC Success=1 era rejeitado; takeover metal (BusMaster/handoff/CSZ/scratchpad/WPR/EHB); probe MSC proibido pós-UI; tick offload global gated |
