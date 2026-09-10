@@ -520,6 +520,33 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
         return false;
     }
 
+    // Port Power em TODAS as portas (padrão Redox flags_preserved + fix PP):
+    // HCRST pode deixar PP=0 — sem energia, CCS lê 0 para sempre e o scan MSC
+    // vê "nenhuma porta CCS" no metal (QEMU mantém PP=1 e mascarava). RMW
+    // preserva CCS/PLS/SPEED e escreve 1 nos RW1C (limpa changes stale).
+    {
+        let mut dump = alloc::string::String::new();
+        for p in 1..=max_ports {
+            let off = 0x400 + (p as u64 - 1) * 0x10;
+            let v = r32(op, off);
+            dump.push_str(alloc::format!("P{}:{:#x} ", p, v).as_str());
+            w32(
+                op,
+                off,
+                v | (1 << 9)                     // PP
+                    | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21), // CSC/PEC/WRC/PRC RW1C
+            );
+        }
+        crate::slog_nano!("USB", "ok", "xHCI[{}] PORTSC pre-PP: {}", index, dump.as_str());
+        let mut dump2 = alloc::string::String::new();
+        for p in 1..=max_ports {
+            let off = 0x400 + (p as u64 - 1) * 0x10;
+            let v = r32(op, off);
+            dump2.push_str(alloc::format!("P{}:{:#x} ", p, v).as_str());
+        }
+        crate::slog_nano!("USB", "ok", "xHCI[{}] PORTSC pos-PP: {}", index, dump2.as_str());
+    }
+
     let tr = match alloc_phys(1) {
         Some(p) => p,
         None => {
