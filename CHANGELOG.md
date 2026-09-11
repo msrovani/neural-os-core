@@ -1,5 +1,18 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s329] - 2026-09-10 — Doc reconciliation (top-level docs + ADR INDEX)
+
+**Escopo:** docs only (nenhuma linha de kernel).
+
+- `TECNOLOGIAS.md` — métricas (~148K LOC / 671 `.rs` / 41 nativos) + versão s328 + boot=Limine + Agency data-driven + IDs duplicados corrigidos + SDIO raw + `7.10 InferQueue`
+- `README.md` — Falcon3 **22L / hidden 3072** (era 30/2560) + 41 seeds + testes **784/6** + Ring3 Onda 6 + GPU W2A8 pendente + InferQueue
+- `TODO.md` — reconciliado c/ s328 (abertos no metal, saúde de testes/CI, pós-s328, ADR-0103 A–H, 0089 feature ON, dívida de doc)
+- `docs/architecture/INDEX.md` — +0090/0091/0093/0094; vazios 0095–0099; lacuna 0066–0073; Lote 2 de arquivados
+- Archive (`git mv` → `docs/archive/notes/`): `0060-ring3-isolation-ring`, `0082-ring3-isolation-{production,registry}`, `PLAN_KAI_CORTEX_FIXES` (`docs/architecture/` 100→96)
+- Refs atualizadas em `0102-*.md`; nota de movimentação em `SESSION_243`
+- Memória: `AGENTS.md` (4 lições), `IDEA_BANK.md` (#554/#555), `STATE.md`, `docs/memory/SESSION_329.md` + `SESSION_INDEX.md`
+- **Aberto:** 6 testes host falhando (pré-existentes); fixture `gen_test_gguf` no CI; licença AGPL vs MIT (decisão maintainer)
+
 ## [1.9.99-s328] - 2026-09-09 — Full Infer D+B+C (Falcon3 off BSP)
 
 **Contrato:** Display/voz/mic no BSP nunca esperam o generate terminar.

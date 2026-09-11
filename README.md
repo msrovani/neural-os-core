@@ -58,20 +58,21 @@ explicit gate over a silent promise.
 | P2P mesh | Two QEMU instances discover each other over UDP broadcast (port 42069), exchange skills; selective ACK per fragment, 16-slot reassembly, HMAC-SHA256/Ed25519 crypto tiers, token-bucket rate limiting |
 | Storage | ATA PIO, FAT32 read/write (data partition), exFAT (opt-in), VirtIO-blk (QEMU) |
 | WASM | `wasmi` `no_std` runtime with fuel metering, capability-gated host imports (`aios::*`); self-test `add(2,3)=5` passes |
+| Inference | Falcon3-3B ternary (22 layers, hidden 3072) run off the BSP through the `InferQueue` MPMC worker (ADR-0057 WS-H); Trinity MoE router with on-demand experts; token streaming (`LLM_STREAM`) + per-sentence TTS |
 | Audio/voice | Intel HDA capture + playback, Piper TTS (PT-BR/EN), CTC STT (55K params), wake word "Jarvis" |
-| GPU compute | NVIDIA PUSH_BUFFER (validated on a GTX 1050), VirtIO-GPU 2D (QEMU), Intel GEN ring (canary) |
+| GPU compute | NVIDIA PUSH_BUFFER submit (HW-real on a GTX 1050), VirtIO-GPU 2D (QEMU), Intel GEN ring (canary). Ternary **W2A8 compute kernels are pending** (KernelPack) — matmul runs on the CPU until then |
 | SMP | 4-core AP wake (3 APs) via directed sequential SIPI, per-AP stacks |
 | UI | `embedded-graphics` card desktop, Z-order compositor, PS/2 mouse, FFT-driven orb |
 | Security | Ed25519 trust chain, capability gates, fail-closed mesh authentication |
 | Self-installer (ADR-0079) | Detects PCI hardware, partitions, formats FAT32 ESP, deploys bootloader and only the needed firmware/models |
-| Host tests | `cargo test --workspace` runs on the host (168 tests passing) |
+| Host tests | `cargo test --workspace --exclude neural-kernel --exclude boot --no-fail-fast` runs on the host (784 passing / 6 failing at this revision) |
 | CI | GitHub Actions: `cargo check --release` (0 errors), host tests, boot smoke test in QEMU |
 
 ### In development / experimental
 
 | Area | State |
 |---|---|
-| Ring 3 user-mode isolation | Implemented but **gated off** (`TRY_ENTER_RING3=false`): enabling it currently triple-faults the kernel. Work tracked in ADR-0060/0082 |
+| Ring 3 user-mode isolation | Onda 6 wired (ADR-0102): `int 0x90` mailbox, `iretq`, sandbox address space + `ring3_run_native()`; sandbox demos run in QEMU with **contained, non-fatal** faults. Registering native (non-WASM) code stays **gated** — `ring3_can_register_native()` is false under TCG/WHPX (metal-only) |
 | Native JIT (Cranelift / Rust-subset) | App Factory paths B/C compile but are **gated** behind the isolation ring; only path A (wasmi sandbox) is active |
 | On-device learning | AutoLearn (detect novel intent → train → register expert) exists but training convergence on ternary weights is unproven |
 | Memory tiering (MHI) | Tier metadata + adaptive heap active; NVMe/VRAM migration deferred |
@@ -174,7 +175,7 @@ and Ring 3 user mode (gated, see Status).
   SafeHarbor → MemoryCore → SystemBringup → Diagnostics
         ↓
   HardwareDiscovery → DriverInit → AgentFleet → Runtime
-  (PCI+ACPI+SMP)     (E1000+xHCI+ATA)  (~259 agents)  (Hermes+Cortex+Display)
+  (PCI+ACPI+SMP)     (E1000+xHCI+ATA)  (Agency)        (Hermes+Cortex+Display)
 ```
 
 ### Design pillars
@@ -218,9 +219,11 @@ and Rust-subset paths exist but are gated behind the isolation ring.
 
 ### Inference & cognition
 
-- **Falcon3-3B-Instruct-1.58bit** — 3B ternary params (`FALCON3.V6`, ~989MB, loaded via
-  QEMU loader or FAT32), 30 layers, hidden 2560, GQA, Medusa speculative decode,
-  AVX2/SSE4.2 kernels with runtime dispatch
+- **Falcon3-3B-Instruct-1.58bit** — 3B ternary params (`FALCON3.V6`, loaded via
+  QEMU loader or FAT32): 22 layers, hidden 3072, 12 heads / 4 KV heads (GQA),
+  intermediate 9216, vocab 131072, RoPE. Medusa + n-gram speculative decode,
+  AVX2/SSE4.2 kernels with runtime dispatch. Generation runs off the BSP via the
+  `InferQueue` worker (ADR-0057 WS-H) so UI/voice stay live during decoding.
 - **Trinity MoE** — router + 7 kind (HwIdentify, HwControl, RustCoder, DiskDiag, Security, Generator, SpeechSynth — 3 wired HWEXPRT/RUSTCDR/PIPER, 4 keyword→Generator) (hardware ID, code generation, disk
   diagnostics, security, speech, text completion); router weights trained offline,
   on-device AutoLearn training experimental
@@ -250,7 +253,9 @@ self-healing firmware pipeline (missing blob → diagnose → download → hot-l
 
 ## Agents
 
-Everything in the system is an agent. 25 native agents are wired in the kernel:
+Everything in the system is an agent. The kernel ships 41 native agent seeds
+(`skills/agents/*/SKILL.md`, embedded at compile time); the 25 classic core agents
+are wired as A-001–A-025:
 
 | Code | Agent | Type | Schedule | Function |
 |------|-------|------|----------|----------|
@@ -280,8 +285,9 @@ Everything in the system is an agent. 25 native agents are wired in the kernel:
 | A-024 | WakeWordAgent | System | EventDriven | "Jarvis" keyword by energy |
 | A-025 | HdaAudioAgent | Driver | Oneshot | HDA audio capture + playback |
 
-Plus ~147 event-driven specialists (hardware, filesystem, network, security,
-application) registered at boot — about 259 agents total at runtime.
+Agency specialists are **data-driven** — registered at boot from signed `AGENT.md`
+manifests via PackageHub (count depends on installed packages), not a hardcoded
+list. A recent boot reported ~259 agents at runtime.
 
 ---
 
@@ -313,7 +319,8 @@ application) registered at boot — about 259 agents total at runtime.
 | TTS streaming (sentence-level, Piper sub-200ms) | Done |
 | VirtIO-blk driver (QEMU disk) | Done |
 | neural-sgdb extraction (standalone crate) | Done |
-| Ring 3 isolation (ADR-0060/0082) | Gated — triple-fault to fix |
+| v1.9.99 dev line (s328): Full Infer D+B+C — `InferQueue` worker off the BSP | Done |
+| Ring 3 isolation (ADR-0077/0082/0102) | Onda 6 wired in QEMU; native registration gated to metal |
 | WiFi/TLS hardware validation | Pending hardware |
 | v2.0.0 gate (formal review + zero backlog + maintainer OK) | Not passed |
 
@@ -323,8 +330,11 @@ application) registered at boot — about 259 agents total at runtime.
 
 - `cargo check --release` — 0 errors required (dead-code warnings are the
   project's Known Warnings policy)
-- `cargo test --workspace --exclude neural-kernel --exclude boot` — host unit
-  tests (168 passing)
+- `cargo test --workspace --exclude neural-kernel --exclude boot --no-fail-fast` —
+  host unit tests (784 passing / 6 failing at this revision: `hermes`
+  `wasm_build` + `cognitive_bridge`, `jarbas` `soul_*`). Without `--no-fail-fast`
+  cargo stops at the first failing suite. One `cortex` integration test needs the
+  fixture generated by `python tools/gen_test_gguf.py`.
 - QEMU boot smoke test (UEFI + TCG) — validates the full 8-phase boot to the
   runtime tick loop
 - CI (GitHub Actions) runs all three on every push and PR
@@ -337,8 +347,8 @@ application) registered at boot — about 259 agents total at runtime.
 |----------|------|
 | [`AGENTS.md`](AGENTS.md) | Agent ontology, boot sequence, operational rules |
 | [`HOWTO.md`](HOWTO.md) | Build + run instructions for all environments |
-| [`TECNOLOGIAS.md`](TECNOLOGIAS.md) | Technology catalog (300+ entries) |
-| [`docs/architecture/INDEX.md`](docs/architecture/INDEX.md) | 47+ ADRs with lifecycle tracking |
+| [`TECNOLOGIAS.md`](TECNOLOGIAS.md) | Technology catalog (~160 rows across 15 sections) |
+| [`docs/architecture/INDEX.md`](docs/architecture/INDEX.md) | ~100 ADRs with lifecycle tracking |
 | [`docs/memory/STATE.md`](docs/memory/STATE.md) | Current kernel state |
 | [`docs/memory/SESSION_INDEX.md`](docs/memory/SESSION_INDEX.md) | Session log index + lessons learned |
 | [`ROADMAP.md`](ROADMAP.md) | Full roadmap v1.0 → v2.0 |

@@ -2,7 +2,7 @@
 
 **Objetivo:** Implementar o isolamento Ring3/SFI de produção (ADR-0082, que depreca ADR-0041 §P9+ para escopo Ring3): address space real, syscall rápido, ELF loader, sandbox W^X e integração WASM B/C gated. Validar boot completo com WHPX/TCG.
 
-**ADR:** `docs/architecture/0082-ring3-isolation-production.md` + `0082-ring3-isolation-registry.md` (docs commitados no `1cd17fd` do usuário).
+**ADR:** `docs/architecture/0082-ring3-isolation-production.md` + `0082-ring3-isolation-registry.md` (docs commitados no `1cd17fd` do usuário). *(Movidos para `docs/archive/notes/` em 2026-09-10 — conflito_id, canônico = ADR-0077.)*
 
 ---
 

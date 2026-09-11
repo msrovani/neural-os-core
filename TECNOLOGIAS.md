@@ -1,8 +1,8 @@
 # CATÁLOGO DE TECNOLOGIAS — AIOS K³CHJ (neural-os-core)
 ## Registro de Propriedade Intelectual e Inovação
 
-**~26.000 LOC, 180+ arquivos Rust, ~50 agentes nativos**
-**Versão release:** v1.9.7 TESTE / NÃO ESTÁVEL (2026-07-22)
+**~148.000 LOC, ~671 arquivos Rust (12 crates do workspace), 41 agentes nativos**
+**Versão release:** v1.9.99-s328 TEST / NÃO ESTÁVEL (2026-09-10)
 **Build:** `cargo clean -p neural-kernel && cargo nk` = 0 erros (warnings dead-code = política conhecida)
 **Licença:** MIT (código próprio) / MIT, GPL, Apache 2.0 (componentes inspirados/portados)
 **Repositório:** [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)
@@ -31,17 +31,17 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
 |---|-----------|------------|------------|---------------|---------|--------|
-| 1.1 | **AIOS Runtime — Agente como Unidade Ontológica Única** | 🏆 Unifica tasks, skills, drivers, daemons em UM único trait `Agent`. Todos os ~50 agentes nativos seguem o mesmo lifecycle: manifest → tick → EventBus → skill. Nenhum outro OS bare-metal ou Linux faz isso. | Projetos de agentes (CrewAI, OpenAI Swarm, AutoGen) — todos em userspace/std | Apache 2.0 / MIT | `agent-core/`, `agents.rs` | ✅ 0 err |
+| 1.1 | **AIOS Runtime — Agente como Unidade Ontológica Única** | 🏆 Unifica tasks, skills, drivers, daemons em UM único trait `Agent`. Todos os agentes nativos (41 seeds em `skills/agents/`) seguem o mesmo lifecycle: manifest → tick → EventBus → skill. Nenhum outro OS bare-metal ou Linux faz isso. | Projetos de agentes (CrewAI, OpenAI Swarm, AutoGen) — todos em userspace/std | Apache 2.0 / MIT | `agent-core/`, `agents.rs` | ✅ 0 err |
 | 1.2 | **HW Expert v3/v4 — Identificação de Hardware por Rede Neural em Kernel** | 🏆 **60K amostras, 44K devices únicos** reconhecidos por BitNet ternário multi-head (5 heads: family, fw, agent, caps, next_action). v3 (free-text) + v4 (estruturado) rodando em no_std. **Único OS do mundo que usa ML para identificar hardware no boot.** HW Expert v4 alimenta o SGDB `/hw/pci/*` e o `build_card()` para decisões PnP. | pci.ids, usb.ids, SDIO DriverPacks, **Windows DriverStore** (nova fonte) | MIT / domínio público | `cortex.rs`, `hw_capability.rs`, `hw_expert_v3.bitnet`, `HWEXPRT4.BIN`, `tools/retrain_hw_expert_v4.py`, `tools/validate_hw_expert_v4.py` | ✅ v4 retreinado + artefato VALIDADO (fração não-zero ≥1%, holdout do arquivo — SESSION_247) |
 | 1.3 | **SelfHealing Firmware Pipeline I3/I4** | 🏆 HW novo é instalado → detectado → identificado → firmware baixado (HTTP) → carregado hot → skill gerada (LLM) → registrada → funcional. Tudo automático, sem reboot, sem configuração. | linux-firmware.git (blobs), Self-Healing Agents papers (arXiv) | MIT (linux-firmware) | `self_heal.rs`, `firmware.rs`, `agents.rs` | ✅ 0 err |
 | 1.4 | **SleepCycle — Ciclo de Sono em Bare-Metal** | 🏆 **Primeiro (e único) sistema bare-metal com ciclo sono/aprendizado.** 5 fases: REPLAY → DREAM → CONSOLIDATE → PRUNE → REFLECT. Inspirado em neurociência humana. Sem internet. Sem humano. Cada boot melhora o sistema. | Neurociência (Atkinson-Shiffrin, Ebbinghaus), SleepCycle papers | — (conhecimento científico) | `agents.rs` (SleepCycleAgent) | ✅ 0 err |
 | 1.5 | **Memory Hierarchy Index (MHI) — Alocação por IA** | 🏆 Sistema de memória em 4 tiers (Dram→Vram→Nvme→Hdd) com alocação orientada por ML. `alloc_by_tier()` + soft-migrate ativo (ADR-0040 MVP). | ZFS ARC (MFU/MRU), Hierarchical Memory papers | GPLv2 / MIT | `mhi.rs`, `memory.rs` | ✅ soft-MVP |
 | 1.6 | **Trinity MoE — Roteamento de Intenção em Bare-Metal** | 🏆 7 kind (HwIdentify, HwControl, RustCoder, DiskDiag, Security, Generator, SpeechSynth — 3 wired HWEXPRT/RUSTCDR/PIPER, 4 keyword→Generator, 1 HwControl) + router treinável (ROUTER.BITNET VOCAB=256 HIDDEN=64; `moe_router=LOADED` vs `ABSENT(keyword)` + `FALLBACK_GENERATOR`). Roteia dentro do LLM sem keyword matching quando LOADED. AutoLearn detecta necessidade → treina → registra novo expert. Routing telemetry (neural/keyword/fallback counters). Expert on-demand load via `get_or_mmap_expert`. | Mixture of Experts papers (Shazeer 2017), MoE em LLMs | MIT | `trinity.rs`, `cortex.rs`, `agents.rs` (AutoLearnAgent) | ✅ 0 err |
+| 1.7 | **3 Camadas Visuais: Orb + Hermes CLI + Window Manager** | 🏆 Arquitetura visual em 3 camadas Z-order com FFT audio→Orbe, overlay CLI semi-transparente, e gerenciador de janelas com mouse integrado. Tudo renderizado por software no framebuffer UEFI, sem GPU. **s294:** fill scanline + glow isqrt (não pixel/`sqrtf`); FPS=1 tick PIT. | SmileyOS patterns, JARVIS .NET MAUI (autor) | MIT | `display/compositor.rs`, `display/avatar.rs` | ✅ 0 err |
+| 1.7b | **Generative Card Desktop (UI declarativa)** | ✅ ADR-0058 S1–S4: `embedded-graphics` `DrawTarget` (`FbTarget`) sobre `DoubleBuffer` + `UiDeclaration`/`UiRenderer` (Text/KeyValue/Gauge/Bars/List/Divider/Button/Panel). Cards gerados por LLM (structured decode #412) ou skill WASM. Orb + HUD preservados; mouse close/drag/botão. Supersede parcial 0047-HMI. | embedded-graphics (kolibri/matrix-gui/embedded-gui = conceitos) | MIT/Apache | `jarbas/src/display/{eg,card,compositor,agent}.rs` | ✅ QEMU 3 cards |
 | 1.8 | **Dual-Tier Memory + R3 (Rollout Routing Replay)** | 🏆 Separação obrigatória: Tier 1 `talc` (Hermes/JARBAS/UI) vs Tier 2 `TensorArena` bump (Cortex/MoE). Cache de rotas e tokens na arena — reset O(1) após GRPO. Zero fragmentação no hot path de inferência. Proíbe `Box`/`Vec` global no loop de tokens. **AIOS self-adapting heap (premissa 4):** piso 512MB + `grow_bump_auto` sob demanda (256MB/passo) até 75% da RAM detectada — o 2B v6 (577MB) carrega via auto-grow sem reserva eager no T+0; stack do Limine reservada no frame allocator (SESSION_254). | Rollout Routing Replay / GRPO papers; bare-metal arena pattern | MIT | `allocator.rs`, `arena.rs`, `r3.rs`, `global_arena.rs` | ✅ 0 err |
 | 1.9 | **k-HAL — Anel R1 / DeviceCap + HalOffer (ADR-0041)** | 🏆 Único dono MMIO + DeviceTree + **HalOffer** (API R3 query/bind + Cap grant) + ports FE Cap-enforce + **H4+ QUEUE_NOTIFY** + **AS shallow** PoC. Continua release **1.8.x**. | HalOffer ≠ VirtIO; sDDF; Theseus | MIT | `crates/k_hal/offer.rs`, `virtio.rs`, `cap_gate.rs`, `hermes/hal_offer.rs` | ✅ H4+/H5+/AS (1.8.x) |
 | 1.10 | **DeviceTree bind no T+0 (Observe→Plan→Act)** | 🏆 H1 observa silício **antes** dos drivers; k_ai planeja NIC+storage com Trust `(1,boot_observe,plan)` + recipe HITL (Escalate ≠ Auto); k_nano executa só o que existe (I225>VirtIO>e1000>RTL; NVMe>AHCI>USB>ATA). SLIP=DEGRADED. Cortex sem pesos no T+0 (honesto). | ADR-0088; HalOffer ADR-0041 H1; DeviceRecipe 0056 | MIT | `k_hal` DeviceTree, `k_ai/src/boot_observe.rs`, `k_nano/src/boot_bind.rs`, `storage_probe.rs` | ✅ SESSION_271–274 |
-| 1.7 | **3 Camadas Visuais: Orb + Hermes CLI + Window Manager** | 🏆 Arquitetura visual em 3 camadas Z-order com FFT audio→Orbe, overlay CLI semi-transparente, e gerenciador de janelas com mouse integrado. Tudo renderizado por software no framebuffer UEFI, sem GPU. **s294:** fill scanline + glow isqrt (não pixel/`sqrtf`); FPS=1 tick PIT. | SmileyOS patterns, JARVIS .NET MAUI (autor) | MIT | `display/compositor.rs`, `display/avatar.rs` | ✅ 0 err |
-| 1.7b | **Generative Card Desktop (UI declarativa)** | ✅ ADR-0058 S1–S4: `embedded-graphics` `DrawTarget` (`FbTarget`) sobre `DoubleBuffer` + `UiDeclaration`/`UiRenderer` (Text/KeyValue/Gauge/Bars/List/Divider/Button/Panel). Cards gerados por LLM (structured decode #412) ou skill WASM. Orb + HUD preservados; mouse close/drag/botão. Supersede parcial 0047-HMI. | embedded-graphics (kolibri/matrix-gui/embedded-gui = conceitos) | MIT/Apache | `jarbas/src/display/{eg,card,compositor,agent}.rs` | ✅ QEMU 3 cards |
 
 ---
 
@@ -49,7 +49,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
 |---|-----------|------------|------------|---------------|---------|--------|
-| 2.1 | **Bootloader 0.11.15 UEFI/BIOS** | 📦 Integração com framebuffer UEFI GOP, 512KB stack, physical memory mapping | `bootloader` crate | MIT/Apache 2.0 | `main.rs`, `crates/boot/` | ✅ 0 err |
+| 2.1 | **Limine bootloader (UEFI; BIOS legado)** | 📦 Framebuffer UEFI GOP + request de stack; `crates/boot/build.rs` → `tools/limine/mk_esp_fat.py` (GPT+ESP) → `limine-esp.img` → `uefi.img`. Migração SESSION_232: crate `bootloader` 0.11 **removida** (Limine é o handoff canônico). Boot validado em UEFI/OVMF — imagem BIOS dá triple-fault. | Limine (limine-bootloader) | BSD-2-Clause | `crates/boot/`, `tools/limine/`, `limine.ld` | ✅ 0 err |
 | 2.2 | **IDT 32 handlers + IST** | 🔄 Double Fault IST com stack dedicada, GPF recoverable, Page Fault com endereço | `x86_64` crate, OSDev wiki | MIT/Apache 2.0 | `interrupts.rs` | ✅ 0 err |
 | 2.3 | **Bitmap Frame Allocator 8GB** | 🔄 Adaptado para suportar até 8GB RAM com bitmap 128KB | `linked_list_allocator`, OSDev | MIT/Apache 2.0 | `memory.rs` | ✅ 0 err |
 | 2.4 | **Adaptive Heap (AI Budget) + talc Dual-Tier** | 🏆 Tier 1: `talc` como `#[global_allocator]` (substitui `linked_list_allocator`). Tier 2: `TensorArena` bump em `0x4800_0000_0000` exclusiva Cortex/R3. `resize_heap_to_mb()` via `talc::extend`. | `talc` crate, bumpalo pattern | MIT/Apache 2.0 | `allocator.rs`, `arena.rs` | ✅ 0 err |
@@ -72,9 +72,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 2.10f | **GGUF/FAT file-backed mmap (P9)** | ✅ Pré-fill FAT→frames + demand-page; Cap MAP_FILE; magic GGUF/BitNet; fallback NFIL. ADR-0041 P9. **≠ AirLLM** (prefixo só). | Cap + FAT mmap | MIT | `gguf_mmap.rs`, `demand_page.rs`, `fat32.rs` | ✅ PoC |
 | 2.10g | **Ring3 Isolation Production (ADR-0082)** | 🏆 **Sucessor de ADR-0041 §P9+** — Isolamento Ring3 real para WASM B/C (native JIT). Deep L4 clone (create_sandbox_as), per-process RSP0, ELF64 loader mínimo (RELATIVE), SYSCALL/SYSRET, sandbox AS + ring3_run_native(), CapGate host functions reais. Depreca ADR-0041 §3,§4,§7,§8 para escopo Ring3. MVP 5-8 sem, ~3.4K LOC. | ADR-0041 PoC, seL4, Fuchsia, Theseus | MIT | `docs/architecture/0082-*.md`, `address_space.rs`, `user_mode.rs`, `syscall.rs`, `isolation_ring.rs`, `elf_loader.rs` (novo) | 🟡 Proposed |
 | 2.10f2 | **AirLLM GGUF Streaming (ADR-0046)** | 🏆 Layer-wise: header+layer map+embed/unembed em RAM; 1 layer/forward via ATA `read_file_range`; PrefetchEngine **soft** (nao DMA); dequant Q4_0/Q5_0/Q8_0/F16; hot-swap ATA + Net→FAT→`set_model` (L3.5/RX se RX=0). Stream-to-disk/DMA deferred. | AirLLM, llama.cpp GGUF | MIT | `gguf_streaming.rs`, `gguf.rs`, `cortex.rs` | ✅ MVP / 🟡 residual |
-| 2.10g | **Adequação Boot OK→K³CHJ (ADR-0042)** | ✅ N1–N5 + wire N2.5–N5.7; marco **v1.8.0**; gate v2.0.0 = review formal | K³CHJ + Cap PoC | MIT | `docs/architecture/0042-*.md` | ✅ v1.8.0 |
 | 2.10h | **LoadStatus + BitNet 2B LOADED (QEMU)** | ✅ Telemetria `LoadStatus`/`[STATUS]`; 2B ~590MB L=30 LOADED via QEMU-loader; FWD OK; TTS empty = known. v1.7.0. | BitNet v4 + LoadStatus | MIT | `load_status.rs`, `cortex.rs`, `main.rs` | ✅ load / 🟡 gen |
-| 2.10 | **ACPI Parser (RSDP/MADT/RSDT)** | 🔄 Parsing de ACPI para descoberta de hardware. Implementação própria sem depender de `acpi` crate. | ACPI spec, OSDev | — (especificação) | `acpi.rs` | ✅ 0 err |
 | 2.11 | **Huge Pages 2MiB/1GiB** | 🔄 `allocate_huge_2mb()` mapeia páginas grandes no page table para performance de memória. | x86_64 MMU, Linux hugetlbfs | GPLv2 | `memory.rs` | ✅ 0 err |
 | 2.12 | **DMA Uncacheable Pages** | 🏆 `dma_alloc()` → `map_page_uc()` (PWT+PCD) — solução para coerência cache/DMA. Fix crítico para NIC e GPU. | Intel x86 manual (PAT/MTRR), E1000 DMA debug (autor) | — (conhecimento HW) | `dma.rs`, `e1000.rs` | ✅ 0 err |
 | 2.13 | **Neural Device LEGO (ADR-0056)** | 🏆 L0 Bus / L1 HalOffer / L2 DeviceRecipe; UnlockDAG stages; Ed25519+blob_hash; UsbHost/Bluetooth; bind H1 só trusted+FW; community hub + AI-Friendly specs | HalOffer ADR-0041, PackageHub 0051–53 | AGPL + FW licenses | `k_hal/device_recipe.rs`, `docs/specs/device-lego/`, `docs/community/` | 🟡 MVP H1 |
@@ -90,6 +88,8 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 2.23 | **ACPI S3 Suspend/Resume** | 🏆 Suspend-to-RAM completo: `\_S3` DSDT parser, FACS waking vector, device save/restore (e1000 16 regs + MTA), AP parking, trampoline 64-bit (0x7000) que restaura CR3+RSP e salta para `s3_resume_entry()`. Handler re-inicializa APIC, PIT, EPB. | ClaudioOS power.rs (921 LOC, ADR-0062 P20), ACPI Spec 6.4 | MIT | `k_nano/src/suspend_resume.rs`, `k_nano/src/acpi.rs` | ✅ S3 entry / 🟡 resume trampoline |
 | 2.24 | **Ondemand Tick no Scheduler Loop** | 🏆 Governor Ondemand integrado ao scheduler loop. `halt` closure do `registry.run()` chama `cpufreq::ondemand_tick(ap_work::has_pending())`. Frequência escala por carga real da fila de APs. | Linux cpufreq ondemand governor (conceito) | GPLv2 | `neural-kernel/src/main.rs` | ✅ 0 err |
 | 2.25 | **CMOS RTC Driver** | 🏆 Driver do relógio CMOS MC146818: leitura segura com loop wait-snapshot-verify contra RTC update in progress. Formata data/hora ISO. | MC146818 / CMOS RTC spec | — (especificação HW) | `k_nano/src/rtc.rs` | ✅ 0 err |
+| 2.26 | **ACPI Parser (RSDP/MADT/RSDT)** | 🔄 Parsing de ACPI para descoberta de hardware. Implementação própria sem depender de `acpi` crate. | ACPI spec, OSDev | — (especificação) | `acpi.rs` | ✅ 0 err |
+| 2.27 | **Adequação Boot OK→K³CHJ (ADR-0042)** | ✅ N1–N5 + wire N2.5–N5.7; marco **v1.8.0**; gate v2.0.0 = review formal | K³CHJ + Cap PoC | MIT | `docs/architecture/0042-*.md` | ✅ v1.8.0 |
 
 ---
 
@@ -215,6 +215,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 7.7 | **BEI — BitNet Ecosystem Intelligence (ADR-0060)** | 🏆 Ecossistema cognitivo de 8 ondas: Onda 0 (MPMC queue); Onda 1 (BudgetManager + ExpertLifecycleManager); Onda 2 (CellNetwork 8 regiões + PlasticityController); Onda 3 (DynamicMoE birth/merge/split); Onda 4 (MemoryStore L0-L7); Onda 5 (AffectRegulator); Onda 6 (ExecutiveSupervisor 7-fase — EgoLayer/PonderNet/Train/PromoteSkill); Onda 7 (SoulMirror 8 estados). ~2900 LOC, 7/7 ondas implementadas. | ADR-0060 (BitNet Cognitivo), neurociência, sistemas multi-agente | MIT | `neural-kernel/src/bei_init.rs`, `docs/architecture/0060-bitnet-cognitivo-bei.md` | ✅ 7/7 ondas |
 | 7.8 | **Engine BitNet Fidelidade + Kernels CPU (ADR-0084)** | 🟡 Auditoria cruzada com bitnet.cpp/2B4T: mismatches ativos M1 (FFN relu2 vs silu), M2 (4 SubNorms), M3 (RoPE theta 500000 vs 10000), M4 (embed Q6_K — ternário em embed é N/A); kernels CPU com evidência (unpack branchless, acumulador em registrador, activation-parallel gated por m, T-MAC/maddubs W2A8 gated); receita treino 1-bit (tanh 30×, LR cooldown, QAT suave). Ordem acordada: fidelidade antes de velocidade; sem retreino. | microsoft/BitNet (bitnet.cpp), arXiv 2504.12285 (2B4T), 2511.21910 (Platinum), nanoGPT speedrun, Hestia QAT | MIT/Apache 2.0 (externo) | `bitnet_avx2.rs`, `cortex.rs`, `nn.rs`, `gguf.rs`, `tools/convert_bitnet.py`, `tools/bitnet_fwd_parity.py` | 🟡 ADR-0084 Proposed (por_fazer) |
 | 7.9 | **Falcon3 3B — modelo principal (.bitnet v6 Q6_K + ternário 1.58bit)** | 🔄 **Lab canônico ADR-0101 / SESSION_298** — tiiuae/Falcon3-3B-Instruct-1.58bit (não 1B; 7B=Pro opcional). HF: hidden 3072, **22** layers, 12 heads, 4 kv_heads, intermediate **9216**, vocab 131072, silu, rope_theta 1000042, tie false. Instruct denso ctx **32768**; checkpoint 1.58bit ctx **4096**. Pipeline: (a) BF16 denso → ternarizado absmean (pack 4/byte, scale f32) e (b) nativo 1.58bit HF unpack (`(out/4,in) u8 → (out,in) int8`). Embed Q6_K (~330 MB) + pesos ternários → v6 ~771 MB. **Kernel honesty:** scalar/SSE = ADD/SUB/SKIP f32 packed; AVX2 host = FMA f32 (não skip-native); metal AVX2 = stub scalar; W2A8 gated. Sem tok/s nosso (ATLAS 7.1 tok/s 3B é referência externa). FAT `FALCON3.V6` Active-first; `slot_from_bitnet_bytes` 771MB→Agent = residual. v6 é genérico: `model.rs:v6_file_size` calcula tamanho para dims arbitrárias, forward usa `hidden/layers` do header. | tiiuae Falcon3, BitNet 1.58, ADR-0085 v6, bitnet_writer.py | Apache 2.0 / Falcon License (tiiuae) | `tools/convert_falcon3_to_v6.py`, `tools/download_falcon3.py`, `tools/mkfat32.py`, `tools/mkexfat.py`, `tools/build_image.py`, `tools/llmfit_pack_filter.py`, `crates/cortex/src/{model_fit,model_hub,model,cortex}.rs`, `tools/bitnet_writer.py` | ✅ tools + wire |
+| 7.10 | **InferQueue WS-H — Full Infer D+B+C (SESSION_328 / ADR-0057)** | 🏆 Fila MPMC (8, 1 in-flight) em `cortex::infer_queue`; `CortexAgent` **só enfileira** (proibido `generate_*` no tick); `InferWorker` + AP `ap_idle_loop` fazem `poll_slice` **fora** de `AGENT_TICK_BUSY`; 1 token/slice + `LLM_STREAM`/`INFER_TTS_PARTIAL`; barge-in via `cancel_active`; affinity infer_worker/cortex_llm=ring1, UI/voz=ring0. Display/mouse/mic vivos durante o generate do Falcon3. | SGLang continuous batching (conceito), ADR-0057 WS-H | MIT | `cortex/infer_queue.rs`, `hermes/agents.rs`, `neural-kernel/` (InferWorker) | ✅ s328 |
 
 ---
 
@@ -222,7 +223,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
 |---|-----------|------------|------------|---------------|---------|--------|
-| 8.1 | **The Agency (214 especialistas)** | 🏆 Catálogo data-driven: 146 base + 68 importados em `AGENT.md` / seed; SpecialistAgent EventDriven no scheduler. Docs antigos “147” = drift. | CrewAI, OpenAI Swarm, AutoGen, agency-agents (MIT) | Apache 2.0 / MIT | `agency_seed.rs`, `ecosystem/agents/`, `agents.rs` | ✅ data-driven |
+| 8.1 | **The Agency (SpecialistAgent data-driven)** | 🏆 Catálogo carregado em runtime via PackageHub a partir de `AGENT.md` agency **assinados** — não é const compile-time; vazio por padrão. `register_agency_agents()` materializa `SpecialistAgent` EventDriven no scheduler. Nativos (**41**) vêm de `skills/agents/<name>/SKILL.md` (`include_str!`). Docs antigos "147/214" = drift. | CrewAI, OpenAI Swarm, AutoGen, agency-agents (MIT) | Apache 2.0 / MIT | `k_ai/src/agency.rs`, `k_ai/src/native_agent_seed.rs`, `skills/agents/`, `hermes/src/agents.rs` (SpecialistAgent) | ✅ data-driven |
 | 8.1b | **PackageHub Agent manifests (ADR-0051)** | 🏆 Manifestos nativos+Agency no namespace NeuralFS; CRUD HITL; VFS bridge bin↔Hermes. | ADR-0051 / NeuralFS §12 | MIT | `hermes/package_hub.rs`, `tools/export_agent_packages.py` | ✅ SESSION_134 |
 | 8.2 | **Consciousness Metrics (10 métricas)** | 🏆 Sistema de "consciência" com 10 métricas cognitivas (skills_ok, errors_resolved, anomaly_count, memories, etc.). Self-Improvement Loop periódico. | JARVIS C# (autor), Lethe brain regions | MIT | `cortex.rs` (Consciousness) | ✅ 0 err |
 | 8.2b | **Self-Evolve Engine (Sprint 108)** | 🏆 observe→generate→verify→improve→reflect: auto-skill por padrão/LLM, verificação estrutural, SIL wired, meta-reflect no SleepCycle. | Cratos / SkillObserver | MIT | `hermes/self_evolve.rs`, `agents.rs` (SelfEvolveAgent) | ✅ S108 |
@@ -238,7 +239,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 9.3 | **Merkle Audit Trail** | 🏆 SHA-256 chain + **Ed25519 por entry** (session). Wire PackageHub/Approval/self_evolve. | Blockchain / distributed ledger (conceito) | MIT | `k_ai/audit.rs` | ✅ SESSION_136 |
 | 9.4 | **HANR Marketplace + Memory** | 🏆 Loja local+Net allowlist; USER/MEMORY/SOUL; progressive skills L0/L1; MCP JSON-RPC mínimo. | Nous Hermes Agent (paridade semântica) | MIT | `marketplace.rs`, `memory_store.rs`, `mcp.rs` | ✅ SESSION_136 |
 | 9.5 | **Cognitive Bridge K³CHJ** | 🏆 Prompt Cortex = SOUL+USER+MEMORY + BGE-RAG + Trinity + L0 CapGate; **route_user_intent** Trinity→Trust→Skill/LLM; IterationBudget; session search; PERSONA Jarbas; REFLECT→MEMORY_NUDGE. UX HANR, stack superior. | HANR + BGE + Trinity MoE | MIT | `cognitive_bridge.rs`, `memory_store.rs`, `jarvis.rs` | ✅ SESSION_137 |
-| 9.4 | **DHCP Starvation Detection** | 🏆 Monitora relação tx_count/rx_count. Se tx >> rx por período prolongado, alerta. Detector implementado em SecurityAgent. | Segurança de rede (conceito) | MIT | `security.rs` | ✅ 0 err |
+| 9.6 | **DHCP Starvation Detection** | 🏆 Monitora relação tx_count/rx_count. Se tx >> rx por período prolongado, alerta. Detector implementado em SecurityAgent. | Segurança de rede (conceito) | MIT | `security.rs` | ✅ 0 err |
 
 ---
 
@@ -246,7 +247,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 | # | Dataset | 🏆 Inovação | Fonte | Licença Orig. | Registros | Link HF |
 |---|---------|------------|------|---------------|-----------|---------|
-| 10.1 | **SDIO HWIDs** | 🏆 **Maior coleção pública de HWIDs de hardware.** 171.003 entradas de 65 DriverPacks, 20.054 arquivos .inf. Extração com 7z (BCJ2), parse UTF-16. | SDIO Windows DriverPacks | MIT (dados públicos) | 171.003 | [HF Dataset](https://huggingface.co/datasets/aios-k2chj/aios-k2chj-sdio-hwids) |
+| 10.1 | **SDIO HWIDs** | 🏆 **Maior coleção pública de HWIDs de hardware.** 171.003 HWID **strings raw** de 65 DriverPacks, 20.054 arquivos .inf. Extração com 7z (BCJ2), parse UTF-16. Após colapso de variantes SUBSYS/REV → ~16.126 únicos; ~1.005 pares (vid,did) **deste corpus**. | SDIO Windows DriverPacks | MIT (dados públicos) | 171.003 (raw) | [HF Dataset](https://huggingface.co/datasets/aios-k2chj/aios-k2chj-sdio-hwids) |
 | 10.2 | **pci.ids + usb.ids** | 🔄 Parsing completo das listas oficiais PCI-SIG e USB-IF. Estruturação como JSON para consumo por ML. | pci-ids.ucw.cz, linux-usb.org | MIT / GPL | 48.346 | [HF Dataset](https://huggingface.co/datasets/aios-k2chj/aios-k2chj-pci-usb-ids) |
 | 10.3 | **linux-firmware WHENCE** | 🔄 Parsing do manifesto oficial do linux-firmware. 998 entries com File, Version, License, Driver, Source. | linux-firmware.git | MIT (GPL) | 1.207 | [HF Dataset](https://huggingface.co/datasets/aios-k2chj/aios-k2chj-firmware-metadata) |
 | 10.4 | **AMD Microcode Patches** | 🔄 Extração de 64 patches Family/Model/Stepping do README amd-ucode. | linux-firmware.git amd-ucode | MIT | 64 | [HF Dataset](https://huggingface.co/datasets/aios-k2chj/aios-k2chj-firmware-metadata) |
@@ -322,19 +323,22 @@ $ cargo clean -p neural-kernel && cargo nk
     0 errors
 ```
 
-**Métricas (v1.9.5 TEST):**
+**Métricas (v1.9.99-s328 TEST):**
 
 | Métrica | Valor |
 |---------|-------|
-| Linhas de código (Rust) | ~26.000 |
-| Arquivos Rust | 180+ |
-| Agentes | ~50 nativos |
-| ADRs | 47+ |
+| Linhas de código (Rust, 12 crates do workspace) | ~148.000 |
+| Arquivos Rust (workspace) | ~671 |
+| Agentes nativos (seeds `skills/agents/`) | 41 |
+| The Agency | data-driven (AGENT.md assinados via PackageHub) |
+| ADRs (`docs/architecture/`) | ~100 |
 | Firmware blobs | 116 (~12.5 MB) |
-| HWIDs HW Expert v3 | **61.453 VID/DID** |
-| Tags release | v1.0.0 → **v1.9.12-power** (gate v2.0.0 = review + `por_fazer` + OK humano) |
-| Crates K³CHJ wired | k_nano, k_ai, cortex, hermes, jarbas |
+| HWIDs HW Expert v3 (treino) | **61.453 VID/DID** |
+| Tags release | v1.0.0 → **v1.9.99-s315** (dev atual v1.9.99-s328; gate v2.0.0 = review + `por_fazer` + OK humano) |
+| Crates K³CHJ wired | k_nano, k_hal, k_ai, cortex, hermes, jarbas |
 | Erros (`cargo nk`) | **0** |
+
+> Nota: `crates/neural-sgdb` é o projeto comunitário extraído (repo separado, ADR-0063) e **não** é membro do workspace — não entra na contagem de LOC.
 
 ---
 
@@ -348,7 +352,7 @@ $ cargo clean -p neural-kernel && cargo nk
 | SDIO HWIDs | MIT | Dados extraídos de DriverPacks públicos. |
 | Modelos .bitnet | MIT | Pesos treinados pela equipe AIOS K³CHJ. |
 | smoltcp | MIT/Apache 2.0 | Pilha TCP/IP. |
-| bootloader crate | MIT/Apache 2.0 | Bootloader v0.11. |
+| Limine | BSD-2-Clause | Bootloader UEFI/BIOS canônico (migração SESSION_232; crate `bootloader` v0.11 removida). |
 | x86_64 crate | MIT/Apache 2.0 | Instruções e estruturas x86. |
 | libm | MIT | Funções matemáticas (musl/newlib). |
 | linked_list_allocator | MIT/Apache 2.0 | Legado — substituído por `talc` no Dual-Tier (v2.0). |
@@ -359,8 +363,8 @@ $ cargo clean -p neural-kernel && cargo nk
 
 ---
 
-> **AIOS K³CHJ — Neural OS Hermes v1.9.5 TEST / NÃO ESTÁVEL**
-> *26.000 LOC, 180+ arquivos Rust, ~50 agentes nativos, 5 crates K³CHJ wired, cargo nk = 0 erros.*
+> **AIOS K³CHJ — Neural OS Hermes v1.9.99-s328 TEST / NÃO ESTÁVEL**
+> *~148.000 LOC, ~671 arquivos Rust (12 crates do workspace), 41 agentes nativos, 6 crates K³CHJ wired, cargo nk = 0 erros.*
 > *"O hardware real não perdoa. O silício obedece."*
 > [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)
 > [huggingface.co/aios-k2chj](https://huggingface.co/aios-k2chj)

@@ -26,4 +26,6 @@
 #   cortex: InferQueue + Persistent KvCache + H2O + MoE 0.05 + Federated health
 #   hermes: Emotion→Affect + Soul→LLM + MCP dynamic + HNSW search + 17 dead removed
 #   Self-Heal: 5/5 detectores wired; LLM loop via InferQueue; user notify; NSGDB memory
+#   DOCS s329: TECNOLOGIAS/README/TODO/INDEX reconciliados c/ tree (148K LOC, 41 nativos,
+#     Falcon3 22L/3072, testes 784/6); ADR legados → archive/notes; licença AGPL vs MIT pendente
 #   Não declarar v2.0.0

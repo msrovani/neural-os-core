@@ -7,7 +7,7 @@
 **Sprint:** ADR-0100 **Onda 6** (T-051–T-057) — enquadrada em **Pós-gate / Layer S** (0100 §gate); não é sprint paralelo fora do backlog  
 **Evidência de auditoria:** tree 2026-09-01 (`k_nano::paging`, `gdt`, `smp/percpu`, `isolation_ring`, `user_mode`, `elf_loader`, `process`, `simd`) + SESSION_243 / 264 / 278 / 279 / 281 / 262  
 
-**Não substitui:** ADR-0077 (canônico do ring de isolamento / F6), ADR-0059 (App Factory A/B/C), ADR-0041 (Cap P0–P9), ADR-0100 (backlog T-*), ADR-0082 HardwareInfo (canônico 0082), `0060-ring3-isolation-ring.md` (cópia histórica → **0077**).  
+**Não substitui:** ADR-0077 (canônico do ring de isolamento / F6), ADR-0059 (App Factory A/B/C), ADR-0041 (Cap P0–P9), ADR-0100 (backlog T-*), ADR-0082 HardwareInfo (canônico 0082), `docs/archive/notes/0060-ring3-isolation-ring.md` (cópia histórica → **0077**).  
 **Não substitui** os checklists `0082-ring3-isolation-*.md` (`conflito_id` → 0077): este documento **filtra** o que desses checklists ainda vale.  
 **Corrige:** o rascunho 2026-09-01 desta mesma ADR, que propunha Fuchsia (Job/Process/Handle/ExceptionChannel) + seL4 SYSCALL fastpath como arquitetura-base (~15–23 semanas, ~2890 LOC). Esse rascunho está **rejeitado** como plano de implementação.
 
@@ -227,9 +227,9 @@ O rascunho pedia 11 critérios incluindo “ExceptionChannel”, “preemption�
 
 ## 9. Referências
 
-- Canônico Ring3: `docs/architecture/0077-ring3-isolation-ring.md` (substitui `0060-ring3-isolation-ring.md`, cópia histórica)
+- Canônico Ring3: `docs/architecture/0077-ring3-isolation-ring.md` (substitui `docs/archive/notes/0060-ring3-isolation-ring.md`, cópia histórica)
 - Backlog: `docs/architecture/0100-k3chj-backlog-custo-anel.md` Onda 6
-- Checklists filtrados: `0082-ring3-isolation-production.md`, `0082-ring3-isolation-registry.md` (subordinados à 0077)
+- Checklists filtrados: `docs/archive/notes/0082-ring3-isolation-production.md`, `docs/archive/notes/0082-ring3-isolation-registry.md` (subordinados à 0077)
 - App Factory: ADR-0059; Cap: ADR-0041; SMP/TSS: ADR-0057
 - Sessões: 243 (WHPX SYSCALL MSR), 262 (bin `smp/percpu` duplicado), 264 (feature não propaga), 278 (iretq TCG + GDT + RSP0), 279 (sem teto de cores), **281** (GDT 1 TSS/CPU)
 - Código: `crates/k_nano/src/{paging.rs,gdt.rs,interrupts.rs,smp/{mod,percpu}.rs,simd.rs}`, `crates/k_hal/src/cap_gate.rs`, `crates/neural-kernel/src/{isolation_ring.rs,user_mode.rs,elf_loader.rs,process.rs,interrupts_ext.rs,smp/percpu.rs}`, `crates/hermes/src/app_factory.rs`

@@ -91,10 +91,9 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0065-cosmic-like-wm-gpu-render-adr.md` | Proposed | `completa` | #495–#510 | **Cosmic-like WM + GPU:** FASES 1.1/1.2/2.1/2.2/3.1/3.2 ✅ completas (commits 289339c + 0fdf20e + 7a5e0a7). Tags adr0065-fase1-3-complete, adr0065-fase2.2-3.2-complete, ui-wm-fixes-v1 |
 | `0075-emagrecer-neural-kernel.md` | Parcial | `completa (parcial)` | #467/#511 | **Emagrecer neural-kernel (2026-07-30):** E0 parcial, E1a/E1c/E2/E3/E4 ✅, aios_api stub ✅ (-72 LOC). Bin 20.403 LOC (−9.028 do original). +Fase 2: hardware/ + adaptation/ → LEGACY (−4.261 LOC speculativa). +main.rs simplificado (−71 linhas). agents/fs/vfs mantidos como role_diff (drift estrutural profundo). **Emagrecimento cirúrgico encerrado — irreducible floor ~115K LOC (workspace).** |
 | `0076-cross-os-ecosystem.md` | Proposed | `fazendo` | #512+ | **Cross-OS Ecosystem:** ADR-0076 + CrossOsAgent + padrões de FYY/Wetware/WeftOS |
+| `0076-cross-os-implementation-plan.md` | — | `plano_sprint` | Companion da ADR-0076 | Plano de implementação Cross-OS (waves) |
 | `0080-legado-tecnologico-e-inovacao.md` | Proposed | `pesquisa` | síntese archive | Rodamap/FS/SESSION_080/082 históricos; não abre sprint sozinha |
 | `0082-hardware-info-registry.md` | Accepted (MVP) | `fazendo` | #520–#525 | **Canônico 0082.** MVP `platform_probe` + Onda CPU SESSION_251. Snapshot WASM / ondas GPU-storage abertas. |
-| `0082-ring3-isolation-registry.md` | Proposed | `conflito_id` | Ring3 checklist | Checklist de execução → **0077**; não é HardwareInfo |
-| `0082-ring3-isolation-production.md` | Proposed | `conflito_id` | ADR-0077 | Produção Ring3; número 0082 colide com HardwareInfo |
 | `0083-ai-layer-gap-auditoria.md` | Accepted | `fazendo` | Auditoria 7.x | Infra + ROUTER.BITNET v6 load ✅ s252; residual: métrica “decisões IA” no boot, W2A8 |
 | `0084-bitnet-engine-fidelidade-e-kernels.md` | Proposed | `fazendo` | #126–156, #375–377, #479–490 | F1–F3/F5 ✅ (SESSION_249). **Aberto:** F4 W2A8 gated WHPX/HW |
 | `0085-bitnet-v6-formato-canonico.md` | Proposed | `completa` | #491 | F0–F4 ✅ + hwexpert v6 SESSION_255. Residual: boot metal 2B/Falcon3 (não reabre formato) |
@@ -103,15 +102,18 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0088-aios-first-premissa-maxima.md` | Accepted | `fazendo` | **#512** #513 | Premissa contínua. s271–274 boot; s281 SMP sem bypass crate-8. Residual #513 measure_bandwidth; metal K23 |
 | `0089-novo-hermes-malha-cognitiva-global.md` | Proposed | `pesquisa` | Whitepaper | **Canônico 0089 pesquisa.** Malha cognitiva v4; pós-v2.0 fases A–E |
 | `0089-smp-per-cpu-runqueue.md` | Proposed | `por_fazer` | #492 | **Conflito 0089.** Runqueue agents no AP; feature `smp-runqueue`; não wired no boot. Ordem de execução → **0100 Onda 4** |
+| `0090-jarbas-desktop-v2-roadmap.md` | Proposed | `fazendo` | Deps 0058/0065/0081 | **Desktop Jarbas v2** (4 Tiers / 15 features). Tier 1 ✅ (s291 orb, s315 liveness) + Soul/Emotion (s319); Tiers 2–4 abertos. |
+| `0091-neural-sgdb-migration.md` | Implemented | `completa` | #527–#535; 0063/0081/0088 | **neural-sgdb externo** como substrato de memória. F0–F3 + Self-Heal closed-loop (s316). Corpo: Status `Implemented` / Lifecycle `proposta_feita` (normalizado aqui). Residual: migrar 75 callers. |
 | `0092-boot-observability.md` | Accepted | `fazendo` | **#539** | **Canônico 0092.** O0–O5 no código (slog sev, PHASE banner, mutes, BOOT SCORE, HUD, profile qemu). Aceite QEMU boot log + `tools/parse_boot_score.py` residual até evidência serial nova. |
-| `0100-k3chj-backlog-custo-anel.md` | Proposed | `fazendo` | **#538** | **Plano-mestre.** Filtra residuals 0077–0089; ondas 0–10 por custo×anel K³CHJ; TODOs T-001–T-075. Lacuna 0090–0099 intencional **exceto ADR-0092**. Não substitui ADRs temáticas |
+| `0093-jarbas-optimization.md` | Accepted | `completa` | Jarbas lock-free/dirty-rect/PT-BR TTS | 45 host tests; 3 `soul_*` falhando (ver TODO); orb s291 + liveness s315. |
+| `0094-hermes-cleanup.md` | Accepted | `completa` | Hermes dead code + host tests | 35 módulos / 7.446 LOC comentados (-23% build); 2 `wasm_build` + 1 `cognitive_bridge` falhando. |
+| `0100-k3chj-backlog-custo-anel.md` | Proposed | `fazendo` | **#538** | **Plano-mestre.** Filtra residuals 0077–0089; ondas 0–10 por custo×anel K³CHJ; TODOs T-001–T-075. Lacuna 0090–0099 preenchida (0090–0094; vazios 0095–0099). Não substitui ADRs temáticas |
 | `0101-falcon3-3b-cognitive-lab.md` | Proposed | `pesquisa` | **#544** | **Lab 3B-first.** Falcon3-3B Instruct 1.58-bit (não 1B, não 7B). Prova SESSION_298: scalar nativo; AVX2 host FMA; metal stub. Onda 0 kernel packed. Não substitui 0084/0085/0060 |
 | `0102-ring3-isolation-migration-cpl03.md` | Proposed | `por_fazer` | **#548** | **Filtro Ring3.** Um sandbox CPL=3 para B/C; rejeita Fuchsia Job/Handle/ExceptionChannel. Execução = **0100 Onda 6** (T-051–T-057). Não substitui **0077**. Honesty: P6 stub + `ring3` não propaga (2026-09-01) |
 | `0103-k-nano-microkernel-modular.md` | Proposed | `fazendo` | **#549** | **Emagreçer k_nano (Fase 1 crates).** Redox = magreza/ref, não process-OS. Fase 2 schemes gated por **0102** HW. S0 ✅; S1 USB hub→MSC wired — aceite metal AWAITING (SESSION_314); checagens C0–C5 no mínimo. Referências: §10.1 Redox read-only, TODO-0103-1. Não substitui **0075**/0041/0042/0102 |
 | `0081-malha-cognitiva-distribuida-p2p.md` | Accepted | `completa (parcial)` | #189/#312f/#315.26/#315.27 | Fase A–C + HMAC s238–241. **Abertos:** SemanticRouter, merge CRDT, merkle piece. SESSION_280: 1c mesh PASS; 2c TCG hang SIPI |
 | `0077-ring3-isolation-ring.md` | Proposed | `fazendo` | ADR-0059 F6; #426; **#548** → 0102 | **Canônico Ring3.** SESSION_278 TCG iretq+CPL3. B/C gated. Filtro de execução / recusa process-OS = **0102**. WHPX/HW + `register_native_ring` abertos |
 | `0078-multi-slot-multimodal-learner.md` | Proposed | `por_fazer` | GGUF→ternário, 6 slots, visão, learner | Fases 1-4 não iniciadas como sprint |
-| `0060-ring3-isolation-ring.md` | Proposed | `conflito_id` | → **0077** | Número 0060 = BEI; este arquivo é cópia Ring3 |
 | `0079-neural-auto-installer.md` | **Superseded (processo) → 0086** | `substituida` | #421 | **AutoInstaller Neural (2026-07-27):** migração pendrive→HD/SSD/NVMe com seleção por HW (modelo por RAM, firmware por PCI, WASM por CPU), MHI no lugar de swap, Limine, particionamento, `MODELS_SOURCE=network`. **Deprecada 2026-08-05 — processo consolidado na ADR-0086 §2** (canônica); mantida como referência de design/riscos |
 | `0079-neural-auto-installer-plan.md` | **Superseded (processo) → 0086** | `substituida` | #421 | **Plano de implementação AutoInstaller:** Fases 0–3 (~3.550 LOC), marcos M0–M4, topologia, checklists por fase. **Deprecado 2026-08-05 — consolidado na ADR-0086 §2**; Fases/Marcos continuam válidos como plano de trabalho detalhado |
 | `NeuralFS.md` | Proposed | `fazendo` | #422 | SESSION_133: USB lock + GPT + unified exFAT; residual power-loss/stress |
@@ -139,10 +141,11 @@ Os conflitos são preservados; nenhum arquivo deve ser renomeado sem migração 
 - **0047:** `0047-latent-space-ai-os.md` é o documento-base. GPU e HMI são extensões nomeadas da família, não novas decisões numeradas.
 - **Lacuna 0008:** não há arquivo ADR-0008 no repositório; o índice não infere conteúdo ausente.
 - **ADR-0074 (lacuna):** sem arquivo próprio; referenciada apenas no código (`hermes/src/git_thin.rs` "git-over-HTTPS thin client (ADR-0074)") e SESSION_241. Conteúdo consolidado na ADR-0086 §3.3.
-- **0060:** `0060-bitnet-cognitivo-bei.md` é o canônico (BEI). `0060-ring3-isolation-ring.md` é cópia histórica → **0077**.
-- **0082:** `0082-hardware-info-registry.md` é o canônico (HardwareInfo). `0082-ring3-isolation-registry.md` e `0082-ring3-isolation-production.md` são checklist Ring3 → **0077**. **ADR-0102 não supersede 0082** (nem HardwareInfo nem o checklist); filtra o checklist via Onda 6.
+- **Lacuna 0066–0073:** sem arquivos próprios (gap histórico entre `0065` e `0075`); não inferir conteúdo ausente.
+- **0060:** `0060-bitnet-cognitivo-bei.md` é o canônico (BEI). `0060-ring3-isolation-ring.md` é cópia histórica → **0077** (movido para `docs/archive/notes/` em 2026-09-10).
+- **0082:** `0082-hardware-info-registry.md` é o canônico (HardwareInfo). `0082-ring3-isolation-registry.md` e `0082-ring3-isolation-production.md` são checklist Ring3 → **0077**, movidos para `docs/archive/notes/` em 2026-09-10. **ADR-0102 não supersede 0082** (nem HardwareInfo nem o checklist); filtra o checklist via Onda 6.
 - **0089:** `0089-novo-hermes-malha-cognitiva-global.md` é pesquisa/whitepaper. `0089-smp-per-cpu-runqueue.md` é runqueue SMP (`por_fazer`). Não fundir.
-- **0090–0099:** lacuna intencional para não colidir com **0100**; **não** preencher IDs vazios. **Exceção:** `0092-boot-observability.md` (contrato de log de boot, maintainer 2026-08-24). 0090/0091/0093–0099 continuam vazios.
+- **0090–0099:** a lacuna original era intencional para não colidir com **0100**; **não** preencher IDs vazios. Preenchidos depois: `0090` (Jarbas Desktop v2), `0091` (neural-sgdb), `0092` (boot observability, maintainer 2026-08-24), `0093` (Jarbas optimization), `0094` (Hermes cleanup). **Vazios: 0095–0099.**
 
 ## Substituições explícitas
 
@@ -162,9 +165,9 @@ Os conflitos são preservados; nenhum arquivo deve ser renomeado sem migração 
 
 Ao fechar uma sprint, aplicar o checklist de `docs/GOVERNANCE.md`: atualizar IDEA_BANK, lifecycle deste índice, TODO, STATE e SESSION na mesma passagem.
 
-## Arquivos fora do padrão — absorvidos e movidos (2026-08-05)
+## Arquivos fora do padrão — absorvidos e movidos
 
-Documentos sem numeração ADR foram revisados, absorvidos nas ADRs atuais e movidos para `docs/archive/notes/`:
+Documentos sem numeração ADR (ou com numeração em conflito) foram revisados, absorvidos nas ADRs atuais e movidos para `docs/archive/notes/`. **Lote 1: 2026-08-05. Lote 2 (legados/duplicados): 2026-09-10.**
 
 | Arquivo (origem) | Absorvido em | Estado |
 |-------------------|--------------|--------|
@@ -174,6 +177,10 @@ Documentos sem numeração ADR foram revisados, absorvidos nas ADRs atuais e mov
 | `pre-v2-residuals.md` | ADRs fonte (cada item aponta sua ADR) + TODO fila ADR | já distribuído → archive |
 | `pre-v2-implementation-plan.md` | TODO fila ADR (itens 12-17 = os do plano, tiers/ordem preservados) | plano histórico → archive |
 | `NeuralFS.md` | **MANTIDO** — referência canônica do FS (lifecycle `fazendo` no INDEX) | canônico |
+| `PLAN_KAI_CORTEX_FIXES.md` | plano k_ai+cortex (base `docs/evidence/ANALYSIS_KAI_CORTEX_2026-08-23.md`); executado em SESSION_317/318 | plano histórico → archive (2026-09-10) |
+| `0060-ring3-isolation-ring.md` | **ADR-0077** (cópia histórica; ≠ `0060-bitnet-cognitivo-bei.md`) | conflito_id → archive (2026-09-10) |
+| `0082-ring3-isolation-production.md` | **ADR-0077** (produção Ring3; `0082` canônico = HardwareInfo) | conflito_id → archive (2026-09-10) |
+| `0082-ring3-isolation-registry.md` | **ADR-0077** (checklist Ring3 subordinado) | conflito_id → archive (2026-09-10) |
 
 
 ## Planos Cursor → ADR (implementados)
