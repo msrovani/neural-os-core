@@ -31,4 +31,8 @@
 #   METAL s330: freeze UI = deadlock SKILL_STORAGE (fix c174c504); timer morto = x2APIC sem
 #     read-back (36c9d1a6); lentidão ~1Hz = calibração LAPIC + ADR-0104 (TimerCap R1, rails/dwell/HITL).
 #     USB/BOOT.LOG no metal = placeholder; "probe nao chegou"/"skip models (no MSC)" — ABERTO
+#   UI s331: orb v2 (gate wall-clock 30fps, OrbState enum, paleta rails, halo SWAR sem
+#     divisão, ring_spans LUT, LOD; bench 112-130µs/frame) + FFT Goertzel (tap cap 1024)
+#     + Hub Health panel agent-driven (HubHealthAgent hermes decide; compositor desenha;
+#     dados medidos, n/a ≠ 0; F12/orb click/badge). USB metal ABERTO (diag FB pronto p/ ler)
 #   Não declarar v2.0.0

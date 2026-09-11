@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s331] - 2026-09-11 — Orb v2 (MCU-JARVIS) + FFT Goertzel + Hub Health panel (agent-driven)
+
+- **Diagnóstico:** fps capado por **LCM acidental** de 2 gates de tick (`%3` do orb × `hz/30` do frame) = 15 fps a 60 Hz; animação **frame-count** (não tempo); cor em **serrilhado perpétuo**; paleta de estado **morta por mismatch de string**; **2 divisões/px** no blend; grid piscando 1-em-4; **FFT ~129k trig/buffer** no caminho do áudio.
+- **Orb v2:** gate único por wall-clock (30 fps alvo), animação time-driven (dt do TSC), cor converge (sem serrilhado), `OrbState` enum dirigido por sinais reais (WAKEWORD/InferQueue/AUDIO_OUT/HEALTH_ISSUE/SLEEP_PHASE/INSTALLER_BUSY), paleta em rails (corpo ciano; acentos violeta/âmbar/verde/vermelho), halo em bandas SWAR (**zero divisão/px**), `ring_spans` de LUT de meia-largura, hex lattice todo paint, LOD do `frame_cost_us`. Bench host: **112-130 µs/frame** (~264k px). `avatar8.rs` deletado (281 LOC, `sqrtf`/px); `SLEEP_PHASE` publicado pelo SleepCycleAgent.
+- **FFT Goertzel:** 2 mul + 2 add/amostra/bin, janela Hann em LUT, tap capado 1024/256 — burst de 64 chunks do HDA não trava o tick; VAD/STT intactos; fallback idle via `SIN_LUT`.
+- **Hub Health panel (agent-driven):** `HubHealthAgent` (hermes, EventDriven) decide abrir/fechar/pill/worst e publica `HUB_HEALTH_STATE`; compositor **zero política** (lê `panel_gen`/`sync_hub_policy`); dados medidos (`timer_cap`/xHCI stage+ccs/heap/agents/`LAST_EXC_*` lock-free), **`n/a` ≠ 0**; placa de vidro α≈216/255 à direita, ~13 rows ASCII, F12/orb click/badge de 4 LEDs; `dirty_panel` + `swap_rect`.
+- Testes: jarbas **67 pass**/3 fail (pré-existentes `jarvis::soul_*`); hermes hub_health 2 pass; `cargo nk`/`cargo check --release` = 0 erros.
+
 ## [1.9.99-s330] - 2026-09-10 — Metal: UI freeze (deadlock) + timer x2APIC + cadência adaptativa (ADR-0104)
 
 - **Freeze da UI (metal):** deadlock determinístico — `SKILL_STORAGE` (TicketLock não-reentrante) segurado em `agents.rs:430` enquanto `cortex_system_prompt`→`memory_store::skills_l0_gated` re-locka (`S4→S5`). Fix: monta o prompt sem segurar o lock + remove `build_system_prompt_for` + clamp UTF-8-safe. (`c174c504`)

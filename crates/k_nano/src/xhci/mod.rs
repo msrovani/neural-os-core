@@ -15,7 +15,7 @@ pub use bringup::{
     host_device_class, host_disable_slot, host_enable_slot, host_ep0_class_nodata,
     host_ep0_control_in, host_ep0_tr_va, host_mark_hub, host_max_ports, host_port_ccs,
     host_reset_port, host_restore_ep0, host_set_configuration, host_set_msc_port,
-    host_ccs_count,
+    host_ccs_count, host_msc_info,
     msc_port_skipped, parse_msc_config, push_route, register_msc_bringup, DevLoc, MscDevice,
     MscEpInfo,
 };
@@ -77,6 +77,8 @@ static XHCI_SELECT: core::sync::atomic::AtomicUsize =
 pub static XHCI_STAGE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 /// BDF do último controller escolhido: (bus<<8)|(dev<<3)|fn.
 pub static XHCI_LAST_BDF: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// Nº de candidatos xHCI (0x0C/0x03) do último scan (diagnóstico Hub Health).
+pub static XHCI_CAND_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 pub const XHCI_STAGE_MSC_DOWN: u8 = 20;
 
@@ -85,6 +87,9 @@ pub fn xhci_last_stage() -> u8 {
 }
 pub fn xhci_last_bdf() -> u32 {
     XHCI_LAST_BDF.load(Ordering::Relaxed)
+}
+pub fn xhci_cand_count() -> u8 {
+    XHCI_CAND_COUNT.load(Ordering::Relaxed)
 }
 /// `true` se o R1 tentou MSC sem controller (distinguível de "0 portas CCS").
 pub fn xhci_msc_down() -> bool {
@@ -434,6 +439,7 @@ unsafe fn port_protocol_major(base: u64, port: u8) -> u8 {
 pub unsafe fn init_xhci_select(index: usize) -> bool {
     XHCI_STAGE.store(0, Ordering::Relaxed);
     let cands = xhci_pci_candidates();
+    XHCI_CAND_COUNT.store(cands.len().min(255) as u8, Ordering::Relaxed);
     if cands.is_empty() {
         XHCI_STAGE.store(1, Ordering::Relaxed);
         crate::slog_nano!("USB", "warn", "nenhum USB HCI PCI 0x0C/0x03");

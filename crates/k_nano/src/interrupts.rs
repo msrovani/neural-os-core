@@ -94,6 +94,50 @@ pub fn scheduler_idle_halt() {
 pub static LAST_SCANCODE: AtomicU8 = AtomicU8::new(0);
 pub static LAST_MOUSE_PACKET: AtomicU32 = AtomicU32::new(0);
 pub static PAGE_FAULT_COUNT: AtomicU32 = AtomicU32::new(0);
+
+// ── Última exceção (s328 Hub Health) — lock-free: `dump_exception` roda em
+// IRQ context (TicketLock em IRQ deadlocks, SESSION_316). ──────────────────
+pub static LAST_EXC_KIND: AtomicU8 = AtomicU8::new(0);
+pub static LAST_EXC_IP: AtomicU64 = AtomicU64::new(0);
+pub static LAST_EXC_COUNT: AtomicU32 = AtomicU32::new(0);
+pub static LAST_EXC_TSC: AtomicU64 = AtomicU64::new(0);
+
+fn exc_kind(name: &str) -> u8 {
+    match name {
+        "#DE" => 1, "#DB" => 2, "#NMI" => 3, "#OF" => 4, "#BR" => 5,
+        "#UD" => 6, "#NM" => 7, "#MF" => 8, "#TS" => 9, "#NP" => 10,
+        "#SS" => 11, "#GP" => 12, "#PF" => 13, "#DF" => 14,
+        _ => 15,
+    }
+}
+
+/// Nome curto da última exceção ("none" se nenhuma).
+pub fn last_exc_name() -> &'static str {
+    match LAST_EXC_KIND.load(Ordering::Relaxed) {
+        1 => "#DE", 2 => "#DB", 3 => "#NMI", 4 => "#OF", 5 => "#BR",
+        6 => "#UD", 7 => "#NM", 8 => "#MF", 9 => "#TS", 10 => "#NP",
+        11 => "#SS", 12 => "#GP", 13 => "#PF", 14 => "#DF",
+        15 => "exc", _ => "none",
+    }
+}
+
+pub fn last_exc_ip() -> u64 {
+    LAST_EXC_IP.load(Ordering::Relaxed)
+}
+
+pub fn last_exc_count() -> u32 {
+    LAST_EXC_COUNT.load(Ordering::Relaxed)
+}
+
+/// Idade da última exceção em ms (`u64::MAX` = sem amostra/relógio).
+pub fn last_exc_age_ms() -> u64 {
+    let tsc = LAST_EXC_TSC.load(Ordering::Relaxed);
+    if tsc == 0 { return u64::MAX; }
+    let hz = crate::tsc::tsc_hz();
+    if hz == 0 { return u64::MAX; }
+    ((crate::tsc::rdtsc().wrapping_sub(tsc) as u128) * 1000 / hz as u128).min(u64::MAX as u128) as u64
+}
+
 /// Posição absoluta atualizada no IRQ/poll (não depende do MouseAgent / Hermes).
 pub static MOUSE_ABS_X: AtomicU32 = AtomicU32::new(640);
 pub static MOUSE_ABS_Y: AtomicU32 = AtomicU32::new(360);
@@ -284,6 +328,11 @@ pub fn heartbeat_fb(ticks: u64) {
 }
 
 fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Option<u64>) {
+    // Telemetria lock-free p/ o Hub Health (antes de qualquer print).
+    LAST_EXC_KIND.store(exc_kind(name), Ordering::Relaxed);
+    LAST_EXC_IP.store(stack_frame.instruction_pointer.as_u64(), Ordering::Relaxed);
+    LAST_EXC_TSC.store(crate::tsc::rdtsc(), Ordering::Relaxed);
+    LAST_EXC_COUNT.fetch_add(1, Ordering::Relaxed);
     puts(b"[EXC] ");
     puts(name.as_bytes());
     puts(b" ip="); puthex(stack_frame.instruction_pointer.as_u64());

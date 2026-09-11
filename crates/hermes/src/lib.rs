@@ -78,6 +78,7 @@ pub mod async_io;
 // pub mod git_thin; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod theme_bridge;
 pub mod manpages;
+pub mod hub_health;
 // pub mod cf_challenge; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 // ADR-0041 H3: MMIO WiFi BE em k-hal; hermes = FE
 pub use k_hal::net::generic_wifi;

@@ -62,6 +62,8 @@ pub enum WmAction {
     OpenChat,                    // Space — abre/foca o chat do Jarbas
     PowerMenu,                   // Ctrl+Alt+Del — mostra menu de desligar
     ShowHelp,                    // H — mostra card de atalhos do teclado
+    ToggleHubHealth,             // F12 — painel Hub Health (glass, fora do WM)
+    CloseHubHealth,              // Esc — fecha o Hub Health
 }
 
 impl WmAction {
@@ -116,6 +118,9 @@ impl WmAction {
             (Modifiers::SUPER, D) => Some(ToggleDock),
             (Modifiers::SUPER, T) => Some(ToggleTiling),
             (Modifiers::SUPER, Space) => Some(ShowLauncher),
+            // Hub Health (fora do WM): F12 alterna, Esc fecha.
+            (Modifiers::NONE, F12) => Some(ToggleHubHealth),
+            (Modifiers::NONE, Escape) => Some(CloseHubHealth),
 
             _ => None,
         }
@@ -164,6 +169,8 @@ pub static SHORTCUTS: &[(KeyCombo, WmAction)] = &[
     (KeyCombo { modifiers: Modifiers::SUPER, key: KeyCode::D }, WmAction::ToggleDock),
     (KeyCombo { modifiers: Modifiers::SUPER, key: KeyCode::T }, WmAction::ToggleTiling),
     (KeyCombo { modifiers: Modifiers::SUPER, key: KeyCode::Space }, WmAction::ShowLauncher),
+    (KeyCombo { modifiers: Modifiers::NONE, key: KeyCode::F12 }, WmAction::ToggleHubHealth),
+    (KeyCombo { modifiers: Modifiers::NONE, key: KeyCode::Escape }, WmAction::CloseHubHealth),
 ];
 
 /// Mapeia scancode PS/2 set 1 → KeyCode. Retorna None se não é tecla WM-mappable.

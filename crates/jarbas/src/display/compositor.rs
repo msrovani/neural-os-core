@@ -7,8 +7,8 @@ use alloc::collections::BTreeMap;
 use k_nano::sync::IrqSafeLock;
 use k_nano::EVENT_BUS;
 use crate::display::decorations;
-use crate::display::fb::DoubleBuffer;
-use crate::display::soul_mirror::{SoulMirrorRenderer, SoulMirrorState};
+use crate::display::fb::{cos_q8, sin_q8, DoubleBuffer};
+use crate::display::soul_mirror::{OrbSignals, SoulMirrorRenderer};
 use crate::display::workspaces::Workspaces;
 use crate::display::focus::{FocusStack, FocusPolicy};
 use crate::display::dock::Dock;
@@ -146,6 +146,72 @@ pub fn hit_power_button(cx: usize, cy: usize, scr_w: usize) -> bool {
     cx >= bx && cx < bx + bw && cy >= by && cy < by + bh
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// Hub Health — glass plaque ancorado à direita, FORA do WM (nunca tile/focus).
+// Geometria spec: x=W-436, y=44, w=420, h=min(H-88,560); tudo × s=min(w,h)/720.
+// ══════════════════════════════════════════════════════════════════════════
+const HUB_W: f32 = 420.0;
+const HUB_H_MAX: f32 = 560.0;
+const HUB_X_OFF: f32 = 436.0;
+const HUB_Y: f32 = 44.0;
+/// Deslocamento do slide-in (px) e duração (µs) — frames intermediários opacos.
+const HUB_SLIDE_PX: usize = 24;
+const HUB_SLIDE_US: u64 = 220_000;
+
+/// Geometria do painel (escalada por `s = min(w,h)/720`).
+pub fn hub_rect(w: usize, h: usize) -> (usize, usize, usize, usize) {
+    let s = (core::cmp::min(w, h) as f32) / 720.0;
+    let pw = (HUB_W * s) as usize;
+    let ph = ((h as f32 - 88.0).min(HUB_H_MAX) * s) as usize;
+    let px = w.saturating_sub((HUB_X_OFF * s) as usize);
+    let py = ((HUB_Y * s) as usize).min(h.saturating_sub(ph));
+    (px, py, pw, ph)
+}
+
+/// Região de staging (rect final + overshoot do slide) — underlay do painel.
+pub fn hub_staging(w: usize, h: usize) -> (usize, usize, usize, usize) {
+    let (px, py, pw, ph) = hub_rect(w, h);
+    let sw = (pw + HUB_SLIDE_PX).min(w.saturating_sub(px));
+    (px, py, sw, ph)
+}
+
+/// Micro badge (4 LEDs USB/MEM/NET/AGENTS) no HUD, perto do brand.
+pub fn hub_badge_rect() -> (usize, usize, usize, usize) {
+    (64, 8, 4 * 8 - 2, 6)
+}
+
+// Paleta do painel (acentos; vidro ~α=216 do bg #0A1220).
+const HUB_BG: (u8, u8, u8) = (0x0A, 0x12, 0x20);
+const HUB_BORDER: (u8, u8, u8) = (0x0A, 0x6E, 0x96);
+const HUB_DIV: (u8, u8, u8) = (0x12, 0x30, 0x48);
+const HUB_LABEL: (u8, u8, u8) = (110, 140, 160);
+const HUB_VALUE: (u8, u8, u8) = (200, 240, 255);
+
+/// Pill publicado pelo HubHealthAgent (código sev 0..3) → cor/label de render.
+fn pill_color(code: u8) -> (u8, u8, u8) {
+    match code {
+        0 => (0x30, 0xFF, 0x90),
+        1 => (0xFF, 0xB0, 0x20),
+        2 => (0xFF, 0x4A, 0x5A),
+        _ => (0x7A, 0x87, 0x94),
+    }
+}
+fn pill_label(code: u8) -> &'static str {
+    match code {
+        0 => "OK",
+        1 => "WARN",
+        2 => "FAIL",
+        _ => "n/a",
+    }
+}
+
+/// Estados dos 4 LEDs do badge: USB, MEM(heap+ram), NET(mesh), AGENTS.
+fn hub_badge_states(hh: &crate::display::gauges::HubHealth) -> [crate::display::gauges::HubState; 4] {
+    use crate::display::gauges::HubState;
+    let mem = hh.rows[7].state.worst(hh.rows[8].state);
+    [hh.rows[1].state, mem, hh.rows[12].state, hh.rows[11].state]
+}
+
 pub fn draw_text(fb: &mut DoubleBuffer, x: usize, y: usize, text: &str, scr_w: usize, r: u8, g: u8, b: u8) {
     // §3.1 (ADR-0090 Tier 1): blit table — pixel-idêntico ao scale=1, zero set_pixel.
     crate::display::font::draw_text_blit(fb, x, y, text, scr_w, r, g, b);
@@ -172,14 +238,27 @@ pub static MOUSE_Y: core::sync::atomic::AtomicUsize = core::sync::atomic::Atomic
 pub static MOUSE_BUTTONS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 // Timing de frame para FPS control
-pub static LAST_FRAME_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-/// ADR-0104 — cadência alvo da UI (fps) e custo EWMA do trabalho de frame (µs).
+// ADR-0104 — cadência alvo da UI (fps) e custo EWMA do trabalho de frame (µs).
 pub const TARGET_FPS: u64 = 30;
 static FRAME_COST_US: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
-/// 1 frame a cada `current_tick_hz()/TARGET_FPS` ticks (nunca 0).
-fn target_frame_ticks() -> u64 {
-    (k_hal::timer_cap::current_tick_hz() / TARGET_FPS).max(1)
+/// Gate de paint por RELÓGIO DE PAREDE (s328): um paint a cada `target_period_us()`.
+/// Substitui o gate por tick (o `%3` do orb + `/30` do frame davam 15 fps reais).
+static LAST_PRESENT_US: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Período-alvo do paint em µs (constante — NÃO derivar da cadência do rail).
+pub fn target_period_us() -> u64 {
+    1_000_000 / TARGET_FPS
+}
+
+/// Relógio da UI: TSC em µs; fallback p/ ticks do PIT quando `tsc_hz()==0`.
+fn ui_now_us(tick: u64) -> u64 {
+    let now = k_nano::tsc::now_us();
+    if now != 0 {
+        now
+    } else {
+        tick.saturating_mul(1_000_000 / k_hal::timer_cap::current_tick_hz().max(1))
+    }
 }
 
 /// Custo EWMA do trabalho de frame em µs (0 = sem amostra).
@@ -212,8 +291,10 @@ pub struct JarbasDesktop {
     pub dirty_mesh: bool,
     pub dirty_cursor: bool,
     pub dirty_dialog: bool,
-    pub last_orb_tick: u64,
-    pub last_hud_tick: u64,
+    /// Último tick que chegou a pintar (cap: 1 paint por tick).
+    pub last_paint_tick: u64,
+    /// Sinais reais do orb (voz/cognição/saúde) — setados pelo DisplayAgent.
+    pub orb_signals: OrbSignals,
 
     // ── FASE 4.3: Hover state ──
     pub hover_zone: HoverZone,
@@ -263,6 +344,22 @@ pub struct JarbasDesktop {
     last_orb_h: usize,
     // Notifications
     pub notifications: NotificationQueue,
+    // ── Hub Health (painel F12; fora do WM) ──
+    // Política (open/close/pill/auto-close) vive no HubHealthAgent (hermes);
+    // o compositor só renderiza o estado publicado (panel_gen/visible).
+    dirty_panel: bool,
+    /// Gen do estado publicado pelo agente (mudou → repaint do painel).
+    hub_gen: u64,
+    /// Full repaint do painel no próximo frame (toggle/checksum/1 Hz/janelas).
+    hub_full: bool,
+    hub_anim_start_us: u64,
+    /// Underlay da região de staging (restore antes de recompor o vidro).
+    hub_underlay: alloc::vec::Vec<u8>,
+    hub_underlay_valid: bool,
+    hub_painted_checksum: u64,
+    hub_last_paint_us: u64,
+    /// Região a apresentar (swap_rect) neste frame.
+    hub_swap_rect: Option<(usize, usize, usize, usize)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -286,7 +383,7 @@ impl JarbasDesktop {
             layers: [Layer::OrbBackground, Layer::HermesOverlay, Layer::AppWindows, Layer::DockBar],
             dirty_orb: true, dirty_hud: true, dirty_windows: true,
             dirty_mesh: true, dirty_cursor: true, dirty_dialog: true,
-            last_orb_tick: 0, last_hud_tick: 0,
+            last_paint_tick: u64::MAX, orb_signals: OrbSignals::default(),
             hover_zone: HoverZone::None, hover_prev: HoverZone::None,
             workspaces: Workspaces::default(),
             focus_stack: FocusStack::new(FocusPolicy::FollowsMouse),
@@ -319,6 +416,15 @@ impl JarbasDesktop {
             last_orb_w: 0,
             last_orb_h: 0,
             notifications: NotificationQueue::new(),
+            dirty_panel: false,
+            hub_gen: 0,
+            hub_full: false,
+            hub_anim_start_us: 0,
+            hub_underlay: alloc::vec::Vec::new(),
+            hub_underlay_valid: false,
+            hub_painted_checksum: 0,
+            hub_last_paint_us: 0,
+            hub_swap_rect: None,
         }
     }
 
@@ -433,9 +539,77 @@ impl JarbasDesktop {
     pub fn invalidate_mesh(&mut self) { self.dirty_mesh = true; }
     pub fn invalidate_cursor(&mut self) { self.dirty_cursor = true; }
     pub fn invalidate_dialog(&mut self) { self.dirty_dialog = true; }
+    pub fn invalidate_panel(&mut self) { self.dirty_panel = true; self.hub_full = true; }
     pub fn invalidate_all(&mut self) {
         self.dirty_orb = true; self.dirty_hud = true; self.dirty_windows = true;
         self.dirty_mesh = true; self.dirty_cursor = true; self.dirty_dialog = true;
+        self.invalidate_panel();
+    }
+
+    // ── Hub Health: política NO AGENTE (hermes::hub_health) ────────────
+    // O compositor só encaminha comandos e sincroniza o estado publicado.
+
+    pub fn hub_is_open(&self) -> bool { hermes::hub_health::panel_visible() }
+
+    pub fn hub_badge_hit(&self, cx: usize, cy: usize) -> bool {
+        let (x, y, w, h) = hub_badge_rect();
+        cx >= x && cx < x + w && cy >= y && cy < y + h
+    }
+
+    /// Clique no orb = toggle do painel (orb não é janela — miss canônico).
+    pub fn orb_hit(&self, mx: i32, my: i32) -> bool {
+        let dx = (mx - self.soul_mirror.cx as i32).abs();
+        let dy = (my - self.soul_mirror.cy as i32).abs();
+        let r = (self.soul_mirror.base_r * 1.25) as i32;
+        dx * dx + dy * dy <= r * r
+    }
+
+    fn publish_hub_cmd(cmd: &str) {
+        let _ = EVENT_BUS.publish(event_bus::Event {
+            id: 0,
+            topic: alloc::string::String::from(hermes::hub_health::TOPIC_HUB_HEALTH_CMD),
+            payload: cmd.as_bytes().to_vec(),
+            token: event_bus::CapabilityToken::Legacy(1),
+        });
+    }
+
+    pub fn toggle_hub_health(&mut self, _now_us: u64) {
+        Self::publish_hub_cmd("toggle");
+    }
+
+    /// `auto_close_us` é ignorado aqui — o auto-close 8s é política do agente
+    /// (HEALTH_ISSUE). Chamada mantida p/ compat dos callers.
+    pub fn open_hub_health(&mut self, _now_us: u64, _auto_close_us: u64) {
+        Self::publish_hub_cmd("open");
+    }
+
+    pub fn close_hub_health(&mut self) {
+        Self::publish_hub_cmd("close");
+    }
+
+    /// Sincroniza com o estado publicado pelo HubHealthAgent (por render, barato):
+    /// gen mudou → repaint; visível subiu → slide-in; caiu → prepara restore.
+    fn sync_hub_policy(&mut self, now_us: u64) {
+        let gen = hermes::hub_health::panel_gen();
+        if gen == self.hub_gen {
+            return;
+        }
+        self.hub_gen = gen;
+        let visible = hermes::hub_health::panel_visible();
+        if visible {
+            if self.hub_anim_start_us == 0 {
+                self.hub_anim_start_us = now_us.max(1);
+            }
+            self.hub_underlay_valid = false;
+            self.hub_painted_checksum = 0;
+            k_nano::slog_jarbas!("HUB", "info", "painel aberto (agente)");
+        } else {
+            self.hub_anim_start_us = 0;
+            self.hub_painted_checksum = 0;
+            k_nano::slog_jarbas!("HUB", "info", "painel fechado (agente)");
+        }
+        self.hub_full = true;
+        self.dirty_panel = true;
     }
 
     pub fn hit_test_hover(&mut self, mx: usize, my: usize) -> HoverZone {
@@ -497,64 +671,68 @@ impl JarbasDesktop {
         self.hover_zone
     }
 
-    // ── FASE 4.4: Voice waveform (32 bars FFT) ────────────────────────
-    fn draw_voice_waveform(&mut self, tick: u64) {
-        let (w, h) = (self.w, self.h);
-        let bar_count = 32usize;
-        let bar_w = 6usize;
-        let bar_gap = 2usize;
-        let max_h = 40usize;
-        let start_x = (w - bar_count * (bar_w + bar_gap)) / 2;
-        let base_y = h.saturating_sub(max_h + 8);
-        let theme = crate::display::theme::current_theme();
-        self.fb.fill_rect_fast(start_x.saturating_sub(4), base_y.saturating_sub(2),
-            bar_count * (bar_w + bar_gap) + 8, max_h + 6, 10, 12, 18);
-        for i in 0..bar_count {
-            let energy = crate::display::avatar::read_fft_bin(i);
-            let bar_h = ((energy * max_h as f32) as usize).min(max_h);
-            if bar_h == 0 { continue; }
-            let x = start_x + i * (bar_w + bar_gap);
-            let y = base_y + max_h - bar_h;
-            let t = bar_h as f32 / max_h as f32;
-            let r = ((1.0 - t) * 40.0) as u8;
-            let g = (80.0 + t * 120.0) as u8;
-            let b = (160.0 + t * 80.0) as u8;
-            self.fb.fill_rect_fast(x, y, bar_w, bar_h, r, g, b);
-        }
-    }
+    // ── FASE 4.4: Voice waveform removido (s328) — sem callers; a
+    // visualização de voz do orb é o próprio SoulMirror (ripples/ticks).
 
     /// ADR-0104: wrapper que mede o custo do frame (EWMA µs) para o
     /// `timer_cap::recommend` — o gate de FPS lê a cadência atual.
-    pub fn render(&mut self, tick: u64, avatar: Option<&mut crate::display::avatar8::Avatar8>, avatar_state: Option<&str>) {
+    pub fn render(&mut self, tick: u64) {
         let t0 = k_nano::tsc::rdtsc();
-        self.render_inner(tick, avatar, avatar_state);
+        self.render_inner(tick);
         record_frame_cost(t0);
     }
 
-    fn render_inner(&mut self, tick: u64, avatar: Option<&mut crate::display::avatar8::Avatar8>, avatar_state: Option<&str>) {
+    /// Sinais reais do orb (drenados pelo DisplayAgent a cada tick).
+    pub fn set_orb_signals(&mut self, sig: OrbSignals) {
+        self.orb_signals = sig;
+    }
+
+    fn render_inner(&mut self, tick: u64) {
         self.tick = tick; let (w, h) = (self.w, self.h);
         RENDER_N.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
 
-        // ── FPS control ──
-        let last = LAST_FRAME_TICK.load(core::sync::atomic::Ordering::Relaxed);
-        if tick.wrapping_sub(last) < target_frame_ticks() { return; }
-        LAST_FRAME_TICK.store(tick, core::sync::atomic::Ordering::Relaxed);
-
-        // Orb: animação a cada 3 ticks (~6 Hz @18) — 2 era ~9 Hz e re-pintava
-        // HUD/dock no mesmo path (bug SESSION_315). Menos CPU no metal soft-halt.
-        if tick.wrapping_sub(self.last_orb_tick) >= 3 {
-            self.dirty_orb = true;
-            self.last_orb_tick = tick;
+        // ── Gate de paint por relógio de parede (s328) ──
+        // Um paint a cada target_period_us(); cap de 1 paint por tick. O relógio
+        // do TSC é independente da cadência do rail (PIT/LAPIC adaptativo).
+        let now = ui_now_us(tick);
+        if now.wrapping_sub(LAST_PRESENT_US.load(core::sync::atomic::Ordering::Relaxed))
+            < target_period_us()
+        {
+            return;
         }
+        if self.last_paint_tick == tick {
+            return;
+        }
+        self.last_paint_tick = tick;
+        LAST_PRESENT_US.store(now, core::sync::atomic::Ordering::Relaxed);
+
+        // Orb anima a cada paint (time-driven dentro do SoulMirror).
+        self.dirty_orb = true;
         // HUD + dock clock: ~1s @18Hz (PIT) / ~0.5s @64Hz. Sem dirty_hud o
         // present_frame não apresenta o dock e o relógio fica 00:00.
         if tick % 16 == 0 {
             self.dirty_hud = true;
         }
 
+        // Hub Health: política do agente → estado local (gen/visible).
+        self.sync_hub_policy(now);
+
+        // Heartbeat 1 Hz + checksum do fill 2 Hz (badge idem).
+        if hermes::hub_health::panel_visible() {
+            let hh = crate::display::gauges::hub_health();
+            if hh.checksum != self.hub_painted_checksum {
+                self.hub_full = true;
+            }
+            if now.saturating_sub(self.hub_last_paint_us) >= 1_000_000 {
+                self.hub_full = true;
+            }
+            self.dirty_panel = true;
+        }
+
         // ── FASE 2: early-exit ──
         if !self.dirty_orb && !self.dirty_hud && !self.dirty_windows
             && !self.dirty_mesh && !self.dirty_cursor && !self.dirty_dialog
+            && !self.dirty_panel
         {
             return;
         }
@@ -563,6 +741,10 @@ impl JarbasDesktop {
         let paint_hud = self.dirty_hud || self.dirty_dialog;
         let paint_windows = self.dirty_windows;
         let paint_dock = self.dirty_hud || self.dirty_windows || self.dirty_dialog;
+        // Painel de vidro: janelas/HUD/banner por cima exigem recomposição full.
+        if hermes::hub_health::panel_visible() && (paint_hud || paint_windows || self.dirty_dialog) {
+            self.hub_full = true;
+        }
 
         // Só cursor: restore+draw+dirty-rect — evita HUD/orb e swap full (TCG).
         if self.dirty_cursor
@@ -571,6 +753,7 @@ impl JarbasDesktop {
             && !self.dirty_windows
             && !self.dirty_mesh
             && !self.dirty_dialog
+            && !self.dirty_panel
         {
             let prev_x = self.cursor_under_x;
             let prev_y = self.cursor_under_y;
@@ -629,10 +812,10 @@ impl JarbasDesktop {
         self.restore_cursor_underlay();
 
         // Only clear orb bounding box — NEVER full screen (anti-flicker).
-        // Glow ~2.2r + particles até ~2.0r → margem generosa.
+        // Halo 2.1r cobre anéis/ticks; bbox = 2.9R + margem (bounds_radius).
         let mut orb_drawn = false;
         if self.dirty_orb || self.dirty_mesh {
-            let orb_cr = (self.soul_mirror.base_r * self.soul_mirror.state.size_scale * 2.6) as usize;
+            let orb_cr = self.soul_mirror.bounds_radius() as usize;
             let ox = self.soul_mirror.cx as usize;
             let oy = self.soul_mirror.cy as usize;
             let x0 = ox.saturating_sub(orb_cr).min(w);
@@ -650,17 +833,17 @@ impl JarbasDesktop {
         }
 
         // Herói visual: Soul Mirror (brand).
-        let _ = avatar;
         if self.avatar_visible && self.dirty_orb {
-            self.draw_orb_layer(tick, w, h, avatar_state);
+            self.draw_orb_layer();
             self.dirty_orb = false;
             orb_drawn = true;
         }
         crate::display::fb::diag_mark(5);
 
-        // Mesh P2P
-        if self.dirty_mesh {
-            self.draw_mesh_graph(tick);
+        // Mesh P2P — dentro da bbox do orb: a bbox é limpa a cada paint do
+        // orb, então o grafo precisa ser redesenhado junto (não só no dirty_mesh).
+        if orb_drawn {
+            self.draw_mesh_graph();
             self.dirty_mesh = false;
         }
 
@@ -683,6 +866,22 @@ impl JarbasDesktop {
             theme.accent.1,
             theme.accent.2,
         );
+
+        // Micro badge do Hub Health (4 LEDs: USB/MEM/NET/AGENTS) — clique abre.
+        if !hermes::hub_health::panel_visible() {
+            let hh = crate::display::gauges::hub_health();
+            let st = hub_badge_states(&hh);
+            let (bx, by, _, _) = hub_badge_rect();
+            for (i, s) in st.iter().enumerate() {
+                let c = s.color();
+                let lx = bx + i * 8;
+                self.fb.fill_rect_fast(lx, by, 6, 6, c.0, c.1, c.2);
+                self.fb.fill_rect_fast(lx, by, 6, 1, 8, 12, 24);
+                self.fb.fill_rect_fast(lx, by + 5, 6, 1, 8, 12, 24);
+                self.fb.fill_rect_fast(lx, by, 1, 6, 8, 12, 24);
+                self.fb.fill_rect_fast(lx + 5, by, 1, 6, 8, 12, 24);
+            }
+        }
 
         let mem_mb = {
             let real = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
@@ -969,6 +1168,17 @@ impl JarbasDesktop {
             draw_text(&mut self.fb, self.w - 60, 0, &alloc::format!("F{}", vcon_active + 1), self.w, 255, 255, 100);
         }
 
+        // Hub Health plaque (por cima de tudo exceto o cursor; SESSION_261).
+        if self.dirty_panel {
+            let bbox = if orb_drawn {
+                Some((self.last_orb_x0, self.last_orb_y0, self.last_orb_w, self.last_orb_h))
+            } else {
+                None
+            };
+            self.draw_hub_panel(now, bbox);
+            self.dirty_panel = false;
+        }
+
         // Cursor do mouse (save underlay → draw → present dirty)
         let mx = MOUSE_X.load(core::sync::atomic::Ordering::Relaxed);
         let my = MOUSE_Y.load(core::sync::atomic::Ordering::Relaxed);
@@ -977,7 +1187,8 @@ impl JarbasDesktop {
         self.dirty_cursor = false;
         let need_full = self.dirty_windows || self.dirty_dialog || vcon_active != 0;
         crate::display::fb::diag_mark(7);
-        self.present_frame(need_full, paint_hud || paint_dock, orb_drawn);
+        let hub_swap = self.hub_swap_rect.take();
+        self.present_frame(need_full, paint_hud || paint_dock, orb_drawn, hub_swap);
         crate::display::fb::diag_mark(8);
         self.dirty_windows = false;
         self.dirty_dialog = false;
@@ -985,7 +1196,13 @@ impl JarbasDesktop {
     }
 
     /// 1º frame / janelas = swap full; orb animado = só dirty-rects (anti-freeze TCG).
-    fn present_frame(&mut self, need_full: bool, swap_hud: bool, swap_orb: bool) {
+    fn present_frame(
+        &mut self,
+        need_full: bool,
+        swap_hud: bool,
+        swap_orb: bool,
+        hub_swap: Option<(usize, usize, usize, usize)>,
+    ) {
         let w = self.w;
         let sb_h = 28usize;
         if self.full_swap_pending || need_full {
@@ -1010,6 +1227,10 @@ impl JarbasDesktop {
                 self.last_orb_w,
                 self.last_orb_h,
             );
+        }
+        // Hub Health region (toggle/slide/checksum — partial não muda pixels).
+        if let Some((hx, hy, hw, hh)) = hub_swap {
+            self.fb.swap_rect(hx, hy, hw, hh);
         }
         // Cursor underlay
         self.fb.swap_rect(
@@ -1045,12 +1266,11 @@ impl JarbasDesktop {
     }
 
     /// Mesh P2P — arestas + satélites em torno do orb (brand = Soul Mirror).
-    /// Sem peers: no-op (orb sozinho = composição limpa).
-    fn draw_mesh_graph(&mut self, tick: u64) {
-        use core::f32::consts::PI;
-        use libm::{sinf, cosf};
+    /// Sem peers: no-op (orb sozinho = composição limpa). Redesenhado junto do
+    /// orb (a bbox é limpa a cada paint); posições via SIN_LUT, sem trig.
+    fn draw_mesh_graph(&mut self) {
         let peers = crate::display::agent::MESH_GRAPH.lock();
-        let n = peers.len().min(12);
+        let n = peers.len().min(8);
         if n == 0 {
             return;
         }
@@ -1058,11 +1278,14 @@ impl JarbasDesktop {
         let cx = (w / 2) as isize;
         let cy = (h / 2) as isize;
         let orbit = (core::cmp::min(w, h) as f32 * 0.32) as isize;
+        let phase = (k_nano::tsc::now_us() / 31_250) as u8; // ~8 s/volta
         for (i, p) in peers.iter().take(n).enumerate() {
-            let ang = (i as f32) * 2.0 * PI / (n as f32);
-            let px = cx + (cosf(ang) * orbit as f32) as isize;
-            let py = cy + (sinf(ang) * orbit as f32) as isize;
-            let pulse = (sinf(tick as f32 * 0.05 + i as f32) * 1.0) as isize;
+            let a8 = ((i as u32 * 256) / n as u32) as u8;
+            let s = sin_q8(a8) as isize;
+            let c = cos_q8(a8) as isize;
+            let px = cx + ((c * orbit) >> 7);
+            let py = cy + ((s * orbit) >> 7);
+            let pulse = (sin_q8(phase.wrapping_add((i as u8) * 32)) as isize) / 24;
             let (er, eg, eb) = if p.reachable {
                 let t = (p.p99_rtt.min(1500) as f32 / 1500.0).clamp(0.0, 1.0);
                 let rr = (60.0 + t * 180.0) as u8;
@@ -1576,10 +1799,9 @@ impl JarbasDesktop {
     }
 
     /// Soul Mirror — orb afetivo (Onda 7) substitui o orb cyan fixo.
-    /// Cor/brilho/pulsação/anéis/rotação vêm do AffectVector + LoopPhase.
-    fn draw_orb_layer(&mut self, _tick: u64, _w: usize, _h: usize, avatar_state: Option<&str>) {
-        // Le AFFECT_SNAPSHOT do BeiInit (sync a cada tick do supervisor).
-        // Converte AffectSnapshot -> AffectVector para SoulMirrorState::from_affect.
+    /// Movimento vem do AffectVector + LoopPhase; cor/acento do OrbState
+    /// (sinais reais setados pelo DisplayAgent em `set_orb_signals`).
+    fn draw_orb_layer(&mut self) {
         let snap = hermes::globals::AFFECT_SNAPSHOT.lock();
         let affect = hermes::affect::AffectVector {
             valence: snap.valence,
@@ -1591,15 +1813,153 @@ impl JarbasDesktop {
             curiosity: snap.curiosity,
             coherence: snap.coherence,
         };
-        let mirror = SoulMirrorState::from_affect(
-            &affect,
-            snap.phase_deg,
-            avatar_state,
-        );
+        let phase_deg = snap.phase_deg;
         drop(snap);
-        self.soul_mirror.update_state(mirror);
+        self.soul_mirror.set_affect(&affect, phase_deg);
         let fft_energy = crate::display::avatar::read_audio_energy();
-        self.soul_mirror.render(&mut self.fb, fft_energy);
+        let sig = self.orb_signals;
+        let now = ui_now_us(self.tick);
+        let _ = self.soul_mirror.paint(&mut self.fb, fft_energy, now, &sig);
+    }
+
+    /// Glass plaque do Hub Health (só aqui — SESSION_261).
+    ///
+    /// `full` (toggle/slide/checksum/1 Hz/janelas) restaura o underlay e
+    /// recompe o vidro inteiro; caso contrário só a interseção com o bbox do orb
+    /// (que acabou de pintar por cima) é recomposta — sem acúmulo de alpha.
+    fn draw_hub_panel(&mut self, now_us: u64, orb_bbox: Option<(usize, usize, usize, usize)>) {
+        let (w, h) = (self.w, self.h);
+        let (px, py, pw, ph) = hub_rect(w, h);
+        if pw == 0 || ph == 0 {
+            return;
+        }
+
+        let (sx, sy, sw, sh) = hub_staging(w, h);
+        if !hermes::hub_health::panel_visible() {
+            if self.hub_underlay_valid {
+                self.fb.copy_rect_in(sx, sy, sw, sh, &self.hub_underlay);
+                self.hub_underlay_valid = false;
+                self.hub_swap_rect = Some((sx, sy, sw, sh));
+            }
+            return;
+        }
+
+        let bpp = self.fb.info.bpp;
+        if self.hub_underlay.len() < sw * sh * bpp {
+            self.hub_underlay = alloc::vec![0u8; sw * sh * bpp];
+            self.hub_underlay_valid = false;
+        }
+
+        let animating = self.hub_anim_start_us != 0
+            && now_us.saturating_sub(self.hub_anim_start_us) < HUB_SLIDE_US;
+        let full = self.hub_full || animating || !self.hub_underlay_valid;
+
+        if full {
+            if self.hub_underlay_valid {
+                self.fb.copy_rect_in(sx, sy, sw, sh, &self.hub_underlay);
+            }
+            self.fb.copy_rect_out(sx, sy, sw, sh, &mut self.hub_underlay);
+            self.hub_underlay_valid = true;
+        }
+
+        // Slide-in (0 no repouso): frames intermediários são opacos.
+        let off = if animating && now_us != 0 {
+            let t = (now_us.saturating_sub(self.hub_anim_start_us) as f32 / HUB_SLIDE_US as f32).clamp(0.0, 1.0);
+            ((1.0 - t) * HUB_SLIDE_PX as f32) as usize
+        } else {
+            0
+        };
+        let x = px + off;
+        let y = py;
+
+        if animating {
+            self.fb.fill_rect_fast(x, y, pw, ph, HUB_BG.0, HUB_BG.1, HUB_BG.2);
+        } else if full {
+            let _ = self.fb.fill_rect_darken_tint(x, y, pw, ph, HUB_BG.0, HUB_BG.1, HUB_BG.2, 216);
+        } else if let Some((bx, by, bw, bh)) = orb_bbox {
+            let ix0 = x.max(bx);
+            let iy0 = y.max(by);
+            let ix1 = (x + pw).min(bx + bw);
+            let iy1 = (y + ph).min(by + bh);
+            if ix1 > ix0 && iy1 > iy0 {
+                let _ = self.fb.fill_rect_darken_tint(
+                    ix0, iy0, ix1 - ix0, iy1 - iy0, HUB_BG.0, HUB_BG.1, HUB_BG.2, 216,
+                );
+            }
+        }
+
+        // Borda 1px #0A6E96 + acento superior 2px ciano.
+        let bd = HUB_BORDER;
+        self.fb.fill_rect_fast(x, y, pw, 1, bd.0, bd.1, bd.2);
+        self.fb.fill_rect_fast(x, y + ph.saturating_sub(1), pw, 1, bd.0, bd.1, bd.2);
+        self.fb.fill_rect_fast(x, y, 1, ph, bd.0, bd.1, bd.2);
+        self.fb.fill_rect_fast(x + pw.saturating_sub(1), y, 1, ph, bd.0, bd.1, bd.2);
+        self.fb.fill_rect_fast(x, y, pw, 2, 0, 212, 255);
+
+        // Conteúdo (layout escalado em q8 a partir de s = min(w,h)/720).
+        let hh = crate::display::gauges::hub_health();
+        let s_q = (core::cmp::min(w, h) * 256 / 720).max(64) as usize;
+        let pad = (14 * s_q) >> 8;
+        let mut cy = y + ((12 * s_q) >> 8);
+
+        // Header + pill do worst (pill vem do agente — código sev 0..3).
+        draw_text(&mut self.fb, x + pad, cy, "HUB HEALTH", self.w, 0, 212, 255);
+        let pill_w = (60 * s_q) >> 8;
+        let pill_h = (20 * s_q) >> 8;
+        let pill_x = x + pw.saturating_sub(pill_w + pad);
+        let pc = pill_color(hermes::hub_health::panel_pill());
+        decorations::draw_rounded_rect(&mut self.fb, pill_x, cy - 2, pill_w, pill_h, 4, pc.0, pc.1, pc.2);
+        let plabel = pill_label(hermes::hub_health::panel_pill());
+        let plx = pill_x + pill_w.saturating_sub(plabel.len() * 9) / 2;
+        draw_text(&mut self.fb, plx, cy + 1, plabel, self.w, 8, 12, 24);
+
+        cy += (24 * s_q) >> 8;
+        draw_text(&mut self.fb, x + pad, cy, hh.live_line(), self.w, 122, 150, 170);
+        cy += (18 * s_q) >> 8;
+        self.fb.fill_rect_fast(x + pad / 2, cy, pw.saturating_sub(pad), 1, HUB_DIV.0, HUB_DIV.1, HUB_DIV.2);
+        cy += (8 * s_q) >> 8;
+
+        // ~13-15 linhas agrupadas: 0 xhci/usb | 2 timer/frame | 4 storage/bootlog/kv
+        // | 7 heap/ram/arena/model | 11 agents/mesh/infer/fault.
+        const GROUP_START: [usize; 5] = [0, 2, 4, 7, 11];
+        let worst_row = hermes::hub_health::panel_worst_row();
+        let pitch = (23 * s_q) >> 8;
+        let sq = (8 * s_q) >> 8;
+        for (i, row) in hh.rows.iter().enumerate() {
+            if i != 0 && GROUP_START.contains(&i) {
+                self.fb.fill_rect_fast(
+                    x + pad / 2,
+                    cy.saturating_sub(3),
+                    pw.saturating_sub(pad),
+                    1,
+                    HUB_DIV.0,
+                    HUB_DIV.1,
+                    HUB_DIV.2,
+                );
+            }
+            let rc = row.state.color();
+            self.fb.fill_rect_fast(x + pad, cy + (pitch.saturating_sub(sq)) / 2, sq, sq, rc.0, rc.1, rc.2);
+            // Pior subsystema (do agente) tem o label aceso — highlight.
+            let (lr, lg, lb) = if worst_row != 0xFF && i == worst_row as usize {
+                rc
+            } else {
+                HUB_LABEL
+            };
+            draw_text(&mut self.fb, x + pad + sq + 8, cy, row.label, self.w, lr, lg, lb);
+            let v = row.value();
+            let vx = x + pw.saturating_sub(pad + v.len() * 9);
+            draw_text(&mut self.fb, vx, cy, v, self.w, HUB_VALUE.0, HUB_VALUE.1, HUB_VALUE.2);
+            cy += pitch;
+        }
+
+        self.hub_painted_checksum = hh.checksum;
+        self.hub_last_paint_us = now_us;
+        self.hub_full = false;
+        // Partial não muda pixels no front (orb apagou e recompe o mesmo vidro);
+        // só full/slide precisam apresentar a região.
+        if full {
+            self.hub_swap_rect = Some((sx, sy, sw, sh));
+        }
     }
 }
 
@@ -1688,5 +2048,52 @@ fn render_app_content(fb: &mut DoubleBuffer, win: &Window, scr_w: usize, _scr_h:
         }
     }
 }
+
+#[cfg(test)]
+mod hub_panel_tests {
+    use super::*;
+
+    #[test]
+    fn hub_rect_spec_at_1280x720() {
+        // s = 1 -> geometria literal da spec.
+        assert_eq!(hub_rect(1280, 720), (844, 44, 420, 560));
+    }
+
+    #[test]
+    fn hub_rect_scales_and_clamps() {
+        // 1440p: s = 2 (min=1440/720) -> w=840, h=min(1440-88,560)*2=1120, x=2560-872.
+        let (x, y, w, h) = hub_rect(2560, 1440);
+        assert_eq!(w, 840);
+        assert_eq!(x, 2560 - 872);
+        assert_eq!(y, 88);
+        assert_eq!(h, 1120);
+        // 640x480 (s~0.667): nunca estoura a tela.
+        let (x, y, w, h) = hub_rect(640, 480);
+        assert!(x + w <= 640, "painel fora da tela: {x}+{w}");
+        assert!(y + h <= 480, "painel fora da tela: {y}+{h}");
+        assert!(w > 0 && h > 0);
+    }
+
+    #[test]
+    fn hub_staging_covers_slide_range() {
+        let (px, py, pw, ph) = hub_rect(1280, 720);
+        let (sx, sy, sw, sh) = hub_staging(1280, 720);
+        assert_eq!((sx, sy), (px, py));
+        assert_eq!(sh, ph);
+        // Staging cobre o painel inteiro + o overshoot do slide que cabe na tela
+        // (a borda direita do painel está a 16px da tela; slide 24px é clipado).
+        assert!(sw >= pw);
+        assert_eq!(sw, (pw + HUB_SLIDE_PX).min(1280 - px));
+        assert!(sx + sw <= 1280);
+    }
+
+    #[test]
+    fn hub_badge_inside_hud_bar() {
+        let (x, y, w, h) = hub_badge_rect();
+        assert!(x >= 60 && x + w < 1280);
+        assert!(y + h <= 28, "badge fora da barra HUD");
+    }
+}
+
 
 

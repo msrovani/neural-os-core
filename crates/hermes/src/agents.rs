@@ -3078,6 +3078,13 @@ impl Agent for SleepCycleAgent {
         }
         if now < self.phase_tick + 200 { return AgentTickResult::Pending; }
         self.execute_phase(_t);
+        // s328: sinal REAL p/ o orb (DREAM) — fase ativa do sleep cycle.
+        let _ = EVENT_BUS.publish(Event {
+            id: 0,
+            topic: String::from("SLEEP_PHASE"),
+            payload: self.phase_name().as_bytes().to_vec(),
+            token: CapabilityToken::Legacy(1),
+        });
         self.phase_tick = now;
         if self.phase >= 5 { self.phase = 0; self.cycle_count += 1; }
         else { self.phase += 1; }

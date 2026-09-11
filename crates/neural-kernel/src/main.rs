@@ -3406,6 +3406,8 @@ pub(crate) fn kernel_boot(
     crate::display::fb::boot_ckpt(51, "MetricsAgent OK");
 
     registry.register(Box::new(agents::HermesAgent::new()));
+    // Hub Health: política do painel F12 (EventDriven) — compositor só renderiza.
+    registry.register(Box::new(hermes_crate::hub_health::HubHealthAgent::new()));
 
     // The Agency: 30+ agentes especialistas
 

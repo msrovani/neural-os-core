@@ -2359,6 +2359,22 @@ pub fn host_set_msc_port(port: u8) {
     }
 }
 
+/// Porta reservada ao MSC + speed do PORTSC (0 = sem MSC / CCS caiu).
+/// Telemetria (Hub Health, ~2 Hz) — não é hot path.
+pub fn host_msc_info() -> Option<(u8, u8)> {
+    let port = {
+        let g = XHCI_STATE.lock();
+        match g.as_ref() {
+            Some(s) if s.msc_port != 0 => s.msc_port,
+            _ => return None,
+        }
+    };
+    match unsafe { host_port_ccs(port) } {
+        Some((speed, _)) => Some((port, speed)),
+        None => Some((port, 0)),
+    }
+}
+
 pub unsafe fn host_mark_hub(slot: u8, loc: DevLoc, nbr_ports: u8, ttt: u32, mtt: bool) -> bool {
     let ctx = match alloc_phys(2) {
         Some(c) => c,

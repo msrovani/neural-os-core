@@ -13,7 +13,6 @@ pub mod overlay;
 pub mod theme;
 pub mod compositor;
 pub mod avatar;
-pub mod avatar8;
 pub mod soul_mirror;
 pub mod ui_spec;
 pub mod embed_viz;

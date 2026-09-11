@@ -5,7 +5,7 @@ use hermes;
 use k_nano::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};
 use crate::display::compositor::{COMPOSITOR, JarbasDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS, POWER_BANNER, POWER_STATE, PowerState, PowerDialogAction, hit_power_button};
-use crate::display::avatar8::{Avatar8State, Avatar8};
+use crate::display::soul_mirror::OrbSignals;
 use crate::display::ui_spec::{self, TOPIC_UI_SPEC};
 use crate::display::shortcuts::{KeyCombo, Modifiers, WmAction, scancode_to_keycode};
 use crate::display::gpu_backend;
@@ -163,12 +163,22 @@ pub struct DisplayAgent {
     phase_recv: event_bus::Receiver,
     /// ADR-0086 A5: receiver para solicitação de UI de seleção de disco.
     install_ui_receiver: Option<event_bus::Receiver>,
+    hub_state_receiver: Option<event_bus::Receiver>,
+    // ── OrbState (s328): sinais reais → janelas temporais ──
+    wake_receiver: event_bus::Receiver,
+    audio_out_receiver: event_bus::Receiver,
+    infer_tts_receiver: event_bus::Receiver,
+    health_receiver: event_bus::Receiver,
+    sleep_receiver: event_bus::Receiver,
+    orb_listen_until_us: u64,
+    orb_speak_until_us: u64,
+    orb_alert_until_us: u64,
+    orb_degraded_until_us: u64,
+    orb_dream_until_us: u64,
+    orb_activity: u32,
     gpu_inited: bool,
     demo_ui_sent: bool,
     input_buffer: alloc::string::String,
-    avatar: Option<Avatar8>,
-    /// Current avatar state label for Jarbas palette override
-    avatar_state_label: Option<&'static str>,
     dragging: bool,
     drag_id: AppId,
     drag_off_x: isize,
@@ -206,11 +216,21 @@ impl DisplayAgent {
             mesh_health_receiver: None,
             phase_recv: k_nano::EVENT_BUS.subscribe("LOOP_PHASE"),
             install_ui_receiver: None,
+            hub_state_receiver: None,
+            wake_receiver: EVENT_BUS.subscribe(crate::audio::TOPIC_WAKEWORD),
+            audio_out_receiver: EVENT_BUS.subscribe(crate::audio::TOPIC_AUDIO_OUT),
+            infer_tts_receiver: EVENT_BUS.subscribe("INFER_TTS_PARTIAL"),
+            health_receiver: EVENT_BUS.subscribe("HEALTH_ISSUE"),
+            sleep_receiver: EVENT_BUS.subscribe("SLEEP_PHASE"),
+            orb_listen_until_us: 0,
+            orb_speak_until_us: 0,
+            orb_alert_until_us: 0,
+            orb_degraded_until_us: 0,
+            orb_dream_until_us: 0,
+            orb_activity: 0,
             gpu_inited: false,
             demo_ui_sent: false,
             input_buffer: alloc::string::String::new(),
-            avatar: None,
-            avatar_state_label: None,
             dragging: false,
             drag_id: AppId::None,
             drag_off_x: 0,
@@ -244,7 +264,6 @@ impl DisplayAgent {
 
     /// Drena receiver → overlay HITL/chat (spawn de janela, sem draw no tick).
     fn drain_hermes_overlay(
-        avatar: &mut Option<Avatar8>,
         rx: &mut event_bus::Receiver,
         mode: OverlayMode,
     ) {
@@ -290,11 +309,6 @@ impl DisplayAgent {
                         content: alloc::format!("[{}] {}", overlay_tag(mode), text),
                     });
                 }
-                }
-            }
-            if matches!(mode, OverlayMode::HitlConfirm | OverlayMode::MemoryNudge) {
-                if let Some(ref mut av) = avatar {
-                    av.set_state(Avatar8State::Listening);
                 }
             }
             match mode {
@@ -382,6 +396,16 @@ impl DisplayAgent {
             k_nano::slog_jarbas!("JARBAS", "POWER", "dialog ABERTO");
             return "power_dialog_open";
         }
+        // Micro badge Hub Health (4 LEDs no HUD) — clique alterna o painel.
+        {
+            let mut comp = COMPOSITOR.lock();
+            if let Some(ref mut d) = *comp {
+                if d.hub_badge_hit(cx, cy) {
+                    d.toggle_hub_health(k_nano::tsc::now_us());
+                    return "hub:badge";
+                }
+            }
+        }
         // Clique fora desarma banner antigo (se houver)
         if self.power_armed_until != 0 {
             self.power_armed_until = 0;
@@ -403,7 +427,7 @@ impl DisplayAgent {
             }
         }
 
-        // Hit-test real: dock → cards → janelas. Clique no orb/grafo = miss.
+        // Hit-test real: dock → cards → janelas. Clique no orb = toggle Hub Health.
         let hit = {
             let mut comp = COMPOSITOR.lock();
             match comp.as_mut() {
@@ -411,6 +435,16 @@ impl DisplayAgent {
                 None => "miss",
             }
         };
+        if hit == "miss" {
+            let mut comp = COMPOSITOR.lock();
+            if let Some(ref mut d) = *comp {
+                if d.orb_hit(cx as i32, cy as i32) {
+                    d.toggle_hub_health(k_nano::tsc::now_us());
+                    k_nano::slog_jarbas!("HUB", "info", "clique no orb → toggle painel");
+                    return "orb:hub";
+                }
+            }
+        }
         if hit == "drag" || hit == "resize" || hit == "win:drag" {
             self.dragging = true;
             self.drag_id = AppId::None;
@@ -531,6 +565,11 @@ impl Agent for DisplayAgent {
             || self.ui_receiver.has_pending()
             || self.toast_receiver.has_pending()
             || self.render_window_receiver.has_pending()
+            || self.wake_receiver.has_pending()
+            || self.audio_out_receiver.has_pending()
+            || self.infer_tts_receiver.has_pending()
+            || self.health_receiver.has_pending()
+            || self.sleep_receiver.has_pending()
     }
 
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
@@ -591,18 +630,16 @@ impl Agent for DisplayAgent {
                 let gpu = GPU.lock();
                 gpu.as_ref().map(|gpu_dev| {
                     let fb = DoubleBuffer::from_gpu(gpu_dev);
-                    let av = Avatar8::new(gpu_dev.fb_width as usize, gpu_dev.fb_height as usize);
-                    (fb, av, gpu_dev.fb_width, gpu_dev.fb_height)
+                    (fb, gpu_dev.fb_width, gpu_dev.fb_height)
                 })
             };
-            if let Some((fb, av, fw, fh)) = built {
+            if let Some((fb, fw, fh)) = built {
                 let mut desktop = JarbasDesktop::new(fb);
                 if crate::display::chat_window::chat_ui_enabled() {
                     desktop.register_app(AppId::HermesChat, "Jarbas Chat", Layer::AppWindows);
                 }
                 k_nano::slog_jarbas!("UI", "info", "Desktop limpo — orb + HUD");
                 *COMPOSITOR.lock() = Some(desktop);
-                self.avatar = Some(av);
                 // Limites + centro para IRQ mouse
                 k_nano::interrupts::MOUSE_MAX_X.store(fw.saturating_sub(1), core::sync::atomic::Ordering::Release);
                 k_nano::interrupts::MOUSE_MAX_Y.store(fh.saturating_sub(1), core::sync::atomic::Ordering::Release);
@@ -633,7 +670,7 @@ impl Agent for DisplayAgent {
                     desktop.invalidate_all();
                     // Animação usa tick do scheduler: se o IRQ timer falhar, a UI
                     // continua responsiva enquanto o runtime ainda progride.
-                    desktop.render(tick, self.avatar.as_mut(), self.avatar_state_label);
+                    desktop.render(tick);
                 }
                 k_nano::boot_logger::mark_ui_live();
                 // Mic aberto pós-desktop: STT/VAD sem depender só do wakeword.
@@ -717,6 +754,7 @@ impl Agent for DisplayAgent {
 
         // ── LLM_STREAM: processa pacotes streaming no ChatWindow ──
         while let Some(ev) = self.llm_stream_receiver.try_receive() {
+            self.orb_activity = self.orb_activity.wrapping_add(1);
             if let Some(pkt) = hermes::stream_packet::StreamPacket::decode(&ev.payload) {
                 match &pkt {
                     hermes::stream_packet::StreamPacket::ReasoningStart
@@ -822,9 +860,9 @@ impl Agent for DisplayAgent {
         }
 
         // HITL / HERMES_RESPONSE / memory — teto por tick (fila EventBus unbounded).
-        Self::drain_hermes_overlay(&mut self.avatar, &mut self.hitl_receiver, OverlayMode::HitlConfirm);
-        Self::drain_hermes_overlay(&mut self.avatar, &mut self.hitl_term_receiver, OverlayMode::HitlTerminal);
-        Self::drain_hermes_overlay(&mut self.avatar, &mut self.memory_nudge_receiver, OverlayMode::MemoryNudge);
+        Self::drain_hermes_overlay(&mut self.hitl_receiver, OverlayMode::HitlConfirm);
+        Self::drain_hermes_overlay(&mut self.hitl_term_receiver, OverlayMode::HitlTerminal);
+        Self::drain_hermes_overlay(&mut self.memory_nudge_receiver, OverlayMode::MemoryNudge);
         for _ in 0..DRAIN_CAP {
             let Some(ev) = self.receiver.try_receive() else { break; };
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
@@ -862,20 +900,7 @@ impl Agent for DisplayAgent {
                 let Some(pkt) = rx.try_receive() else { break; };
                 drained += 1;
             let norm = f32::from_bits(pkt.norm_bits);
-            if let Some(ref mut avatar8) = self.avatar {
-                let st = if norm > 8.0 {
-                    Avatar8State::Speaking
-                } else if norm > 2.0 {
-                    Avatar8State::Processing
-                } else if norm > 0.1 {
-                    Avatar8State::Listening
-                } else {
-                    Avatar8State::Idle
-                };
-                avatar8.set_state(st);
-                self.avatar_state_label = Some(st.label());
-                ui_spec::mark_avatar_telem();
-            }
+            ui_spec::mark_avatar_telem();
             if let Some(ref mut desktop) = *COMPOSITOR.lock() {
                 let w = desktop.fb.info.width;
                 let h = desktop.fb.info.height;
@@ -957,6 +982,12 @@ impl Agent for DisplayAgent {
                             ));
                             desktop.spawn_card(decl);
                         }
+                        WmAction::ToggleHubHealth => {
+                            desktop.toggle_hub_health(k_nano::tsc::now_us());
+                        }
+                        WmAction::CloseHubHealth => {
+                            desktop.close_hub_health();
+                        }
                     }
                     k_nano::slog_jarbas!("WM", "info", "action={:?}", action);
                 }
@@ -1024,6 +1055,19 @@ impl Agent for DisplayAgent {
             }
         }
 
+        // ── HUB_HEALTH_STATE: política do HubHealthAgent (hermes) mudou →
+        // repaint do painel. O compositor sincroniza o resto no render.
+        if self.hub_state_receiver.is_none() {
+            self.hub_state_receiver = Some(EVENT_BUS.subscribe(hermes::hub_health::TOPIC_HUB_HEALTH_STATE));
+        }
+        if let Some(ref rx) = self.hub_state_receiver {
+            while rx.try_receive().is_some() {
+                if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                    desktop.invalidate_panel();
+                }
+            }
+        }
+
         // ── SYS_INSTALL_UI: solicitação de UI de seleção de disco (ADR-0086 A5) ──
         if self.install_ui_receiver.is_none() {
             self.install_ui_receiver = Some(EVENT_BUS.subscribe(k_nano::installer_agent::TOPIC_SYS_INSTALL_UI));
@@ -1038,18 +1082,76 @@ impl Agent for DisplayAgent {
             }
         }
 
+        // OrbState (s328): sinais REAIS → OrbSignals ────────────────────
+        // Janelas temporais ficam aqui; a máquina de estados com dwell vive
+        // no SoulMirror. thinking = InferQueue (job ativo/fila); updating =
+        // instalador (SYS_INSTALL_UI/INSTALLER_BUSY); sleep cycle publica
+        // SLEEP_PHASE; saúde crítica (I5/panic/fault) → ALERT.
+        // Auto-open do Hub Health é política do HubHealthAgent (hermes).
+        let sig = {
+            let now = k_nano::tsc::now_us();
+            let active = |until: u64| -> bool {
+                if now == 0 { until == u64::MAX } else { now < until }
+            };
+            while let Some(_ev) = self.wake_receiver.try_receive() {
+                self.orb_listen_until_us = if now == 0 { u64::MAX } else { now + 6_000_000 };
+                self.orb_activity = self.orb_activity.wrapping_add(1);
+            }
+            while let Some(_ev) = self.audio_out_receiver.try_receive() {
+                self.orb_speak_until_us = if now == 0 { u64::MAX } else { now + 1_500_000 };
+                self.orb_activity = self.orb_activity.wrapping_add(1);
+            }
+            while let Some(_ev) = self.infer_tts_receiver.try_receive() {
+                self.orb_speak_until_us = if now == 0 { u64::MAX } else { now + 1_500_000 };
+                self.orb_activity = self.orb_activity.wrapping_add(1);
+            }
+            while let Some(ev) = self.health_receiver.try_receive() {
+                let msg = core::str::from_utf8(&ev.payload).unwrap_or("");
+                let critical =
+                    msg.contains("I5") || msg.contains("panic") || msg.contains("fault");
+                if critical {
+                    self.orb_alert_until_us = if now == 0 { u64::MAX } else { now + 12_000_000 };
+                } else {
+                    self.orb_degraded_until_us = if now == 0 { u64::MAX } else { now + 8_000_000 };
+                }
+                // Auto-open 8s: política do HubHealthAgent (hermes) — nada aqui.
+            }
+            while let Some(ev) = self.sleep_receiver.try_receive() {
+                let phase = core::str::from_utf8(&ev.payload).unwrap_or("");
+                if phase.is_empty() || phase == "IDLE" {
+                    self.orb_dream_until_us = 0;
+                } else {
+                    self.orb_dream_until_us = if now == 0 { u64::MAX } else { now + 30_000_000 };
+                }
+            }
+            let peers = MESH_GRAPH.lock().len().min(8) as u8;
+            OrbSignals {
+                listening: active(self.orb_listen_until_us),
+                thinking: cortex::infer_queue::has_work(),
+                speaking: active(self.orb_speak_until_us),
+                alert: active(self.orb_alert_until_us),
+                degraded: active(self.orb_degraded_until_us),
+                dreaming: active(self.orb_dream_until_us),
+                updating: k_nano::installer_agent::INSTALLER_BUSY
+                    .load(core::sync::atomic::Ordering::Relaxed),
+                peers,
+                activity: self.orb_activity,
+            }
+        };
+
         crate::display::fb::diag_mark(4);
-        // Render desktop: orb circular no compositor (avatar partículas após clear interno)
+        // Render desktop: orb circular no compositor (SoulMirror time-driven).
         let mut comp = COMPOSITOR.lock();
         if let Some(ref mut desktop) = *comp {
             // Consome clique em botão de card (ex: seleção de disco do instalador).
             if let Some((card_id, btn_idx)) = desktop.take_card_hit_button() {
                 self.handle_card_button(card_id, btn_idx);
             }
+            desktop.set_orb_signals(sig);
             // Render/liveness não dependem do LAPIC/PIT; relógio do dock lê
             // TIMER_TICKS separadamente. Assim mouse/orb não congelam se o
             // timer de parede degradar, mas o scheduler continuar acordando.
-            desktop.render(tick, self.avatar.as_mut(), self.avatar_state_label);
+            desktop.render(tick);
         }
         drop(comp);
 

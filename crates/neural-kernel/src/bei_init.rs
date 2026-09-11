@@ -9,7 +9,6 @@ use k_nano::sync::mpmc::MpmcQueue;
 use k_ai::{economy::BudgetManager, expert_lifecycle::ExpertLifecycleManager};
 use cortex_crate::{cellular::{CellNetwork, CellType}, evolution::PlasticityController, moe::DynamicMoE};
 use hermes_crate::{memory::{MemoryStore, MemoryLevel}, affect::{AffectRegulator, AffectVector, AffectEvent}, executive::{ExecutiveSupervisor, SupervisorVerdict}};
-use jarbas_crate::display::soul_mirror::SoulMirrorState;
 
 
 /// Global BEI state container
@@ -36,9 +35,6 @@ pub struct BeiState {
     
     // Wave 6: Supervisor
     pub executive_supervisor: Arc<Mutex<ExecutiveSupervisor>>,
-    
-    // Wave 7: Soul Mirror (state synced in tick; render owned by compositor)
-    pub soul_mirror_state: Arc<Mutex<SoulMirrorState>>,
     
     // Current tick for synchronization
     pub current_tick: Arc<Mutex<u64>>,
@@ -106,8 +102,9 @@ impl BeiState {
         k_nano::slog_bin!("BEI", "wave6", "ExecutiveSupervisor created (7-phase loop)");
         
         // ─── Wave 7: Soul Mirror ───
-        let soul_mirror_state = Arc::new(Mutex::new(SoulMirrorState::neutral()));
-        k_nano::slog_bin!("BEI", "wave7", "SoulMirrorState created");
+        // Estado do orb mora no compositor (jarbas::display::soul_mirror);
+        // o BEI só publica o affect via AFFECT_SNAPSHOT (bridge abaixo).
+        k_nano::slog_bin!("BEI", "wave7", "Soul Mirror: affect via AFFECT_SNAPSHOT (compositor owns render)");
         
         // ─── Cross-connections ───
         Self::connect_components(
@@ -133,7 +130,6 @@ impl BeiState {
             memory_store,
             affect_regulator,
             executive_supervisor,
-            soul_mirror_state,
             current_tick: Arc::new(Mutex::new(0)),
         }
     }
@@ -306,12 +302,10 @@ impl BeiState {
             phase_deg = supervisor.phase.rotation_deg();
         }
         
-        // 6. Sync SoulMirrorState with AffectVector
+        // 6. Sync AFFECT_SNAPSHOT for compositor (hermes::globals bridge) —
+        // o OrbState do compositor lê daqui; sem cópia local no BEI.
         {
             let affect = self.affect_regulator.lock().affect;
-            let _state = SoulMirrorState::from_affect(&affect, phase_deg, None);
-            *self.soul_mirror_state.lock() = _state;
-            // 6b. Sync AFFECT_SNAPSHOT for compositor (hermes::globals bridge)
             hermes_crate::globals::sync_affect_snapshot(&affect, phase_deg);
         }
         

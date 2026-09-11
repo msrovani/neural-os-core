@@ -42,6 +42,32 @@ pub fn sin_lut(tick: u64) -> f32 { SIN_LUT[(tick & 0xFF) as usize] as f32 / 127.
 #[inline(always)]
 pub fn cos_lut(tick: u64) -> f32 { SIN_LUT[((tick + 64) & 0xFF) as usize] as f32 / 127.0 }
 
+/// Seno quantizado i8 (-127..127) por fase 0..255 = turno completo.
+/// Substitui sinf/cosf no hot path do orb (SIN_LUT existente).
+#[inline(always)]
+pub fn sin_q8(phase: u8) -> i8 { SIN_LUT[phase as usize] }
+/// Cosseno quantizado i8 via SIN_LUT (fase + 64).
+#[inline(always)]
+pub fn cos_q8(phase: u8) -> i8 { SIN_LUT[((phase as usize) + 64) & 0xFF] }
+
+/// LUT de meias-larguras de círculo: `out[radius+dy] = isqrt(radius²-dy²)`.
+/// Construída uma vez por raio inteiro (cache do chamador) e reusada por
+/// `fill_circle_*_spans`/`ring_spans` — elimina sqrt/trig por ponto.
+/// Retorna o número de entradas escritas (2·radius+1) ou 0 se `out` for curto.
+pub fn build_half_width_lut(radius: usize, out: &mut [u16]) -> usize {
+    let need = radius * 2 + 1;
+    if out.len() < need || radius == 0 {
+        return 0;
+    }
+    let r2 = radius as u64 * radius as u64;
+    for dy in 0..=radius {
+        let hw = isqrt_u64(r2 - (dy * dy) as u64) as u16;
+        out[radius + dy] = hw;
+        out[radius - dy] = hw;
+    }
+    need
+}
+
 static CONSOLE_LINE: AtomicUsize = AtomicUsize::new(0);
 static CONSOLE_INITED: AtomicBool = AtomicBool::new(false);
 /// DisplayAgent / compositor assume o FB — console de boot (K*) deixa de pintar texto.
@@ -1370,13 +1396,14 @@ impl DoubleBuffer {
     }
 
     /// Fill sólido por linha (u32). O loop `aw/4` antigo pintava só 25% do rect.
-    pub fn fill_rect_fast(&mut self, x: usize, y: usize, w: usize, h: usize, r: u8, g: u8, b: u8) {
-        if x >= self.info.width || y >= self.info.height { return; }
+    /// Retorna os pixels efetivamente escritos (clipping aplicado).
+    pub fn fill_rect_fast(&mut self, x: usize, y: usize, w: usize, h: usize, r: u8, g: u8, b: u8) -> usize {
+        if x >= self.info.width || y >= self.info.height { return 0; }
         let x2 = (x + w).min(self.info.width);
         let y2 = (y + h).min(self.info.height);
         let aw = x2 - x;
         let ah = y2 - y;
-        if aw == 0 || ah == 0 { return; }
+        if aw == 0 || ah == 0 { return 0; }
         self.dirty = true;
         let bpp = self.info.bpp;
         let stride = self.info.stride;
@@ -1416,6 +1443,7 @@ impl DoubleBuffer {
                 }
             }
         }
+        aw * ah
     }
 
     pub fn draw_line(&mut self, x0: isize, y0: isize, x1: isize, y1: isize, r: u8, g: u8, b: u8) {
@@ -1568,6 +1596,213 @@ impl DoubleBuffer {
                 }
             }
         }
+    }
+
+    /// SWAR tint blend: `dst += ((tint - dst) * k) >> 8` por canal, sem
+    /// divisão por pixel. Escrita in-place — preserva grid/scanlines por baixo
+    /// (halo do orb). `k`: 0 = identidade, 255 = tint. Retorna pixels tocados.
+    pub fn fill_rect_darken_tint(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        r: u8,
+        g: u8,
+        b: u8,
+        k: u8,
+    ) -> usize {
+        if k == 0 || w == 0 || h == 0 || x >= self.info.width || y >= self.info.height {
+            return 0;
+        }
+        let x2 = (x + w).min(self.info.width);
+        let y2 = (y + h).min(self.info.height);
+        let aw = x2 - x;
+        let ah = y2 - y;
+        if aw == 0 || ah == 0 { return 0; }
+        self.dirty = true;
+        let bpp = self.info.bpp;
+        let stride = self.info.stride;
+        let ptr = self.back.as_mut_ptr();
+        let kk = k as u32;
+        let inv = 256 - kk;
+        unsafe {
+            if bpp == 4 {
+                let tint_word = if self.info.rgb_order {
+                    u32::from_le_bytes([r, g, b, 0xFF])
+                } else {
+                    u32::from_le_bytes([b, g, r, 0xFF])
+                };
+                // SWAR: 2 canais por word (bytes 0/2 e 1/3). Cada grupo de 16
+                // bits fica ≤ 255*256 = 65280 — sem carry entre grupos.
+                let te = tint_word & 0x00FF_00FF;
+                let to = (tint_word >> 8) & 0x00FF_00FF;
+                let tek = te * kk;
+                let tok = to * kk;
+                for dy in 0..ah {
+                    let mut p = ptr.add((y + dy) * stride + x * bpp) as *mut u32;
+                    for _ in 0..aw {
+                        let d = p.read();
+                        let de = d & 0x00FF_00FF;
+                        let do_ = (d >> 8) & 0x00FF_00FF;
+                        let re = (tek + de * inv) >> 8;
+                        let ro = (tok + do_ * inv) >> 8;
+                        p.write((re & 0x00FF_00FF) | ((ro & 0x00FF_00FF) << 8));
+                        p = p.add(1);
+                    }
+                }
+            } else {
+                let (c0, c1, c2) = if self.info.rgb_order { (r, g, b) } else { (b, g, r) };
+                let ch = [c0, c1, c2];
+                for dy in 0..ah {
+                    let base = (y + dy) * stride + x * bpp;
+                    for dx in 0..aw {
+                        let off = base + dx * bpp;
+                        for ci in 0..3 {
+                            let d = ptr.add(off + ci).read() as i32;
+                            let nv = d + (((ch[ci] as i32 - d) * kk as i32) >> 8);
+                            ptr.add(off + ci).write(nv.clamp(0, 255) as u8);
+                        }
+                        if bpp > 3 { ptr.add(off + 3).write(0xFF); }
+                    }
+                }
+            }
+        }
+        aw * ah
+    }
+
+    /// Disco plano por linhas (cor sólida) usando LUT de meias-larguras.
+    /// Zero trabalho por pixel além do fill de linha. Retorna pixels pintados.
+    pub fn fill_circle_flat_spans(
+        &mut self,
+        cx: isize,
+        cy: isize,
+        radius: isize,
+        half: &[u16],
+        r: u8,
+        g: u8,
+        b: u8,
+    ) -> usize {
+        if radius <= 0 { return 0; }
+        let ru = radius as usize;
+        if half.len() < ru * 2 + 1 { return 0; }
+        let fh = self.info.height as isize;
+        let fw = self.info.width as isize;
+        let mut filled = 0usize;
+        for dy in -radius..=radius {
+            let py = cy + dy;
+            if py < 0 || py >= fh { continue; }
+            let xw = half[(radius + dy) as usize] as isize;
+            let x0 = (cx - xw).max(0);
+            let x1 = (cx + xw).min(fw - 1);
+            if x1 < x0 { continue; }
+            filled += self.fill_rect_fast(x0 as usize, py as usize, (x1 - x0 + 1) as usize, 1, r, g, b);
+        }
+        filled
+    }
+
+    /// Disco com falloff radial em BANDAS DE LINHA: alpha quadrático por linha
+    /// (1 recíproco por disco, zero divisão por pixel) e blend SWAR in-place.
+    /// `strength` = alpha máximo do centro (0..=255). Retorna pixels tocados.
+    pub fn fill_circle_alpha_bands(
+        &mut self,
+        cx: isize,
+        cy: isize,
+        radius: isize,
+        half: &[u16],
+        r: u8,
+        g: u8,
+        b: u8,
+        strength: u8,
+    ) -> usize {
+        if radius <= 0 || strength == 0 { return 0; }
+        let ru = radius as usize;
+        if half.len() < ru * 2 + 1 { return 0; }
+        let r2 = (radius as u64) * (radius as u64);
+        if r2 == 0 { return 0; }
+        // Recíproco Q32 — 1 divisão por disco; ratio_q32 >> 24 = alpha 0..255.
+        let inv_q32 = (1u64 << 32) / r2;
+        let fh = self.info.height as isize;
+        let fw = self.info.width as isize;
+        let mut filled = 0usize;
+        for dy in -radius..=radius {
+            let py = cy + dy;
+            if py < 0 || py >= fh { continue; }
+            let yy = (dy * dy) as u64;
+            if yy > r2 { continue; }
+            let lin = (((r2 - yy) * inv_q32) >> 24).min(255) as u32; // 0..255
+            let a = (lin * lin) >> 8; // falloff quadrático
+            let k = (a * strength as u32) >> 8;
+            if k < 2 { continue; }
+            let xw = half[(radius + dy) as usize] as isize;
+            let x0 = (cx - xw).max(0);
+            let x1 = (cx + xw).min(fw - 1);
+            if x1 < x0 { continue; }
+            filled += self.fill_rect_darken_tint(
+                x0 as usize, py as usize, (x1 - x0 + 1) as usize, 1, r, g, b, k as u8,
+            );
+        }
+        filled
+    }
+
+    /// Arco/anel elíptico por spans (2 spans por linha) com brilho viajante da
+    /// SIN_LUT. `half` = LUT de meias-larguras do raio `ry` (círculo unitário
+    /// escalado para rx/ry) — zero trig por ponto. `dy0..=dy1` permite desenhar
+    /// só a metade traseira/dianteira do anel (perspectiva). Retorna pixels.
+    pub fn ring_spans(
+        &mut self,
+        cx: isize,
+        cy: isize,
+        rx: isize,
+        ry: isize,
+        thickness: isize,
+        r: u8,
+        g: u8,
+        b: u8,
+        phase: u8,
+        dy0: isize,
+        dy1: isize,
+        half: &[u16],
+    ) -> usize {
+        if rx <= 0 || ry <= 0 || thickness <= 0 { return 0; }
+        let ruy = ry as usize;
+        if half.len() < ruy * 2 + 1 { return 0; }
+        let fh = self.info.height as isize;
+        let fw = self.info.width as isize;
+        let scale_q16 = ((rx as u64) << 16) / (ry as u64);
+        let t_step = (256u64 << 8) / ((2 * ry) as u64).max(1);
+        let halfth = thickness / 2;
+        let mut t_q = 0u64;
+        let mut filled = 0usize;
+        for dy in -ry..=ry {
+            if dy >= dy0 && dy <= dy1 {
+                let py = cy + dy;
+                if py >= 0 && py < fh {
+                    let xw = ((half[(ry + dy) as usize] as u64 * scale_q16) >> 16) as isize;
+                    if xw > 0 {
+                        let idx = ((t_q >> 8) as i32 + phase as i32) & 0xFF;
+                        let bright = (128 + SIN_LUT[idx as usize] as i32).clamp(0, 255) as u32;
+                        let rr = ((r as u32 * bright) >> 8) as u8;
+                        let gg = ((g as u32 * bright) >> 8) as u8;
+                        let bb = ((b as u32 * bright) >> 8) as u8;
+                        let lx = cx - xw - halfth;
+                        if lx + thickness > 0 && lx < fw {
+                            let x0 = lx.max(0) as usize;
+                            let x1 = (lx + thickness).min(fw) as usize;
+                            filled += self.fill_rect_fast(x0, py as usize, x1 - x0, 1, rr, gg, bb);
+                        }
+                        let rx_ = cx + xw - halfth;
+                        if rx_ + thickness > 0 && rx_ < fw {
+                            let x0 = rx_.max(0) as usize;
+                            let x1 = (rx_ + thickness).min(fw) as usize;
+                            filled += self.fill_rect_fast(x0, py as usize, x1 - x0, 1, rr, gg, bb);
+                        }
+                    }
+                }
+            }
+            t_q += t_step;
+        }
+        filled
     }
 
     pub fn draw_char(&mut self, x: usize, y: usize, char_data: &[u8], cw: usize, ch: usize, fg: (u8, u8, u8), bg: (u8, u8, u8)) {
