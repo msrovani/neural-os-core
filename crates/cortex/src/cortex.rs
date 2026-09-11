@@ -3822,6 +3822,11 @@ pub trait Model: Send {
 }
 
 pub static CURRENT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
+/// Flag lock-free que espelha "CURRENT_MODEL está setado" (freeze s330): o
+/// `bei_tick` no BSP não pode pegar o spinlock do CURRENT_MODEL (contenda com
+/// inferência no AP). Setado em `set_model`; `model_is_loaded` lê isto.
+pub static MODEL_LOADED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 /// AirLLM: modelo streaming ativo (layer-by-layer do disco).
 /// Se Some, generate_via_model() usa este em vez do CURRENT_MODEL residente.
 pub static CURRENT_STREAMING_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
@@ -3920,6 +3925,7 @@ pub fn loaded_model_name() -> alloc::string::String {
 pub fn set_model(model: Box<dyn Model>) {
     CURRENT_MODEL_EMBED_DIM.store(model.embed_dim(), core::sync::atomic::Ordering::Relaxed);
     *CURRENT_MODEL.lock() = Some(model);
+    MODEL_LOADED.store(true, core::sync::atomic::Ordering::Release);
     MODEL_STATUS.store(ModelStatus::BitNetReal as u8, core::sync::atomic::Ordering::Release);
     crate::model_hub::mark_active(true);
     let dim = CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
@@ -4053,7 +4059,19 @@ pub fn load_models_multi(blobs: &[(&[u8], Option<&str>)]) -> usize {
 
 /// True se CURRENT_MODEL está setado (LLM LOADED).
 pub fn model_is_loaded() -> bool {
-    CURRENT_MODEL.lock().is_some()
+    if MODEL_LOADED.load(core::sync::atomic::Ordering::Acquire) {
+        return true;
+    }
+    // Fallback p/ writers legados que setam CURRENT_MODEL direto (model_hub
+    // GGUF, model_hub.rs:111/138): checa o lock UMA vez e memoiza — o bei_tick
+    // não relocka depois (objetivo: zero spinlock no BSP em regime).
+    // ponytail: memoiza; invalidar se algum dia CURRENT_MODEL voltar a None.
+    if CURRENT_MODEL.lock().is_some() {
+        MODEL_LOADED.store(true, core::sync::atomic::Ordering::Release);
+        true
+    } else {
+        false
+    }
 }
 
 /// True se HW Expert MoE está setado.

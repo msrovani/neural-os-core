@@ -173,6 +173,11 @@ pub fn install_infer_poll_fn(f: fn() -> bool) {
 
 /// Executa um slice de inferência. Retorna true se houve trabalho.
 pub fn try_infer_poll_slice() -> bool {
+    // ADR-0057 WS-F: sem APs pollable (IDT/IPI pleno) o idle loop dos APs
+    // chamava isto incondicionalmente mesmo com a feature off (freeze s330).
+    if !ap_pollable() {
+        return false;
+    }
     let s = INFER_POLL_FN.load(Ordering::Acquire);
     if s == 0 {
         return false;

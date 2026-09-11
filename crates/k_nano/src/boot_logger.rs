@@ -600,7 +600,11 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
                     if last.is_ok() {
                         msc.sync_cache();
                         ok = true;
-                    } else if last.unsuitable() {
+                    } else if last == OverwriteResult::NoFatParts {
+                        // Só "sem partição FAT32" desliga o MSC em definitivo.
+                        // BOOT.LOG ausente pode ser transitório (FAT pronto antes
+                        // do arquivo) — marcar skip aqui mataria a persistência USB
+                        // pelo resto do boot.
                         mark_skip(SKIP_USB);
                     }
                 }

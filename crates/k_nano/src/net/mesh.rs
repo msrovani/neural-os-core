@@ -736,21 +736,32 @@ pub fn local_role() -> NodeRole {
         .unwrap_or(NodeRole::Undecided)
 }
 
+/// Último id derivado de ip/mac (freeze s330). Cache lock-free: node_id() é
+/// chamado DENTRO de MESH_ENGINE.lock() (send_role_assign via p2p_tick) e não
+/// pode re-adquirir o lock via local_role().
+static LOCAL_NODE_ID: AtomicU8 = AtomicU8::new(0);
+
 /// ID único por instância — usado como source_id nos pacotes NoProto
 /// (heartbeat/Sync/offers) e no node_id das NodeCapabilities do mesh.
 ///
 /// SESSION_234: `local_role() as u8` colidia entre instâncias (ambas
 /// enviavam o mesmo ID, ex. Undecided=4) → add_or_update_node deduplicava
 /// pelo node_id → nodes=1 mesmo com 2 instâncias. Deriva do IP real
-/// (10.0.3.2→2, .3→3) para unicidade; fallbacks: MAC byte 5, depois role.
+/// (10.0.3.2→2, .3→3) para unicidade; fallback: MAC byte 5. Com ip/mac
+/// zerados devolve o último id cacheado (0 se nunca houve) — nunca `local_role()`.
 pub fn node_id() -> u8 {
-    let cfg = crate::nic_globals::NET_CONFIG.lock();
-    if cfg.ip[3] != 0 {
-        cfg.ip[3]
-    } else if cfg.mac[5] != 0 {
-        cfg.mac[5]
+    let (ip_last, mac_last) = {
+        let cfg = crate::nic_globals::NET_CONFIG.lock();
+        (cfg.ip[3], cfg.mac[5])
+    };
+    let id = if ip_last != 0 { ip_last } else { mac_last };
+    if id != 0 {
+        LOCAL_NODE_ID.store(id, Ordering::Relaxed);
+        id
     } else {
-        local_role() as u8
+        // ip/mac ainda zerados: devolve o último id derivado (0 se nunca houve).
+        // NUNCA chamar local_role() aqui — self-deadlock em MESH_ENGINE.
+        LOCAL_NODE_ID.load(Ordering::Relaxed)
     }
 }
 

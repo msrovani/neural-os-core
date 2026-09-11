@@ -533,6 +533,9 @@ impl AgentRegistry {
             }
 
             let mut polled: u32 = 0;
+            // Scheduler-stage (freeze s330): boundary pré-loop. Se o frame congelar
+            // aqui, o hang é ANTES do 1º agente (order/budget/respawn).
+            tick_stage(SCHED_STAGE_PRE_LOOP);
             // Scheduler por affinity ring R0→R1→R2 (ADR-0055) + FlowTrigger
             let order = self.poll_order_by_affinity();
             for &i in &order {
@@ -650,6 +653,13 @@ impl AgentRegistry {
                     _ => {}
                 }
             }
+            // Scheduler-stage (freeze s330): IMEDIATAMENTE após o loop de agentes.
+            // Congelar aqui = hang no maybe_log/BEI/halt (fora de qualquer tick).
+            tick_stage(SCHED_STAGE_POST_LOOP);
+            // STALE STAMP guard (freeze s330): limpa o stamp de agente ao fim da
+            // iteração — um nome antigo (ex. network_agent, sempre o último) não
+            // pode mascarar um hang pós-loop como se fosse o site travado.
+            LAST_STAMPED_AGENT.store(0, core::sync::atomic::Ordering::Relaxed);
             // Novelty decay (RuVix): decrease all novelty scores by 1 each tick
             for agent in &mut self.agents {
                 if agent.novelty_score > 0 {
@@ -657,6 +667,9 @@ impl AgentRegistry {
                 }
             }
             maybe_log_sched_metrics(tick_id, self.agents.len(), polled);
+            // Scheduler-stage (freeze s330): topo do caminho halt (drain_wakes /
+            // cpufreq / scheduler_idle_halt invocados pelo closure do bin).
+            tick_stage(SCHED_STAGE_HALT);
             halt();
         }
     }
@@ -708,6 +721,13 @@ pub fn set_tick_stamp_fn(f: Option<fn(&[u8])>) {
 /// display; agentes (ex: Cortex) marcam progresso fino via `tick_stage(n)`.
 static TICK_STAGE_FN: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(0);
+
+/// Códigos do scheduler-stage (freeze s330), no MESMO canal `tick_stage`:
+/// 7 = pré-loop, 8 = pós-loop, 9 = entrada do halt. Distinguem "travou DENTRO
+/// do agente X" (1..=6) de "travou no boundary do scheduler" (7/8/9).
+pub const SCHED_STAGE_PRE_LOOP: u8 = 7;
+pub const SCHED_STAGE_POST_LOOP: u8 = 8;
+pub const SCHED_STAGE_HALT: u8 = 9;
 
 /// Registra a fn de sub-estágio (None = desativa).
 pub fn set_tick_stage_fn(f: Option<fn(u8)>) {

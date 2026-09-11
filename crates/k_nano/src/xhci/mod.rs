@@ -258,8 +258,10 @@ pub unsafe fn init_xhci() {
 /// Handoff xHCI do firmware para o OS (xHCI 1.2 §4.2 / §7.1).
 ///
 /// UEFI pode deixar BIOS Owned=1. Resetar o HC antes de pedir OS Owned causa
-/// controller mudo em silício, embora QEMU aceite.
-unsafe fn claim_firmware_ownership(base: u64, hcc1: u32) {
+/// controller mudo em silício, embora QEMU aceite. Retorna o desfecho para o
+/// caller logar: `"os_owned"` (sem USBLEGSUP ou semáforo liberado),
+/// `"bios_owned"` (BIOS manteve a posse) ou `"timeout"` (corrida na releitura).
+unsafe fn claim_firmware_ownership(base: u64, hcc1: u32) -> &'static str {
     let mut off = (((hcc1 >> 16) & 0xFFFF) as u64) * 4;
     let mut walked = 0u8;
     while off != 0 && walked < 64 {
@@ -288,8 +290,7 @@ unsafe fn claim_firmware_ownership(base: u64, hcc1: u32) {
                         off + 4,
                         (ctl & LEGACY_PRESERVE) | LEGACY_SMI_EVENTS,
                     );
-                    crate::slog_nano!("USB", "ok", "xHCI firmware handoff OK");
-                    return;
+                    return "os_owned";
                 }
                 spins = spins.saturating_add(1);
                 if (budget > 0 && crate::tsc::rdtsc().wrapping_sub(start) >= budget)
@@ -301,13 +302,20 @@ unsafe fn claim_firmware_ownership(base: u64, hcc1: u32) {
                         "xHCI firmware handoff TIMEOUT legsup={:#x}",
                         legsup
                     );
-                    return;
+                    // bit16 (BIOS Owned) ainda setado = firmware dono.
+                    return if legsup & (1 << 16) != 0 {
+                        "bios_owned"
+                    } else {
+                        "timeout"
+                    };
                 }
                 core::hint::spin_loop();
             }
         }
         off = if next == 0 { 0 } else { off + next * 4 };
     }
+    // Sem capability USBLEGSUP: nada a reivindicar, OS é dono natural.
+    "os_owned"
 }
 
 /// Espera bit de registrador operacional assumir o estado esperado.
@@ -359,6 +367,32 @@ unsafe fn init_scratchpads(dcbaa_va: *mut u64, hcs2: u32) -> Option<usize> {
     dcbaa_va.write_volatile(array.0);
     crate::slog_nano!("USB", "ok", "xHCI scratchpads={} initialized", count);
     Some(count)
+}
+
+/// Revisão maior de USB (2 = USB2, 3 = USB3/SuperSpeed) da Supported Protocol
+/// Capability que cobre a root `port`. 0 = desconhecida. Só assim dá para saber
+/// que uma porta é SuperSpeed quando CCS=0 (o campo speed do PORTSC zera sem
+/// dispositivo conectado — SESSION_316/327).
+unsafe fn port_protocol_major(base: u64, port: u8) -> u8 {
+    let hcc1 = r32(base, 0x10);
+    let mut off = (((hcc1 >> 16) & 0xFFFF) as u64) * 4;
+    for _ in 0..64 {
+        if off == 0 {
+            break;
+        }
+        let hdr = r32(base, off);
+        let next = ((hdr >> 8) & 0xFF) as u64;
+        if (hdr & 0xFF) as u8 == 2 {
+            let ports = r32(base, off + 0x08);
+            let first = (ports & 0xFF) as u8;
+            let count = ((ports >> 8) & 0xFF) as u8;
+            if port >= first && port < first.saturating_add(count) {
+                return ((hdr >> 24) & 0xFF) as u8;
+            }
+        }
+        off = if next == 0 { 0 } else { off + next * 4 };
+    }
+    0
 }
 
 /// Soft-unbind + bind do xHCI PCI no índice `index` (0-based).
@@ -414,7 +448,9 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     let db_off = (r32(base, 0x14) & !0x3) as u64;
     let rtsoff = (r32(base, 0x18) & !0x1F) as u64;
 
-    claim_firmware_ownership(base, hcc1);
+    let fw = claim_firmware_ownership(base, hcc1);
+    let fw_sev = if fw == "os_owned" { "ok" } else { "warn" };
+    crate::slog_nano!("USB", fw_sev, "xHCI[{}] firmware ownership: {}", index, fw);
 
     w32(op, 0, r32(op, 0) & !0x01);
     if !wait_op_bit(op, 0x04, 1, true, 100) {
@@ -520,10 +556,25 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
         return false;
     }
 
+    // HCCPARAMS1/USBCMD/USBSTS pós-run: PPC (bit3) diz se PP é programável.
+    let ppc = hcc1 & (1 << 3) != 0;
+    crate::slog_nano!(
+        "USB",
+        "ok",
+        "xHCI[{}] run USBCMD={:#x} USBSTS={:#x} HCCPARAMS1={:#x} PPC={}",
+        index,
+        r32(op, 0),
+        r32(op, 0x04),
+        hcc1,
+        ppc as u8
+    );
+
     // Port Power em TODAS as portas (padrão Redox flags_preserved + fix PP):
     // HCRST pode deixar PP=0 — sem energia, CCS lê 0 para sempre e o scan MSC
     // vê "nenhuma porta CCS" no metal (QEMU mantém PP=1 e mascarava). RMW
     // preserva CCS/PLS/SPEED e escreve 1 nos RW1C (limpa changes stale).
+    // SESSION_316/327: a leitura imediata pós-write pode pegar PP stale — só
+    // depois de um settle o latch é confiável.
     {
         let mut dump = alloc::string::String::new();
         for p in 1..=max_ports {
@@ -538,13 +589,41 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
             );
         }
         crate::slog_nano!("USB", "ok", "xHCI[{}] PORTSC pre-PP: {}", index, dump.as_str());
+        // PP precisa de tempo para subir no silício (~10ms não pesa no boot).
+        crate::tsc::sleep_ms(10);
         let mut dump2 = alloc::string::String::new();
         for p in 1..=max_ports {
             let off = 0x400 + (p as u64 - 1) * 0x10;
             let v = r32(op, off);
-            dump2.push_str(alloc::format!("P{}:{:#x} ", p, v).as_str());
+            let ccs = v & 1;
+            let ped = (v >> 1) & 1;
+            let pp = (v >> 9) & 1;
+            let pls = (v >> 5) & 0xF;
+            let speed = (v >> 10) & 0xF;
+            dump2.push_str(
+                alloc::format!(
+                    "P{}:{:#x}[CCS={} PED={} PP={} PLS={} SP={}] ",
+                    p, v, ccs, ped, pp, pls, speed
+                )
+                .as_str(),
+            );
+            // Fase 2 (SESSION_316/327): PP latched mas CCS=0 numa porta
+            // SuperSpeed = link USB3 ainda sem detect. Religa RxDetect
+            // (PLS=5) com LWS (bit16) e re-lê após settle.
+            if pp == 1 && ccs == 0 && port_protocol_major(base, p) >= 3 {
+                w32(op, off, (v & !(0xF << 5)) | (5 << 5) | (1 << 16));
+                crate::tsc::sleep_ms(10);
+                let v2 = r32(op, off);
+                dump2.push_str(
+                    alloc::format!(
+                        "P{}*:{:#x}[CCS={} PP={} PLS={}] ",
+                        p, v2, v2 & 1, (v2 >> 9) & 1, (v2 >> 5) & 0xF
+                    )
+                    .as_str(),
+                );
+            }
         }
-        crate::slog_nano!("USB", "ok", "xHCI[{}] PORTSC pos-PP: {}", index, dump2.as_str());
+        crate::slog_nano!("USB", "ok", "xHCI[{}] PORTSC settled: {}", index, dump2.as_str());
     }
 
     let tr = match alloc_phys(1) {
