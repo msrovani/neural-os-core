@@ -198,19 +198,11 @@ impl SkillLoader {
         crate::cognitive_bridge::cortex_system_prompt("")
     }
 
-    /// Prompt contextualizado com intent do usuário (+ hint semântico de skill).
-    pub fn build_system_prompt_for(&self, intent: &str) -> String {
-        let mut prompt = crate::cognitive_bridge::cortex_system_prompt(intent);
-        if !intent.is_empty() {
-            if let Some(name) = self.find_skill_hint(intent) {
-                prompt.push_str(&alloc::format!(
-                    "\n[SKILL-HINT] {} — skill pode ser relevante ao pedido.\n",
-                    name
-                ));
-            }
-        }
-        prompt
-    }
+    // NOTE (freeze s330): `build_system_prompt_for` foi removido — ele chamava
+    // `cortex_system_prompt` (que re-locka SKILL_STORAGE) e, por ser um método
+    // `&self`, só era utilizável com o guard do TicketLock em mão → self-deadlock
+    // não-reentrante. O prompt seguro é montado no caller (agents.rs) sem segurar
+    // o lock durante `cortex_system_prompt`.
 }
 
 /// Invalida o índice de skills — o próximo prompt reconstrói (consumido pelo

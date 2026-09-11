@@ -208,8 +208,8 @@ fn skill_lines() -> Vec<(String, String, f32, String)> {
             if !crate::cognitive_bridge::skill_visible(&p.body) {
                 continue;
             }
-            let desc = if p.purpose.len() > 60 {
-                format!("{}…", &p.purpose[..57])
+            let desc = if p.purpose.chars().count() > 60 {
+                format!("{}…", clamp_public(&p.purpose, 57))
             } else {
                 p.purpose.clone()
             };
@@ -222,8 +222,8 @@ fn skill_lines() -> Vec<(String, String, f32, String)> {
             if lines.iter().any(|(name, _, _, _)| name == &n) {
                 continue;
             }
-            let desc = if d.len() > 60 {
-                format!("{}…", &d[..57.min(d.len())])
+            let desc = if d.chars().count() > 60 {
+                format!("{}…", clamp_public(&d, 57))
             } else {
                 d
             };

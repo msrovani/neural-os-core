@@ -427,7 +427,18 @@ impl Agent for CortexAgent {
                     user_text
                 )
             } else {
-                let system_prompt = alloc::format!("{} [LLM: Falcon3-3B-Instruct-1.58bit]", SKILL_STORAGE.lock().build_system_prompt_for(user_text));
+                // Freeze s330: NÃO segurar SKILL_STORAGE através de
+                // cortex_system_prompt — ele re-locka SKILL_STORAGE em
+                // memory_store::skills_l0_gated, e o TicketLock NÃO é reentrante
+                // (self-deadlock determinístico no tick do cortex_llm, S4→S5).
+                let mut base = crate::cognitive_bridge::cortex_system_prompt(user_text);
+                if let Some(name) = SKILL_STORAGE.lock().find_skill_hint(user_text) {
+                    base.push_str(&alloc::format!(
+                        "\n[SKILL-HINT] {} — skill pode ser relevante ao pedido.\n",
+                        name
+                    ));
+                }
+                let system_prompt = alloc::format!("{} [LLM: Falcon3-3B-Instruct-1.58bit]", base);
                 alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text)
             };
             agent_core::tick_stage(5);
