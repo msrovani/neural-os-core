@@ -282,8 +282,55 @@ pub unsafe fn enable_x2apic_this_cpu() -> bool {
     }
     x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR)
         .write(apic_base | (1 << 10) | (1 << 11));
-    USING_X2APIC.store(true, Ordering::Release);
+    // SESSION_328: o write pode ser ignorado silenciosamente (firmware/BIOS
+    // deixa EXTD=0 ou o MSR não é writeable). Sem read-back, USING_X2APIC
+    // latched true e TODA acesso LAPIC (SVR/LVT/INIT/EOI) ia por MSR com a
+    // LAPIC real em MMIO → timer nunca armado (TIMER_TICKS=0 no metal).
+    let readback = read_apic_base_raw();
+    let en = (readback >> 10) & 1 != 0;
+    let extd = (readback >> 11) & 1 != 0;
+    let ok = en && extd;
+    USING_X2APIC.store(ok, Ordering::Release);
+    crate::slog_nano!(
+        "APIC",
+        if ok { "ok" } else { "warn" },
+        "x2APIC readback base={:#x} EN={} EXTD={} USING_X2APIC={}",
+        readback,
+        en as u8,
+        extd as u8,
+        ok as u8
+    );
     was_x2
+}
+
+/// SESSION_328 — diagnóstico do timer LAPIC no metal (TIMER_TICKS=0). Publica
+/// no canal de boot (slog visível `ok`/`warn` + ramlog/BOOT.LOG + FB stamp se o
+/// DisplayAgent já registrou o bridge). Serial é invisível no metal; FB/BOOT.LOG
+/// não. Lê o MSR base, o modo verificado e os read-backs SVR/LVT/INIT/CUR (CUR
+/// duas vezes para mostrar o contador a andar).
+pub unsafe fn lapic_timer_diag() {
+    let msr = read_apic_base_raw();
+    let en = (msr >> 10) & 1;
+    let extd = (msr >> 11) & 1;
+    let x2 = USING_X2APIC.load(Ordering::Acquire) as u8;
+    let svr = lapic_read_reg(LAPIC_SVR);
+    let lvt = lapic_read_reg(LAPIC_LVT_TIMER);
+    let init = lapic_read_reg(LAPIC_INIT_COUNT);
+    let cur1 = lapic_read_reg(LAPIC_CURRENT_COUNT);
+    let cur2 = lapic_read_reg(LAPIC_CURRENT_COUNT);
+    let line = alloc::format!(
+        "APICDIAG base={:#x} EN={} EXTD={} x2={} SVR={:#x} LVT={:#x} INIT={:#x} CUR={:#x}/{:x}",
+        msr, en, extd, x2, svr, lvt, init, cur1, cur2
+    );
+    crate::slog_nano!("APIC", if x2 == 1 { "ok" } else { "warn" }, "{}", line);
+    // Persistência boot (BOOT.LOG/ramlog) — sem eco duplicado no serial.
+    crate::boot_logger::log_quiet(&line);
+    // Canal FB existente (bridge do DisplayAgent; no-op até registrar).
+    let b = line.as_bytes();
+    let n = b.len().min(140);
+    let mut buf = [0u8; 140];
+    buf[..n].copy_from_slice(&b[..n]);
+    crate::interrupts::exception_fb_stamp(&buf[..n]);
 }
 
 unsafe fn x2apic_icr_write(val: u64) {
@@ -623,42 +670,49 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
     // #GP. Sempre checar hypervisor mesmo quando firmware_x2 (detect via CPUID direto).
     let hv = crate::platform_probe::detect_hypervisor();
     let hv_allows_x2 = matches!(hv, crate::platform_probe::HypervisorKind::None | crate::platform_probe::HypervisorKind::Kvm);
-    // MMIO 0xFEE00000 é #GP se o firmware já deixou EXTD=1 (240H comum).
-    if firmware_x2 && hv_allows_x2 {
-        USING_X2APIC.store(true, Ordering::Release);
-        crate::slog_nano!("APIC", "info", "firmware já em x2APIC — skip SVR MMIO");
-    } else if firmware_x2 && !hv_allows_x2 {
-        // fica xAPIC MMIO apesar do firmware ter EXTD — evita #GP no wrmsr.
-        USING_X2APIC.store(false, Ordering::Release);
-        crate::slog_nano!("APIC", "warn", "firmware x2APIC mas hv={:?} — forca xAPIC MMIO (sem #GP)", hv);
-    } else {
-        let svr_early = read_volatile((lapic_virt_base + LAPIC_SVR) as *const u32);
-        let svr_fixed_early = (svr_early & 0xFFFFFF00) | 0xFF | 0x100;
-        write_volatile((lapic_virt_base + LAPIC_SVR) as *mut u32, svr_fixed_early);
-        crate::slog_nano!("APIC", "info", "SVR set early: {:#x}", svr_fixed_early);
-    }
 
-    let mut x2apic_supported = firmware_x2 && hv_allows_x2;
+    // Candidato a x2APIC (firmware já EXTD ou CPUID bit21), gated por hypervisor.
+    // NÃO liga USING_X2APIC — só dispara a tentativa de enable (read-back abaixo).
+    let mut x2apic_candidate = firmware_x2 && hv_allows_x2;
     #[cfg(target_arch = "x86_64")]
     {
         let result = core::arch::x86_64::__cpuid(0x0000_0001);
         if (result.ecx & (1 << 21)) != 0 {
-            x2apic_supported = true;
+            x2apic_candidate = true;
         }
     }
-    x2apic_supported &= hv_allows_x2; // SESSION_281: gate hypervisor tambem no CPUID.
+    x2apic_candidate &= hv_allows_x2; // SESSION_281: gate hypervisor tambem no CPUID.
 
-    let lapic = Lapic::new(if x2apic_supported { 0 } else { lapic_virt_base });
-    if x2apic_supported {
-        // Enable x2APIC neste CPU: EN (10) + EXTD (11). ICR daqui pra frente
-        // usa x2apic_icr_value — bits 14/15 no MSR 0x830 = #GP no Kaby Lake.
+    // SESSION_328: USING_X2APIC é derivado do READ-BACK verificado em
+    // enable_x2apic_this_cpu — nunca do flag pré-latchado. Se o write não
+    // confirmar EN+EXTD, opera a LAPIC por MMIO para TODO o init (SVR early +
+    // Lapic com base virtual), senão todo acesso MSR vai a lugar nenhum e o
+    // timer nunca arma (TIMER_TICKS=0 no metal).
+    let lapic = if x2apic_candidate {
         let was_x2 = enable_x2apic_this_cpu();
         crate::boot_logger::log(&alloc::format!(
-            "APIC: x2APIC ativado (era_x2={} base_msr={:#x})",
+            "APIC: x2APIC tentativa (era_x2={} base_msr={:#x})",
             was_x2, apic_base_now
         ));
-        crate::slog_nano!("APIC", "info", "x2APIC ativado via MSR (era_x2={}).", was_x2);
-    }
+        if USING_X2APIC.load(Ordering::Acquire) {
+            Lapic::new(0)
+        } else {
+            let svr_early = read_volatile((lapic_virt_base + LAPIC_SVR) as *const u32);
+            let svr_fixed_early = (svr_early & 0xFFFFFF00) | 0xFF | 0x100;
+            write_volatile((lapic_virt_base + LAPIC_SVR) as *mut u32, svr_fixed_early);
+            crate::slog_nano!("APIC", "warn", "x2APIC nao confirmado — SVR MMIO fallback {:#x}", svr_fixed_early);
+            Lapic::new(lapic_virt_base)
+        }
+    } else {
+        // MMIO 0xFEE00000 é #GP se o firmware já deixou EXTD=1 (240H comum);
+        // hv gated acima garante que este path só roda em xAPIC.
+        USING_X2APIC.store(false, Ordering::Release);
+        let svr_early = read_volatile((lapic_virt_base + LAPIC_SVR) as *const u32);
+        let svr_fixed_early = (svr_early & 0xFFFFFF00) | 0xFF | 0x100;
+        write_volatile((lapic_virt_base + LAPIC_SVR) as *mut u32, svr_fixed_early);
+        crate::slog_nano!("APIC", "info", "SVR set early: {:#x}", svr_fixed_early);
+        Lapic::new(lapic_virt_base)
+    };
     lapic.init();
 
     disable_pic();
@@ -671,10 +725,16 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
     lapic.start_timer();
     // SESSION_310: PIT channel 0 → IOAPIC GSI 0 → vec32 (backup timer)
     crate::slog_nano!("APIC", "info", "LAPIC timer started + PIT→IOAPIC GSI0→vec32 (SESSION_310)");
+    lapic_timer_diag();
 
     USING_APIC.store(true, Ordering::Release);
     // STI adiado para depois de init_smp — ver neural-kernel SESSION_139.
-    crate::slog_nano!("APIC", "info", "APIC operacional. x2APIC={} (STI deferred)", x2apic_supported);
+    crate::slog_nano!(
+        "APIC",
+        if USING_X2APIC.load(Ordering::Acquire) { "ok" } else { "warn" },
+        "APIC operacional. x2APIC={} (STI deferred)",
+        USING_X2APIC.load(Ordering::Acquire) as u8
+    );
 }
 
 /// Lê registrador LAPIC (compatível xAPIC/x2APIC)

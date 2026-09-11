@@ -55,7 +55,8 @@ pub extern "C" fn ap_entry(_cpu_id: u64) -> ! {
         // SVR via path vivo (MSR se x2APIC). MMIO no AP após EXTD = #GP.
         let svr = apic::lapic_read_reg(0xF0);
         apic::lapic_write_reg(0xF0, (svr & 0xFFFFFF00) | 0xFF | 0x100);
-        apic::apic_eoi();
+        // SESSION_328: sem `apic_eoi()` aqui — EOI antes de qualquer interrupção
+        // gera interrupção espúria → tempestade espúria por-AP.
     }
 
     let ap_index = (cpu_id - 1) as usize;

@@ -1728,9 +1728,12 @@ pub(crate) fn kernel_boot(
     
 
     // Pacote B: plataforma (PCI+ACPI+APIC[+SMP]) ANTES dos drivers
-    // ponytail: detect WHPX early para pular PIT init (WHPX ignora vector 0)
-    let hv_name = crate::net::detect_hypervisor_name();
-    if hv_name.contains("Microsoft") {
+    // ponytail: só WHPX real (CPUID hypervisor bit 31) pula o PIT — vendor
+    // string sem o bit de hypervisor dava skip espúrio no metal (TIMER_TICKS=0).
+    if matches!(
+        k_nano::platform_probe::detect_hypervisor(),
+        k_nano::platform_probe::HypervisorKind::MicrosoftHv
+    ) {
         crate::apic::SKIP_PIT.store(true, core::sync::atomic::Ordering::Relaxed);
     }
     publish_boot_phase(BootPhase::HardwareDiscovery, "PCI+ACPI+APIC+SMP sync");
@@ -1837,8 +1840,13 @@ pub(crate) fn kernel_boot(
         } else {
             crate::env::set(crate::env::SystemEnv::QemuSandbox);
         }
-        // ponytail: WHPX ignora PIT vector 0 — skip PIT, usa só LAPIC timer
-        if hv_name.contains("Microsoft") {
+        // ponytail: WHPX ignora PIT vector 0 — skip PIT, usa só LAPIC timer.
+        // Só o bit de hypervisor (detect_hypervisor) vale; vendor string livra
+        // skip espúrio no metal.
+        if matches!(
+            k_nano::platform_probe::detect_hypervisor(),
+            k_nano::platform_probe::HypervisorKind::MicrosoftHv
+        ) {
             crate::apic::SKIP_PIT.store(true, core::sync::atomic::Ordering::Relaxed);
         }
         k_nano::slog_bin!("ENV", "info", "Sandbox detectado: {} — SLIP so se NIC ausente (DEGRADED)", hv_name.trim_end());
