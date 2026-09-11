@@ -936,6 +936,22 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
             k_nano::async_rt::drain_pending_wakes();
             // Governor ondemand tick — escala frequência por carga da fila de AP
             k_nano::cpufreq::ondemand_tick(k_nano::smp::ap_work::has_pending());
+            // ADR-0104: cadência adaptativa do timer (R1 sanciona; bin dirige),
+            // quantizada a ~1×/128 ticks para não pesar no idle. Offset 64 p/
+            // intercalar com o DisplayAgent (%128==0) — 2 amostras de verdade.
+            let tcap = k_nano::interrupts::TIMER_TICKS
+                .load(core::sync::atomic::Ordering::Relaxed) as u64;
+            if tcap % 128 == 64 {
+                let cost = crate::display::compositor::frame_cost_us();
+                let actual = k_nano::cpufreq::actual_ratio();
+                let throttled = actual != 0
+                    && k_nano::cpufreq::has_pstate()
+                    && actual < k_nano::cpufreq::p0_ratio().saturating_sub(4);
+                let _ = k_hal::timer_cap::request_tick_hz(
+                    k_hal::timer_cap::recommend(cost, throttled),
+                    "scheduler",
+                );
+            }
             // hlt se timer vivo; soft ~18Hz se IRQ morto (orb/relógio/mouse).
             k_nano::interrupts::scheduler_idle_halt();
         },
@@ -1738,6 +1754,19 @@ pub(crate) fn kernel_boot(
     }
     publish_boot_phase(BootPhase::HardwareDiscovery, "PCI+ACPI+APIC+SMP sync");
     unsafe { agents::init_platform_sync(); }
+    // ADR-0104: sanção da banda do timer (default 60 Hz; QEMU/TCG/WHPX medem e
+    // caem no default). O bin dirige a política no scheduler.
+    let timer_cap0 = k_hal::timer_cap::detect();
+    k_nano::slog_bin!(
+        "TimerCap",
+        "ok",
+        "boot source={:?} band=[{},{}] default={} trusted={}",
+        timer_cap0.source,
+        timer_cap0.hz_min,
+        timer_cap0.hz_max,
+        timer_cap0.hz_default,
+        timer_cap0.trusted
+    );
     // Ponytail: K22 (SMP wake) trava em TCG/240H — tenta pendrive sem hang.
     let _ = k_nano::boot_logger::try_flush_ramlog();
 
@@ -4777,6 +4806,21 @@ pub(crate) fn kernel_boot(
     {
         use k_ai::self_state::{LifePhase, current_phase, record_life_event, write_self_state};
         let mode = k_nano::boot_mode::boot_mode();
+        // ADR-0104: CONFIG.TXT `TICK_HZ=` fixa a cadência no boot (HITL override).
+        if let Some(v) = k_nano::boot_mode::config_value("TICK_HZ") {
+            match v.parse::<u64>() {
+                Ok(hz) => {
+                    let applied = k_hal::timer_cap::pin_tick_hz(
+                        Some(hz),
+                        k_hal::timer_cap::cap().source,
+                    );
+                    k_nano::slog_bin!("TimerCap", "ok", "config TICK_HZ={} pinned={}", hz, applied);
+                }
+                Err(_) => {
+                    k_nano::slog_bin!("TimerCap", "warn", "config TICK_HZ invalido: {}", v)
+                }
+            }
+        }
         let phase = match mode {
             k_nano::boot_mode::BootMode::Live => LifePhase::Visitante,
             k_nano::boot_mode::BootMode::Install => LifePhase::Mensageiro,

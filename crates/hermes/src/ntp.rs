@@ -5,7 +5,8 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
 
-/// Calibrado em boot por `calibrate_timer_hz()`.
+/// Calibrado em boot por `k_nano::apic::calibrate_lapic_timer()`. Mantém o
+/// mesmo contrato de `TIMER_HZ` (tick real, ADR-0104).
 fn ticks_per_sec() -> u64 {
     k_nano::interrupts::TIMER_HZ.load(core::sync::atomic::Ordering::Relaxed).max(1)
 }

@@ -5,6 +5,31 @@
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
+/// Lê `KEY=value` do CONFIG.TXT (mesmo probe FAT32 do boot mode). Primeiro
+/// match. `None` se sem ATA/CONFIG.TXT/chave. ADR-0104 usa p/ `TICK_HZ`.
+pub fn config_value(key: &str) -> Option<alloc::string::String> {
+    let ata = crate::globals::ATA_DRIVER.lock();
+    let ata = ata.as_ref()?;
+    let parts = unsafe { crate::fat32::read_mbr(ata) };
+    for part in &parts {
+        if matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
+            let fs = unsafe { crate::fat32::Fat32Reader::new(ata, part) };
+            let fs = fs?;
+            let data = unsafe { fs.read_file("CONFIG.TXT") }?;
+            let text = core::str::from_utf8(&data).ok()?;
+            let prefix = alloc::format!("{}=", key);
+            for line in text.lines() {
+                let line = line.trim();
+                if let Some(rest) = line.strip_prefix(&prefix) {
+                    return Some(alloc::string::String::from(rest.trim()));
+                }
+            }
+            return None;
+        }
+    }
+    None
+}
+
 /// Modo de boot do sistema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootMode {

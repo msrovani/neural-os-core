@@ -173,7 +173,32 @@ pub static MOUSE_BUTTONS: core::sync::atomic::AtomicU8 = core::sync::atomic::Ato
 
 // Timing de frame para FPS control
 pub static LAST_FRAME_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-pub const TARGET_FRAME_TICKS: u64 = 1; // 1 frame / tick PIT (~18 Hz). 3 era ~6 FPS.
+/// ADR-0104 — cadência alvo da UI (fps) e custo EWMA do trabalho de frame (µs).
+pub const TARGET_FPS: u64 = 30;
+static FRAME_COST_US: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// 1 frame a cada `current_tick_hz()/TARGET_FPS` ticks (nunca 0).
+fn target_frame_ticks() -> u64 {
+    (k_hal::timer_cap::current_tick_hz() / TARGET_FPS).max(1)
+}
+
+/// Custo EWMA do trabalho de frame em µs (0 = sem amostra).
+pub fn frame_cost_us() -> u32 {
+    FRAME_COST_US.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+fn record_frame_cost(t0: u64) {
+    let t1 = k_nano::tsc::rdtsc();
+    let hz = k_nano::tsc::tsc_hz();
+    if hz == 0 {
+        return;
+    }
+    let dt = ((t1.wrapping_sub(t0) as u128) * 1_000_000 / hz as u128).min(u32::MAX as u128) as u32;
+    let cur = FRAME_COST_US.load(core::sync::atomic::Ordering::Relaxed);
+    let next = if cur == 0 { dt } else { cur - cur / 8 + dt / 8 };
+    FRAME_COST_US.store(next, core::sync::atomic::Ordering::Relaxed);
+    k_hal::timer_cap::note_frame_cost_us(next);
+}
 
 pub struct JarbasDesktop {
     // Compositor base
@@ -498,13 +523,21 @@ impl JarbasDesktop {
         }
     }
 
+    /// ADR-0104: wrapper que mede o custo do frame (EWMA µs) para o
+    /// `timer_cap::recommend` — o gate de FPS lê a cadência atual.
     pub fn render(&mut self, tick: u64, avatar: Option<&mut crate::display::avatar8::Avatar8>, avatar_state: Option<&str>) {
+        let t0 = k_nano::tsc::rdtsc();
+        self.render_inner(tick, avatar, avatar_state);
+        record_frame_cost(t0);
+    }
+
+    fn render_inner(&mut self, tick: u64, avatar: Option<&mut crate::display::avatar8::Avatar8>, avatar_state: Option<&str>) {
         self.tick = tick; let (w, h) = (self.w, self.h);
         RENDER_N.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
 
         // ── FPS control ──
         let last = LAST_FRAME_TICK.load(core::sync::atomic::Ordering::Relaxed);
-        if tick.wrapping_sub(last) < TARGET_FRAME_TICKS { return; }
+        if tick.wrapping_sub(last) < target_frame_ticks() { return; }
         LAST_FRAME_TICK.store(tick, core::sync::atomic::Ordering::Relaxed);
 
         // Orb: animação a cada 3 ticks (~6 Hz @18) — 2 era ~9 Hz e re-pintava

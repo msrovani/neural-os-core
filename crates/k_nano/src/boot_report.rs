@@ -94,6 +94,8 @@ impl BootReport {
 
 static BOOT_REPORT: Mutex<Option<BootReport>> = Mutex::new(None);
 static GPU_NOTE: Mutex<Option<(String, bool)>> = Mutex::new(None);
+/// ADR-0104 — cadência escolhida (linha textual + ok) para o BOOT SCORE.
+static TIMER_NOTE: Mutex<Option<(String, bool)>> = Mutex::new(None);
 // ADR-0100 Onda 0 T-001: lock-free atomic counters (observe/plan/act/verify/escalate)
 static AI_OBSERVE: AtomicU32 = AtomicU32::new(0);
 static AI_PLAN: AtomicU32 = AtomicU32::new(0);
@@ -137,6 +139,12 @@ pub fn inc_verify(n: u32) {
 
 pub fn note_gpu(name: &str, ok: bool) {
     *GPU_NOTE.lock() = Some((String::from(name), ok));
+}
+
+/// ADR-0104 — nota da cadência do timer (mirror de `note_gpu`): HUD/BOOT SCORE
+/// mostram o tick escolhido em vez de assumir 60 Hz.
+pub fn note_timer(line: &str, trusted: bool) {
+    *TIMER_NOTE.lock() = Some((String::from(line), trusted));
 }
 
 pub fn note_ai(c: BootAiCounts) {
@@ -272,6 +280,11 @@ pub fn build_score_text() -> String {
     let bus = storage_bus(usb);
     let gpu_note = GPU_NOTE.lock().clone();
     let gpu_ok = gpu_note.as_ref().map(|(_, ok)| *ok).unwrap_or(false);
+    let timer_note = TIMER_NOTE.lock().clone();
+    let timer_line = timer_note
+        .as_ref()
+        .map(|(s, _)| s.clone())
+        .unwrap_or_else(|| String::from("default"));
     let (llm, llm_att) = class_llm(qemu);
     let (audio, audio_att) = class_audio(qemu);
 
@@ -327,6 +340,7 @@ storage       {}  bus={}\n\
 llm           {}\n\
 audio_stt_tts {}\n\
 gpu           {}\n\
+timer         {}\n\
 wifi          await\n\
 attention     {}\n\
 --- topology (ADR-0103 s321) ---\n\
@@ -351,6 +365,7 @@ slog          home=k_nano::slog ref=ADR-0092\n\
         llm,
         audio,
         gpu,
+        timer_line,
         att.trim()
     )
 }

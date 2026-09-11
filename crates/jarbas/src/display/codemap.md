@@ -22,7 +22,7 @@ MOUSE_X/Y/BUTTONS, POWER_STATE, TOPIC_CARD_ACTION}`;
 `agent::DisplayAgent` (EventBus-driven Continuous; `has_pending`; HITL card 8001).
 
 **Hot path (SESSION_294):** `fill_rect` = `fill_rect_fast` (bpp=4 `0..aw`, doubling memcpy se aw≥16);
-`fill_circle_glow` scanline+`isqrt_u64` (não `sqrtf`/pixel); `TARGET_FRAME_TICKS=1` (PIT ~18 Hz);
+`fill_circle_glow` scanline+`isqrt_u64` (não `sqrtf`/pixel); `target_frame_ticks()` (ADR-0104: cadência do timer);
 orb ambient 1.35× max 2 rings; dock pinta uma vez. Grid/partículas saíram do frame.
 
 **Integration**: bin calls `probe_raw_framebuffer` (limine_boot.rs) and

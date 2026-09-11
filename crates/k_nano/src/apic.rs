@@ -1,6 +1,6 @@
 use crate::acpi::AcpiInfo;
 use crate::{println};
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use core::ptr::{read_volatile, write_volatile};
 use x86_64::structures::paging::{PageTable, PageTableFlags};
 use x86_64::VirtAddr;
@@ -78,8 +78,33 @@ const LAPIC_LVT_TIMER: u64 = 0x320;
 const LAPIC_INIT_COUNT: u64 = 0x380;
 const LAPIC_CURRENT_COUNT: u64 = 0x390;
 const LAPIC_DIVIDE_CONFIG: u64 = 0x3E0;
-/// Valor fixo programado em `start_timer()`.
+/// Valor fixo de arranque programado em `start_timer()`. É apenas o INIT
+/// **provisório** usado para medir a taxa real do LAPIC; `init_apic` reescreve
+/// o INIT para `TICK_HZ_DEFAULT` logo depois (ver `calibrate_lapic_timer`).
 const LAPIC_TIMER_INIT_COUNT_VAL: u32 = 0x800000;
+
+/// Cadência-alvo segura (Hz). ADR-0104: as rails [30,60,120] vivem em
+/// `k_hal::timer_cap`; R0 só conhece o default e os limites do silício.
+pub const TICK_HZ_DEFAULT: u64 = 60;
+/// Menor cadência que mantém a UI viva.
+pub const TICK_HZ_MIN: u64 = 30;
+/// Maior cadência permitida pelo timer LAPIC.
+pub const TICK_HZ_MAX: u64 = 240;
+/// Piso do `INIT_COUNT`: abaixo disso o timer dispara rápido demais.
+pub const INIT_FLOOR: u32 = 1000;
+
+/// Cadência-alvo efetiva (Hz). Fonte única do timer — escrita em runtime SÓ
+/// por [`set_tick_hz`] (o único ponto de mutação R0) e pela calibração inicial.
+pub static TICK_TARGET_HZ: AtomicU64 = AtomicU64::new(TICK_HZ_DEFAULT);
+
+/// INIT_COUNT **efetivamente programado** no LAPIC. Lido por
+/// `rearm_lapic_timer` a cada tick, então precisa ser o valor calibrado — não
+/// a constante fixa de arranque. Atualizado por `calibrate_lapic_timer`.
+pub static LAPIC_TIMER_INIT_COUNT: AtomicU32 = AtomicU32::new(LAPIC_TIMER_INIT_COUNT_VAL);
+
+/// Taxa de decremento do LAPIC (counts/s) medida na última calibração.
+/// 0 = medição falhou (INIT fixo mantido). Só para diagnóstico.
+pub static LAST_MEASURED_LAPIC_HZ: AtomicU64 = AtomicU64::new(0);
 
 const IOAPIC_IOREGSEL: u64 = 0x00;
 const IOAPIC_IOWIN: u64 = 0x10;
@@ -136,9 +161,11 @@ impl Lapic {
         // SESSION_310: set divide BEFORE timer mode to avoid glitch in TCG.
         self.write(LAPIC_DIVIDE_CONFIG, 0b1011);
         self.write(LAPIC_LVT_TIMER, 32 | 0x20000);
-        self.write(LAPIC_INIT_COUNT, LAPIC_TIMER_INIT_COUNT_VAL);
+        // INIT provisório: só para poder medir a taxa real em seguida.
+        let init = LAPIC_TIMER_INIT_COUNT.load(Ordering::Relaxed);
+        self.write(LAPIC_INIT_COUNT, init);
 
-        crate::slog_nano!("APIC", "info", "LAPIC timer iniciado: vetor 32, count={}, div=16.", LAPIC_TIMER_INIT_COUNT_VAL);
+        crate::slog_nano!("APIC", "info", "LAPIC timer iniciado: vetor 32, count={}, div=16.", init);
     }
 }
 
@@ -318,17 +345,19 @@ pub unsafe fn lapic_timer_diag() {
     let init = lapic_read_reg(LAPIC_INIT_COUNT);
     let cur1 = lapic_read_reg(LAPIC_CURRENT_COUNT);
     let cur2 = lapic_read_reg(LAPIC_CURRENT_COUNT);
+    let measured = LAST_MEASURED_LAPIC_HZ.load(Ordering::Relaxed);
+    let chosen = LAPIC_TIMER_INIT_COUNT.load(Ordering::Relaxed);
     let line = alloc::format!(
-        "APICDIAG base={:#x} EN={} EXTD={} x2={} SVR={:#x} LVT={:#x} INIT={:#x} CUR={:#x}/{:x}",
-        msr, en, extd, x2, svr, lvt, init, cur1, cur2
+        "APICDIAG base={:#x} EN={} EXTD={} x2={} SVR={:#x} LVT={:#x} INIT={:#x} CUR={:#x}/{:x} MEAS={} TARGET={} CHOSEN={:#x}",
+        msr, en, extd, x2, svr, lvt, init, cur1, cur2, measured, TICK_TARGET_HZ.load(Ordering::Relaxed), chosen
     );
     crate::slog_nano!("APIC", if x2 == 1 { "ok" } else { "warn" }, "{}", line);
     // Persistência boot (BOOT.LOG/ramlog) — sem eco duplicado no serial.
     crate::boot_logger::log_quiet(&line);
     // Canal FB existente (bridge do DisplayAgent; no-op até registrar).
     let b = line.as_bytes();
-    let n = b.len().min(140);
-    let mut buf = [0u8; 140];
+    let n = b.len().min(200);
+    let mut buf = [0u8; 200];
     buf[..n].copy_from_slice(&b[..n]);
     crate::interrupts::exception_fb_stamp(&buf[..n]);
 }
@@ -723,6 +752,13 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
     ioapic.init(&info.iso_overrides);
 
     lapic.start_timer();
+    // SESSION_330/ADR-0104: mede a taxa real do contador LAPIC e reescreve
+    // INIT_COUNT para a cadência-alvo de `TICK_TARGET_HZ`. Fallback: mantém o
+    // INIT fixo (sem regressão). `calibrate_lapic_timer` já publica TIMER_HZ.
+    let (meas_hz, _init) = calibrate_lapic_timer();
+    if meas_hz > 0 {
+        crate::interrupts::TIMER_HZ.store(tick_hz(), Ordering::Relaxed);
+    }
     // SESSION_310: PIT channel 0 → IOAPIC GSI 0 → vec32 (backup timer)
     crate::slog_nano!("APIC", "info", "LAPIC timer started + PIT→IOAPIC GSI0→vec32 (SESSION_310)");
     lapic_timer_diag();
@@ -743,8 +779,12 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
 pub static REARM_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 pub unsafe fn rearm_lapic_timer() {
     REARM_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    // In periodic mode, writing INIT_COUNT reloads the counter.
-    lapic_write_reg(LAPIC_INIT_COUNT, LAPIC_TIMER_INIT_COUNT_VAL);
+    // In periodic mode, writing INIT_COUNT reloads the counter. Usa o valor
+    // calibrado — a constante fixa de arranque destrói a cadência de 60 Hz.
+    lapic_write_reg(
+        LAPIC_INIT_COUNT,
+        LAPIC_TIMER_INIT_COUNT.load(Ordering::Relaxed),
+    );
 }
 
 pub unsafe fn lapic_read_reg(reg: u64) -> u32 {
@@ -982,12 +1022,16 @@ pub unsafe fn end_of_interrupt() {
     }
 }
 
-/// Estima TIMER_HZ lendo o registrador LAPIC_CURRENT_COUNT.
-/// O timer decrementa a cada ciclo do barramento APIC.
-/// timer_freq = decremento * tsc_hz / (elapsed_tsc * initial_count)
-/// Nao depende de TIMER_TICKS (interrupção) nem de busy-wait longo.
+/// Mede a **taxa de decremento do LAPIC em counts/s** (já com o divide
+/// aplicado) lendo `CURRENT_COUNT` sobre um intervalo de TSC.
+///
+/// `counts_per_sec = Δcount * tsc_hz / Δtsc`. NÃO divide pelo INIT: o retorno é
+/// a taxa do contador do barramento, não a frequência de interrupção. Para
+/// achar o INIT que produz `freq` Hz basta `counts_per_sec / freq` (ver
+/// `calibrate_lapic_timer`). Usa o INIT corrente só para dimensionar a amostra;
+/// timeout de ~10 ms evita hang se o timer estiver parado. Retorna 0 se falhar.
 pub fn estimate_timer_hz(tsc_hz: u64) -> u64 {
-    let initial = LAPIC_TIMER_INIT_COUNT_VAL as u64;
+    let initial = LAPIC_TIMER_INIT_COUNT.load(Ordering::Relaxed) as u64;
     if initial == 0 { return 0; }
     let target_decrement = initial / 8; // espera ~12.5% do periodo
     unsafe {
@@ -1007,15 +1051,122 @@ pub fn estimate_timer_hz(tsc_hz: u64) -> u64 {
         let decrement = count_start.wrapping_sub(count_now);
         let elapsed_tsc = tsc_end.wrapping_sub(tsc_start);
         if decrement > 0 && elapsed_tsc > 0 {
-            // timer_freq = decrement * tsc_hz / (elapsed_tsc * initial)
+            // counts/s = decrement * tsc_hz / elapsed_tsc
             let hz = (decrement as u128)
                 .saturating_mul(tsc_hz as u128)
-                .checked_div((elapsed_tsc as u128).saturating_mul(initial as u128))
+                .checked_div(elapsed_tsc as u128)
                 .unwrap_or(0) as u64;
-            return hz.min(1_000_000).max(1);
+            return hz.min(1_000_000_000).max(1);
         }
     }
     0 // falha
+}
+
+/// PROVA (SESSION_330): mede a taxa real do LAPIC e reprograma `INIT_COUNT`
+/// para a cadência-alvo corrente (`TICK_TARGET_HZ`, default 60 Hz). Deve ser
+/// chamada logo após `start_timer()`, com o LVT em modo periódico. Se a medição
+/// falhar (0), mantém o INIT corrente (fallback fixo) e retorna 0 — QEMU/TCG
+/// que não exponham `CURRENT_COUNT` continuam funcionando sem regressão.
+/// Retorna `(measured_counts_s, init)`. Fonte única de TIMER_HZ.
+pub unsafe fn calibrate_lapic_timer() -> (u64, u32) {
+    let tsc_hz = crate::interrupts::estimate_tsc_hz();
+    let measured = estimate_timer_hz(tsc_hz);
+    LAST_MEASURED_LAPIC_HZ.store(measured, Ordering::Relaxed);
+    if measured == 0 {
+        let init = LAPIC_TIMER_INIT_COUNT.load(Ordering::Relaxed);
+        crate::slog_nano!(
+            "APIC",
+            "warn",
+            "LAPIC timer calibracao falhou (CURRENT_COUNT=0) — INIT fixo {:#x}",
+            init
+        );
+        return (0, init);
+    }
+    let target = TICK_TARGET_HZ.load(Ordering::Relaxed).clamp(TICK_HZ_MIN, TICK_HZ_MAX);
+    // counts_per_sec / alvo = counts por periodo (1 interrupcao a cada INIT).
+    let init = (measured / target).clamp(INIT_FLOOR as u64, u32::MAX as u64) as u32;
+    LAPIC_TIMER_INIT_COUNT.store(init, Ordering::Relaxed);
+    lapic_write_reg(LAPIC_INIT_COUNT, init);
+    TICK_TARGET_HZ.store(target, Ordering::Relaxed);
+    crate::interrupts::TIMER_HZ.store(target, Ordering::Relaxed);
+    crate::slog_nano!(
+        "APIC",
+        "ok",
+        "LAPIC timer calibrado: meas={} counts/s tsc={} Hz target={} Hz INIT={:#x}",
+        measured,
+        tsc_hz,
+        target,
+        init
+    );
+    (measured, init)
+}
+
+/// Cadência-alvo corrente do timer (Hz). Fonte única do scheduler/compositor.
+#[inline]
+pub fn tick_hz() -> u64 {
+    TICK_TARGET_HZ.load(Ordering::Relaxed)
+}
+
+/// ADR-0104 — **o único ponto de mutação da cadência do timer** (R0 programa;
+/// R1 sanciona a banda). Reprograma `INIT_COUNT` do LAPIC a partir da taxa
+/// medida. Retorna a cadência efetiva, ou 0 se a taxa do LAPIC nunca foi medida
+/// (não arma o timer — sem regressão, fica o default).
+pub unsafe fn set_tick_hz(hz: u64) -> u64 {
+    let hz = hz.clamp(TICK_HZ_MIN, TICK_HZ_MAX);
+    let counts_hz = LAST_MEASURED_LAPIC_HZ.load(Ordering::Relaxed);
+    if counts_hz == 0 {
+        return 0;
+    }
+    let init = (counts_hz / hz).clamp(INIT_FLOOR as u64, u32::MAX as u64) as u32;
+    LAPIC_TIMER_INIT_COUNT.store(init, Ordering::Relaxed);
+    lapic_write_reg(LAPIC_INIT_COUNT, init);
+    TICK_TARGET_HZ.store(hz, Ordering::Relaxed);
+    crate::interrupts::TIMER_HZ.store(hz, Ordering::Relaxed);
+    hz
+}
+
+/// Snapshot observacional da medição do timer (R0). Consumido por
+/// `k_hal::timer_cap` para sancionar a banda e decidir `trusted`.
+#[derive(Debug, Clone, Copy)]
+pub struct TimerMeasured {
+    /// Taxa do contador LAPIC (counts/s) — 0 = não medido.
+    pub lapic_counts_hz: u64,
+    /// TSC declarada pelo firmware (CPUID). 2 GHz = fallback não confiável.
+    pub tsc_hz: u64,
+    /// INIT_COUNT programado.
+    pub init_count: u32,
+    /// Cadência-alvo atual (Hz).
+    pub tick_hz: u64,
+    /// Jitter medido (ppm; 0 = desconhecido).
+    pub jitter_ppm: u32,
+    /// TIMER_TICKS avançou entre duas amostras.
+    pub alive: bool,
+    /// Medição confiável (counts≠0, TSC real, jitter≤5%, alive).
+    pub trusted: bool,
+}
+
+/// Lê o snapshot atual do timer. Não bloqueia além da amostra de `alive`
+/// (~2 ms no pior caso, sem timer).
+pub fn timer_measured() -> TimerMeasured {
+    let lapic_counts_hz = LAST_MEASURED_LAPIC_HZ.load(Ordering::Relaxed);
+    let tsc_hz = crate::interrupts::estimate_tsc_hz();
+    let init_count = LAPIC_TIMER_INIT_COUNT.load(Ordering::Relaxed);
+    let tick_hz = TICK_TARGET_HZ.load(Ordering::Relaxed);
+    let jitter_ppm = crate::interrupts::timer_jitter_ppm();
+    let alive = crate::interrupts::timer_alive();
+    let trusted = lapic_counts_hz != 0
+        && tsc_hz != 2_000_000_000
+        && jitter_ppm <= 50_000
+        && alive;
+    TimerMeasured {
+        lapic_counts_hz,
+        tsc_hz,
+        init_count,
+        tick_hz,
+        jitter_ppm,
+        alive,
+        trusted,
+    }
 }
 
 #[cfg(test)]

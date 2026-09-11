@@ -53,7 +53,7 @@ logic lives here.
    `HEAP_START=0x_4000_0000_0000`, 512MB).
 2. `init_platform_sync` (bin): `pci::init_pci()` → `acpi::init_acpi` (RSDP/FADT/MADT/SRAT)
    → `apic::init_apic` → `smp::init_smp` → `core_pinning::init_pools(total_cores)` →
-   STI → `interrupts::calibrate_timer_hz`. `PlatformAgent` is idempotent if this ran.
+   STI → `apic::calibrate_lapic_timer` (fonte única de TIMER_HZ; ADR-0104). `PlatformAgent` is idempotent if this ran.
 3. Driver phase: ATA/AHCI/NVMe/xHCI probes + NIC init (`nic_globals` slots filled),
    `boot_logger::init`/`boot_ramlog`, VFS `init_standard_mounts`.
 4. `disk_agent::DiskIntelligenceAgent` (Oneshot): probe controllers → S.M.A.R.T. →
@@ -108,7 +108,7 @@ EventBus topic `TOPIC_P2P_PACKET` for hermes consumers (`skill_marketplace`, `sk
   `globals::{EVENT_BUS, LATENT_BUS, MESSAGE_BUS, SKILL_REGISTRY}`,
   `vfs::VFS`, `mhi::MHI_REGISTRY`, `xhci::XHCI_STATE`,
   `smp::{ap_entry, AP_COUNT, ap_entry_count, total_cores, ap_pollable, init_smp, wake_aps_sequential}`,
-  `interrupts::{init_idt, TIMER_TICKS, TIMER_HZ, calibrate_timer_hz}`,
+  `interrupts::{init_idt, TIMER_TICKS, TIMER_HZ, timer_jitter_ppm, timer_alive}`,
   `hal::ARCH`, `boot_handoff::BootHandoff`, `net::{mesh, udp_broadcast, noproto, transport}`.
 
 ## Submodule Map

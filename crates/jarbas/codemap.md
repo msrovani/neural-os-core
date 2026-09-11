@@ -57,7 +57,8 @@ k_hal (R1), cortex, hermes. `no_std`, ~62 `.rs` files, 12 top-level modules
   `*COMPOSITOR = Some(desktop)` → `claim_graphics()`; subsequent ticks drain
   EventBus receivers (HERMES_RESPONSE, LLM_STREAM, USER_INTENT, STT_TEXT,
   HITL, TOAST, RENDER_*, KEY_EVENT), poll mouse, then
-  `desktop.render(tick, avatar, state)` (FPS-gated by `TARGET_FRAME_TICKS`).
+  `desktop.render(tick, avatar, state)` (FPS-gated by `target_frame_ticks()`,
+  ADR-0104 cadence-aware).
 - **Mouse flow**: PS/2 IRQ updates `k_nano::interrupts::MOUSE_ABS_*` → tick
   detects button edge (`MOUSE_ABS_BTN ^ prev`) → `handle_pointer_click()`
   (power dialog, OFF button, notification hit-test, chat/ambient focus) →

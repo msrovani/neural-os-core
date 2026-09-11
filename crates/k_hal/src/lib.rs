@@ -22,6 +22,7 @@ pub mod unlock_dag;
 pub mod hw_gate;
 pub mod discovery;
 pub mod pci_bar;
+pub mod timer_cap;
 pub mod compute_port;
 pub mod net_port;
 pub mod display_port;

@@ -21,6 +21,44 @@ pub static SOFT_TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
 /// Timer frequency em Hz (calibrado na inicializaçao). Fallback 18 Hz (PIT).
 pub static TIMER_HZ: AtomicU64 = AtomicU64::new(18);
 
+/// ADR-0104 — TSC do último timer IRQ (0 = sem amostra). Alimenta o jitter.
+static LAST_TIMER_TSC: AtomicU64 = AtomicU64::new(0);
+/// ADR-0104 — EWMA (α=1/8) do intervalo de TSC entre ticks do timer.
+static TIMER_DELTA_EWMA: AtomicU64 = AtomicU64::new(0);
+
+/// Jitter do timer em ppm (0 = desconhecido). EWMA do desvio do intervalo
+/// entre ticks contra o período nominal `tsc_hz / tick_hz`.
+pub fn timer_jitter_ppm() -> u32 {
+    let delta = TIMER_DELTA_EWMA.load(Ordering::Relaxed);
+    if delta == 0 {
+        return 0;
+    }
+    let hz = crate::apic::tick_hz().max(1);
+    let nominal = crate::tsc::tsc_hz() / hz;
+    if nominal == 0 {
+        return 0;
+    }
+    let diff = delta.abs_diff(nominal);
+    ((diff.saturating_mul(1_000_000)) / nominal).min(1_000_000) as u32
+}
+
+/// `true` se `TIMER_TICKS` avançou entre duas amostras TSC-stamped (bounded
+/// ~2 ms). Sem timer vivo retorna `false` (não bloqueia além do limite).
+pub fn timer_alive() -> bool {
+    let before = TIMER_TICKS.load(Ordering::Relaxed);
+    let t0 = crate::tsc::rdtsc();
+    let limit = crate::tsc::tsc_hz() / 500; // ~2 ms
+    loop {
+        if TIMER_TICKS.load(Ordering::Relaxed) != before {
+            return true;
+        }
+        if crate::tsc::rdtsc().wrapping_sub(t0) > limit {
+            return false;
+        }
+        core::hint::spin_loop();
+    }
+}
+
 /// Ticks de parede para UI: IRQ timer + soft (quando hlt não acorda).
 #[inline]
 pub fn wall_ticks() -> u64 {
@@ -47,8 +85,10 @@ pub fn scheduler_idle_halt() {
         );
     }
     SOFT_TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
-    // ~55 ms ≈ 1 tick PIT (18.2 Hz)
-    crate::tsc::sleep_us(55_000);
+    // ADR-0104: cadência do soft path segue a rail escolhida (não 55 ms fixo).
+    // 1_000_000 / hz µs = período do tick atual; 18 Hz degraded ≈ 55 ms.
+    let hz = crate::apic::tick_hz().max(1);
+    crate::tsc::sleep_us((1_000_000 / hz).max(1));
 }
 
 pub static LAST_SCANCODE: AtomicU8 = AtomicU8::new(0);
@@ -369,6 +409,16 @@ fn send_eoi(vector: u8) {
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     let ticks = TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    // ADR-0104: EWMA (α=1/8) do intervalo de TSC entre ticks — alimenta
+    // `timer_jitter_ppm`. Custo: 1 rdtsc + aritmética inteira, sem alocação.
+    let now_tsc = crate::tsc::rdtsc();
+    let prev = LAST_TIMER_TSC.swap(now_tsc, Ordering::Relaxed);
+    if prev != 0 {
+        let d = now_tsc.wrapping_sub(prev);
+        let cur = TIMER_DELTA_EWMA.load(Ordering::Relaxed);
+        let next = if cur == 0 { d } else { cur - cur / 8 + d / 8 };
+        TIMER_DELTA_EWMA.store(next, Ordering::Relaxed);
+    }
     // Freeze s326: heartbeat no FB — discriminador vivo-vs-morto (18Hz,
     // ~10 glyphs volatile = custo desprezível vs ISR).
     heartbeat_fb(ticks as u64);
@@ -797,7 +847,8 @@ pub fn enable_interrupts() {
 }
 
 /// Estima a frequência da TSC via CPUID leaf 0x15 (Intel) ou fallback.
-fn estimate_tsc_hz() -> u64 {
+/// `pub` para `apic::calibrate_lapic_timer` (SESSION_330).
+pub fn estimate_tsc_hz() -> u64 {
     #[cfg(target_arch = "x86_64")]
     unsafe {
         let max = core::arch::x86_64::__cpuid(0).eax;
@@ -833,47 +884,8 @@ fn estimate_tsc_hz() -> u64 {
     2_000_000_000 // fallback conservador 2 GHz
 }
 
-/// Calibra TIMER_HZ — método primário: LAPIC_CURRENT_COUNT (HW direto).
-/// Fallback: busy-wait 0.5s contando TIMER_TICKS.
-/// Fallback final: mantém 18 Hz se tudo falhar.
-pub fn calibrate_timer_hz() {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let tsc_hz = estimate_tsc_hz();
-        if crate::apic::USING_APIC.load(core::sync::atomic::Ordering::Relaxed) {
-            let hz = crate::apic::estimate_timer_hz(tsc_hz);
-            if hz > 0 {
-                crate::slog_nano!("TIMER", "info", "LAPIC direct: {} Hz (tsc_hz={})", hz, tsc_hz);
-                TIMER_HZ.store(hz, core::sync::atomic::Ordering::Relaxed);
-                return;
-            }
-        }
-
-        // Fallback: busy-wait 0.5s
-        let sample_tsc = tsc_hz / 2;
-        let tsc_start = unsafe { core::arch::x86_64::_rdtsc() };
-        let tick_start = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-        loop {
-            let tsc_now = unsafe { core::arch::x86_64::_rdtsc() };
-            if tsc_now.wrapping_sub(tsc_start) >= sample_tsc { break; }
-            core::hint::spin_loop();
-        }
-        let tsc_end = unsafe { core::arch::x86_64::_rdtsc() };
-        let tick_end = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-        let elapsed_ticks = tick_end.wrapping_sub(tick_start);
-        let elapsed_tsc = tsc_end.wrapping_sub(tsc_start);
-        if elapsed_ticks > 0 && elapsed_tsc > 0 {
-            let hz_fb = (tsc_hz as u128).saturating_mul(elapsed_ticks as u128) / elapsed_tsc as u128;
-            let hz_fb = hz_fb.min(1_000_000).max(1) as u64;
-            TIMER_HZ.store(hz_fb, core::sync::atomic::Ordering::Relaxed);
-            crate::slog_nano!("TIMER", "info", "calibrado {} Hz via busy-wait (ticks={})", hz_fb, elapsed_ticks);
-            return;
-        }
-        crate::slog_nano!("TIMER", "warn", "calibraçao falhou — mantendo fallback 18 Hz");
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    { TIMER_HZ.store(18, core::sync::atomic::Ordering::Relaxed); }
-}
+// ADR-0104: `calibrate_timer_hz()` (0 callers) foi removida — a fonte única de
+// TIMER_HZ é `apic::calibrate_lapic_timer` (mede counts/s e programa INIT).
 
 #[cfg(test)]
 mod host_tests {

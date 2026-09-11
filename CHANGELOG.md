@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s330] - 2026-09-10 — Metal: UI freeze (deadlock) + timer x2APIC + cadência adaptativa (ADR-0104)
+
+- **Freeze da UI (metal):** deadlock determinístico — `SKILL_STORAGE` (TicketLock não-reentrante) segurado em `agents.rs:430` enquanto `cortex_system_prompt`→`memory_store::skills_l0_gated` re-locka (`S4→S5`). Fix: monta o prompt sem segurar o lock + remove `build_system_prompt_for` + clamp UTF-8-safe. (`c174c504`)
+- **USB metal (aberto):** boot screen mostra `USB: ramlog sem linhas hub/MSC (probe nao chegou?)` e `skip models (no MSC)`; `E:\BOOT.LOG`=placeholder, `NSGDB.BIN`=zeros. Instrumentação xHCI (ownership/PPC/settle/RxDetect). (`3bcb49ed`)
+- **Timer morto no metal:** `USING_X2APIC` sem read-back → SVR/LVT/INIT/EOI por MSR com a LAPIC em MMIO → `TIMER_TICKS=0`. Fix: read-back EN+EXTD + fallback MMIO + `lapic_timer_diag`; remove EOI espúrio no AP; `SKIP_PIT` só MicrosoftHv. (`36c9d1a6`)
+- **Cadência adaptativa (ADR-0104):** alvo de tick deixa de ser const; R0 mede + `set_tick_hz`; R1 `k_hal::timer_cap` sanciona faixa + `request_tick_hz` (rails/dwell/confirmação/rollback; auto só desce; subir > default = HITL); R3 jarbas frame; bin dirige + `/tick` + `CONFIG.TXT TICK_HZ=`. 10 testes host em `k_hal`.
+- ADR-0104 + INDEX + IDEA_BANK #556; SESSION_330.
+
 ## [1.9.99-s329] - 2026-09-10 — Doc reconciliation (top-level docs + ADR INDEX)
 
 **Escopo:** docs only (nenhuma linha de kernel).

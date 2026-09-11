@@ -73,6 +73,7 @@ pub fn execute(cmd: &str) -> String {
         "skills" => alloc::format!("Skills: see /skills\n"),
         "events" => alloc::format!("Events: see EventBus\n"),
         "ticks" => { let t = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed); alloc::format!("Ticks: {}\n", t) }
+        "tick" | "/tick" => tick_cmd(args),
         "bench" => {
             let t0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             for _ in 0..1000 { core::hint::spin_loop(); }
@@ -170,10 +171,40 @@ fn which_cmd(args: &str) -> String {
     let cmds = ["help","echo","clear","uptime","ps","kill","meminfo","pci","theme",
         "shutdown","reboot","date","uname","cpuinfo","ls","cat","learn","profile",
         "version","credits","whoami","hostname","env","which","ping","dns","http",
-        "gpu","vram","agents","skills","events","ticks","bench","heap","irq","gpio",
+        "gpu","vram","agents","skills","events","ticks","tick","bench","heap","irq","gpio",
         "touch","mkdir","rm","pwd","find","top","dmesg","netstat","dhcp","trust",
         "logs","inspect","font","wallpaper","backtrace","alias","du","head","fetch"];
     if cmds.contains(&args) { alloc::format!("{}\n", args) } else { String::from("not found\n") }
+}
+
+/// ADR-0104 HITL: `/tick <hz>` fixa a cadência (clampada à banda medida),
+/// `/tick auto` devolve ao controle automático, `/tick` mostra o estado.
+fn tick_cmd(args: &str) -> String {
+    let a = args.trim();
+    if a.is_empty() || a.eq_ignore_ascii_case("status") {
+        let c = k_hal::timer_cap::cap();
+        return alloc::format!(
+            "tick: {}Hz src={:?} band=[{},{}] jitter={}ppm trusted={}\n",
+            k_hal::timer_cap::current_tick_hz(),
+            c.source,
+            c.hz_min,
+            c.hz_max,
+            c.jitter_ppm,
+            c.trusted
+        );
+    }
+    let src = k_hal::timer_cap::cap().source;
+    if a.eq_ignore_ascii_case("auto") {
+        let hz = k_hal::timer_cap::pin_tick_hz(None, src);
+        return alloc::format!("tick: auto -> {}Hz\n", hz);
+    }
+    match a.parse::<u64>() {
+        Ok(hz) => {
+            let applied = k_hal::timer_cap::pin_tick_hz(Some(hz), src);
+            alloc::format!("tick: pinned {} -> {}Hz\n", hz, applied)
+        }
+        Err(_) => String::from("Usage: /tick <hz> | /tick auto\n"),
+    }
 }
 
 fn fetch_cmd(url: &str) -> String {

@@ -554,6 +554,26 @@ impl Agent for DisplayAgent {
                 dsp_putc(b'\n');
             }
         }
+        // ADR-0104: política de cadência ~1×/128 ticks (rara e quantizada).
+        // Auto só mantém/baixa; subir acima do default exige HITL.
+        if tick != 0 && tick % 128 == 0 {
+            let cost = crate::display::compositor::frame_cost_us();
+            let actual = k_nano::cpufreq::actual_ratio();
+            let throttled = actual != 0
+                && k_nano::cpufreq::has_pstate()
+                && actual < k_nano::cpufreq::p0_ratio().saturating_sub(4);
+            let want = k_hal::timer_cap::recommend(cost, throttled);
+            let applied = k_hal::timer_cap::request_tick_hz(want, "display");
+            k_nano::slog_jarbas!(
+                "TIMER",
+                "info",
+                "policy cost_us={} throttled={} want={} applied={}",
+                cost,
+                throttled,
+                want,
+                applied
+            );
+        }
         if !self.gpu_inited {
             // Initialize GPU backend (k_hal GPU BE) — check compute state
             if let Err(e) = gpu_backend::init_gpu_backend() {
