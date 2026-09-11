@@ -15,6 +15,7 @@ pub use bringup::{
     host_device_class, host_disable_slot, host_enable_slot, host_ep0_class_nodata,
     host_ep0_control_in, host_ep0_tr_va, host_mark_hub, host_max_ports, host_port_ccs,
     host_reset_port, host_restore_ep0, host_set_configuration, host_set_msc_port,
+    host_ccs_count,
     msc_port_skipped, parse_msc_config, push_route, register_msc_bringup, DevLoc, MscDevice,
     MscEpInfo,
 };
@@ -66,6 +67,33 @@ pub static XHCI_STATE: spin::Mutex<Option<XhciState>> = spin::Mutex::new(None);
 /// Índice do xHCI PCI atualmente bound (`init_xhci_select`).
 static XHCI_SELECT: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);
+
+/// Último estágio de `init_xhci_select` (diagnóstico FB — serial/ramlog são
+/// invisíveis no metal). Códigos:
+/// 0=entrada, 1=sem candidatos, 2=CAPLEN suspeito, 3=ownership ok,
+/// 4=halt timeout, 5=reset/CNR timeout, 6=PAGESIZE não suportado,
+/// 7=alloc_phys falhou, 8=run ok, 9=port power ok, 10=sucesso (XHCI_STATE set),
+/// 20=R1 viu XHCI_STATE=None no bring-up MSC (≠ "0 CCS").
+pub static XHCI_STAGE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+/// BDF do último controller escolhido: (bus<<8)|(dev<<3)|fn.
+pub static XHCI_LAST_BDF: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+pub const XHCI_STAGE_MSC_DOWN: u8 = 20;
+
+pub fn xhci_last_stage() -> u8 {
+    XHCI_STAGE.load(Ordering::Relaxed)
+}
+pub fn xhci_last_bdf() -> u32 {
+    XHCI_LAST_BDF.load(Ordering::Relaxed)
+}
+/// `true` se o R1 tentou MSC sem controller (distinguível de "0 portas CCS").
+pub fn xhci_msc_down() -> bool {
+    XHCI_STAGE.load(Ordering::Relaxed) == XHCI_STAGE_MSC_DOWN
+}
+/// R1 (`k_hal`) sinaliza que `host_max_ports()` era None.
+pub fn mark_msc_xhci_down() {
+    XHCI_STAGE.store(XHCI_STAGE_MSC_DOWN, Ordering::Relaxed);
+}
 
 /// Controllers USB3 xHCI (`class=0x0C subclass=0x03 prog_if=0x30`).
 /// Sem `prog_if` filtro o 1º HCI pode ser EHCI → MSC nunca sobe (Alienware).
@@ -248,11 +276,17 @@ pub struct XhciState {
 }
 
 /// Bind do 1º xHCI (idempotente se já up). Preferir `init_xhci_select` no probe MSC.
+/// Tenta TODOS os candidatos em ordem — controller 0 pode ser um decoy (Alienware).
 pub unsafe fn init_xhci() {
     if XHCI_STATE.lock().is_some() {
         return;
     }
-    let _ = init_xhci_select(0);
+    let n = xhci_pci_candidates().len();
+    for index in 0..n {
+        if init_xhci_select(index) || XHCI_STATE.lock().is_some() {
+            return;
+        }
+    }
 }
 
 /// Handoff xHCI do firmware para o OS (xHCI 1.2 §4.2 / §7.1).
@@ -398,8 +432,10 @@ unsafe fn port_protocol_major(base: u64, port: u8) -> u8 {
 /// Soft-unbind + bind do xHCI PCI no índice `index` (0-based).
 /// Páginas do HC anterior ficam leaked (boot-only; poucos frames).
 pub unsafe fn init_xhci_select(index: usize) -> bool {
+    XHCI_STAGE.store(0, Ordering::Relaxed);
     let cands = xhci_pci_candidates();
     if cands.is_empty() {
+        XHCI_STAGE.store(1, Ordering::Relaxed);
         crate::slog_nano!("USB", "warn", "nenhum USB HCI PCI 0x0C/0x03");
         *XHCI_STATE.lock() = None;
         return false;
@@ -410,6 +446,10 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     *XHCI_STATE.lock() = None;
     clear_msc_port_skips();
     let d = cands[index];
+    XHCI_LAST_BDF.store(
+        ((d.bus as u32) << 8) | ((d.device as u32) << 3) | (d.function as u32),
+        Ordering::Relaxed,
+    );
     // xHCI usa DMA para DCBAA/rings: Memory Space + Bus Master são obrigatórios.
     crate::pci::enable_pci_bus_master(&d);
     let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
@@ -424,6 +464,7 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     let base = mmio + pmoff;
     let capl = r32(base, 0) as u64 & 0xFF;
     if capl < 0x20 || capl > 0x100 {
+        XHCI_STAGE.store(2, Ordering::Relaxed);
         crate::slog_nano!(
             "USB",
             "warn",
@@ -449,11 +490,13 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     let rtsoff = (r32(base, 0x18) & !0x1F) as u64;
 
     let fw = claim_firmware_ownership(base, hcc1);
+    XHCI_STAGE.store(3, Ordering::Relaxed);
     let fw_sev = if fw == "os_owned" { "ok" } else { "warn" };
     crate::slog_nano!("USB", fw_sev, "xHCI[{}] firmware ownership: {}", index, fw);
 
     w32(op, 0, r32(op, 0) & !0x01);
     if !wait_op_bit(op, 0x04, 1, true, 100) {
+        XHCI_STAGE.store(4, Ordering::Relaxed);
         crate::slog_nano!("USB", "warn", "xHCI[{}] halt TIMEOUT", index);
         return false;
     }
@@ -462,6 +505,7 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     if !wait_op_bit(op, 0, 1 << 1, false, 1000)
         || !wait_op_bit(op, 0x04, 1 << 11, false, 1000)
     {
+        XHCI_STAGE.store(5, Ordering::Relaxed);
         crate::slog_nano!(
             "USB",
             "warn",
@@ -474,6 +518,7 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     }
     let pagesize = r32(op, 0x08);
     if pagesize & 1 == 0 {
+        XHCI_STAGE.store(6, Ordering::Relaxed);
         crate::slog_nano!(
             "USB",
             "warn",
@@ -487,12 +532,14 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     let dcbaa = match alloc_phys(1) {
         Some(p) => p,
         None => {
+            XHCI_STAGE.store(7, Ordering::Relaxed);
             crate::slog_nano!("USB", "xhci", "alloc_phys falhou (DCBAA)");
             return false;
         }
     };
     core::ptr::write_bytes(dcbaa.1, 0, 4096);
     if init_scratchpads(dcbaa.1 as *mut u64, hcs2).is_none() {
+        XHCI_STAGE.store(7, Ordering::Relaxed);
         crate::slog_nano!("USB", "warn", "alloc_phys falhou (scratchpads)");
         return false;
     }
@@ -502,6 +549,7 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     let cmd = match alloc_phys(1) {
         Some(p) => p,
         None => {
+            XHCI_STAGE.store(7, Ordering::Relaxed);
             crate::slog_nano!("USB", "xhci", "alloc_phys falhou (CRCR)");
             return false;
         }
@@ -513,6 +561,7 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     let erst_mem = match alloc_phys(1) {
         Some(p) => p,
         None => {
+            XHCI_STAGE.store(7, Ordering::Relaxed);
             crate::slog_nano!("USB", "xhci", "alloc_phys falhou (ERST)");
             return false;
         }
@@ -520,6 +569,7 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     let er = match alloc_phys(1) {
         Some(p) => p,
         None => {
+            XHCI_STAGE.store(7, Ordering::Relaxed);
             crate::slog_nano!("USB", "xhci", "alloc_phys falhou (Event Ring)");
             return false;
         }
@@ -555,6 +605,7 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
         crate::slog_nano!("USB", "warn", "xHCI[{}] run TIMEOUT", index);
         return false;
     }
+    XHCI_STAGE.store(8, Ordering::Relaxed);
 
     // HCCPARAMS1/USBCMD/USBSTS pós-run: PPC (bit3) diz se PP é programável.
     let ppc = hcc1 & (1 << 3) != 0;
@@ -625,10 +676,12 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
         }
         crate::slog_nano!("USB", "ok", "xHCI[{}] PORTSC settled: {}", index, dump2.as_str());
     }
+    XHCI_STAGE.store(9, Ordering::Relaxed);
 
     let tr = match alloc_phys(1) {
         Some(p) => p,
         None => {
+            XHCI_STAGE.store(7, Ordering::Relaxed);
             crate::slog_nano!("USB", "xhci", "alloc_phys falhou (TR)");
             return false;
         }
@@ -637,6 +690,7 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     let report = match alloc_phys(1) {
         Some(p) => p,
         None => {
+            XHCI_STAGE.store(7, Ordering::Relaxed);
             crate::slog_nano!("USB", "xhci", "alloc_phys falhou (report)");
             return false;
         }
@@ -702,6 +756,7 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
         uac_ep0_tr_va: 0,
     });
     XHCI_SELECT.store(index, Ordering::Relaxed);
+    XHCI_STAGE.store(10, Ordering::Relaxed);
     crate::slog_nano!(
         "USB",
         "ok",

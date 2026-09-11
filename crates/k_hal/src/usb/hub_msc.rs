@@ -30,7 +30,14 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
         MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
     }
 
-    let max_ports = xhci::host_max_ports()?;
+    let max_ports = match xhci::host_max_ports() {
+        Some(m) => m,
+        None => {
+            // Distingue "controller down" de "0 CCS" no FB (serial/ramlog são mudos).
+            xhci::mark_msc_xhci_down();
+            return None;
+        }
+    };
     let mut ccs: alloc::vec::Vec<(u8, u8)> = alloc::vec::Vec::new();
     for port in 1..=max_ports {
         if xhci::msc_port_skipped(port) {

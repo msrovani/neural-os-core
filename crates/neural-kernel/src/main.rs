@@ -1807,6 +1807,13 @@ pub(crate) fn kernel_boot(
         crate::display::fb::boot_progress_line("BOOT: xHCI init...");
         crate::display::fb::boot_ckpt(181, "early xhci init");
         unsafe { crate::xhci::init_xhci(); }
+        // FB (não serial): cands/stage/bdf localizam onde o xHCI parou no metal.
+        crate::display::fb::boot_progress_line(&alloc::format!(
+            "BOOT: xHCI cands={} stage={} bdf={:04x}",
+            k_nano::xhci::xhci_controller_count(),
+            k_nano::xhci::xhci_last_stage(),
+            k_nano::xhci::xhci_last_bdf()
+        ));
         crate::display::fb::boot_progress_line("BOOT: xHCI done — MSC...");
         crate::display::fb::boot_ckpt(182, "early xhci done");
         // R1 hub→MSC (route+TT): obrigatório p/ stick atrás de hub interno (Alienware).
@@ -1833,6 +1840,14 @@ pub(crate) fn kernel_boot(
                     crate::display::fb::console_print(line);
                 });
             }
+        }
+        crate::display::fb::boot_progress_line(&alloc::format!(
+            "BOOT: MSC maxports={} ccs={}",
+            k_nano::xhci::host_max_ports().unwrap_or(0),
+            k_nano::xhci::host_ccs_count()
+        ));
+        if k_nano::xhci::xhci_msc_down() {
+            crate::display::fb::boot_progress_line("BOOT: MSC xhci-down (sem controller)");
         }
         crate::boot_logger::log("BOOT: early USB path (pre-NIC)");
         if crate::USB_MSC.lock().is_some() {

@@ -2248,6 +2248,24 @@ pub fn host_max_ports() -> Option<u8> {
     XHCI_STATE.lock().as_ref().map(|s| s.max_ports)
 }
 
+/// Quantas portas root têm CCS (diagnóstico FB) — lê XHCI_STATE uma vez.
+pub fn host_ccs_count() -> u8 {
+    let g = XHCI_STATE.lock();
+    let st = match g.as_ref() {
+        Some(s) => s,
+        None => return 0,
+    };
+    let mut n = 0u8;
+    for p in 1..=st.max_ports {
+        if let Some(addr) = unsafe { portsc_addr(st, p) } {
+            if unsafe { r32(st.base, addr - st.base) } & 1 != 0 {
+                n = n.saturating_add(1);
+            }
+        }
+    }
+    n
+}
+
 pub unsafe fn host_port_ccs(port: u8) -> Option<(u8, u32)> {
     let g = XHCI_STATE.lock();
     let st = g.as_ref()?;
