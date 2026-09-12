@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s332] - 2026-09-11 — Host test suite green (829 pass / 0 fail)
+
+- **`wasmi_rt::run_wasm` (bug real):** a resolução de assinatura só tentava aridades `[args.len(), 0]`; `sandbox_validate_and_run` chama com 0 args e um export `run(a,b)` (arity 2) nunca casava → `get_typed_func::<(),i32>` falhava e o validador retornava `false` mesmo com o módulo executando. Fix: tenta a aridade do caller e depois `0..=4` (preenchendo 0), como o doc comentário prometia. Destrava `wasm_build::compile_and_run_real_skill` e `dsl_print_cmp`.
+- **`cognitive_bridge` tests (isolamento):** `budget_basic` era flaky — o budget é estado global e testes paralelos (`budget_reset_test`/`budget_status_format`) resetavam-no no meio. Fix: `static GLOBAL_TEST_LOCK: spin::Mutex<()>` serializa os testes que mutam `BUDGET_*`/`SESSION`/`NUDGE_QUEUE` + reset explícito.
+- **`session_load_respects_cap`:** a asserção era tautologicamente falsa (`session_search` ecoa a query no header) — reescrita para assertar diretamente o log (`len == SESSION_CAP`, sem `entry 0`), com `SESSION` limpa para determinismo. O cap estava correto.
+- **`jarbas::jarvis::soul_*` (testes stale):** a unificação Soul (s319) tornou `hermes::soul::SoulEngine` canônico (tone `Coach`, formality 0.7, empathy 0.8, humor=creativity 0.3); `"witty"` nem existe no enum `Tone`. Testes atualizados para o comportamento canônico (asserts mantidos significativos: `tone` não-vazio e presente em `describe()`; Joy eleva `humor_level` acima do baseline).
+- Resultado: `cargo test --workspace --exclude neural-kernel --exclude boot --no-fail-fast` = **829 pass / 0 fail**; `cargo nk` = 0 erros.
+
 ## [1.9.99-s331] - 2026-09-11 — Orb v2 (MCU-JARVIS) + FFT Goertzel + Hub Health panel (agent-driven)
 
 - **Diagnóstico:** fps capado por **LCM acidental** de 2 gates de tick (`%3` do orb × `hz/30` do frame) = 15 fps a 60 Hz; animação **frame-count** (não tempo); cor em **serrilhado perpétuo**; paleta de estado **morta por mismatch de string**; **2 divisões/px** no blend; grid piscando 1-em-4; **FFT ~129k trig/buffer** no caminho do áudio.

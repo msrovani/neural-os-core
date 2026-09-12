@@ -323,8 +323,15 @@ pub fn run_wasm(
         .map_err(|_| "wasm: instantiate")?
         .start(&mut store)
         .map_err(|_| "wasm: start")?;
-    for n_params in &[args.len(), 0] {
-        let a = |i: usize| args.get(i).copied().unwrap_or(0);
+    if args.len() > 4 {
+        return Err("wasm: muitos argumentos (max 4)");
+    }
+    // Resolve por assinatura: tenta a aridade fornecida primeiro, depois as
+    // demais 0..=4. Necessário porque `sandbox_validate_and_run` chama com
+    // `args` vazio módulos cujo export tem aridade > 0 (ex.: DSL `run(a,b)`);
+    // a assinatura errada falha no `get_typed_func` sem executar.
+    let a = |i: usize| args.get(i).copied().unwrap_or(0);
+    for n_params in [args.len(), 0, 1, 2, 3, 4] {
         let r: Result<i32, _> = match n_params {
             0 => instance.get_typed_func::<(), i32>(&store, func_name)
                 .and_then(|f| f.call(&mut store, ()).map_err(|e| e.into())),
@@ -336,12 +343,10 @@ pub fn run_wasm(
                 .and_then(|f| f.call(&mut store, (a(0), a(1), a(2))).map_err(|e| e.into())),
             4 => instance.get_typed_func::<(i32, i32, i32, i32), i32>(&store, func_name)
                 .and_then(|f| f.call(&mut store, (a(0), a(1), a(2), a(3))).map_err(|e| e.into())),
-            _ => return Err("wasm: muitos argumentos (max 4)"),
+            _ => continue,
         };
-        match r {
-            Ok(val) => return Ok(val),
-            Err(_) if *n_params == args.len() => continue,
-            Err(_) => return Err("wasm: export não encontrado/assinatura"),
+        if let Ok(val) = r {
+            return Ok(val);
         }
     }
     Err("wasm: export não encontrado ou assinatura incompatível")

@@ -960,6 +960,12 @@ pub fn status_line() -> String {
 mod tests {
     use super::*;
 
+    /// Serializa os testes deste módulo que tocam estado global
+    /// (`BUDGET_*`, `SESSION`, `NUDGE_QUEUE`). `cargo test` roda os testes em
+    /// paralelo e essas funções compartilham statics — sem o lock o veredito
+    /// depende da ordem de execução.
+    static GLOBAL_TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
     // ── is_skill_creation_request ────────────────────────────────────────
 
     #[test]
@@ -1027,6 +1033,7 @@ mod tests {
 
     #[test]
     fn budget_basic() {
+        let _g = GLOBAL_TEST_LOCK.lock();
         budget_set_max(3);
         assert_eq!(budget_tick(), BudgetVerdict::Continue); // left 3→2
         assert_eq!(budget_tick(), BudgetVerdict::Continue); // left 2→1
@@ -1037,6 +1044,7 @@ mod tests {
 
     #[test]
     fn budget_reset_test() {
+        let _g = GLOBAL_TEST_LOCK.lock();
         budget_set_max(2);
         budget_tick();
         budget_tick();
@@ -1047,6 +1055,7 @@ mod tests {
 
     #[test]
     fn budget_status_format() {
+        let _g = GLOBAL_TEST_LOCK.lock();
         budget_set_max(5);
         let s = budget_status();
         assert!(s.contains("BUDGET"));
@@ -1071,6 +1080,7 @@ mod tests {
 
     #[test]
     fn session_record_and_search() {
+        let _g = GLOBAL_TEST_LOCK.lock();
         session_record("user", "deploy the API", 100);
         session_record("assistant", "deploying now", 101);
         let results = session_search("deploy", 5);
@@ -1079,6 +1089,7 @@ mod tests {
 
     #[test]
     fn session_len_after_record() {
+        let _g = GLOBAL_TEST_LOCK.lock();
         let before = session_len();
         session_record("user", "test message", 999);
         assert!(session_len() > before);
@@ -1088,6 +1099,7 @@ mod tests {
 
     #[test]
     fn propose_memory_nudge_does_not_panic() {
+        let _g = GLOBAL_TEST_LOCK.lock();
         propose_memory_nudge("test fact for nudge");
     }
 
@@ -1095,6 +1107,7 @@ mod tests {
 
     #[test]
     fn extract_qa_empty() {
+        let _g = GLOBAL_TEST_LOCK.lock();
         let pairs = extract_qa_pairs(10);
         // May or may not be empty depending on session state
         assert!(pairs.len() <= 10);
@@ -1130,6 +1143,7 @@ action: deploy"));
 
     #[test]
     fn session_record_writes_to_vfs() {
+        let _g = GLOBAL_TEST_LOCK.lock();
         // VFS may not be initialized in host tests — skip gracefully
         session_record("user", "hello world", 42);
         match crate::globals::read_vfs("/mnt/neural/SESSION.log") {
@@ -1144,6 +1158,7 @@ action: deploy"));
 
     #[test]
     fn session_load_hydrates_entries() {
+        let _g = GLOBAL_TEST_LOCK.lock();
         session_record("user", "test entry alpha", 100);
         session_record("assistant", "test entry beta", 200);
         session_load();
@@ -1156,13 +1171,23 @@ action: deploy"));
 
     #[test]
     fn session_load_respects_cap() {
+        let _g = GLOBAL_TEST_LOCK.lock();
+        // Estado global: parte de um log vazio para o resultado ser determinístico.
+        SESSION.lock().entries.clear();
         for i in 0..55u64 {
             session_record("user", &format!("entry {}", i), i);
         }
         session_load();
-        let result = session_search("entry 0 ", 10);
-        // entry 0 was drained (cap=48, we wrote 55, loaded last 48 = entries 7..54)
-        assert!(result.contains("no hits") || !result.contains("entry 0"), "oldest entry should be drained: {}", result);
+        // cap=48: somente as 48 entradas mais recentes sobrevivem; as 7 mais
+        // antigas (entry 0..6) são drenadas.
+        // Nota: o header de `session_search` ecoa a query (`for 'entry 0'`),
+        // então NÃO se pode checar a string inteira — inspecionamos o log.
+        let log = SESSION.lock();
+        assert_eq!(log.entries.len(), SESSION_CAP, "cap=48 deve ser respeitado");
+        assert!(
+            log.entries.iter().all(|e| e.text != "entry 0"),
+            "oldest entry (entry 0) should be drained"
+        );
     }
 
 }

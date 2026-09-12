@@ -702,9 +702,13 @@ mod tests {
 
     #[test]
     fn soul_default_jarbas() {
+        // s319: SoulProfile delegates to the canonical hermes::soul::SoulEngine
+        // (hermes is the lower layer; jarbas depends on it). Canonical default
+        // tone is Tone::Coach — the enum is Coach|Tutor|Tool|Friend, so the old
+        // jarbas "witty" string is not representable.
         let s = SoulProfile::default_jarbas();
         assert_eq!(s.name, "JARBAS");
-        assert_eq!(s.tone, "witty");
+        assert_eq!(s.tone, "Coach");
         assert!(s.humor_level > 0.0 && s.humor_level <= 1.0);
         assert!(s.empathy > 0.0 && s.empathy <= 1.0);
     }
@@ -720,9 +724,14 @@ mod tests {
     #[test]
     fn soul_fluid_update_joy() {
         let mut s = SoulProfile::default_jarbas();
+        let baseline = s.humor_level;
         s.fluid_update(Emotion::Joy, 0);
         assert_eq!(s.tone, "casual");
-        assert!(s.humor_level >= 0.5);
+        // Joy raises humor above the canonical baseline (hermes default
+        // creativity=0.3 → humor_level=0.3; the old fixed 0.5 threshold
+        // predates s319 delegation).
+        assert!(s.humor_level > baseline, "joy should raise humor: {}", s.humor_level);
+        assert!(s.humor_level <= 1.0);
     }
 
     #[test]
@@ -760,7 +769,10 @@ mod tests {
         let s = SoulProfile::default_jarbas();
         let d = s.describe();
         assert!(d.contains("PERSONA"), "describe should contain PERSONA: {}", d);
-        assert!(d.contains("witty"), "describe should contain tone: {}", d);
+        // s319: tone is the canonical hermes Tone debug label — assert the
+        // describe output actually renders the profile's non-empty tone.
+        assert!(!s.tone.is_empty());
+        assert!(d.contains(&s.tone), "describe should contain tone '{}': {}", s.tone, d);
     }
 
     // ── SessionHistory ───────────────────────────────────────────────────
