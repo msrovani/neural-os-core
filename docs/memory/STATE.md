@@ -35,4 +35,7 @@
 #     divisão, ring_spans LUT, LOD; bench 112-130µs/frame) + FFT Goertzel (tap cap 1024)
 #     + Hub Health panel agent-driven (HubHealthAgent hermes decide; compositor desenha;
 #     dados medidos, n/a ≠ 0; F12/orb click/badge). USB metal ABERTO (diag FB pronto p/ ler)
+#   UI s332-s335: fluidez (TARGET_FPS 60, DamageList heapless, chrome cache, SSE2) +
+#     FB WC/PAT/movnti + cursor HW + BCS (gated, default-OFF; validacao METAL pendente) +
+#     invalidacao de janelas/cards; testes 845 pass/0 fail; imagem regenerada
 #   Não declarar v2.0.0
