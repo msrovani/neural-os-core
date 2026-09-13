@@ -40,4 +40,7 @@
 #     invalidacao de janelas/cards; testes 845 pass/0 fail; imagem regenerada
 #   UI s336: fix orb (intrinsics SSE2 mal-compilados no soft-float -> copy_nonoverlapping);
 #     QEMU verificado: orb ciano com G intacto, frame cost 18ms, animacao viva
+#   MEM s339: fix heap-wrap (clamp janela ~2GB + refuse-before-map); telemetria honesta
+#     (Heap(atual):512MB); OOM handler carimba agente+FB (allocs grandes bypassam o grow)
+#     - teste a quente no metal nomeia o requester dos 8,39GB
 #   Não declarar v2.0.0

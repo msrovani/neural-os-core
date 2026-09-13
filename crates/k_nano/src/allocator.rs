@@ -582,18 +582,36 @@ fn oom(layout: core::alloc::Layout) -> ! {
     unsafe {
         core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b'O', options(nostack, preserves_flags));
     }
+    // SESSION_339: carimba o agente que pediu o alloc (allocs grandes bypassam o
+    // grow — TALC direto). tick_in_progress() é lock-free (seguro no OOM handler).
+    let agent = agent_core::tick_in_progress().map(|(n, _)| n).unwrap_or("?");
     {
         let mut w = crate::vga_buffer::WRITER.lock();
         if let Some(ref mut w) = *w {
-            let _ = write!(w, "[OOM/TALC] size={} align={}", layout.size(), layout.align());
+            let _ = write!(w, "[OOM/TALC] size={} align={} agente={}", layout.size(), layout.align(), agent);
         }
     }
     {
         let mut s = crate::serial::SERIAL.lock();
         if let Some(ref mut s) = *s {
-            let _ = write!(s, "[OOM/TALC] sem memoria Tier 1. size={} align={} Verifique HEAP_SIZE.\n",
-                layout.size(), layout.align());
+            let _ = write!(s, "[OOM/TALC] sem memoria Tier 1. size={} align={} agente={} Verifique HEAP_SIZE.\n",
+                layout.size(), layout.align(), agent);
         }
+    }
+    // FB: o serial é invisível no metal — carimba o canal FB (SESSION_316/330).
+    {
+        let mut buf = [0u8; 96];
+        let mut n = 0usize;
+        for &b in b"OOM agente=" { if n < buf.len() { buf[n] = b; n += 1; } }
+        for &b in agent.as_bytes() { if n < buf.len() { buf[n] = b; n += 1; } }
+        for &b in b" size=" { if n < buf.len() { buf[n] = b; n += 1; } }
+        let mut v = layout.size();
+        let mut digits = [0u8; 20];
+        let mut d = 0usize;
+        if v == 0 { digits[0] = b'0'; d = 1; }
+        while v > 0 && d < 20 { digits[d] = b'0' + (v % 10) as u8; v /= 10; d += 1; }
+        while d > 0 { d -= 1; if n < buf.len() { buf[n] = digits[d]; n += 1; } }
+        crate::interrupts::exception_fb_stamp(&buf[..n]);
     }
     loop {
         x86_64::instructions::hlt();
