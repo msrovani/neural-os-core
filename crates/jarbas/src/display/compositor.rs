@@ -137,7 +137,8 @@ pub fn hit_power_dialog(cx: usize, cy: usize, scr_w: usize, scr_h: usize) -> Pow
 }
 
 pub fn power_btn_rect(scr_w: usize) -> (usize, usize, usize, usize) {
-    let x = scr_w.saturating_sub(POWER_BTN_W + 8);
+    // Deve casar com o desenho do botão OFF (render: off_x = w-(bw+10)).
+    let x = scr_w.saturating_sub(POWER_BTN_W + 10);
     (x, 4, POWER_BTN_W, POWER_BTN_H)
 }
 

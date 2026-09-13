@@ -239,6 +239,8 @@ pub fn begin_orderly_shutdown(cause: ShutdownCause) -> ! {
         k_nano::acpi::pm1a_cnt_port()
     );
     dump_boot_log_sector();
+    // Graceful: persiste o ramlog (BOOT.LOG) ANTES do S5/reboot.
+    let _ = k_nano::boot_logger::try_flush_ramlog();
     halt_aps();
     power_off_cascade()
 }
@@ -257,6 +259,7 @@ pub fn begin_orderly_reboot(cause: ShutdownCause) -> ! {
         now_tick()
     );
     dump_boot_log_sector();
+    let _ = k_nano::boot_logger::try_flush_ramlog();
     halt_aps();
     ps2_reset();
     loop {
@@ -335,6 +338,32 @@ pub fn handle_power_phrase(text: &str) -> Option<alloc::string::String> {
         ));
     }
     None
+}
+
+static RX_SHUTDOWN: spin::Mutex<Option<event_bus::Receiver>> = spin::Mutex::new(None);
+static RX_REBOOT: spin::Mutex<Option<event_bus::Receiver>> = spin::Mutex::new(None);
+
+/// Assina os tópicos de energia UMA vez (chamar no boot, fora de IRQ).
+pub fn init_power_drain() {
+    *RX_SHUTDOWN.lock() = Some(crate::EVENT_BUS.subscribe(TOPIC_SYSTEM_SHUTDOWN));
+    *RX_REBOOT.lock() = Some(crate::EVENT_BUS.subscribe(TOPIC_SYSTEM_REBOOT));
+    k_nano::slog_bin!("SHUTDOWN", "ok", "power drain subscribed (SYSTEM_SHUTDOWN/REBOOT)");
+}
+
+/// Drena os receivers assinados — chamar do loop do scheduler (idle closure).
+pub fn power_drain_tick() {
+    let mut rx_s = RX_SHUTDOWN.lock();
+    let mut rx_r = RX_REBOOT.lock();
+    if let Some(rx) = rx_s.as_mut() {
+        if rx.try_receive().is_some() {
+            begin_orderly_shutdown(ShutdownCause::Triggered);
+        }
+    }
+    if let Some(rx) = rx_r.as_mut() {
+        if rx.try_receive().is_some() {
+            begin_orderly_reboot(ShutdownCause::Scheduled);
+        }
+    }
 }
 
 /// Drena EventBus power topics (chamar do Hermes/Display tick no bin).

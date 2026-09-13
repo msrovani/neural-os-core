@@ -930,8 +930,13 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
         },
     });
     crate::display::fb::boot_ckpt(53, "scheduler run start");
+    // Consumer de SYSTEM_SHUTDOWN/SYSTEM_REBOOT (botão OFF do dock): assina
+    // uma vez e drena a cada ciclo do scheduler — nunca dentro de IRQ.
+    crate::shutdown::init_power_drain();
     registry.run(
         || {
+            // Power: drena SYSTEM_SHUTDOWN/SYSTEM_REBOOT → begin_orderly_*.
+            crate::shutdown::power_drain_tick();
             // Wakes marcados pelo IRQ do timer são processados aqui (fora do IRQ).
             k_nano::async_rt::drain_pending_wakes();
             // Governor ondemand tick — escala frequência por carga da fila de AP

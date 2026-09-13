@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s338] - 2026-09-11 — Fix: botão Power (consumidor do SYSTEM_SHUTDOWN ausente)
+
+- **Causa:** a cadeia funcionava até publicar `SYSTEM_SHUTDOWN`/`SYSTEM_REBOOT` no EventBus — mas `drain_power_requests()` (`neural-kernel/src/shutdown.rs:341`) existia com **zero callers**: o evento ia para o vazio e nada executava o desligamento. Secundário: mismatch de **2 px** no hit-test do botão OFF desenhado.
+- **Fix:** `init_power_drain()` (assina `SYSTEM_SHUTDOWN`/`SYSTEM_REBOOT` uma vez no boot) + `power_drain_tick()` como 1ª instrução do closure idle do scheduler (fora de IRQ, padrão drain-in-loop). O drain executa a cascata completa: log persistente de shutdown → `dump_boot_log_sector` → **`boot_logger::try_flush_ramlog()` (persistência ANTES do power-off)** → halt APs → `k_nano::acpi::power_off_s5()` (S5 real) → fallback QEMU `0x604` → reboot via 8042 `0x64/0xFE` → hlt.
+- **Hit-test:** `power_btn_rect` x offset +8→+10 (cobre exatamente o botão OFF desenhado, `off_x = w-(bw+10)`).
+- jarbas **89 pass / 0 fail**; `cargo nk`/`cargo check --release` = 0 erros. Verificação QEMU: click Power → dialog → Desligar → **QEMU sai limpo**; Reiniciar → reset via 8042.
+
 ## [1.9.99-s337] - 2026-09-11 — Orb: IDLE ciano brilhante como default + ornamento completo
 
 - **Gating do Dreaming (causa do orb escuro):** o `SleepCycleAgent` publica `SLEEP_PHASE` a cada fase (~200 ticks, loop REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT) e o gate antigo tratava *qualquer* fase não-IDLE como dreaming (refresh 30 s) → orb **preso no Dreaming escuro**. Fix: só a fase `DREAM` genuína abre a janela (60 s); as demais limpam. **Boot default = IDLE ciano brilhante.**
