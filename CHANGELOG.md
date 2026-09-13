@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s336] - 2026-09-11 — Fix: orb renderizava azul-escuro (intrinsics SSE2 mal-compilados no soft-float)
+
+- **Bug (achado na verificação QEMU):** o orb aparecia **azul-escuro (canal G zerado)** — `sse2_copy_bytes` (`_mm_loadu_si128`/`_mm_storeu_si128` sob `#[target_feature(enable="sse2")]`) é **mal-compilado no target soft-float** (`-C target-feature=-sse2`): LLVM baixa para scalar que **zera o byte 1 de cada u32** (o G no BGRX). Mesma classe do `find_child_byte16_sse` (SESSION_249b). Host tests não pegavam (host tem SSE2 nativo).
+- **Fix (`fb.rs`):** `copy_bytes` → `core::ptr::copy_nonoverlapping` (memcpy do compilador, correto); `fill_rect_darken_tint` → `tint_swar_scalar`. Mantido `sse2_stream_copy_bytes` (**movnti**, operando GP — correto). `sse2_copy_bytes`/`tint_sse2` ficam só p/ testes host (nativos).
+- **Efeito:** frame cost QEMU **159→18 ms**; orb **ciano (0,150,220)** com G intacto; HUD/dock corretos.
+- 3 testes host novos (`render_paints_cyan_orb_into_back_buffer`, `swap_rect_preserves_green_channel`, `swap_rect_unaligned_preserves_green_channel`). jarbas **89 pass / 0 fail**; `cargo nk`/`cargo check --release` = 0 erros.
+
 ## [1.9.99-s335] - 2026-09-11 — UI fluidity B: WC framebuffer + NT present + HW cursor + BCS blit (metal-only)
 
 Pacote B do plano de fluidez (otimizações que só se medem no metal; **QEMU cai sempre no fallback** — não validadas em HW ainda):

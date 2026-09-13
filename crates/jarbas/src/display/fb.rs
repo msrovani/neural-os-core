@@ -1262,16 +1262,20 @@ pub(crate) unsafe fn sse2_copy_bytes(dst: *mut u8, src: *const u8, len: usize) {
     }
 }
 
-/// Dispatch: SSE2 quando disponível, senão `copy_nonoverlapping`.
+/// Dispatch: `copy_nonoverlapping` (compiler memcpy).
+///
+/// ⚠️ s335: o kernel builda com `-C target-feature=-sse2` (soft-float,
+/// `.cargo/config.toml`). Sob essa flag o LLVM rebaixa os intrinsics de
+/// `sse2_copy_bytes` (`_mm_loadu_si128`/`_mm_storeu_si128`) para código
+/// escalar **incorreto**: cada bloco de 16 B copiado zera o byte 1 de cada
+/// u32 (o canal G no layout BGRX do FB) — o tail escalar de 8 B copia certo.
+/// Sintoma no QEMU: orb/HUD sem o canal G (azul em vez de ciano), dock (via
+/// movnti) correto. Mesma classe do bug documentado de `find_child_byte16_sse`
+/// (AGENTS.md). O `copy_nonoverlapping` compila para memcpy escalar correto
+/// (provado pelo fill_rect_fast/dock). `sse2_copy_bytes` fica só para os
+/// testes de paridade no host (SSE2 nativo lá é correto).
 #[inline]
 unsafe fn copy_bytes(dst: *mut u8, src: *const u8, len: usize) {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if sse2_available() {
-            sse2_copy_bytes(dst, src, len);
-            return;
-        }
-    }
     core::ptr::copy_nonoverlapping(src, dst, len);
 }
 
@@ -1869,15 +1873,10 @@ impl DoubleBuffer {
                 } else {
                     u32::from_le_bytes([b, g, r, 0xFF])
                 };
-                // #5: kernel SSE2 (4 px/iteração) quando disponível; escalar é
-                // o fallback e a referência de paridade.
-                #[cfg(target_arch = "x86_64")]
-                {
-                    if sse2_available() {
-                        tint_sse2(ptr, stride, x, y, aw, ah, tint_word, kk);
-                        return aw * ah;
-                    }
-                }
+                // ⚠️ s335: `tint_sse2` usa `_mm_loadu_si128`/`_mm_storeu_si128`
+                // e sofre da MESMA miscompilação soft-float que `sse2_copy_bytes`
+                // (zera o canal G no kernel). O `tint_swar_scalar` é a referência
+                // de paridade e compila correto. `tint_sse2` fica p/ testes host.
                 tint_swar_scalar(ptr, stride, x, y, aw, ah, tint_word, kk);
             } else {
                 let (c0, c1, c2) = if self.info.rgb_order { (r, g, b) } else { (b, g, r) };

@@ -2532,6 +2532,120 @@ mod damage_tests {
         d.blit_hud_chrome(theme);
         assert_eq!(d.hud_chrome_key, key);
     }
+
+    /// O orb (Soul Mirror) TEM de pintar pixels ciano no back buffer através do
+    /// caminho completo `render()` — regressão do bug "orb invisível no QEMU":
+    /// se `avatar_visible`/`dirty_orb`/paint quebrarem, a bbox do orb fica só
+    /// com o fill navy do fundo e o teste falha.
+    #[test]
+    fn render_paints_cyan_orb_into_back_buffer() {
+        let gpu = crate::display::fb::GpuDevice::from_probe(0, 640, 360, 640, 4, false);
+        let mut d = JarbasDesktop::new(DoubleBuffer::from_gpu(&gpu));
+        assert!(d.avatar_visible, "orb visivel por padrao");
+        // 3 frames com ticks distintos (cada um passa o gate e pinta).
+        // No QEMU os renders ficam ~159 ms apart; no host o paint é µs, então
+        // re-arma o gate a cada frame (senão o 2º render é bloqueado).
+        for t in 1..=3u64 {
+            let past = k_nano::tsc::now_us().saturating_sub(1_000_000);
+            LAST_PRESENT_US.store(past, core::sync::atomic::Ordering::Relaxed);
+            d.render(t);
+            assert!(
+                d.last_paint_tick == t,
+                "render({t}) deve pintar (gate de relogio de parede passou)"
+            );
+        }
+
+        // bbox do orb (mesma conta de render_inner).
+        let orb_cr = d.soul_mirror.bounds_radius() as usize;
+        let ox = d.soul_mirror.cx as usize;
+        let oy = d.soul_mirror.cy as usize;
+        let x0 = ox.saturating_sub(orb_cr).min(d.w);
+        let y0 = oy.saturating_sub(orb_cr).min(d.h);
+        let cw = (orb_cr * 2 + 24).min(d.w.saturating_sub(x0));
+        let ch = (orb_cr * 2 + 24).min(d.h.saturating_sub(y0));
+        assert!(cw > 0 && ch > 0, "bbox do orb vazia");
+
+        // Conta pixels "corpo ciano" (G≥80, B≥120, R≤40) dentro da bbox.
+        let mut cyan = 0usize;
+        let mut total = 0usize;
+        for y in y0..y0 + ch {
+            for x in x0..x0 + cw {
+                if let Some((r, g, b)) = d.fb.get_pixel(x, y) {
+                    total += 1;
+                    if g >= 80 && b >= 120 && r <= 40 {
+                        cyan += 1;
+                    }
+                }
+            }
+        }
+        assert!(total > 0, "bbox do orb fora do back buffer");
+        assert!(
+            cyan > 500,
+            "orb nao pintou corpo ciano no back buffer: cyan={cyan} total={total} \
+             (bbox {x0},{y0} {cw}x{ch}; ORB_PIXELS={})",
+            crate::display::soul_mirror::ORB_PIXELS.load(core::sync::atomic::Ordering::Relaxed)
+        );
+    }
+
+    /// O present (`swap_rect`) TEM de copiar o back→front byte-a-byte: um
+    /// `swap_rect` que zere o canal G (ou qualquer byte) apaga o corpo ciano
+    /// do orb na tela mesmo com o back correto — o sintoma exato do QEMU.
+    #[test]
+    fn swap_rect_preserves_green_channel() {
+        let w = 640usize;
+        let h = 360usize;
+        // "Framebuffer" real: Vec hospedado (addr = ponteiro do Vec).
+        let mut front = alloc::vec![0xEEu8; w * h * 4];
+        let addr = front.as_mut_ptr() as u64;
+        let gpu = crate::display::fb::GpuDevice::from_probe(addr, w as u32, h as u32, w as u32, 4, false);
+        let mut d = JarbasDesktop::new(DoubleBuffer::from_gpu(&gpu));
+        // Pinta um retângulo ciano direto no back (sem render — foco no swap).
+        d.fb.fill_rect_fast(100, 100, 200, 100, 0, 150, 220);
+        // Swap do rect exatamente como present_frame faz.
+        d.fb.swap_rect(100, 100, 200, 100);
+        // Lê o front (BGRX): byte0=B, byte1=G, byte2=R.
+        let off = 150 * (w * 4) + 150 * 4;
+        let (b0, g0, r0) = (front[off], front[off + 1], front[off + 2]);
+        assert_eq!((b0, g0, r0), (220, 150, 0),
+            "swap_rect corrompeu o pixel: bytes BGR = ({b0},{g0},{r0}), esperado (220,150,0)");
+        // Varre o rect inteiro: nenhum pixel pode ter G=0 onde o fill escreveu.
+        let mut bad = 0usize;
+        for y in 100..200 {
+            for x in 100..300 {
+                let o = y * (w * 4) + x * 4;
+                if front[o + 1] != 150 {
+                    bad += 1;
+                }
+            }
+        }
+        assert_eq!(bad, 0, "{bad} pixels com canal G corrompido no swap_rect");
+    }
+
+    /// Variante com rect DESALINHADO (x0 % 4 != 0): o orb do QEMU é swapado
+    /// por `sse2_copy_bytes` (loadu/storeu) porque `dst` não é 16-B alinhado —
+    /// o caminho que o teste alinhado acima não cobre.
+    #[test]
+    fn swap_rect_unaligned_preserves_green_channel() {
+        let w = 640usize;
+        let h = 360usize;
+        let mut front = alloc::vec![0xEEu8; w * h * 4];
+        let addr = front.as_mut_ptr() as u64;
+        let gpu = crate::display::fb::GpuDevice::from_probe(addr, w as u32, h as u32, w as u32, 4, false);
+        let mut d = JarbasDesktop::new(DoubleBuffer::from_gpu(&gpu));
+        // x0 = 5 → off = y*stride + 20 → dst % 16 = 4 → caminho loadu/storeu.
+        d.fb.fill_rect_fast(5, 100, 200, 100, 0, 150, 220);
+        d.fb.swap_rect(5, 100, 200, 100);
+        let mut bad = 0usize;
+        for y in 100..200 {
+            for x in 5..205 {
+                let o = y * (w * 4) + x * 4;
+                if front[o + 1] != 150 {
+                    bad += 1;
+                }
+            }
+        }
+        assert_eq!(bad, 0, "{bad} pixels com canal G corrompido no swap_rect desalinhado");
+    }
 }
 
 
