@@ -198,7 +198,7 @@
 ## 🧾 DÍVIDA DE DOC/CONSISTÊNCIA
 
 - [ ] Licença: `LICENSE` = **AGPL-3.0**, mas `TECNOLOGIAS.md` declara "código próprio MIT" — decidir a correta e alinhar
-- [ ] Métricas velhas (~26K LOC / 180+ arquivos / ~50 agentes) em `AGENTS.md`, `SUMMARY.md`, `ROADMAP.md`, `codemap.md`, `HOWTO.md` (`TECNOLOGIAS.md`/`README.md` já atualizados para ~148K / ~671 / 41 nativos)
+- [x] Métricas alinhadas ao **medido** em `AGENTS.md`, `SUMMARY.md`, `ROADMAP.md`, `codemap.md`, `HOWTO.md` (+ `TECNOLOGIAS.md`/`README.md`): ~148K LOC / ~671 `.rs` (12 crates do workspace) / 41 nativos / v1.9.99-s332 / 829 testes host
 
 ---
 

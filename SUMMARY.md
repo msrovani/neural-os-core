@@ -1,9 +1,9 @@
 # Neural OS Hermes — AI Summary
 
-**O que é:** Sistema operacional bare-metal (`no_std` Rust) onde **tudo é Agente ou Skill**. ~50 agentes nativos, Trinity MoE no kernel (VOCAB=256, routing telemetry), BitNet ternário para HW e inferência.
+**O que é:** Sistema operacional bare-metal (`no_std` Rust) onde **tudo é Agente ou Skill**. 41 agentes nativos, Trinity MoE no kernel (VOCAB=256, routing telemetry), BitNet ternário para HW e inferência.
 
-**Versão release:** **v1.9.99-s297 TESTE / NÃO ESTÁVEL** (2026-08-31) — virtio_blk + NSGDB persistente; TTS streaming; compositor hot path; Trinity improvements.
-**Estado:** ~28.000 LOC, 180+ arquivos, `cargo nk` = 0 erros, 168 testes host.
+**Versão release:** **v1.9.99-s332 TEST / NÃO ESTÁVEL** (2026-09-11) — orb v2 (MCU-JARVIS) + FFT Goertzel + Hub Health panel (agent-driven); tick adaptativo (ADR-0104); timer x2APIC; InferQueue.
+**Estado:** ~148K LOC, ~671 arquivos (12 crates do workspace), `cargo nk` = 0 erros, 829 testes host (0 fail).
 
 **Base v1.8.0:**
 - ADR-0042 N1–N5 ✅ — cadeia funcional K³CHJ

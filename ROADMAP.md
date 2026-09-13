@@ -1,9 +1,9 @@
 # Roadmap — neural-os-core
 
-**Última atualização:** 2026-08-31
-**Versão release:** **v1.9.99-s297 TEST / NÃO ESTÁVEL**
-**Estado:** ~28.000 LOC, 180+ arquivos Rust, ~50 agentes nativos, 0 erros (`cargo nk`)
-**Pista ativa:** s297 virtio_blk + NSGDB persistente; s296 HW splash freeze; s295 HW pendrive; s294 compositor hot path + TTS streaming; s293 Trinity vocab256 + routing telemetry.
+**Última atualização:** 2026-09-11
+**Versão release:** **v1.9.99-s332 TEST / NÃO ESTÁVEL**
+**Estado:** ~148K LOC, ~671 arquivos Rust (12 crates do workspace), 41 agentes nativos, 0 erros (`cargo nk`), 829 testes host (0 fail)
+**Pista ativa:** s331 orb v2 (MCU-JARVIS) + FFT Goertzel + Hub Health panel (agent-driven); s330 freeze/timer x2APIC + ADR-0104 (tick adaptativo); s328 InferQueue WS-H; s321 k_nano slimming. **Aberto:** USB/MSC no metal + mouse (diagnóstico FB pronto p/ ler).
 
 ---
 
