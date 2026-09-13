@@ -9,6 +9,17 @@ use crate::ata::AtaDriver;
 use crate::block_dev::BlockDevice;
 
 static FAT32_BPB_LOGGED: AtomicBool = AtomicBool::new(false);
+
+// ── Root dir cluster chain cache ──────────────────────────────
+// Evita N caminhadas da root dir via ATA PIO (cada lookup=read_file
+// re-caminhava a chain inteira). Na 1ª chamada popula; nas seguintes
+// usa o cache. Invalidado por new(). Timeout TSC de 2s previne hang
+// se a chain for异常mente longa ou corrupta.
+const ROOT_DIR_CACHE_SECTORS: usize = 512; // 256KB — 256 clusters × 8 SPC × 512B
+static mut ROOT_DIR_CACHE: [u8; ROOT_DIR_CACHE_SECTORS * 512] = [0u8; ROOT_DIR_CACHE_SECTORS * 512];
+static mut ROOT_DIR_CACHE_SECTORS_READ: usize = 0;
+static mut ROOT_DIR_CACHE_SPC: u8 = 0;
+static mut ROOT_DIR_CACHE_BPS: u16 = 0;
 /// Converte "NAME.EXT" para entrada FAT 8.3 (11 bytes, espaços).
 pub fn encode_83(name: &str) -> [u8; 11] {
     let mut out = [b' '; 11];
@@ -958,111 +969,166 @@ impl<'a> Fat32Reader<'a> {
         None
     }
 
-    /// Retorna tamanho do arquivo na raiz (8.3), sem ler o conteúdo.
-    pub unsafe fn lookup_file_size(&self, name: &str) -> Option<usize> {
-        let want = encode_83(name);
+    /// Popula o cache estático da root dir (1ª chamada).
+    /// Caminha a cluster chain UMA vez via ATA PIO, grava setores em ROOT_DIR_CACHE.
+    /// Retorna true se completou, false em timeout/erro.
+    unsafe fn populate_root_dir_cache(&self) -> bool {
+        if ROOT_DIR_CACHE_SECTORS_READ > 0 { return true; }
+        let deadline = crate::tsc::now_us() + 2_000_000; // 2s timeout
+        let spc = self.sectors_per_cluster;
+        let bps = self.bytes_per_sector as usize;
+        let cluster_bytes = spc as usize * bps;
         let mut cluster = self.root_cluster;
         let mut walked = 0u32;
         let mut prev = 0u32;
+        let mut cache_offset = 0usize;
         while cluster < 0x0FFF_FFF8 && cluster >= 2 && walked < Self::MAX_ROOT_DIR_CLUSTERS {
-            if cluster == prev {
-                break;
+            if cluster == prev { break; }
+            if crate::tsc::now_us() > deadline {
+                crate::slog_nano!("FAT32", "warn", "root_dir cache timeout after 2s walked={}", walked);
+                return false;
             }
             prev = cluster;
             walked += 1;
             let lba = self.cluster_lba(cluster);
-            let mut buf = vec![0u8; self.sectors_per_cluster as usize * self.bytes_per_sector as usize];
-            for i in 0..self.sectors_per_cluster as u32 {
-                self.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
-            }
-            for entry_off in (0..buf.len()).step_by(32) {
-                let first = buf[entry_off];
-                if first == 0 {
-                    return None;
+            if cache_offset + cluster_bytes <= ROOT_DIR_CACHE.len() {
+                for i in 0..spc as u32 {
+                    let off = cache_offset + i as usize * bps;
+                    self.ata.read_sectors(lba + i, &mut ROOT_DIR_CACHE[off..off + bps], 1);
                 }
-                if first == 0xE5 { continue; }
-                if buf[entry_off + 11] & 0x08 != 0 { continue; }
-                if buf[entry_off + 11] & 0x0F == 0x0F { continue; }
-                if buf[entry_off..entry_off+11] != want { continue; }
-                let file_size = u32::from_le_bytes([
-                    buf[entry_off+28], buf[entry_off+29],
-                    buf[entry_off+30], buf[entry_off+31],
-                ]) as usize;
-                return Some(file_size);
+                cache_offset += cluster_bytes;
             }
             cluster = self.read_fat_entry(cluster);
+        }
+        ROOT_DIR_CACHE_SECTORS_READ = cache_offset / 512;
+        ROOT_DIR_CACHE_SPC = spc;
+        ROOT_DIR_CACHE_BPS = bps as u16;
+        crate::slog_nano!("FAT32", "ok", "root_dir cache populated: {} sectors, {} clusters",
+            ROOT_DIR_CACHE_SECTORS_READ, walked);
+        true
+    }
+
+    /// Retorna tamanho do arquivo na raiz (8.3), sem ler o conteúdo.
+    /// Usa cache se disponível; senão popula cache (1ª chamada).
+    /// Timeout TSC de 2s previne hang em ATA PIO lenta.
+    pub unsafe fn lookup_file_size(&self, name: &str) -> Option<usize> {
+        let want = encode_83(name);
+        // Tenta cache primeiro
+        if ROOT_DIR_CACHE_SECTORS_READ > 0 {
+            let spc = ROOT_DIR_CACHE_SPC as usize;
+            let bps = ROOT_DIR_CACHE_BPS as usize;
+            let cluster_bytes = spc * bps;
+            let total = ROOT_DIR_CACHE_SECTORS_READ * 512;
+            let mut offset = 0usize;
+            while offset + cluster_bytes <= total {
+                for entry_off in (offset..offset + cluster_bytes).step_by(32) {
+                    let first = ROOT_DIR_CACHE[entry_off];
+                    if first == 0 { return None; }
+                    if first == 0xE5 { continue; }
+                    if ROOT_DIR_CACHE[entry_off + 11] & 0x08 != 0 { continue; }
+                    if ROOT_DIR_CACHE[entry_off + 11] & 0x0F == 0x0F { continue; }
+                    if ROOT_DIR_CACHE[entry_off..entry_off+11] != want { continue; }
+                    let file_size = u32::from_le_bytes([
+                        ROOT_DIR_CACHE[entry_off+28], ROOT_DIR_CACHE[entry_off+29],
+                        ROOT_DIR_CACHE[entry_off+30], ROOT_DIR_CACHE[entry_off+31],
+                    ]) as usize;
+                    return Some(file_size);
+                }
+                offset += cluster_bytes;
+            }
+            return None;
+        }
+        // 1ª chamada: popula cache (1 leitura ATA, timeout 2s)
+        if !self.populate_root_dir_cache() {
+            return None;
+        }
+        self.lookup_file_size(name) // recursão com cache pronto
+    }
+
+    /// Le o conteudo de um arquivo pelo nome na raiz (cluster chain)
+    /// Busca entrada de arquivo no cache da root dir.
+    /// Retorna (start_cluster, file_size) ou None.
+    unsafe fn find_in_root_cache(&self, name: &str) -> Option<(u32, usize)> {
+        if ROOT_DIR_CACHE_SECTORS_READ == 0 { return None; }
+        let want = encode_83(name);
+        let spc = ROOT_DIR_CACHE_SPC as usize;
+        let bps = ROOT_DIR_CACHE_BPS as usize;
+        let cluster_bytes = spc * bps;
+        let total = ROOT_DIR_CACHE_SECTORS_READ * 512;
+        let mut offset = 0usize;
+        while offset + cluster_bytes <= total {
+            for entry_off in (offset..offset + cluster_bytes).step_by(32) {
+                let first = ROOT_DIR_CACHE[entry_off];
+                if first == 0 { return None; }
+                if first == 0xE5 { continue; }
+                if ROOT_DIR_CACHE[entry_off + 11] & 0x08 != 0 { continue; }
+                if ROOT_DIR_CACHE[entry_off + 11] & 0x0F == 0x0F { continue; }
+                if ROOT_DIR_CACHE[entry_off..entry_off+11] != want { continue; }
+                let file_size = u32::from_le_bytes([
+                    ROOT_DIR_CACHE[entry_off+28], ROOT_DIR_CACHE[entry_off+29],
+                    ROOT_DIR_CACHE[entry_off+30], ROOT_DIR_CACHE[entry_off+31],
+                ]) as usize;
+                let start_cluster_lo = u16::from_le_bytes([ROOT_DIR_CACHE[entry_off+26], ROOT_DIR_CACHE[entry_off+27]]);
+                let start_cluster_hi = u16::from_le_bytes([ROOT_DIR_CACHE[entry_off+20], ROOT_DIR_CACHE[entry_off+21]]);
+                let start_cluster = ((start_cluster_hi as u32) << 16) | start_cluster_lo as u32;
+                return Some((start_cluster, file_size));
+            }
+            offset += cluster_bytes;
         }
         None
     }
 
-    /// Le o conteudo de um arquivo pelo nome na raiz (cluster chain)
+    /// Le o conteudo de um arquivo pelo nome na raiz (cluster chain).
+    /// Usa cache para encontrar a entrada; timeout TSC de 2s previne hang.
     pub unsafe fn read_file(&self, name: &str) -> Option<Vec<u8>> {
-        let mut cluster = self.root_cluster;
-        let want = encode_83(name);
-        let mut walked = 0u32;
-        let mut prev = 0u32;
-
-        while cluster < 0x0FFF_FFF8 && cluster >= 2 && walked < Self::MAX_ROOT_DIR_CLUSTERS {
-            if cluster == prev {
-                break;
+        // Tenta encontrar no cache (1 leitura ATA evitada)
+        let (start_cluster, file_size) = if ROOT_DIR_CACHE_SECTORS_READ > 0 {
+            match self.find_in_root_cache(name) {
+                Some(entry) => entry,
+                None => return None,
             }
-            prev = cluster;
-            walked += 1;
-            let lba = self.cluster_lba(cluster);
-            let mut buf = vec![0u8; self.sectors_per_cluster as usize * self.bytes_per_sector as usize];
-            for i in 0..self.sectors_per_cluster as u32 {
-                self.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
+        } else {
+            // 1ª chamada: popula cache primeiro
+            if !self.populate_root_dir_cache() { return None; }
+            match self.find_in_root_cache(name) {
+                Some(entry) => entry,
+                None => return None,
             }
-
-            for entry_off in (0..buf.len()).step_by(32) {
-                let first = buf[entry_off];
-                if first == 0 {
-                    return None;
-                }
-                if first == 0xE5 { continue; }
-                if buf[entry_off + 11] & 0x08 != 0 { continue; }
-                if buf[entry_off + 11] & 0x0F == 0x0F { continue; }
-                if buf[entry_off..entry_off+11] != want { continue; }
-
-                let file_size = u32::from_le_bytes([
-                    buf[entry_off+28], buf[entry_off+29],
-                    buf[entry_off+30], buf[entry_off+31],
-                ]) as usize;
-                // Não truncar: modelo >256MB precisa AirLLM/range, não Vec mentiroso.
-                const MAX_INLINE: usize = 256 * 1024 * 1024;
-                if file_size > MAX_INLINE {
-                    crate::slog_nano!("FAT", "warn", "{} size={}MB > inline cap — recusa read_file",
-                        name, file_size / (1024 * 1024));
-                    return None;
-                }
-                let start_cluster_lo = u16::from_le_bytes([buf[entry_off+26], buf[entry_off+27]]);
-                let start_cluster_hi = u16::from_le_bytes([buf[entry_off+20], buf[entry_off+21]]);
-                let start_cluster = ((start_cluster_hi as u32) << 16) | start_cluster_lo as u32;
-
-                let mut data = Vec::with_capacity(file_size);
-                let mut fc = start_cluster;
-                let max_clusters = (file_size / self.bytes_per_sector as usize).max(1) * 2;
-                let mut cluster_iter = 0usize;
-                while fc < 0x0FFF_FFF8 && fc >= 2 && data.len() < file_size && cluster_iter < max_clusters {
-                    let clba = self.cluster_lba(fc);
-                    let mut chunk = [0u8; 512];
-                    for i in 0..self.sectors_per_cluster as u32 {
-                        if data.len() >= file_size { break; }
-                        if !self.ata.read_sectors(clba + i, &mut chunk, 1) {
-                            return None;
-                        }
-                        let remaining = file_size - data.len();
-                        let copy_end = remaining.min(512);
-                        data.extend_from_slice(&chunk[..copy_end]);
-                    }
-                    fc = self.read_fat_entry(fc);
-                    cluster_iter += 1;
-                }
-                return Some(data);
-            }
-            cluster = self.read_fat_entry(cluster);
+        };
+        // Não truncar: modelo >256MB precisa AirLLM/range, não Vec mentiroso.
+        const MAX_INLINE: usize = 256 * 1024 * 1024;
+        if file_size > MAX_INLINE {
+            crate::slog_nano!("FAT", "warn", "{} size={}MB > inline cap — recusa read_file",
+                name, file_size / (1024 * 1024));
+            return None;
         }
-        None
+        // Lê dados do arquivo (cluster chain via ATA PIO, com timeout)
+        let deadline = crate::tsc::now_us() + 2_000_000;
+        let mut data = Vec::with_capacity(file_size);
+        let mut fc = start_cluster;
+        let max_clusters = (file_size / self.bytes_per_sector as usize).max(1) * 2;
+        let mut cluster_iter = 0usize;
+        while fc < 0x0FFF_FFF8 && fc >= 2 && data.len() < file_size && cluster_iter < max_clusters {
+            if crate::tsc::now_us() > deadline {
+                crate::slog_nano!("FAT", "warn", "read_file {} timeout after 2s ({}KB read)",
+                    name, data.len() / 1024);
+                return None;
+            }
+            let clba = self.cluster_lba(fc);
+            let mut chunk = [0u8; 512];
+            for i in 0..self.sectors_per_cluster as u32 {
+                if data.len() >= file_size { break; }
+                if !self.ata.read_sectors(clba + i, &mut chunk, 1) {
+                    return None;
+                }
+                let remaining = file_size - data.len();
+                let copy_end = remaining.min(512);
+                data.extend_from_slice(&chunk[..copy_end]);
+            }
+            fc = self.read_fat_entry(fc);
+            cluster_iter += 1;
+        }
+        Some(data)
     }
 }
 

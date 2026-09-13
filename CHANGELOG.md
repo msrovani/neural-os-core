@@ -1,5 +1,14 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s340] - 2026-09-13 — FAT32 root dir cache + TSC timeout (desbloqueio boot ATA PIO)
+
+- **Problema:** boot QEMU hangava no PHASE 5 durante `lookup_file_size("BGE.BIN")`. Causa: caminhada da root dir cluster chain inteira via ATA PIO (256+ clusters × SPC+1 leituras por cluster). O guard `sz > 8MB skip ATA PIO` nunca era alcançado — o hang era no FAT walk, não no read_file.
+- **Fix A (k_nano fat32.rs):** `ROOT_DIR_CACHE` (256KB static) + `populate_root_dir_cache()`: caminha a chain UMA vez, grava setores. `lookup_file_size` usa cache nas chamadas seguintes (zero ATA PIO). `find_in_root_cache()` retorna (start_cluster, file_size).
+- **Fix B (k_nano fat32.rs):** TSC timeout 2s em `lookup_file_size` + `read_file`. Deadline via `k_nano::tsc::now_us()` no loop. Retorna None em vez de hang.
+- **Fix C (main.rs):** Bloco ATA BGE simplificado de 40 LOC para 15 LOC via `read_file_from_dev(ata, "BGE.BIN")` (usa cache + timeout do k_nano).
+- **Impacto:** 11 chamadas lookup_file_size → 1 leitura ATA + 10 cache-hit. Boot ~30s → ~3s no QEMU.
+- `cargo check --release` = 0 erros; hermes 188 pass.
+
 ## [1.9.99-s339] - 2026-09-13 — Fix: heap-wrap 2⁶⁴ (clamp à janela endereçável + telemetria honesta)
 
 - **Causa-raiz (oracle, definitiva):** a janela endereçável do bump heap é **~2 GB** (`HEAP_BUFFER` é `.kheap` no FIM da imagem; `heap_start + offset` cruza 2⁶⁴ em ~2044 MB), mas o budget era **5376 MB** — cap em MB-de-RAM, não em offset endereçável → todo grow com `need > ~2 GB` andava até o wrap (`grow wrap 2^64 - abort` → OOM). E **"Heap:128MB" era métrica mentirosa** (MemoryAgent hardcodava 128 no branch sem-modelo; o heap real era o piso 512 MB) — 3 números de "heap" inconsistentes = a armadilha de debug que fez o 1º fix (HEAP_EXT_BASE) falhar.

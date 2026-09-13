@@ -79,6 +79,7 @@ pipenv
 
 # Modelos grandes (>100 MB) - apenas local
 *.safetensors
+models/FALCON3.V6
 models/llm_moe/bitnet_2B.bitnet
 models/bitnet_2B.bitnet
 models/tokenizer/BGE_M3.BIN

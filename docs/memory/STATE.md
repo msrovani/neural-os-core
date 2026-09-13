@@ -1,6 +1,11 @@
-# STATE — neural-os-core v1.9.99-s328 — Full Infer D+B+C (Falcon3 off BSP)
+# STATE — neural-os-core v1.9.99-s340 — FAT32 root dir cache + TSC timeout
 
-#   PISTA ATIVA: InferQueue WS-H — UI viva durante generate
+#   PISTA ATIVA: Boot ATA PIO desbloqueado — cache root dir + timeout 2s
+#   SESSION_340: Fat32Reader root dir cache (256KB static) + TSC deadline
+#   Fix: lookup_file_size hang em PHASE 5 (root dir cluster chain walk)
+#   Cache: 1 leitura ATA real + 10 cache-hit; timeout 2s previne hang
+#   Simplificação: ATA BGE block 40→15 LOC via read_file_from_dev
+#   PISTA ANTERIOR: InferQueue WS-H — UI viva durante generate
 #   SESSION_328: CortexAgent submit-only; InferWorker+AP poll_slice; stream+TTS parcial
 #   Decisão residual s328: NÃO GPU/NPU no job agora (WS-D/E Layer S); NÃO
 #     agent_tick_offload_safe; Prefill AirLLM = sprint seguinte candidata;

@@ -2849,39 +2849,19 @@ pub(crate) fn kernel_boot(
                 }
             }
             drop(ahci_guard);
+            // ATA fallback — usa read_file_from_dev (cache FAT32 + timeout 2s em k_nano)
             if !loaded {
-                let ata_guard = crate::ATA_DRIVER.lock();
-                if let Some(ref ata) = *ata_guard {
-                    let parts = crate::fat32::read_mbr(ata);
-                    for p in &parts {
-                        if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
-                        if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
-                            if let Some(sz) = fs.lookup_file_size("BGE.BIN") {
-                                found = true;
-                                k_nano::slog_bin!("BGE", "info", "BGE.BIN presente FAT ({} KB) — lendo…", sz / 1024);
-                                // ATA PIO 138MB trava o boot (QEMU WHPX hv pode ainda ser None).
-                                // Embeddings ficam para runtime / NVMe.
-                                if sz > 8 * 1024 * 1024 {
-                                    k_nano::slog_bin!(
-                                        "BGE",
-                                        "info",
-                                        "skip ATA PIO BGE {}KB no hypervisor (saudacao/runtime primeiro)",
-                                        sz / 1024
-                                    );
-                                    continue;
-                                }
-                            }
-                            if let Some(bge_data) = fs.read_file("BGE.BIN") {
-                                found = true;
-                                k_nano::slog_bin!("BGE", "info", "BGE.BIN lido ATA ({} KB) — parse…", bge_data.len() / 1024);
-                                if crate::memory_systems::load_bge(&bge_data) {
-                                    k_nano::slog_bin!("Asset", "bge", "Embedding model LOADED from FAT (ATA)!");
-                                    crate::boot_logger::log("BOOT: BGE embedding loaded");
-                                    loaded = true;
-                                } else {
-                                    k_nano::slog_bin!("Asset", "bge", "BGE.BIN present but parse FAILED (sem word_embeddings_weight?)");
-                                }
-                            }
+                let mut ata_guard = crate::ATA_DRIVER.lock();
+                if let Some(ref mut ata) = *ata_guard {
+                    if let Some(bge_data) = read_file_from_dev(ata, "BGE.BIN") {
+                        found = true;
+                        k_nano::slog_bin!("BGE", "info", "BGE.BIN lido ATA ({} KB) — parse…", bge_data.len() / 1024);
+                        if crate::memory_systems::load_bge(&bge_data) {
+                            k_nano::slog_bin!("Asset", "bge", "Embedding model LOADED from FAT (ATA)!");
+                            crate::boot_logger::log("BOOT: BGE embedding loaded");
+                            loaded = true;
+                        } else {
+                            k_nano::slog_bin!("Asset", "bge", "BGE.BIN present but parse FAILED (sem word_embeddings_weight?)");
                         }
                     }
                 }
