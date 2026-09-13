@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s337] - 2026-09-11 — Orb: IDLE ciano brilhante como default + ornamento completo
+
+- **Gating do Dreaming (causa do orb escuro):** o `SleepCycleAgent` publica `SLEEP_PHASE` a cada fase (~200 ticks, loop REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT) e o gate antigo tratava *qualquer* fase não-IDLE como dreaming (refresh 30 s) → orb **preso no Dreaming escuro**. Fix: só a fase `DREAM` genuína abre a janela (60 s); as demais limpam. **Boot default = IDLE ciano brilhante.**
+- **Paleta Dreaming:** body `(0,110,190)`→`(0,140,225)`; accent `(70,60,170)`→`(130,100,235)` — violeta agora visível em rim/ticks/rings.
+- **LOD recalibrado** p/ o custo TCG medido (~18 ms): L2 (lattice completa + 3 rings + 24 ticks + 12 sparks) é o default até **20 ms** (era 4.5 ms); L1 ≤45 ms; L0 acima. Degrade sob carga preservado.
+- **Presença/brilho:** halo idle 34→46, Dreaming 36→56; inner halo `(0,175,240,α140)`; core `r·0.16`→`r·0.22` (fim do "core escuro"); lattice dots `(0,80,120)`→`(0,120,180)` α10→14 (a maioria dos dots estava abaixo do floor de visibilidade `a≥3` — por isso a lattice era invisível, não o LOD).
+- jarbas **89 pass / 0 fail**; `cargo nk`/`cargo check --release` = 0 erros.
+
 ## [1.9.99-s336] - 2026-09-11 — Fix: orb renderizava azul-escuro (intrinsics SSE2 mal-compilados no soft-float)
 
 - **Bug (achado na verificação QEMU):** o orb aparecia **azul-escuro (canal G zerado)** — `sse2_copy_bytes` (`_mm_loadu_si128`/`_mm_storeu_si128` sob `#[target_feature(enable="sse2")]`) é **mal-compilado no target soft-float** (`-C target-feature=-sse2`): LLVM baixa para scalar que **zera o byte 1 de cada u32** (o G no BGRX). Mesma classe do `find_child_byte16_sse` (SESSION_249b). Host tests não pegavam (host tem SSE2 nativo).

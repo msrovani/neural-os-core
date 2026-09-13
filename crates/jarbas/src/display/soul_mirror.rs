@@ -53,7 +53,7 @@ impl OrbState {
             OrbState::Listening => (0, 255, 255), // ciano claro
             OrbState::Thinking => (150, 90, 255), // violeta
             OrbState::Speaking => (0, 230, 255),  // ciano elétrico
-            OrbState::Dreaming => (70, 60, 170),  // violeta profundo
+            OrbState::Dreaming => (130, 100, 235), // violeta vivo (rim/ticks legíveis)
             OrbState::Degraded => (255, 176, 32), // âmbar
             OrbState::Alert => (255, 48, 56),     // vermelho
             OrbState::Updating => (64, 255, 160), // verde
@@ -63,11 +63,11 @@ impl OrbState {
     /// Tint do corpo — sempre família ciano (B ≥ G > 0).
     pub fn body_tint(&self) -> (u8, u8, u8) {
         match self {
-            OrbState::Idle => (0, 150, 220),
-            OrbState::Listening => (0, 175, 240),
-            OrbState::Thinking => (0, 145, 225),
-            OrbState::Speaking => (0, 200, 245),
-            OrbState::Dreaming => (0, 110, 190),
+            OrbState::Idle => (0, 160, 235),
+            OrbState::Listening => (0, 185, 245),
+            OrbState::Thinking => (0, 150, 230),
+            OrbState::Speaking => (0, 205, 250),
+            OrbState::Dreaming => (0, 140, 225),
             OrbState::Degraded => (0, 160, 215),
             OrbState::Alert => (0, 150, 220),
             OrbState::Updating => (0, 170, 225),
@@ -77,11 +77,11 @@ impl OrbState {
     /// Alpha máximo do halo (acento) — ALERT pulsa mais fundo.
     pub fn halo_strength(&self) -> u8 {
         match self {
-            OrbState::Idle => 34,
-            OrbState::Listening => 48,
-            OrbState::Thinking => 62,
-            OrbState::Speaking => 78,
-            OrbState::Dreaming => 36,
+            OrbState::Idle => 46,
+            OrbState::Listening => 56,
+            OrbState::Thinking => 68,
+            OrbState::Speaking => 82,
+            OrbState::Dreaming => 56,
             OrbState::Degraded => 56,
             OrbState::Alert => 96,
             OrbState::Updating => 60,
@@ -292,11 +292,11 @@ pub fn blit_grid(fb: &mut DoubleBuffer, pulse_phase: u8, stride: usize) -> usize
     let mut i = 0usize;
     while i < cache.len {
         let d = &cache.dots[i];
-        let a = (10.0 * d.fade * pulsing) as u8;
+        let a = (14.0 * d.fade * pulsing) as u8;
         if a >= 3 {
             let (x, y) = (d.x as usize, d.y as usize);
             if x < dw && y < dh {
-                fb.set_pixel_unchecked(x, y, 0, 80, 120); // JARVIS_CYAN_DIM
+                fb.set_pixel_unchecked(x, y, 0, 120, 180); // JARVIS_CYAN_DIM
                 drawn += 1;
             }
         }
@@ -459,7 +459,9 @@ impl SoulMirrorRenderer {
 
     fn update_lod(&mut self) {
         let cost = crate::display::compositor::frame_cost_us();
-        let want = if cost == 0 || cost < 4_500 { 2 } else if cost < 12_000 { 1 } else { 0 };
+        // Recalibrado (s329): TCG mede ~18 ms — L2 (ornamentação completa) é
+        // o default até 20 ms; degrada só sob carga real (L1 ≤45 ms, L0 acima).
+        let want = if cost == 0 || cost < 20_000 { 2 } else if cost < 45_000 { 1 } else { 0 };
         if want == self.lod {
             self.lod_votes = 0;
             return;
@@ -558,7 +560,7 @@ impl SoulMirrorRenderer {
         if inner_halo > 0 {
             let lut = self.ensure_lut(inner_halo as usize);
             px += fb.fill_circle_alpha_bands(
-                cx, cy, inner_halo, lut, 0, 150, 220, 120,
+                cx, cy, inner_halo, lut, 0, 175, 240, 140,
             ) as u32;
         }
 
@@ -602,7 +604,7 @@ impl SoulMirrorRenderer {
                 cx, cy, ir, lut, BODY_INNER.0, BODY_INNER.1, BODY_INNER.2,
             ) as u32;
         }
-        let cr = ((r * 0.16) as isize).max(3);
+        let cr = ((r * 0.22) as isize).max(4);
         {
             let lut = self.ensure_lut(cr as usize);
             px += fb.fill_circle_flat_spans(cx, cy, cr, lut, CORE.0, CORE.1, CORE.2) as u32;
@@ -741,11 +743,11 @@ mod tests {
                     let max_d = (fw * fw + fh * fh) as f32 * 0.22;
                     if d_sq < max_d {
                         let dist_fade = 1.0 - (d_sq / max_d).min(1.0);
-                        let a = (10.0 * dist_fade * pulsing) as u8;
+                        let a = (14.0 * dist_fade * pulsing) as u8;
                         if a >= 3 {
                             fb.set_pixel(
                                 x as usize, y as usize,
-                                0, 80, 120,
+                                0, 120, 180,
                             );
                         }
                     }

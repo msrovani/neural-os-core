@@ -1139,10 +1139,15 @@ impl Agent for DisplayAgent {
             }
             while let Some(ev) = self.sleep_receiver.try_receive() {
                 let phase = core::str::from_utf8(&ev.payload).unwrap_or("");
-                if phase.is_empty() || phase == "IDLE" {
-                    self.orb_dream_until_us = 0;
+                // Gate DREAM (s329): o SleepCycleAgent publica SLEEP_PHASE em
+                // TODAS as fases (~200 ticks, loop infinito) — tratar qualquer
+                // fase como "dreaming" deixava o orb preso em Dreaming para
+                // sempre. Só a fase DREAM genuína abre a janela (≤60 s);
+                // qualquer outra fase devolve o orb ao IDLE ciano.
+                if phase == "DREAM" {
+                    self.orb_dream_until_us = if now == 0 { u64::MAX } else { now + 60_000_000 };
                 } else {
-                    self.orb_dream_until_us = if now == 0 { u64::MAX } else { now + 30_000_000 };
+                    self.orb_dream_until_us = 0;
                 }
             }
             let peers = MESH_GRAPH.lock().len().min(8) as u8;
