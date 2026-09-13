@@ -199,30 +199,45 @@ impl GpuDevice {
 pub static GPU: k_nano::sync::IrqSafeLock<Option<GpuDevice>> = k_nano::sync::IrqSafeLock::new(None);
 
 /// Força coerência de cache no framebuffer: remapeia páginas do FB como
-/// Uncacheable (NO_CACHE|WRITE_THROUGH) e desliga VGA plane Intel (via k-hal R1).
+/// **Write-Combining (WC)** — antes era UC (NO_CACHE|WRITE_THROUGH). WC usa a
+/// entrada 4 do `IA32_PAT` (PTE bit 7 = PAT, PCD=PWT=0), o que deixa o
+/// back→front sequential present muito mais rápido que UC, e desliga VGA plane
+/// Intel (via k-hal R1).
 /// Em Intel Skylake+ (6xx), o VGA plane NÃO é completamente desligado pelo
 /// sequenciador (0x3C4/0x3C5) — VGACNTRL (0x71400) vive no BE k-hal.
-/// DEVE ser chamada APÓS memory init (Phase 2+) — map_page_uc() aloca frames
+/// DEVE ser chamada APÓS memory init (Phase 2+) — map_page_wc() aloca frames
 /// para page tables e precisa do frame allocator pronto.
+/// Se PAT/WC não estiver disponível, cai por página para `map_page_uc` (UC) —
+/// nunca crasha. O ganho de WC é **metal-only** (QEMU é RAM WB comum e ignora
+/// o hint — não é mensurável em QEMU).
 pub fn fb_remap_uc() {
     let gpu = GPU.lock();
     if let Some(ref gpu_dev) = *gpu {
         if gpu_dev.fb_addr == 0 { return; }
 
+        // PAT é pré-requisito do WC. Se falhar, cada página cai para UC.
+        let wc_ok = k_nano::apic::init_pat();
+
         // HW-6: FB pages mapped as WB by firmware — CPU writes stay in cache,
         // display controller never sees them → garbled/stale output on real HW.
-        // Walk every 4K page of FB and set PTE to NO_CACHE | WRITE_THROUGH.
+        // Aqui viram WC (PTE PAT) quando PAT disponível; senão UC.
         let pm = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         let phys = (gpu_dev.fb_addr as u64).saturating_sub(pm);
         let fb_size = (gpu_dev.fb_height as usize).saturating_mul(gpu_dev.stride_bytes());
         let pages = (fb_size + 4095) / 4096;
         let mut mapped_count = 0usize;
+        let mut wc_pages = 0usize;
         for i in 0..pages {
             let page_phys = phys.saturating_add((i as u64) * 4096);
             // overflow guard
             if page_phys < phys && i > 0 { break; }
             unsafe {
-                k_nano::apic::map_page_uc(page_phys, pm);
+                if wc_ok && k_nano::apic::map_page_wc(page_phys, pm) {
+                    wc_pages += 1;
+                } else {
+                    // Fallback UC: funciona igual, só mais lento no present.
+                    k_nano::apic::map_page_uc(page_phys, pm);
+                }
             }
             mapped_count += 1;
         }
@@ -237,10 +252,16 @@ pub fn fb_remap_uc() {
             core::arch::asm!("sfence", options(nostack, preserves_flags));
             core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         }
-        k_nano::slog_jarbas!("Display", "info",
-            "FB remapped as UC: {} pages @phys={:x} stride={} ({}x{})",
-            mapped_count, phys, gpu_dev.stride_bytes(),
-            gpu_dev.fb_width, gpu_dev.fb_height);
+        if wc_ok && wc_pages == mapped_count {
+            k_nano::slog_jarbas!("Display", "ok",
+                "FB remapped as WC: {} pages @phys={:x} stride={} ({}x{}) [metal-only gain]",
+                mapped_count, phys, gpu_dev.stride_bytes(),
+                gpu_dev.fb_width, gpu_dev.fb_height);
+        } else {
+            k_nano::slog_jarbas!("Display", "warn",
+                "FB remapped UC (wc_ok={} wc_pages={}/{}): PAT/WC indisponível @phys={:x}",
+                wc_ok, wc_pages, mapped_count, phys);
+        }
     }
 }
 
@@ -1254,6 +1275,51 @@ unsafe fn copy_bytes(dst: *mut u8, src: *const u8, len: usize) {
     core::ptr::copy_nonoverlapping(src, dst, len);
 }
 
+/// Copia `len` bytes com **stores non-temporal** (streaming) SSE2 — evita o
+/// read-for-ownership (RFO) da linha de cache no destino. A cauda (`< 8 B`) é
+/// escalar.
+///
+/// Usa `movnti` (non-temporal store de 64-bit em registrador GP). O `movntdq`
+/// de 128-bit (`_mm_stream_si128`) NÃO compila neste target soft-float: o asm
+/// com constraint `xmm_reg` dispara `rustc-LLVM ERROR: Do not know how to split
+/// this operator's operand!`. `movnti` dá o mesmo hint sem operando XMM.
+///
+/// Só faz sentido quando o destino é WC (framebuffer); em memória WB o hint é
+/// apenas uma dica e o dado continua correto. Como os stores são fracamente
+/// ordenados, o caller DEVE emitir `sfence` antes de considerar o frame
+/// apresentado. Ganho **metal-only** — QEMU ignora o hint.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+pub(crate) unsafe fn sse2_stream_copy_bytes(dst: *mut u8, src: *const u8, len: usize) {
+    use core::arch::x86_64::*;
+    let mut i = 0usize;
+    while i + 8 <= len {
+        let v = (src.add(i) as *const i64).read_unaligned();
+        _mm_stream_si64(dst.add(i) as *mut i64, v);
+        i += 8;
+    }
+    while i < len {
+        *dst.add(i) = *src.add(i);
+        i += 1;
+    }
+}
+
+/// Copia back→front usando streaming stores quando o destino está alinhado a
+/// 16 B (bulk full-width); senão delega ao `copy_bytes`. Retorna `true` se o
+/// caminho non-temporal foi usado — o caller deve emitir `sfence` depois.
+#[inline]
+unsafe fn stream_copy_bytes(dst: *mut u8, src: *const u8, len: usize) -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if sse2_available() && len >= 16 && (dst as usize & 15) == 0 {
+            sse2_stream_copy_bytes(dst, src, len);
+            return true;
+        }
+    }
+    copy_bytes(dst, src, len);
+    false
+}
+
 /// SWAR escalar (referência exata) — `dst += ((tint-dst)*k)>>8` por canal,
 /// 2 canais por word via máscara 0x00FF00FF. Mesma matemática do bpp==4.
 pub(crate) unsafe fn tint_swar_scalar(
@@ -2052,13 +2118,18 @@ impl DoubleBuffer {
             return;
         }
         unsafe {
+            let mut used_nt = false;
             for py in y0..y1 {
                 let off = py * stride + x0 * bpp;
                 if off + row_bytes > self.back.len() {
                     break;
                 }
-                // #5: cópia de linha SSE2 (16 B/ciclo) + cauda escalar.
-                copy_bytes(front.add(off), self.back.as_ptr().add(off), row_bytes);
+                // #5: streaming (non-temporal) quando a linha alinha; senão SSE2.
+                used_nt |= stream_copy_bytes(front.add(off), self.back.as_ptr().add(off), row_bytes);
+            }
+            // Stores NT/WC são fracamente ordenados: o display só vê após sfence.
+            if used_nt {
+                core::arch::asm!("sfence", options(nostack, preserves_flags));
             }
         }
     }
@@ -2076,8 +2147,12 @@ impl DoubleBuffer {
         }
         let len = self.back.len();
         unsafe {
-            // #5: cópia SSE2 do buffer inteiro (fallback escalar no gate).
-            copy_bytes(addr as *mut u8, self.back.as_ptr(), len);
+            // #5: streaming NT no full-frame alinhado (FB WC); SSE2/escalar no resto.
+            let used_nt = stream_copy_bytes(addr as *mut u8, self.back.as_ptr(), len);
+            if used_nt {
+                // Visibilidade ao display engine antes de considerar apresentado.
+                core::arch::asm!("sfence", options(nostack, preserves_flags));
+            }
         }
         self.dirty = false;
     }
@@ -2158,6 +2233,25 @@ mod simd_parity_tests {
         assert_eq!(n, 16 * 8);
         assert!(db.dirty);
     }
+
+    /// #2 WC/NT: o streaming copy (dst 16 B-alinhado) é byte-idêntico ao
+    /// `copy_nonoverlapping`, inclusive caudas não-múltiplas de 16.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn sse2_stream_copy_matches_scalar_for_aligned_len() {
+        for &len in &[16usize, 17, 31, 32, 33, 100, 1000, 4095, 4096] {
+            let mut src = alloc::vec![0u8; len];
+            fill_pseudo(&mut src, 0x9E37_79B9 ^ len as u32);
+            // +16 B extras e alinhamento manual: bulk WC alinhado (16 B).
+            let mut raw = alloc::vec![0xEEu8; len + 16];
+            let base = raw.as_mut_ptr();
+            let aligned = ((base as usize + 15) & !15) as *mut u8;
+            unsafe { sse2_stream_copy_bytes(aligned, src.as_ptr(), len) };
+            let got = unsafe { core::slice::from_raw_parts(aligned, len) };
+            assert_eq!(got, &src[..], "len={len}");
+        }
+    }
 }
 
 
+// revert-probe-12345

@@ -3,12 +3,13 @@
 
 use alloc::vec::Vec;
 use crate::gpu::intel::BcsRing;
+use crate::gpu::intel_gtt::GgttPin;
 use crate::gpu::detect::GpuInfo;
 use crate::unlock_dag::CapToken;
 use crate::cap_gate::{check_map_bar, CapResult};
 use k_nano::memory::PHYS_MEM_OFFSET;
 use k_nano::slog_hal;
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Engine de blit 2D.
 pub enum BlitEngine {
@@ -19,9 +20,23 @@ pub enum BlitEngine {
 /// Estado global do blit engine.
 static BLIT_ENGINE: spin::Mutex<Option<BlitEngine>> = spin::Mutex::new(None);
 
+/// MMIO base (BAR0 + pmoff) do engine Intel — para pin GGTT sob demanda.
+static BLIT_MMIO: AtomicU64 = AtomicU64::new(0);
+
+/// Cache PA→GGTT: BCS endereça por offset GGTT; repinar a cada blit esgotaria
+/// as 512 entradas. Reusa regiões (PA base page-aligned + nº páginas).
+struct PinEntry {
+    pa: u64,
+    pages: u32,
+    gtt: u64,
+}
+static PIN_CACHE: spin::Mutex<Vec<PinEntry>> = spin::Mutex::new(Vec::new());
+const PIN_CACHE_MAX: usize = 24;
+
 /// Inicializa o blit engine baseado no backend atual.
 /// Chamado de `init_backend()` após probe do BCS.
 pub unsafe fn init_blit(gpu: &GpuInfo, pmoff: u64) {
+    BLIT_MMIO.store(gpu.bar0 + pmoff, Ordering::Release);
     let bcs = BcsRing::probe(gpu.bar0 + pmoff);
     let engine = if let Some(bcs) = bcs {
         slog_hal!("BLIT", "init", "Intel BCS probe OK — blit acelerado ativo");
@@ -33,19 +48,80 @@ pub unsafe fn init_blit(gpu: &GpuInfo, pmoff: u64) {
     *BLIT_ENGINE.lock() = Some(engine);
 }
 
-/// Blit 2D genérico: src_pa → dst_pa, w×h, bpp (bytes per pixel: 4 para BGRA32).
-/// Retorna true se sucesso.
-pub fn blit_2d(src_pa: u64, dst_pa: u64, w: u32, h: u32, bpp: u32) -> bool {
-    let mut guard = BLIT_ENGINE.lock();
-    match guard.as_mut() {
-        Some(BlitEngine::IntelBcs(bcs)) => {
-            // BCS blit requer endereços físicos (GTT pinned)
-            bcs.blit(src_pa, dst_pa, w, h, bpp)
-        }
-        Some(BlitEngine::Cpu) | None => {
-            cpu_blit(src_pa, dst_pa, w, h, bpp)
+/// Pina [pa, pa+bytes) no GGTT e devolve o offset GGTT do 1º byte.
+/// `pin_sys` mapeia páginas **físicas contíguas**; o BCS (intel.rs) usa
+/// pitch = w*bpp para src e dst, então o chamador deve fornecer um buffer
+/// contíguo (rect de largura total). Fail → `None` → fallback CPU.
+fn pin_region(pa: u64, bytes: usize) -> Option<u64> {
+    let mmio = BLIT_MMIO.load(Ordering::Relaxed);
+    if mmio == 0 || bytes == 0 {
+        return None;
+    }
+    let offset = pa & 0xFFF;
+    let base = pa & !0xFFF;
+    let pages = (((offset as usize).saturating_add(bytes)).saturating_add(4095) / 4096) as u32;
+    if pages == 0 {
+        return None;
+    }
+    {
+        let cache = PIN_CACHE.lock();
+        for e in cache.iter() {
+            if e.pa == base && e.pages == pages {
+                return Some(e.gtt + offset);
+            }
         }
     }
+    let gtt_off = unsafe {
+        let mut gtt = GgttPin::new(mmio);
+        gtt.pin_sys(base, pages)?
+    };
+    {
+        let mut cache = PIN_CACHE.lock();
+        if cache.len() < PIN_CACHE_MAX {
+            cache.push(PinEntry { pa: base, pages, gtt: gtt_off });
+        } else {
+            slog_hal!("BLIT", "pin", "cache cheio ({}), região não cacheada", PIN_CACHE_MAX);
+        }
+    }
+    Some(gtt_off + offset)
+}
+
+/// Tenta o BCS p/ uma cópia tight (pitch = w*bpp). `None` = sem engine Intel
+/// ou sem token `GpuBlitReady` (fora do canário) → caller faz CPU fallback.
+/// `allow_unready` só é true dentro do próprio canário (chicken-and-egg do token).
+fn try_bcs_blit(
+    src_pa: u64,
+    dst_pa: u64,
+    w: u32,
+    h: u32,
+    bpp: u32,
+    allow_unready: bool,
+) -> Option<bool> {
+    let mut guard = BLIT_ENGINE.lock();
+    let bcs = match guard.as_mut() {
+        Some(BlitEngine::IntelBcs(b)) => b,
+        _ => return None,
+    };
+    if !allow_unready && !blit_ready() {
+        return None;
+    }
+    if bpp != 4 || w == 0 || h == 0 {
+        return None;
+    }
+    let bytes = (w as usize).saturating_mul(h as usize).saturating_mul(bpp as usize);
+    let s = pin_region(src_pa, bytes)?;
+    let d = pin_region(dst_pa, bytes)?;
+    Some(bcs.blit(s, d, w, h, bpp))
+}
+
+/// Blit 2D genérico: src_pa → dst_pa, w×h, bpp (4 = BGRA/ARGB32).
+/// Endereços são **físicos**; o backend BCS os pina no GGTT e passa offsets
+/// (nunca PA/virtual cru). `blit_ready()` gateia o BCS; senão CPU.
+pub fn blit_2d(src_pa: u64, dst_pa: u64, w: u32, h: u32, bpp: u32) -> bool {
+    if let Some(true) = try_bcs_blit(src_pa, dst_pa, w, h, bpp, false) {
+        return true;
+    }
+    cpu_blit(src_pa, dst_pa, w, h, bpp)
 }
 
 /// CPU fallback: memcpy via framebuffer virtual addresses.
@@ -66,7 +142,9 @@ fn cpu_blit(src_pa: u64, dst_pa: u64, w: u32, h: u32, bpp: u32) -> bool {
     true
 }
 
-/// Fill retângulo com cor sólida (CPU fallback).
+/// Fill retângulo com cor sólida (CPU).
+/// NOTA: XY_COLOR_BLT (0x41) no BCS não é emitido — o encoding Gen9 precisa de
+/// validação em metal (o canário só cobre XY_SRC_COPY_BLT). CPU é o default.
 pub fn fill_rect_2d(dst_pa: u64, w: u32, h: u32, bpp: u32, color: u32) -> bool {
     let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     let dst_va = (dst_pa + pmoff) as *mut u32;
@@ -121,8 +199,15 @@ pub unsafe fn run_blit_canary(gpu: &GpuInfo) -> bool {
         }
     }
     
-    // Executa blit via engine ativo
-    let ok = blit_2d(src_pa, dst_pa, 64, 64, 4);
+    // Executa blit via BCS DIRETO (canário roda antes do token existir).
+    // Sem engine BCS o canário FALHA — nunca concede GpuBlitReady em CPU.
+    let ok = match try_bcs_blit(src_pa, dst_pa, 64, 64, 4, true) {
+        Some(v) => v,
+        None => {
+            slog_hal!("BLIT", "canary", "FAIL — engine BCS ausente (Cpu)");
+            return false;
+        }
+    };
     if !ok {
         slog_hal!("BLIT", "canary", "FAIL — blit_2d returned false");
         return false;

@@ -870,6 +870,19 @@ impl JarbasDesktop {
             && !self.dirty_dialog
             && !self.dirty_panel
         {
+            // Cursor HW (gated/Intel): o plano move-se por register write no
+            // DisplayAgent; aqui só removemos o cursor de software legado (1x).
+            if k_hal::gpu::intel_display::hw_cursor_active() {
+                if self.cursor_under_valid {
+                    let (px, py) = (self.cursor_under_x, self.cursor_under_y);
+                    self.restore_cursor_underlay();
+                    self.damage.push(px, py, CURSOR_UNDER_W, CURSOR_UNDER_H, w, h);
+                    let dmg = self.damage;
+                    self.present_frame(false, dmg);
+                }
+                self.dirty_cursor = false;
+                return;
+            }
             let prev_x = self.cursor_under_x;
             let prev_y = self.cursor_under_y;
             let had = self.cursor_under_valid;
@@ -915,7 +928,9 @@ impl JarbasDesktop {
                     let tx = w.saturating_sub(tw) / 2;
                     draw_text(&mut self.fb, tx, h / 2 - 8, msg, w, 255, 200, 80);
                 }
-                draw_mouse_cursor(&mut self.fb, MOUSE_X.load(core::sync::atomic::Ordering::Relaxed), MOUSE_Y.load(core::sync::atomic::Ordering::Relaxed), w, h);
+                if !k_hal::gpu::intel_display::hw_cursor_active() {
+                    draw_mouse_cursor(&mut self.fb, MOUSE_X.load(core::sync::atomic::Ordering::Relaxed), MOUSE_Y.load(core::sync::atomic::Ordering::Relaxed), w, h);
+                }
                 self.fb.swap();
                 return;
             }
@@ -1341,20 +1356,31 @@ impl JarbasDesktop {
             self.dirty_panel = false;
         }
 
-        // Cursor do mouse (save underlay → draw → present dirty)
+        // Cursor do mouse.
+        // HW cursor (gated/Intel): o plano desenha no scanout; NÃO pintar seta
+        // no framebuffer nem save-under (só remover o software legado 1x).
+        // Software: save underlay → draw → present dirty (default/fallback).
         let mx = MOUSE_X.load(core::sync::atomic::Ordering::Relaxed);
         let my = MOUSE_Y.load(core::sync::atomic::Ordering::Relaxed);
-        self.save_cursor_underlay(mx, my);
-        draw_mouse_cursor(&mut self.fb, mx, my, self.w, self.h);
+        if k_hal::gpu::intel_display::hw_cursor_active() {
+            if self.cursor_under_valid {
+                let (px, py) = (self.cursor_under_x, self.cursor_under_y);
+                self.restore_cursor_underlay();
+                self.damage.push(px, py, CURSOR_UNDER_W, CURSOR_UNDER_H, w, h);
+            }
+        } else {
+            self.save_cursor_underlay(mx, my);
+            draw_mouse_cursor(&mut self.fb, mx, my, self.w, self.h);
+            self.damage.push(
+                self.cursor_under_x,
+                self.cursor_under_y,
+                CURSOR_UNDER_W,
+                CURSOR_UNDER_H,
+                w,
+                h,
+            );
+        }
         self.dirty_cursor = false;
-        self.damage.push(
-            self.cursor_under_x,
-            self.cursor_under_y,
-            CURSOR_UNDER_W,
-            CURSOR_UNDER_H,
-            w,
-            h,
-        );
         // #1: região do painel Hub Health (toggle/slide/checksum — partial não
         // muda pixels, então só o full/slide publica rect).
         if let Some((hx, hy, hw, hh)) = self.hub_swap_rect.take() {
@@ -1423,14 +1449,30 @@ impl JarbasDesktop {
 
     /// #1 — 1º frame / repaint genuinamente full = `swap()`; resto = um
     /// `swap_rect` por rect de dano (merge/clip feito no `push`).
+    ///
+    /// Present BCS (back→front) só quando `GpuBlitReady` (canário Intel PASS).
+    /// `intel.rs::blit` usa pitch = w*bpp, então limitamos a rects de largura
+    /// total (x0==0 && w==screen); demais rects usam `swap_rect` (CPU/SSE2).
     fn present_frame(&mut self, full: bool, damage: DamageList) {
         if self.full_swap_pending || full {
             self.fb.swap();
             self.full_swap_pending = false;
             return;
         }
+        let use_gpu = self.fb.info.bpp == 4 && k_hal::gpu::blit::blit_ready();
         for r in damage.iter() {
-            self.fb.swap_rect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
+            let (x0, y0) = (r.x0, r.y0);
+            let (dw, dh) = (r.x1 - r.x0, r.y1 - r.y0);
+            if use_gpu && x0 == 0 && dw == self.w {
+                if let (Some(spa), Some(dpa)) =
+                    (back_pa(&self.fb, x0, y0), front_pa(&self.fb, x0, y0))
+                {
+                    if k_hal::gpu::blit::blit_2d(spa, dpa, dw as u32, dh as u32, 4) {
+                        continue;
+                    }
+                }
+            }
+            self.fb.swap_rect(x0, y0, dw, dh);
         }
         self.fb.dirty = false;
     }
@@ -2195,6 +2237,27 @@ fn draw_window_fb(fb: &mut DoubleBuffer, win: &Window, theme: &Theme, scr_w: usi
         bg_color.0, bg_color.1, bg_color.2,
     );
     decorations::draw_window_decorations(fb, win, theme, scr_w);
+}
+
+/// PA real do back buffer via page tables. `phys_addr_for` devolve `va - pmoff`
+/// (inválido para o heap do kernel, que não é HHDM); o walk corrige. None em
+/// host/test (pm=0) ou VA não mapeada → present CPU.
+fn back_pa(fb: &DoubleBuffer, x: usize, y: usize) -> Option<u64> {
+    let pseudo = fb.phys_addr_for(x, y)?;
+    let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    if pmoff == 0 {
+        return None;
+    }
+    k_nano::memory::page_leaf_phys(pseudo + pmoff)
+}
+
+/// PA real do front buffer (aperture GOP / RAM) para o rect em (x,y).
+fn front_pa(fb: &DoubleBuffer, x: usize, y: usize) -> Option<u64> {
+    if fb.info.bpp != 4 || fb.info.addr == 0 {
+        return None;
+    }
+    let off = (y * fb.info.stride + x * fb.info.bpp) as u64;
+    k_nano::memory::page_leaf_phys(fb.info.addr as u64 + off)
 }
 
 fn draw_mouse_cursor(fb: &mut DoubleBuffer, mx: usize, my: usize, scr_w: usize, scr_h: usize) {

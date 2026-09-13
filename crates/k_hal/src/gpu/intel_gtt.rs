@@ -1,12 +1,20 @@
 //! GGTT Intel — pin de páginas sysmem com bias WOPCM (ADR-0050 P2).
 //! GuC/LRC/firmware DMA devem ficar acima da região WOPCM.
 
+use core::sync::atomic::{AtomicU32, Ordering};
+
 const GMADR_BASE: u64 = 0x100000;
 const GFX_FLSH_CNTL: u64 = 0x101008;
 /// Default WOPCM se reg ilegível (Gen9 tipicamente 512KiB–2MiB).
 const DEFAULT_WOPCM_BYTES: u64 = 0x20_0000;
 const GUC_WOPCM_SIZE: u64 = 0xC050;
 const MAX_GTT_ENTRIES: u32 = 512;
+
+/// Índice GGTT global monotônico. Antes cada `GgttPin::new` reiniciava no bias
+/// WOPCM — ring (IntelRing), BCS e qualquer novo pin (cursor/blit) escreviam as
+/// MESMAS PTEs (colisão silenciosa). Agora todos compartilham um único pool.
+/// ponytail: sem reclaim (boot single-thread); esgota em 512 entradas → fallback.
+static GLOBAL_NEXT_GTT_INDEX: AtomicU32 = AtomicU32::new(0);
 
 /// Alocador GGTT simples (índices de página).
 pub struct GgttPin {
@@ -30,12 +38,14 @@ impl GgttPin {
                 b
             }
         };
-        let start = ((wopcm + 4095) / 4096) as u32;
+        let computed = ((wopcm + 4095) / 4096) as u32;
+        // Continua de onde qualquer pin anterior parou (ring/BCS/cursor/blit).
+        let start = computed.max(GLOBAL_NEXT_GTT_INDEX.load(Ordering::Relaxed)).max(1);
         k_nano::slog_hal!("GGTT", "info", "WOPCM={}B bias_index={} (pin acima WOPCM)", wopcm, start);
         GgttPin {
             mmio,
             wopcm_bytes: wopcm,
-            next_index: start.max(1),
+            next_index: start,
             pinned: 0,
         }
     }
@@ -59,6 +69,8 @@ impl GgttPin {
         core::ptr::write_volatile((self.mmio + GFX_FLSH_CNTL) as *mut u32, 0);
         self.next_index += pages;
         self.pinned += pages;
+        // Reserva global pula a faixa (ring/BCS/cursor não colidem de PTE).
+        let _ = GLOBAL_NEXT_GTT_INDEX.fetch_max(self.next_index, Ordering::SeqCst);
         let gtt_off = (start as u64) * 4096;
         k_nano::slog_hal!("GGTT", "info", "pin phys={:#x} pages={} → gtt_off={:#x}", phys, pages, gtt_off);
         Some(gtt_off)

@@ -669,6 +669,13 @@ impl Agent for DisplayAgent {
                 k_nano::interrupts::set_heartbeat_fb_fn(Some(
                     crate::display::fb::heartbeat_stamp,
                 ));
+                // Cursor HW (default OFF): só ativa em Intel + display engine +
+                // BAR mapeado + readback OK. QEMU/não-Intel → cursor software.
+                if unsafe { k_hal::gpu::intel_display::try_enable_hw_cursor() } {
+                    k_nano::slog_jarbas!("Jarbas", "info", "cursor HW ativo (plano CUR_*)");
+                } else {
+                    k_nano::slog_jarbas!("Jarbas", "info", "cursor software (HW não gateado)");
+                }
                 // 1º frame imediato: splash no tick 1; sem render+swap aqui depende do tick 2
                 // (Hermes/LLM pode bloquear minutos — SESSION_168 / HW real freeze no splash).
                 if let Some(ref mut desktop) = *COMPOSITOR.lock() {
@@ -714,7 +721,12 @@ impl Agent for DisplayAgent {
         if mx != self.last_pointer_x || my != self.last_pointer_y {
             self.last_pointer_x = mx;
             self.last_pointer_y = my;
-            if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+            if k_hal::gpu::intel_display::hw_cursor_active() {
+                // Cursor HW: mover = 1 register write, sem repaint/save-under.
+                unsafe {
+                    k_hal::gpu::intel_display::hw_cursor_move(mx as i32, my as i32);
+                }
+            } else if let Some(ref mut desktop) = *COMPOSITOR.lock() {
                 desktop.invalidate_cursor();
             }
         }

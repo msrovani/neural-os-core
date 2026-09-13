@@ -1,5 +1,14 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s335] - 2026-09-11 — UI fluidity B: WC framebuffer + NT present + HW cursor + BCS blit (metal-only)
+
+Pacote B do plano de fluidez (otimizações que só se medem no metal; **QEMU cai sempre no fallback** — não validadas em HW ainda):
+
+- **#2 WC framebuffer + non-temporal stores** (`k_nano/apic.rs`, `jarbas/fb.rs`): `init_pat()` programa `IA32_PAT` entry 4 = WC (RMW preservando as outras 7); `map_page_wc`/`map_page_wc_at` (PTE PAT bit, PCD/PWT limpos, huge-page bit 12). O FB frontal passa de **UC → WC** (back buffer segue WB — RMW por blend); per-page fallback p/ UC se PAT/WC indisponível. `swap`/`swap_rect` usam stores NT (`movnti`/`_mm_stream_si64` — `_mm_stream_si128` **não compila** no target soft-float) + `sfence`.
+- **#3 Hardware cursor** (`k_hal/gpu/intel_display.rs` + wiring jarbas): corrigido Gen9 (`CURCNTR` mode `0x27`, `CURBASE` = offset **GGTT** 32-bit, não PA 64-bit); `try_enable_hw_cursor` (gate Intel + display engine + BAR0 + GGTT pin + readback) → `hw_cursor_active()`; quando ativo, o cursor vira write de registrador e a UI pula o save-under/dirty-rect do cursor. **Default OFF** (QEMU/não-Intel/readback rejeitado → cursor software).
+- **#6 Intel BCS 2D blit** (`k_hal/gpu/blit.rs` + `intel_gtt.rs` + `jarbas/gpu_compositor.rs` + `compositor.rs`): `blit_2d` agora **pinna src/dst na GGTT** e passa **offsets** (antes passava PA/ptr virtual cru); `GLOBAL_NEXT_GTT_INDEX` (pins não colidem mais no WOPCM); apresentação full-width roteia por BCS **só** quando `blit_ready()` (canário passou com engine BCS real); senão CPU/SSE2. `page_flip_hw` (unsafe) intencionalmente **não wired**.
+- Testes host: jarbas **86 pass** (incl. `sse2_stream_copy` parity); suíte workspace **845 pass / 0 fail**; `cargo nk`/`cargo check --release` = 0 erros. **Validação de HW pendente** (WC/cursor/BCS só medem no 240H).
+
 ## [1.9.99-s334] - 2026-09-11 — UI fluidity A: 60fps target + damage rects + chrome cache + SIMD
 
 Plano de fluidez (técnicas externas portáveis), pacote A (QEMU-testável):

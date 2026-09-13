@@ -8,6 +8,8 @@ use x86_64::VirtAddr;
 pub static USING_APIC: AtomicBool = AtomicBool::new(false);
 pub static USING_X2APIC: AtomicBool = AtomicBool::new(false);
 pub static LAPIC_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
+/// Log do IA32_PAT uma única vez (init_pat é chamado por página WC).
+static PAT_LOGGED: AtomicBool = AtomicBool::new(false);
 
 const IA32_APIC_BASE_MSR: u32 = 0x1B;
 /// SDM Vol 3A §10.12.9: x2APIC ICR é MSR 64-bit; bits 12–17 (status/assert/level)
@@ -523,6 +525,41 @@ pub unsafe fn set_page_wb(phys_addr: u64, phys_mem_offset: u64) -> bool {
     true
 }
 
+/// IA32_PAT (MSR 0x277) — Programmable Attribute Table.
+///
+/// O default de power-on (`0x0007_0406_0007_0406`) tem as 4 primeiras entradas
+/// WB/WT/UC-/UC e repete o mesmo nas 4 seguintes — **não há entrada WC
+/// utilizável por página 4KB** (a entrada 4 é a única alcançável pelo bit PAT
+/// de um PTE). Para `map_page_wc` (PTE bit 7 = PAT, PCD=PWT=0) a entrada 4
+/// precisa ser `0x01` (WC). Read-modify-write preserva as outras 7 entradas.
+///
+/// PAT é **por logical processor** (é MSR, não page-table): cada CPU que
+/// acesse a página WC precisa do seu próprio WRMSR. Esta função é idempotente
+/// e roda no boot BSP (via `init_apic`/`fb_remap_wc`). Os APs NÃO passam por
+/// este caminho hoje — se um AP for escrever no framebuffer, o `ap_entry`
+/// precisa chamar `init_pat()` também (fora do escopo desta lane).
+///
+/// Retorna `true` se a entrada 4 ficou WC (verificado por read-back).
+pub fn init_pat() -> bool {
+    use x86_64::registers::model_specific::Msr;
+    const IA32_PAT: u32 = 0x277;
+    let mut msr = Msr::new(IA32_PAT);
+    let cur = unsafe { msr.read() };
+    // entry 4 = bits 32..39 = WC (0x01); preserva 0..3 e 5..7.
+    let new = (cur & !(0xFFu64 << 32)) | (0x01u64 << 32);
+    unsafe { msr.write(new); }
+    let back = unsafe { msr.read() };
+    let ok = (back >> 32) & 0xFF == 0x01;
+    if !PAT_LOGGED.swap(true, Ordering::Relaxed) {
+        if ok {
+            crate::slog_nano!("PAGING", "ok", "PAT entry4=WC (0x{:016x} -> 0x{:016x})", cur, back);
+        } else {
+            crate::slog_nano!("PAGING", "warn", "PAT entry4=WC falhou (rd=0x{:016x}) — FB fica UC", back);
+        }
+    }
+    ok
+}
+
 /// Mapa uma pagina de 4KB para MMIO no endereco fisico `phys_addr`,
 /// criando entradas de tabela se necessario, e marca como NO_CACHE + WRITE_THROUGH.
 /// Se uma huge page (2MB/1GB) ja cobrir o endereco, modifica as flags diretamente.
@@ -591,6 +628,100 @@ pub unsafe fn map_page_uc_at(virt_addr: u64, phys_addr: u64, phys_mem_offset: u6
         | PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH);
 
     x86_64::instructions::tlb::flush(virt);
+}
+
+/// Marca uma entrada de huge page (PDE 2MB ou PDPTE 1GB) como
+/// Write-Combining. Em huge pages o bit PAT é o **bit 12** (o bit 7 é PS).
+unsafe fn set_huge_entry_wc(
+    entry: &mut x86_64::structures::paging::page_table::PageTableEntry,
+) {
+    let mut raw = entry.flags().bits();
+    raw &= !(PageTableFlags::NO_CACHE.bits() | PageTableFlags::WRITE_THROUGH.bits());
+    raw |= 1u64 << 12; // PAT em huge page
+    entry.set_flags(PageTableFlags::from_bits_retain(raw));
+}
+
+/// Mapa uma página 4KB como **Write-Combining** (WC), criando L4→L1.
+///
+/// WC = PAT entry 4 (PTE bit 7 = PAT, PCD=PWT=0). Exige `init_pat()`;
+/// esta função chama `init_pat()` (idempotente) por invocação. Retorna
+/// `true` se a página ficou presente; `false` se faltou frame para page
+/// table — o chamador deve cair para `map_page_uc` (UC continua correto,
+/// só mais lento no present).
+///
+/// ⚠️ Ganho de WC/NT é **metal-only**: QEMU/RAM é WB comum e o hint
+/// non-temporal é ignorado — não dá para medir em QEMU.
+pub unsafe fn map_page_wc(phys_addr: u64, phys_mem_offset: u64) -> bool {
+    map_page_wc_at(phys_addr + phys_mem_offset, phys_addr, phys_mem_offset)
+}
+
+/// `map_page_wc` com VA de destino explícito (mesmo walk de `map_page_uc_at`).
+pub unsafe fn map_page_wc_at(virt_addr: u64, phys_addr: u64, phys_mem_offset: u64) -> bool {
+    use x86_64::structures::paging::PageTable;
+    use x86_64::VirtAddr;
+    use x86_64::PhysAddr;
+
+    init_pat();
+
+    let virt = VirtAddr::new(virt_addr);
+    let (l4_frame, _) = x86_64::registers::control::Cr3::read();
+    let base = VirtAddr::new(phys_mem_offset);
+    let l4_virt = base + l4_frame.start_address().as_u64();
+    let l4_table = &mut *(l4_virt.as_mut_ptr::<PageTable>());
+
+    // L4 → L3
+    let l3_entry = &mut l4_table[usize::from(virt.p4_index())];
+    if !l3_entry.flags().contains(PageTableFlags::PRESENT) {
+        let frame = alloc_mmio_frame(base);
+        if frame == 0 { return false; }
+        l3_entry.set_addr(PhysAddr::new(frame), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    } else if l3_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+        set_huge_entry_wc(l3_entry); // 1GB: PAT bit 12
+        x86_64::instructions::tlb::flush(virt);
+        return true;
+    }
+    let l3_virt = base + l3_entry.addr().as_u64();
+    let l3_table = &mut *(l3_virt.as_mut_ptr::<PageTable>());
+
+    // L3 → L2
+    let l2_entry = &mut l3_table[usize::from(virt.p3_index())];
+    if !l2_entry.flags().contains(PageTableFlags::PRESENT) {
+        let frame = alloc_mmio_frame(base);
+        if frame == 0 { return false; }
+        l2_entry.set_addr(PhysAddr::new(frame), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    } else if l2_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+        set_huge_entry_wc(l2_entry); // 1GB: PAT bit 12
+        x86_64::instructions::tlb::flush(virt);
+        return true;
+    }
+    let l2_virt = base + l2_entry.addr().as_u64();
+    let l2_table = &mut *(l2_virt.as_mut_ptr::<PageTable>());
+
+    // L2 → L1
+    let l1_entry = &mut l2_table[usize::from(virt.p2_index())];
+    if !l1_entry.flags().contains(PageTableFlags::PRESENT) {
+        let frame = alloc_mmio_frame(base);
+        if frame == 0 { return false; }
+        l1_entry.set_addr(PhysAddr::new(frame), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    } else if l1_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+        set_huge_entry_wc(l1_entry); // 2MB: PAT bit 12
+        x86_64::instructions::tlb::flush(virt);
+        return true;
+    }
+    let l1_virt = base + l1_entry.addr().as_u64();
+    let l1_table = &mut *(l1_virt.as_mut_ptr::<PageTable>());
+
+    // L1 → folha 4KB: bit 7 = PAT (na folha, NÃO é huge), PCD/PWT = 0.
+    let pte = &mut l1_table[usize::from(virt.p1_index())];
+    pte.set_addr(PhysAddr::new(phys_addr),
+        PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    let mut raw = pte.flags().bits();
+    raw &= !(PageTableFlags::NO_CACHE.bits() | PageTableFlags::WRITE_THROUGH.bits());
+    raw |= 1u64 << 7; // PAT em PTE de 4KB
+    pte.set_flags(PageTableFlags::from_bits_retain(raw));
+
+    x86_64::instructions::tlb::flush(virt);
+    true
 }
 
 /// Mapa uma regiao de memoria fisica usando Huge Pages de 2MB para MMIO.
@@ -677,6 +808,9 @@ fn alloc_mmio_frame(base: VirtAddr) -> u64 {
 pub unsafe fn init_apic(info: &AcpiInfo) {
     crate::slog_nano!("APIC", "info", "Inicializando APIC...");
     println!("[APIC] Inicializando APIC...");
+
+    // PAT entry 4 = WC (pré-requisito do FB Write-Combining). BSP boot path.
+    init_pat();
 
     let ioapic_uc = set_page_uc(0xFEC0_0000, info.phys_mem_offset);
     let lapic_uc = set_page_uc(0xFEE0_0000, info.phys_mem_offset);

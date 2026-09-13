@@ -1,6 +1,8 @@
 //! ADR-0090 Tier 4 - GPU Compositing
 //!
 //! Uses k_hal GPU BE (blit_2d, fill_rect_2d) for DMA-accelerated compositing.
+//! Gated by `is_blit_ready()` (Intel BCS canary passed); otherwise CPU path.
+//! Default OFF: QEMU / não-Intel / canário falho → CPU.
 
 use crate::display::gpu_backend;
 use crate::display::fb::DoubleBuffer;
@@ -10,6 +12,26 @@ use k_hal::gpu::blit::{blit_2d, fill_rect_2d};
 pub enum CompositeMode {
     CpuOnly,
     GpuAccelerated,
+}
+
+/// VA→PA real via page tables. `phys_addr_for` devolve `va - pmoff`, que é
+/// inválido para o heap do kernel (não-HHDM) — corrigimos com o walk do CR3.
+/// None em host/test ou VA não mapeada → CPU fallback.
+fn back_pa(fb: &DoubleBuffer, x: usize, y: usize) -> Option<u64> {
+    let pseudo = fb.phys_addr_for(x, y)?;
+    let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    if pmoff == 0 {
+        return None;
+    }
+    k_nano::memory::page_leaf_phys(pseudo + pmoff)
+}
+
+/// PA de um slice do heap (o endereço virtual NÃO é físico).
+fn slice_pa(p: *const u8) -> Option<u64> {
+    if p.is_null() {
+        return None;
+    }
+    k_nano::memory::page_leaf_phys(p as u64)
 }
 
 pub struct GpuCompositor {
@@ -44,8 +66,7 @@ impl GpuCompositor {
             } else {
                 u32::from_le_bytes([b, g, r, 0xFF])
             };
-            let dst_pa = fb.phys_addr_for(x, y);
-            if let Some(pa) = dst_pa {
+            if let Some(pa) = back_pa(fb, x, y) {
                 if fill_rect_2d(pa, w as u32, h as u32, fb.info.bpp as u32, color) {
                     self.fill_count += 1;
                     fb.mark_dirty();
@@ -60,10 +81,16 @@ impl GpuCompositor {
 
     pub fn blit_region(&mut self, fb: &mut DoubleBuffer, src: &[u8], src_w: usize, src_h: usize, src_bpp: usize, dst_x: usize, dst_y: usize) {
         if self.mode == CompositeMode::GpuAccelerated {
-            let src_pa = src.as_ptr() as u64;
-            let dst_pa = fb.phys_addr_for(dst_x, dst_y);
-            if let (Some(spa), Some(dpa)) = (Some(src_pa), dst_pa) {
-                if blit_2d(spa, dpa, src_w as u32, src_h as u32, src_bpp as u32) {
+            // BCS precisa de PA real; slice virtual cru era o bug (lido como
+            // "physical"). page_leaf_phys traduz heap → PA.
+            let dst_pa = back_pa(fb, dst_x, dst_y);
+            let src_pa = slice_pa(src.as_ptr() as *const u8);
+            if let (Some(spa), Some(dpa)) = (src_pa, dst_pa) {
+                // BCS (intel.rs) usa pitch = w*bpp: só rects tight. Um blit de
+                // região com stride arbitrário cai no loop CPU abaixo.
+                if (src_w * src_bpp) == fb.info.stride
+                    && blit_2d(spa, dpa, src_w as u32, src_h as u32, src_bpp as u32)
+                {
                     self.blit_count += 1;
                     fb.mark_dirty();
                     return;
