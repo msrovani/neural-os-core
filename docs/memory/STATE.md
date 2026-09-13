@@ -38,4 +38,6 @@
 #   UI s332-s335: fluidez (TARGET_FPS 60, DamageList heapless, chrome cache, SSE2) +
 #     FB WC/PAT/movnti + cursor HW + BCS (gated, default-OFF; validacao METAL pendente) +
 #     invalidacao de janelas/cards; testes 845 pass/0 fail; imagem regenerada
+#   UI s336: fix orb (intrinsics SSE2 mal-compilados no soft-float -> copy_nonoverlapping);
+#     QEMU verificado: orb ciano com G intacto, frame cost 18ms, animacao viva
 #   Não declarar v2.0.0
