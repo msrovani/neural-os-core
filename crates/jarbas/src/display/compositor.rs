@@ -239,7 +239,11 @@ pub static MOUSE_BUTTONS: core::sync::atomic::AtomicU8 = core::sync::atomic::Ato
 
 // Timing de frame para FPS control
 // ADR-0104 — cadência alvo da UI (fps) e custo EWMA do trabalho de frame (µs).
-pub const TARGET_FPS: u64 = 30;
+/// Cadência-alvo da UI. O bench do orb é 112–130 µs/frame, muito abaixo do
+/// orçamento de 33 ms do rail de 30 fps — logo o teto era a constante, não o
+/// compute. 60 fps mantém o gate tunável por UM const (`target_period_us()`).
+/// NÃO derivar da cadência do rail: o tick do DisplayAgent limita naturalmente.
+pub const TARGET_FPS: u64 = 60;
 static FRAME_COST_US: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Gate de paint por RELÓGIO DE PAREDE (s328): um paint a cada `target_period_us()`.
@@ -250,6 +254,96 @@ static LAST_PRESENT_US: core::sync::atomic::AtomicU64 = core::sync::atomic::Atom
 pub fn target_period_us() -> u64 {
     1_000_000 / TARGET_FPS
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// #1 — Damage rects heapless (sem alloc no paint path).
+// Substitui o booleano `need_full` como caminho normal: cada camada pintada
+// empilha seu rect; o present faz `swap_rect` de cada um (merge/clip barato).
+// ══════════════════════════════════════════════════════════════════════════
+
+/// Rect de dano em coordenadas de pixel, EXCLUSIVO no x1/y1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DamageRect {
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+}
+
+impl DamageRect {
+    #[inline]
+    fn intersects(&self, o: &DamageRect) -> bool {
+        self.x0 < o.x1 && o.x0 < self.x1 && self.y0 < o.y1 && o.y0 < self.y1
+    }
+
+    #[inline]
+    fn merge(&mut self, o: &DamageRect) {
+        self.x0 = self.x0.min(o.x0);
+        self.y0 = self.y0.min(o.y0);
+        self.x1 = self.x1.max(o.x1);
+        self.y1 = self.y1.max(o.y1);
+    }
+}
+
+/// Capacidade fixa: cobre orb + HUD + dock + ~4 janelas + painel + cursor +
+/// notifications/overlays. Estouro funde no último rect (nunca falha, nunca
+/// aloca) — o custo de um swap extra é barato; correção vem primeiro.
+const DAMAGE_CAP: usize = 16;
+
+/// Lista fixa de rects de dano. `push` clipa à tela e coalesce com o primeiro
+/// rect que intersecta; sem espaço funde no último slot. Ordem irrelevante.
+#[derive(Clone, Copy)]
+struct DamageList {
+    rects: [DamageRect; DAMAGE_CAP],
+    len: usize,
+}
+
+impl DamageList {
+    const fn new() -> Self {
+        Self { rects: [DamageRect { x0: 0, y0: 0, x1: 0, y1: 0 }; DAMAGE_CAP], len: 0 }
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    fn push(&mut self, x: usize, y: usize, w: usize, h: usize, fw: usize, fh: usize) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        let x0 = x.min(fw);
+        let y0 = y.min(fh);
+        let x1 = x.saturating_add(w).min(fw);
+        let y1 = y.saturating_add(h).min(fh);
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let r = DamageRect { x0, y0, x1, y1 };
+        for i in 0..self.len {
+            if self.rects[i].intersects(&r) {
+                self.rects[i].merge(&r);
+                return;
+            }
+        }
+        if self.len < DAMAGE_CAP {
+            self.rects[self.len] = r;
+            self.len += 1;
+        } else {
+            self.rects[DAMAGE_CAP - 1].merge(&r);
+        }
+    }
+
+    fn iter(&self) -> core::slice::Iter<'_, DamageRect> {
+        self.rects[..self.len].iter()
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+}
+
+/// Altura da banda de chrome estático do HUD cacheada (#4).
+const HUD_CHROME_H: usize = 28;
 
 /// Relógio da UI: TSC em µs; fallback p/ ticks do PIT quando `tsc_hz()==0`.
 fn ui_now_us(tick: u64) -> u64 {
@@ -342,6 +436,16 @@ pub struct JarbasDesktop {
     last_orb_y0: usize,
     last_orb_w: usize,
     last_orb_h: usize,
+    /// #1 — rects de dano acumulados por camada pintada neste frame.
+    damage: DamageList,
+    /// #1 — rects das janelas pintadas no frame anterior (mover/fechar exige
+    /// apresentar também a posição antiga).
+    prev_win_rects: [(usize, usize, usize, usize); 8],
+    prev_win_len: usize,
+    /// #4 — chrome estático do HUD (bg + separador + brand) pré-rasterizado.
+    hud_chrome: alloc::vec::Vec<u8>,
+    /// Chave do cache (w,bpp,accent) — muda → re-rasteriza.
+    hud_chrome_key: u64,
     // Notifications
     pub notifications: NotificationQueue,
     // ── Hub Health (painel F12; fora do WM) ──
@@ -415,6 +519,11 @@ impl JarbasDesktop {
             last_orb_y0: 0,
             last_orb_w: 0,
             last_orb_h: 0,
+            damage: DamageList::new(),
+            prev_win_rects: [(0, 0, 0, 0); 8],
+            prev_win_len: 0,
+            hud_chrome: alloc::vec::Vec::new(),
+            hud_chrome_key: 0,
             notifications: NotificationQueue::new(),
             dirty_panel: false,
             hub_gen: 0,
@@ -710,6 +819,7 @@ impl JarbasDesktop {
         }
         self.last_paint_tick = tick;
         LAST_PRESENT_US.store(now, core::sync::atomic::Ordering::Relaxed);
+        self.damage.clear();
 
         // Orb anima a cada paint (time-driven dentro do SoulMirror).
         self.dirty_orb = true;
@@ -770,15 +880,18 @@ impl JarbasDesktop {
             draw_mouse_cursor(&mut self.fb, mx, my, w, h);
             self.dirty_cursor = false;
             if had {
-                self.fb.swap_rect(prev_x, prev_y, CURSOR_UNDER_W, CURSOR_UNDER_H);
+                self.damage.push(prev_x, prev_y, CURSOR_UNDER_W, CURSOR_UNDER_H, w, h);
             }
-            self.fb.swap_rect(
+            self.damage.push(
                 self.cursor_under_x,
                 self.cursor_under_y,
                 CURSOR_UNDER_W,
                 CURSOR_UNDER_H,
+                w,
+                h,
             );
-            self.fb.dirty = false;
+            let dmg = self.damage;
+            self.present_frame(false, dmg);
             return;
         }
 
@@ -814,12 +927,34 @@ impl JarbasDesktop {
         // Quando só cursor muda, pula 1M+ pixels de fill.
         // ═════════════════════════════════════════════════════════════
         // Anti-rastro: restaura underlay ANTES de qualquer paint (cursor some do back).
+        // #1: o rect do cursor anterior também precisa ser apresentado (senão ghost).
+        if self.cursor_under_valid {
+            self.damage.push(
+                self.cursor_under_x,
+                self.cursor_under_y,
+                CURSOR_UNDER_W,
+                CURSOR_UNDER_H,
+                w,
+                h,
+            );
+        }
         self.restore_cursor_underlay();
 
         // Only clear orb bounding box — NEVER full screen (anti-flicker).
         // Halo 2.1r cobre anéis/ticks; bbox = 2.9R + margem (bounds_radius).
         let mut orb_drawn = false;
         if self.dirty_orb || self.dirty_mesh {
+            // #1: a bbox anterior (raio pode pulsar) também entra no dano.
+            if self.last_orb_w > 0 && self.last_orb_h > 0 {
+                self.damage.push(
+                    self.last_orb_x0,
+                    self.last_orb_y0,
+                    self.last_orb_w,
+                    self.last_orb_h,
+                    w,
+                    h,
+                );
+            }
             let orb_cr = self.soul_mirror.bounds_radius() as usize;
             let ox = self.soul_mirror.cx as usize;
             let oy = self.soul_mirror.cy as usize;
@@ -833,6 +968,7 @@ impl JarbasDesktop {
                 self.last_orb_y0 = y0;
                 self.last_orb_w = cw;
                 self.last_orb_h = ch;
+                self.damage.push(x0, y0, cw, ch, w, h);
             }
             orb_drawn = true;
         }
@@ -857,20 +993,10 @@ impl JarbasDesktop {
         // ═════════════════════════════════════════════════════════════
         let sb_h = 28usize;
         if paint_hud {
-        self.fb.fill_rect_fast(0, 0, w, sb_h, 8, 12, 24);  // JARVIS_BG
-        self.fb.fill_rect_fast(0, sb_h - 1, w, 1, JARVIS_CYAN_R, JARVIS_CYAN_G, JARVIS_CYAN_B);
-
-        // Brand first (hero signal na barra)
-        draw_text(
-            &mut self.fb,
-            12,
-            6,
-            "JARBAS",
-            self.w,
-            theme.accent.0,
-            theme.accent.1,
-            theme.accent.2,
-        );
+        // #1: banda do HUD (bar + folga p/ banner) entra no dano.
+        self.damage.push(0, 0, w, sb_h + 28, w, h);
+        // #4: chrome estático (bg + separador + brand) vem do cache.
+        self.blit_hud_chrome(theme);
 
         // Micro badge do Hub Health (4 LEDs: USB/MEM/NET/AGENTS) — clique abre.
         if !hermes::hub_health::panel_visible() {
@@ -1051,6 +1177,12 @@ impl JarbasDesktop {
         let panel_h = h.saturating_sub(sb_h + gap * 2 + dock_h);
         let left_w = w.saturating_sub(gap * 2); // margens laterais pequenas (painel Hermes removido)
         if paint_windows {
+        // #1: posições antigas das janelas (mover/fechar) também no dano.
+        for i in 0..self.prev_win_len {
+            let (px, py, pw, ph) = self.prev_win_rects[i];
+            self.damage.push(px, py, pw, ph, w, h);
+        }
+        self.prev_win_len = 0;
         let window_updates = {
             let ws = self.workspaces.active();
             let screen_rect = Rect {
@@ -1082,6 +1214,16 @@ impl JarbasDesktop {
                 self.windows[idx].rect = gapped;
                 draw_window_fb(&mut self.fb, &self.windows[idx], theme, self.w);
                 render_app_content(&mut self.fb, &self.windows[idx], self.w, self.h);
+                // #1: dano do rect da janela (clip no push).
+                let rx = gapped.x.max(0) as usize;
+                let ry = gapped.y.max(0) as usize;
+                self.damage
+                    .push(rx, ry, gapped.width as usize, gapped.height as usize, w, h);
+                if self.prev_win_len < 8 {
+                    self.prev_win_rects[self.prev_win_len] =
+                        (rx, ry, gapped.width as usize, gapped.height as usize);
+                    self.prev_win_len += 1;
+                }
             }
         }
         } // paint_windows
@@ -1096,10 +1238,18 @@ impl JarbasDesktop {
 
         if self.dock.visible && paint_dock {
             self.dock.render(&mut self.fb, theme);
+            let dh = self.dock.height as usize;
+            self.damage.push(0, h.saturating_sub(dh), w, dh, w, h);
         }
 
         if paint_hud || paint_windows {
             self.notifications.render(&mut self.fb, theme, Rect { x: 0, y: 0, width: w as u32, height: h as u32 }, self.tick);
+            // #1: faixa dos toasts (canto superior direito, 40px cada).
+            let n = self.notifications.notifications.len().min(self.notifications.max_visible);
+            if n > 0 {
+                let nx = w.saturating_sub(320);
+                self.damage.push(nx, 4, w.saturating_sub(nx), n * 40 + 8, w, h);
+            }
         }
 
         // Modo Chat: hint discreto (Ambient = silêncio — orb é o sinal)
@@ -1122,6 +1272,13 @@ impl JarbasDesktop {
         }
 
         // Diálogo de energia (modal central) — 3 opções
+        // #1: o rect do modal (inclui sombra) entra no dano sempre que o estado
+        // muda — cobre abrir E fechar (sem full swap).
+        if self.dirty_dialog {
+            let (dx, dy, dw, dh) = power_dialog_rect(self.w, self.h);
+            self.damage
+                .push(dx.saturating_sub(4), dy.saturating_sub(4), dw + 8, dh + 8, w, h);
+        }
         if self.power_dialog && self.dirty_dialog {
             let (dx, dy, dw, dh) = power_dialog_rect(self.w, self.h);
             // Sombra
@@ -1190,60 +1347,91 @@ impl JarbasDesktop {
         self.save_cursor_underlay(mx, my);
         draw_mouse_cursor(&mut self.fb, mx, my, self.w, self.h);
         self.dirty_cursor = false;
-        let need_full = self.dirty_windows || self.dirty_dialog || vcon_active != 0;
+        self.damage.push(
+            self.cursor_under_x,
+            self.cursor_under_y,
+            CURSOR_UNDER_W,
+            CURSOR_UNDER_H,
+            w,
+            h,
+        );
+        // #1: região do painel Hub Health (toggle/slide/checksum — partial não
+        // muda pixels, então só o full/slide publica rect).
+        if let Some((hx, hy, hw, hh)) = self.hub_swap_rect.take() {
+            self.damage.push(hx, hy, hw, hh, w, h);
+        }
+        // Repaint genuinamente full: o virtual console pinta a tela inteira.
+        let full = vcon_active != 0;
         crate::display::fb::diag_mark(7);
-        let hub_swap = self.hub_swap_rect.take();
-        self.present_frame(need_full, paint_hud || paint_dock, orb_drawn, hub_swap);
+        let dmg = self.damage;
+        self.present_frame(full, dmg);
         crate::display::fb::diag_mark(8);
         self.dirty_windows = false;
         self.dirty_dialog = false;
         self.dirty_hud = false;
     }
 
-    /// 1º frame / janelas = swap full; orb animado = só dirty-rects (anti-freeze TCG).
-    fn present_frame(
-        &mut self,
-        need_full: bool,
-        swap_hud: bool,
-        swap_orb: bool,
-        hub_swap: Option<(usize, usize, usize, usize)>,
-    ) {
+    /// #4 — chave do cache de chrome do HUD: muda com (w,h,bpp,accent).
+    fn hud_chrome_key(&self, theme: &Theme) -> u64 {
+        let a = theme.accent;
+        (self.w as u64)
+            ^ ((self.h as u64) << 16)
+            ^ ((self.fb.info.bpp as u64) << 32)
+            ^ ((a.0 as u64) << 40)
+            ^ ((a.1 as u64) << 48)
+            ^ ((a.2 as u64) << 56)
+    }
+
+    /// #4 — blita o chrome estático do HUD (bg + separador ciano + brand).
+    /// Cache miss rasteriza a banda direto no back e copia p/ o offscreen.
+    /// Memória: `w * HUD_CHROME_H * bpp` bytes (1280×28×4 = 143 KB).
+    fn blit_hud_chrome(&mut self, theme: &Theme) {
         let w = self.w;
-        let sb_h = 28usize;
-        if self.full_swap_pending || need_full {
+        let bpp = self.fb.info.bpp;
+        let need = w.saturating_mul(HUD_CHROME_H).saturating_mul(bpp);
+        let key = self.hud_chrome_key(theme);
+        if self.hud_chrome_key == key && self.hud_chrome.len() >= need {
+            self.fb.copy_rect_in(0, 0, w, HUD_CHROME_H, &self.hud_chrome);
+            return;
+        }
+        self.fb.fill_rect_fast(0, 0, w, HUD_CHROME_H, 8, 12, 24); // JARVIS_BG
+        self.fb.fill_rect_fast(
+            0,
+            HUD_CHROME_H - 1,
+            w,
+            1,
+            JARVIS_CYAN_R,
+            JARVIS_CYAN_G,
+            JARVIS_CYAN_B,
+        );
+        draw_text(
+            &mut self.fb,
+            12,
+            6,
+            "JARBAS",
+            w,
+            theme.accent.0,
+            theme.accent.1,
+            theme.accent.2,
+        );
+        if self.hud_chrome.len() < need {
+            self.hud_chrome = alloc::vec![0u8; need];
+        }
+        self.fb.copy_rect_out(0, 0, w, HUD_CHROME_H, &mut self.hud_chrome);
+        self.hud_chrome_key = key;
+    }
+
+    /// #1 — 1º frame / repaint genuinamente full = `swap()`; resto = um
+    /// `swap_rect` por rect de dano (merge/clip feito no `push`).
+    fn present_frame(&mut self, full: bool, damage: DamageList) {
+        if self.full_swap_pending || full {
             self.fb.swap();
             self.full_swap_pending = false;
             return;
         }
-        // HUD / dock só se foram pintados neste frame (orb-only = skip)
-        if swap_hud {
-            self.fb.swap_rect(0, 0, w, sb_h + 28);
-            if self.dock.visible {
-                let dh = self.dock.height as usize;
-                let h = self.h;
-                self.fb.swap_rect(0, h.saturating_sub(dh), w, dh);
-            }
+        for r in damage.iter() {
+            self.fb.swap_rect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
         }
-        // Orb region
-        if swap_orb && self.last_orb_w > 0 && self.last_orb_h > 0 {
-            self.fb.swap_rect(
-                self.last_orb_x0,
-                self.last_orb_y0,
-                self.last_orb_w,
-                self.last_orb_h,
-            );
-        }
-        // Hub Health region (toggle/slide/checksum — partial não muda pixels).
-        if let Some((hx, hy, hw, hh)) = hub_swap {
-            self.fb.swap_rect(hx, hy, hw, hh);
-        }
-        // Cursor underlay
-        self.fb.swap_rect(
-            self.cursor_under_x,
-            self.cursor_under_y,
-            CURSOR_UNDER_W,
-            CURSOR_UNDER_H,
-        );
         self.fb.dirty = false;
     }
 
@@ -1307,6 +1495,7 @@ impl JarbasDesktop {
     }
 
     fn paint_overlays(&mut self, theme: &Theme) {
+        let (w, h) = (self.w, self.h);
         {
             let marks = crate::display::overlay::EMBED_MARKS.lock();
             for m in marks.iter() {
@@ -1319,6 +1508,15 @@ impl JarbasDesktop {
                         &mut self.fb, m.x, m.y, m.color,
                     );
                 }
+                // #1: splat ~8px de raio → caixa de 20px.
+                self.damage.push(
+                    m.x.saturating_sub(10),
+                    m.y.saturating_sub(10),
+                    20,
+                    20,
+                    w,
+                    h,
+                );
             }
         }
         let overlays: alloc::vec::Vec<_> = crate::display::overlay::RENDER_OVERLAYS.lock().clone();
@@ -1328,6 +1526,14 @@ impl JarbasDesktop {
         let registry = crate::display::render_registry::RENDER_REGISTRY.lock();
         for ov in &overlays {
             let _ = registry.render(&ov.name, &mut self.fb, ov.rect, theme, &ov.data);
+            self.damage.push(
+                ov.rect.x.max(0) as usize,
+                ov.rect.y.max(0) as usize,
+                ov.rect.width as usize,
+                ov.rect.height as usize,
+                w,
+                h,
+            );
         }
     }
 
@@ -2171,6 +2377,97 @@ mod invalidation_tests {
         LAST_PRESENT_US.store(ui_now_us(7), core::sync::atomic::Ordering::Relaxed);
         d.render(7);
         assert!(!d.dirty_windows, "render no-op nao deve agendar janelas");
+    }
+}
+
+#[cfg(test)]
+mod damage_tests {
+    use super::*;
+
+    fn rects(d: &DamageList) -> alloc::vec::Vec<(usize, usize, usize, usize)> {
+        d.iter().map(|r| (r.x0, r.y0, r.x1, r.y1)).collect()
+    }
+
+    #[test]
+    fn push_clips_to_screen() {
+        let mut d = DamageList::new();
+        // Fora pela direita/baixo: clippa em (fw,fh).
+        d.push(90, 50, 40, 40, 100, 60);
+        assert_eq!(rects(&d), alloc::vec![(90, 50, 100, 60)]);
+        // Inteiramente fora: descartado.
+        assert_eq!(d.len(), 1);
+        d.push(200, 200, 10, 10, 100, 60);
+        assert_eq!(d.len(), 1, "rect fora da tela nao entra");
+        // Zero tamanho: descartado.
+        d.push(0, 0, 0, 10, 100, 60);
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn push_coalesces_intersecting() {
+        let mut d = DamageList::new();
+        d.push(0, 0, 10, 10, 100, 100);
+        d.push(5, 5, 10, 10, 100, 100);
+        assert_eq!(d.len(), 1, "rects que se cruzam viram um");
+        assert_eq!(rects(&d), alloc::vec![(0, 0, 15, 15)]);
+    }
+
+    #[test]
+    fn push_keeps_disjoint_separate() {
+        let mut d = DamageList::new();
+        d.push(0, 0, 10, 10, 100, 100);
+        d.push(50, 50, 10, 10, 100, 100);
+        assert_eq!(d.len(), 2);
+    }
+
+    #[test]
+    fn overflow_merges_into_last_never_grows() {
+        let mut d = DamageList::new();
+        for i in 0..(DAMAGE_CAP + 5) {
+            let x = (i * 7) % 90;
+            let y = (i * 11) % 90;
+            d.push(x, y, 2, 2, 100, 100);
+        }
+        assert_eq!(d.len(), DAMAGE_CAP, "lista heapless nao cresce");
+    }
+
+    #[test]
+    fn union_covers_all_pushed_rects() {
+        // Todo rect empilhado (não coalescido) fica contido na lista resultante.
+        let mut d = DamageList::new();
+        let pts = [(1, 2, 3, 4), (40, 50, 5, 5), (80, 10, 4, 6)];
+        for &(x, y, w, h) in &pts {
+            d.push(x, y, w, h, 100, 100);
+        }
+        for &(x, y, w, h) in &pts {
+            let cx = x + w / 2;
+            let cy = y + h / 2;
+            assert!(
+                d.iter().any(|r| cx >= r.x0 && cx < r.x1 && cy >= r.y0 && cy < r.y1),
+                "ponto ({cx},{cy}) nao coberto pelo dano"
+            );
+        }
+    }
+
+    #[test]
+    fn target_period_is_60fps() {
+        assert_eq!(TARGET_FPS, 60, "teto tunável deve ser 60 fps");
+        assert_eq!(target_period_us(), 16_666);
+    }
+
+    #[test]
+    fn hud_chrome_cache_fills_and_is_stable() {
+        let gpu = crate::display::fb::GpuDevice::from_probe(0, 320, 200, 320, 4, false);
+        let mut d = JarbasDesktop::new(DoubleBuffer::from_gpu(&gpu));
+        let theme = crate::display::theme::current_theme();
+        d.blit_hud_chrome(theme);
+        let need = d.w * HUD_CHROME_H * d.fb.info.bpp;
+        assert_eq!(d.hud_chrome.len(), need, "cache dimensionado w*H*bpp");
+        let key = d.hud_chrome_key;
+        assert_ne!(key, 0, "chave nao-trivial");
+        // Segunda chamada não re-rasteriza (chave estável).
+        d.blit_hud_chrome(theme);
+        assert_eq!(d.hud_chrome_key, key);
     }
 }
 

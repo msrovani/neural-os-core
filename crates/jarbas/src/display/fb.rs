@@ -1202,6 +1202,155 @@ pub fn heartbeat_stamp(ticks: u64) {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// #5 — Row blitters SSE2 (padrão do repo: #[target_feature] + gate runtime).
+// O target soft-float desliga sse2 no nível do target; `#[target_feature]`
+// reabilita por função (cf. `cortex::bitnet_sse`). Fallback escalar sempre
+// existe — nada é hard-`cfg`ado para fora.
+// ══════════════════════════════════════════════════════════════════════════
+
+/// Gate runtime SSE2. SSE2 é baseline do x86_64 (o `-C target-feature=-sse2`
+/// do soft-float é política de build, não ausência de hardware). Espelha
+/// `cortex::bitnet_sse::sse2_available()`.
+#[inline]
+fn sse2_available() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        true
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        false
+    }
+}
+
+/// Copia `len` bytes com SSE2 (16 B/ciclo) + cauda escalar.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+pub(crate) unsafe fn sse2_copy_bytes(dst: *mut u8, src: *const u8, len: usize) {
+    use core::arch::x86_64::*;
+    let mut i = 0usize;
+    while i + 16 <= len {
+        let v = _mm_loadu_si128(src.add(i) as *const __m128i);
+        _mm_storeu_si128(dst.add(i) as *mut __m128i, v);
+        i += 16;
+    }
+    while i < len {
+        *dst.add(i) = *src.add(i);
+        i += 1;
+    }
+}
+
+/// Dispatch: SSE2 quando disponível, senão `copy_nonoverlapping`.
+#[inline]
+unsafe fn copy_bytes(dst: *mut u8, src: *const u8, len: usize) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if sse2_available() {
+            sse2_copy_bytes(dst, src, len);
+            return;
+        }
+    }
+    core::ptr::copy_nonoverlapping(src, dst, len);
+}
+
+/// SWAR escalar (referência exata) — `dst += ((tint-dst)*k)>>8` por canal,
+/// 2 canais por word via máscara 0x00FF00FF. Mesma matemática do bpp==4.
+pub(crate) unsafe fn tint_swar_scalar(
+    ptr: *mut u8,
+    stride: usize,
+    x: usize,
+    y: usize,
+    aw: usize,
+    ah: usize,
+    tint_word: u32,
+    k: u32,
+) {
+    let inv = 256 - k;
+    let te = tint_word & 0x00FF_00FF;
+    let to = (tint_word >> 8) & 0x00FF_00FF;
+    let tek = te * k;
+    let tok = to * k;
+    for dy in 0..ah {
+        let mut p = ptr.add((y + dy) * stride + x * 4) as *mut u32;
+        for _ in 0..aw {
+            let d = p.read();
+            let de = d & 0x00FF_00FF;
+            let od = (d >> 8) & 0x00FF_00FF;
+            let re = (tek + de * inv) >> 8;
+            let ro = (tok + od * inv) >> 8;
+            p.write((re & 0x00FF_00FF) | ((ro & 0x00FF_00FF) << 8));
+            p = p.add(1);
+        }
+    }
+}
+
+/// Versão SSE2 do tint: 4 pixels (16 B) por iteração, paridade EXATA com o
+/// SWAR escalar (produtos ≤65025 caibam em u16; carry recalculado nos bytes
+/// baixos). Cauda escalar. `k == 0` é filtrado pelo caller.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+pub(crate) unsafe fn tint_sse2(
+    ptr: *mut u8,
+    stride: usize,
+    x: usize,
+    y: usize,
+    aw: usize,
+    ah: usize,
+    tint_word: u32,
+    k: u32,
+) {
+    use core::arch::x86_64::*;
+    let inv = 256 - k;
+    let mask = _mm_set1_epi32(0x00FF_00FFu32 as i32);
+    let lowbyte = _mm_set1_epi16(0x00FFu16 as i16);
+    let kkv = _mm_set1_epi16(k as i16);
+    let invv = _mm_set1_epi16(inv as i16);
+    let te = tint_word & 0x00FF_00FF;
+    let to = (tint_word >> 8) & 0x00FF_00FF;
+    let tev = _mm_set1_epi32(te as i32);
+    let tov = _mm_set1_epi32(to as i32);
+    // floor(const/256) + carry pré-computados para as constantes.
+    let thi_e = _mm_mulhi_epu16(_mm_slli_epi16(tev, 8), kkv);
+    let thi_o = _mm_mulhi_epu16(_mm_slli_epi16(tov, 8), kkv);
+    let tlo_e = _mm_and_si128(_mm_mullo_epi16(tev, kkv), lowbyte);
+    let tlo_o = _mm_and_si128(_mm_mullo_epi16(tov, kkv), lowbyte);
+    for dy in 0..ah {
+        let mut p = ptr.add((y + dy) * stride + x * 4);
+        let mut remaining = aw;
+        while remaining >= 4 {
+            let d = _mm_loadu_si128(p as *const __m128i);
+            let de = _mm_and_si128(d, mask);
+            let od = _mm_and_si128(_mm_srli_epi32(d, 8), mask);
+            let dhi_e = _mm_mulhi_epu16(_mm_slli_epi16(de, 8), invv);
+            let dhi_o = _mm_mulhi_epu16(_mm_slli_epi16(od, 8), invv);
+            let dlo_e = _mm_and_si128(_mm_mullo_epi16(de, invv), lowbyte);
+            let dlo_o = _mm_and_si128(_mm_mullo_epi16(od, invv), lowbyte);
+            let carry_e = _mm_srli_epi16(_mm_add_epi16(dlo_e, tlo_e), 8);
+            let carry_o = _mm_srli_epi16(_mm_add_epi16(dlo_o, tlo_o), 8);
+            let re = _mm_add_epi16(_mm_add_epi16(dhi_e, thi_e), carry_e);
+            let ro = _mm_add_epi16(_mm_add_epi16(dhi_o, thi_o), carry_o);
+            let res = _mm_or_si128(
+                _mm_and_si128(re, mask),
+                _mm_slli_epi32(_mm_and_si128(ro, mask), 8),
+            );
+            _mm_storeu_si128(p as *mut __m128i, res);
+            p = p.add(16);
+            remaining -= 4;
+        }
+        let mut q = p as *mut u32;
+        for _ in 0..remaining {
+            let d = q.read();
+            let de = d & 0x00FF_00FF;
+            let od = (d >> 8) & 0x00FF_00FF;
+            let re = (te * k + de * inv) >> 8;
+            let ro = (to * k + od * inv) >> 8;
+            q.write((re & 0x00FF_00FF) | ((ro & 0x00FF_00FF) << 8));
+            q = q.add(1);
+        }
+    }
+}
+
 impl DoubleBuffer {
     /// Constrói o double-buffer a partir do GpuDevice já probeado (fonte dinâmica).
     pub fn from_gpu(gpu: &GpuDevice) -> Self {
@@ -1318,11 +1467,22 @@ impl DoubleBuffer {
         if dst.len() < need || w == 0 || h == 0 {
             return;
         }
+        let row_bytes = w * bpp;
+        let back_len = self.back.len();
         let mut di = 0usize;
         for row in 0..h {
             let py = y + row;
             if py >= self.info.height {
                 break;
+            }
+            // #5 fast path: linha inteira dentro do back → cópia contígua SSE2.
+            let off = py * self.info.stride + x * bpp;
+            if x + w <= self.info.width && off + row_bytes <= back_len {
+                unsafe {
+                    copy_bytes(dst.as_mut_ptr().add(di), self.back.as_ptr().add(off), row_bytes);
+                }
+                di += row_bytes;
+                continue;
             }
             for col in 0..w {
                 let px = x + col;
@@ -1331,7 +1491,7 @@ impl DoubleBuffer {
                 } else {
                     usize::MAX
                 };
-                if off != usize::MAX && off + bpp <= self.back.len() {
+                if off != usize::MAX && off + bpp <= back_len {
                     dst[di..di + bpp].copy_from_slice(&self.back[off..off + bpp]);
                 } else {
                     for b in 0..bpp {
@@ -1351,17 +1511,28 @@ impl DoubleBuffer {
             return;
         }
         self.dirty = true;
+        let row_bytes = w * bpp;
+        let back_len = self.back.len();
         let mut si = 0usize;
         for row in 0..h {
             let py = y + row;
             if py >= self.info.height {
                 break;
             }
+            // #5 fast path: linha inteira dentro do back → cópia contígua SSE2.
+            let off = py * self.info.stride + x * bpp;
+            if x + w <= self.info.width && off + row_bytes <= back_len {
+                unsafe {
+                    copy_bytes(self.back.as_mut_ptr().add(off), src.as_ptr().add(si), row_bytes);
+                }
+                si += row_bytes;
+                continue;
+            }
             for col in 0..w {
                 let px = x + col;
                 if px < self.info.width {
                     let off = py * self.info.stride + px * bpp;
-                    if off + bpp <= self.back.len() {
+                    if off + bpp <= back_len {
                         self.back[off..off + bpp].copy_from_slice(&src[si..si + bpp]);
                     }
                 }
@@ -1625,7 +1796,6 @@ impl DoubleBuffer {
         let stride = self.info.stride;
         let ptr = self.back.as_mut_ptr();
         let kk = k as u32;
-        let inv = 256 - kk;
         unsafe {
             if bpp == 4 {
                 let tint_word = if self.info.rgb_order {
@@ -1633,24 +1803,16 @@ impl DoubleBuffer {
                 } else {
                     u32::from_le_bytes([b, g, r, 0xFF])
                 };
-                // SWAR: 2 canais por word (bytes 0/2 e 1/3). Cada grupo de 16
-                // bits fica ≤ 255*256 = 65280 — sem carry entre grupos.
-                let te = tint_word & 0x00FF_00FF;
-                let to = (tint_word >> 8) & 0x00FF_00FF;
-                let tek = te * kk;
-                let tok = to * kk;
-                for dy in 0..ah {
-                    let mut p = ptr.add((y + dy) * stride + x * bpp) as *mut u32;
-                    for _ in 0..aw {
-                        let d = p.read();
-                        let de = d & 0x00FF_00FF;
-                        let do_ = (d >> 8) & 0x00FF_00FF;
-                        let re = (tek + de * inv) >> 8;
-                        let ro = (tok + do_ * inv) >> 8;
-                        p.write((re & 0x00FF_00FF) | ((ro & 0x00FF_00FF) << 8));
-                        p = p.add(1);
+                // #5: kernel SSE2 (4 px/iteração) quando disponível; escalar é
+                // o fallback e a referência de paridade.
+                #[cfg(target_arch = "x86_64")]
+                {
+                    if sse2_available() {
+                        tint_sse2(ptr, stride, x, y, aw, ah, tint_word, kk);
+                        return aw * ah;
                     }
                 }
+                tint_swar_scalar(ptr, stride, x, y, aw, ah, tint_word, kk);
             } else {
                 let (c0, c1, c2) = if self.info.rgb_order { (r, g, b) } else { (b, g, r) };
                 let ch = [c0, c1, c2];
@@ -1886,17 +2048,17 @@ impl DoubleBuffer {
         }
         let row_bytes = (x1 - x0) * bpp;
         let front = self.info.addr as *mut u8;
+        if front.is_null() {
+            return;
+        }
         unsafe {
             for py in y0..y1 {
                 let off = py * stride + x0 * bpp;
                 if off + row_bytes > self.back.len() {
                     break;
                 }
-                copy_nonoverlapping(
-                    self.back.as_ptr().add(off),
-                    front.add(off),
-                    row_bytes,
-                );
+                // #5: cópia de linha SSE2 (16 B/ciclo) + cauda escalar.
+                copy_bytes(front.add(off), self.back.as_ptr().add(off), row_bytes);
             }
         }
     }
@@ -1909,11 +2071,92 @@ impl DoubleBuffer {
         // Cinto: limpa lock legado caso IRQ antigo tenha vazado.
         k_nano::interrupts::CURSOR_LOCK.store(false, Ordering::Release);
         let addr = self.info.addr;
+        if addr == 0 {
+            return;
+        }
         let len = self.back.len();
         unsafe {
-            copy_nonoverlapping(self.back.as_ptr(), addr as *mut u8, len);
+            // #5: cópia SSE2 do buffer inteiro (fallback escalar no gate).
+            copy_bytes(addr as *mut u8, self.back.as_ptr(), len);
         }
         self.dirty = false;
+    }
+}
+
+#[cfg(test)]
+mod simd_parity_tests {
+    #![allow(clippy::needless_range_loop)]
+    #[cfg(target_arch = "x86_64")]
+    use super::*;
+
+    /// xorshift determinístico (sem rand no no_std/host).
+    fn fill_pseudo(buf: &mut [u8], mut seed: u32) {
+        for b in buf.iter_mut() {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            *b = (seed >> 8) as u8;
+        }
+    }
+
+    /// #5: SSE2 row copy byte-idêntico ao `copy_nonoverlapping` (varias larguras,
+    /// inclusive não múltiplas de 16).
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn sse2_copy_matches_scalar_for_any_len() {
+        for &len in &[0usize, 1, 3, 15, 16, 17, 31, 32, 33, 64, 100, 255, 1000] {
+            let mut src = alloc::vec![0u8; len.max(1)];
+            fill_pseudo(&mut src, 0x1234_5678 ^ len as u32);
+            let mut got = alloc::vec![0xEEu8; len];
+            let mut want = alloc::vec![0xEEu8; len];
+            if len > 0 {
+                unsafe { sse2_copy_bytes(got.as_mut_ptr(), src.as_ptr(), len) };
+                want.copy_from_slice(&src[..len]);
+            }
+            assert_eq!(got, want, "len={len}");
+        }
+    }
+
+    /// #5: kernel SSE2 do tint tem paridade EXATA com o SWAR escalar, com
+    /// cauda (aw%4 != 0) e várias combinações de k/tint.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn tint_sse2_matches_swar_scalar() {
+        // Largura 11 → 2 blocos de 4 + cauda de 3. Altura 3.
+        let (w, h) = (11usize, 3usize);
+        let stride = w * 4;
+        let tints: [(u8, u8, u8); 3] = [(8, 12, 24), (0xD4, 0xFF, 0x00), (200, 40, 90)];
+        for (r, g, b) in tints {
+            for &k in &[1u8, 37, 128, 216, 255] {
+                for rgb_order in [false, true] {
+                    let tint_word = if rgb_order {
+                        u32::from_le_bytes([r, g, b, 0xFF])
+                    } else {
+                        u32::from_le_bytes([b, g, r, 0xFF])
+                    };
+                    let mut a = alloc::vec![0u8; stride * h];
+                    fill_pseudo(&mut a, 0xABCD_0001);
+                    let mut c = a.clone();
+                    unsafe {
+                        tint_swar_scalar(a.as_mut_ptr(), stride, 0, 0, w, h, tint_word, k as u32);
+                        tint_sse2(c.as_mut_ptr(), stride, 0, 0, w, h, tint_word, k as u32);
+                    }
+                    assert_eq!(a, c, "rgb_order={rgb_order} k={k} tint={r},{g},{b}");
+                }
+            }
+        }
+    }
+
+    /// #5: o dispatch público usa SSE2 no host sem alterar o resultado e
+    /// escreve o retorno esperado.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn fill_rect_darken_tint_dispatch_writes_and_counts() {
+        let gpu = super::GpuDevice::from_probe(0, 16, 8, 16, 4, false);
+        let mut db = super::DoubleBuffer::from_gpu(&gpu);
+        let n = db.fill_rect_darken_tint(0, 0, 16, 8, 8, 12, 24, 216);
+        assert_eq!(n, 16 * 8);
+        assert!(db.dirty);
     }
 }
 

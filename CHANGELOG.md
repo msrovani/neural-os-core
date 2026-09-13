@@ -1,5 +1,15 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s334] - 2026-09-11 — UI fluidity A: 60fps target + damage rects + chrome cache + SIMD
+
+Plano de fluidez (técnicas externas portáveis), pacote A (QEMU-testável):
+
+- **#0 TARGET_FPS 30→60** (`compositor.rs`): o bench do orb é 112-130 µs/frame (≪33 ms) — o cap era o **alvo**, não o compute. Gate wall-clock `now_us - last >= 1e6/TARGET_FPS`; rail menor degrada naturalmente. (~DispSync/KMS pacing.)
+- **#1 damage rects** (`compositor.rs`): `DamageList` heapless `[DamageRect;16]` zero-alloc, merge/clip/overflow-merge, substitui o booleano `need_full`. Cada camada pintada empurra seu rect (orb bbox velho+novo, HUD, janelas velho+novo, dock, notificações, dialog, painel, cursor). `present_frame` troca a união por rects — **fim do full swap de 3.6 MB para mudança de 1 px**; full só na 1ª frame/vcon/power. (~Wayland/X11 DAMAGE/Android/DXGI dirty rects.)
+- **#4 chrome cache** (`compositor.rs`): banda estática do HUD (bg+separador+brand) pré-rasterizada e blitada, invalidada por `(w,h,bpp,accent)`; dinâmico (clock, cores, badge, RENDER_N…) continua desenhado. ~143 KB. (~TouchGFX Cacheable Container.)
+- **#5 SIMD blitters** (`fb.rs`): `sse2_copy_bytes`/`tint_sse2` via `#[target_feature(enable="sse2")]` + gate runtime `sse2_available()` (compila no target soft-float), fallback escalar; wired em `swap_rect`/`swap`/`copy_rect_in|out`/`fill_rect_darken_tint`. Parity exata testada (incl. tail `aw%4!=0`). (~pixman/embedded-graphics.)
+- Testes: jarbas **85 pass** (+ `damage_tests`/`simd_parity_tests`); suíte workspace **844 pass / 0 fail**; `cargo nk`/`cargo check --release` = 0 erros.
+
 ## [1.9.99-s333] - 2026-09-11 — UI: window/card repaint invalidation
 
 - **Bug:** `JarbasDesktop::invalidate_windows()` (`compositor.rs`) tinha **zero callers** — após o boot, janelas/cards nunca repintavam (só orb/HUD animavam); as mutações escreviam num back buffer que nunca era trocado (pior: o novo Hub Health panel e qualquer card novo ficavam invisíveis ou presos).
