@@ -1,4 +1,4 @@
-# STATE — neural-os-core v1.9.99-s341 — Jarbas bughunt: render alloc fixes
+# STATE — neural-os-core v1.9.99-s343 — VirtIO modern drivers (virtio-drivers crate)
 
 #   PISTA ATIVA: Jarbas render path otimizado — zero alloc no paint loop
 #   SESSION_341: RENDER_OVERLAYS iter under lock + HUD_CACHE static buffer

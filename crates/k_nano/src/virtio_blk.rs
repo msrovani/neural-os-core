@@ -418,6 +418,14 @@ pub unsafe fn init_driver_virtio_blk() -> bool {
     if VIRTIO_BLK_DEV.lock().is_some() {
         return true;
     }
+
+    // Try modern transport first (virtio-drivers crate)
+    if crate::virtio_modern::init_driver_virtio_blk_modern() {
+        crate::slog_nano!("VBLK", "ok", "Modern VirtIO-blk driver initialized");
+        return true;
+    }
+
+    // Fallback to legacy manual driver
     let devices = crate::pci::scan_pci();
     for dev in &devices {
         if dev.vendor_id != VIRTIO_VENDOR {

@@ -24,6 +24,8 @@ ruvix-proof = { version = "0.1", default-features = false, features = ["alloc"] 
 ruvix-vecgraph = { version = "0.1", default-features = false, features = ["alloc"] }
 ruvix-types = { version = "0.1", default-features = false, features = ["alloc"] }
 ruvix-region = { version = "0.1", default-features = false, features = ["alloc"] }
+# VirtIO guest drivers (rcore-os) — no_std, Block/Net/GPU/Input/Console/Sound
+virtio-drivers = { version = "0.13", default-features = false, features = ["alloc"] }
 
 [features]
 default = []

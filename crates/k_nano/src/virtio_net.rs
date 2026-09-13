@@ -410,6 +410,13 @@ unsafe fn prealloc_rx_buffers(queue_pa: u64, io_base: u16, is_mmio: bool, mmio_b
 // ---------------------------------------------------------------------------
 
 pub unsafe fn init_driver_virtio() -> bool {
+    // Try modern transport first (virtio-drivers crate)
+    if crate::virtio_modern::init_driver_virtio_modern() {
+        crate::slog_nano!("VIRTIO", "ok", "Modern VirtIO-net driver initialized");
+        return true;
+    }
+
+    // Fallback to legacy manual driver
     let devices = crate::pci::scan_pci();
     for dev in &devices {
         if dev.vendor_id == VIRTIO_VENDOR &&
@@ -442,4 +449,34 @@ pub unsafe fn init_driver_virtio() -> bool {
     }
     crate::slog_nano!("VIRTIO", "info", "Nenhum dispositivo VirtIO-net encontrado.");
     false
+}
+
+// ---------------------------------------------------------------------------
+// Unified send/recv — modern driver first, legacy fallback
+// ---------------------------------------------------------------------------
+
+/// Send a packet via VirtIO-net. Tries modern driver first, then legacy.
+pub fn virtio_send(data: &[u8]) -> bool {
+    // Modern driver
+    if let Some(ref mut net) = *crate::virtio_modern::MODERN_NET.lock() {
+        return net.send(data);
+    }
+    // Legacy driver
+    if let Some(ref mut dev) = *crate::nic_globals::VIRTIO_DEV.lock() {
+        return dev.send(data);
+    }
+    false
+}
+
+/// Receive a packet via VirtIO-net. Tries modern driver first, then legacy.
+pub fn virtio_recv() -> Option<alloc::vec::Vec<u8>> {
+    // Modern driver
+    if let Some(ref mut net) = *crate::virtio_modern::MODERN_NET.lock() {
+        return net.recv();
+    }
+    // Legacy driver
+    if let Some(ref mut dev) = *crate::nic_globals::VIRTIO_DEV.lock() {
+        return dev.recv();
+    }
+    None
 }

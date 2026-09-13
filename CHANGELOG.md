@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s343] - 2026-09-13 — VirtIO modern drivers (virtio-drivers crate)
+
+- **Novo `virtio_hal.rs`:** Bridge HAL para o crate `virtio-drivers` (rcore-os). Implementa `AiosHal` (DMA alloc, MMIO mapping, share/unshare) e `AiosPciAccess` (PCI config space bridge).
+- **Novo `virtio_modern.rs`:** Wrappers modernos `VirtIoNetModern` e `VirtIoBlkModern` com API compatível com drivers legacy. Globais `MODERN_NET` / `MODERN_BLK`.
+- **`init_driver_virtio()` e `init_driver_virtio_blk()`:** agora tentam transporte moderno primeiro, fallback para legacy.
+- **Hermes netstack:** `nic_send()`/`nic_recv()` usam `virtio_send()`/`virtio_recv()` unificados.
+- Dependência: `virtio-drivers 0.13` (no_std, alloc).
+
 ## [1.9.99-s341] - 2026-09-13 — Jarbas bughunt: render alloc fixes
 
 - **Fix A (compositor.rs):** `RENDER_OVERLAYS.lock().clone()` → itera sob lock direto. Elimina ~120 allocs/s no render path (cada overlay = String + Vec<u8>). Zero alloc.

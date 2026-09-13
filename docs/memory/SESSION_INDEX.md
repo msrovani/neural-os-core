@@ -21,6 +21,8 @@
 | 313 | HW real | xHCI/Jarbas | Persistência USB + UI liveness | Event Ring exigia `RTSOFF+0x20`; Normal TRB IOC estava no DWORD errado e CC Success=1 era rejeitado; takeover metal (BusMaster/handoff/CSZ/scratchpad/WPR/EHB); probe MSC proibido pós-UI; tick offload global gated |
 | 319 | hermes+jarbas | ADR-0103 | hermes + jarbas unification: Emotion, Soul, SER→Affect, LoopPhase→Display | hermes::emotion canonical (Sarcasm) + SoulProfile delegates hermes + VOICE_EMOTION event + LOOP_PHASE subscription + HNSW boot populate |
 | 318 | hermes+cortex | ADR-0103 | hermes + cortex complete optimization: FASE 1-4 | Persistent KvCache + MoE 0.05 + Emotion->Affect + Soul->LLM + BeiInit + PonderNet + MCP dynamic + SkillGen persist + HNSW search + VectorClock dedup + 17 dead modules removed + LLM feedback + Federated health |
+| 343 | VirtIO | s343 | Modern drivers (virtio-drivers crate) | virtio_hal.rs HAL bridge; virtio_modern.rs wrappers; init modern-first fallback; hermes netstack unified send/recv |
+| 342 | Research | s342 | GPU bare-metal research | Nova GSP merged Linux 6.15; cutile-rs stable Rust; virtio-drivers rcore-os; nicho DNN bare-metal aberto |
 | 341 | Jarbas | s341 | Jarbas bughunt: render alloc fixes | RENDER_OVERLAYS iter under lock; HUD_CACHE static buffer; auditoria 63 files |
 | 340 | Boot/FAT32 | s340 | FAT32 root dir cache + TSC timeout (boot ATA PIO desbloqueado) | ROOT_DIR_CACHE 256KB; populate_root_dir_cache(); TSC deadline 2s; find_in_root_cache(); ATA BGE 40→15 LOC |
 | 317 | k_ai+cortex | ADR-0103 | k_ai + Cortex optimization: FASE 1-4 complete | ContextWindow + Budget + IntentPlanner + ReAct + MCP + CodebookVQ + H2O eviction + MoE neural 0.08 + dead code removal |

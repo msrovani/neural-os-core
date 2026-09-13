@@ -109,6 +109,8 @@ pub mod vfs;
 pub mod vga_buffer;
 pub mod virtio_net;
 pub mod virtio_blk;
+pub mod virtio_hal;
+pub mod virtio_modern;
 pub mod audio;
 pub mod xhci;
 pub mod paging;

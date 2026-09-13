@@ -169,9 +169,7 @@ unsafe fn nic_send(data: Vec<u8>) {
             return;
         }
     }
-    if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
-        nic.send(&data); return;
-    }
+    if k_nano::virtio_net::virtio_send(&data) { return; }
     if let Some(ref mut nic) = *crate::net::E1000.lock() {
         nic.send(&data); return;
     }
@@ -193,9 +191,7 @@ unsafe fn nic_recv() -> Option<Vec<u8>> {
             return Some(pkt);
         }
     }
-    if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
-        if let Some(pkt) = nic.recv() { return Some(pkt); }
-    }
+    if let Some(pkt) = k_nano::virtio_net::virtio_recv() { return Some(pkt); }
     if let Some(ref mut nic) = *crate::net::E1000.lock() {
         nic.kick_rx_lite();
         if let Some(pkt) = nic.recv() { return Some(pkt); }
