@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s344] - 2026-09-13 — Gates G1-G3 do plano GPU Rust ecosystem
+
+- **G1 ❌:** cuda-oxide NÃO suporta sm_61 — piso oficial sm_80 (Ampere) + host Linux-only (feature matrix + README NVlabs).
+- **G2a ✅:** cutile-ir 0.3.1 compila offline, puro Rust, sem CUDA — probe `Module::new` → `write_bytecode` (34 bytes) → `decode_bytecode` round-trip OK.
+- **G2b 🟡:** cutile-compiler → `tileiras --gpu-name sm_XXX` é assembler offline (sem GPU), mas exige CUDA toolkit 13.2+ no host e alvo sm_80+.
+- **G3 ❌:** khal 0.3.0 `cpu`-only não compila — bug upstream (`any_backend.rs:30` importa `WebGpuTimestamps` sem cfg gate `webgpu`).
+- **Decisão:** Fase 2 descartada p/ GTX 1050 (sm_61). Destra com GPU Ampere+ no lab + host Linux. NKP1 segue nvcc como único produtor.
+
 ## [1.9.99-s343] - 2026-09-13 — VirtIO modern drivers (virtio-drivers crate)
 
 - **Novo `virtio_hal.rs`:** Bridge HAL para o crate `virtio-drivers` (rcore-os). Implementa `AiosHal` (DMA alloc, MMIO mapping, share/unshare) e `AiosPciAccess` (PCI config space bridge).

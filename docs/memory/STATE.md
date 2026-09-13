@@ -1,4 +1,4 @@
-# STATE — neural-os-core v1.9.99-s343 — VirtIO modern drivers (virtio-drivers crate)
+# STATE — neural-os-core v1.9.99-s344 — Gates G1-G3 GPU Rust: Fase 2 descartada p/ sm_61 (destra Ampere+ Linux)
 
 #   PISTA ATIVA: Jarbas render path otimizado — zero alloc no paint loop
 #   SESSION_341: RENDER_OVERLAYS iter under lock + HUD_CACHE static buffer

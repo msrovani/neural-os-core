@@ -551,6 +551,8 @@ ID=9001) retry periódico até FAT_READY=true.
 
 - **`virtio-drivers` crate (rcore-os) funciona com transporte modern PCI (SESSION_343):** O crate `virtio-drivers 0.13` fornece drivers maduros (net/blk/gpu/console/input) mas exige transporte **modern** (BAR-based common config, não legacy I/O ports). QEMU default para `virtio-net-pci` é modern (sem `disable-modern=on`). Requer implementar `Hal` (DMA alloc, MMIO mapping) e `ConfigurationAccess` (PCI config bridge) — `unsafe impl` apenas no `Hal`; `ConfigurationAccess` exige também `unsafe_clone()` (stateless = `Self` novo). `PciRoot::enumerate_bus` faz a própria enumeração PCI (não reusa `scan_pci`). O `zerocopy` (dependência) compila no toolchain atual. Drivers legacy `virtio_net.rs`/`virtio_blk.rs` permanecem como fallback; `virtio_send()`/`virtio_recv()` checam modern primeiro. GPU 2D via crate é viável (`VirtIOGpu` com `resource_create_2d`/`flush`) mas ainda pendente. Nota: `cargo test --workspace` paralelo pode falhar 1 suíte de forma transiente (race) — re-rodar antes de investigar.
 
+- **Gates GPU Rust: nenhum produtor Rust→CUBIN cobre sm_61 (SESSION_344):** cuda-oxide piso oficial = **sm_80 (Ampere)** e host Linux-only (não Turing+ como se assumia). cutile-ir 0.3.1 é offline/puro-Rust (probe: `Module::new`→`write_bytecode`→`decode_bytecode` OK, ~7K LOC, sem CUDA) mas cutile-compiler exige CUDA toolkit 13.2+ no host e o Tile model também é sm_80+. khal 0.3.0 `cpu`-only **não compila** (bug upstream: `any_backend.rs:30` importa `WebGpuTimestamps` sem cfg gate). Destra: GPU Ampere+ no lab + host Linux. NKP1 segue nvcc como único produtor.
+
 # Referências
 - ADR-0036: JARVIS Unified Interaction Layer
 - ADR-0037: SMP+GPU Architecture (multi-vendor)

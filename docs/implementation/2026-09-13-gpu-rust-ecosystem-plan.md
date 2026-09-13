@@ -5,6 +5,19 @@
 **Escopo:** aproveitar CUDA Rust / cutile / khal como **produtores offline** de kernel para o
 envelope NKP1 que **já existe**. Nenhum destes roda bare-metal.
 
+> ## ⚠️ RESULTADO DOS GATES (Fase 1 executada — SESSION_344, 2026-09-13)
+>
+> | Gate | Resultado |
+> |------|-----------|
+> | **G1** | ❌ cuda-oxide NÃO suporta sm_61 — piso oficial é **sm_80 (Ampere)** + host Linux-only |
+> | **G2a** | ✅ `cutile-ir` compila offline, puro Rust, sem CUDA (probe testado; não é no_std — irrelevante p/ produtor host) |
+> | **G2b** | 🟡 `cutile-compiler` → tileiras → cubin é offline, mas exige CUDA toolkit 13.2+ no host e alvo **sm_80+** |
+> | **G3** | ❌ khal 0.3.0 `cpu`-only NÃO compila (bug upstream: import ungated `WebGpuTimestamps` em `any_backend.rs:30`) |
+>
+> **Conclusão:** Fase 2 NÃO executa para sm_61 (GTX 1050). O gate de destrave é
+> **GPU Ampere+ (sm_80) + host Linux** — não Turing+ como assumido na seção 3 abaixo.
+> Pipeline NKP1 permanece com nvcc como único produtor. Ver `docs/memory/SESSION_344.md`.
+
 ---
 
 ## 0. Achados verificados
@@ -69,9 +82,15 @@ Nenhuma linha de código kernel nesta fase. Cada lane responde **uma** pergunta 
 
 | Gate | Pergunta | Se NÃO | 
 |---|---|---|
-| **G1** | `cuda-oxide` emite PTX/CUBIN p/ **sm_61** (ou aceita `--arch` menor que 8.0)? | Track NVIDIA morto p/ nosso lab → só valor futuro (Turing+) |
+| **G1** | `cuda-oxide` emite PTX/CUBIN p/ **sm_61** (ou aceita `--arch` menor que 8.0)? | Track NVIDIA morto p/ nosso lab → só valor futuro (**Ampere+**, não Turing) |
 | **G2** | `cutile-compiler` produz **PTX/CUBIN offline** (sem driver CUDA em runtime)? E `cutile-ir` é `no_std`-legível? | cutile vira só leitura de design |
 | **G3** | `khal` tem camada de abstração utilizável sem wgpu/cudarc (feature `cpu` isolada)? | khal = referência conceitual apenas |
+
+> **✅ EXECUTADO (SESSION_344):** G1 = ❌ (piso sm_80, Linux-only). G2a = ✅ (cutile-ir
+> offline puro Rust, probe `Module::new` → `write_bytecode` → `decode_bytecode` OK).
+> G2b = 🟡 (offline via `tileiras --gpu-name`, mas CTK 13.2+ no host e alvo sm_80+).
+> G3 = ❌ (bug upstream khal 0.3.0 — `any_backend.rs:30` import sem cfg gate).
+> **Destra: GPU Ampere+ no lab + host Linux.**
 
 **Entregável:** 1 nota curta por gate em `docs/memory/SESSION_3xx.md` + decisão registrada no IDEA_BANK
 (⏳ → ✅ adotado / ❌ descartado com motivo).
