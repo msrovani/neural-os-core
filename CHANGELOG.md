@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s341] - 2026-09-13 — Jarbas bughunt: render alloc fixes
+
+- **Fix A (compositor.rs):** `RENDER_OVERLAYS.lock().clone()` → itera sob lock direto. Elimina ~120 allocs/s no render path (cada overlay = String + Vec<u8>). Zero alloc.
+- **Fix B (compositor.rs):** `HUD_CACHE_STR.lock().clone()` → static buffer `[u8; 128]` + `AtomicUsize` len. HUD string gravada uma vez; subsequentes leem buffer sem alloc. Zero alloc no paint path.
+- **Auditoria completa** do crate jarbas (63 files, 18K LOC): render loop, damage rects, framebuffer, font blit, orb/soul_mirror, agent tick, gauges, compositor, cards, audio. Bugs/perf/fluidity documentados.
+- jarbas **89 pass / 0 fail**; `cargo check --release` = 0 erros.
+
 ## [1.9.99-s340] - 2026-09-13 — FAT32 root dir cache + TSC timeout (desbloqueio boot ATA PIO)
 
 - **Problema:** boot QEMU hangava no PHASE 5 durante `lookup_file_size("BGE.BIN")`. Causa: caminhada da root dir cluster chain inteira via ATA PIO (256+ clusters × SPC+1 leituras por cluster). O guard `sz > 8MB skip ATA PIO` nunca era alcançado — o hang era no FAT walk, não no read_file.

@@ -670,6 +670,7 @@ For deep work on a specific folder, also read that folder's `codemap.md`.
 - **Orb JARVIS MCU rendering (SESSION_291):** hex grid (dots nas intersecoes, 48px spacing, pulse por distancia), 5 camadas de glow (outer 2.8r -> body -> inner ring 0.7r -> core 0.18r -> specular), 24 particulas deterministicas, aneis rotativos com perspectiva eliptica (flatten Y x0.3), scanlines a cada 4px. Paleta: cyan #00D4FF em navy #080C18. Distance2 + quadratic falloff (zero sqrtf/expf). sinf/cosf so para ~24 posicoes/frame.
 
 - **Anti-flicker compositor (SESSION_291):** o root cause do flicker era fill_rect(0,0,w,h) a CADA frame (limpa tela inteira). Fix: bounding box do orb apenas (+16px margin para particulas). dirty_hud NAO cascata mais apos orb/mesh redraw. dirty_orb = true a cada 2 ticks para manter animacao.
+- **Render alloc hot paths (SESSION_341):** `RENDER_OVERLAYS.lock().clone()` allocava Vec a cada paint (60Hz) — iter sob lock direto. `HUD_CACHE_STR.lock().clone()` clonava String a cada paint — static buffer `[u8;128]` + AtomicUsize. Regra: **nenhum alloc no render path** — buffers estáticos ou stack para dados que mudam raramente.
 
 - **Theme JARVIS navy (SESSION_291):** Dark theme bg atualizado de (15,15,18) cinza para (8,12,24) navy. Consiste com o background do orb. fill_rect_fast para HUD bar em vez de fill_rect (8x mais rapido).
 

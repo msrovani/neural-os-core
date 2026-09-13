@@ -65,7 +65,9 @@ static WELCOME_UNTIL: core::sync::atomic::AtomicU64 = core::sync::atomic::Atomic
 /// Cached HUD status line — recomputed only when values change.
 /// Elimina alloc de String por frame no render loop (60Hz).
 static HUD_CACHE_MEM: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(u64::MAX);
-    static HUD_CACHE_STR: spin::Mutex<alloc::string::String> = spin::Mutex::new(alloc::string::String::new());
+/// Buffer fixo para HUD line (evita clone de String no paint path).
+static mut HUD_CACHE_BUF: [u8; 128] = [0u8; 128];
+static HUD_CACHE_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// Ticks do DisplayAgent que chegaram ao render (diagnóstico freeze s317):
 /// valor pintado no HUD; se a tela congelar, o último frame mostra até onde
@@ -1035,24 +1037,27 @@ impl JarbasDesktop {
             if real > 0 { real } else { 0 }
         };
         let net = k_nano::env::net_hud_label();
-        // Cache HUD string: recompute only when mem_mb changes
-        let right = {
-            let prev = HUD_CACHE_MEM.load(core::sync::atomic::Ordering::Relaxed);
-            if prev != mem_mb {
-                HUD_CACHE_MEM.store(mem_mb, core::sync::atomic::Ordering::Relaxed);
-                let s = k_nano::boot_report::hud_line(mem_mb, net);
-                *HUD_CACHE_STR.lock() = s.clone();
-                s
-            } else {
-                HUD_CACHE_STR.lock().clone()
+        // Cache HUD string: recompute only when mem_mb changes (sem alloc)
+        let prev = HUD_CACHE_MEM.load(core::sync::atomic::Ordering::Relaxed);
+        if prev != mem_mb {
+            HUD_CACHE_MEM.store(mem_mb, core::sync::atomic::Ordering::Relaxed);
+            let s = k_nano::boot_report::hud_line(mem_mb, net);
+            let bytes = s.as_bytes();
+            let len = bytes.len().min(127);
+            unsafe {
+                core::ptr::copy_nonoverlapping(bytes.as_ptr(), HUD_CACHE_BUF.as_mut_ptr(), len);
+                HUD_CACHE_BUF[len] = 0;
             }
-        };
-        let right_x = w.saturating_sub(right.len() * 8 + POWER_BTN_W + 24);
+            HUD_CACHE_LEN.store(len, core::sync::atomic::Ordering::Relaxed);
+        }
+        let right_len = HUD_CACHE_LEN.load(core::sync::atomic::Ordering::Relaxed);
+        let right = unsafe { core::str::from_utf8_unchecked(&HUD_CACHE_BUF[..right_len]) };
+        let right_x = w.saturating_sub(right_len * 8 + POWER_BTN_W + 24);
         draw_text(
             &mut self.fb,
             right_x,
             6,
-            &right,
+            right,
             self.w,
             theme.fg_muted.0,
             theme.fg_muted.1,
@@ -1562,12 +1567,13 @@ impl JarbasDesktop {
                 );
             }
         }
-        let overlays: alloc::vec::Vec<_> = crate::display::overlay::RENDER_OVERLAYS.lock().clone();
+        // Itera sob lock (evita clone+alloc no hot path).
+        let overlays = crate::display::overlay::RENDER_OVERLAYS.lock();
         if overlays.is_empty() {
             return;
         }
         let registry = crate::display::render_registry::RENDER_REGISTRY.lock();
-        for ov in &overlays {
+        for ov in overlays.iter() {
             let _ = registry.render(&ov.name, &mut self.fb, ov.rect, theme, &ov.data);
             self.damage.push(
                 ov.rect.x.max(0) as usize,

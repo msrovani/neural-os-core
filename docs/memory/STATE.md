@@ -1,6 +1,10 @@
-# STATE — neural-os-core v1.9.99-s340 — FAT32 root dir cache + TSC timeout
+# STATE — neural-os-core v1.9.99-s341 — Jarbas bughunt: render alloc fixes
 
-#   PISTA ATIVA: Boot ATA PIO desbloqueado — cache root dir + timeout 2s
+#   PISTA ATIVA: Jarbas render path otimizado — zero alloc no paint loop
+#   SESSION_341: RENDER_OVERLAYS iter under lock + HUD_CACHE static buffer
+#   Fix: 2 alloc hot paths eliminados (120+ allocs/s cada)
+#   Auditoria completa: 63 files, bugs/perf/fluidity documentados
+#   PISTA ANTERIOR: Boot ATA PIO desbloqueado
 #   SESSION_340: Fat32Reader root dir cache (256KB static) + TSC deadline
 #   Fix: lookup_file_size hang em PHASE 5 (root dir cluster chain walk)
 #   Cache: 1 leitura ATA real + 10 cache-hit; timeout 2s previne hang
