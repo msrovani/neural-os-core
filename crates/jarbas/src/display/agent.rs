@@ -297,6 +297,8 @@ impl DisplayAgent {
                 if matches!(mode, OverlayMode::HitlConfirm) {
                     spawn_or_update_hitl_card(desktop, text);
                 }
+                // Conteudo de janela mudou (chat/card): agenda repaint.
+                desktop.invalidate_windows();
             }
             {
                 if crate::display::chat_window::chat_ui_enabled() {
@@ -422,6 +424,7 @@ impl DisplayAgent {
                 if let Some(ref mut d) = *comp {
                     d.notifications.handle_click(notif_id);
                     d.notifications.dismiss(notif_id);
+                    d.invalidate_hud();
                 }
                 return "notification";
             }
@@ -486,6 +489,7 @@ impl DisplayAgent {
                     settings.rect.width = spec.w.max(120) as u32;
                     settings.rect.height = spec.h.max(80) as u32;
                 }
+                desktop.invalidate_windows();
             }
             ui_spec::mark_ui_ok();
             k_nano::slog_jarbas!("ADR", "0047-H", "ui_spec applied title={}", spec.title);
@@ -523,6 +527,7 @@ fn spawn_or_update_hitl_card(desktop: &mut crate::display::compositor::JarbasDes
             d.body.push(crate::display::card::Widget::Button(alloc::string::String::from("/deny")));
         }
         win.visible = true;
+        desktop.invalidate_windows();
         return;
     }
     let decl = crate::display::card::UiDeclaration::new(HITL_CARD_ID, "HITL", 72, 48, 440, 200)
@@ -855,6 +860,7 @@ impl Agent for DisplayAgent {
                         None,
                         now,
                     );
+                    desktop.invalidate_hud();
                 }
             }
         }
@@ -989,6 +995,8 @@ impl Agent for DisplayAgent {
                             desktop.close_hub_health();
                         }
                     }
+                    // Qualquer WmAction mexe em foco/layout/dock: agenda repaint.
+                    desktop.invalidate_windows();
                     k_nano::slog_jarbas!("WM", "info", "action={:?}", action);
                 }
             }
@@ -1048,6 +1056,7 @@ impl Agent for DisplayAgent {
                         let ny = (my as isize - self.drag_off_y).max(28) as i32;
                         w.rect.x = nx.min(desktop.w.saturating_sub(100) as i32);
                         w.rect.y = ny.min(desktop.h.saturating_sub(100) as i32);
+                        desktop.invalidate_windows();
                     } else {
                         self.dragging = false;
                     }

@@ -1,5 +1,11 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s333] - 2026-09-11 — UI: window/card repaint invalidation
+
+- **Bug:** `JarbasDesktop::invalidate_windows()` (`compositor.rs`) tinha **zero callers** — após o boot, janelas/cards nunca repintavam (só orb/HUD animavam); as mutações escreviam num back buffer que nunca era trocado (pior: o novo Hub Health panel e qualquer card novo ficavam invisíveis ou presos).
+- **Fix:** invalidação wired em **todos** os pontos de mutação: `spawn_window`, `close_tiled_window`/`close_app_window`, `relayout_active_workspace`, `bring_to_front`, `register_app`, `show_app`, `spawn_card`, `card_click`/`card_drag_step`/`card_resize_step`, `window_drag_step`, `toggle_app`, `maximize/minimize_focused`, `toggle_floating_focused`, `toggle_dock`, e `open/close_power_dialog` (novo `invalidate_dialog`); em `agent.rs`: Hermes overlay, HITL card update-in-place, `apply_ui_spec`, dispatch `WmAction`, app-drag, notifications (`invalidate_hud`). Invalida só em mudança de estado (sem custo por frame).
+- 5 testes host novos (`show_app_invalidates_windows`, `spawn_card_invalidates_windows`, `toggle_app_and_dock_invalidate_windows`, `hit_test_miss_keeps_windows_clean`, `no_op_render_keeps_windows_clean`); suíte workspace **834 pass / 0 fail**; `cargo nk`/`cargo check --release` = 0 erros.
+
 ## [1.9.99-s332] - 2026-09-11 — Host test suite green (829 pass / 0 fail)
 
 - **`wasmi_rt::run_wasm` (bug real):** a resolução de assinatura só tentava aridades `[args.len(), 0]`; `sandbox_validate_and_run` chama com 0 args e um export `run(a,b)` (arity 2) nunca casava → `get_typed_func::<(),i32>` falhava e o validador retornava `false` mesmo com o módulo executando. Fix: tenta a aridade do caller e depois `0..=4` (preenchendo 0), como o doc comentário prometia. Destrava `wasm_build::compile_and_run_real_skill` e `dsl_print_cmp`.

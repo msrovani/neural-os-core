@@ -487,6 +487,7 @@ impl JarbasDesktop {
         self.focus_stack.focus(id);
         self.dock.set_running(dock_app, true, 1);
         self.windows.push(window);
+        self.invalidate_windows();
 
         id
     }
@@ -497,15 +498,18 @@ impl JarbasDesktop {
         self.windows.retain(|w| w.id != id);
         // Re-layout tiling
         self.relayout_active_workspace();
+        self.invalidate_windows();
     }
 
     pub fn close_app_window(&mut self, id: AppId) {
         if let Some(win) = self.windows.iter_mut().find(|w| w.app_id == Some(id)) {
             win.visible = false;
         }
+        self.invalidate_windows();
     }
 
     pub fn relayout_active_workspace(&mut self) {
+        self.invalidate_windows();
         if !self.tiling_enabled { return; }
         let ws = self.workspaces.active();
         let screen_rect = Rect {
@@ -526,6 +530,7 @@ impl JarbasDesktop {
         if let Some(idx) = self.windows.iter().position(|w| w.id == id) {
             let win = self.windows.remove(idx);
             self.windows.push(win);
+            self.invalidate_windows();
         }
     }
 
@@ -1448,6 +1453,7 @@ impl JarbasDesktop {
         if app_id == AppId::HermesChat && !crate::display::chat_window::chat_ui_enabled() {
             return;
         }
+        self.invalidate_windows();
         if !self.windows.iter().any(|w| w.app_id == Some(app_id)) {
             let title = match app_id {
                 AppId::HermesChat => "Jarbas Chat",
@@ -1522,14 +1528,15 @@ impl JarbasDesktop {
             data: alloc::string::String::new(),
             z: layer,
         });
+        self.invalidate_windows();
     }
 
     pub fn render_window(&mut self, win: &Window, theme: &Theme) {
         draw_window_fb(&mut self.fb, win, theme, self.w);
     }
 
-    pub fn open_power_dialog(&mut self) { self.power_dialog = true; }
-    pub fn close_power_dialog(&mut self) { self.power_dialog = false; }
+    pub fn open_power_dialog(&mut self) { self.power_dialog = true; self.invalidate_dialog(); }
+    pub fn close_power_dialog(&mut self) { self.power_dialog = false; self.invalidate_dialog(); }
 
     /// Overlay Hermes = janela floating real (SESSION_261). Não pinta no tick.
     pub fn ensure_hermes_overlay(&mut self) {
@@ -1566,6 +1573,7 @@ impl JarbasDesktop {
         self.workspaces.active_mut().add_window_floating(
             crate::display::window::FloatingWindow::new(id, rect, content)
         );
+        self.invalidate_windows();
     }
 
     pub fn card_click(&mut self, cx: i32, cy: i32) -> &'static str {
@@ -1579,6 +1587,8 @@ impl JarbasDesktop {
                 if cx >= decl.x && cx < decl.x + decl.w && cy >= decl.y && cy < decl.y + decl.h {
                     let card_id = decl.id;
                     let win_id = self.windows[i].id;
+                    // Interacao com card e mudanca de estado: repaint das janelas.
+                    self.invalidate_windows();
                     // Close button
                     let (crx, cry, crw, crh) = decl.close_rect();
                     if decl.closable && cx >= crx && cx < crx + crw && cy >= cry && cy < cry + crh {
@@ -1638,6 +1648,7 @@ impl JarbasDesktop {
         };
         if let Some(rect) = rect {
             self.sync_floating_rect(card_id, rect);
+            self.invalidate_windows();
         }
     }
 
@@ -1659,6 +1670,7 @@ impl JarbasDesktop {
         };
         if let Some(rect) = rect {
             self.sync_floating_rect(card_id, rect);
+            self.invalidate_windows();
         }
     }
 
@@ -1697,6 +1709,7 @@ impl JarbasDesktop {
                 if app_id == AppId::HermesChat {
                     *FOCUS_MODE.lock() = FocusMode::Ambient;
                 }
+                self.invalidate_windows();
                 return;
             }
         }
@@ -1751,6 +1764,7 @@ impl JarbasDesktop {
                     };
                 }
             }
+            self.invalidate_windows();
         }
     }
 
@@ -1761,12 +1775,14 @@ impl JarbasDesktop {
                 w.minimized = true;
                 w.visible = false;
             }
+            self.invalidate_windows();
         }
     }
 
     /// Toggle dock visibility.
     pub fn toggle_dock(&mut self) {
         self.dock.visible = !self.dock.visible;
+        self.invalidate_windows();
     }
 
     /// Toggle floating da janela focada.
@@ -1775,6 +1791,7 @@ impl JarbasDesktop {
             if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
                 w.floating = !w.floating;
             }
+            self.invalidate_windows();
         }
     }
 
@@ -2092,6 +2109,68 @@ mod hub_panel_tests {
         let (x, y, w, h) = hub_badge_rect();
         assert!(x >= 60 && x + w < 1280);
         assert!(y + h <= 28, "badge fora da barra HUD");
+    }
+}
+
+#[cfg(test)]
+mod invalidation_tests {
+    use super::*;
+    use crate::display::fb::GpuDevice;
+
+    fn test_desktop() -> JarbasDesktop {
+        // FB pequeno sintetico (addr 0 -> diag/FB writes sao no-op no host).
+        let gpu = GpuDevice::from_probe(0, 320, 200, 320, 4, false);
+        JarbasDesktop::new(DoubleBuffer::from_gpu(&gpu))
+    }
+
+    #[test]
+    fn show_app_invalidates_windows() {
+        let mut d = test_desktop();
+        d.dirty_windows = false;
+        d.show_app(AppId::Settings);
+        assert!(d.dirty_windows, "show_app deve agendar repaint das janelas");
+    }
+
+    #[test]
+    fn spawn_card_invalidates_windows() {
+        let mut d = test_desktop();
+        d.dirty_windows = false;
+        let decl = crate::display::card::UiDeclaration::new(1, "card", 8, 8, 120, 90);
+        d.spawn_card(decl);
+        assert!(d.dirty_windows, "spawn_card deve agendar repaint das janelas");
+    }
+
+    #[test]
+    fn toggle_app_and_dock_invalidate_windows() {
+        let mut d = test_desktop();
+        d.show_app(AppId::Settings);
+        d.dirty_windows = false;
+        d.toggle_app(AppId::Settings); // fecha a janela visivel
+        assert!(d.dirty_windows, "fechar app deve agendar repaint");
+
+        d.dirty_windows = false;
+        d.toggle_dock();
+        assert!(d.dirty_windows, "toggle_dock deve agendar repaint");
+    }
+
+    #[test]
+    fn hit_test_miss_keeps_windows_clean() {
+        // Sem mutacao (clique que erra): nao agenda repaint de janelas.
+        let mut d = test_desktop();
+        d.dirty_windows = false;
+        assert_eq!(d.handle_desktop_click(1, 1), "miss");
+        assert!(!d.dirty_windows, "miss nao deve agendar repaint");
+    }
+
+    #[test]
+    fn no_op_render_keeps_windows_clean() {
+        let mut d = test_desktop();
+        d.dirty_windows = false;
+        d.last_paint_tick = 0;
+        // Segura o gate de relogio de parede -> render sai antes de pintar/agendar.
+        LAST_PRESENT_US.store(ui_now_us(7), core::sync::atomic::Ordering::Relaxed);
+        d.render(7);
+        assert!(!d.dirty_windows, "render no-op nao deve agendar janelas");
     }
 }
 
