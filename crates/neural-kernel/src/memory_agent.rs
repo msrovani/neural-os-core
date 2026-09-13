@@ -150,17 +150,21 @@ impl Agent for MemoryAgent {
             Self::calculate_budget(model_params, total_ram, total_vram)
         } else {
             k_ai::model_fit::set_host_memory(total_ram, total_vram);
+            // Fix B: telemetria real — nada de 128/64 hardcoded.
+            let heap_now_mb = k_nano::allocator::CURRENT_HEAP_MB
+                .load(core::sync::atomic::Ordering::Relaxed);
+            let heap_used_mb = k_nano::allocator::heap_used_bytes() / (1024 * 1024);
             MemoryBudget {
                 total_ram_mb: total_ram, total_vram_mb: total_vram,
-                heap_target_mb: 128, model_ram_mb: 0, kv_cache_mb: 0,
-                arc_cache_mb: 64, vram_model_mb: 0,
-                free_after_mb: total_ram.saturating_sub(192), is_gpu: total_vram > 0,
+                heap_target_mb: heap_now_mb, model_ram_mb: 0, kv_cache_mb: 0,
+                arc_cache_mb: heap_used_mb, vram_model_mb: 0,
+                free_after_mb: total_ram.saturating_sub(heap_now_mb as u64), is_gpu: total_vram > 0,
             }
         };
 
         k_nano::slog_bin!("MEM", "info", "Orcamento adaptativo de memoria");
         k_nano::slog_bin!("MEM", "info", "RAM: {} MB | VRAM: {} MB | Modelo: {} params", budget.total_ram_mb, budget.total_vram_mb, model_params);
-        k_nano::slog_bin!("MEM", "info", "Heap:{}MB Model:{}MB KV:{}MB ARC:{}MB Vram:{}MB",
+        k_nano::slog_bin!("MEM", "info", "Heap(atual):{}MB Model:{}MB KV:{}MB ARC:{}MB Vram:{}MB",
             budget.heap_target_mb, budget.model_ram_mb,
             budget.kv_cache_mb, budget.arc_cache_mb, budget.vram_model_mb);
         k_nano::slog_bin!("MEM", "info", "Livre apos: {} MB", budget.free_after_mb);

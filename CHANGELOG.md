@@ -1,5 +1,14 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s339] - 2026-09-13 — Fix: heap-wrap 2⁶⁴ (clamp à janela endereçável + telemetria honesta)
+
+- **Causa-raiz (oracle, definitiva):** a janela endereçável do bump heap é **~2 GB** (`HEAP_BUFFER` é `.kheap` no FIM da imagem; `heap_start + offset` cruza 2⁶⁴ em ~2044 MB), mas o budget era **5376 MB** — cap em MB-de-RAM, não em offset endereçável → todo grow com `need > ~2 GB` andava até o wrap (`grow wrap 2^64 - abort` → OOM). E **"Heap:128MB" era métrica mentirosa** (MemoryAgent hardcodava 128 no branch sem-modelo; o heap real era o piso 512 MB) — 3 números de "heap" inconsistentes = a armadilha de debug que fez o 1º fix (HEAP_EXT_BASE) falhar.
+- **Fix A (`allocator.rs`):** `BUMP_MAX_OFFSET = usize::MAX - heap_start - 4096`; `grow_bump_auto` faz `want = min(need, budget, window)` e **recusa honestamente ANTES de mapear** (`HEAP fail refuse need=XMB window=~2034MB (agente=<nome>)`); `set_heap_budget_mb` clampa à janela. Sem walks de wrap; `checked_add` mantido como cinto-e-colar.
+- **Fix B (telemetria honesta):** `memory_agent.rs` no-model branch reporta o `CURRENT_HEAP_MB`/`heap_used_bytes()` **real** (não mais 128 hardcoded → `[MEM] Heap(atual):XMB`); `inventory.rs` deriva `heap_size_mb` do `CURRENT_HEAP_MB` (não mais a tabela SKU 2048).
+- **Fix C (instrumentação):** log de `need` na ENTRADA do grow + o refuse/wrap carimba o nome do agente via `tick_in_progress()` (SESSION_316) — um boot nomeia o requester do alloc de 8,39 GB (contagem ímpar → length corrompido; suspeitos: `parallel_matmul.rs:54` via shape lixo ou DMA-clobber, residual SESSION_252).
+- **LLM ABSENT no QEMU é por design** (gate de sandbox; modelos via `-device loader`) — causa separada, não do heap.
+- k-nano **192 pass / 0 fail**; jarbas 89/0; `cargo nk`/`cargo check --release` = 0 erros. **Não fazer:** subir o budget; re-tentar a extensão p4[508] sem as checagens HUGE_PAGE nível-a-nível.
+
 ## [1.9.99-s338] - 2026-09-11 — Fix: botão Power (consumidor do SYSTEM_SHUTDOWN ausente)
 
 - **Causa:** a cadeia funcionava até publicar `SYSTEM_SHUTDOWN`/`SYSTEM_REBOOT` no EventBus — mas `drain_power_requests()` (`neural-kernel/src/shutdown.rs:341`) existia com **zero callers**: o evento ia para o vazio e nada executava o desligamento. Secundário: mismatch de **2 px** no hit-test do botão OFF desenhado.

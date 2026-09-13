@@ -70,6 +70,21 @@ unsafe impl GlobalAlloc for LazyBumpAllocator {
     }
 }
 
+/// Janela endereçável do bump heap (Fix A, wrap 2^64): HEAP_BUFFER vive no
+/// high-half no FIM da imagem (.kheap), então `heap_start + offset` só é
+/// válido até `usize::MAX - heap_start` (~2.0-2.1 GB). Computado uma vez.
+/// Guard de 1 página no fim da janela.
+static BUMP_MAX_OFFSET: AtomicUsize = AtomicUsize::new(0);
+
+fn bump_max_offset() -> usize {
+    let cached = BUMP_MAX_OFFSET.load(Ordering::Relaxed);
+    if cached != 0 { return cached; }
+    let heap_start = unsafe { HEAP_BUFFER.as_mut_ptr() as usize };
+    let w = usize::MAX - heap_start - 4096;
+    BUMP_MAX_OFFSET.store(w, Ordering::Relaxed);
+    w
+}
+
 /// Auto-crescimento do bump heap (premissa AIOS: self-adapting heap).
 /// Mapeia frames adicionais após o HEAP_BUFFER (.bss.heap) para acomodar
 /// `need` bytes, em blocos de HEAP_GROW_STEP. VERIFICA presença real de cada
@@ -81,6 +96,9 @@ fn grow_bump_auto(need: usize) -> bool {
     if need <= current_limit {
         return true; // já coberto
     }
+    // Fix C: log do need na ENTRADA (o path wrap/refuse era cego).
+    crate::slog_nano!("HEAP", "BUMP", "grow entry need={}MB limit={}MB",
+        need / (1024 * 1024), current_limit / (1024 * 1024));
     // SESSION_287: HEAP_BUDGET_MB era escrito e nunca lido — grow ia até OOM.
     let budget_bytes = HEAP_BUDGET_MB
         .load(Ordering::Relaxed)
@@ -98,7 +116,17 @@ fn grow_bump_auto(need: usize) -> bool {
     }
 
     let want_raw = need.saturating_add(HEAP_GROW_STEP - 1) / HEAP_GROW_STEP * HEAP_GROW_STEP;
-    let want = want_raw.min(budget_bytes);
+    // Fix A: clamp à janela endereçável (wrap 2^64) — nunca andar páginas
+    // além do que heap_start + offset consegue endereçar.
+    let window = bump_max_offset();
+    if need > window {
+        // Fix C: nomeia o agente requestor via seam FB (SESSION_316).
+        let agent = agent_core::tick_in_progress().map(|(n, _)| n).unwrap_or("?");
+        crate::slog_nano!("HEAP", "fail", "refuse need={}MB window=~{}MB (agente={})",
+            need / (1024 * 1024), window / (1024 * 1024), agent);
+        return false;
+    }
+    let want = want_raw.min(budget_bytes).min(window);
     if want <= current_limit {
         return false;
     }
@@ -186,9 +214,13 @@ pub static CURRENT_HEAP_MB: AtomicUsize = AtomicUsize::new(512);
 pub static HEAP_BUDGET_MB: AtomicUsize = AtomicUsize::new(1536);
 
 /// Define o budget máximo do heap (chamado de main.rs no boot).
+/// Fix A: clamp à janela endereçável — budget em MB-de-RAM não pode exceder
+/// o offset máximo antes do wrap 2^64 (política e telemetria coerentes).
 pub fn set_heap_budget_mb(mb: usize) {
+    let window_mb = bump_max_offset() / (1024 * 1024);
+    let mb = mb.min(window_mb);
     HEAP_BUDGET_MB.store(mb, Ordering::Release);
-    crate::slog_nano!("HEAP", "BUDGET", "budget={}MB", mb);
+    crate::slog_nano!("HEAP", "BUDGET", "budget={}MB (window=~{}MB)", mb, window_mb);
 }
 
 /// Limite do LazyBumpAllocator — o array HEAP_BUFFER tem 512MB (todo seguro).

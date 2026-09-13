@@ -129,7 +129,9 @@ impl SystemArchitecture {
         SystemArchitecture {
             ring0_mode: 0,
             ring1_mode: if has_gpu { 1 } else { 0 },
-            heap_size_mb: if ram_gb > 2.0 { 2048 } else if ram_gb > 0.5 { 512 } else { 64 },
+            // Fix B: heap real do allocator (não tabela SKU hardcoded).
+            heap_size_mb: k_nano::allocator::CURRENT_HEAP_MB
+                .load(core::sync::atomic::Ordering::Relaxed) as u32,
             trust_level: 1,
             power_mode: if is_many_cores { 1 } else { 0 },
             tensor_tier: 0,
