@@ -92,7 +92,11 @@ assumia. O entregável honesto da Fase 1 é:
 
 ## Próximos passos possíveis (se retomar)
 
-- Subir PR upstream no khal consertando o import ungated (~1 linha) — cortesia à comunidade.
+- Subir PR upstream no khal consertando o import ungated (~1 linha) — **PREPARADO, não submetido**
+  (sessão 344b): fix commitado em branch local `fix/cpu-feature-ungated-webgpu-import` do clone
+  `%TEMP%\khal-pr`, verificado em 3 configs (`cpu` ✅ antes quebrado, `cpu,derive` ✅, default webgpu ✅).
+  Patch exportado em `docs/patches/khal-cpu-feature-fix.patch` — submeter via fork+PR no GitHub web
+  quando houver token, ou `git am docs/patches/khal-cpu-feature-fix.patch` num fork local.
 - Re-avaliar gates quando o lab tiver GPU sm_80+ e/ou host Linux.
 - `cutile-ir` pode ser usado como **formato de referência** para descrever kernels W2A8
   no offline pipeline (documentação viva), sem dependência de runtime.

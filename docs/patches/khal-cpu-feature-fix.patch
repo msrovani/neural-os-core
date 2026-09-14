@@ -1,0 +1,37 @@
+From 3ff586e448aefa35d2bd837f9d3433c857694c25 Mon Sep 17 00:00:00 2001
+From: msrovani <msrovani@neural-os.local>
+Date: Sun, 13 Sep 2026 21:12:50 -0300
+Subject: [PATCH] fix: gate WebGpuTimestamps import behind webgpu feature
+
+The `use crate::backend::webgpu::WebGpuTimestamps;` import in
+any_backend.rs was not cfg-gated, so building with
+`--no-default-features --features cpu` failed with:
+
+    error[E0432]: unresolved import `crate::backend::webgpu`
+
+All three usages (import, enum variant at line 724, constructor at
+line 741) are inside webgpu-gated scopes; only the import itself was
+ungated. Add the same `#[cfg(feature = "webgpu")]` the sibling imports
+already carry.
+
+Verified: `cargo build -p khal --no-default-features --features cpu`,
+`--features cpu,derive`, and default (webgpu) all compile.
+---
+ crates/khal/src/backend/any_backend.rs | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/crates/khal/src/backend/any_backend.rs b/crates/khal/src/backend/any_backend.rs
+index bf720f6..6534601 100644
+--- a/crates/khal/src/backend/any_backend.rs
++++ b/crates/khal/src/backend/any_backend.rs
+@@ -14,6 +14,7 @@ use crate::backend::metal::{
+ };
+ #[cfg(feature = "webgpu")]
+ use crate::backend::webgpu::CommandEncoderExt;
++#[cfg(feature = "webgpu")]
+ use crate::backend::webgpu::WebGpuTimestamps;
+ use crate::backend::{
+     Backend, BufferUsages, DeviceValue, Dispatch, DispatchGrid, Encoder, MaybeSendSync,
+-- 
+2.55.0.windows.3
+
