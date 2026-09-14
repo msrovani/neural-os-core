@@ -2,7 +2,8 @@
 //!
 //! Contrato:
 //! - BSP/Hermes/CortexAgent só **enfileiram** InferJob (nunca `generate_*` no tick).
-//! - `poll_slice` (InferWorker BSP ou AP idle) roda **1 slice** (prefill ou 1 token).
+//! - `poll_slice` (InferWorker BSP ou AP idle) roda **1 slice** (prefill layer(s) ou 1 token).
+//! - SESSION_345 F4: prefill **layer-yield** (`Prefilling`) — 1 layer ativa/slice (heavy).
 //! - Stream: `LLM_STREAM` MessageDelta; fim: `LLM_RESPONSE` (+ healing topic).
 //! - 1 job in-flight; fila profundidade 8; cancel no próximo yield.
 
@@ -92,11 +93,29 @@ static ACTIVE_CANCEL: AtomicBool = AtomicBool::new(false);
 static SLICE_BUSY: AtomicBool = AtomicBool::new(false);
 static PENDING_COUNT: AtomicU32 = AtomicU32::new(0);
 
+/// Telemetria F4 (lock-free) — slices de prefill, µs, tokens decode.
+static TELEM_PREFILL_SLICES: AtomicU64 = AtomicU64::new(0);
+static TELEM_PREFILL_US: AtomicU64 = AtomicU64::new(0);
+static TELEM_LAST_PREFILL_US: AtomicU64 = AtomicU64::new(0);
+static TELEM_DECODE_TOKENS: AtomicU64 = AtomicU64::new(0);
+
+/// Snapshot: (prefill_slices, prefill_us_total, last_prefill_us, decode_tokens).
+pub fn telemetry() -> (u64, u64, u64, u64) {
+    (
+        TELEM_PREFILL_SLICES.load(Ordering::Relaxed),
+        TELEM_PREFILL_US.load(Ordering::Relaxed),
+        TELEM_LAST_PREFILL_US.load(Ordering::Relaxed),
+        TELEM_DECODE_TOKENS.load(Ordering::Relaxed),
+    )
+}
+
 /// Fase da state machine de generate fatiado.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Idle,
     NeedPrefill,
+    /// Prefill layer-yield (F4) — 1+ layers por `poll_slice`.
+    Prefilling,
     Decoding,
     CoarseFallback,
     Finishing,
@@ -126,6 +145,14 @@ struct ActiveState {
     tts_buf: String,
     /// Fallback: modelo não-Transformer — roda generate inteiro numa slice.
     coarse: bool,
+    /// Prefill yield: hidden residual + mask + cursor de layer.
+    prefill_x: Option<Tensor>,
+    prefill_mask: Option<Tensor>,
+    prefill_layer: usize,
+    prefill_new_len: usize,
+    prefill_start_pos: usize,
+    prefill_total_seq: usize,
+    prefill_t0_us: u64,
 }
 
 static ACTIVE: Mutex<Option<ActiveState>> = Mutex::new(None);
@@ -325,6 +352,13 @@ fn try_claim_into_active() -> bool {
             acc_text: String::new(),
             tts_buf: String::new(),
             coarse,
+            prefill_x: None,
+            prefill_mask: None,
+            prefill_layer: 0,
+            prefill_new_len: 0,
+            prefill_start_pos: 0,
+            prefill_total_seq: 0,
+            prefill_t0_us: 0,
         });
         infer_guard_begin();
         emit_msg_start();
@@ -403,7 +437,7 @@ fn push_delta(st: &mut ActiveState, piece: &str) {
     }
 }
 
-fn run_prefill(st: &mut ActiveState) {
+fn run_prefill_setup(st: &mut ActiveState) {
     if ACTIVE_CANCEL.load(Ordering::Acquire) {
         finish_job(st, "[cancelled]");
         return;
@@ -415,7 +449,6 @@ fn run_prefill(st: &mut ActiveState) {
         return;
     };
     let Some(model) = model_box.as_transformer() else {
-        // Não-Transformer: coarse numa slice.
         st.coarse = true;
         st.phase = Phase::CoarseFallback;
         drop(guard);
@@ -496,30 +529,148 @@ fn run_prefill(st: &mut ActiveState) {
         }
     }
 
-    let t0 = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
-    let (last_hidden, last_logits) = model.forward_with_kv(&tokens, &mut cache);
-    let t1 = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
+    let (x, mask, start_pos, new_len, total_seq) = model.embed_for_kv(&tokens, &cache);
+    st.tokens = tokens;
+    st.cache = Some(cache);
+    st.prefill_x = Some(x);
+    st.prefill_mask = Some(mask);
+    st.prefill_layer = 0;
+    st.prefill_new_len = new_len;
+    st.prefill_start_pos = start_pos;
+    st.prefill_total_seq = total_seq;
+    st.prefill_t0_us = k_nano::tsc::now_us();
+    st.phase = Phase::Prefilling;
     k_nano::slog_cortex!(
         "InferQ",
         "ok",
-        "prefill id={} tokens={} ticks={}",
+        "prefill_begin id={} tokens={} layers={}",
         st.job_id,
-        tokens.len(),
-        t1 - t0
+        st.prompt_len,
+        model.layers.len()
+    );
+    drop(guard);
+}
+
+/// Uma slice de prefill: aplica até `layers_per_slice` layers ativas (soft_stride).
+fn run_prefill_step(st: &mut ActiveState) {
+    if ACTIVE_CANCEL.load(Ordering::Acquire) {
+        finish_job(st, "[cancelled]");
+        return;
+    }
+    let t_slice0 = k_nano::tsc::now_us();
+    let guard = CURRENT_MODEL.lock();
+    let Some(model_box) = guard.as_ref() else {
+        drop(guard);
+        finish_job(st, NO_MODEL_MSG);
+        return;
+    };
+    let Some(model) = model_box.as_transformer() else {
+        drop(guard);
+        finish_job(st, NO_MODEL_MSG);
+        return;
+    };
+
+    let Some(ref mut x) = st.prefill_x else {
+        drop(guard);
+        finish_job(st, NO_MODEL_MSG);
+        return;
+    };
+    let Some(ref mask) = st.prefill_mask else {
+        drop(guard);
+        finish_job(st, NO_MODEL_MSG);
+        return;
+    };
+    let Some(ref mut cache) = st.cache else {
+        drop(guard);
+        finish_job(st, NO_MODEL_MSG);
+        return;
+    };
+
+    let n_layers = model.layers.len();
+    // Espelha forward_with_kv: soft_stride=3 em hidden≥2048.
+    let soft_stride: usize = if model.hidden >= 2048 { 3 } else { 1 };
+    let layers_per_slice: usize = if model.hidden >= 2048 { 1 } else { 2 };
+    let mut applied = 0usize;
+
+    while st.prefill_layer < n_layers && applied < layers_per_slice {
+        let li = st.prefill_layer;
+        st.prefill_layer += 1;
+        if soft_stride > 1 && (li % soft_stride) != 0 {
+            continue;
+        }
+        let layer = &model.layers[li];
+        model.apply_one_layer(
+            li,
+            layer,
+            x,
+            cache,
+            st.prefill_start_pos,
+            st.prefill_new_len,
+            st.prefill_total_seq,
+            mask,
+        );
+        applied += 1;
+    }
+
+    let slice_us = k_nano::tsc::now_us().saturating_sub(t_slice0);
+    TELEM_PREFILL_SLICES.fetch_add(1, Ordering::Relaxed);
+    TELEM_PREFILL_US.fetch_add(slice_us, Ordering::Relaxed);
+    TELEM_LAST_PREFILL_US.store(slice_us, Ordering::Relaxed);
+    // Budget honesto: layer >100ms em soft-float é esperado; só warn se >2s.
+    if slice_us > 2_000_000 {
+        k_nano::slog_cortex!(
+            "InferQ",
+            "warn",
+            "prefill_slice slow id={} layer={}/{} us={}",
+            st.job_id,
+            st.prefill_layer,
+            n_layers,
+            slice_us
+        );
+    }
+
+    if st.prefill_layer < n_layers {
+        // Yield — próximo poll_slice continua.
+        drop(guard);
+        return;
+    }
+
+    // Finalize
+    cache.advance(st.prefill_new_len);
+    let new_len = st.prefill_new_len;
+    let (last_hidden, last_logits) = model.finalize_logits(x, new_len);
+    let total_us = k_nano::tsc::now_us().saturating_sub(st.prefill_t0_us);
+    k_nano::slog_cortex!(
+        "InferQ",
+        "ok",
+        "prefill_done id={} tokens={} layers={} slices={} us={}",
+        st.job_id,
+        st.prompt_len,
+        n_layers,
+        TELEM_PREFILL_SLICES.load(Ordering::Relaxed),
+        total_us
     );
 
     st.recent_u16.clear();
     if !st.is_greeting {
-        if let Some(&last) = tokens.last() {
+        if let Some(&last) = st.tokens.last() {
             st.recent_u16.push(last as u16);
         }
     }
-    st.tokens = tokens;
-    st.cache = Some(cache);
     st.last_hidden = Some(last_hidden);
     st.last_logits = Some(last_logits);
+    st.prefill_x = None;
+    st.prefill_mask = None;
     st.step = 0;
     st.phase = Phase::Decoding;
+    drop(guard);
+}
+
+fn run_prefill(st: &mut ActiveState) {
+    run_prefill_setup(st);
+    if st.phase == Phase::Prefilling {
+        run_prefill_step(st);
+    }
 }
 
 fn run_decode_one(st: &mut ActiveState) {
@@ -584,6 +735,7 @@ fn run_decode_one(st: &mut ActiveState) {
         st.recent_u16.remove(0);
     }
     st.step += 1;
+    TELEM_DECODE_TOKENS.fetch_add(1, Ordering::Relaxed);
 
     let piece = if st.use_bpe {
         crate::bpe::decode(&[next])
@@ -650,6 +802,7 @@ pub fn poll_slice() -> bool {
         if let Some(ref mut st) = *guard {
             match st.phase {
                 Phase::NeedPrefill => run_prefill(st),
+                Phase::Prefilling => run_prefill_step(st),
                 Phase::Decoding => run_decode_one(st),
                 Phase::CoarseFallback => run_coarse(st),
                 Phase::Finishing | Phase::Idle => {

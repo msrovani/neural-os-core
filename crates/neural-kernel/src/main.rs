@@ -2818,16 +2818,34 @@ pub(crate) fn kernel_boot(
         k_nano::slog_bin!("JARBAS", "ok", "pre-BGE emit_hw_greeting_at_register");
         audio::skills::init_neural_tts();
         audio::jarvis::emit_hw_greeting_at_register();
-        // FAT policy: NVMe > AHCI > ATA > USB-MSC (ADR-0062 P3)
-        if has_fat_block {
-            if !loaded {
+
+        // SESSION_345: BGE ~135MB via ATA PIO no sandbox = soft-hang pós-saudação
+        // (log mudo, CPU alta). USB-MSC já skipava >8MB; ATA/AHCI/NVMe não.
+        // QEMU/WHPX/TCG: só aceita loader-RAM; FAT BGE fica deferred (Runtime/HW).
+        let bge_fat_skip = k_nano::platform_probe::probe_done()
+            && k_nano::platform_probe::hypervisor().is_sandbox();
+        if bge_fat_skip && !loaded {
+            found = true; // presente no FAT; só não lê no boot sandbox
+            k_nano::slog_bin!(
+                "BGE",
+                "warn",
+                "skip FAT PIO boot hv={} loader_loaded={} — Runtime defer (BGE~135MB)",
+                k_nano::platform_probe::hypervisor().name(),
+                loaded as u8
+            );
+            crate::boot_logger::log("BOOT: BGE FAT PIO skipped (sandbox)");
+        } else if has_fat_block && !loaded {
+            k_nano::slog_bin!("BGE", "ok", "FAT load begin (metal path)");
+            // FAT policy: NVMe > AHCI > ATA > USB-MSC (ADR-0062 P3)
+            {
                 let mut nvme_g = k_nano::disk_agent::nvme::NVME_DRIVER.lock();
                 if let Some(ref mut nvme) = *nvme_g {
+                    k_nano::slog_bin!("BGE", "ok", "try NVMe…");
                     if let Some(bge_data) = read_file_from_dev(nvme, "BGE.BIN") {
                         found = true;
-                        k_nano::slog_bin!("BGE", "info", "BGE.BIN lido NVMe ({} KB) — parse…", bge_data.len() / 1024);
+                        k_nano::slog_bin!("BGE", "ok", "BGE.BIN lido NVMe ({} KB) — parse…", bge_data.len() / 1024);
                         if crate::memory_systems::load_bge(&bge_data) {
-                            k_nano::slog_bin!("Asset", "bge", "Embedding model LOADED from NVMe FAT!");
+                            k_nano::slog_bin!("Asset", "ok", "Embedding model LOADED from NVMe FAT!");
                             crate::boot_logger::log("BOOT: BGE embedding loaded (NVMe)");
                             loaded = true;
                         }
@@ -2837,33 +2855,34 @@ pub(crate) fn kernel_boot(
             let mut ahci_guard = crate::AHCI_DRIVER.lock();
             if let Some(ref mut ahci) = *ahci_guard {
                 if !loaded {
+                    k_nano::slog_bin!("BGE", "ok", "try AHCI…");
                     if let Some(bge_data) = read_file_from_dev(ahci, "BGE.BIN") {
                         found = true;
-                        k_nano::slog_bin!("BGE", "info", "BGE.BIN lido AHCI ({} KB) — parse…", bge_data.len() / 1024);
+                        k_nano::slog_bin!("BGE", "ok", "BGE.BIN lido AHCI ({} KB) — parse…", bge_data.len() / 1024);
                         if crate::memory_systems::load_bge(&bge_data) {
-                            k_nano::slog_bin!("Asset", "bge", "Embedding model LOADED from AHCI FAT!");
+                            k_nano::slog_bin!("Asset", "ok", "Embedding model LOADED from AHCI FAT!");
                             crate::boot_logger::log("BOOT: BGE embedding loaded");
                             loaded = true;
                         } else {
-                            k_nano::slog_bin!("Asset", "bge", "BGE.BIN present but parse FAILED (AHCI)");
+                            k_nano::slog_bin!("Asset", "warn", "BGE.BIN present but parse FAILED (AHCI)");
                         }
                     }
                 }
             }
             drop(ahci_guard);
-            // ATA fallback — usa read_file_from_dev (cache FAT32 + timeout 2s em k_nano)
             if !loaded {
                 let mut ata_guard = crate::ATA_DRIVER.lock();
                 if let Some(ref mut ata) = *ata_guard {
+                    k_nano::slog_bin!("BGE", "ok", "try ATA…");
                     if let Some(bge_data) = read_file_from_dev(ata, "BGE.BIN") {
                         found = true;
-                        k_nano::slog_bin!("BGE", "info", "BGE.BIN lido ATA ({} KB) — parse…", bge_data.len() / 1024);
+                        k_nano::slog_bin!("BGE", "ok", "BGE.BIN lido ATA ({} KB) — parse…", bge_data.len() / 1024);
                         if crate::memory_systems::load_bge(&bge_data) {
-                            k_nano::slog_bin!("Asset", "bge", "Embedding model LOADED from FAT (ATA)!");
+                            k_nano::slog_bin!("Asset", "ok", "Embedding model LOADED from FAT (ATA)!");
                             crate::boot_logger::log("BOOT: BGE embedding loaded");
                             loaded = true;
                         } else {
-                            k_nano::slog_bin!("Asset", "bge", "BGE.BIN present but parse FAILED (sem word_embeddings_weight?)");
+                            k_nano::slog_bin!("Asset", "warn", "BGE.BIN present but parse FAILED (sem word_embeddings_weight?)");
                         }
                     }
                 }
@@ -2873,33 +2892,41 @@ pub(crate) fn kernel_boot(
                 if let Some(ref mut msc) = *usb_guard {
                     if let Some(sz) = unsafe { k_nano::fat32::lookup_file_on_dev(msc, "BGE.BIN") } {
                         found = true;
+                        // Live stick: budget 8MB no boot (MSC PIO lento); BGE completo no metal NVMe/AHCI.
                         if sz > 8 * 1024 * 1024 {
                             k_nano::slog_bin!(
                                 "BGE",
-                                "info",
+                                "warn",
                                 "skip USB PIO BGE {}KB no boot (runtime/HW)",
                                 sz / 1024
                             );
                         } else if let Some(bge_data) = read_file_from_dev(msc, "BGE.BIN") {
-                            k_nano::slog_bin!("BGE", "info", "BGE.BIN lido USB-MSC ({} KB) — parse…", bge_data.len() / 1024);
+                            k_nano::slog_bin!("BGE", "ok", "BGE.BIN lido USB-MSC ({} KB) — parse…", bge_data.len() / 1024);
                             if crate::memory_systems::load_bge(&bge_data) {
-                                k_nano::slog_bin!("Asset", "bge", "Embedding model LOADED from USB-MSC FAT!");
+                                k_nano::slog_bin!("Asset", "ok", "Embedding model LOADED from USB-MSC FAT!");
                                 crate::boot_logger::log("BOOT: BGE embedding loaded (USB)");
                                 loaded = true;
                             } else {
-                                k_nano::slog_bin!("Asset", "bge", "BGE.BIN present but parse FAILED (USB-MSC)");
+                                k_nano::slog_bin!("Asset", "warn", "BGE.BIN present but parse FAILED (USB-MSC)");
                             }
                         }
                     }
                 }
             }
+            k_nano::slog_bin!("BGE", "ok", "FAT load end loaded={}", loaded as u8);
         }
         if !loaded && !found {
             crate::load_status::set_if_upgrade(
                 crate::load_status::AssetKind::Bge,
                 crate::load_status::LoadStatus::Absent,
             );
-            k_nano::slog_bin!("Asset", "bge", "BGE.BIN ausente no FAT — STATUS Absent");
+            k_nano::slog_bin!("Asset", "warn", "BGE.BIN ausente no FAT — STATUS Absent");
+        } else if !loaded && found {
+            crate::load_status::set_if_upgrade(
+                crate::load_status::AssetKind::Bge,
+                crate::load_status::LoadStatus::Absent,
+            );
+            k_nano::slog_bin!("BGE", "warn", "BGE present but not loaded at boot (deferred)");
         }
     }
 

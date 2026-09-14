@@ -463,6 +463,10 @@ def populate(path):
     # via FileFlash (k_nano::storage::flash) quando nao ha NVMe. Zeros puros =
     # scan_volume para no EOF limpo; primeiro put real escreve header TKLV.
     files.append(("NSGDB.BIN", b"\x00" * (8 * 1024 * 1024)))
+    # TLSPINS.BIN pre-alocado (4 KiB): SESSION_345 F2a — boot/Runtime só faz
+    # overwrite (zero find_free no hot path). Magic TLSP + zeros = empty store.
+    tlspins = b"TLSP" + bytes([1, 0, 0, 0]) + (b"\x00" * (4 * 1024 - 8))
+    files.append(("TLSPINS.BIN", tlspins[: 4 * 1024]))
 
     with open(path, "r+b") as f:
         f.seek(2048 * 512)  # skip MBR + partition start
@@ -647,6 +651,32 @@ def populate(path):
 
             status = "OK" if placed else "sem slot dir"
             print(f"  [{status}] {name} ({len(data)//1024}K, {clusters_needed} cls)")
+
+        # SESSION_345 F2b: atualizar FSInfo FSI_Nxt_Free após inject (hint p/ kernel).
+        nxt_free = None
+        for cl in range(3, total_clusters + 2):
+            fat_sec_offset = (cl * 4) // bps
+            if fat_sec_offset >= fat_sectors * fat_count:
+                break
+            f.seek(fat_lba * 512 + cl * 4)
+            entry = struct.unpack("<I", f.read(4))[0] & 0x0FFFFFFF
+            if entry == 0:
+                nxt_free = cl
+                break
+        if nxt_free is not None:
+            for fsinfo_off in (1, 7):  # primary + backup FSInfo
+                f.seek((2048 + fsinfo_off) * 512)
+                fsinfo = bytearray(f.read(512))
+                if len(fsinfo) < 512:
+                    continue
+                struct.pack_into("<I", fsinfo, 488, 0xFFFFFFFF)  # free count unknown
+                struct.pack_into("<I", fsinfo, 492, nxt_free)
+                f.seek((2048 + fsinfo_off) * 512)
+                f.write(fsinfo)
+            print(f"  [OK] FSInfo FSI_Nxt_Free={nxt_free}")
+        else:
+            print("  [--] FSInfo: sem cluster livre p/ hint")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

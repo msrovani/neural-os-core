@@ -1191,41 +1191,159 @@ impl<'a> Fat32Writer<'a> {
         self.reader.ata.write_sectors(fat_sector_u64 as u32, &sector, 1)
     }
 
-    /// Varre a FAT por N clusters livres (le FAT por setor — nao 1 I/O por entrada).
-    /// Budget: no maximo MAX_FAT_SCAN_SECTORS para nao travar o boot em PIO (spf pode ser 16K+).
+    /// Lê FSI_Nxt_Free do FSInfo (SESSION_345 F2b). None se ausente/inválido.
+    unsafe fn read_fsinfo_nxt_free(&self) -> Option<u32> {
+        let mut bpb = [0u8; 512];
+        if !self.reader.ata.read_sectors(self.reader.lba_start, &mut bpb, 1) {
+            return None;
+        }
+        let fsinfo_sec = u16::from_le_bytes([bpb[0x30], bpb[0x31]]);
+        if fsinfo_sec == 0 || fsinfo_sec == 0xFFFF {
+            return None;
+        }
+        let mut fsinfo = [0u8; 512];
+        if !self
+            .reader
+            .ata
+            .read_sectors(self.reader.lba_start.saturating_add(fsinfo_sec as u32), &mut fsinfo, 1)
+        {
+            return None;
+        }
+        let lead = u32::from_le_bytes([fsinfo[0], fsinfo[1], fsinfo[2], fsinfo[3]]);
+        let struc = u32::from_le_bytes([fsinfo[484], fsinfo[485], fsinfo[486], fsinfo[487]]);
+        if lead != 0x4161_5252 || struc != 0x6141_7272 {
+            return None;
+        }
+        let nxt = u32::from_le_bytes([fsinfo[492], fsinfo[493], fsinfo[494], fsinfo[495]]);
+        if nxt < 2 || nxt == 0xFFFF_FFFF {
+            return None;
+        }
+        Some(nxt)
+    }
+
+    /// Atualiza FSI_Nxt_Free (best-effort; não bloqueia write).
+    unsafe fn write_fsinfo_nxt_free(&self, nxt: u32) {
+        let mut bpb = [0u8; 512];
+        if !self.reader.ata.read_sectors(self.reader.lba_start, &mut bpb, 1) {
+            return;
+        }
+        let fsinfo_sec = u16::from_le_bytes([bpb[0x30], bpb[0x31]]);
+        if fsinfo_sec == 0 || fsinfo_sec == 0xFFFF {
+            return;
+        }
+        let lba = self.reader.lba_start.saturating_add(fsinfo_sec as u32);
+        let mut fsinfo = [0u8; 512];
+        if !self.reader.ata.read_sectors(lba, &mut fsinfo, 1) {
+            return;
+        }
+        fsinfo[492..496].copy_from_slice(&nxt.to_le_bytes());
+        let _ = self.reader.ata.write_sectors(lba, &fsinfo, 1);
+    }
+
+    /// Varre a FAT por N clusters livres (1 I/O por setor).
+    /// SESSION_345 F2b/c: começa em FSI_Nxt_Free; cap setores + TSC (~2s) — soft fail.
     unsafe fn find_free_clusters(&self, count: u32) -> Option<Vec<u32>> {
-        const MAX_FAT_SCAN_SECTORS: u32 = 65535;
+        // Antes: 65535 setores × ATA PIO em volume 6GB cheio = soft-hang (QEMU 8c).
+        const MAX_FAT_SCAN_SECTORS: u32 = 512;
+        const MAX_SCAN_US: u64 = 2_000_000;
         let bps = self.reader.bytes_per_sector as u32;
-        let fat_sectors = self.reader.sectors_per_fat32.min(MAX_FAT_SCAN_SECTORS);
+        let fat_sectors = self.reader.sectors_per_fat32;
+        if fat_sectors == 0 || bps < 4 || count == 0 {
+            return None;
+        }
         let entries_per_sector = bps / 4;
+        let hint = self.read_fsinfo_nxt_free().unwrap_or(2);
+        let start_sec = ((hint.saturating_mul(4)) / bps).min(fat_sectors.saturating_sub(1));
+        let budget = fat_sectors.min(MAX_FAT_SCAN_SECTORS);
+        let t0 = crate::tsc::now_us();
         let mut result = Vec::with_capacity(count as usize);
         let mut sector_buf = [0u8; 512];
-        for sec in 0..fat_sectors {
-            if result.len() >= count as usize { break; }
-            let lba_u64 = self.reader.fat_lba + sec as u64;
-            if !self.reader.ata.read_sectors(lba_u64 as u32, &mut sector_buf, 1) {
-                continue;
-            }
-            let base = sec * entries_per_sector;
-            let start = if sec == 0 { 2u32 } else { 0u32 }; // skip FAT[0], FAT[1]
-            for i in start..entries_per_sector {
-                if result.len() >= count as usize { break; }
-                let off = (i * 4) as usize;
-                let val = u32::from_le_bytes([
-                    sector_buf[off], sector_buf[off + 1],
-                    sector_buf[off + 2], sector_buf[off + 3],
-                ]) & 0x0FFF_FFFF;
-                if val == 0 {
-                    result.push(base + i);
+        let mut scanned = 0u32;
+
+        let mut scan_range = |from: u32, to_excl: u32, min_cl: u32, result: &mut Vec<u32>, scanned: &mut u32| {
+            let mut sec = from;
+            while sec < to_excl && *scanned < budget && result.len() < count as usize {
+                if crate::tsc::now_us().saturating_sub(t0) > MAX_SCAN_US {
+                    return;
                 }
+                let lba_u64 = self.reader.fat_lba + sec as u64;
+                if self.reader.ata.read_sectors(lba_u64 as u32, &mut sector_buf, 1) {
+                    let base = sec * entries_per_sector;
+                    let start_i = if sec == 0 { 2u32 } else { 0u32 };
+                    for i in start_i..entries_per_sector {
+                        if result.len() >= count as usize {
+                            break;
+                        }
+                        let cl = base + i;
+                        if cl < min_cl {
+                            continue;
+                        }
+                        let off = (i * 4) as usize;
+                        let val = u32::from_le_bytes([
+                            sector_buf[off],
+                            sector_buf[off + 1],
+                            sector_buf[off + 2],
+                            sector_buf[off + 3],
+                        ]) & 0x0FFF_FFFF;
+                        if val == 0 {
+                            result.push(cl);
+                        }
+                    }
+                }
+                *scanned += 1;
+                sec += 1;
             }
+        };
+
+        // Passada 1: hint → fim
+        scan_range(start_sec, fat_sectors, hint, &mut result, &mut scanned);
+        // Passada 2 (wrap): início → hint
+        if result.len() < count as usize && scanned < budget && start_sec > 0 {
+            scan_range(0, start_sec, 2, &mut result, &mut scanned);
         }
+
+        let elapsed = crate::tsc::now_us().saturating_sub(t0);
         if result.len() >= count as usize {
+            if let Some(&last) = result.last() {
+                self.write_fsinfo_nxt_free(last.saturating_add(1));
+            }
+            crate::slog_nano!(
+                "FAT32",
+                "ok",
+                "find_free ok need={} got={} scanned={} hint={} us={}",
+                count,
+                result.len(),
+                scanned,
+                hint,
+                elapsed
+            );
             Some(result)
         } else {
-            crate::slog_nano!("FAT32", "info", "find_free_clusters budget/miss need={} got={} scanned<={}", count, result.len(), fat_sectors);
+            crate::slog_nano!(
+                "FAT32",
+                "warn",
+                "find_free miss need={} got={} scanned={} hint={} us={} verdict=soft_fail",
+                count,
+                result.len(),
+                scanned,
+                hint,
+                elapsed
+            );
             None
         }
+    }
+
+    /// Cadeia de clusters a partir de `first` (cap de segurança).
+    unsafe fn collect_cluster_chain(&self, first: u32) -> Vec<u32> {
+        let mut out = Vec::new();
+        let mut c = first;
+        let mut walked = 0u32;
+        while c >= 2 && c < 0x0FFF_FFF8 && walked < 1_000_000 {
+            out.push(c);
+            c = self.reader.read_fat_entry(c);
+            walked += 1;
+        }
+        out
     }
 
     /// Cria entrada de diretorio 8.3 no root
@@ -1269,94 +1387,98 @@ impl<'a> Fat32Writer<'a> {
         false
     }
 
-    /// Escreve dados em um cluster chain, alocando FAT entries
+    /// Escreve dados em cluster chain **já encontrada** (não chama find_free).
+    /// Preferir isto a `write_cluster_chain` legacy.
     unsafe fn write_cluster_chain(&self, _start_cluster: u32, data: &[u8]) -> bool {
-        let spc = self.reader.sectors_per_cluster as u32;
-        let bps = self.reader.bytes_per_sector as usize;
-        let cluster_size = spc as usize * bps;
+        // Compat: ainda aloca (callers legados). Preferir write_data_to_clusters.
+        let cluster_size =
+            self.reader.sectors_per_cluster as usize * self.reader.bytes_per_sector as usize;
         let num_clusters = (data.len() + cluster_size - 1) / cluster_size;
-
         let clusters = match self.find_free_clusters(num_clusters as u32) {
             Some(c) => c,
-            None => { crate::slog_nano!("FAT32", "info", "Sem clusters livres!"); return false; }
-        };
-        let mut written = 0usize;
-        for (i, &c) in clusters.iter().enumerate() {
-            let lba = self.reader.cluster_lba(c);
-            let chunk = &data[written..written + cluster_size.min(data.len() - written)];
-            for s in 0..spc {
-                let off = s as usize * bps;
-                let end = off + bps;
-                // SECTOR SHORT-WRITE BUG: se o arquivo < 512B, o setor s=1 fazia
-                // &chunk[512..] -> PANIC (range start out of range). Fix: setor
-                // sem dados = zeros (cluster FAT32 é maior que o arquivo; o size
-                // no dirent limita a leitura). Bug real de HW: WIFI.CFG/BOOT.LOG/
-                // TLSPINS.BIN pequenos gravados na ESP panicavam.
-                let sector_data = if off >= chunk.len() {
-                    &[][..]
-                } else if end <= chunk.len() {
-                    &chunk[off..end]
-                } else {
-                    &chunk[off..]
-                };
-                let mut sector = [0u8; 512];
-                sector[..sector_data.len()].copy_from_slice(sector_data);
-                if !self.reader.ata.write_sectors(lba + s, &sector, 1) {
-                    return false;
-                }
+            None => {
+                crate::slog_nano!("FAT32", "warn", "Sem clusters livres!");
+                return false;
             }
-            written += cluster_size;
-            // FAT entry: aponta para proximo cluster ou EOC
-            let next = if i + 1 < clusters.len() { clusters[i+1] } else { 0x0FFF_FFF8 };
-            if !self.write_fat_entry(c, next) { return false; }
-        }
-        true
+        };
+        self.write_data_to_clusters(&clusters, data)
     }
 
-    /// Escreve arquivo completo no root (cria ou substitui)
+    /// Escreve arquivo completo no root (cria ou substitui).
+    /// SESSION_345: se o ficheiro já existe e a chain couber → **só**
+    /// `write_data_to_clusters` (zero find_free). Antes: overwrite chamava
+    /// `write_cluster_chain` que realocava → hang PIO em volume cheio.
     pub unsafe fn write_file(&self, name: &str, data: &[u8]) -> bool {
-        let cluster_size = self.reader.sectors_per_cluster as usize * self.reader.bytes_per_sector as usize;
-        let num_clusters = (data.len() + cluster_size - 1) / cluster_size;
+        let cluster_size =
+            self.reader.sectors_per_cluster as usize * self.reader.bytes_per_sector as usize;
+        let num_clusters = if data.is_empty() {
+            1
+        } else {
+            (data.len() + cluster_size - 1) / cluster_size
+        };
 
-        // Se arquivo ja existe, reusa primeiro cluster
         if let Some((_off, _lba, first_cluster)) = self.find_entry(name) {
-            // Sobrescrever: reutilizar cluster inicial, alocar mais se necessario
-            let existing_clusters = (0u32..).scan(first_cluster, |c, _| {
-                if *c < 2 || *c >= 0x0FFF_FFF8 { return None; }
-                let cur = *c;
-                *c = unsafe { self.reader.read_fat_entry(cur) };
-                Some(cur)
-            }).count();
-
-            if existing_clusters >= num_clusters {
-                // Clusters existentes sao suficientes — soh escrever dados
-                return self.write_cluster_chain(first_cluster, data);
-            }
-            // Precisamos liberar clusters antigos e alocar novos
-            // Simplificacao: usar write_cluster_chain com novos clusters
-            // (deixamos clusters antigos orfaos — GC em proximo boot)
-            // Marcar antigo cluster como free
-            let mut c = first_cluster;
-            while c >= 2 && c < 0x0FFF_FFF8 {
-                let next = unsafe { self.reader.read_fat_entry(c) };
-                if !unsafe { self.write_fat_entry(c, 0) } {
+            let existing = self.collect_cluster_chain(first_cluster);
+            if existing.len() >= num_clusters {
+                let slice = &existing[..num_clusters];
+                if !self.write_data_to_clusters(slice, data) {
                     return false;
                 }
-                c = next;
+                // Libertar clusters sobrando (best-effort)
+                for &extra in existing.iter().skip(num_clusters) {
+                    let _ = self.write_fat_entry(extra, 0);
+                }
+                return self.update_file_size(
+                    name,
+                    core::cmp::min(data.len(), u32::MAX as usize) as u32,
+                );
             }
-            // Alocar novos e escrever
-            if !self.write_cluster_chain(first_cluster, data) { return false; }
-            // Atualizar tamanho na entrada
-            self.update_file_size(name, core::cmp::min(data.len(), u32::MAX as usize) as u32)
-        } else {
-            // Arquivo novo: alocar clusters e criar entrada
-            let clusters = match self.find_free_clusters(num_clusters as u32) {
+            // Precisa crescer: alocar extras e juntar à chain
+            let need_extra = num_clusters - existing.len();
+            let extra = match self.find_free_clusters(need_extra as u32) {
                 Some(c) => c,
-                None => { crate::slog_nano!("FAT32", "info", "Sem clusters livres!"); return false; }
+                None => {
+                    crate::slog_nano!(
+                        "FAT32",
+                        "warn",
+                        "write_file grow miss need_extra={}",
+                        need_extra
+                    );
+                    return false;
+                }
             };
-            if !self.write_cluster_chain(clusters[0], data) { return false; }
-            self.create_entry(name, clusters[0], core::cmp::min(data.len(), u32::MAX as usize) as u32)
+            let mut all = existing;
+            if let Some(&last) = all.last() {
+                if !self.write_fat_entry(last, extra[0]) {
+                    return false;
+                }
+            }
+            all.extend_from_slice(&extra);
+            if !self.write_data_to_clusters(&all[..num_clusters], data) {
+                return false;
+            }
+            return self.update_file_size(
+                name,
+                core::cmp::min(data.len(), u32::MAX as usize) as u32,
+            );
         }
+
+        // Arquivo novo: um find_free + write_data (sem double-scan)
+        let clusters = match self.find_free_clusters(num_clusters as u32) {
+            Some(c) => c,
+            None => {
+                crate::slog_nano!("FAT32", "warn", "Sem clusters livres!");
+                return false;
+            }
+        };
+        if !self.write_data_to_clusters(&clusters, data) {
+            return false;
+        }
+        self.create_entry(
+            name,
+            clusters[0],
+            core::cmp::min(data.len(), u32::MAX as usize) as u32,
+        )
     }
 
     /// Tamanho atual do arquivo no root (None se inexistente).

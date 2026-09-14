@@ -363,15 +363,27 @@ pub fn load_pins_from_fat() {
     );
 }
 
-/// Persiste pins em FAT. Non-fatal.
+/// Persiste pins em SGDB + FAT. Non-fatal.
+///
+/// SESSION_345 F2: FAT é **overwrite-only**. Sem `TLSPINS.BIN` pré-alocado no
+/// mkfat32, não cria ficheiro novo (evita `find_free` PIO em volume cheio).
 pub fn persist_pins_to_fat() {
     let blob = PINS.lock().serialize();
     let _ = k_ai::sgdb::put_kv("sys/tls_pins", &blob);
+    if cortex::gguf::read_fat_range(PIN_FILE, 0, 1).is_none() {
+        k_nano::slog_hermes!(
+            "TLS",
+            "warn",
+            "pins=FAT save DEFER reason=no_prealloc file={} (RAM+SGDB only)",
+            PIN_FILE
+        );
+        return;
+    }
     match cortex::gguf::write_fat_file(PIN_FILE, &blob) {
         Ok(()) => {
             k_nano::slog_hermes!(
                 "TLS",
-                "info",
+                "ok",
                 "pins=FAT save OK file={} bytes={}",
                 PIN_FILE,
                 blob.len()
@@ -380,7 +392,7 @@ pub fn persist_pins_to_fat() {
         Err(e) => {
             k_nano::slog_hermes!(
                 "TLS",
-                "info",
+                "warn",
                 "pins=FAT save SKIP reason={} file={}",
                 e,
                 PIN_FILE

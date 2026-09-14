@@ -1,6 +1,12 @@
-# STATE — neural-os-core v1.9.99-s344 — Gates G1-G3 GPU Rust: Fase 2 descartada p/ sm_61 (destra Ampere+ Linux)
+# STATE — neural-os-core v1.9.99-s345 — F1–F4 código; QEMU Runtime PASS; F3 metal AWAITING
 
-#   PISTA ATIVA: Jarbas render path otimizado — zero alloc no paint loop
+#   PISTA ATIVA: F3+F4 código ✅ — SysInfo MSC-safe persist; InferQueue Prefilling+telemetry
+#   SESSION_345: F1–F4; F3 aceite = stick real; F4 aceite = generate c/ modelo loaded
+#   Próximo: metal BOOT.LOG/NSGDB ≠ placeholder → F5 FS / F6 Layer S (gated)
+#   PISTA ANTERIOR: F1+F2 + BGE skip — QEMU 8c PHASE7/desktop_ready/ticks/BOOT SCORE ✅
+#   PISTA ANTERIOR: QEMU 8c soft-hang pós-pins miss — FIXED código; regenerar imagem + aceite boot
+#   PISTA ANTERIOR: Gates G1-G3 GPU Rust: Fase 2 descartada p/ sm_61 (destra Ampere+ Linux)
+#   PISTA ANTERIOR: Jarbas render path otimizado — zero alloc no paint loop
 #   SESSION_341: RENDER_OVERLAYS iter under lock + HUD_CACHE static buffer
 #   Fix: 2 alloc hot paths eliminados (120+ allocs/s cada)
 #   Auditoria completa: 63 files, bugs/perf/fluidity documentados
