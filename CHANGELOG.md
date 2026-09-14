@@ -11,6 +11,7 @@
 - **STT:** FFT radix-2 (~100× menos MACs que a DFT ingênua) com teste de paridade; job em slices (fora do tick); **removido o decoder que fabricava texto** (agora `STT_UNCERTAIN`); vocabulário derivado do modelo + contrato verificado por `tools/stt_vocab_check.py`.
 - **Emoção:** distribuição de crença Q8 + argmax (antes EWMA sobre o índice do enum: joy+sarcasm → fear) e segunda opinião no prompt.
 - **Tooling:** `tools/gen_stt_corpus.py` (840 frases PT-BR + WAVs por espeak-ng); `train_stt.py` prefere fala real e avisa quando não tem.
+- **Aceite QEMU 8c:** boot chega a PHASE 5 `ok` sem panic e para na MESMA linha do log anterior às mudanças (`TTS boot greeting`) ⇒ o stall do 8c é **pré-existente** (pista FAT/pins do s345), não desta mudança. QEMU não enumera codec HDA (`No codecs found … aceite=HW`) ⇒ **áudio não é testável em QEMU**; o aceite da captura é metal-only. `tools/run-qemu-8c-ui-loop.ps1` não parseia (erro de chave em cascata, linha 55) — pendente.
 
 ## [1.9.99-s344] - 2026-09-13 — Gates G1-G3 do plano GPU Rust ecosystem
 

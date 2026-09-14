@@ -120,10 +120,42 @@ A resposta não estava no modelo — estava na **captura**.
 | `python tools/stt_vocab_check.py` | ✅ vocabulário kernel↔trainer idêntico |
 | `python tools/gen_stt_corpus.py --corpus-only` | ✅ 840 frases em `data/stt_corpus.txt` |
 
-**Não validado (honesto):** nenhum boot QEMU/real foi executado nesta sessão. Os números
-de captura (≈47 entradas/s, `CARRY_OVERFLOW == 0`, `PLAY_SAMPLES_DROPPED`) são o critério
-de aceite a medir no próximo boot. O `STT.BIN` atual (front-end legado, dataset de bipes)
-continua impreciso: precisa de `gen_stt_corpus.py` + `train_stt.py` com espeak-ng.
+## Aceite QEMU 8c (executado nesta sessão)
+
+Comando: `cargo build --release` → `run-qemu-whpx.ps1 -Smp 8 -RamGB 4` (host com 4,8 GB
+livres → 4 GB, conforme a lição do teto de 6 GB). Log: `logs/boot_whpx_20260914_105127.txt`.
+
+| Aceite | Resultado |
+|--------|-----------|
+| Sem panic / triple fault | ✅ `panic=0` |
+| Fases de boot | ✅ PHASE 0→5 `status=ok` |
+| PHASE 6 (AgentFleet) / 7 (Runtime) | ❌ **não alcançadas** |
+| `VOICE_STATE` / contadores de captura | ⛔ não emitidos (agentes nunca tickados) |
+| Captura HDA exercitada | ⛔ impossível neste ambiente |
+
+**1. O stall do 8c é PRÉ-EXISTENTE, não desta mudança.** O log anterior às minhas
+alterações (`logs/boot_whpx_20260914_103113.txt`, 527 linhas) para na **mesma linha**:
+`TTS boot greeting 168160 frames` após PHASE 5 ok. O meu run (523 linhas) para igual.
+Código de áudio diferente, mesmo ponto de parada ⇒ a causa está no caminho comum
+(FAT/pins — pista ativa do s345). O `STATE.md` do s345 afirma "FIXED código; regenerar
+imagem + aceite boot": a imagem FOI regenerada neste run e o stall persiste, então
+aquele fix não está efetivo nesta árvore.
+
+**2. QEMU não tem codec HDA — áudio não é testável ali.**
+`Found HDA: 8086:2668 …` + `home=k_nano::audio::hda profile=qemu | No codecs found
+(degraded expected — aceite=HW)` → `init_hda` falha, SD0/SD1 nunca armam, `poll_hda_audio`
+retorna cedo. Consequência: **nem o bug antigo nem o fix do formato/BDL são observáveis no
+QEMU** — a validação de áudio é metal-only. Isso também explica por que a pipeline de voz
+nunca teve áudio real em QEMU em nenhuma sessão anterior.
+
+**3. `tools/run-qemu-8c-ui-loop.ps1` não parseia** (`Parser::ParseFile` → 1 erro:
+"missing closing brace" em linha 55, col 59; chaves balanceadas no tokenizer, erro em
+cascata). QEMU foi lançado direto pelo `run-qemu-whpx.ps1`. **Pendente de fix.**
+
+**Não validado (honesto):** nenhum boot REAL (metal). Os números de captura (≈47
+entradas/s, `CARRY_OVERFLOW == 0`, `PLAY_SAMPLES_DROPPED`) seguem como critério de aceite
+de metal. O `STT.BIN` atual (front-end legado, dataset de bipes) continua impreciso:
+precisa de `gen_stt_corpus.py` + `train_stt.py` com espeak-ng.
 
 ## Residuais
 1. **Aceite QEMU/HW** dos contadores de captura e do `VOICE_STATE` no HUD.
