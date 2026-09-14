@@ -4,9 +4,9 @@
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use event_bus::{CapabilityToken, Event, Receiver};
-use crate::audio::vad::{VAD, VadTransition};
+use crate::audio::capture::{FRAME_SAMPLES, TOPIC_AUDIO_FRAME};
 use crate::audio::settings::{self, WAKEWORD_SENSITIVITY};
-use crate::audio::{TOPIC_WAKEWORD, TOPIC_AUDIO_IN};
+use crate::audio::TOPIC_WAKEWORD;
 
 use core::sync::atomic::Ordering;
 
@@ -69,9 +69,21 @@ const WAKEWORD_MANIFEST: AgentManifest = AgentManifest {
     persist: true,
 };
 
+/// RMS de um frame — mesma escala do VAD (base do treino do MLP).
+fn rms(pcm: &[i16]) -> f32 {
+    if pcm.is_empty() {
+        return 0.0;
+    }
+    let mut sum = 0.0f32;
+    for &s in pcm {
+        let v = s as f32;
+        sum += v * v;
+    }
+    libm::sqrtf(sum / pcm.len() as f32)
+}
+
 pub struct WakeWordAgent {
     receiver: Receiver,
-    vad: VAD,
     energy_history: [f32; 64],
     history_idx: usize,
     cooldown: u32,
@@ -81,10 +93,11 @@ pub struct WakeWordAgent {
 
 impl WakeWordAgent {
     pub fn new() -> Self {
-        let vad = VAD::new(settings::vad_threshold(), 16000);
+        // Sem VAD próprio: o VAD é único e vive no `AudioInputAgent` (antes havia
+        // DUAS instâncias independentes processando o mesmo stream, com estados que
+        // podiam discordar). Aqui só classificamos frames já normalizados.
         WakeWordAgent {
-            receiver: k_nano::EVENT_BUS.subscribe(TOPIC_AUDIO_IN),
-            vad,
+            receiver: k_nano::EVENT_BUS.subscribe(TOPIC_AUDIO_FRAME),
             energy_history: [0.0; 64],
             history_idx: 0,
             cooldown: 0,
@@ -138,53 +151,41 @@ impl Agent for WakeWordAgent {
             self.cooldown -= 1;
         }
 
+        // Frames já chegam normalizados em 320 amostras @16 kHz mono (antes este
+        // agente fatiava eventos de 512 e DESCARTAVA as 192 amostras restantes,
+        // 37,5% do áudio, sempre nas mesmas fronteiras).
         while let Some(ev) = self.receiver.try_receive() {
+            if ev.payload.len() < FRAME_SAMPLES * 2 {
+                continue;
+            }
             let pcm: &[i16] = unsafe {
-                core::slice::from_raw_parts(
-                    ev.payload.as_ptr() as *const i16,
-                    ev.payload.len() / 2,
-                )
+                core::slice::from_raw_parts(ev.payload.as_ptr() as *const i16, FRAME_SAMPLES)
             };
+            let energy = rms(pcm);
+            self.energy_history[self.history_idx] = energy;
+            self.history_idx += 1;
 
-            let frame_size = 320;
-            for chunk in pcm.chunks(frame_size) {
-                if chunk.len() < frame_size {
-                    continue;
+            if self.history_idx >= 64 {
+                let mut energy_16 = [0.0f32; 16];
+                energy_16.copy_from_slice(&self.energy_history[..16]);
+                let ml_score = self.ml.predict(&energy_16);
+                if tick.wrapping_sub(self.last_score_log as u64) > 50 {
+                    self.last_score_log = tick as u32;
                 }
-                let (energy, _zcr, _active, transition) = self.vad.process_frame(chunk);
-
-                self.energy_history[self.history_idx % 64] = energy;
-                self.history_idx = (self.history_idx + 1).min(64);
-
-                if transition == VadTransition::SpeechStart {
-                    k_nano::slog_bin!("WAKEWORD", "info", "Voz detectada (energy={:.0})", energy);
+                let thr = settings::wake_ml_threshold();
+                let pattern = self.detect_wakeword_pattern();
+                if self.cooldown == 0 && (pattern || ml_score > thr) {
+                    let via = if pattern && ml_score > thr {
+                        "pattern+ml"
+                    } else if pattern {
+                        "pattern"
+                    } else {
+                        "ml"
+                    };
+                    self.publish_wake(ml_score, via);
                 }
-
-                if transition == VadTransition::SpeechEnd {
-                    k_nano::slog_bin!("WAKEWORD", "info", "Silencio detectado");
-                    let mut energy_16 = [0.0f32; 16];
-                    let copy_len = self.history_idx.min(16);
-                    energy_16[..copy_len].copy_from_slice(&self.energy_history[..copy_len]);
-                    let ml_score = self.ml.predict(&energy_16);
-                    // Telemetria throttled (~1/50 SpeechEnd)
-                    if tick.wrapping_sub(self.last_score_log as u64) > 50 {
-                        // kjson!("WAKEWORD", "ML", "score", "val", ml_score);
-                        self.last_score_log = tick as u32;
-                    }
-                    let thr = settings::wake_ml_threshold();
-                    let pattern = self.detect_wakeword_pattern();
-                    if self.cooldown == 0 && (pattern || ml_score > thr) {
-                        let via = if pattern && ml_score > thr {
-                            "pattern+ml"
-                        } else if pattern {
-                            "pattern"
-                        } else {
-                            "ml"
-                        };
-                        self.publish_wake(ml_score, via);
-                    }
-                    self.history_idx = 0;
-                }
+                // Janelas não sobrepostas de 64 frames (~1,28 s).
+                self.history_idx = 0;
             }
         }
         AgentTickResult::Pending

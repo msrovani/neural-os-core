@@ -15,8 +15,42 @@ use crate::audio::voice::PLAYBACK_RING;
 
 /// Saudacao HW emitida no register (K44) — evita depender do scheduler (hang pos-K44).
 static HW_GREET_EMITTED: AtomicBool = AtomicBool::new(false);
-/// InferQueue já falou frases via INFER_TTS_PARTIAL — pular TTS do HERMES_RESPONSE completo.
-static SKIP_NEXT_FULL_TTS: AtomicBool = AtomicBool::new(false);
+/// Ledger do texto JÁ falado via `INFER_TTS_PARTIAL`.
+///
+/// Antes existia um `bool` único (`SKIP_NEXT_FULL_TTS`): ele pulava o
+/// `HERMES_RESPONSE` inteiro, então a **frase final** da resposta (a que nunca
+/// fechou durante o generate) simplesmente não era falada — e, quando o bool não
+/// era consumido, a resposta inteira era repetida. Guardar o corpo já falado
+/// permite falar exatamente o que falta.
+static SPOKEN_PARTIAL: spin::Mutex<alloc::string::String> =
+    spin::Mutex::new(alloc::string::String::new());
+
+/// Registra o que foi falado via parcial.
+fn note_spoken(body: &str) {
+    let mut g = SPOKEN_PARTIAL.lock();
+    if g.len() < 4096 {
+        g.push_str(body);
+    }
+}
+
+/// Parte do texto final que ainda NÃO foi falada.
+///
+/// Se o prefixo já falado não bater (ex.: LLM reformulou no final), devolve o texto
+/// inteiro — repetir é menos ruim que perder fala.
+fn unsaid_remainder<'a>(full: &'a str) -> &'a str {
+    let spoken = SPOKEN_PARTIAL.lock();
+    if spoken.is_empty() {
+        return full;
+    }
+    if let Some(rest) = full.strip_prefix(spoken.as_str()) {
+        return rest.trim_start();
+    }
+    full
+}
+
+fn clear_spoken() {
+    SPOKEN_PARTIAL.lock().clear();
+}
 
 /// True se a saudacao de boot (template) ja foi emitida — nao chamar LLM no mesmo boot.
 pub fn hw_greet_emitted() -> bool {
@@ -152,7 +186,15 @@ fn compose_boot_llm_prompt(mem_mb: u64, cpu_count: u16, agent_count: usize) -> S
 enum StreamingTtsState {
     Idle,
     /// Drenando buffer PCM + queue de frases restantes.
-    Streaming { buffer: alloc::vec::Vec<i16>, pos: usize, queue: alloc::vec::Vec<alloc::string::String> },
+    /// `gen` = geração de TTS capturada na síntese: se um barge-in incrementar a
+    /// geração, este buffer é ABANDONADO (antes ele era redrenado no tick seguinte e
+    /// a fala voltava, ou seja, interromper não interrompia).
+    Streaming {
+        gen: u64,
+        buffer: alloc::vec::Vec<i16>,
+        pos: usize,
+        queue: alloc::vec::Vec<alloc::string::String>,
+    },
 }
 
 pub struct JarbasAgent {
@@ -367,7 +409,19 @@ impl Agent for JarbasAgent {
         // Take ownership to avoid borrow-checker conflict on self.stream_tts
         let prev = core::mem::replace(&mut self.stream_tts, StreamingTtsState::Idle);
         match prev {
-            StreamingTtsState::Streaming { buffer, mut pos, mut queue } => {
+            StreamingTtsState::Streaming { gen, buffer, mut pos, mut queue } => {
+                // Barge-in invalidou a geração: abandona o buffer em vez de redrená-lo.
+                // (Antes o `pipeline` limpava o PLAYBACK_RING mas este buffer voltava
+                // no tick seguinte — interromper não interrompia.)
+                if !crate::audio::voice::tts_generation_valid(gen) {
+                    k_nano::slog_jarbas!(
+                        "Jarbas",
+                        "ok",
+                        "TTS abandonado por barge-in (gen {} de {})",
+                        gen,
+                        crate::audio::voice::tts_generation()
+                    );
+                } else {
                 const CHUNK: usize = 2560;
                 let n = buffer.len().saturating_sub(pos).min(CHUNK);
                 if n > 0 {
@@ -385,19 +439,20 @@ impl Agent for JarbasAgent {
                             let cn = total.min(CHUNK);
                             let _ = PLAYBACK_RING.push(&pcm[..cn]);
                             self.stream_tts = StreamingTtsState::Streaming {
-                                buffer: pcm, pos: cn, queue,
+                                gen, buffer: pcm, pos: cn, queue,
                             };
                         } else {
                             self.stream_tts = StreamingTtsState::Streaming {
-                                buffer: alloc::vec::Vec::new(), pos: 0, queue,
+                                gen, buffer: alloc::vec::Vec::new(), pos: 0, queue,
                             };
                         }
                     }
                     // else: queue empty → Idle (already set by replace)
                 } else {
                     self.stream_tts = StreamingTtsState::Streaming {
-                        buffer, pos, queue,
+                        gen, buffer, pos, queue,
                     };
+                }
                 }
             }
             StreamingTtsState::Idle => {}
@@ -451,7 +506,8 @@ impl Agent for JarbasAgent {
                 let clean = text
                     .trim_start_matches("[JARBAS] ")
                     .trim_start_matches("JARVIS: ");
-                SKIP_NEXT_FULL_TTS.store(true, Ordering::Relaxed);
+                // Ledger: o que já foi falado não deve ser repetido no final.
+                note_spoken(clean);
                 let sentences = split_into_sentences(clean);
                 if sentences.is_empty() {
                     continue;
@@ -475,6 +531,7 @@ impl Agent for JarbasAgent {
                     let _ = PLAYBACK_RING.push(&pcm[..n]);
                     if total > n || !rest.is_empty() {
                         self.stream_tts = StreamingTtsState::Streaming {
+                            gen: crate::audio::voice::tts_generation(),
                             buffer: pcm,
                             pos: n.min(total),
                             queue: rest,
@@ -498,20 +555,38 @@ impl Agent for JarbasAgent {
                     continue; // telemetria: descarta; chat real: processa abaixo
                 }
 
-                if SKIP_NEXT_FULL_TTS.swap(false, Ordering::Relaxed) {
-                    k_nano::slog_jarbas!(
-                        "Jarbas",
-                        "ok",
-                        "TTS full skip — já falou via InferQ partial"
-                    );
-                    continue;
-                }
-
                 let clean = text
                     .trim_start_matches("[JARBAS] ")
                     .trim_start_matches("JARVIS: ");
 
-                let sentences = split_into_sentences(clean);
+                // O `publish_greeting`/resposta prefixa "<nome>: "; o ledger dos
+                // parciais guarda só o CORPO, então removemos o prefixo antes de
+                // comparar (senão o strip_prefix nunca casa e a fala repete).
+                let name_prefix = alloc::format!("{}: ", self.engine.soul.name);
+                let body = clean.strip_prefix(name_prefix.as_str()).unwrap_or(clean);
+
+                // Já falado via INFER_TTS_PARTIAL → fala só o RESTANTE da resposta.
+                let to_say = unsaid_remainder(body);
+                clear_spoken();
+                if to_say.trim().is_empty() {
+                    k_nano::slog_jarbas!(
+                        "Jarbas",
+                        "ok",
+                        "TTS full skip — corpo ja falado via parcial"
+                    );
+                    continue;
+                }
+                if to_say.len() < body.len() {
+                    k_nano::slog_jarbas!(
+                        "Jarbas",
+                        "ok",
+                        "TTS só o restante ({} de {} chars)",
+                        to_say.len(),
+                        body.len()
+                    );
+                }
+
+                let sentences = split_into_sentences(to_say);
                 if sentences.is_empty() {
                     break;
                 }
@@ -536,6 +611,7 @@ impl Agent for JarbasAgent {
                     let _ = PLAYBACK_RING.push(&pcm[..n]);
                     if total > n {
                         self.stream_tts = StreamingTtsState::Streaming {
+                            gen: crate::audio::voice::tts_generation(),
                             buffer: pcm,
                             pos: n,
                             queue: rest,
@@ -552,6 +628,7 @@ impl Agent for JarbasAgent {
                             self.stream_tts = StreamingTtsState::Idle;
                         } else {
                             self.stream_tts = StreamingTtsState::Streaming {
+                                gen: crate::audio::voice::tts_generation(),
                                 buffer: pcm2,
                                 pos: 0,
                                 queue: next_rest,

@@ -40,10 +40,26 @@ FFTSIZE = 512
 N_BINS = FFTSIZE // 2 + 1
 N_MFCC = 13
 HIDDEN = 64
-VOCAB = 28  # a-z + space(26) + blank(27)
+# ---------------------------------------------------------------------------
+# VOCABULÁRIO CANÔNICO — contrato com `crates/jarbas/src/audio/stt.rs::VOCAB_CHARS`.
+# A ordem aqui É a ordem dos logits (`out.bias`). Divergir = caracteres trocados
+# em silêncio. Verificar sempre com `python tools/stt_vocab_check.py` APÓS editar.
+# O índice do blank é sempre o último (len(VOCAB_CHARS)).
+# ---------------------------------------------------------------------------
+VOCAB_CHARS = [
+    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
+    't', 'u', 'v', 'w', 'x', 'y', 'z', ' ',
+]
+VOCAB = len(VOCAB_CHARS) + 1  # + blank
+
+# Versão da front-end declarada no header do .bin (offset 4). O kernel compara e
+# avisa se não casar: feats != treino produz texto plausível e errado.
+FEAT_VERSION = 1
 FRAME_SHIFT = FFTSIZE // 2
 
 # Corpus PT mínimo (labels ASCII a-z + espaço)
+_WARNED_NO_TTS = False
+
 CORPUS = [
     "jarvis",
     "ola jarvis",
@@ -69,18 +85,94 @@ CORPUS = [
 
 
 def text_to_ids(text: str) -> list[int]:
+    """Mapeia texto → ids usando a MESMA ordem de VOCAB_CHARS."""
     ids = []
     for ch in text.lower():
-        if "a" <= ch <= "z":
-            ids.append(ord(ch) - ord("a"))
-        elif ch == " ":
-            ids.append(26)
-        # ignora acentos/pontuação
+        if ch in VOCAB_CHARS:
+            ids.append(VOCAB_CHARS.index(ch))
+        # fora do vocabulário: ignorado (nunca inventa id)
     return ids
 
 
+def load_corpus() -> list[str]:
+    """Corpus de treino.
+
+    Preferência: `data/stt_corpus.txt` (uma frase por linha) — o corpus inline de 20
+    frases fixas treinava o modelo para exatamente 20 entradas e a validação usava
+    `CORPUS[:8]` (vazamento de treino, acurácia sem significado).
+    """
+    extra = ROOT / "data" / "stt_corpus.txt"
+    if extra.exists():
+        lines = [l.strip() for l in extra.read_text(encoding="utf-8").splitlines()]
+        lines = [l for l in lines if l and not l.startswith("#")]
+        print(f"[STT] corpus externo: {len(lines)} frases de {extra.name}")
+        return lines
+    print(
+        f"[STT] AVISO: corpus inline ({len(CORPUS)} frases fixas). "
+        "Gere um corpus real com tools/gen_stt_corpus.py para STT utilizável."
+    )
+    return CORPUS
+
+
+def _tts_synthesize(text: str, sr: int, voice: str = "pt-br") -> np.ndarray | None:
+    """Síntese de FALA REAL (espeak-ng) → int16 @ `sr`.
+
+    Retorna None se não houver backend instalado. É o caminho correto: o modelo
+    anterior foi treinado com `synthesize_pcm` (3 senoides cujas frequências derivam
+    do ÍNDICE DO CARACTERE) — ou seja, aprendeu "bipes por letra", não fala. Nenhum
+    ajuste de arquitetura conserta isso; o dataset é que estava errado.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    exe = shutil.which("espeak-ng") or shutil.which("espeak")
+    if not exe:
+        return None
+    with tempfile.TemporaryDirectory() as td:
+        wav = Path(td) / "t.wav"
+        try:
+            subprocess.run(
+                [exe, "-v", voice, "-s", "150", "-w", str(wav), text],
+                check=True,
+                capture_output=True,
+                timeout=20,
+            )
+        except Exception:
+            return None
+        if not wav.exists():
+            return None
+        with wave.open(str(wav), "rb") as w:
+            src_sr = w.getframerate()
+            n = w.getnframes()
+            raw = w.readframes(n)
+        pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+        if src_sr != sr and len(pcm) > 1:
+            # Reamostragem linear (o kernel decima 48k→16k com box filter; aqui o
+            # objetivo é só casar a taxa do treino).
+            tgt_len = int(len(pcm) * sr / src_sr)
+            idx = np.linspace(0, len(pcm) - 1, tgt_len)
+            pcm = np.interp(idx, np.arange(len(pcm)), pcm)
+        return np.clip(pcm, -32768, 32767).astype(np.int16)
+
+
 def synthesize_pcm(text: str, sr: int = SAMPLE_RATE) -> np.ndarray:
-    """Síntese formant-lite determinística alinhada ao texto (treino)."""
+    """Síntese para treino: fala REAL se houver backend, senão formant-lite.
+
+    O fallback formant existe apenas para o pipeline continuar rodando em ambiente
+    sem espeak-ng — ele NÃO produz modelo utilizável e isso é avisado uma vez.
+    """
+    global _WARNED_NO_TTS
+    real = _tts_synthesize(text, sr)
+    if real is not None:
+        return real
+    if not _WARNED_NO_TTS:
+        _WARNED_NO_TTS = True
+        print(
+            "[STT] AVISO GRAVE: espeak-ng ausente — caindo no sintetizador FORMANT "
+            "(bipes por caractere). O modelo resultante NÃO transcreve fala real. "
+            "Instale espeak-ng (ou use tools/gen_stt_corpus.py com Piper)."
+        )
     samples: list[float] = []
     rng = np.random.RandomState(sum(ord(c) for c in text) & 0xFFFF)
     for ch in text.lower():
@@ -214,6 +306,10 @@ class TinyLSTM(nn.Module):
         return torch.stack(logits, dim=1)
 
 
+# Corpus efetivo do treino (arquivo externo se existir, senão o inline de 20 frases).
+TRAIN_CORPUS = load_corpus()
+
+
 def make_batch(batch_size: int, wav_pairs: list) -> tuple[torch.Tensor, list[torch.Tensor]]:
     xs = []
     targets = []
@@ -221,7 +317,7 @@ def make_batch(batch_size: int, wav_pairs: list) -> tuple[torch.Tensor, list[tor
         if wav_pairs and np.random.rand() < 0.5:
             pcm, ids = wav_pairs[np.random.randint(len(wav_pairs))]
         else:
-            text = CORPUS[np.random.randint(len(CORPUS))]
+            text = TRAIN_CORPUS[np.random.randint(len(TRAIN_CORPUS))]
             pcm = synthesize_pcm(text)
             ids = text_to_ids(text)
         feats = mfcc_kernel(pcm)
@@ -255,9 +351,10 @@ def export_bin(model: TinyLSTM, output: Path) -> None:
         params.append((name, arr))
     with open(output, "wb") as f:
         f.write(struct.pack("<I", MAGIC))
-        f.write(struct.pack("<I", 4))
+        # offset 4 = feat_version (o kernel avisa se != a dele)
+        f.write(struct.pack("<I", FEAT_VERSION))
         f.write(struct.pack("<I", len(params)))
-        f.write(struct.pack("<I", 0))
+        f.write(struct.pack("<I", VOCAB))
         data_off = 0
         for name, arr in params:
             bname = name.encode().ljust(32, b"\x00")[:32]
@@ -277,7 +374,9 @@ def validate(model: TinyLSTM, wav_pairs: list) -> float:
     model.eval()
     total_chars = 0
     hit = 0
-    texts = CORPUS[:8]
+    # Holdout: últimas frases, nunca as primeiras (antes era CORPUS[:8], que também
+    # era usado no treino → acurácia sem significado).
+    texts = TRAIN_CORPUS[-8:] if len(TRAIN_CORPUS) > 16 else TRAIN_CORPUS[-2:]
     blank = VOCAB - 1
     for text in texts:
         pcm = synthesize_pcm(text)

@@ -1,0 +1,842 @@
+# Corpus STT PT-BR — gerado por tools/gen_stt_corpus.py
+# Uma frase por linha; '#' = comentário. Consumido por train_stt.py::load_corpus
+por favor volume baixo por favor
+por favor ligar a luz
+jarvis qual o tempo pra mim
+oi temperatura da cpu agora
+por favor silenciar o microfone agora
+jarbas abrir terminal
+por favor temperatura agora agora
+jarvis status do sistema por favor
+jarbas tirar um print da tela por favor
+oi volume baixo por favor
+oi o tempo esta bom por favor
+oi quantos agentes estao ativos agora
+oi bom dia jarvis por favor
+temperatura agora por favor
+que horas sao agora
+ei volume baixo
+ei abrir terminal pra mim
+jarbas temperatura agora
+oi nao
+por favor ajuda pra mim
+uso de memoria agora
+jarvis ligar a luz agora
+jarvis volume baixo
+jarvis abra o menu pra mim
+jarvis que horas sao pra mim
+por favor apagar a luz pra mim
+ei ola jarvis agora
+jarbas silenciar o microfone pra mim
+jarbas toque uma musica agora
+jarvis jarvis por favor
+oi o tempo esta bom
+jarvis apagar a luz pra mim
+ei diminuir o volume por favor
+ei boa noite jarvis agora
+toque uma musica agora
+boa noite jarvis pra mim
+por favor tirar um print da tela
+ei abra o menu por favor
+jarbas uso de memoria por favor
+ei parar por favor
+por favor continuar
+ei jarvis agora
+sim
+por favor apagar a luz agora
+me mande um email pra mim
+jarbas quantos agentes estao ativos agora
+oi silenciar o microfone
+jarvis volume baixo agora
+por favor qual o tempo pra mim
+ola jarvis
+uso de memoria
+jarvis abrir terminal por favor
+continuar agora
+por favor vai chover hoje por favor
+oi abra o menu pra mim
+obrigado agora
+jarvis toque uma musica por favor
+oi diminuir o volume
+jarvis silenciar o microfone por favor
+jarvis temperatura da cpu
+por favor o tempo esta bom agora
+oi que horas sao por favor
+apagar a luz por favor
+oi me mande um email por favor
+jarbas ola jarvis por favor
+jarbas boa noite jarvis por favor
+ei abrir terminal agora
+ei ajuda agora
+tirar um print da tela
+jarbas obrigado agora
+oi ola jarvis
+jarvis volume alto pra mim
+por favor parar por favor
+jarvis temperatura agora por favor
+ei volume alto agora
+por favor status do sistema pra mim
+por favor boa noite jarvis por favor
+feche a janela pra mim
+jarbas silenciar o microfone por favor
+ei pesquisar na internet agora
+jarvis pesquisar na internet por favor
+ei temperatura agora por favor
+ei silenciar o microfone agora
+por favor sim pra mim
+por favor apagar a luz
+silenciar o microfone pra mim
+oi o tempo esta bom pra mim
+jarbas pesquisar na internet
+oi volume alto agora
+volume baixo pra mim
+jarbas tirar um print da tela
+jarvis apagar a luz
+por favor ola jarvis por favor
+por favor ligar a luz pra mim
+jarvis parar pra mim
+oi volume alto
+por favor tirar um print da tela por favor
+continuar
+ei toque uma musica
+jarbas continuar agora
+jarbas que horas sao pra mim
+ei quantos agentes estao ativos agora
+aumentar o volume pra mim
+jarbas temperatura agora pra mim
+que horas sao pra mim
+jarvis parar por favor
+por favor volume alto agora
+oi volume baixo pra mim
+oi abra o menu agora
+por favor ajuda
+jarbas desligar por favor
+ei obrigado agora
+por favor temperatura da cpu por favor
+jarvis me mande um email pra mim
+por favor desligar pra mim
+qual o tempo agora
+vai chover hoje agora
+jarbas toque uma musica pra mim
+jarvis toque uma musica
+tirar um print da tela por favor
+jarvis desligar agora
+jarbas boa noite jarvis agora
+jarbas feche a janela por favor
+jarvis o tempo esta bom por favor
+jarvis abra o menu agora
+parar agora
+ei abra o menu agora
+jarbas diminuir o volume
+oi aumentar o volume pra mim
+ei status do sistema
+jarvis jarvis pra mim
+jarvis ajuda agora
+jarvis pra mim
+por favor o tempo esta bom
+ei ligar a luz agora
+jarbas bom dia jarvis por favor
+por favor volume alto pra mim
+ei aumentar o volume por favor
+oi como esta o tempo pra mim
+ei temperatura da cpu
+oi quantos agentes estao ativos por favor
+ei diminuir o volume pra mim
+por favor continuar agora
+oi toque uma musica agora
+jarbas volume alto pra mim
+por favor obrigado
+jarbas volume alto por favor
+ei feche a janela agora
+ei bom dia jarvis
+por favor volume baixo agora
+jarvis abra o menu por favor
+jarbas jarvis pra mim
+jarvis pesquisar na internet agora
+me mande um email agora
+jarbas jarvis
+oi o tempo esta bom agora
+jarbas ligar a luz por favor
+ei volume alto
+apagar a luz
+jarbas jarvis por favor
+oi qual o tempo
+jarvis quantos agentes estao ativos agora
+oi continuar
+ei parar pra mim
+oi tirar um print da tela pra mim
+por favor me mande um email agora
+oi temperatura agora agora
+temperatura agora agora
+jarbas nao
+ei volume alto por favor
+oi me mande um email
+jarbas qual o tempo pra mim
+jarbas que horas sao
+ei aumentar o volume pra mim
+silenciar o microfone agora
+obrigado pra mim
+oi continuar pra mim
+jarbas ajuda agora
+jarvis desligar por favor
+jarvis ajuda por favor
+por favor bom dia jarvis agora
+parar por favor
+jarbas desligar
+oi abrir terminal agora
+ei obrigado
+ligar a luz agora
+jarbas temperatura da cpu por favor
+oi diminuir o volume pra mim
+vai chover hoje por favor
+oi sim pra mim
+jarvis parar
+por favor ola jarvis pra mim
+jarvis volume alto por favor
+por favor o tempo esta bom pra mim
+obrigado
+jarvis qual o tempo por favor
+jarbas vai chover hoje
+por favor como esta o tempo pra mim
+jarbas continuar
+por favor jarvis pra mim
+por favor sim
+oi vai chover hoje
+jarvis vai chover hoje agora
+me mande um email
+ei uso de memoria
+por favor que horas sao agora
+ei status do sistema agora
+oi tirar um print da tela agora
+por favor status do sistema agora
+ei desligar agora
+jarbas pesquisar na internet por favor
+aumentar o volume agora
+jarbas ajuda pra mim
+jarvis o tempo esta bom pra mim
+oi parar por favor
+jarvis ola jarvis pra mim
+jarbas pesquisar na internet pra mim
+oi continuar agora
+ei abra o menu pra mim
+por favor me mande um email por favor
+jarvis que horas sao por favor
+jarbas volume alto
+jarbas uso de memoria agora
+oi que horas sao
+oi que horas sao pra mim
+oi status do sistema pra mim
+por favor jarvis agora
+desligar agora
+jarvis status do sistema pra mim
+jarvis pesquisar na internet pra mim
+jarvis obrigado agora
+ei feche a janela pra mim
+jarbas bom dia jarvis pra mim
+jarbas temperatura da cpu pra mim
+por favor continuar pra mim
+oi silenciar o microfone por favor
+por favor diminuir o volume
+diminuir o volume pra mim
+bom dia jarvis pra mim
+por favor toque uma musica agora
+jarbas parar
+jarbas quantos agentes estao ativos
+como esta o tempo por favor
+quantos agentes estao ativos pra mim
+ei quantos agentes estao ativos por favor
+jarvis boa noite jarvis por favor
+jarvis aumentar o volume agora
+oi ola jarvis agora
+oi parar
+jarvis diminuir o volume
+por favor status do sistema por favor
+jarbas nao pra mim
+jarbas volume baixo
+por favor ajuda agora
+jarvis quantos agentes estao ativos por favor
+ei toque uma musica pra mim
+ei tirar um print da tela por favor
+ei volume alto pra mim
+jarvis feche a janela pra mim
+ei feche a janela por favor
+por favor volume baixo
+jarvis continuar pra mim
+por favor boa noite jarvis
+oi boa noite jarvis agora
+jarbas ligar a luz pra mim
+ei toque uma musica por favor
+toque uma musica por favor
+ei como esta o tempo
+vai chover hoje
+volume alto
+diminuir o volume
+ei ajuda
+jarbas quantos agentes estao ativos pra mim
+jarvis obrigado pra mim
+por favor obrigado agora
+por favor abra o menu pra mim
+jarvis ola jarvis
+jarvis parar agora
+jarvis continuar por favor
+pesquisar na internet pra mim
+pesquisar na internet
+oi sim
+ei que horas sao agora
+ei qual o tempo por favor
+ei o tempo esta bom pra mim
+por favor nao
+jarvis qual o tempo agora
+jarvis vai chover hoje por favor
+ei status do sistema pra mim
+por favor feche a janela por favor
+jarvis desligar pra mim
+jarvis tirar um print da tela agora
+ei ligar a luz por favor
+oi uso de memoria pra mim
+oi uso de memoria agora
+oi toque uma musica
+apagar a luz pra mim
+jarbas sim por favor
+pesquisar na internet agora
+jarbas desligar agora
+jarbas status do sistema agora
+oi abrir terminal por favor
+ei jarvis pra mim
+jarbas jarvis agora
+jarvis diminuir o volume pra mim
+jarbas nao por favor
+por favor o tempo esta bom por favor
+ei temperatura da cpu por favor
+jarbas boa noite jarvis pra mim
+oi uso de memoria por favor
+por favor abrir terminal por favor
+ei vai chover hoje
+ei toque uma musica agora
+ei pesquisar na internet pra mim
+jarvis vai chover hoje
+ei abra o menu
+status do sistema por favor
+por favor quantos agentes estao ativos
+ola jarvis por favor
+por favor abrir terminal pra mim
+jarvis obrigado
+por favor bom dia jarvis
+ei me mande um email agora
+volume alto por favor
+oi jarvis agora
+jarbas diminuir o volume pra mim
+ei continuar agora
+abrir terminal agora
+por favor quantos agentes estao ativos pra mim
+jarbas pesquisar na internet agora
+oi pesquisar na internet
+ei jarvis por favor
+jarbas volume alto agora
+ei ajuda pra mim
+ei nao por favor
+por favor ola jarvis agora
+jarbas qual o tempo por favor
+toque uma musica
+jarbas ola jarvis agora
+jarvis como esta o tempo por favor
+por favor abra o menu
+jarvis continuar
+por favor jarvis
+jarbas como esta o tempo por favor
+jarvis ajuda
+jarbas quantos agentes estao ativos por favor
+por favor tirar um print da tela agora
+por favor temperatura da cpu agora
+silenciar o microfone por favor
+oi ola jarvis por favor
+oi vai chover hoje pra mim
+ei volume baixo agora
+ei parar
+por favor obrigado por favor
+por favor desligar agora
+ei uso de memoria agora
+jarvis temperatura agora pra mim
+status do sistema pra mim
+por favor sim agora
+ei tirar um print da tela pra mim
+jarvis tirar um print da tela por favor
+jarbas como esta o tempo agora
+ei que horas sao
+oi jarvis
+jarbas como esta o tempo pra mim
+jarvis como esta o tempo pra mim
+jarbas ola jarvis pra mim
+jarbas aumentar o volume
+oi qual o tempo por favor
+por favor bom dia jarvis por favor
+oi status do sistema agora
+jarbas status do sistema
+ei vai chover hoje pra mim
+jarvis toque uma musica agora
+jarvis tirar um print da tela pra mim
+o tempo esta bom por favor
+ei temperatura agora
+oi nao pra mim
+nao
+ei diminuir o volume
+jarbas ligar a luz agora
+jarbas desligar pra mim
+ei obrigado pra mim
+jarbas aumentar o volume por favor
+ei uso de memoria pra mim
+por favor nao por favor
+jarvis me mande um email
+jarbas vai chover hoje pra mim
+por favor aumentar o volume pra mim
+ei qual o tempo
+por favor volume baixo pra mim
+ei o tempo esta bom por favor
+jarvis temperatura agora agora
+oi apagar a luz pra mim
+ei ligar a luz
+nao por favor
+jarvis feche a janela agora
+jarbas qual o tempo agora
+ei sim por favor
+jarbas tirar um print da tela pra mim
+oi tirar um print da tela
+por favor temperatura agora pra mim
+bom dia jarvis
+oi nao agora
+jarbas aumentar o volume pra mim
+oi ligar a luz pra mim
+status do sistema
+por favor como esta o tempo por favor
+boa noite jarvis por favor
+jarbas o tempo esta bom pra mim
+sim agora
+jarbas continuar por favor
+ei nao agora
+oi silenciar o microfone agora
+jarvis temperatura da cpu agora
+ei tirar um print da tela agora
+jarvis temperatura da cpu pra mim
+tirar um print da tela pra mim
+ei sim agora
+jarvis qual o tempo
+jarbas ajuda
+por favor que horas sao pra mim
+como esta o tempo pra mim
+ei sim pra mim
+jarvis ola jarvis por favor
+jarbas vai chover hoje por favor
+oi status do sistema por favor
+por favor temperatura agora
+jarvis que horas sao
+oi aumentar o volume agora
+por favor silenciar o microfone pra mim
+jarvis ligar a luz por favor
+oi ajuda agora
+por favor aumentar o volume agora
+por favor diminuir o volume pra mim
+ei volume baixo pra mim
+oi pesquisar na internet agora
+jarbas feche a janela
+oi me mande um email pra mim
+por favor pesquisar na internet
+ei apagar a luz
+ei ajuda por favor
+por favor desligar por favor
+oi apagar a luz
+temperatura da cpu agora
+ei temperatura da cpu pra mim
+jarbas sim agora
+ei qual o tempo agora
+oi apagar a luz agora
+oi parar agora
+jarvis volume baixo por favor
+continuar por favor
+jarbas toque uma musica por favor
+jarvis me mande um email por favor
+por favor ola jarvis
+jarvis volume alto agora
+abra o menu por favor
+oi desligar pra mim
+jarvis ligar a luz pra mim
+jarbas apagar a luz pra mim
+jarvis me mande um email agora
+oi volume baixo
+jarbas diminuir o volume por favor
+oi como esta o tempo por favor
+qual o tempo por favor
+ei como esta o tempo pra mim
+abrir terminal
+oi feche a janela agora
+oi status do sistema
+ei bom dia jarvis agora
+por favor uso de memoria
+por favor diminuir o volume por favor
+ei apagar a luz pra mim
+oi temperatura da cpu pra mim
+por favor toque uma musica por favor
+jarvis quantos agentes estao ativos
+jarvis sim por favor
+oi aumentar o volume
+ei ola jarvis pra mim
+oi volume alto por favor
+jarvis pesquisar na internet
+por favor nao pra mim
+ei continuar
+apagar a luz agora
+ei aumentar o volume agora
+jarbas abra o menu agora
+ei boa noite jarvis
+ajuda por favor
+jarvis uso de memoria
+jarvis agora
+oi parar pra mim
+jarbas me mande um email pra mim
+feche a janela
+jarvis feche a janela por favor
+jarvis status do sistema agora
+por favor jarvis por favor
+oi apagar a luz por favor
+ei desligar
+ei boa noite jarvis por favor
+por favor desligar
+ei silenciar o microfone por favor
+jarbas apagar a luz
+jarbas status do sistema por favor
+ei quantos agentes estao ativos pra mim
+jarvis ajuda pra mim
+oi temperatura agora pra mim
+desligar
+ei temperatura da cpu agora
+por favor ajuda por favor
+por favor parar agora
+sim pra mim
+jarvis temperatura da cpu por favor
+nao agora
+ei silenciar o microfone
+abra o menu pra mim
+oi diminuir o volume por favor
+por favor diminuir o volume agora
+oi continuar por favor
+ei que horas sao por favor
+por favor quantos agentes estao ativos por favor
+por favor parar pra mim
+ligar a luz por favor
+jarbas apagar a luz por favor
+por favor abra o menu agora
+ligar a luz
+oi pesquisar na internet por favor
+jarbas que horas sao por favor
+oi como esta o tempo agora
+oi pesquisar na internet pra mim
+jarvis jarvis agora
+oi jarvis por favor
+jarvis como esta o tempo agora
+jarvis vai chover hoje pra mim
+jarbas silenciar o microfone
+oi toque uma musica por favor
+oi diminuir o volume agora
+ei pesquisar na internet
+jarvis aumentar o volume
+oi feche a janela pra mim
+por favor como esta o tempo agora
+ei o tempo esta bom agora
+jarbas vai chover hoje agora
+jarbas tirar um print da tela agora
+oi volume alto pra mim
+jarbas temperatura da cpu agora
+oi obrigado por favor
+por favor que horas sao por favor
+ei sim
+por favor que horas sao
+jarvis o tempo esta bom agora
+por favor uso de memoria por favor
+jarvis aumentar o volume por favor
+jarvis obrigado por favor
+como esta o tempo agora
+jarvis boa noite jarvis agora
+por favor me mande um email pra mim
+jarvis silenciar o microfone pra mim
+jarvis por favor
+jarvis uso de memoria agora
+jarbas temperatura agora por favor
+por favor sim por favor
+por favor temperatura agora por favor
+uso de memoria por favor
+ei abrir terminal por favor
+por favor toque uma musica pra mim
+por favor ligar a luz por favor
+me mande um email por favor
+jarvis nao por favor
+oi sim por favor
+temperatura da cpu por favor
+jarbas sim
+ei temperatura agora agora
+desligar por favor
+uso de memoria pra mim
+oi desligar agora
+ei ola jarvis
+ei ola jarvis por favor
+silenciar o microfone
+quantos agentes estao ativos
+jarbas abrir terminal agora
+jarvis temperatura agora
+jarbas ligar a luz
+diminuir o volume agora
+ei apagar a luz por favor
+ei temperatura agora pra mim
+jarbas me mande um email por favor
+sim por favor
+por favor quantos agentes estao ativos agora
+feche a janela agora
+jarbas abra o menu por favor
+oi me mande um email agora
+ei nao
+o tempo esta bom pra mim
+jarvis nao pra mim
+abra o menu agora
+desligar pra mim
+oi boa noite jarvis por favor
+jarbas parar por favor
+volume alto pra mim
+ola jarvis pra mim
+ei feche a janela
+ei vai chover hoje agora
+pesquisar na internet por favor
+jarvis abra o menu
+por favor pesquisar na internet agora
+ei silenciar o microfone pra mim
+abra o menu
+oi vai chover hoje por favor
+por favor uso de memoria agora
+ei desligar pra mim
+ei tirar um print da tela
+jarvis aumentar o volume pra mim
+ei me mande um email pra mim
+jarvis boa noite jarvis pra mim
+ei continuar pra mim
+jarvis uso de memoria pra mim
+por favor uso de memoria pra mim
+oi temperatura da cpu por favor
+jarbas uso de memoria pra mim
+oi qual o tempo agora
+ei como esta o tempo por favor
+por favor silenciar o microfone
+por favor pesquisar na internet pra mim
+jarbas toque uma musica
+jarbas volume baixo agora
+jarbas apagar a luz agora
+por favor vai chover hoje
+obrigado por favor
+jarvis diminuir o volume por favor
+oi temperatura agora
+boa noite jarvis
+ola jarvis agora
+ei aumentar o volume
+jarvis nao
+ei qual o tempo pra mim
+oi abra o menu por favor
+por favor volume alto por favor
+ei abrir terminal
+jarvis
+por favor qual o tempo
+ei bom dia jarvis por favor
+jarvis toque uma musica pra mim
+jarbas silenciar o microfone agora
+jarbas qual o tempo
+oi vai chover hoje agora
+jarbas status do sistema pra mim
+oi temperatura agora por favor
+oi bom dia jarvis
+temperatura agora pra mim
+jarbas me mande um email agora
+ajuda agora
+diminuir o volume por favor
+jarvis uso de memoria por favor
+por favor qual o tempo agora
+jarbas obrigado pra mim
+ajuda
+ei volume baixo por favor
+jarbas obrigado por favor
+oi feche a janela
+jarvis silenciar o microfone
+ei bom dia jarvis pra mim
+por favor aumentar o volume
+oi quantos agentes estao ativos pra mim
+por favor como esta o tempo
+jarvis continuar agora
+que horas sao
+aumentar o volume
+jarbas nao agora
+jarbas abra o menu pra mim
+por favor me mande um email
+ei vai chover hoje por favor
+ei jarvis
+parar
+ei desligar por favor
+jarbas o tempo esta bom agora
+toque uma musica pra mim
+jarbas uso de memoria
+jarvis jarvis
+oi ligar a luz agora
+volume alto agora
+oi ligar a luz por favor
+oi tirar um print da tela por favor
+jarvis o tempo esta bom
+jarvis boa noite jarvis
+oi que horas sao agora
+oi ligar a luz
+ei obrigado por favor
+ei nao pra mim
+jarbas ajuda por favor
+oi desligar por favor
+por favor feche a janela pra mim
+por favor status do sistema
+oi como esta o tempo
+oi desligar
+por favor feche a janela agora
+ajuda pra mim
+jarvis tirar um print da tela
+o tempo esta bom agora
+por favor boa noite jarvis agora
+jarvis silenciar o microfone agora
+jarbas obrigado
+oi obrigado pra mim
+jarvis apagar a luz por favor
+jarvis como esta o tempo
+por favor tirar um print da tela pra mim
+ei ligar a luz pra mim
+que horas sao por favor
+quantos agentes estao ativos por favor
+oi qual o tempo pra mim
+aumentar o volume por favor
+ei o tempo esta bom
+nao pra mim
+jarbas temperatura da cpu
+oi jarvis pra mim
+jarbas sim pra mim
+oi silenciar o microfone pra mim
+por favor obrigado pra mim
+parar pra mim
+temperatura da cpu
+volume baixo por favor
+jarvis abrir terminal pra mim
+jarvis diminuir o volume agora
+ei continuar por favor
+oi volume baixo agora
+jarvis bom dia jarvis agora
+jarbas bom dia jarvis agora
+por favor volume alto
+jarbas volume baixo por favor
+ei uso de memoria por favor
+jarvis desligar
+oi boa noite jarvis pra mim
+oi bom dia jarvis agora
+por favor temperatura da cpu pra mim
+jarbas abrir terminal por favor
+por favor pesquisar na internet por favor
+por favor toque uma musica
+oi sim agora
+jarvis volume baixo pra mim
+jarvis sim
+ei pesquisar na internet por favor
+por favor abrir terminal agora
+jarbas feche a janela pra mim
+ei boa noite jarvis pra mim
+jarvis volume alto
+jarbas ola jarvis
+oi ajuda pra mim
+oi uso de memoria
+por favor vai chover hoje pra mim
+jarvis sim agora
+o tempo esta bom
+ei que horas sao pra mim
+oi quantos agentes estao ativos
+ei me mande um email por favor
+jarbas que horas sao agora
+oi toque uma musica pra mim
+ei parar agora
+temperatura da cpu pra mim
+tirar um print da tela agora
+jarvis sim pra mim
+quantos agentes estao ativos agora
+por favor abra o menu por favor
+jarbas parar pra mim
+jarvis abrir terminal
+por favor boa noite jarvis pra mim
+por favor apagar a luz por favor
+jarbas volume baixo pra mim
+jarbas o tempo esta bom
+jarvis apagar a luz agora
+jarbas parar agora
+por favor nao agora
+por favor temperatura da cpu
+jarbas me mande um email
+oi temperatura da cpu
+por favor continuar por favor
+ei status do sistema por favor
+jarbas abra o menu
+volume baixo
+ei quantos agentes estao ativos
+jarbas temperatura agora agora
+por favor aumentar o volume por favor
+jarvis bom dia jarvis por favor
+abrir terminal por favor
+jarbas bom dia jarvis
+por favor silenciar o microfone por favor
+por favor feche a janela
+qual o tempo pra mim
+oi nao por favor
+temperatura agora
+ei diminuir o volume agora
+ei me mande um email
+jarbas abrir terminal pra mim
+por favor qual o tempo por favor
+jarbas o tempo esta bom por favor
+volume baixo agora
+oi feche a janela por favor
+continuar pra mim
+por favor abrir terminal
+como esta o tempo
+feche a janela por favor
+vai chover hoje pra mim
+oi ajuda por favor
+por favor parar
+jarbas como esta o tempo
+jarbas feche a janela agora
+oi ola jarvis pra mim
+por favor ligar a luz agora
+bom dia jarvis agora
+oi obrigado agora
+oi abrir terminal pra mim
+jarvis abrir terminal agora
+jarvis bom dia jarvis pra mim
+jarvis que horas sao agora
+jarbas aumentar o volume agora
+oi aumentar o volume por favor
+jarvis ligar a luz
+ei como esta o tempo agora
+abrir terminal pra mim
+jarvis bom dia jarvis
+status do sistema agora
+jarvis feche a janela
+oi boa noite jarvis
+ei apagar a luz agora
+oi bom dia jarvis pra mim
+oi ajuda
+jarvis status do sistema
+jarbas boa noite jarvis
+jarvis ola jarvis agora
+ligar a luz pra mim
+jarvis quantos agentes estao ativos pra mim
+por favor bom dia jarvis pra mim
+oi abrir terminal
+jarvis nao agora
+qual o tempo
+oi abra o menu
+boa noite jarvis agora
+bom dia jarvis por favor
+jarbas diminuir o volume agora
+oi obrigado
+por favor vai chover hoje agora
+jarbas continuar pra mim

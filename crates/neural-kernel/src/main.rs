@@ -2011,9 +2011,11 @@ pub(crate) fn kernel_boot(
         audio::skills::init_neural_tts();
     }
 
-    // Labor 12: pins FAT após ATA (smoke HTTPS pode ter aprendido em RAM antes).
+    // Labor 12 / SESSION_345 F1: load pins no DriverInit; NÃO persistir aqui.
+    // persist→find_free_clusters em volume 6GB cheio = soft-hang PIO (QEMU 8c).
+    // Persist deferido p/ Runtime (overwrite-only / TLSPINS prealloc).
     crate::tls_trust::load_pins_from_fat();
-    crate::tls_trust::persist_pins_to_fat();
+    k_nano::slog_bin!("TLS", "ok", "pins=FAT load done; persist deferred to Runtime");
 
     publish_boot_phase(BootPhase::DriverInit, &alloc::format!("ATA probe={}", if ata_found { "found" } else { "none" }));
 
@@ -3421,8 +3423,12 @@ pub(crate) fn kernel_boot(
     registry.register(Box::new(audio::wakeword::WakeWordAgent::new()));
     crate::display::fb::boot_ckpt(47, "WakeWord OK");
 
-    registry.register(Box::new(audio::pipeline::AudioPipelineAgent::new()));
-    crate::display::fb::boot_ckpt(48, "AudioPipeline OK");
+    // WS2: dono ÚNICO do microfone (poll HDA/UAC + 48k estéreo→16k mono + frames
+    // fixos + VAD único). Substitui o AudioPipelineAgent, cujo único papel
+    // (barge-in) passou para a sessão de voz — onde é possível invalidar a geração
+    // de TTS em vez de só limpar o ring.
+    registry.register(Box::new(audio::capture::AudioInputAgent::new()));
+    crate::display::fb::boot_ckpt(48, "AudioInput OK");
 
     registry.register(Box::new(audio::mixer::AudioMixerAgent::new()));
     crate::display::fb::boot_ckpt(49, "AudioMixer OK");
@@ -4869,6 +4875,9 @@ pub(crate) fn kernel_boot(
     unsafe { crate::interrupts_ext::init_pic_fallback_and_sti(); }
 
     publish_boot_phase(BootPhase::Runtime, "Entrando no AgentScheduler");
+
+    // SESSION_345 F1: pins FAT só após Runtime vivo (overwrite-only se TLSPINS prealloc).
+    crate::tls_trust::persist_pins_to_fat();
 
     // Onda 6 — residuals AirLLM (ATA soft path OK; DMA/stream/K-quant AWAITING).
     crate::gguf_streaming::log_airllm_residuals();

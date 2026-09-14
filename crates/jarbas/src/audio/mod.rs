@@ -15,13 +15,13 @@ pub mod ser;
 pub mod context;
 pub mod piper;
 pub mod voice;
+pub mod capture;
 pub mod skills;
 pub mod settings;
 pub mod mixer;
 pub mod jarvis;
 pub mod wakeword;
 pub mod usb;
-pub mod pipeline;
 pub mod token;
 pub mod codebook;
 pub mod stt;
@@ -36,3 +36,10 @@ pub const TOPIC_AUDIO_OUT: &str = "AUDIO_OUT";
 pub const TOPIC_WAKEWORD: &str = "WAKEWORD";
 pub const TOPIC_STT_TEXT: &str = "STT_TEXT";
 pub const TOPIC_TTS_CMD: &str = "TTS_CMD";
+/// Frames de 320 amostras @16 kHz mono — contrato de entrada do consumidor de voz
+/// (produzido exclusivamente por `capture::AudioInputAgent`).
+pub const TOPIC_AUDIO_FRAME: &str = "AUDIO_FRAME";
+/// Transição de VAD única do sistema (payload `start|end`).
+pub const TOPIC_VAD_TRANSITION: &str = "VAD_TRANSITION";
+/// Estado da sessão de voz (payload = `VoiceState as u8` + rótulo).
+pub const TOPIC_VOICE_STATE: &str = "VOICE_STATE";

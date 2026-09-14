@@ -36,10 +36,40 @@ pub fn build_emotional_context(text_emotion: Option<Emotion>) -> String {
     };
 
     let source = if LAST_VOICE_EMOTION.load(Ordering::Relaxed) != 6 { "voice" } else { "text" };
+    // Distribuição de crença suavizada (WS6): se voz e texto discordam, o contexto
+    // carrega a SEGUNDA opinião também — antes só o vencedor aparecia e a LLM perdia
+    // a ambiguidade (ex.: texto neutro + voz tensa).
+    let (second, second_q) = second_emotion();
     alloc::format!(
-        "[Emotion: {} | Energy: {} | Source: {}]",
-        combined, energy, source
+        "[Emotion: {} | Energy: {} | Source: {} | Alt: {} ({})]",
+        combined, energy, source, second, second_q
     )
+}
+
+/// Segunda emoção mais provável da distribuição, com peso Q8 (0–255).
+fn second_emotion() -> (&'static str, u32) {
+    let mut best = (0usize, 0u32);
+    let mut second = (0usize, 0u32);
+    for (i, slot) in crate::audio::voice::EMOTION_DIST.iter().enumerate() {
+        let v = slot.load(Ordering::Relaxed);
+        if v > best.1 {
+            second = best;
+            best = (i, v);
+        } else if v > second.1 {
+            second = (i, v);
+        }
+    }
+    const NAMES: [&str; 8] = [
+        "joy",
+        "sadness",
+        "anger",
+        "fear",
+        "surprise",
+        "disgust",
+        "neutral",
+        "sarcasm",
+    ];
+    (NAMES[second.0.min(7)], second.1)
 }
 
 fn format_emotion(e: Emotion) -> &'static str {

@@ -143,6 +143,8 @@ const PARAM_OUT_AMP_CAP: u32 = 0x0C;
 const PARAM_CONNLIST_LEN: u32 = 0x0E;
 const PARAM_POWER_STATE: u32 = 0x0F;
 const PARAM_PROC_WIDGET_CAP: u32 = 0x10;
+/// Get Parameter 0x0A — Supported Stream Formats (só faz sentido em conversores).
+const PARAM_SUPP_STREAM_FORMATS: u32 = 0x0A;
 const PARAM_GPIO_CAP: u32 = 0x11;
 const PARAM_VOLUME_KNOB_CAP: u32 = 0x12;
 
@@ -168,9 +170,33 @@ const PIN_OUT_EN: u32 = 0x40;
 const PIN_HP_EN: u32 = 0x80;
 
 // ============================================================================
-// Audio Format (16-bit, 48kHz, stereo)
+// Audio Format — Intel HDA 1.0a §3.7.1 (Stream Format), layout canônico:
+//   bits 14:12 = canais-1 | bits 10:8 = bits/amostra (001=16) |
+//   bits  6:4  = base rate (000=48kHz, 101=16kHz) | bits 3:0 = mult/div
+//
+// FIX (WS1/SESSION_345): o valor anterior era `0x21` — que nesse layout significa
+// 8-bit / mono / 32 kHz / NÃO-PCM, isto é, nada do que o comentário dizia. O
+// barramento passava a carregar amostras de 8 bits enquanto o driver lia i16 do
+// DMA: todo o áudio (captura E playback) era lido com o dobro de duração e metade
+// dos canais, além de taxa 32k em vez de 48k. Ver `tools/hda_fmt_check.py`.
 // ============================================================================
-const FMT_16BIT_48KHZ_STEREO: u32 = 0x0000_0021; // Type=PCM(0), 16-bit(2), 48kHz(0), stereo(1)
+const FMT_16BIT_48KHZ_STEREO: u32 = 0x0000_1100; // chan(2)=0x1000 | 16-bit=0x100 | base 48k=0
+/// 16 kHz mono — usado só quando o codec anuncia suporte (ver `adc_supported_formats`).
+const FMT_16BIT_16KHZ_MONO: u32 = 0x0000_0150; // chan(1)=0 | 16-bit=0x100 | base 16k=0x50
+
+/// Formato EFETIVO da captura — fonte única. A FE (jarbas) não deve hardcodar
+/// 16 kHz: o ADC entrega 48 kHz estéreo e a conversão vive em `audio/capture.rs`.
+pub const CAPTURE_RATE_HZ: u32 = 48000;
+pub const CAPTURE_CHANNELS: usize = 2;
+/// Taxa consumida pelo pipeline de voz (VAD/STT/SER).
+pub const VOICE_RATE_HZ: u32 = 16000;
+/// Razão de decimação 48k→16k (fator inteiro, logo a conversão é exata).
+pub const VOICE_DECIM: usize = (CAPTURE_RATE_HZ / VOICE_RATE_HZ) as usize;
+
+/// Anel SD0/SD1: 16 descritores de 4 KB = 64 KB.
+const BDL_ENTRIES: usize = 16;
+const ENTRY_BYTES: usize = 4096;
+const SAMPLES_PER_ENTRY: usize = ENTRY_BYTES / 2; // 2048 i16 por entrada
 
 // ============================================================================
 // Global State
@@ -184,11 +210,32 @@ static HDA_CORB_BUF: AtomicU64 = AtomicU64::new(0);
 static HDA_RIRB_BUF: AtomicU64 = AtomicU64::new(0);
 static HDA_SD0_BDL: AtomicU64 = AtomicU64::new(0);
 static HDA_SD0_BUF: AtomicU64 = AtomicU64::new(0);
+/// Cyclic Buffer Length do SD0 (usado para validar o LPIB no drain).
+static HDA_SD0_CBL: AtomicU64 = AtomicU64::new(0);
 static HDA_CORB_WP: AtomicU32 = AtomicU32::new(0);
 static HDA_RIRB_RP: AtomicU32 = AtomicU32::new(0);
 static HDA_SD0_RPI: AtomicU32 = AtomicU32::new(0); // Read Pointer Index for BDL
 static HDA_SD1_BDL: AtomicU64 = AtomicU64::new(0);
 static HDA_SD1_BUF: AtomicU64 = AtomicU64::new(0);
+/// Write cursor do playback (entrada BDL corrente) — pagina o anel SD1.
+static HDA_SD1_WPI: AtomicU32 = AtomicU32::new(0);
+
+/// O IRQ apenas SINALIZA conclusão; a leitura do BDL + publish acontece no tick do
+/// AudioInputAgent. Antes o handler de interrupção fazia o walk completo e alocava
+/// um `Vec` por chunk — alloc dentro de IRQ, e o MESMO walk duplicado em dois
+/// lugares (duas verdades que divergiam).
+static HDA_SD0_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Contadores auditáveis da captura. `CAP_ENTRIES_DRAINED` deve crescer ~47/s
+/// (48 kHz estéreo / 2048 amostras por entrada) e cada entrada é publicada UMA vez.
+pub static CAP_ENTRIES_DRAINED: AtomicU64 = AtomicU64::new(0);
+pub static CAP_SAMPLES_PUBLISHED: AtomicU64 = AtomicU64::new(0);
+/// Incrementa quando o LPIB volta valor implausível e caímos no fallback de 1 entrada.
+pub static CAP_LPIB_STALE: AtomicU64 = AtomicU64::new(0);
+/// Formatos suportados pelo ADC (verb Get Parameter 0x0A) — observação, não política.
+pub static CAP_ADC_SUPPORTED_FMT: AtomicU32 = AtomicU32::new(0);
+/// Amostras de playback descartadas por o anel SD1 estar cheio.
+pub static PLAY_SAMPLES_DROPPED: AtomicU64 = AtomicU64::new(0);
 
 // DMA buffers (kept alive)
 static mut CORB_DMA: Option<DmaBuf> = None;
@@ -643,6 +690,24 @@ unsafe fn configure_capture_path(bar: u64) -> bool {
             VERB_SET_CONNECTION_SELECT | conn_idx,
         );
 
+        // OBSERVAÇÃO (não política): o que o ADC realmente anuncia suportar.
+        // Bit 0 = 8 kHz, 1 = 11.025, 2 = 16 kHz, 3 = 22.05, 4 = 24, 5 = 32,
+        // 6 = 44.1, 7 = 48 kHz; bits 8–10 = 16/20/24/32-bit; 11–13 = taxas ×2..×4.
+        // Fica registrado para decidir o switch gated para 16 kHz mono em HW real.
+        if let Some(fmt) = icw_send(bar, cad, codec.adc_nid, VERB_GET_PARAMETER | PARAM_SUPP_STREAM_FORMATS) {
+            CAP_ADC_SUPPORTED_FMT.store(fmt, Ordering::Release);
+            let sixteen_k = fmt & (1 << 2) != 0;
+            slog_nano!(
+                "HDA",
+                "info",
+                "ADC fmt cap=0x{:08X} 16k={} (fmt ativo=0x{:04X} 48k/est) mono16k=0x{:04X} gated",
+                fmt,
+                sixteen_k,
+                FMT_16BIT_48KHZ_STEREO,
+                FMT_16BIT_16KHZ_MONO
+            );
+        }
+
         let _ = corb_write_and_wait(
             bar,
             cad,
@@ -828,6 +893,7 @@ unsafe fn init_sd0_capture(bar: u64) -> bool {
     
     // Program Cyclic Buffer Length (total ring size = 64KB)
     w32(bar, sd0_cbl, audio_size as u32);
+    HDA_SD0_CBL.store(audio_size as u64, Ordering::Release);
     
     // Program Last Valid Index (15 = 16 entries, 0-based)
     w16(bar, sd0_lvi, 15);
@@ -955,53 +1021,94 @@ pub unsafe fn hda_irq_handler() {
         w16(bar, sd0_sts_off, sd0_sts | SD_STS_FIFOE as u16 | SD_STS_DESE as u16);
     }
     
-    // Process completed BDL entries
-    let rpi = HDA_SD0_RPI.load(Ordering::Acquire);
-    let audio_phys = HDA_SD0_BUF.load(Ordering::Acquire);
-    let audio_virt = (audio_phys + PHYS_MEM_OFFSET.load(Ordering::Acquire)) as *const i16;
-    
-    // Each BDL entry is 4KB = 2048 i16 samples
-    const SAMPLES_PER_ENTRY: usize = 2048;
-    
-    // Process up to 16 entries (full ring)
-    for _ in 0..16 {
-        let entry_idx = rpi % 16;
-        let entry_offset = (entry_idx as usize) * SAMPLES_PER_ENTRY;
-        
-        // Copy samples to MIC_CAPTURE_RING (via EventBus publish)
-        // We'll publish in chunks to avoid huge allocations
-        const CHUNK_SIZE: usize = 512;
-        let mut remaining = SAMPLES_PER_ENTRY;
-        let mut offset = entry_offset;
-        
-        while remaining > 0 {
-            let chunk = remaining.min(CHUNK_SIZE);
-            let samples = core::slice::from_raw_parts(audio_virt.add(offset), chunk);
-            
-            // Convert i16 to bytes for EventBus
-            let mut audio_buf = alloc::vec::Vec::with_capacity(chunk * 2);
-            for &s in samples {
-                audio_buf.extend_from_slice(&s.to_le_bytes());
-            }
-            
-            let _ = crate::globals::EVENT_BUS.publish(Event {
-                id: 0,
-                topic: alloc::string::String::from("AUDIO_IN"),
-                payload: audio_buf,
-                token: CapabilityToken::Legacy(1),
-            });
-            
-            offset += chunk;
-            remaining -= chunk;
-        }
-        
-        // Advance RPI
-        let next_rpi = (rpi + 1) % 16;
-        HDA_SD0_RPI.store(next_rpi, Ordering::Release);
-    }
-    
+    // Interrupção NÃO faz trabalho pesado: sem alloc, sem publish, sem walk do BDL
+    // (era aqui que o mesmo descritor era republicado 16× — ver drain_sd0_completed).
+    HDA_SD0_PENDING.store(true, Ordering::Release);
+
     // Acknowledge global interrupt (write 1 to clear)
     w32(bar, HDA_INTSTS, intsts);
+}
+
+/// Publica UMA entrada do BDL SD0 (2048 i16 = 4 KB @48 kHz estéreo ≈ 21 ms).
+///
+/// Antes: cada entrada era fatiada em 4 publishes de 512 amostras e o mesmo índice
+/// era republicado 16× por interrupção (`rpi` era capturado FORA do loop, então
+/// `entry_idx` e `next_rpi` nunca mudavam) → 32.768 amostras duplicadas por BCIS e
+/// um RPI que avançava 1 enquanto o hardware já tinha passado por N entradas.
+unsafe fn publish_sd0_entry(entry_idx: usize) {
+    let audio_phys = HDA_SD0_BUF.load(Ordering::Acquire);
+    if audio_phys == 0 {
+        return;
+    }
+    let audio_virt = (audio_phys + PHYS_MEM_OFFSET.load(Ordering::Acquire)) as *const i16;
+    let samples = core::slice::from_raw_parts(audio_virt.add(entry_idx * SAMPLES_PER_ENTRY), SAMPLES_PER_ENTRY);
+    let mut buf = alloc::vec::Vec::with_capacity(SAMPLES_PER_ENTRY * 2);
+    for &s in samples {
+        buf.extend_from_slice(&s.to_le_bytes());
+    }
+    let _ = crate::globals::EVENT_BUS.publish(Event {
+        id: 0,
+        topic: alloc::string::String::from("AUDIO_IN"),
+        payload: buf,
+        token: CapabilityToken::Legacy(1),
+    });
+    CAP_SAMPLES_PUBLISHED.fetch_add(SAMPLES_PER_ENTRY as u64, Ordering::Relaxed);
+}
+
+/// Drena as entradas do BDL SD0 que o controlador JÁ completou, uma única vez cada.
+///
+/// A posição corrente do hardware vem do LPIB (Link Position In Buffer, offset
+/// dentro do buffer cíclico). Entradas entre o nosso RPI e a entrada corrente do
+/// hardware estão completas. LPIB implausível → fallback honesto de 1 entrada por
+/// chamada (nunca trava, nunca republica em loop).
+pub unsafe fn drain_sd0_completed() {
+    let bar = HDA_BAR.load(Ordering::Acquire);
+    if bar == 0 || !HDA_INIT_DONE.load(Ordering::Acquire) {
+        return;
+    }
+    let sts_off = SD0_BASE + SDX_STS;
+    let sts = r16(bar, sts_off);
+    let pending = HDA_SD0_PENDING.swap(false, Ordering::AcqRel);
+    if !pending && sts & SD_STS_BCIS as u16 == 0 {
+        return;
+    }
+    if sts & SD_STS_BCIS as u16 != 0 {
+        w16(bar, sts_off, sts | SD_STS_BCIS as u16);
+    }
+
+    let lpib = r32(bar, SD0_BASE + SDX_LPIB) as usize;
+    let cbl = HDA_SD0_CBL.load(Ordering::Acquire) as usize;
+    let mut rpi = HDA_SD0_RPI.load(Ordering::Acquire);
+
+    // Quantas entradas completas drenar. `hw_entry` é a entrada que o hardware está
+    // escrevendo AGORA — nunca a publicamos (ainda incompleta).
+    let valid_lpib = cbl > 0 && lpib < cbl;
+    let hw_entry = if valid_lpib { (lpib / ENTRY_BYTES) % BDL_ENTRIES } else { 0 };
+    if !valid_lpib {
+        CAP_LPIB_STALE.fetch_add(1, Ordering::Relaxed);
+    }
+
+    let mut drained = 0usize;
+    loop {
+        if drained >= BDL_ENTRIES {
+            break;
+        }
+        if valid_lpib {
+            // RPI alcançou a posição do hardware: nada novo completo. Não republica.
+            if rpi as usize == hw_entry {
+                break;
+            }
+        } else if drained >= 1 {
+            break; // LPIB implausível: degrada para 1 entrada por chamada
+        }
+        publish_sd0_entry(rpi as usize);
+        rpi = (rpi + 1) % BDL_ENTRIES as u32;
+        drained += 1;
+    }
+    if drained > 0 {
+        HDA_SD0_RPI.store(rpi, Ordering::Release);
+        CAP_ENTRIES_DRAINED.fetch_add(drained as u64, Ordering::Relaxed);
+    }
 }
 
 // ============================================================================
@@ -1139,62 +1246,9 @@ pub fn init_hda() -> bool {
 /// Poll HDA audio (compatibility function for non-IRQ path).
 /// Reads completed BDL entries and publishes to EventBus.
 pub fn poll_hda_audio() {
-    if !HDA_INIT_DONE.load(Ordering::Acquire) {
-        return;
-    }
-    
-    let bar = HDA_BAR.load(Ordering::Acquire);
-    if bar == 0 {
-        return;
-    }
-    
+    // Uma única verdade do walk do BDL (a mesma usada pelo IRQ handler).
     unsafe {
-        let sd0_sts_off = SD0_BASE + SDX_STS;
-        let sd0_sts = r16(bar, sd0_sts_off);
-        
-        if sd0_sts & SD_STS_BCIS as u16 != 0 {
-            // Clear interrupt
-            w16(bar, sd0_sts_off, sd0_sts | SD_STS_BCIS as u16);
-            
-            // Process completed entries (same as IRQ handler but without global INTSTS)
-            let rpi = HDA_SD0_RPI.load(Ordering::Acquire);
-            let audio_phys = HDA_SD0_BUF.load(Ordering::Acquire);
-            let audio_virt = (audio_phys + PHYS_MEM_OFFSET.load(Ordering::Acquire)) as *const i16;
-            
-            const SAMPLES_PER_ENTRY: usize = 2048;
-            const CHUNK_SIZE: usize = 512;
-            
-            for _ in 0..16 {
-                let entry_idx = rpi % 16;
-                let entry_offset = (entry_idx as usize) * SAMPLES_PER_ENTRY;
-                
-                let mut remaining = SAMPLES_PER_ENTRY;
-                let mut offset = entry_offset;
-                
-                while remaining > 0 {
-                    let chunk = remaining.min(CHUNK_SIZE);
-                    let samples = core::slice::from_raw_parts(audio_virt.add(offset), chunk);
-                    
-                    let mut audio_buf = alloc::vec::Vec::with_capacity(chunk * 2);
-                    for &s in samples {
-                        audio_buf.extend_from_slice(&s.to_le_bytes());
-                    }
-                    
-                    let _ = crate::globals::EVENT_BUS.publish(Event {
-                        id: 0,
-                        topic: alloc::string::String::from("AUDIO_IN"),
-                        payload: audio_buf,
-                        token: CapabilityToken::Legacy(1),
-                    });
-                    
-                    offset += chunk;
-                    remaining -= chunk;
-                }
-                
-                let next_rpi = (rpi + 1) % 16;
-                HDA_SD0_RPI.store(next_rpi, Ordering::Release);
-            }
-        }
+        drain_sd0_completed();
     }
 }
 
@@ -1205,7 +1259,7 @@ pub fn is_ready() -> bool {
 
 /// Escreve samples no BDL SD1 (mesma instância do IRQ/captura). No-op se SD1 não armou.
 pub fn write_hda_playback(samples: &[i16]) {
-    if !is_ready() {
+    if !is_ready() || samples.is_empty() {
         return;
     }
     let bar = HDA_BAR.load(Ordering::Acquire);
@@ -1219,10 +1273,44 @@ pub fn write_hda_playback(samples: &[i16]) {
         if sts & SD_STS_BCIS as u16 != 0 {
             w16(bar, sts_off, sts | SD_STS_BCIS as u16);
         }
+
+        // FIX (WS1): o playback escrevia PCM MONO @16 kHz direto num stream
+        // configurado como 48 kHz ESTÉREO — cada amostra virava um canal e a taxa
+        // efetiva ficava 6× acima (L/R alternados, sem interpolação). Agora expande
+        // mono→estéreo (L=R) e interpola por VOICE_DECIM (hold), que é o inverso
+        // exato da decimação de `audio/capture.rs`.
         let virt = (audio_phys + PHYS_MEM_OFFSET.load(Ordering::Acquire)) as *mut i16;
-        let count = samples.len().min(16 * 2048);
-        for i in 0..count {
-            core::ptr::write_volatile(virt.add(i), samples[i]);
+        const FRAMES_PER_ENTRY: usize = ENTRY_BYTES / 4; // 1024 frames estéreo (4 B)
+        const TOTAL_FRAMES: usize = FRAMES_PER_ENTRY * BDL_ENTRIES; // 16384 (≈341 ms)
+
+        // Posição de leitura do hardware, em frames estéreo.
+        let lpib = r32(bar, SD1_BASE + SDX_LPIB) as usize;
+        let rd = (lpib / 4) % TOTAL_FRAMES;
+        let mut pos = HDA_SD1_WPI.load(Ordering::Acquire) as usize % TOTAL_FRAMES;
+        let used = (pos + TOTAL_FRAMES - rd) % TOTAL_FRAMES;
+        let free_frames = TOTAL_FRAMES - 1 - used;
+
+        let need = samples.len() * VOICE_DECIM;
+        let to_write = need.min(free_frames);
+        if to_write < need {
+            // Back-pressure honesto: descarta o excedente em vez de rasgar o anel.
+            PLAY_SAMPLES_DROPPED
+                .fetch_add(((need - to_write) / VOICE_DECIM) as u64, Ordering::Relaxed);
         }
+
+        let mut frames = 0usize;
+        'outer: for &s in samples {
+            for _ in 0..VOICE_DECIM {
+                if frames >= to_write {
+                    break 'outer;
+                }
+                let idx = pos * 2;
+                core::ptr::write_volatile(virt.add(idx), s);
+                core::ptr::write_volatile(virt.add(idx + 1), s);
+                pos = (pos + 1) % TOTAL_FRAMES;
+                frames += 1;
+            }
+        }
+        HDA_SD1_WPI.store(pos as u32, Ordering::Release);
     }
 }

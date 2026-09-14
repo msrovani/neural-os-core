@@ -1,5 +1,17 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s346] - 2026-09-14 — Voice Pipeline 2.0 (dono único do mic, HDA correto, STT honesto)
+
+- **HDA formato ❌→✅:** `FMT_16BIT_48KHZ_STEREO` era `0x21` = **8-bit mono 32 kHz não-PCM** no layout Intel (§3.7.1). Agora `0x1100`. Isso explica áudio RX/TX corrompido desde o início.
+- **HDA BDL 16×→1×:** o walk do SD0 lia o MESMO descritor 16 vezes por interrupção (`rpi` capturado fora do loop) — 32.768 amostras duplicadas por BCIS. Agora um único `drain_sd0_completed()` guiado por LPIB; IRQ só sinaliza (sem alloc em contexto de interrupção).
+- **Playback ✅:** `write_hda_playback` expande mono 16 k → estéreo 48 k (L=R + interpolação ×3) com cursor de escrita e back-pressure (antes: TTS ~6× acelerado).
+- **`AudioInputAgent` (novo):** dono único do microfone — de-interleave, decimação 48k→16k, **carry-over** (fim do descarte de 37,5% das amostras), `AUDIO_FRAME` de 320 amostras exatas, VAD único. Substitui o `AudioPipelineAgent`.
+- **`VoiceState` explícito:** Sleeping/Listening/Thinking/Speaking/BargeIn/Error derivado e publicado em `VOICE_STATE` (orb/HUD desenham snapshot).
+- **Barge-in real:** `TTS_GENERATION` invalida a fala em curso (antes o `stream_tts` redrenava e a fala voltava); ledger `SPOKEN_PARTIAL` fala só o que falta da resposta (antes a frase final era perdida).
+- **STT:** FFT radix-2 (~100× menos MACs que a DFT ingênua) com teste de paridade; job em slices (fora do tick); **removido o decoder que fabricava texto** (agora `STT_UNCERTAIN`); vocabulário derivado do modelo + contrato verificado por `tools/stt_vocab_check.py`.
+- **Emoção:** distribuição de crença Q8 + argmax (antes EWMA sobre o índice do enum: joy+sarcasm → fear) e segunda opinião no prompt.
+- **Tooling:** `tools/gen_stt_corpus.py` (840 frases PT-BR + WAVs por espeak-ng); `train_stt.py` prefere fala real e avisa quando não tem.
+
 ## [1.9.99-s344] - 2026-09-13 — Gates G1-G3 do plano GPU Rust ecosystem
 
 - **G1 ❌:** cuda-oxide NÃO suporta sm_61 — piso oficial sm_80 (Ampere) + host Linux-only (feature matrix + README NVlabs).
