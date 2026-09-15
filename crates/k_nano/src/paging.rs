@@ -885,21 +885,69 @@ pub fn ring3_run_native_blob(code: &[u8]) -> Result<i64, &'static str> {
     if code.is_empty() { return Err("ring3: code vazio"); }
     crate::ring3::verify_blob_no_simd(code)?;
     let mut aspace = create_sandbox_as()?;
-    let entry = unsafe { jit_write_exec_user(&mut aspace, code) }?;
+    let entry = match unsafe { jit_write_exec_user(&mut aspace, code) } {
+        Ok(e) => e,
+        Err(e) => {
+            free_frame(aspace.l4_frame);
+            return Err(e);
+        }
+    };
     const USER_STACK_BASE: u64 = 0x0000_7000_0040_0000;
     const USER_STACK_PAGES: usize = 4;
     let mut stack_frames: [Option<PhysFrame<Size4KiB>>; 4] = [None, None, None, None];
     let mut n_stack = 0usize;
-    let mailbox_frame = map_user_mailbox(&mut aspace)?;
+    let mailbox_frame = match map_user_mailbox(&mut aspace) {
+        Ok(f) => f,
+        Err(e) => {
+            if let Some(cf) = aspace.frame_for_virt(VirtAddr::new(entry)) {
+                free_frame(cf);
+            }
+            free_frame(aspace.l4_frame);
+            return Err(e);
+        }
+    };
     for j in 0..USER_STACK_PAGES {
         let va = USER_STACK_BASE + (j as u64) * 4096;
-        let frame = alloc_frame()?;
+        let frame = match alloc_frame() {
+            Ok(f) => f,
+            Err(e) => {
+                free_frame(mailbox_frame);
+                if let Some(cf) = aspace.frame_for_virt(VirtAddr::new(entry)) {
+                    free_frame(cf);
+                }
+                for f in stack_frames[..n_stack].iter().flatten() {
+                    free_frame(*f);
+                }
+                free_frame(aspace.l4_frame);
+                return Err(e);
+            }
+        };
         stack_frames[j] = Some(frame);
         n_stack = j + 1;
-        unsafe { aspace.map_user_page(VirtAddr::new(va), frame, user_data_flags())?; }
+        if let Err(e) = unsafe { aspace.map_user_page(VirtAddr::new(va), frame, user_data_flags()) } {
+            free_frame(mailbox_frame);
+            if let Some(cf) = aspace.frame_for_virt(VirtAddr::new(entry)) {
+                free_frame(cf);
+            }
+            for f in stack_frames[..n_stack].iter().flatten() {
+                free_frame(*f);
+            }
+            free_frame(aspace.l4_frame);
+            return Err(e);
+        }
     }
     let stack_top = USER_STACK_BASE + (USER_STACK_PAGES as u64) * 4096;
-    let code_frame = aspace.frame_for_virt(VirtAddr::new(entry)).ok_or("ring3: code leaf")?;
+    let code_frame = match aspace.frame_for_virt(VirtAddr::new(entry)) {
+        Some(f) => f,
+        None => {
+            free_frame(mailbox_frame);
+            for f in stack_frames[..n_stack].iter().flatten() {
+                free_frame(*f);
+            }
+            free_frame(aspace.l4_frame);
+            return Err("ring3: code leaf");
+        }
+    };
     crate::slog_nano!("ISO-RING", "info", "ring3_run_native_blob: blob @{:#x} stack @{:#x}", entry, stack_top);
     let result = unsafe { x86_64::instructions::interrupts::without_interrupts(|| enter_user_mode(entry, stack_top, aspace.l4_frame, Cap::ENTER_USER)) };
     free_frame(code_frame);

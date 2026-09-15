@@ -5,12 +5,11 @@
 //! - Prefetch entre camadas do transformer
 //! - Dispatch adaptativo por CPU: scalar, AVX2, bitwise
 //!
-//! Honesty ADR-0101 / SESSION_298 (lab Falcon3-3B 1.58):
+//! Honesty ADR-0101 / SESSION_298 + SESSION_348 (lab Falcon3-3B 1.58):
 //! - Scalar/SSE: ADD/SUB/SKIP de ativações f32 sobre packed 2-bit — nativo algébrico.
-//! - AVX2 host (`not(target_os="none")`): unpack i8/LUT → f32 FMA — NÃO skip-native SIMD.
-//! - Bare-metal (`target_os="none"`): `avx2_ternary_matmul_impl` é o scalar.
+//! - AVX2 host (`not(target_os="none")`): unpack i8 → f32 FMA — NÃO skip-native SIMD.
+//! - Bare-metal (`target_os="none"`): `avx2_ternary_matmul_impl` delega ao SSE2 ADD/SUB/SKIP.
 //! - W2A8 maddubs existe mas `w2a8_enabled()` é false (`GENERATION_GAPS_RESOLVED`).
-//! Onda 0 do lab 3B = SIMD ADD/SUB/SKIP compilado para `x86_64-unknown-none`, não LUT→GEMM.
 
 use crate::tensor::{PackedTernaryTensor, Tensor};
 use alloc::vec;
@@ -254,6 +253,13 @@ pub(super) unsafe fn avx2_ternary_matmul_impl(
     k: usize,
     n: usize,
 ) -> Tensor {
+    // Metal: SSE2 ADD/SUB/SKIP (ADR-0101 Onda 0 residual) — não FMA dequant.
+    #[cfg(all(target_arch = "x86_64", target_os = "none"))]
+    {
+        if n >= 4 {
+            return crate::bitnet_sse::sse2_ternary_matmul_add_sub_skip(weight, input, m, k, n);
+        }
+    }
     scalar_ternary_matmul(weight, input, m, k, n)
 }
 

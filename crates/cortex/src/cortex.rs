@@ -829,6 +829,11 @@ impl TransformerModel {
         }
     }
 
+    /// Pub p/ vocab_shortlist (Onda 1) — tie-embeddings logit ≈ scale·⟨h, embed[t]⟩.
+    pub fn embed_lookup_pub(&self, token: u32) -> Tensor {
+        self.embed_lookup(token)
+    }
+
     fn embed_lookup(&self, token: u32) -> Tensor {
         let t = (token as usize).min(self.embed.shape.1.saturating_sub(1));
         let mut data = Vec::with_capacity(self.hidden);
@@ -909,8 +914,8 @@ impl TransformerModel {
         let mask = Tensor::from_row_major((new_len, total_seq), mask_data).unwrap_or_else(|| Tensor::zero((new_len, total_seq)));
 
         let _layer_count = self.layers.len();
-        // Soft-float 2B: stride=3 (~⅓ layers) libera budget p/ chat frame 8 toks + gen.
-        let soft_stride: usize = if self.hidden >= 2048 { 3 } else { 1 };
+        // ADR-0101 Onda 2: soft_stride via difficulty_gate (override) ou legado heavy=3.
+        let soft_stride: usize = crate::difficulty_gate::effective_soft_stride(self.hidden);
         if is_first_pass && soft_stride > 1 {
             k_nano::slog_cortex!("FWD", "info", "soft_stride={} layers≈{}/{}",
                 soft_stride,
@@ -1110,7 +1115,12 @@ impl TransformerModel {
                 }
                 Tensor { shape: (1, self.hidden), data: padded }
             });
-        let logits = self.unembed_logits(&last_hidden, self.vocab_size as usize);
+        let logits = if crate::vocab_shortlist::skip_full_unembed() {
+            // Onda 1: sentinel 1-col — caller usa score_candidates.
+            Tensor::zero((1, 1))
+        } else {
+            self.unembed_logits(&last_hidden, self.vocab_size as usize)
+        };
         (last_hidden, logits)
     }
 
@@ -1454,12 +1464,22 @@ impl TransformerModel {
     }
 
     /// Embed new tokens for a KV forward pass (AirLLM helper).
+    /// ctx_cap espelha `generate_speculative` (heavy≤512) — nunca `max_seq` cru
+    /// do header (32768) para alocar máscara (SESSION_349 OOM 4.4GB).
     pub fn embed_for_kv(&self, tokens: &[u32], cache: &KvCache) -> (Tensor, Tensor, usize, usize, usize) {
-        let seq_len = tokens.len();
+        let ctx_cap = if self.hidden >= 2048 {
+            self.max_seq.min(512)
+        } else {
+            self.max_seq.min(64)
+        };
         let is_first_pass = cache.len == 0;
-        let new_len = if is_first_pass { seq_len.min(self.max_seq) } else { seq_len };
-        let total_seq = if is_first_pass { new_len } else { cache.len + seq_len };
-        let start_pos = if is_first_pass { 0 } else { cache.len };
+        let new_len = tokens.len().min(ctx_cap);
+        let start_pos = if is_first_pass { 0 } else { cache.len.min(ctx_cap) };
+        let total_seq = if is_first_pass {
+            new_len
+        } else {
+            start_pos.saturating_add(new_len).min(ctx_cap).max(new_len)
+        };
 
         let mut x = Tensor::new((new_len, self.hidden));
         for (i, &t) in tokens.iter().enumerate().take(new_len) {
@@ -1469,14 +1489,30 @@ impl TransformerModel {
             }
         }
 
-        let mut mask_data = vec![0.0f32; new_len * total_seq];
-        for i in 0..new_len {
-            let global_i = start_pos + i;
-            for j in (global_i + 1)..total_seq {
-                mask_data[i * total_seq + j] = NEG_INFINITY;
+        let mask_elems = new_len.checked_mul(total_seq).unwrap_or(0);
+        let mut mask_data = if mask_elems == 0 || mask_elems > (64 * 1024 * 1024) {
+            k_nano::slog_cortex!(
+                "KV",
+                "fail",
+                "mask refuse new_len={} total_seq={} elems={}",
+                new_len,
+                total_seq,
+                mask_elems
+            );
+            alloc::vec![0.0f32; 0]
+        } else {
+            alloc::vec![0.0f32; mask_elems]
+        };
+        if !mask_data.is_empty() {
+            for i in 0..new_len {
+                let global_i = start_pos + i;
+                for j in (global_i + 1)..total_seq {
+                    mask_data[i * total_seq + j] = NEG_INFINITY;
+                }
             }
         }
-        let mask = Tensor::from_row_major((new_len, total_seq), mask_data).unwrap();
+        let mask = Tensor::from_row_major((new_len, total_seq), mask_data)
+            .unwrap_or_else(|| Tensor::zero((1, 1)));
         (x, mask, start_pos, new_len, total_seq)
     }
 
@@ -2525,7 +2561,9 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
     let num_layers = read_u16(data, off)? as usize;
     let num_heads = read_u16(data, off)? as usize;
     let vocab_size = read_u32(data, off)?;
-    let max_seq = read_u16(data, off)? as usize;
+    // Falcon3 Instruct denso declara 32K; 1.58bit lab = 4096 (SESSION_298/349).
+    // Header 32768 → máscara attn 32K²×4 ≈ 4GB + OOM UI (T+793). Clamp honesto.
+    let mut max_seq = read_u16(data, off)? as usize;
     let intermediate_size = read_u16(data, off)? as usize;
     let num_kv_heads = read_u16(data, off)? as usize;
     let q_dim = read_u16(data, off)? as usize;
@@ -2549,9 +2587,19 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
     let ffn_group = intermediate_size * q_dim / hidden.max(1);
     let down_out = q_dim;
 
+    if hidden >= 2048 && max_seq > 4096 {
+        k_nano::slog_cortex!(
+            "LLM",
+            "warn",
+            "max_seq={} >4096 (heavy) — clamp 4096 (evita mask 32K² OOM)",
+            max_seq
+        );
+        max_seq = 4096;
+    }
+
     k_nano::slog_cortex!("LLM", "info",
-        "v6 LLM h={} L={} q_dim={} vocab={} act={} emb={} feat=0x{:02x}",
-        hidden, num_layers, q_dim, vocab_size, act_type, embed_type, feat);
+        "v6 LLM h={} L={} q_dim={} vocab={} act={} emb={} feat=0x{:02x} max_seq={}",
+        hidden, num_layers, q_dim, vocab_size, act_type, embed_type, feat, max_seq);
 
     // Heap: NÃO estimar/resize aqui (premissa AIOS — self-adapting heap).
     // O bump allocator global cresce sozinho via grow_bump_auto quando a
@@ -3595,18 +3643,19 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
         }
     };
 
+    let is_greeting = crate::bpe::prompt_is_greeting(prompt);
+    let tier = crate::difficulty_gate::classify(prompt, is_greeting, model.hidden);
+    crate::difficulty_gate::apply_tier(tier, model.hidden);
+
     let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     let (mut last_hidden, mut last_logits) = model.forward_with_kv(&tokens, &mut cache);
     let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     k_nano::slog_cortex!("GEN", "info", "prompt fwd: {} ticks", t1 - t0);
 
-    let is_greeting = crate::bpe::prompt_is_greeting(prompt);
-    let max_gen = if model.hidden >= 2048 {
-        if use_bpe { if is_greeting { 8 } else { 6 } } else { 4 }
-    } else {
-        max_seq.saturating_sub(prompt_len).min(16)
-    };
-    k_nano::slog_cortex!("GEN", "info", "max_gen={} greet={}", max_gen, is_greeting as u8);
+    let max_gen = crate::difficulty_gate::max_gen_for(tier, model.hidden, use_bpe, is_greeting);
+    k_nano::slog_cortex!("GEN", "info", "max_gen={} greet={} tier={}", max_gen, is_greeting as u8, tier.name());
+    // Wall-clock só do decode (pós-prefill) — tok/s honesto p/ Hub / microbench.
+    let decode_t0_us = k_nano::tsc::now_us();
 
     // recent is Vec<u16> for u16-based argmax/sample functions
     let mut recent_u16: Vec<u16> = Vec::new();
@@ -3618,6 +3667,10 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
     let tokens_u16_slice: Vec<u16> = tokens.iter().map(|&t| t as u16).collect();
     spec.feed_slice(&tokens_u16_slice);
 
+    // Onda 1: shortlist state (refresh periódico com full unembed)
+    let mut shortlist: Vec<u32> = Vec::new();
+    let mut shortlist_age: usize = crate::vocab_shortlist::REFRESH_EVERY; // force refresh step 0
+
     let mut step = 0usize;
     while step < max_gen {
         // H2O: evict old KV entries when near capacity instead of hard-clipping
@@ -3626,6 +3679,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
             let h2o_heavy = evict_target / 3; // keep top 1/3 as heavy hitters
             let dropped = crate::kv_h2o::h2o_evict(&mut cache, 8, h2o_heavy);
             if dropped > 0 {
+                crate::cognitive_runtime::note_h2o_drops(dropped);
                 k_nano::slog_cortex!("GEN", "info", "h2o evict: dropped={} cache_len={}", dropped, cache.len);
             }
             // After eviction, update tokens to match cache
@@ -3646,6 +3700,21 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
         // F4: apply structured decoder mask (zero invalid tokens)
         if let Some(ref d) = decoder {
             d.mask_logits(&mut last_logits.data);
+        }
+
+        // Onda 1: se forward omitiu unembed (sentinel), score shortlist.
+        if last_logits.shape.1 <= 1 && !shortlist.is_empty() {
+            last_logits = crate::vocab_shortlist::score_candidates(model, &last_hidden, &shortlist);
+        } else if model.tie_embeddings && model.hidden >= 2048 && use_bpe {
+            crate::vocab_shortlist::note_full_unembed();
+            let top = crate::vocab_shortlist::top_k_ids(&last_logits, crate::vocab_shortlist::SHORTLIST_K);
+            shortlist = crate::vocab_shortlist::build_candidates(
+                &top,
+                &recent_u16,
+                model.vocab_size as usize,
+                &[eos, eot],
+            );
+            shortlist_age = 0;
         }
 
         // ── Select next token (returns u16) ──
@@ -3735,22 +3804,122 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
             }
         }
 
+        // Onda 1: Medusa heads draft (se pack tiver heads) — verify igual n-gram.
+        if !model.medusa_heads.is_empty()
+            && decoder.is_none()
+            && !COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed)
+            && step < max_gen
+        {
+            let mut drafts_u16: Vec<u16> = Vec::with_capacity(model.medusa_heads.len().min(3));
+            for head in model.medusa_heads.iter().take(3) {
+                let mut mlogits = head.forward(&last_hidden);
+                if let Some(ref d) = decoder {
+                    d.mask_logits(&mut mlogits.data);
+                }
+                let t = if use_bpe {
+                    argmax_row_hf_vocab(&mlogits, 0, &recent_u16)
+                } else {
+                    argmax_row_char_vocab(&mlogits, 0, recent_u16.last().copied())
+                };
+                if t as u32 == eos || t as u32 == eot {
+                    break;
+                }
+                drafts_u16.push(t as u16);
+            }
+            if drafts_u16.len() >= 2 {
+                let drafts_u32: Vec<u32> = drafts_u16.iter().map(|&t| t as u32).collect();
+                let all_logits = model.forward_with_kv_all_logits(&drafts_u32, &mut cache);
+                let (extra_accept, bonus_u16) = verify_draft(&all_logits, &drafts_u16);
+                let kept = (1 + extra_accept).min(drafts_u16.len());
+                record_spec_hit(kept as u64);
+                k_nano::slog_cortex!("GEN", "info", "medusa draft kept={}/{}", kept, drafts_u16.len());
+                for &t in drafts_u16.iter().take(kept) {
+                    tokens.push(t as u32);
+                    recent_u16.push(t);
+                    if recent_u16.len() > 4 {
+                        recent_u16.remove(0);
+                    }
+                    tokens_u16.push(t);
+                    step += 1;
+                    spec.feed(t);
+                }
+                if bonus_u16 as u16 != eos_u16 && step < max_gen && tokens.len() < max_seq {
+                    tokens.push(bonus_u16);
+                    recent_u16.push(bonus_u16 as u16);
+                    if recent_u16.len() > 4 {
+                        recent_u16.remove(0);
+                    }
+                    tokens_u16.push(bonus_u16 as u16);
+                    step += 1;
+                    spec.feed(bonus_u16 as u16);
+                    record_spec_bonus_forward();
+                    record_spec_tokens(1);
+                }
+                if tokens.last() == Some(&eos) || tokens.last() == Some(&eot) {
+                    break;
+                }
+                // Refresh hidden/logits for next loop
+                if step < max_gen && tokens.len() < max_seq {
+                    if let Some(&last) = tokens.last() {
+                        let (nh, nl) = model.forward_with_kv(&[last], &mut cache);
+                        last_hidden = nh;
+                        last_logits = nl;
+                        shortlist_age = crate::vocab_shortlist::REFRESH_EVERY;
+                    }
+                }
+                continue;
+            }
+        }
+
         // Normal KV forward for the next step
         if step < max_gen && tokens.len() < max_seq {
+            let use_sl = model.tie_embeddings
+                && model.hidden >= 2048
+                && use_bpe
+                && !shortlist.is_empty()
+                && shortlist_age + 1 < crate::vocab_shortlist::REFRESH_EVERY;
+            crate::vocab_shortlist::set_skip_full_unembed(use_sl);
             let t_step = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             let (new_hidden, new_logits) = model.forward_with_kv(&[next], &mut cache);
+            crate::vocab_shortlist::set_skip_full_unembed(false);
             let t_step1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            k_nano::slog_cortex!("GEN", "info", "step={} token={} kv_cache: {} ticks (ctx={})",
-                step, next, t_step1 - t_step, tokens.len());
+            k_nano::slog_cortex!("GEN", "info", "step={} token={} kv_cache: {} ticks (ctx={} shortlist={})",
+                step, next, t_step1 - t_step, tokens.len(), use_sl as u8);
             last_hidden = new_hidden;
             last_logits = new_logits;
+            if use_sl {
+                shortlist_age += 1;
+            } else {
+                shortlist_age = crate::vocab_shortlist::REFRESH_EVERY; // rebuild on next select
+            }
         }
     }
+
+    crate::vocab_shortlist::set_skip_full_unembed(false);
+    crate::difficulty_gate::clear_soft_stride_override();
 
     // ADR-0047: publish last hidden as latent thought (non-fatal).
     crate::projection::publish_thought(&last_hidden.data);
 
     let gen = &tokens[prompt_len..];
+    let decode_us = k_nano::tsc::now_us().saturating_sub(decode_t0_us).max(1);
+    let gen_toks = gen.len() as u64;
+    if gen_toks > 0 {
+        crate::infer_queue::record_last_decode(gen_toks, decode_us);
+        let milli = gen_toks.saturating_mul(1_000_000_000) / decode_us;
+        k_nano::slog_cortex!(
+            "GEN",
+            "ok",
+            "decode_tok/s={} milli={} us/tok={} toks={} us={} h={} L={}",
+            gen_toks.saturating_mul(1_000_000) / decode_us,
+            milli,
+            decode_us / gen_toks.max(1),
+            gen_toks,
+            decode_us,
+            model.hidden,
+            model.num_layers
+        );
+    }
     // F0: structured result log
     let bpe_label = if use_bpe {
         if model.vocab_size > 0 && model.vocab_size <= 33_000 { "SP32" } else { "LLAMA" }
@@ -3789,9 +3958,13 @@ pub fn generate_text(model: &TransformerModel, prompt: &str) -> alloc::string::S
     let raw = match decoder_opt.as_mut() {
         Some(ptr) => {
             let decoder = unsafe { &mut **ptr };
+            // Structured decode: path clássico (sem shortlist omit).
             generate_speculative(model, prompt, Some(decoder))
         }
-        None => generate_speculative(model, prompt, None),
+        None => {
+            // ADR-0101 Onda 3: política difficulty + telemetria.
+            crate::cognitive_runtime::generate_with_policy(model, prompt, None).0
+        }
     };
     // TV-DSL determinism
     if raw.contains("[TV-DSL: ") {

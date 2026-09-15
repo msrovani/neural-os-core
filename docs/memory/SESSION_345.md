@@ -81,9 +81,33 @@ Overwrite BOOT.LOG continua data-only em `boot_logger` (SESSION_264). Aceite **m
 
 `poll_slice`: `NeedPrefill` → setup+1º step; `Prefilling` → step; depois Decoding.
 
-Aceite QEMU: modelo muitas vezes `ABSENT` → path só com Falcon3 carregado (loader/HW). Host: `cargo check -p cortex -p hermes`.
+## F3 metal reteste (noite 2) — CCS=0 no stick USB3
 
-## F5–F6 (abertos)
+Fotos Alienware pós-imagem 8319 MB: HUB ainda `no msc` / `bootlog ram only`; `E:\` placeholder.
+
+Ramlog: `8086:a71e` + `8086:51ed`; xHCI[0] `PORTSC=0x2a0` (PP=1 **CCS=0** PLS=RxDetect); [1] só portas LS/FS 4/6/10. Stick USB3 **não retreina** após HCRST com settle 10 ms.
+
+**Fix 2:** settle metal 100 ms + RxDetect + **WPR** em portas USB3 escuras + **poll CCS 2 s**; MSC pass-B +500 ms; budget metal 12 s / deferred 8 s.
+
+
+
+**Evidência operador:** Alienware desktop OK; HUB `usb … no msc`, `bootlog ram only`; stick `E:\BOOT.LOG` placeholder (167 nz); `NSGDB.BIN` 8 MiB zeros. FB: `ccs=4` + `MSC fail` + dump `probe nao chegou?` (falso — 1ªs 200 linhas do ramlog).
+
+**Causas:**
+1. Bring-up early/DriverInit falha (hub atrás de CCS; budget 3s curto; roots não-MSC antes do hub).
+2. `UsbMassStorage::probe` **bloqueava** com UI live.
+3. SysInfo `ui_live && !msc → Pending` **nunca** chamava `ensure_persisted`.
+4. `dump_usb_hint` só lia as 1ªs 200 linhas.
+
+**Fix código:**
+- `k_hal::usb::hub_msc`: hub-first (classify → hub enum), budget metal 10s / UI 4s / QEMU 3s, breadcrumbs `USB:` no ramlog+ckpt, sem skip permanente em abort por budget.
+- `usb_msc::probe_deferred_bound_hc`: retry só no HC bound com UI viva.
+- `try_ensure_usb_msc` / SysInfo: recovery path ativo pós-tick 64.
+- `dump_usb_hint`: varre o buffer inteiro.
+
+**Aceite:** regravar `usb_hw.img` → Alienware → FB deve mostrar `USB: try root` / `USB: hub enum` / `USB: MSC OK…`; stick `BOOT.LOG` com `[T+]`/`Knn`; NSGDB nonzero.
+
+
 
 | Frente | Status | Notas |
 |--------|--------|-------|

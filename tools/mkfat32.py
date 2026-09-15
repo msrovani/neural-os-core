@@ -170,10 +170,48 @@ def find_bitnet_850():
 def find_bitnet_3b():
     return find_large("BITNET3B.BIN") or find_large("bitnet_3B.bitnet")
 
+def _v6_layers_hidden(path):
+    """Lê (num_layers, hidden) do header v6 BE11 — None se inválido.
+    Offsets canônicos = cortex::model::parse_model_header (hidden@18, layers@20)."""
+    try:
+        with open(path, "rb") as f:
+            hdr = f.read(40)
+        if len(hdr) < 24 or int.from_bytes(hdr[0:4], "little") != 0xBE11BE11:
+            return None
+        if hdr[4] != 6 or hdr[5] != 0:  # version != 6
+            return None
+        hidden = int.from_bytes(hdr[18:20], "little")
+        layers = int.from_bytes(hdr[20:22], "little")
+        return layers, hidden
+    except OSError:
+        return None
+
 def find_falcon3():
-    return (find_large("FALCON3.V6") or find_large("FALCON3.BIN")
-            or find_large("falcon3.v6") or find_large("falcon3.bitnet")
-            or find_large("BITNET_FALCON3.BIN"))
+    """Lab canônico = Falcon3-3B Instruct 1.58 (22L / hidden 3072). Evita 7B
+    mal-nomeado como FALCON3.BIN/V6 (SESSION_348+ / ADR-0101)."""
+    preferred = (
+        find_large("FALCON3_BASE.V6"),
+        find_large("FALCON3_3B.V6"),
+        find_large("FALCON3.V6"),
+        find_large("FALCON3.BIN"),
+        find_large("falcon3.v6"),
+        find_large("falcon3.bitnet"),
+        find_large("BITNET_FALCON3.BIN"),
+    )
+    for p in preferred:
+        if not p:
+            continue
+        meta = _v6_layers_hidden(p)
+        if meta is None:
+            return p
+        layers, hidden = meta
+        # 3B lab: 22 layers, hidden 3072. Recusa 7B (28L) e 1B (18L/2048).
+        if layers == 22 and hidden == 3072:
+            print(f"[PACK_LLM] falcon3 lab 3B 1.58: {p} (L={layers} h={hidden})")
+            return p
+        print(f"[PACK_LLM] skip {p} (L={layers} h={hidden} — nao e 3B lab)")
+    # Fallback: BASE explícito mesmo sem parse
+    return find_large("FALCON3_BASE.V6") or find_large("FALCON3.V6")
 
 def align_up(v, a): return (v + a - 1) // a * a
 

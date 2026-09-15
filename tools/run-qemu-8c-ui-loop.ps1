@@ -1,5 +1,5 @@
 #!/usr/bin/env pwsh
-# QEMU 8 cores — loop ate UI/desktop fluida (desktop_ready + ticks + BOOT SCORE).
+# QEMU 8 cores -- loop ate UI/desktop fluida (desktop_ready + ticks + BOOT SCORE).
 # Depois: use run-qemu-p2p-mesh.ps1 -Cores 8 -Mem 4 -NoModels -Instance Both
 param(
     [int]$Cores = 8,
@@ -94,7 +94,7 @@ for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         exit 0
     }
 
-    Write-Host "[loop] attempt $attempt FAIL — salvando diagnostico" -ForegroundColor Yellow
+    Write-Host "[loop] attempt $attempt FAIL -- salvando diagnostico" -ForegroundColor Yellow
     if ($latestBoot) {
         Copy-Item $latestBoot.FullName $attemptLog -Force
         $raw = Read-LogShared $latestBoot.FullName
@@ -105,5 +105,5 @@ for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
     Stop-QemuAll
 }
 
-Write-Host "[loop] ESGOTADO — UI nao ficou fluida em $MaxAttempts tentativas" -ForegroundColor Red
+Write-Host "[loop] ESGOTADO -- UI nao ficou fluida em $MaxAttempts tentativas" -ForegroundColor Red
 exit 1

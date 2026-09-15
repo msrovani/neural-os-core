@@ -150,6 +150,20 @@ python tools\build_image.py
 .\run-qemu-whpx.ps1 -Window
 ```
 
+### PRIORIDADE testes/dev — Falcon3-3B 1.58 tok/s (WHPX)
+Script canónico de **sucesso medido** (não usar `run-qemu-whpx.ps1` para este lab):
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\measure-falcon3-toks.ps1 `
+  -Accel whpx -RamGB 6 -Smp 4 -TimeoutSec 2400
+```
+- Modelo: `models\FALCON3.BIN` (22L / h=3072) via QEMU-loader `@0x100000000`
+- Loader-only (script **omite** `disk_qemu.raw` — FAT com 7B mal-nomeado → OOM)
+- Log: `logs\falcon3_toks_whpx.txt` — procurar `Falcon3 decode_tok/s=` / `milli=` / `us=`
+- TCG do 3B: prefill inviável para tok/s; aceite de velocidade = WHPX ou metal
+- UI/FAT/HDA (dev): acrescentar `-Window -WithFat -AudioBridge` (HDA QEMU degradado esperado)
+- Pós-bench: se FB mostrar `OOM agente=cortex_llm size=…` ver SESSION_349 (guards max_seq/Tensor)
+- SGDB: `recall(scope=neural-os-core/dev)` entities `qemu/whpx`, `falcon3/3b`
+
 ### Rede (Net gate = e1000 + user/slirp — NÃO SLIP)
 ```powershell
 # Host peers (Pós-LAN SESSION_152) — antes do QEMU

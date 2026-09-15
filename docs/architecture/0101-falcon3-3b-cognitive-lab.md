@@ -107,24 +107,26 @@ Escopo: formato de pesos v6 do **3B 1.58**, layout packed, SIMD ADD/SUB/SKIP no 
 
 Aceite:
 
-- [ ] `FALCON3.V6` gerado de `tiiuae/Falcon3-3B-Instruct-1.58bit` via `convert_falcon3_bitnet.py` / `convert_falcon3_to_v6.py`; header bate 3072 / 22L / 12H / kv=4 / 9216 / vocab 131072 / silu.
-- [ ] Forward metal: packed → ADD/SUB/SKIP **sem** materializar W f32 (teste paridade scalar vs SIMD).
-- [ ] AVX2 no `x86_64-unknown-none` **ou** SSE skip-native documentado; hoje o stub metal→scalar é o gap.
-- [ ] Sem tok/s inventado; opcional: microbench host vs ATLAS (ordem de grandeza, não claim de produto).
+- [x] `FALCON3.V6` pipeline + header 3B (SESSION_309/298); validar artefato no FAT HW = operador.
+- [x] Forward metal: packed → ADD/SUB/SKIP **sem** `W*x` mul (SSE2; SESSION_348 testes parity).
+- [~] AVX2 no `x86_64-unknown-none` defer — metal usa SSE ADD/SUB/SKIP; host AVX2 ainda FMA.
+- [x] Sem tok/s inventado.
 
-**Nesta SESSION_298:** prova + ADR + inventário 3B-first. **Não** reescrever AVX2 (é o lab, não um diff de 40 linhas honesto).
+### Onda 1 — Decode / vocab (SESSION_348)
 
-### Onda 1 — Decode / vocab (após Onda 0 verde)
+- [x] Shortlist 512 + refresh periódico; skip full unembed entre refreshes (tie-embeddings).
+- [x] Medusa draft+verify quando heads no pack; n-gram já wired.
+- [x] KV H2O telemetria + InferQueue evict.
 
-Shortlist de logits, n-gram/Medusa *wired no 3B*, KV H2O medido, i2_s GGUF só se AirLLM for o path (não o lab nativo).
+### Onda 2 — Adaptive compute (SESSION_348)
 
-### Onda 2 — Adaptive compute
+- [x] Difficulty gate Cheap/Normal/Full → soft_stride + max_gen.
+- [ ] Early-exit KL treinado — **não** nesta entrega (honesty).
 
-Difficulty gate no `generate_next` do 3B; early-exit só com KL treinado (senão softmax-confidence = mentira); layer skip = residual.
+### Onda 3 — Falcon3-BitNet Cognitive (SESSION_348)
 
-### Onda 3 — Falcon3-BitNet Cognitive
-
-Composição: gate + spec + kernel nativo + KV compress + SGDB (ADR-0091). Nome de produto **depois** de Onda 0 medida.
+- [x] `cognitive_runtime::generate_with_policy` + status `/cog`.
+- [~] SGDB = prompt-side (não no matmul); KV compress ternário = residual.
 
 ---
 

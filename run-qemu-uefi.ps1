@@ -109,7 +109,7 @@ if ($Bridge) {
 
 if (-not $NoSerialBridge) {
     if (Test-PortListening -Port $SerialBridgePort) {
-        Write-Host "[BRIDGE] porta $SerialBridgePort ja em LISTEN — reutilizando" -ForegroundColor Yellow
+        Write-Host "[BRIDGE] porta $SerialBridgePort ja em LISTEN -- reutilizando" -ForegroundColor Yellow
     } else {
         $py = Get-Command python -ErrorAction SilentlyContinue
         if (-not $py -or -not (Test-Path $bridgeScript)) {
@@ -226,7 +226,7 @@ foreach ($smpN in $smpTry) {
     } catch {
         Write-Host "WARN: QEMU -smp $smpN falhou: $_" -ForegroundColor Yellow
         if ($netMode -eq "bridge") {
-            Write-Host "WARN: bridge falhou — fallback user+hostfwd" -ForegroundColor Yellow
+            Write-Host "WARN: bridge falhou -- fallback user+hostfwd" -ForegroundColor Yellow
             $netMode = "user"
             $netArgs = @("-netdev", "user,id=n0,hostfwd=tcp::4445-:4445,hostfwd=tcp::4446-:4446", "-device", "e1000,netdev=n0")
         }

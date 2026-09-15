@@ -98,6 +98,14 @@ static TELEM_PREFILL_SLICES: AtomicU64 = AtomicU64::new(0);
 static TELEM_PREFILL_US: AtomicU64 = AtomicU64::new(0);
 static TELEM_LAST_PREFILL_US: AtomicU64 = AtomicU64::new(0);
 static TELEM_DECODE_TOKENS: AtomicU64 = AtomicU64::new(0);
+/// Soma µs de todas as fases decode concluídas (jobs).
+static TELEM_DECODE_US: AtomicU64 = AtomicU64::new(0);
+/// Último job: tokens gerados + µs wall (TSC) → tok/s = toks*1e6/us.
+static TELEM_LAST_DECODE_TOKS: AtomicU64 = AtomicU64::new(0);
+static TELEM_LAST_DECODE_US: AtomicU64 = AtomicU64::new(0);
+/// Início do decode do job ativo (0 = idle / ainda em prefill).
+static DECODE_T0_US: AtomicU64 = AtomicU64::new(0);
+static DECODE_JOB_TOKS: AtomicU64 = AtomicU64::new(0);
 
 /// Snapshot: (prefill_slices, prefill_us_total, last_prefill_us, decode_tokens).
 pub fn telemetry() -> (u64, u64, u64, u64) {
@@ -107,6 +115,90 @@ pub fn telemetry() -> (u64, u64, u64, u64) {
         TELEM_LAST_PREFILL_US.load(Ordering::Relaxed),
         TELEM_DECODE_TOKENS.load(Ordering::Relaxed),
     )
+}
+
+/// Último decode concluído: (tokens, µs). `(0,0)` = ainda sem amostra.
+pub fn last_decode_timing() -> (u64, u64) {
+    (
+        TELEM_LAST_DECODE_TOKS.load(Ordering::Relaxed),
+        TELEM_LAST_DECODE_US.load(Ordering::Relaxed),
+    )
+}
+
+/// tok/s inteiro do último job (`toks * 1_000_000 / us`). 0 = n/a.
+pub fn last_decode_tok_s() -> u64 {
+    let (toks, us) = last_decode_timing();
+    if toks == 0 || us == 0 {
+        0
+    } else {
+        toks.saturating_mul(1_000_000) / us
+    }
+}
+
+/// Grava amostra de decode (InferQueue **ou** `generate_speculative` clássico).
+/// Usado pelo Hub Health e pelo microbench QEMU Falcon3-3B.
+pub fn record_last_decode(toks: u64, us: u64) {
+    if toks == 0 || us == 0 {
+        return;
+    }
+    let us = us.max(1);
+    TELEM_DECODE_TOKENS.fetch_add(toks, Ordering::Relaxed);
+    TELEM_DECODE_US.fetch_add(us, Ordering::Relaxed);
+    TELEM_LAST_DECODE_TOKS.store(toks, Ordering::Relaxed);
+    TELEM_LAST_DECODE_US.store(us, Ordering::Relaxed);
+    let tps = toks.saturating_mul(1_000_000) / us;
+    // milli-tok/s quando <1 tok/s (QEMU/soft-float do 3B).
+    let milli = toks.saturating_mul(1_000_000_000) / us;
+    let us_per = us / toks.max(1);
+    k_nano::slog_cortex!(
+        "InferQ",
+        "ok",
+        "decode_tok/s={} milli={} us/tok={} toks={} us={}",
+        tps,
+        milli,
+        us_per,
+        toks,
+        us
+    );
+}
+
+/// Durante decode ativo: tok/s ao vivo (0 se idle/prefill).
+pub fn live_decode_tok_s() -> u64 {
+    let t0 = DECODE_T0_US.load(Ordering::Relaxed);
+    if t0 == 0 {
+        return 0;
+    }
+    let toks = DECODE_JOB_TOKS.load(Ordering::Relaxed);
+    if toks == 0 {
+        return 0;
+    }
+    let now = k_nano::tsc::now_us();
+    let us = now.saturating_sub(t0);
+    if us == 0 {
+        0
+    } else {
+        toks.saturating_mul(1_000_000) / us
+    }
+}
+
+/// Linha curta p/ Hub Health / SysInfo (≤36 chars).
+pub fn hub_infer_line(queue_pending: u64, running: bool) -> alloc::string::String {
+    let live = live_decode_tok_s();
+    let last = last_decode_tok_s();
+    if running && live > 0 {
+        alloc::format!("{}t/s q{} run", live, queue_pending)
+    } else if last > 0 {
+        alloc::format!(
+            "{}t/s q{} {}",
+            last,
+            queue_pending,
+            if running { "run" } else { "ok" }
+        )
+    } else if running {
+        alloc::format!("q{} run", queue_pending)
+    } else {
+        alloc::format!("q{} idle", queue_pending)
+    }
 }
 
 /// Fase da state machine de generate fatiado.
@@ -368,6 +460,26 @@ fn try_claim_into_active() -> bool {
 }
 
 fn finish_job(st: &mut ActiveState, text: &str) {
+    crate::difficulty_gate::clear_soft_stride_override();
+    crate::vocab_shortlist::set_skip_full_unembed(false);
+    // Fecha wall-clock do decode (tok/s Hub Health).
+    let t0 = DECODE_T0_US.swap(0, Ordering::AcqRel);
+    let job_toks = DECODE_JOB_TOKS.swap(0, Ordering::AcqRel);
+    if t0 != 0 && job_toks > 0 {
+        let us = k_nano::tsc::now_us().saturating_sub(t0).max(1);
+        TELEM_DECODE_US.fetch_add(us, Ordering::Relaxed);
+        TELEM_LAST_DECODE_TOKS.store(job_toks, Ordering::Relaxed);
+        TELEM_LAST_DECODE_US.store(us, Ordering::Relaxed);
+        let tps = job_toks.saturating_mul(1_000_000) / us;
+        k_nano::slog_cortex!(
+            "InferQ",
+            "ok",
+            "decode_tok/s={} toks={} us={}",
+            tps,
+            job_toks,
+            us
+        );
+    }
     let out = if text.is_empty() {
         if st.acc_text.is_empty() {
             String::from(NO_MODEL_MSG)
@@ -496,19 +608,17 @@ fn run_prefill_setup(st: &mut ActiveState) {
         tokens = crate::cortex::slim_prompt_tokens_for_heavy(&tokens, st.use_bpe);
     }
     st.prompt_len = tokens.len();
-    st.max_gen = if model.hidden >= 2048 {
-        if st.use_bpe {
-            if st.is_greeting {
-                8
-            } else {
-                6
-            }
-        } else {
-            4
-        }
-    } else {
-        max_seq.saturating_sub(st.prompt_len).min(16)
-    };
+    let tier = crate::difficulty_gate::classify(&st.prompt, st.is_greeting, model.hidden);
+    crate::difficulty_gate::apply_tier(tier, model.hidden);
+    st.max_gen = crate::difficulty_gate::max_gen_for(tier, model.hidden, st.use_bpe, st.is_greeting);
+    k_nano::slog_cortex!(
+        "InferQ",
+        "ok",
+        "tier={} max_gen={} soft_stride={}",
+        tier.name(),
+        st.max_gen,
+        crate::difficulty_gate::soft_stride_for(tier, model.hidden)
+    );
 
     let kv_dim = model.kv_dim;
     let k_dim = if model.layers.is_empty() {
@@ -587,8 +697,8 @@ fn run_prefill_step(st: &mut ActiveState) {
     };
 
     let n_layers = model.layers.len();
-    // Espelha forward_with_kv: soft_stride=3 em hidden≥2048.
-    let soft_stride: usize = if model.hidden >= 2048 { 3 } else { 1 };
+    // ADR-0101 Onda 2: soft_stride via difficulty_gate.
+    let soft_stride: usize = crate::difficulty_gate::effective_soft_stride(model.hidden);
     let layers_per_slice: usize = if model.hidden >= 2048 { 1 } else { 2 };
     let mut applied = 0usize;
 
@@ -663,6 +773,8 @@ fn run_prefill_step(st: &mut ActiveState) {
     st.prefill_mask = None;
     st.step = 0;
     st.phase = Phase::Decoding;
+    DECODE_JOB_TOKS.store(0, Ordering::Release);
+    DECODE_T0_US.store(k_nano::tsc::now_us(), Ordering::Release);
     drop(guard);
 }
 
@@ -709,10 +821,20 @@ fn run_decode_one(st: &mut ActiveState) {
     };
 
     if st.tokens.len() >= st.max_seq {
-        let acc = st.acc_text.clone();
-        drop(guard);
-        finish_job(st, &acc);
-        return;
+        // Onda 1: H2O no InferQueue (produção).
+        let dropped = crate::kv_h2o::h2o_evict(cache, 8, st.max_seq / 6);
+        if dropped > 0 {
+            crate::cognitive_runtime::note_h2o_drops(dropped);
+            if st.tokens.len() > cache.len {
+                st.tokens.drain(..st.tokens.len() - cache.len);
+            }
+        }
+        if st.tokens.len() >= st.max_seq {
+            let acc = st.acc_text.clone();
+            drop(guard);
+            finish_job(st, &acc);
+            return;
+        }
     }
 
     let next = if st.use_bpe {
@@ -736,6 +858,7 @@ fn run_decode_one(st: &mut ActiveState) {
     }
     st.step += 1;
     TELEM_DECODE_TOKENS.fetch_add(1, Ordering::Relaxed);
+    DECODE_JOB_TOKS.fetch_add(1, Ordering::Relaxed);
 
     let piece = if st.use_bpe {
         crate::bpe::decode(&[next])
@@ -767,6 +890,8 @@ fn run_coarse(st: &mut ActiveState) {
         finish_job(st, "[cancelled]");
         return;
     }
+    DECODE_JOB_TOKS.store(0, Ordering::Release);
+    DECODE_T0_US.store(k_nano::tsc::now_us(), Ordering::Release);
     // Uma slice = generate completo (AirLLM / GGUF) — ainda fora de AGENT_TICK_BUSY.
     let text = {
         if let Some(ref sm) = *CURRENT_STREAMING_MODEL.lock() {
@@ -777,6 +902,8 @@ fn run_coarse(st: &mut ActiveState) {
             String::from(NO_MODEL_MSG)
         }
     };
+    // Coarse: 1 "token-unidade" = job completo (não dá tok/s fino; marca ≥1 p/ wall).
+    DECODE_JOB_TOKS.store(1, Ordering::Release);
     emit_msg_delta(&text);
     st.acc_text = text.clone();
     finish_job(st, &text);

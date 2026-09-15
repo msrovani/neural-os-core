@@ -58,5 +58,8 @@ pub mod mesh_distrib;
 pub mod federated;
 pub mod speculative;
 pub mod infer_queue;
+pub mod vocab_shortlist;
+pub mod difficulty_gate;
+pub mod cognitive_runtime;
 
 

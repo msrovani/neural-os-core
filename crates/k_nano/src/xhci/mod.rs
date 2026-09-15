@@ -630,9 +630,16 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     // HCRST pode deixar PP=0 — sem energia, CCS lê 0 para sempre e o scan MSC
     // vê "nenhuma porta CCS" no metal (QEMU mantém PP=1 e mascarava). RMW
     // preserva CCS/PLS/SPEED e escreve 1 nos RW1C (limpa changes stale).
-    // SESSION_316/327: a leitura imediata pós-write pode pegar PP stale — só
-    // depois de um settle o latch é confiável.
+    //
+    // SESSION_345 F3 (Alienware 8086:a71e/51ed): pós-Limine o stick USB3 fica
+    // PORTSC=0x2a0 (PP=1 CCS=0 PLS=RxDetect) — 10ms não basta p/ retrain.
+    // Settle longo + RxDetect + WPR + poll CCS até 2s no metal.
     {
+        let metal = crate::platform_probe::probe_done()
+            && matches!(
+                crate::platform_probe::hypervisor(),
+                crate::platform_probe::HypervisorKind::None
+            );
         let mut dump = alloc::string::String::new();
         for p in 1..=max_ports {
             let off = 0x400 + (p as u64 - 1) * 0x10;
@@ -641,13 +648,103 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
             w32(
                 op,
                 off,
-                v | (1 << 9)                     // PP
-                    | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21), // CSC/PEC/WRC/PRC RW1C
+                v | (1 << 9) // PP
+                    | (1 << 17)
+                    | (1 << 18)
+                    | (1 << 19)
+                    | (1 << 21), // CSC/PEC/WRC/PRC RW1C
             );
         }
         crate::slog_nano!("USB", "ok", "xHCI[{}] PORTSC pre-PP: {}", index, dump.as_str());
-        // PP precisa de tempo para subir no silício (~10ms não pesa no boot).
-        crate::tsc::sleep_ms(10);
+        crate::tsc::sleep_ms(if metal { 100 } else { 10 });
+
+        // SS escuros: forçar PLS=RxDetect (5) + LWS.
+        for p in 1..=max_ports {
+            let off = 0x400 + (p as u64 - 1) * 0x10;
+            let v = r32(op, off);
+            let ccs = v & 1;
+            let pp = (v >> 9) & 1;
+            if pp == 1 && ccs == 0 && port_protocol_major(base, p) >= 3 {
+                w32(
+                    op,
+                    off,
+                    (v & !(0xF << 5)) | (5 << 5) | (1 << 16) | (1 << 9),
+                );
+            }
+        }
+        crate::tsc::sleep_ms(if metal { 100 } else { 10 });
+
+        // Ainda CCS=0 em porta USB3: Warm Port Reset (WPR) — retreina após UEFI.
+        if metal {
+            for p in 1..=max_ports {
+                let off = 0x400 + (p as u64 - 1) * 0x10;
+                let v = r32(op, off);
+                if v & 1 != 0 {
+                    continue;
+                }
+                if (v >> 9) & 1 == 0 {
+                    continue;
+                }
+                if port_protocol_major(base, p) < 3 {
+                    continue;
+                }
+                w32(
+                    op,
+                    off,
+                    v | (1 << 9)
+                        | (1 << 17)
+                        | (1 << 18)
+                        | (1 << 19)
+                        | (1 << 21)
+                        | (1 << 31), // WPR
+                );
+                let t0 = crate::tsc::rdtsc();
+                let hz = crate::tsc::tsc_hz();
+                let budget = if hz > 1_000_000 { hz / 5 } else { 0 }; // 200ms
+                loop {
+                    let v2 = r32(op, off);
+                    if v2 & (1 << 19) != 0 || (v2 & 1 != 0) {
+                        // clear WRC
+                        w32(op, off, v2 | (1 << 19));
+                        break;
+                    }
+                    if budget > 0 && crate::tsc::rdtsc().wrapping_sub(t0) > budget {
+                        break;
+                    }
+                    core::hint::spin_loop();
+                }
+            }
+            crate::tsc::sleep_ms(50);
+        }
+
+        // Poll CCS: stick USB3 pode aparecer centenas de ms após HCRST.
+        let poll_ms: u64 = if metal { 2000 } else { 50 };
+        let hz = crate::tsc::tsc_hz();
+        let t_poll0 = crate::tsc::rdtsc();
+        let poll_budget = if hz > 1_000_000 {
+            hz.saturating_mul(poll_ms) / 1000
+        } else {
+            0
+        };
+        let mut best_ccs = 0u8;
+        loop {
+            let mut n = 0u8;
+            for p in 1..=max_ports {
+                let off = 0x400 + (p as u64 - 1) * 0x10;
+                if r32(op, off) & 1 != 0 {
+                    n = n.saturating_add(1);
+                }
+            }
+            best_ccs = best_ccs.max(n);
+            if n > 0 || poll_budget == 0 {
+                break;
+            }
+            if crate::tsc::rdtsc().wrapping_sub(t_poll0) > poll_budget {
+                break;
+            }
+            crate::tsc::sleep_ms(50);
+        }
+
         let mut dump2 = alloc::string::String::new();
         for p in 1..=max_ports {
             let off = 0x400 + (p as u64 - 1) * 0x10;
@@ -657,30 +754,31 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
             let pp = (v >> 9) & 1;
             let pls = (v >> 5) & 0xF;
             let speed = (v >> 10) & 0xF;
-            dump2.push_str(
-                alloc::format!(
-                    "P{}:{:#x}[CCS={} PED={} PP={} PLS={} SP={}] ",
-                    p, v, ccs, ped, pp, pls, speed
-                )
-                .as_str(),
-            );
-            // Fase 2 (SESSION_316/327): PP latched mas CCS=0 numa porta
-            // SuperSpeed = link USB3 ainda sem detect. Religa RxDetect
-            // (PLS=5) com LWS (bit16) e re-lê após settle.
-            if pp == 1 && ccs == 0 && port_protocol_major(base, p) >= 3 {
-                w32(op, off, (v & !(0xF << 5)) | (5 << 5) | (1 << 16));
-                crate::tsc::sleep_ms(10);
-                let v2 = r32(op, off);
+            if ccs != 0 || pp != 0 {
                 dump2.push_str(
                     alloc::format!(
-                        "P{}*:{:#x}[CCS={} PP={} PLS={}] ",
-                        p, v2, v2 & 1, (v2 >> 9) & 1, (v2 >> 5) & 0xF
+                        "P{}:{:#x}[CCS={} PED={} PP={} PLS={} SP={}] ",
+                        p, v, ccs, ped, pp, pls, speed
                     )
                     .as_str(),
                 );
             }
         }
-        crate::slog_nano!("USB", "ok", "xHCI[{}] PORTSC settled: {}", index, dump2.as_str());
+        crate::slog_nano!(
+            "USB",
+            "ok",
+            "xHCI[{}] PORTSC settled ccs={} metal={}: {}",
+            index,
+            best_ccs,
+            metal as u8,
+            dump2.as_str()
+        );
+        crate::boot_ramlog::append(&alloc::format!(
+            "USB: xHCI[{}] settle ccs={} {}",
+            index,
+            best_ccs,
+            &dump2[..dump2.len().min(80)]
+        ));
     }
     XHCI_STAGE.store(9, Ordering::Relaxed);
 

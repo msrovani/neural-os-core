@@ -112,6 +112,45 @@ pub fn gp_likely_firmware(ip: u64, cs: u64) -> bool {
     gp_fault_class(ip, cs) == "firmware_ovmf"
 }
 
+/// Relatório Onda 6 (ADR-0102) — honesty no boot / `/ring3 status`.
+pub fn onda6_status_lines() -> alloc::string::String {
+    use alloc::format;
+    let can_iretq = crate::paging::ring3_can_iretq();
+    let hw = HW_GATE_PASSED.load(Ordering::Acquire);
+    let can_reg = ring3_can_register_native();
+    let hv = crate::platform_probe::hypervisor();
+    format!(
+        "Onda6 Ring3 status:\n\
+         H1-H3: wired (can_iretq={})\n\
+         T-051: #GP class wired (firmware/kernel/ring3_user)\n\
+         T-052: metal iretq ▶️ AWAITING_HW (can_iretq={} hv={:?})\n\
+         T-053: HW gate {} (HITL /ring3 approve)\n\
+         T-054/055: can_register={} (promote sob HITL)\n\
+         T-056: verify_blob_no_simd wired\n\
+         T-057: CapGate deny DMA/PIN/FB a CPL=3 wired\n",
+        can_iretq,
+        can_iretq,
+        hv,
+        if hw { "PASS(marked)" } else { "pending" },
+        can_reg
+    )
+}
+
+/// Log Onda 6 no serial (boot).
+pub fn slog_onda6_boot_status() {
+    let can_iretq = crate::paging::ring3_can_iretq();
+    let hw = HW_GATE_PASSED.load(Ordering::Acquire);
+    let can_reg = ring3_can_register_native();
+    crate::slog_nano!(
+        "Onda6",
+        "ok",
+        "Ring3 code-complete can_iretq={} hw_gate={} can_reg={} (T-052/053 metal AWAITING)",
+        can_iretq,
+        hw,
+        can_reg
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

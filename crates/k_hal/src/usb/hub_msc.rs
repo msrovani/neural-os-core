@@ -3,6 +3,10 @@
 //! Referências: Redox xhcid/usbhubd; Chitti `enumerate_hub` (Mac mini USB-A
 //! atrás de hub). Sem isto, Alienware chega ao desktop (Limine leu ESP) mas
 //! `BOOT.LOG`/`NSGDB` nunca gravam — stick não está em root CCS.
+//!
+//! SESSION_345 F3 attack (2026-09-14): metal ccs=4 + MSC fail + UI bloqueava
+//! retry → placeholder no stick. Aqui: budget metal maior, **hub-first**,
+//! breadcrumbs no FB/ramlog, não skip permanente em abort por budget.
 
 use k_nano::xhci::{self, MscDevice};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -19,13 +23,36 @@ fn msc_budget_ok() -> bool {
     k_nano::tsc::rdtsc() < d
 }
 
+fn is_metal() -> bool {
+    k_nano::platform_probe::probe_done()
+        && matches!(
+            k_nano::platform_probe::hypervisor(),
+            k_nano::platform_probe::HypervisorKind::None
+        )
+}
+
+fn fb_usb(msg: &str) {
+    // Metal sem COM1: FB + ramlog (slog sozinho some no dump das 1ªs linhas).
+    k_nano::boot_ramlog::append(msg);
+    k_nano::display::fb::boot_ckpt_noflush(191, msg);
+}
+
 /// Entry R1 registrada em `k_nano::xhci::register_msc_bringup`.
 pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
-    // Budget 3s parede: hub×EP0 sem teto = Limine → tela preta interminável.
+    // SESSION_345: metal pós-Limine — stick USB3 atrasa CCS; 8s no deferred.
+    let secs: u64 = if is_metal() {
+        if k_nano::boot_logger::ui_is_live() {
+            8
+        } else {
+            12
+        }
+    } else {
+        3
+    };
     let hz = k_nano::tsc::tsc_hz();
     let t0 = k_nano::tsc::rdtsc();
     if hz > 1_000_000 {
-        MSC_TSC_DEADLINE.store(t0.wrapping_add(hz.saturating_mul(3)), Ordering::Relaxed);
+        MSC_TSC_DEADLINE.store(t0.wrapping_add(hz.saturating_mul(secs)), Ordering::Relaxed);
     } else {
         MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
     }
@@ -33,8 +60,8 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
     let max_ports = match xhci::host_max_ports() {
         Some(m) => m,
         None => {
-            // Distingue "controller down" de "0 CCS" no FB (serial/ramlog são mudos).
             xhci::mark_msc_xhci_down();
+            fb_usb("USB: MSC xhci-down (sem controller)");
             return None;
         }
     };
@@ -63,61 +90,113 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
             "k_hal::usb::hub_msc",
             "nenhuma porta CCS — stick ausente?"
         );
+        fb_usb("USB: nenhuma porta CCS");
         MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
         return None;
     }
+    // SuperSpeed primeiro nas roots; hubs (class 9) tratados em pass 1 abaixo.
     ccs.sort_by(|a, b| b.1.cmp(&a.1));
 
-    for (port, speed) in ccs {
+    fb_usb(&alloc::format!(
+        "USB: MSC scan ccs={} budget={}s metal={}",
+        ccs.len(),
+        secs,
+        is_metal() as u8
+    ));
+
+    // Pass 1: classificar — MSC root OK imediato; hubs enfileirados; resto skip.
+    let mut hubs: alloc::vec::Vec<(u8, u8, u8, u16)> = alloc::vec::Vec::new(); // port,speed,slot,mps
+    for (port, speed) in ccs.iter().copied() {
         if !msc_budget_ok() {
             k_nano::slog_hal!(
                 "USB",
                 "warn",
-                "MSC bringup budget 3s — abort (UI first; retry DriverInit)"
+                "MSC bringup budget — abort classify (UI first; retry)"
             );
+            fb_usb("USB: MSC budget abort (classify)");
+            // NÃO mark_failed — retry DriverInit/deferred deve rever estas portas.
             break;
         }
-        match try_msc_on_port(port, speed) {
-            Some(dev) => {
-                k_nano::slog_hal_home!(
-                    "USB",
-                    "ok",
-                    "k_hal::usb::hub_msc",
-                    "MSC bringup OK port={} slot={} speed={}",
-                    dev.port,
-                    dev.slot,
-                    speed
-                );
+        fb_usb(&alloc::format!("USB: try root P{} speed={}", port, speed));
+        match classify_root_port(port, speed) {
+            RootClass::Msc(dev) => {
                 MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
+                fb_usb(&alloc::format!(
+                    "USB: MSC OK root P{} slot={}",
+                    dev.port,
+                    dev.slot
+                ));
+                return Some(dev);
+            }
+            RootClass::Hub {
+                slot,
+                mps,
+            } => {
+                hubs.push((port, speed, slot, mps));
+            }
+            RootClass::Other | RootClass::Fail => {
+                xhci::mark_msc_port_failed(port);
+            }
+        }
+    }
+
+    // Pass 2: MSC atrás dos hubs (Alienware USB-A típico).
+    for (port, speed, hub_slot, hub_mps) in hubs {
+        if !msc_budget_ok() {
+            fb_usb("USB: MSC budget abort (hub pass)");
+            // Libera slots de hub sem marcar porta failed (budget).
+            let _ = xhci::host_disable_slot(hub_slot);
+            break;
+        }
+        fb_usb(&alloc::format!("USB: hub enum root P{} slot={}", port, hub_slot));
+        let hub_loc = xhci::DevLoc::root(port, speed);
+        match try_msc_behind_hub(hub_slot, hub_loc, hub_mps) {
+            Some(dev) => {
+                MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
+                fb_usb(&alloc::format!(
+                    "USB: MSC OK hub P{} child slot={}",
+                    port,
+                    dev.slot
+                ));
                 return Some(dev);
             }
             None => {
+                let _ = xhci::host_disable_slot(hub_slot);
                 xhci::mark_msc_port_failed(port);
                 k_nano::slog_hal!(
                     "USB",
                     "warn",
-                    "MSC bringup FAIL port={} — tenta proxima",
+                    "MSC bringup FAIL hub root={} — tenta proxima",
                     port
                 );
             }
         }
     }
+
     k_nano::slog_hal!("USB", "warn", "MSC bringup FAIL em todas as portas CCS");
+    fb_usb("USB: MSC FAIL all CCS/hubs");
     MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
     None
 }
 
-unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
+enum RootClass {
+    Msc(MscDevice),
+    Hub { slot: u8, mps: u16 },
+    Other,
+    Fail,
+}
+
+unsafe fn classify_root_port(port: u8, speed: u8) -> RootClass {
     if !xhci::host_reset_port(port, speed) {
         k_nano::slog_hal!("USB", "warn", "port {} reset FAIL", port);
-        return None;
+        return RootClass::Fail;
     }
     let loc = xhci::DevLoc::root(port, speed);
     let slot = match xhci::host_enable_slot(port) {
         Some(s) if s > 0 => s,
         _ => {
             k_nano::slog_hal!("USB", "warn", "Enable Slot FAIL port={}", port);
-            return None;
+            return RootClass::Fail;
         }
     };
     let mps = xhci::ep0_mps_for_speed(speed);
@@ -130,21 +209,30 @@ unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
             port
         );
         let _ = xhci::host_disable_slot(slot);
-        return None;
+        return RootClass::Fail;
     }
     crate::unlock_dag::grant(crate::unlock_dag::CapToken::UsbEp0);
 
-    if xhci::host_device_class(slot, mps) == Some(9) {
-        k_nano::slog_hal!(
-            "USB",
-            "ok",
-            "hub class @ root port={} — enumerando filhos p/ MSC",
-            port
-        );
-        crate::unlock_dag::grant(crate::unlock_dag::CapToken::UsbHubOk);
-        return try_msc_behind_hub(slot, loc, mps);
+    match xhci::host_device_class(slot, mps) {
+        Some(9) => {
+            k_nano::slog_hal!(
+                "USB",
+                "ok",
+                "hub class @ root port={} — defer hub enum",
+                port
+            );
+            crate::unlock_dag::grant(crate::unlock_dag::CapToken::UsbHubOk);
+            RootClass::Hub { slot, mps }
+        }
+        _ => {
+            if let Some(dev) = finish_msc(slot, loc, mps) {
+                RootClass::Msc(dev)
+            } else {
+                let _ = xhci::host_disable_slot(slot);
+                RootClass::Other
+            }
+        }
     }
-    finish_msc(slot, loc, mps)
 }
 
 unsafe fn finish_msc(slot: u8, loc: xhci::DevLoc, ep0_mps: u16) -> Option<MscDevice> {
@@ -222,7 +310,6 @@ unsafe fn try_msc_behind_hub(
     let mut hdesc = [0u8; 15];
     if !xhci::host_ep0_control_in(hub_slot, hub_mps, 0xA0, 0x06, 0x2900, 0, &mut hdesc) {
         k_nano::slog_hal!("USB", "warn", "hub GET_DESCRIPTOR FAIL slot={}", hub_slot);
-        let _ = xhci::host_disable_slot(hub_slot);
         return None;
     }
     let nbr_ports = hdesc[2].max(1).min(15);
@@ -250,6 +337,7 @@ unsafe fn try_msc_behind_hub(
     for p in 1..=nbr_ports {
         if !msc_budget_ok() {
             k_nano::slog_hal!("USB", "warn", "hub MSC budget — abort mid-hub");
+            fb_usb(&alloc::format!("USB: hub mid-budget abort @{p}"));
             break;
         }
         xhci::host_restore_ep0(hub_ep0, hub_slot);
@@ -262,7 +350,6 @@ unsafe fn try_msc_behind_hub(
         if status & 1 == 0 {
             continue;
         }
-        // Linux hub: clear C_PORT_CONNECTION (feature 16) antes do reset.
         if change & 1 != 0 {
             let _ = xhci::host_ep0_class_nodata(hub_slot, hub_mps, 0x23, 1, 16, p as u16);
         }
@@ -286,7 +373,6 @@ unsafe fn try_msc_behind_hub(
             }
             let st = u16::from_le_bytes([stbuf[0], stbuf[1]]);
             let ch = u16::from_le_bytes([stbuf[2], stbuf[3]]);
-            // C_PORT_RESET set e PORT_RESET clear
             if ch & (1 << 4) != 0 || (st & (1 << 4) == 0 && st & 1 != 0) {
                 if st & (1 << 4) == 0 {
                     reset_ok = true;
@@ -304,7 +390,6 @@ unsafe fn try_msc_behind_hub(
         }
         let _ = xhci::host_ep0_class_nodata(hub_slot, hub_mps, 0x23, 1, 20, p as u16);
         k_nano::tsc::sleep_us(10_000);
-        // CRÍTICO: re-ler status após clear C_RESET — buffer antigo mentia a speed (SESSION_314).
         xhci::host_restore_ep0(hub_ep0, hub_slot);
         if !xhci::host_ep0_control_in(hub_slot, hub_mps, 0xA3, 0, 0, p as u16, &mut stbuf) {
             continue;
@@ -314,7 +399,6 @@ unsafe fn try_msc_behind_hub(
             k_nano::slog_hal!("USB", "warn", "hub port {} lost CCS pós-reset", p);
             continue;
         }
-        // Hub port status: bit9=LS, bit10=HS; senão Full. (USB2.0 11.24.2.7)
         let speed = if status & (1 << 9) != 0 {
             2
         } else if status & (1 << 10) != 0 {
@@ -325,7 +409,6 @@ unsafe fn try_msc_behind_hub(
         let Some(route) = xhci::push_route(hub_loc.route, p) else {
             continue;
         };
-        // U-Boot: TT só LS/FS atrás de hub HS+ (Slot TT_HUB/TT_PORT).
         let need_tt = (speed == 1 || speed == 2) && hub_loc.speed >= 3;
         let child_loc = xhci::DevLoc {
             root_port: hub_loc.root_port,
@@ -334,7 +417,6 @@ unsafe fn try_msc_behind_hub(
             parent_slot: hub_slot,
             parent_port: p,
             tt: need_tt,
-            // Linux xhci-mem: DEV_MTT no filho LS/FS se hub->tt.multi
             mtt: need_tt && mtt,
         };
         k_nano::slog_hal!(

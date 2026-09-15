@@ -1,5 +1,26 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s349] - 2026-09-15 — Falcon3 WHPX measure + OOM UI guards
+
+- Lab: `tools/measure-falcon3-toks.ps1` canónico WHPX (~0.15 tok/s; usar `milli=`/`us=`)
+- Loader: header v6 > FAT size; parse in-place (sem leak 2× blob)
+- OOM UI T+793: `cortex_llm` pediu ~4.4 GB (`size=4764923932`); header `max_seq=32768`
+- Guards: `Tensor::new` checked_mul+cap; `load_llm_v6` clamp max_seq≤4096 heavy; `embed_for_kv` ctx≤512
+
+## [1.9.99-s348] - 2026-09-15 — ADR-0101 Onda 0 residual + Ondas 1–3 (Falcon3 lab)
+
+- Onda 0: SSE2 ADD/SUB/SKIP real (sem `W*x`); metal AVX2→SSE; testes parity Falcon3-shaped
+- Onda 1: `vocab_shortlist` + Medusa draft/verify + H2O telem/InferQueue
+- Onda 2: `difficulty_gate` Cheap/Normal/Full (policy; sem KL)
+- Onda 3: `cognitive_runtime` + `/cog` status; `generate_text` via política
+
+## [1.9.99-s347] - 2026-09-15 — Onda 6 Ring3 código-complete (HITL `/ring3`)
+
+- ADR-0102: `stash_native_runner` + `promote_native_ring_if_ready`; `/ring3 status|approve` → Approve skill `ring3_register` marca T-053
+- T-051/056/057 + teardown mid-fail: wired; **T-052/053 metal = AWAITING_HW** (não falso PASS)
+- Boot slog `Onda6` honesty; QEMU/WHPX nunca auto-registra `register_native_ring`
+- Docs: SESSION_347, TODO, ADR-0102 §6, STATE
+
 ## [1.9.99-s346] - 2026-09-14 — Voice Pipeline 2.0 (dono único do mic, HDA correto, STT honesto)
 
 - **HDA formato ❌→✅:** `FMT_16BIT_48KHZ_STEREO` era `0x21` = **8-bit mono 32 kHz não-PCM** no layout Intel (§3.7.1). Agora `0x1100`. Isso explica áudio RX/TX corrompido desde o início.

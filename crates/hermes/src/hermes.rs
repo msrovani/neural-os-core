@@ -348,6 +348,8 @@ pub enum Command {
     /// Instalador do sistema (ADR-0079): abre card de seleção de disco.
     /// Pub SYS_INSTALL_UI → DisplayAgent spawna card 7902 → clique dispara SYS_INSTALL.
     Install,
+    /// ADR-0102 Onda 6: status | approve (HITL Escalate → T-053 mark + T-054 promote)
+    Ring3(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -578,6 +580,14 @@ pub fn parse_command(line: &str) -> Command {
         }
         if name.eq_ignore_ascii_case("install") || name.eq_ignore_ascii_case("instalar") {
             return Command::Install;
+        }
+        if name.eq_ignore_ascii_case("ring3") {
+            let arg = parts.next().unwrap_or("status").trim().to_string();
+            return Command::Ring3(if arg.is_empty() {
+                String::from("status")
+            } else {
+                arg
+            });
         }
         if name.eq_ignore_ascii_case("fetch") || name.eq_ignore_ascii_case("get") {
             return Command::Fetch(parts.next().unwrap_or("").trim().to_string());

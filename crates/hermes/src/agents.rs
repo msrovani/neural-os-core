@@ -1008,6 +1008,7 @@ impl Agent for HermesAgent {
                 hermes::Command::UiMode(_) => "UiMode",
                 hermes::Command::Commands => "Commands",
                 hermes::Command::Install => "Install",
+                hermes::Command::Ring3(_) => "Ring3",
                 hermes::Command::Chat(_) => "Chat",
                 hermes::Command::ModelSwap(_) => "ModelSwap",
             };
@@ -1226,6 +1227,17 @@ impl Agent for HermesAgent {
                             alloc::format!(
                                 "Requisicao #{} aprovada. [TRUST] llm_generate OK — reenvie o chat",
                                 id
+                            )
+                        } else if skill_name.as_deref() == Some("ring3_register") {
+                            // ADR-0102 T-053/T-054: HITL marca HW gate + promove stash → register.
+                            let _ = now;
+                            k_nano::ring3::ring3_mark_hw_gate_passed();
+                            let promoted = crate::app_factory::promote_native_ring_if_ready();
+                            alloc::format!(
+                                "Requisicao #{} aprovada. [RING3] T-053 marked; promote={} (B/C sob CapGate)\n{}",
+                                id,
+                                promoted,
+                                k_nano::ring3::onda6_status_lines()
                             )
                         } else {
                             let mut hub = crate::package_hub::PACKAGE_HUB.lock();
@@ -1476,6 +1488,34 @@ impl Agent for HermesAgent {
                         token: event_bus::CapabilityToken::Legacy(1),
                     });
                     String::from("Install: selecione o disco de destino na UI\n")
+                }
+                hermes::Command::Ring3(ref arg) => {
+                    let a = arg.trim().to_ascii_lowercase();
+                    if a == "status" || a.is_empty() {
+                        let mut msg = k_nano::ring3::onda6_status_lines();
+                        msg.push_str(&alloc::format!(
+                            "isolation_ring_registered={}\n",
+                            crate::app_factory::native_ring_registered()
+                        ));
+                        msg
+                    } else if a == "approve" || a == "register" {
+                        // Escalate HITL — /approve <id> marca T-053 + promote T-054.
+                        let id = APPROVAL_GATE.lock().request(
+                            "ring3_register",
+                            "hermes",
+                            "ADR-0102 Onda 6: liberar register_native_ring (B/C) apos checklist metal",
+                            crate::approval::ApprovalLevel::Escalate,
+                        );
+                        alloc::format!(
+                            "[RING3] HITL Escalate #{} — /approve {} ou /deny {}\n{}",
+                            id,
+                            id,
+                            id,
+                            k_nano::ring3::onda6_status_lines()
+                        )
+                    } else {
+                        String::from("Ring3: /ring3 status | /ring3 approve")
+                    }
                 }
                 hermes::Command::AddSkill(ref name, ref desc) => {
                     let prompt = alloc::format!(

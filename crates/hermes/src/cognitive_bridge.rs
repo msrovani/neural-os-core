@@ -938,7 +938,7 @@ pub fn session_len() -> u64 {
 
 pub fn status_line() -> String {
     format!(
-        "{} | session_n={} | nudges={} | route={} | {}",
+        "{} | session_n={} | nudges={} | route={} | {} | {}",
         budget_status(),
         SESSION.lock().entries.len(),
         NUDGE_QUEUE.lock().len(),
@@ -947,7 +947,8 @@ pub fn status_line() -> String {
             .as_ref()
             .map(|s| s.as_str())
             .unwrap_or("-"),
-        k_ai::memory_systems::bge_status()
+        k_ai::memory_systems::bge_status(),
+        cortex::cognitive_runtime::status_line()
     )
 }
 

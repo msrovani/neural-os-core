@@ -31,6 +31,32 @@ pub fn register_native_ring(f: NativeRingFn) {
     k_nano::slog_hermes!("APPFACTORY", "info", "native isolation ring REGISTRADO (ADR-0060) — B/C liberável sob HITL");
 }
 
+/// Guarda o runner nativo antes do gate HW (T-054 promote sob HITL).
+static NATIVE_STASH: AtomicUsize = AtomicUsize::new(0);
+
+pub fn stash_native_runner(f: NativeRingFn) {
+    NATIVE_STASH.store(f as usize, Ordering::Release);
+}
+
+/// T-054: após `ring3_mark_hw_gate_passed`, registra o runner stashed se predicados OK.
+pub fn promote_native_ring_if_ready() -> bool {
+    if !k_nano::ring3::ring3_can_register_native() {
+        return false;
+    }
+    let f = NATIVE_STASH.load(Ordering::Acquire);
+    if f == 0 {
+        k_nano::slog_hermes!("APPFACTORY", "warn", "promote Ring3: stash vazio");
+        return false;
+    }
+    if native_ring_registered() {
+        return true;
+    }
+    // SAFETY: stash só recebe NativeRingFn via stash_native_runner.
+    let runner: NativeRingFn = unsafe { core::mem::transmute(f) };
+    register_native_ring(runner);
+    true
+}
+
 pub fn native_ring_registered() -> bool {
     NATIVE_RING.load(Ordering::Acquire) != 0
 }

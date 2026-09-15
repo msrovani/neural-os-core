@@ -70,24 +70,25 @@
 - [x] **H2** — Demos P6 reais no tree (`demo_ring3*` em `k_nano::paging`; SESSION_302)
 - [x] **H3** — `ring3_can_iretq()` + `can_register_native()` cindidos + self-test wired no boot
 - [~] Demos P6 rodam no QEMU 4c (`ring3_can_iretq=true` + Jarbas greeting; SESSION_305); faltas contidas non-fatal
-- [ ] **T-051** — Separar `#GP` OVMF de `#GP` kernel (WHPX = `int 0x90`)
-- [ ] **T-052** — Metal: iretq+CPL3 + fault-containment (🔴 depende Onda 2 SMP metal)
-- [ ] **T-053** — Checklist 0077 §6 em HW
-- [ ] **T-054** — `register_native_ring` + HITL Escalate
-- [ ] **T-055** — `isolation_ring_available()==true` só então
-- [ ] **T-056** — Fronteira xmm: verificador opcode **ou** XSAVE (não `#UD` por CR0.EM)
-- [ ] **T-057** — `SYS_PIN_DMA` pós T-055; CapGate deny DMA a CPL=3
+- [x] **T-051** — Separar `#GP` OVMF de `#GP` kernel (`gp_fault_class` / `gp_likely_firmware`) — código ✅; WHPX flaky fora do caminho crítico
+- [ ] **T-052** — Metal: iretq+CPL3 + fault-containment ▶️ **AWAITING_HW** (depende Onda 2 SMP metal)
+- [ ] **T-053** — Checklist 0077 §6 em HW ▶️ **AWAITING_HW** (HITL `/ring3 approve` marca gate; aceite = notebook)
+- [x] **T-054** — `stash_native_runner` + HITL Escalate `ring3_register` → `promote_native_ring_if_ready` (SESSION_347)
+- [ ] **T-055** — `isolation_ring_available()==true` só após T-053 metal (código gated; aceite HW pendente)
+- [x] **T-056** — Fronteira xmm: `verify_blob_no_simd` antes do `iretq`
+- [x] **T-057** — CapGate deny DMA/PIN/FB a CPL=3 (`sandbox_syscalls`)
 
+**Operador:** `/ring3 status` | `/ring3 approve` → `/approve <id>`. QEMU nunca auto-registra (hv≠None).
 ### 3. ADR-0101 — Falcon3-3B Cognitive Lab
 **Goal:** decode m=1 do 3B faz ADD/SUB/SKIP packed no SIMD do `x86_64-unknown-none`.
 
 - [x] **Onda 0** — Inventário 3B-first (`falcon3_boot_names`, `fat_names_for(Active)` com `FALCON3.V6`)
-- [x] **Onda 0** — SSE2 skip-native + scalar ternário-nativo (`bitnet_sse.rs`, paridade vs scalar)
+- [x] **Onda 0** — SSE2 ADD/SUB/SKIP real + scalar ternário-nativo (`bitnet_sse.rs`, paridade vs scalar; SESSION_348)
 - [x] **Onda 0** — GGUF inferência wired (TQ2_0 + BF16 + auto-config; SESSION_309)
-- [~] **Onda 0** — AVX2 no target `none` (defer explícito da ADR; metal→scalar documentado, não reescrever ainda)
-- [ ] **Onda 1** — Shortlist logits + n-gram/Medusa wired no 3B + KV H2O medido
-- [ ] **Onda 2** — Difficulty gate no `generate_next`; early-exit só com KL treinado
-- [ ] **Onda 3** — Composição: gate + spec + kernel nativo + KV compress + SGDB
+- [~] **Onda 0** — AVX2 no target `none` (defer: metal usa SSE; host AVX2 ainda FMA dequant)
+- [x] **Onda 1** — Shortlist logits + Medusa/n-gram wired + KV H2O telemetria/InferQueue (SESSION_348)
+- [x] **Onda 2** — Difficulty gate no generate/InferQueue (policy budget; **não** KL early-exit)
+- [x] **Onda 3** — `cognitive_runtime` composição + `/cog` status (SGDB continua prompt-side)
 
 ### 4. ADR-0100 — Backlog unificado K³CHJ (plano-mestre)
 **Goal:** gate v2.0.0 = Onda 0 + Onda 1 (mín. T-011) + Onda 2 (um metal) + Onda 3 (A2 ou A3).
@@ -97,7 +98,7 @@
 - [ ] **Onda 2** — Metal K23 `online==madt-1` (T-017 img ✅; T-018–T-021 ▶️ metal)
 - [ ] **Onda 3** — 0086 A2–A8 (T-022–T-032; A1/A9 HITL)
 - [ ] **Onda 4** — `ap_pollable` + runqueue 0089 (T-033–T-044) 🟡 (feature 0089 já ON)
-- [~] **Onda 6** — Ring3: H1–H3 + demos P6 no QEMU (s302/s305); metal T-051–T-057 ▶️
+- [~] **Onda 6** — Ring3: código-complete (SESSION_347 HITL `/ring3`); metal T-052/053 ▶️ AWAITING_HW
 - [ ] **Onda 7** — W2A8 gated + 0078 só Fase 1 (T-058–T-065)
 - [ ] **Onda 8** — Golden GPU/SDMA/NPU (T-066–T-069) ▶️
 - [ ] **Onda 9** — 0058 S5 um widget + A/V (T-070–T-072)

@@ -3,6 +3,22 @@
 
 use alloc::vec::Vec;
 use crate::cortex::KvCache;
+use core::sync::atomic::{AtomicU64, Ordering};
+
+static TELEM_EVICT_DROPS: AtomicU64 = AtomicU64::new(0);
+static TELEM_EVICT_CALLS: AtomicU64 = AtomicU64::new(0);
+
+pub fn record_evict(dropped: usize) {
+    TELEM_EVICT_CALLS.fetch_add(1, Ordering::Relaxed);
+    TELEM_EVICT_DROPS.fetch_add(dropped as u64, Ordering::Relaxed);
+}
+
+pub fn telemetry() -> (u64, u64) {
+    (
+        TELEM_EVICT_CALLS.load(Ordering::Relaxed),
+        TELEM_EVICT_DROPS.load(Ordering::Relaxed),
+    )
+}
 
 /// Keep last `recent` tokens always; among older positions keep top `heavy` by ||k||.
 pub fn h2o_evict(cache: &mut KvCache, recent: usize, heavy: usize) -> usize {
@@ -80,6 +96,9 @@ pub fn h2o_evict(cache: &mut KvCache, recent: usize, heavy: usize) -> usize {
     }
     let dropped = len - new_len;
     cache.len = new_len;
+    if dropped > 0 {
+        record_evict(dropped);
+    }
     dropped
 }
 

@@ -918,13 +918,20 @@ pub fn try_ensure_usb_msc() -> bool {
                 crate::xhci::init_xhci();
             }
         }
-        let msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
+        // UI live: só HC bound (evita rebind multi-HC = freeze SESSION_312).
+        let msc = unsafe {
+            if ui_is_live() {
+                crate::usb_msc::UsbMassStorage::probe_deferred_bound_hc()
+            } else {
+                crate::usb_msc::UsbMassStorage::probe()
+            }
+        };
         let ok = msc.is_some();
         if ok {
             *crate::globals::USB_MSC.lock() = msc;
-            crate::slog_nano!("LOG", "info", "try_ensure_usb_msc: MSC OK (retry)");
-            // noflush: chamado de dentro do heal/persist (recursão via try_flush).
+            crate::slog_nano!("LOG", "ok", "try_ensure_usb_msc: MSC OK (retry)");
             crate::display::fb::boot_ckpt_noflush(190, "USB-MSC retry OK (self-heal)");
+            crate::boot_ramlog::append("USB: MSC retry OK — BOOT.LOG path");
         }
         ok
     }
@@ -956,8 +963,8 @@ pub fn ensure_persisted() -> bool {
         static LAST_MSC_PROBE_TICK: AtomicU64 = AtomicU64::new(0);
         let now = now_tick();
         let last = LAST_MSC_PROBE_TICK.load(Ordering::Relaxed);
-        // Pós-desktop: o 1º ensure_persisted NÃO pode varrer xHCI no mesmo
-        // tick do 1º frame (SysInfo urgency 160 — SESSION_312 Alienware).
+        // Pós-desktop: 1º ensure NÃO varre xHCI (tick do 1º frame — SESSION_312).
+        // Depois: deferred MSC no HC bound a cada MSC_PROBE_MIN_TICKS (F3 recovery).
         if ui_is_live() && last == 0 {
             LAST_MSC_PROBE_TICK.store(now, Ordering::Relaxed);
             return flush();
@@ -965,13 +972,15 @@ pub fn ensure_persisted() -> bool {
         let due = has_msc
             || last == 0
             || now.saturating_sub(last) >= MSC_PROBE_MIN_TICKS;
-        if due {
+        if due && !has_msc {
             LAST_MSC_PROBE_TICK.store(now, Ordering::Relaxed);
             let msc = try_ensure_usb_msc();
             if msc {
                 BACKEND_SKIP.fetch_and(!SKIP_USB, Ordering::Relaxed);
                 let _ = crate::storage::remount_after_usb_msc();
             }
+        } else if due && has_msc {
+            LAST_MSC_PROBE_TICK.store(now, Ordering::Relaxed);
         }
     } else {
         crate::slog_nano!("LOG", "ok", "ensure_persisted: skip MSC retry (TCG+virtio-blk)");

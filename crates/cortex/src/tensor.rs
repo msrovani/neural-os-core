@@ -35,8 +35,37 @@ pub struct Tensor {
 }
 
 impl Tensor {
+    /// Aloca zeros. Overflow `rows*cols` → tensor vazio + slog (SESSION_349:
+    /// wrap release produzia `layout.size` primo ~4.4GB e OOM `cortex_llm`).
     pub fn new(shape: (usize, usize)) -> Self {
-        let len = shape.0 * shape.1;
+        let Some(len) = shape.0.checked_mul(shape.1) else {
+            k_nano::slog_cortex!(
+                "Tensor",
+                "fail",
+                "shape overflow {}x{} — refuse alloc",
+                shape.0,
+                shape.1
+            );
+            return Tensor {
+                shape: (0, 0),
+                data: alloc::vec::Vec::new(),
+            };
+        };
+        // Cap honesto: >2 GiB f32 (~512M elems) nunca cabe no bump window ~2GB.
+        if len > (512 * 1024 * 1024) {
+            k_nano::slog_cortex!(
+                "Tensor",
+                "fail",
+                "shape too large {}x{} elems={} — refuse alloc",
+                shape.0,
+                shape.1,
+                len
+            );
+            return Tensor {
+                shape: (0, 0),
+                data: alloc::vec::Vec::new(),
+            };
+        }
         Tensor {
             shape,
             data: vec![0.0; len],
@@ -45,12 +74,14 @@ impl Tensor {
 
     /// Creates a zero-initialized tensor of the given shape (fallback for failed ops).
     pub fn zero(shape: (usize, usize)) -> Self {
-        let size = shape.0 * shape.1;
-        Self { data: vec![0.0; size], shape }
+        Self::new(shape)
     }
 
     pub fn from_row_major(shape: (usize, usize), data: Vec<f32>) -> Option<Self> {
-        if data.len() != shape.0 * shape.1 {
+        let Some(need) = shape.0.checked_mul(shape.1) else {
+            return None;
+        };
+        if data.len() != need {
             return None;
         }
         Some(Tensor { shape, data })

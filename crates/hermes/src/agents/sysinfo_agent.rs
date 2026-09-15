@@ -1,7 +1,10 @@
 //! SysInfoAgent — retry de flush do BOOT.LOG + NSGDB no pendrive (HW real).
 //!
-//! SESSION_345 F3: com UI viva **não** re-enumera xHCI; se `USB_MSC` já existe,
-//! tenta `ensure_persisted` + remount NSGDB (overwrite-only, sem alloc).
+//! SESSION_345 F3: UI viva **sem** MSC → deferred probe no HC bound (não
+//! rebind multi-xHCI). Com MSC → ensure_persisted + remount NSGDB.
+//!
+//! Painel na tela: **Hub Health** (F12) — linha `infer` mostra tok/s
+//! (`cortex::infer_queue::hub_infer_line`). Card 9001 removido no s261.
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -42,12 +45,8 @@ impl Agent for SysInfoAgent {
         let ui_live = k_nano::boot_logger::ui_is_live();
 
         if !fat_ok {
-            // UI viva + sem MSC: não reabre EnableSlot (freeze Display).
-            // UI viva + MSC já enumerado: overwrite BOOT.LOG é seguro (F3).
-            if ui_live && !has_msc {
-                return AgentTickResult::Pending;
-            }
             let n = MSC_RETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
+            // Sem UI: limpa skips e permite re-probe completo periodicamente.
             if n > 0 && n % 64 == 0 && !ui_live {
                 k_nano::xhci::clear_msc_port_skips();
             }
@@ -65,7 +64,7 @@ impl Agent for SysInfoAgent {
                 } else {
                     k_nano::slog_bin!("LOG", "warn", "NSGDB remount skip/fail T+{}", tick);
                 }
-            } else if !ok && n % 32 == 0 {
+            } else if !ok && n % 16 == 0 {
                 k_nano::slog_bin!(
                     "LOG",
                     "warn",

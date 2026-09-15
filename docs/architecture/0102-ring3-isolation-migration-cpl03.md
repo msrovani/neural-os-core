@@ -187,7 +187,7 @@ SYSCALL vira ADR/TODO **depois** de T-055, com os quatro itens do §4. Preemptio
 Não substituem o §6 da 0077. Somam honesty:
 
 - [x] H1–H3 no tree (feature propaga; P6 não é stub; predicados cindidos). SESSION_302.
-- [ ] T-051…T-057 da Onda 6, com wasmi default até T-055 (código wired; T-052/053 HW pendente).
+- [~] T-051…T-057: **código wired** (SESSION_347 HITL `/ring3` + stash/promote); T-052/053 aceite **AWAITING_HW**; wasmi default até T-055 metal.
 - [x] Nenhum `handle_table` / `exception_channel` / `vdso` no bin.
 - [x] `register_native_ring` wired **somente** quando `ring3_can_register_native()` (T-053 + metal).
 - [ ] SYSCALL/SYSRET **não** ligado em WHPX; em KVM/metal só após §4.

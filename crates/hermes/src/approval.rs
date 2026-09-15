@@ -94,6 +94,7 @@ impl ApprovalGate {
         let s = skill.to_lowercase();
         if s.contains("shutdown") || s.contains("reboot") || s.contains("format") || s.contains("delete")
             || s == "llm_generate"
+            || s == "ring3_register"
         {
             ApprovalLevel::Escalate
         } else if s.contains("write") || s.contains("exec") || s.contains("net") || s.contains("disk") {

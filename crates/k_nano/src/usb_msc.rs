@@ -28,40 +28,84 @@ unsafe impl Send for UsbMassStorage {}
 
 impl UsbMassStorage {
     pub unsafe fn probe() -> Option<Self> {
-        // Runtime: NUNCA enumerar/rebindar de forma síncrona no scheduler
-        // cooperativo. Mesmo o HC atual pode travar em EnableSlot/BOT.
+        // Boot path: multi-HC OK. Pós-desktop: use `probe_deferred_bound_hc`
+        // (SESSION_345 F3 — ui_live + multi-rebind = freeze Alienware).
         if crate::boot_logger::ui_is_live() {
-            crate::slog_nano!("USB", "warn", "MSC probe bloqueado: UI live");
-            return None;
-        }
-        let n = xhci::xhci_controller_count();
-        let n = if n == 0 { 1 } else { n };
-        for ci in 0..n {
-            // Rebind se ainda não há state, ou se vamos para o próximo HC.
-            let need_bind = xhci::XHCI_STATE.lock().is_none()
-                || (ci > 0 && xhci::xhci_selected_index() != ci);
-            if need_bind {
-                if !xhci::init_xhci_select(ci) {
-                    continue;
-                }
-            }
-            xhci::clear_msc_port_skips();
-            crate::slog_nano!(
-                "USB",
-                "msc",
-                "probe MSC em xHCI[{}/{}]",
-                ci,
-                n
-            );
-            if let Some(msc) = Self::probe_current_hc() {
-                return Some(msc);
-            }
             crate::slog_nano!(
                 "USB",
                 "warn",
-                "MSC FAIL xHCI[{}] — tenta próximo controller",
-                ci
+                "MSC probe multi-HC bloqueado: UI live — use deferred"
             );
+            return None;
+        }
+        Self::probe_all_hcs()
+    }
+
+    /// Retry F3 com UI viva: **só o HC já bound** (sem `init_xhci_select` em
+    /// todos). Rate-limit no caller (SysInfo / ensure_persisted).
+    pub unsafe fn probe_deferred_bound_hc() -> Option<Self> {
+        if xhci::XHCI_STATE.lock().is_none() {
+            crate::slog_nano!("USB", "warn", "deferred MSC: sem XHCI_STATE");
+            return None;
+        }
+        xhci::clear_msc_port_skips();
+        crate::boot_ramlog::append("USB: deferred MSC probe (bound HC)");
+        crate::slog_nano!(
+            "USB",
+            "warn",
+            "deferred MSC probe xHCI[{}]",
+            xhci::xhci_selected_index()
+        );
+        Self::probe_current_hc()
+    }
+
+    unsafe fn probe_all_hcs() -> Option<Self> {
+        let n = xhci::xhci_controller_count();
+        let n = if n == 0 { 1 } else { n };
+        // Pass A imediato; Pass B após 500ms se metal (stick USB3 pós-HCRST atrasado).
+        for pass in 0..2u8 {
+            if pass == 1 {
+                let metal = crate::platform_probe::probe_done()
+                    && matches!(
+                        crate::platform_probe::hypervisor(),
+                        crate::platform_probe::HypervisorKind::None
+                    );
+                if !metal {
+                    break;
+                }
+                crate::boot_ramlog::append("USB: MSC pass-B wait 500ms (USB3 retrain)");
+                crate::tsc::sleep_ms(500);
+                xhci::clear_msc_port_skips();
+            }
+            for ci in 0..n {
+                let need_bind = xhci::XHCI_STATE.lock().is_none()
+                    || (ci > 0 && xhci::xhci_selected_index() != ci)
+                    || pass == 1;
+                if need_bind {
+                    if !xhci::init_xhci_select(ci) {
+                        continue;
+                    }
+                }
+                xhci::clear_msc_port_skips();
+                crate::slog_nano!(
+                    "USB",
+                    "msc",
+                    "probe MSC em xHCI[{}/{}] pass={}",
+                    ci,
+                    n,
+                    pass
+                );
+                if let Some(msc) = Self::probe_current_hc() {
+                    return Some(msc);
+                }
+                crate::slog_nano!(
+                    "USB",
+                    "warn",
+                    "MSC FAIL xHCI[{}] pass={} — tenta próximo",
+                    ci,
+                    pass
+                );
+            }
         }
         crate::slog_nano!("USB", "warn", "MSC FAIL em todos os xHCI");
         None

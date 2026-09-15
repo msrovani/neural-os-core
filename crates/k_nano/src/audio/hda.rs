@@ -40,15 +40,15 @@ const HDA_CORBSIZE: u64 = 0x4E;   // CORB Size
 const HDA_RIRBLBASE: u64 = 0x50;  // RIRB Lower Base Address
 const HDA_RIRBUBASE: u64 = 0x54;  // RIRB Upper Base Address
 const HDA_RIRBWP: u64 = 0x58;     // RIRB Write Pointer
-const HDA_RIRBRP: u64 = 0x5A;     // RIRB Read Pointer
+const HDA_RINTCNT: u64 = 0x5A;    // RINTCNT — respostas antes do IRQ (NÃO é read pointer)
 const HDA_RIRBCTL: u64 = 0x5C;    // RIRB Control
 const HDA_RIRBSTS: u64 = 0x5D;    // RIRB Status
 const HDA_RIRBSIZE: u64 = 0x5E;   // RIRB Size
 
 // Immediate Command
-const HDA_ICW: u64 = 0x60;        // Immediate Command Write
-const HDA_ICR: u64 = 0x64;        // Immediate Command Read
-const HDA_ICS: u64 = 0x68;        // Immediate Command Status
+const HDA_ICW: u64 = 0x60;        // IC  — Immediate Command (WO, 32b)
+const HDA_ICR: u64 = 0x64;        // IR  — Immediate Response (RO, 32b)
+const HDA_ICS: u64 = 0x68;        // IRS — Immediate Status (RW, 16b): bit0=BUSY bit1=VALID [7:4]=CAD
 
 // Stream Descriptor 0 (SD0) - Capture (Microphone)
 // Base offset 0x80, each SD is 0x20 bytes
@@ -79,6 +79,23 @@ const CORB_RUN: u32 = 1 << 1;     // Run
 const CORB_CMEIE: u32 = 1 << 0;   // CORB Memory Error Interrupt Enable
 const RIRB_RINTCTL: u32 = 1 << 0; // Response Interrupt Control
 const RIRB_DMA_EN: u32 = 1 << 1;  // DMA Enable
+
+// ICS (0x68) — Immediate Command Status. Layout do silício/QEMU (ICH6_IRS_* em
+// `hw/audio/intel-hda-defs.h`, origem linux/sound/pci/hda/hda_intel.c):
+//   escrever BUSY(bit0)=1 DISPARA o verbo que está em ICW (não basta escrever ICW);
+//   escrever VALID(bit1)=1 LIMPA o resultado; bits[7:4] = CAD que respondeu.
+const ICS_BUSY: u16 = 1 << 0;
+const ICS_VALID: u16 = 1 << 1;
+
+// RIRBWP/CORBRP bit 15 = reset do ponteiro (self-clearing).
+const RIRBWP_RST: u16 = 1 << 15;
+const CORBRP_RST: u16 = 1 << 15;
+
+// RIRBSTS (0x5D) — write-1-to-clear.
+const RIRBSTS_IRQ: u8 = 1 << 0;
+const RIRBSTS_OVERRUN: u8 = 1 << 2;
+/// Ambos os anéis (CORB e RIRB) são de 256 entradas — CORBSIZE/RIRBSIZE = 0x02.
+const RING_ENTRIES: u32 = 256;
 
 // SDx_CTL
 const SD_CTL_RUN: u32 = 1 << 0;   // Run
@@ -212,6 +229,10 @@ static HDA_SD0_BDL: AtomicU64 = AtomicU64::new(0);
 static HDA_SD0_BUF: AtomicU64 = AtomicU64::new(0);
 /// Cyclic Buffer Length do SD0 (usado para validar o LPIB no drain).
 static HDA_SD0_CBL: AtomicU64 = AtomicU64::new(0);
+/// STATE CHange Status — quais slots de codec mudaram de estado (0 = nenhum presente).
+static HDA_STATESTS_CACHE: AtomicU32 = AtomicU32::new(0);
+/// Tentativas de ICW que não obtiveram resposta (diagnóstico de barramento mudo).
+pub static HDA_ICW_FAILS: AtomicU64 = AtomicU64::new(0);
 static HDA_CORB_WP: AtomicU32 = AtomicU32::new(0);
 static HDA_RIRB_RP: AtomicU32 = AtomicU32::new(0);
 static HDA_SD0_RPI: AtomicU32 = AtomicU32::new(0); // Read Pointer Index for BDL
@@ -321,94 +342,172 @@ unsafe fn init_corb_rirb(bar: u64) -> bool {
     // Program CORB base address
     w32(bar, HDA_CORBLBASE, corb_phys as u32);
     w32(bar, HDA_CORBUBASE, (corb_phys >> 32) as u32);
-    w16(bar, HDA_CORBWP, 0);
+    // Reset do read pointer (§3.4.1): RST=1 é self-clearing. Sem o reset o RP pode
+    // herdar lixo e o controlador lê o anel como cheio/vazio errado.
+    w16(bar, HDA_CORBRP, CORBRP_RST);
     w16(bar, HDA_CORBRP, 0);
-    w8(bar, HDA_CORBCTL, CORB_RUN as u8 | CORB_CMEIE as u8);
+    w16(bar, HDA_CORBWP, 0);
     w8(bar, HDA_CORBSIZE, 0x02); // 256 entries
-    
-    // Program RIRB base address
+
+    // Program RIRB base address. DMA primeiro, CORB_RUN depois: com o CORB já rodando
+    // a 1ª resposta chegaria com o RIRB desabilitado e seria descartada.
     w32(bar, HDA_RIRBLBASE, rirb_phys as u32);
     w32(bar, HDA_RIRBUBASE, (rirb_phys >> 32) as u32);
-    w16(bar, HDA_RIRBWP, 0);
-    w16(bar, HDA_RIRBRP, 0);
+    w16(bar, HDA_RIRBWP, RIRBWP_RST); // reset do write pointer
+    // 0x5A é RINTCNT (respostas por IRQ), NÃO um read pointer do RIRB — o RP do RIRB
+    // é mantido por software. Escrever 0 aqui = nenhum IRQ de resposta.
+    w16(bar, HDA_RINTCNT, 1);
     w8(bar, HDA_RIRBCTL, RIRB_RINTCTL as u8 | RIRB_DMA_EN as u8);
     w8(bar, HDA_RIRBSIZE, 0x02); // 256 entries
-    
-    // Reset pointers
-    HDA_CORB_WP.store(0, Ordering::Release);
+
+    // Habilita o engine CORB por último.
+    w8(bar, HDA_CORBCTL, CORB_RUN as u8 | CORB_CMEIE as u8);
+
+    // Estado de software: ambos os ponteiros vêm do device (fonte única de verdade).
+    HDA_CORB_WP.store(r16(bar, HDA_CORBWP) as u32, Ordering::Release);
     HDA_RIRB_RP.store(0, Ordering::Release);
-    
-    slog_nano!("HDA", "info", "CORB @ 0x{:x} RIRB @ 0x{:x}", corb_phys, rirb_phys);
+
+    slog_nano!("HDA", "info", "CORB @ 0x{:x} RIRB @ 0x{:x} size={} entries", corb_phys, rirb_phys, RING_ENTRIES);
     true
 }
 
-/// Write a verb to CORB and wait for response in RIRB.
-/// Returns (response, success).
-unsafe fn corb_write_and_wait(bar: u64, cad: u8, node: u8, verb: u32) -> (u32, bool) {
-    let wp = HDA_CORB_WP.load(Ordering::Acquire);
-    let next_wp = (wp + 1) % 256;
-    
-    // Check if CORB is full (next_wp == rp)
-    let rp = r16(bar, HDA_CORBRP) as u32;
-    if next_wp == rp {
-        return (0, false); // CORB full
+/// Prazo em TEMPO REAL para o handshake com o codec.
+///
+/// Contagem de spins mente: `for _ in 0..200_000 { r16(...) }` custa ~5 s por
+/// timeout no QEMU (cada MMIO é uma saída de VM) e transformou o boot em ~12 min
+/// com todas as esperas falhando. Usa `rdtsc` calibrado (lição SESSION_277);
+/// sem calibração o teto de iterações continua valendo como rede de segurança.
+const HDA_CMD_TIMEOUT_US: u64 = 20_000;
+const HDA_CMD_MAX_SPINS: u32 = 1_000_000;
+
+#[inline]
+fn hda_deadline() -> u64 {
+    let hz = crate::tsc::tsc_hz();
+    if hz == 0 {
+        return 0; // sem TSC calibrado: só o teto de spins limita
     }
-    
-    // Build command: [31:28] = CAD, [27:20] = NodeID, [19:0] = Verb
-    let cmd = ((cad as u32) << 28) | ((node as u32) << 20) | (verb & 0xFFFFF);
-    
-    // Write to CORB
+    let ticks = (HDA_CMD_TIMEOUT_US as u128 * hz as u128 / 1_000_000) as u64;
+    crate::tsc::rdtsc().wrapping_add(ticks)
+}
+
+#[inline]
+fn hda_expired(deadline: u64) -> bool {
+    deadline != 0 && crate::tsc::rdtsc().wrapping_sub(deadline) < (1u64 << 63)
+}
+
+/// Campo Verb+Data (20 bits) do comando HDA na codificação da spec §7.3.1.
+///
+/// A spec define DUAS formas e o device escolhe pelos 3 bits altos do Verb ID
+/// (QEMU `hda_audio_command`: `(data & 0x70000) == 0x70000`):
+///   - 12/8: [19:8] = Verb ID, [7:0]  = payload → verbes 0x700-0xFFF (todo GET)
+///   - 4/16: [19:8] = Verb ID (byte baixo 0), [15:0] = payload → verbes 0x200/0x300
+/// Escrever `VERB | payload` direto (o idioma que existia aqui) coloca o Verb ID
+/// em [11:0]: o codec decodifica um verbo inexistente, cai no `default` e responde 0
+/// — foi assim que a enumeração "encontrou" um codec com `vendor=0x000000`.
+/// Payload e ID são argumentos SEPARADOS porque `SET_CONVERTER_FORMAT` leva 16 bits.
+#[inline]
+fn verb_field(verb_id: u32, payload: u32) -> u32 {
+    let mask = if verb_id & 0x700 != 0 { 0xFF } else { 0xFFFF };
+    (verb_id << 8) | (payload & mask)
+}
+
+/// Envia um verbo pelo CORB e espera a resposta no RIRB. Retorna (resposta, ok).
+///
+/// Índices do controlador (QEMU `intel_hda_corb_run` / `intel_hda_response`):
+///   - o anel tem comando pendente quando `CORBRP != CORBWP`;
+///   - o device CONSOME o slot `CORBRP+1` e só então avança o seu CORBRP;
+///   - a resposta é escrita em `RIRBWP+1` e o device avança RIRBWP;
+///   - o dword BAIXO da entrada é a resposta, o ALTO é o tag (`solicited|cad`).
+/// Escrever/lcr no slot errado (ou ler o dword errado) devolve lixo — três off-by-one
+/// que fizeram o caminho CORB nunca aplicar um SET em nenhum codec.
+unsafe fn corb_write_and_wait(bar: u64, cad: u8, node: u8, verb_id: u32, payload: u32) -> (u32, bool) {
+    let wp = (r16(bar, HDA_CORBWP) as u32) & 0xFF;
+    let next_wp = (wp + 1) % RING_ENTRIES;
+    let rp = (r16(bar, HDA_CORBRP) as u32) & 0xFF;
+    if next_wp == rp {
+        return (0, false); // anel cheio
+    }
+
+    // Build command: [31:28] = CAD, [27:20] = NodeID, [19:0] = Verb+Data
+    let cmd = ((cad as u32) << 28) | ((node as u32) << 20) | verb_field(verb_id, payload);
+
+    // Publica o verbo NO SLOT next_wp antes de mexer no CORBWP (o device lê o slot
+    // assim que vê o wp mudar).
     let corb_phys = HDA_CORB_BUF.load(Ordering::Acquire);
     let corb_virt = (corb_phys + PHYS_MEM_OFFSET.load(Ordering::Acquire)) as *mut u32;
-    core::ptr::write_volatile(corb_virt.add(wp as usize), cmd);
-    
-    // Update write pointer
+    core::ptr::write_volatile(corb_virt.add(next_wp as usize), cmd);
+
     w16(bar, HDA_CORBWP, next_wp as u16);
     HDA_CORB_WP.store(next_wp, Ordering::Release);
-    
-    // Wait for response in RIRB (poll with timeout)
-    for _ in 0..10000 {
-        let rirb_rp = HDA_RIRB_RP.load(Ordering::Acquire);
-        let rirb_wp = r16(bar, HDA_RIRBWP) as u32;
-        
-        if rirb_rp != rirb_wp {
-            // Response available
+
+    // Espera a resposta (RIRBWP é a fonte de verdade; o RP é de software).
+    let deadline = hda_deadline();
+    let mut rirb_rp = HDA_RIRB_RP.load(Ordering::Acquire);
+    for _ in 0..HDA_CMD_MAX_SPINS {
+        let rirb_wp = (r16(bar, HDA_RIRBWP) as u32) & 0xFF;
+        if rirb_wp != rirb_rp {
+            // O device acabou de escrever em RIRBWP; o slot novo é rirb_rp+1
+            // (Linux: `rp = (rp+1) & mask; rb = buf + rp`).
+            rirb_rp = (rirb_rp + 1) % RING_ENTRIES;
             let rirb_phys = HDA_RIRB_BUF.load(Ordering::Acquire);
-            let rirb_virt = (rirb_phys + PHYS_MEM_OFFSET.load(Ordering::Acquire)) as *mut u64;
-            let response = core::ptr::read_volatile(rirb_virt.add(rirb_rp as usize));
-            
-            // Advance RIRB read pointer
-            let next_rp = (rirb_rp + 1) % 256;
-            w16(bar, HDA_RIRBRP, next_rp as u16);
-            HDA_RIRB_RP.store(next_rp, Ordering::Release);
-            
-            // Response format: [63:32] = response, [31:0] = unsolicited tag (ignore)
-            let resp = (response >> 32) as u32;
-            return (resp, true);
+            let rirb_virt = (rirb_phys + PHYS_MEM_OFFSET.load(Ordering::Acquire)) as *const u64;
+            let entry = core::ptr::read_volatile(rirb_virt.add(rirb_rp as usize));
+            HDA_RIRB_RP.store(rirb_rp, Ordering::Release);
+            // Limpa RIRBSTS (write-1-to-clear). Com RINTCNT=1 o device PARA de
+            // processar o anel CORB enquanto `rirb_count == rirb_cnt`; a limpeza
+            // do IRQ é o que reabre o anel (QEMU `intel_hda_set_rirb_sts` →
+            // `rirb_count = 0; intel_hda_corb_run()`). Sem isto o caminho CORB
+            // trava depois do primeiro verbo e todo SET vira timeout.
+            w8(bar, HDA_RIRBSTS, RIRBSTS_IRQ | RIRBSTS_OVERRUN);
+            // dword baixo = resposta; alto = tag (bit4 = não-solicitado | CAD).
+            return (entry as u32, true);
+        }
+        if hda_expired(deadline) {
+            break;
         }
         core::hint::spin_loop();
     }
-    
+
+    HDA_ICW_FAILS.fetch_add(1, Ordering::Relaxed);
     (0, false) // Timeout
 }
 
-/// Send a verb via Immediate Command interface (fallback for init).
-unsafe fn icw_send(bar: u64, cad: u8, node: u8, verb: u32) -> Option<u32> {
-    let icw = ((cad as u32) << 28) | ((node as u32) << 20) | (verb & 0xFFFFF);
+/// Envia um verbo pela interface de Immediate Command (usada na enumeração).
+///
+/// Protocolo (§3.3 + QEMU `intel_hda_set_ics` / `intel_hda_response`):
+///   ICW(0x60) recebe o verbo; **ICS(0x68).BUSY=1 é o kick** que faz o device
+///   executar; ICS.VALID=1 aparece quando o codec respondeu; a resposta está
+///   em IR(0x64). CAD inexistente NUNCA responde — o timeout é o sinal de ausência.
+///
+/// O código anterior escrevia ICW, lia o próprio ICW (write-only) esperando um bit
+/// de busy que mora em OUTRO registrador, e nunca dava o kick: nenhum dos 8 CADs
+/// era executado e o boot concluía "No codecs found" (SESSION_346).
+unsafe fn icw_send(bar: u64, cad: u8, node: u8, verb_id: u32, payload: u32) -> Option<u32> {
+    let icw = ((cad as u32) << 28) | ((node as u32) << 20) | verb_field(verb_id, payload);
+
+    // 1) limpa VALID (write-1-to-clear) para não ler a resposta de um verbo anterior.
+    w16(bar, HDA_ICS, ICS_VALID);
+    // 2) publica o verbo.
     w32(bar, HDA_ICW, icw);
-    
-    // Wait for completion (bit 31 = ICB - Immediate Command Busy)
-    for _ in 0..50000 {
-        let status = r32(bar, HDA_ICW);
-        if status & 0x8000_0000 == 0 {
+    // 3) kick.
+    w16(bar, HDA_ICS, ICS_BUSY);
+
+    // 4) espera VALID (prazo de parede, não contagem de spins).
+    let deadline = hda_deadline();
+    for _ in 0..HDA_CMD_MAX_SPINS {
+        let st = r16(bar, HDA_ICS);
+        if st & ICS_VALID != 0 {
             let resp = r32(bar, HDA_ICR);
-            if resp != 0 && resp != 0xFFFF_FFFF {
-                return Some(resp);
-            }
-            return None;
+            w16(bar, HDA_ICS, ICS_VALID); // limpa para o próximo verbo
+            return Some(resp);
+        }
+        if hda_expired(deadline) {
+            break;
         }
         core::hint::spin_loop();
     }
+
+    HDA_ICW_FAILS.fetch_add(1, Ordering::Relaxed);
     None
 }
 
@@ -458,19 +557,19 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
     
     for cad in 0..8u8 {
         // Get vendor ID via Immediate Command (simpler for init)
-        let resp = icw_send(bar, cad, 0x00, VERB_GET_PARAMETER | PARAM_VENDOR_ID);
+        let resp = icw_send(bar, cad, 0x00, VERB_GET_PARAMETER, PARAM_VENDOR_ID);
         let vendor_id = match resp {
             Some(v) => v,
             None => continue,
         };
         
-        let rev_resp = icw_send(bar, cad, 0x00, VERB_GET_PARAMETER | PARAM_REVISION_ID);
+        let rev_resp = icw_send(bar, cad, 0x00, VERB_GET_PARAMETER, PARAM_REVISION_ID);
         let revision_id = rev_resp.unwrap_or(0);
         
         slog_nano!("HDA", "info", "Codec {}: vendor={:#08x} rev={:#08x}", cad, vendor_id, revision_id);
         
         // Get sub-node count (widgets)
-        let sub_resp = icw_send(bar, cad, 0x00, VERB_GET_PARAMETER | PARAM_SUB_NODE_COUNT);
+        let sub_resp = icw_send(bar, cad, 0x00, VERB_GET_PARAMETER, PARAM_SUB_NODE_COUNT);
         let (start_nid, total_widgets) = match sub_resp {
             Some(v) => ((v >> 16) as u8, (v & 0xFF) as u8),
             None => continue,
@@ -495,7 +594,7 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
             if widget_idx >= 32 { break; }
             
             // Get widget capabilities
-            let caps_resp = icw_send(bar, cad, nid, VERB_GET_PARAMETER | PARAM_AUDIO_WIDGET_CAP);
+            let caps_resp = icw_send(bar, cad, nid, VERB_GET_PARAMETER, PARAM_AUDIO_WIDGET_CAP);
             let caps = caps_resp.unwrap_or(0);
             let widget_type = (caps >> 20) & 0xF;
             
@@ -509,14 +608,14 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
             
             // Get connection list for input widgets
             if widget_type == WIDGET_TYPE_AUDIO_INPUT || widget_type == WIDGET_TYPE_PIN_COMPLEX {
-                let conn_resp = icw_send(bar, cad, nid, VERB_GET_PARAMETER | PARAM_CONNLIST_LEN);
+                let conn_resp = icw_send(bar, cad, nid, VERB_GET_PARAMETER, PARAM_CONNLIST_LEN);
                 if let Some(conn_len) = conn_resp {
                     let num_conns = (conn_len & 0x7F) as u8;
                     widget.num_connections = num_conns.min(8);
                     
                     // Read connection list (long form if > 8)
                     if num_conns > 0 {
-                        let list_resp = icw_send(bar, cad, nid, VERB_GET_CONNECTION_LIST);
+                        let list_resp = icw_send(bar, cad, nid, VERB_GET_CONNECTION_LIST, 0);
                         if let Some(list) = list_resp {
                             for i in 0..widget.num_connections as usize {
                                 widget.connections[i] = ((list >> (i * 4)) & 0xF) as u8;
@@ -528,7 +627,7 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
             
             // Check for Audio Function Group
             if widget_type == 0x1 { // Function group
-                let fg_type_resp = icw_send(bar, cad, nid, VERB_GET_PARAMETER | PARAM_FUNCTION_GROUP_TYPE);
+                let fg_type_resp = icw_send(bar, cad, nid, VERB_GET_PARAMETER, PARAM_FUNCTION_GROUP_TYPE);
                 if let Some(fg_type) = fg_type_resp {
                     if fg_type & 0xFF == 0x01 { // Audio Function Group
                         codec.audio_fg_nid = nid;
@@ -540,10 +639,10 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
             // PCAP §7.3.4.9: bit4=OutputCapable, bit5=InputCapable.
             // Config Default device §7.3.3.31: 0=LineOut 1=Speaker 2=HP 4=Mic 0xA=LineIn.
             if widget_type == WIDGET_TYPE_PIN_COMPLEX {
-                let pin_cap = icw_send(bar, cad, nid, VERB_GET_PARAMETER | PARAM_PCAP).unwrap_or(0);
+                let pin_cap = icw_send(bar, cad, nid, VERB_GET_PARAMETER, PARAM_PCAP).unwrap_or(0);
                 let input_cap = (pin_cap >> 5) & 1;
                 let output_cap = (pin_cap >> 4) & 1;
-                let cfg = icw_send(bar, cad, nid, VERB_GET_CONFIG_DEFAULT).unwrap_or(0);
+                let cfg = icw_send(bar, cad, nid, VERB_GET_CONFIG_DEFAULT, 0).unwrap_or(0);
                 let device = (cfg >> 20) & 0xF;
                 if input_cap == 1 {
                     if device == 0x4 || codec.mic_pin_nid == 0 {
@@ -585,6 +684,25 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
             widget_idx += 1;
         }
         
+        // O log é o único canal de diagnóstico visível no metal: sem isto não se
+        // distingue "nó inexistente", "CAD mudo" e "verbo errado" — foi essa
+        // cegueira que deixou o capture path falhando sem explicação.
+        slog_nano!(
+            "HDA",
+            "info",
+            "enum cad={} start_nid={} total={} widgets={} fg={} mic_pin={} adc={} spk={} dac={} icw_fails={}",
+            cad,
+            start_nid,
+            total_widgets,
+            widget_idx,
+            codec.audio_fg_nid,
+            codec.mic_pin_nid,
+            codec.adc_nid,
+            codec.speaker_pin_nid,
+            codec.dac_nid,
+            HDA_ICW_FAILS.load(Ordering::Relaxed)
+        );
+
         codec.num_widgets = widget_idx as u8;
         resolve_dac_from_speaker(&mut codec);
         CODECS[cad as usize] = codec;
@@ -667,7 +785,7 @@ unsafe fn configure_capture_path(bar: u64) -> bool {
         );
 
         if codec.audio_fg_nid != 0 {
-            let _ = corb_write_and_wait(bar, cad, codec.audio_fg_nid, VERB_SET_POWER_STATE | 0);
+            let _ = corb_write_and_wait(bar, cad, codec.audio_fg_nid, VERB_SET_POWER_STATE, 0);
         }
 
         // Pin Widget Control: IN_EN + VREF 80% (HDA 1.0a bits).
@@ -676,7 +794,8 @@ unsafe fn configure_capture_path(bar: u64) -> bool {
             bar,
             cad,
             codec.mic_pin_nid,
-            VERB_SET_PIN_WIDGET_CONTROL | pin_ctl,
+            VERB_SET_PIN_WIDGET_CONTROL,
+            pin_ctl,
         );
 
         // Connection Select = índice na lista do ADC, NÃO o NID.
@@ -687,14 +806,15 @@ unsafe fn configure_capture_path(bar: u64) -> bool {
             bar,
             cad,
             codec.adc_nid,
-            VERB_SET_CONNECTION_SELECT | conn_idx,
+            VERB_SET_CONNECTION_SELECT,
+            conn_idx,
         );
 
         // OBSERVAÇÃO (não política): o que o ADC realmente anuncia suportar.
         // Bit 0 = 8 kHz, 1 = 11.025, 2 = 16 kHz, 3 = 22.05, 4 = 24, 5 = 32,
         // 6 = 44.1, 7 = 48 kHz; bits 8–10 = 16/20/24/32-bit; 11–13 = taxas ×2..×4.
         // Fica registrado para decidir o switch gated para 16 kHz mono em HW real.
-        if let Some(fmt) = icw_send(bar, cad, codec.adc_nid, VERB_GET_PARAMETER | PARAM_SUPP_STREAM_FORMATS) {
+        if let Some(fmt) = icw_send(bar, cad, codec.adc_nid, VERB_GET_PARAMETER, PARAM_SUPP_STREAM_FORMATS) {
             CAP_ADC_SUPPORTED_FMT.store(fmt, Ordering::Release);
             let sixteen_k = fmt & (1 << 2) != 0;
             slog_nano!(
@@ -712,7 +832,8 @@ unsafe fn configure_capture_path(bar: u64) -> bool {
             bar,
             cad,
             codec.adc_nid,
-            VERB_SET_CONVERTER_FORMAT | FMT_16BIT_48KHZ_STEREO,
+            VERB_SET_CONVERTER_FORMAT,
+            FMT_16BIT_48KHZ_STEREO,
         );
 
         let stream_channel = (CAPTURE_STREAM_TAG << 4) | 0;
@@ -720,20 +841,23 @@ unsafe fn configure_capture_path(bar: u64) -> bool {
             bar,
             cad,
             codec.adc_nid,
-            VERB_SET_CONVERTER_STREAM_CHANNEL | stream_channel,
+            VERB_SET_CONVERTER_STREAM_CHANNEL,
+            stream_channel,
         );
 
         let _ = corb_write_and_wait(
             bar,
             cad,
             codec.mic_pin_nid,
-            VERB_SET_AMP_GAIN_MUTE | AMP_UNMUTE_IN,
+            VERB_SET_AMP_GAIN_MUTE,
+            AMP_UNMUTE_IN,
         );
         let _ = corb_write_and_wait(
             bar,
             cad,
             codec.adc_nid,
-            VERB_SET_AMP_GAIN_MUTE | AMP_UNMUTE_IN,
+            VERB_SET_AMP_GAIN_MUTE,
+            AMP_UNMUTE_IN,
         );
 
         slog_nano!("HDA", "ok", "capture path ready CAD {}", cad);
@@ -770,7 +894,8 @@ unsafe fn configure_playback_path(bar: u64) -> bool {
             bar,
             cad,
             codec.speaker_pin_nid,
-            VERB_SET_PIN_WIDGET_CONTROL | pin_ctl,
+            VERB_SET_PIN_WIDGET_CONTROL,
+            pin_ctl,
         );
 
         // Se o pin tem lista, seleciona DAC/mixer conectado.
@@ -782,7 +907,8 @@ unsafe fn configure_playback_path(bar: u64) -> bool {
                     bar,
                     cad,
                     codec.speaker_pin_nid,
-                    VERB_SET_CONNECTION_SELECT | idx,
+                    VERB_SET_CONNECTION_SELECT,
+                    idx,
                 );
             }
         }
@@ -791,27 +917,31 @@ unsafe fn configure_playback_path(bar: u64) -> bool {
             bar,
             cad,
             codec.dac_nid,
-            VERB_SET_CONVERTER_FORMAT | FMT_16BIT_48KHZ_STEREO,
+            VERB_SET_CONVERTER_FORMAT,
+            FMT_16BIT_48KHZ_STEREO,
         );
         let stream_channel = (PLAYBACK_STREAM_TAG << 4) | 0;
         let _ = corb_write_and_wait(
             bar,
             cad,
             codec.dac_nid,
-            VERB_SET_CONVERTER_STREAM_CHANNEL | stream_channel,
+            VERB_SET_CONVERTER_STREAM_CHANNEL,
+            stream_channel,
         );
 
         let _ = corb_write_and_wait(
             bar,
             cad,
             codec.dac_nid,
-            VERB_SET_AMP_GAIN_MUTE | AMP_UNMUTE_OUT,
+            VERB_SET_AMP_GAIN_MUTE,
+            AMP_UNMUTE_OUT,
         );
         let _ = corb_write_and_wait(
             bar,
             cad,
             codec.speaker_pin_nid,
-            VERB_SET_AMP_GAIN_MUTE | AMP_UNMUTE_OUT,
+            VERB_SET_AMP_GAIN_MUTE,
+            AMP_UNMUTE_OUT,
         );
 
         slog_nano!("HDA", "ok", "playback path ready CAD {}", cad);
@@ -1167,21 +1297,58 @@ pub fn init_hda() -> bool {
     
     HDA_BAR.store(bar, Ordering::Release);
     
-    // Reset controller
+    // Reset do controlador — GCTL.CRST: **0 = em reset, 1 = fora de reset**
+    // (Intel HDA 1.0a §4.3, GCTL bit 0).
+    //
+    // FIX (SESSION_346): a sequência anterior fazia `CRST=1` e depois `CRST=0` e ainda
+    // *validava* `CRST == 0` como sucesso — ou seja, deixava o controlador EM RESET e
+    // seguia usando ICW/CORB/RIRB (registradores que só vivem fora do reset). Resultado:
+    // `icw_send` devolvia `None` para todo CAD, `enumerate_codecs` achava zero codecs, e a
+    // conclusão registrada na SESSION_286 ("QEMU intel-hda: CORB/RIRB frequentemente mudo;
+    // aceite = HW real") era um SINTOMA deste bug, não uma limitação do emulador. Com o
+    // controlador em reset, nenhum áudio funcionava em lugar nenhum (QEMU ou metal).
     unsafe {
-        w32(bar, HDA_GCTL, r32(bar, HDA_GCTL) | GCTL_CRST);
-        for _ in 0..10000 { core::hint::spin_loop(); }
+        // 1) entra em reset e espera o bit BAIXAR
         w32(bar, HDA_GCTL, r32(bar, HDA_GCTL) & !GCTL_CRST);
-        for _ in 0..20000 { core::hint::spin_loop(); }
-        
-        // Verify controller is out of reset
-        let gctl = r32(bar, HDA_GCTL);
-        if gctl & GCTL_CRST != 0 {
-            slog_nano!("HDA", "error", "Controller reset failed");
+        let mut entered = false;
+        for _ in 0..500_000 {
+            if r32(bar, HDA_GCTL) & GCTL_CRST == 0 {
+                entered = true;
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        if !entered {
+            slog_nano!("HDA", "error", "GCTL.CRST nao desceu — controlador nao entrou em reset");
             return false;
         }
-        
+
+        // 2) sai do reset e espera o bit SUBIR (é isso que significa "out of reset")
+        w32(bar, HDA_GCTL, r32(bar, HDA_GCTL) | GCTL_CRST);
+        let mut out_of_reset = false;
+        for _ in 0..500_000 {
+            if r32(bar, HDA_GCTL) & GCTL_CRST != 0 {
+                out_of_reset = true;
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        if !out_of_reset {
+            slog_nano!("HDA", "error", "GCTL.CRST nao subiu — controlador permanece em reset");
+            return false;
+        }
+
+        // 3) codecs precisam de alguns ms para reportar presença depois do reset.
+        // Antes o código só girava `spin_loop` 10k vezes (~10 µs) e nunca lia STATESTS.
+        for _ in 0..2_000_000 { core::hint::spin_loop(); }
+        let statests = r16(bar, HDA_STATESTS);
+        HDA_STATESTS_CACHE.store(statests as u32, Ordering::Release);
+        // "instrumento invisível = instrumento inexistente": o estado do barramento de
+        // codecs passa a ser registrado (é o que distingue "sem codec" de "driver mudo").
+        slog_nano!("HDA", "info", "CRST ok (fora de reset) STATESTS=0x{:04x}", statests);
+
         // Enable unsolicited responses
+        let gctl = r32(bar, HDA_GCTL);
         w32(bar, HDA_GCTL, gctl | GCTL_UNSOL);
         
         // Initialize CORB/RIRB
@@ -1198,17 +1365,23 @@ pub fn init_hda() -> bool {
             } else {
                 "hw"
             };
-            // QEMU intel-hda: GCTL OK, CORB/RIRB frequentemente mudo (SESSION_286).
-            // Aceite de áudio = HW real — não inventar codec no emulador.
+            // Diagnóstico honesto: STATESTS diz se ALGUM codec se apresentou no barramento
+            // e HDA_ICW_FAILS conta comandos que ficaram sem resposta. "Nenhum codec no
+            // barramento" e "barramento mudo" são causas diferentes — a conclusão anterior
+            // (SESSION_286: "QEMU CORB/RIRB mudo") foi tirada sem essa evidência, e o motivo
+            // real era o CRST invertido que deixava o controlador em reset.
+            let statests = HDA_STATESTS_CACHE.load(Ordering::Acquire);
             slog_nano!(
                 "HDA",
-                if profile == "qemu" { "ok" } else { "warn" },
-                "home=k_nano::audio::hda profile={} | No codecs found{}",
+                "warn",
+                "home=k_nano::audio::hda profile={} | No codecs found (STATESTS=0x{:04x} icw_fails={}){} — aceite=HW",
                 profile,
-                if profile == "qemu" {
-                    " (degraded expected — aceite=HW)"
+                statests,
+                HDA_ICW_FAILS.load(Ordering::Relaxed),
+                if statests == 0 {
+                    " [barramento sem codec presente]"
                 } else {
-                    ""
+                    " [codec presente, enumeracao falhou]"
                 }
             );
             return false;

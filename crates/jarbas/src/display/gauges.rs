@@ -703,12 +703,20 @@ pub fn refresh_hub_health() {
 
     let q = cortex::infer_queue::queue_pending();
     let running = cortex::infer_queue::active_job_id() != 0;
-    let (st, val, pill) = if q > 4 {
-        (HubState::Warn, alloc::format!("q{} run{}", q, if running { "1" } else { "0" }), true)
+    let line = cortex::infer_queue::hub_infer_line(q as u64, running);
+    let tps = cortex::infer_queue::last_decode_tok_s();
+    let live = cortex::infer_queue::live_decode_tok_s();
+    let (st, pill) = if running {
+        (HubState::Ok, true)
+    } else if q > 4 {
+        (HubState::Warn, true)
+    } else if tps > 0 {
+        (HubState::Ok, true)
     } else {
-        (HubState::Ok, alloc::format!("q{} {}", q, if running { "run" } else { "idle" }), true)
+        (HubState::Na, false)
     };
-    hub_set(&mut hh.rows[13], "infer", st, pill, val);
+    let _ = live; // live já embutido em `line` quando run
+    hub_set(&mut hh.rows[13], "infer", st, pill, line);
 
     let exc_n = k_nano::interrupts::last_exc_count();
     let exc_age = k_nano::interrupts::last_exc_age_ms();

@@ -3540,12 +3540,11 @@ pub(crate) fn kernel_boot(
             })
             .unwrap_or((None, None))
         };
-        // QEMU/WHPX = DEV/TEST: pula LLM probe/copy (aceite = HW real ou
-        // QEMU-loader explícito). RAM≥8GB ainda é sandbox — não PIO de 770MB.
-        let qemu_dev_skip_models = k_nano::platform_probe::hypervisor().is_sandbox();
-        if qemu_dev_skip_models {
-            k_nano::slog_bin!("Asset", "skip", "sandbox (profile=qemu) — LLM probe/copy pulado (dev/test; aceite=HW)");
-        } else if mem_has_4gb {
+        // QEMU/WHPX = DEV/TEST: NÃO pular o probe do QEMU-loader @0x100000000 —
+        // scripts (`run-qemu-*-loop`, whpx MoE loader) depositam FALCON3.BIN aí.
+        // Só o FAT PIO grande fica gated (bloco `if !model_loaded` abaixo).
+        // Aceite metal = HW; lab tok/s = loader + generate microbench.
+        if mem_has_4gb {
             k_nano::slog_bin!("Asset", "ok", "LLM probe: mem_has_4gb=true, probing @0x{load_addr:x}…");
             let probe_ptr = (load_addr + pm_offset) as *const u8;
             let raw0 = unsafe { core::ptr::read_volatile(probe_ptr) };
@@ -3560,9 +3559,20 @@ pub(crate) fn kernel_boot(
                 // do header (o const v4 604MB truncava o 2B v6 de 792MB → OOM #PF).
                 const BITNET_2B_V4_BYTES: usize = 604_856_373;
                 let mut model_len = fat_sz.unwrap_or(BITNET_2B_V4_BYTES);
-                if fat_sz.is_none() {
+                // Header v6 no loader é a fonte de verdade (ADR-0101): FAT pode
+                // ter FALCON3.BIN=7B mal-nomeado enquanto o loader traz o 3B.
+                {
                     let hdr = unsafe { core::slice::from_raw_parts(probe_ptr, 64) };
                     if let Some(v6sz) = cortex_crate::model::v6_file_size(hdr) {
+                        if fat_sz.map_or(false, |f| f != v6sz) {
+                            k_nano::slog_bin!(
+                                "Asset",
+                                "warn",
+                                "FAT size {}KB != header v6 {}KB — usando header (loader)",
+                                fat_sz.unwrap_or(0) / 1024,
+                                v6sz / 1024
+                            );
+                        }
                         model_len = v6sz;
                     }
                 }
@@ -3578,21 +3588,21 @@ pub(crate) fn kernel_boot(
                 );
                 if model_len > 1024 {
                     let model_data = unsafe { core::slice::from_raw_parts(probe_ptr, model_len) };
-                    // Copia + LEAK: load_model faz zero-copy nos pesos; dropar o Vec
-                    // apos set_model deixava dangling → #PF no FWD (CR2 heap liberado).
+                    // NÃO to_vec+leak do blob inteiro: load_model_v6 já copia cada
+                    // tensor (to_vec). Leak+parse = 2× ~990MB → OOM no unembed
+                    // (~96MB) quando FAT/outros já consumiram heap (SESSION measure+FAT).
+                    // Fonte = região QEMU-loader (RAM guest estável durante o boot).
                     k_nano::slog_bin!(
                         "Asset",
                         "ok",
-                        "LLM copying {}KB -> heap (leak) then load_model_v6…",
+                        "LLM parse in-place from loader {}KB (no full-blob leak) then load_model_v6…",
                         model_len / 1024
                     );
-                    let owned: alloc::vec::Vec<u8> = model_data.to_vec();
-                    let leaked: &'static [u8] = alloc::boxed::Box::leak(owned.into_boxed_slice());
-                    let llm_v6 = cortex_crate::model::load_model_v6(leaked).and_then(|v| match v {
+                    let llm_v6 = cortex_crate::model::load_model_v6(model_data).and_then(|v| match v {
                         cortex_crate::model::ModelView::Llm(m) => Some(m),
                         _ => None,
                     });
-                    if let Some(big_model) = llm_v6.or_else(|| crate::cortex::load_model(leaked)) {
+                    if let Some(big_model) = llm_v6.or_else(|| crate::cortex::load_model(model_data)) {
                         crate::cortex::set_model(alloc::boxed::Box::new(big_model));
                         let tag = fat_name.unwrap_or("llama8b.bin");
                         // AIOS na veia (premissa 4): loga a decisão de fit com a RAM
@@ -3600,16 +3610,16 @@ pub(crate) fn kernel_boot(
                         // streaming). O heap auto-adaptativo já cresce até 75% da RAM;
                         // acima disso o modelo exige AirLLM (seam em model_fit).
                         let fit_ram = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
-                        let model_mb = (leaked.len() / (1024 * 1024)) as u64;
+                        let model_mb = (model_len / (1024 * 1024)) as u64;
                         let params = cortex_crate::cortex::GLOBAL_MODEL_PARAMS
                             .load(core::sync::atomic::Ordering::Relaxed);
                         let airllm = cortex_crate::model_fit::needs_airllm(params, model_mb);
                         k_nano::slog_bin!(
                             "Asset",
                             "ok",
-                            "LLM LOADED {} (QEMU@4G->heap) size={}KB RAM={}MB airllm={}",
+                            "LLM LOADED {} (QEMU@4G in-place) size={}KB RAM={}MB airllm={}",
                             tag,
-                            leaked.len() / 1024,
+                            model_len / 1024,
                             fit_ram,
                             airllm
                         );
@@ -4572,6 +4582,8 @@ pub(crate) fn kernel_boot(
 
     // K49 hang: generate_via_model no boot (CPU QEMU / header lixo) apos AudioMixer.
     // Template ja foi falado em emit_hw_greeting_at_register.
+    // Lab Falcon3-3B (ADR-0101): em QEMU com modelo loader, microbench tok/s
+    // Cheap (max_gen≤8) — saudação TTS continua skip; medimos decode só.
     if already_greeted || qemu {
         crate::display::fb::boot_ckpt(50, "saudacao LLM skip (template/QEMU)");
         k_nano::slog_bin!(
@@ -4581,6 +4593,28 @@ pub(crate) fn kernel_boot(
             already_greeted,
             qemu
         );
+        if qemu && model_ok {
+            crate::display::fb::boot_ckpt(51, "Falcon3 tok/s microbench...");
+            k_nano::slog_bin!(
+                "BENCH",
+                "ok",
+                "Falcon3-3B decode microbench start (max_gen=2)"
+            );
+            // 2 tokens: TCG do 3B é lento; WHPX ainda útil. Prefill conta separado.
+            cortex_crate::difficulty_gate::set_force_max_gen(2);
+            let _ = crate::cortex::generate_via_model("ola");
+            cortex_crate::difficulty_gate::set_force_max_gen(0);
+            let tps = cortex_crate::infer_queue::last_decode_tok_s();
+            let (toks, us) = cortex_crate::infer_queue::last_decode_timing();
+            k_nano::slog_bin!(
+                "BENCH",
+                "ok",
+                "Falcon3 decode_tok/s={} toks={} us={}",
+                tps,
+                toks,
+                us
+            );
+        }
     } else if model_ok && bpe_ok {
         crate::display::fb::boot_ckpt(49, "Gerando saudacao LLM...");
         k_nano::slog_bin!("JARBAS", "GREETING",

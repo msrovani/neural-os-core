@@ -268,13 +268,14 @@ pub fn dump() {
 }
 
 /// Emite linhas USB/hub/MSC do ramlog (foto no Alienware sem COM1).
+/// Varre **todo** o buffer (não só as 1ªs 200 linhas — F3 false "probe nao chegou").
 pub fn dump_usb_hint(mut emit: impl FnMut(&str)) {
     let mut n = 0usize;
-    for_each_line(200, |line| {
-        let l = line;
-        if n >= 24 {
+    for_each_line(usize::MAX, |line| {
+        if n >= 32 {
             return;
         }
+        let l = line;
         let lower_ok = l.contains("USB")
             || l.contains("usb")
             || l.contains("hub")
@@ -283,14 +284,15 @@ pub fn dump_usb_hint(mut emit: impl FnMut(&str)) {
             || l.contains("xhci")
             || l.contains("XHCI")
             || l.contains("BOOT.LOG")
-            || l.contains("CCS");
+            || l.contains("CCS")
+            || l.contains("PORTSC");
         if lower_ok {
             emit(l);
             n += 1;
         }
     });
     if n == 0 {
-        emit("USB: ramlog sem linhas hub/MSC (probe nao chegou?)");
+        emit("USB: ramlog sem linhas hub/MSC (slog pode ser serial-only)");
     }
 }
 
