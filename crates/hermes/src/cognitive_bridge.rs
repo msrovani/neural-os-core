@@ -16,6 +16,29 @@ use k_nano::globals::EVENT_BUS;
 pub const TOPIC_MEMORY_NUDGE: &str = "MEMORY_NUDGE";
 pub const TOPIC_COG_STATUS: &str = "COG_STATUS";
 
+/// SESSION_350: cortex::heap_aios Remember → SGDB (host aprende ctx/heap).
+pub fn install_heap_aios_remember() {
+    cortex::heap_aios::register_remember(heap_aios_remember_impl);
+}
+
+fn heap_aios_remember_impl(note: &str) {
+    // put_hanr é compacto e boot-durable; remember_fact se SGDB full ready.
+    if k_ai::sgdb::ready() {
+        let _ = k_ai::sgdb::put_hanr("heap_aios", note);
+        k_ai::sgdb::remember_fact(note);
+        k_nano::slog_hermes!("HeapAIOS", "ok", "SGDB remember ok ({}B)", note.len());
+    } else {
+        k_nano::slog_hermes!("HeapAIOS", "warn", "SGDB not ready — {}", note);
+    }
+    // EventBus p/ HUD / SelfHeal (Observe contínuo).
+    let _ = EVENT_BUS.publish(event_bus::Event {
+        id: 0,
+        topic: alloc::string::String::from(k_nano::allocator::TOPIC_ALLOC_REFUSED),
+        payload: note.as_bytes().to_vec(),
+        token: event_bus::CapabilityToken::Legacy(1),
+    });
+}
+
 /// Ponte de guarda do Hermes: detecta se a mensagem e sobre criacao de skill.
 /// Se for, o Hermes DEVE garantir que o skill_writer esteja no contexto do LLM.
 /// Usado no Chat handler do HermesAgent como pre-flight check.

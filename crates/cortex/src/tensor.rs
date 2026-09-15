@@ -34,6 +34,71 @@ pub struct Tensor {
     pub data: Vec<f32>,
 }
 
+/// Zeros f32 com `checked` + headroom — **nunca** `vec![0.0; a*b]` cru
+/// (SESSION_349/351: wrap → OOM TALC ~4.7GB). Refuse → Vec vazio.
+pub fn f32_zeros(len: usize) -> alloc::vec::Vec<f32> {
+    const MAX_ELEMS: usize = 64 * 1024 * 1024; // 256 MiB f32
+    if len == 0 {
+        return alloc::vec::Vec::new();
+    }
+    if len > MAX_ELEMS {
+        k_nano::slog_cortex!("Tensor", "fail", "f32_zeros refuse len={}", len);
+        k_nano::allocator::note_alloc_refused(
+            len.saturating_mul(4),
+            k_nano::allocator::heap_window_bytes(),
+            "f32_zeros",
+        );
+        return alloc::vec::Vec::new();
+    }
+    let Some(bytes) = len.checked_mul(4) else {
+        k_nano::slog_cortex!("Tensor", "fail", "f32_zeros overflow len={}", len);
+        return alloc::vec::Vec::new();
+    };
+    if bytes > 1024 * 1024 && !k_nano::allocator::can_alloc_bytes(bytes, 64) {
+        k_nano::slog_cortex!(
+            "Tensor",
+            "warn",
+            "f32_zeros headroom refuse len={}MB",
+            bytes / (1024 * 1024)
+        );
+        k_nano::allocator::note_alloc_refused(
+            bytes,
+            k_nano::allocator::heap_window_bytes(),
+            "f32_zeros",
+        );
+        return alloc::vec::Vec::new();
+    }
+    let mut v = alloc::vec::Vec::new();
+    if v.try_reserve_exact(len).is_err() {
+        k_nano::slog_cortex!("Tensor", "fail", "f32_zeros try_reserve len={}", len);
+        k_nano::allocator::note_alloc_refused(
+            bytes,
+            k_nano::allocator::heap_window_bytes(),
+            "f32_zeros",
+        );
+        return alloc::vec::Vec::new();
+    }
+    v.resize(len, 0.0);
+    v
+}
+
+/// `a.checked_mul(b)` + `f32_zeros` — substitui `vec![0.0f32; a * b]`.
+pub fn f32_zeros_2d(rows: usize, cols: usize) -> alloc::vec::Vec<f32> {
+    match rows.checked_mul(cols) {
+        Some(n) => f32_zeros(n),
+        None => {
+            k_nano::slog_cortex!(
+                "Tensor",
+                "fail",
+                "f32_zeros_2d overflow {}x{}",
+                rows,
+                cols
+            );
+            alloc::vec::Vec::new()
+        }
+    }
+}
+
 impl Tensor {
     /// Aloca zeros. Overflow `rows*cols` → tensor vazio + slog (SESSION_349:
     /// wrap release produzia `layout.size` primo ~4.4GB e OOM `cortex_llm`).
@@ -61,6 +126,32 @@ impl Tensor {
                 shape.1,
                 len
             );
+            k_nano::allocator::note_alloc_refused(
+                len.saturating_mul(4),
+                k_nano::allocator::heap_window_bytes(),
+                "tensor",
+            );
+            return Tensor {
+                shape: (0, 0),
+                data: alloc::vec::Vec::new(),
+            };
+        }
+        let bytes = len.saturating_mul(4);
+        // AIOS Observe pró-ativo: não entrar no grow→OOM se headroom não cobre.
+        if bytes > 1024 * 1024 && !k_nano::allocator::can_alloc_bytes(bytes, 64) {
+            k_nano::slog_cortex!(
+                "Tensor",
+                "warn",
+                "headroom refuse {}x{} bytes={}MB",
+                shape.0,
+                shape.1,
+                bytes / (1024 * 1024)
+            );
+            k_nano::allocator::note_alloc_refused(
+                bytes,
+                k_nano::allocator::heap_window_bytes(),
+                "tensor",
+            );
             return Tensor {
                 shape: (0, 0),
                 data: alloc::vec::Vec::new(),
@@ -68,7 +159,7 @@ impl Tensor {
         }
         Tensor {
             shape,
-            data: vec![0.0; len],
+            data: f32_zeros(len),
         }
     }
 
@@ -209,7 +300,13 @@ impl Tensor {
 
     pub fn transposed(&self) -> Self {
         let (rows, cols) = self.shape;
-        let mut data = vec![0.0_f32; rows * cols];
+        let mut data = f32_zeros_2d(rows, cols);
+        if data.len() != rows.saturating_mul(cols) {
+            return Tensor {
+                shape: (0, 0),
+                data: alloc::vec::Vec::new(),
+            };
+        }
         for i in 0..rows {
             for j in 0..cols {
                 data[j * rows + i] = self.data[i * cols + j];

@@ -245,6 +245,8 @@ struct ActiveState {
     prefill_start_pos: usize,
     prefill_total_seq: usize,
     prefill_t0_us: u64,
+    /// SESSION_350: plano heap AIOS (escalate → resposta HITL sem forward).
+    heap_escalate: bool,
 }
 
 static ACTIVE: Mutex<Option<ActiveState>> = Mutex::new(None);
@@ -451,6 +453,7 @@ fn try_claim_into_active() -> bool {
             prefill_start_pos: 0,
             prefill_total_seq: 0,
             prefill_t0_us: 0,
+            heap_escalate: false,
         });
         infer_guard_begin();
         emit_msg_start();
@@ -460,13 +463,14 @@ fn try_claim_into_active() -> bool {
 }
 
 fn finish_job(st: &mut ActiveState, text: &str) {
-    crate::difficulty_gate::clear_soft_stride_override();
+    crate::heap_aios::clear_job_overrides();
     crate::vocab_shortlist::set_skip_full_unembed(false);
     // Fecha wall-clock do decode (tok/s Hub Health).
     let t0 = DECODE_T0_US.swap(0, Ordering::AcqRel);
     let job_toks = DECODE_JOB_TOKS.swap(0, Ordering::AcqRel);
+    let mut us = 0u64;
     if t0 != 0 && job_toks > 0 {
-        let us = k_nano::tsc::now_us().saturating_sub(t0).max(1);
+        us = k_nano::tsc::now_us().saturating_sub(t0).max(1);
         TELEM_DECODE_US.fetch_add(us, Ordering::Relaxed);
         TELEM_LAST_DECODE_TOKS.store(job_toks, Ordering::Relaxed);
         TELEM_LAST_DECODE_US.store(us, Ordering::Relaxed);
@@ -480,6 +484,9 @@ fn finish_job(st: &mut ActiveState, text: &str) {
             us
         );
     }
+    // Verify + Remember (SESSION_350 Heap AIOS).
+    let completed = !st.heap_escalate && !text.starts_with("[heap escalate]");
+    crate::heap_aios::verify_job(completed, job_toks, us);
     let out = if text.is_empty() {
         if st.acc_text.is_empty() {
             String::from(NO_MODEL_MSG)
@@ -580,13 +587,6 @@ fn run_prefill_setup(st: &mut ActiveState) {
     };
     st.is_greeting = crate::bpe::prompt_is_greeting(&st.prompt);
 
-    let max_seq = if model.hidden >= 2048 {
-        model.max_seq.min(512)
-    } else {
-        model.max_seq.min(64)
-    };
-    st.max_seq = max_seq;
-
     let mut tokens: Vec<u32> = if st.use_bpe {
         crate::bpe::encode(&st.prompt)
     } else {
@@ -608,16 +608,46 @@ fn run_prefill_setup(st: &mut ActiveState) {
         tokens = crate::cortex::slim_prompt_tokens_for_heavy(&tokens, st.use_bpe);
     }
     st.prompt_len = tokens.len();
-    let tier = crate::difficulty_gate::classify(&st.prompt, st.is_greeting, model.hidden);
-    crate::difficulty_gate::apply_tier(tier, model.hidden);
-    st.max_gen = crate::difficulty_gate::max_gen_for(tier, model.hidden, st.use_bpe, st.is_greeting);
+
+    // SESSION_350 Heap AIOS: Observe→Plan→Act antes de alocar máscara/KV.
+    let base = crate::difficulty_gate::classify(&st.prompt, st.is_greeting, model.hidden);
+    let plan = crate::heap_aios::plan_for(base, model.hidden, st.use_bpe, st.is_greeting);
+    crate::heap_aios::apply_plan(plan, model.hidden);
+    if plan.kind == crate::heap_aios::HeapPlanKind::Escalate {
+        st.heap_escalate = true;
+        drop(guard);
+        let msg = crate::heap_aios::escalate_message(&plan);
+        finish_job(st, &msg);
+        return;
+    }
+    let max_seq = plan.ctx_cap.min(if model.hidden >= 2048 {
+        model.max_seq.min(512)
+    } else {
+        model.max_seq.min(64)
+    });
+    st.max_seq = max_seq;
+    if plan.force_slim && tokens.len() > 1 {
+        tokens = crate::cortex::slim_prompt_tokens_for_heavy(&tokens, st.use_bpe);
+    }
+    if tokens.len() > max_seq {
+        let keep = max_seq.max(1);
+        tokens = tokens[tokens.len() - keep..].to_vec();
+    }
+    st.prompt_len = tokens.len();
+    st.max_gen = plan.max_gen;
     k_nano::slog_cortex!(
         "InferQ",
         "ok",
-        "tier={} max_gen={} soft_stride={}",
-        tier.name(),
+        "tier={} max_gen={} soft_stride={} ctx={} heap_plan={}",
+        plan.tier.name(),
         st.max_gen,
-        crate::difficulty_gate::soft_stride_for(tier, model.hidden)
+        plan.soft_stride,
+        max_seq,
+        match plan.kind {
+            crate::heap_aios::HeapPlanKind::Ok => "ok",
+            crate::heap_aios::HeapPlanKind::Degrade => "degrade",
+            crate::heap_aios::HeapPlanKind::Escalate => "escalate",
+        }
     );
 
     let kv_dim = model.kv_dim;

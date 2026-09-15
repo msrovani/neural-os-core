@@ -8,6 +8,8 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 351 | Falcon3/Heap | OOM+HW | f32_zeros + refuse-only refuse + usb_hw | `vec![a*b]` bypass Tensor; cap 256MiB matou load 315MB; refuse só >janela bump; WHPX milli=159; T+800 `capacity overflow`; `usb_hw.img` 8.1GB PACK_LLM=all |
+| 350 | Falcon3/Heap | AIOS | Heap Observe→Plan→Act→Verify→Remember | grow refuse só atomics; plan por headroom real; InferQueue degrade/escalate HITL; Tensor pró-ativo; SGDB `heap_aios` |
 | 349 | Falcon3 | QEMU/WHPX lab | Measure tok/s + OOM UI 4.4GB | WHPX ≈0.15 tok/s (milli); FAT≠header→7B OOM; in-place parse; T+793 `size=4764923932` primo/f32 + max_seq header 32768; Tensor checked_mul + clamp ctx |
 | 348 | Falcon3 | ADR-0101 Onda 0–3 | SSE ADD/SUB/SKIP + shortlist + difficulty + CogRT | Metal SSE sem W*x mul; shortlist skip-unembed; Medusa verify; gate Cheap/Normal/Full; **sem** KL early-exit; SGDB prompt-side |
 | 347 | Ring3 | Onda 6 ADR-0102 | Código-complete + HITL `/ring3` | stash→promote; Approve `ring3_register`→T-053 mark; T-051/056/057 wired; **T-052/053 AWAITING_HW** (não falso PASS); QEMU nunca auto-register |

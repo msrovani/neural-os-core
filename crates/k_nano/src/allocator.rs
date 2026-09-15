@@ -32,6 +32,33 @@ unsafe impl GlobalAlloc for LazyBumpAllocator {
         let size = layout.size();
         let align = layout.align().max(1);
 
+        // SESSION_351: refuse só o impossível (size > janela ~2GB) — classe wrap
+        // 4.7GB. Cap 256MiB era falso positivo: load Falcon3 copia ~315MB (align=1)
+        // e o OOM/hlt vinha no meio do parse (agente=? boot).
+        let window = bump_max_offset();
+        if size > window {
+            let agent = agent_core::tick_in_progress().map(|(n, _)| n).unwrap_or("?");
+            note_alloc_refused(size, window, agent);
+            {
+                let mut buf = [0u8; 72];
+                let mut n = 0usize;
+                for &b in b"ALLOC refuse " {
+                    if n < buf.len() {
+                        buf[n] = b;
+                        n += 1;
+                    }
+                }
+                for &b in agent.as_bytes() {
+                    if n < buf.len() {
+                        buf[n] = b;
+                        n += 1;
+                    }
+                }
+                crate::interrupts::exception_fb_stamp(&buf[..n]);
+            }
+            return core::ptr::null_mut();
+        }
+
         let mut current_offset = self.offset.load(Ordering::Relaxed);
         loop {
             let real_offset = if current_offset < 0 { 0 } else { current_offset as usize };
@@ -124,6 +151,8 @@ fn grow_bump_auto(need: usize) -> bool {
         let agent = agent_core::tick_in_progress().map(|(n, _)| n).unwrap_or("?");
         crate::slog_nano!("HEAP", "fail", "refuse need={}MB window=~{}MB (agente={})",
             need / (1024 * 1024), window / (1024 * 1024), agent);
+        // AIOS Observe (SESSION_350): só atomics — NÃO alocar (EventBus) aqui.
+        note_alloc_refused(need, window, agent);
         return false;
     }
     let want = want_raw.min(budget_bytes).min(window);
@@ -191,6 +220,113 @@ static HEAP_ALLOC: LazyBumpAllocator = LazyBumpAllocator::new();
 pub fn heap_used_bytes() -> usize {
     let offset = HEAP_ALLOC.offset.load(Ordering::Relaxed);
     if offset < 0 { 0 } else { offset as usize }
+}
+
+/// Janela endereçável do bump (~2GB) — Observe AIOS.
+pub fn heap_window_bytes() -> usize {
+    bump_max_offset()
+}
+
+/// Headroom real: window − used (nunca o HUD “RAM guest”).
+pub fn heap_headroom_bytes() -> usize {
+    bump_max_offset().saturating_sub(heap_used_bytes())
+}
+
+/// Tópicos EventBus (consumidor publica fora do grow — grow é alloc-free).
+pub const TOPIC_HEAP_PRESSURE: &str = "HEAP_PRESSURE";
+pub const TOPIC_ALLOC_REFUSED: &str = "ALLOC_REFUSED";
+
+/// 0=ok 1=warn (headroom baixo) 2=critical (refuse recente).
+static HEAP_PRESSURE_LEVEL: AtomicUsize = AtomicUsize::new(0);
+static LAST_REFUSE_NEED: AtomicUsize = AtomicUsize::new(0);
+static LAST_REFUSE_WINDOW: AtomicUsize = AtomicUsize::new(0);
+static REFUSE_COUNT: AtomicU64 = AtomicU64::new(0);
+static PRESSURE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Snapshot Observe (lock-free).
+#[derive(Clone, Copy, Debug)]
+pub struct HeapObserve {
+    pub used_mb: usize,
+    pub window_mb: usize,
+    pub headroom_mb: usize,
+    pub pressure: u8,
+    pub last_refuse_need_mb: usize,
+    pub refuse_count: u64,
+    pub seq: u64,
+}
+
+pub fn heap_observe() -> HeapObserve {
+    let used = heap_used_bytes();
+    let window = bump_max_offset();
+    let headroom = window.saturating_sub(used);
+    // Warn proativo: <256MB headroom com modelo heavy já carregado.
+    let mut pressure = HEAP_PRESSURE_LEVEL.load(Ordering::Acquire) as u8;
+    if pressure < 1 && headroom < 256 * 1024 * 1024 {
+        pressure = 1;
+    }
+    HeapObserve {
+        used_mb: used / (1024 * 1024),
+        window_mb: window / (1024 * 1024),
+        headroom_mb: headroom / (1024 * 1024),
+        pressure,
+        last_refuse_need_mb: LAST_REFUSE_NEED.load(Ordering::Relaxed) / (1024 * 1024),
+        refuse_count: REFUSE_COUNT.load(Ordering::Relaxed),
+        seq: PRESSURE_SEQ.load(Ordering::Relaxed),
+    }
+}
+
+/// Chamado no refuse do grow — **zero alloc**.
+pub fn note_alloc_refused(need: usize, window: usize, _agent: &str) {
+    LAST_REFUSE_NEED.store(need, Ordering::Release);
+    LAST_REFUSE_WINDOW.store(window, Ordering::Release);
+    REFUSE_COUNT.fetch_add(1, Ordering::Relaxed);
+    HEAP_PRESSURE_LEVEL.store(2, Ordering::Release);
+    PRESSURE_SEQ.fetch_add(1, Ordering::Relaxed);
+}
+
+/// InferQueue / Tensor: pedir bytes e ver se cabe com margem.
+pub fn can_alloc_bytes(size: usize, margin_mb: usize) -> bool {
+    let headroom = heap_headroom_bytes();
+    let margin = margin_mb.saturating_mul(1024 * 1024);
+    size.saturating_add(margin) <= headroom
+}
+
+/// Publica HEAP_PRESSURE no EventBus (chamar fora de grow — pode alocar).
+pub fn publish_heap_pressure_if_due() {
+    let obs = heap_observe();
+    if obs.pressure == 0 {
+        return;
+    }
+    use alloc::format;
+    use event_bus::{CapabilityToken, Event};
+    let payload = format!(
+        "pressure={} used_mb={} window_mb={} headroom_mb={} refuse_need_mb={} refuse_n={} seq={}",
+        obs.pressure,
+        obs.used_mb,
+        obs.window_mb,
+        obs.headroom_mb,
+        obs.last_refuse_need_mb,
+        obs.refuse_count,
+        obs.seq
+    );
+    let _ = crate::EVENT_BUS.publish(Event {
+        id: 0,
+        topic: alloc::string::String::from(TOPIC_HEAP_PRESSURE),
+        payload: payload.into_bytes(),
+        token: CapabilityToken::Legacy(1),
+    });
+}
+
+/// Limpa critical → warn após plan degradar com sucesso.
+pub fn clear_critical_pressure() {
+    let cur = HEAP_PRESSURE_LEVEL.load(Ordering::Acquire);
+    if cur >= 2 {
+        HEAP_PRESSURE_LEVEL.store(1, Ordering::Release);
+    }
+}
+
+pub fn set_pressure_warn() {
+    let _ = HEAP_PRESSURE_LEVEL.compare_exchange(0, 1, Ordering::SeqCst, Ordering::Relaxed);
 }
 
 /// Buffer de heap estático — seção própria `.bss.heap` colocada no FIM da

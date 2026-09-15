@@ -132,9 +132,12 @@ fn softmax_inplace(logits: &mut [f32]) {
 
 pub fn rope_precompute(max_seq: usize, head_dim: usize, theta: f32) -> (Vec<f32>, Vec<f32>) {
     let half = head_dim / 2;
-    let n = max_seq * half;
-    let mut cos_table = vec![0.0f32; n];
-    let mut sin_table = vec![0.0f32; n];
+    let n = max_seq.saturating_mul(half);
+    let mut cos_table = crate::tensor::f32_zeros(n);
+    let mut sin_table = crate::tensor::f32_zeros(n);
+    if cos_table.len() != n || sin_table.len() != n {
+        return (alloc::vec::Vec::new(), alloc::vec::Vec::new());
+    }
     for pos in 0..max_seq {
         for d in 0..half {
             let inv_freq = libm::powf(theta, -2.0 * d as f32 / head_dim as f32);
@@ -888,13 +891,26 @@ impl TransformerModel {
     }
 
     pub fn forward_with_kv(&self, tokens: &[u32], cache: &mut KvCache) -> (Tensor, Tensor) {
-        let seq_len = tokens.len();
+        let ctx_cap = if self.hidden >= 2048 {
+            crate::heap_aios::last_ctx_cap().min(self.max_seq.min(512))
+        } else {
+            self.max_seq.min(64)
+        };
+        let seq_len = tokens.len().min(ctx_cap);
         let is_first_pass = cache.len == 0;
-        let new_len = if is_first_pass { seq_len.min(self.max_seq) } else { seq_len };
-        let total_seq = if is_first_pass { new_len } else { cache.len + seq_len };
+        let new_len = if is_first_pass {
+            seq_len
+        } else {
+            tokens.len().min(ctx_cap)
+        };
+        let total_seq = if is_first_pass {
+            new_len
+        } else {
+            cache.len.saturating_add(new_len).min(ctx_cap).max(new_len)
+        };
 
         // Embed only the new tokens
-        let start_pos = if is_first_pass { 0 } else { cache.len };
+        let start_pos = if is_first_pass { 0 } else { cache.len.min(ctx_cap) };
         let mut x = Tensor::new((new_len, self.hidden));
         for (i, &t) in tokens.iter().enumerate().take(new_len) {
             let emb = self.embed_lookup(t);
@@ -904,14 +920,16 @@ impl TransformerModel {
         }
 
         // Causal mask for the new tokens over the full sequence
-        let mut mask_data = vec![0.0f32; new_len * total_seq];
-        for i in 0..new_len {
-            let global_i = start_pos + i;
-            for j in (global_i + 1)..total_seq {
-                mask_data[i * total_seq + j] = NEG_INFINITY;
+        let mut mask_data = crate::tensor::f32_zeros_2d(new_len, total_seq);
+        if mask_data.len() == new_len.saturating_mul(total_seq) && !mask_data.is_empty() {
+            for i in 0..new_len {
+                let global_i = start_pos + i;
+                for j in (global_i + 1)..total_seq {
+                    mask_data[i * total_seq + j] = NEG_INFINITY;
+                }
             }
         }
-        let mask = Tensor::from_row_major((new_len, total_seq), mask_data).unwrap_or_else(|| Tensor::zero((new_len, total_seq)));
+        let mask = Tensor::from_row_major((new_len, total_seq), mask_data).unwrap_or_else(|| Tensor::zero((new_len.max(1), total_seq.max(1))));
 
         let _layer_count = self.layers.len();
         // ADR-0101 Onda 2: soft_stride via difficulty_gate (override) ou legado heavy=3.
@@ -963,7 +981,7 @@ impl TransformerModel {
             let q_group_size = num_heads / num_kv_heads;
             let k_dim = total_k.shape.1;
             let v_dim = total_v.shape.1;
-            let mut attn_out_data = vec![0.0f32; new_len * kv_dim];
+            let mut attn_out_data = crate::tensor::f32_zeros_2d(new_len, kv_dim);
 
             // Block size adaptativo: quantos tokens cabem no cache L1/L2
             let block_size = crate::tensor::optimal_attention_block(qk_head_dim);
@@ -1126,12 +1144,22 @@ impl TransformerModel {
 
     /// Forward new tokens with KV cache; returns logits [new_len × vocab] (one row per input token).
     pub fn forward_with_kv_all_logits(&self, tokens: &[u32], cache: &mut KvCache) -> Tensor {
-        let seq_len = tokens.len();
+        let ctx_cap = if self.hidden >= 2048 {
+            crate::heap_aios::last_ctx_cap().min(self.max_seq.min(512))
+        } else {
+            self.max_seq.min(64)
+        };
+        // Medusa drafts are short; never materialize new_len×vocab for heavy ctx.
+        let seq_len = tokens.len().min(ctx_cap.min(16));
         let is_first_pass = cache.len == 0;
-        let new_len = if is_first_pass { seq_len.min(self.max_seq) } else { seq_len };
-        let total_seq = if is_first_pass { new_len } else { cache.len + seq_len };
+        let new_len = seq_len;
+        let total_seq = if is_first_pass {
+            new_len
+        } else {
+            cache.len.saturating_add(new_len).min(ctx_cap).max(new_len)
+        };
 
-        let start_pos = if is_first_pass { 0 } else { cache.len };
+        let start_pos = if is_first_pass { 0 } else { cache.len.min(ctx_cap) };
         let mut x = Tensor::new((new_len, self.hidden));
         for (i, &t) in tokens.iter().enumerate().take(new_len) {
             let emb = self.embed_lookup(t);
@@ -1140,14 +1168,17 @@ impl TransformerModel {
             }
         }
 
-        let mut mask_data = vec![0.0f32; new_len * total_seq];
-        for i in 0..new_len {
-            let global_i = start_pos + i;
-            for j in (global_i + 1)..total_seq {
-                mask_data[i * total_seq + j] = NEG_INFINITY;
+        let mut mask_data = crate::tensor::f32_zeros_2d(new_len, total_seq);
+        if mask_data.len() == new_len.saturating_mul(total_seq) && !mask_data.is_empty() {
+            for i in 0..new_len {
+                let global_i = start_pos + i;
+                for j in (global_i + 1)..total_seq {
+                    mask_data[i * total_seq + j] = NEG_INFINITY;
+                }
             }
         }
-        let mask = Tensor::from_row_major((new_len, total_seq), mask_data).unwrap_or_else(|| Tensor::zero((new_len, total_seq)));
+        let mask = Tensor::from_row_major((new_len, total_seq), mask_data)
+            .unwrap_or_else(|| Tensor::zero((new_len.max(1), total_seq.max(1))));
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let norm = self.rms_norm_tensor(&x, &layer.rms_attn);
@@ -1174,7 +1205,7 @@ impl TransformerModel {
             let q_group_size = num_heads / num_kv_heads;
             let k_dim = total_k.shape.1;
             let v_dim = total_v.shape.1;
-            let mut attn_out_data = vec![0.0f32; new_len * kv_dim];
+            let mut attn_out_data = crate::tensor::f32_zeros_2d(new_len, kv_dim);
             let block_size = crate::tensor::optimal_attention_block(qk_head_dim);
 
             for kv_g in 0..num_kv_heads {
@@ -1288,17 +1319,40 @@ impl TransformerModel {
 
         let final_norm = self.rms_norm_tensor(&x, &self.rms_final);
         let vocab_size = self.vocab_size as usize;
-        let mut all_logits = vec![0.0f32; new_len * vocab_size];
-        for i in 0..new_len {
-            let hidden = Tensor::from_row_major((1, self.hidden),
-                final_norm.data[i * self.hidden..(i + 1) * self.hidden].to_vec())
-                .unwrap_or_else(|| Tensor::zero((1, self.hidden)));
-            let logits = self.unembed_logits(&hidden, vocab_size);
-            for j in 0..vocab_size {
-                all_logits[i * vocab_size + j] = logits.data[j];
+        // Heavy: new_len×131072 f32 pode ser GiB — só via f32_zeros_2d.
+        let mut all_logits = crate::tensor::f32_zeros_2d(new_len, vocab_size);
+        if all_logits.len() != new_len.saturating_mul(vocab_size) || new_len == 0 {
+            // Fallback: só última row (Medusa verify p/ draft curto).
+            let last = new_len.saturating_sub(1);
+            let start = last.saturating_mul(self.hidden);
+            let end = start.saturating_add(self.hidden).min(final_norm.data.len());
+            let mut row = crate::tensor::f32_zeros(self.hidden);
+            if end > start && row.len() == self.hidden {
+                let n = (end - start).min(self.hidden);
+                row[..n].copy_from_slice(&final_norm.data[start..start + n]);
             }
+            let hidden = Tensor {
+                shape: (1, self.hidden),
+                data: row,
+            };
+            return self.unembed_logits(&hidden, vocab_size);
         }
-        Tensor::from_row_major((new_len, vocab_size), all_logits).unwrap_or_else(|| Tensor::zero((new_len, vocab_size)))
+        for i in 0..new_len {
+            let start = i * self.hidden;
+            let end = start + self.hidden;
+            let hidden = if end <= final_norm.data.len() {
+                Tensor::from_row_major((1, self.hidden), final_norm.data[start..end].to_vec())
+                    .unwrap_or_else(|| Tensor::zero((1, self.hidden)))
+            } else {
+                Tensor::zero((1, self.hidden))
+            };
+            let logits = self.unembed_logits(&hidden, vocab_size);
+            let copy_n = vocab_size.min(logits.data.len());
+            all_logits[i * vocab_size..i * vocab_size + copy_n]
+                .copy_from_slice(&logits.data[..copy_n]);
+        }
+        Tensor::from_row_major((new_len, vocab_size), all_logits)
+            .unwrap_or_else(|| Tensor::zero((1, 1)))
     }
 
     /// AirLLM: apply one transformer layer then return; caller drops weights.
@@ -1340,7 +1394,7 @@ impl TransformerModel {
         let q_group_size = (num_heads / num_kv_heads).max(1);
         let k_dim = total_k.shape.1;
         let v_dim = total_v.shape.1;
-        let mut attn_out_data = vec![0.0f32; new_len * kv_dim];
+        let mut attn_out_data = crate::tensor::f32_zeros_2d(new_len, kv_dim);
         let block_size = crate::tensor::optimal_attention_block(qk_head_dim);
 
         for kv_g in 0..num_kv_heads {
@@ -1468,7 +1522,7 @@ impl TransformerModel {
     /// do header (32768) para alocar máscara (SESSION_349 OOM 4.4GB).
     pub fn embed_for_kv(&self, tokens: &[u32], cache: &KvCache) -> (Tensor, Tensor, usize, usize, usize) {
         let ctx_cap = if self.hidden >= 2048 {
-            self.max_seq.min(512)
+            crate::heap_aios::last_ctx_cap().min(self.max_seq.min(512))
         } else {
             self.max_seq.min(64)
         };
@@ -1499,9 +1553,9 @@ impl TransformerModel {
                 total_seq,
                 mask_elems
             );
-            alloc::vec![0.0f32; 0]
+            alloc::vec::Vec::new()
         } else {
-            alloc::vec![0.0f32; mask_elems]
+            crate::tensor::f32_zeros(mask_elems)
         };
         if !mask_data.is_empty() {
             for i in 0..new_len {
@@ -1528,7 +1582,12 @@ impl TransformerModel {
     }
 
     pub fn forward_hidden(&self, tokens: &[u32]) -> (Tensor, Tensor) {
-        let seq_len = tokens.len().min(self.max_seq);
+        let ctx_cap = if self.hidden >= 2048 {
+            crate::heap_aios::last_ctx_cap().min(self.max_seq.min(512))
+        } else {
+            self.max_seq.min(64)
+        };
+        let seq_len = tokens.len().min(ctx_cap);
         let num_heads = self.num_heads;
         let num_kv_heads = self.num_kv_heads;
         let qk_head_dim = self.kv_dim / num_heads; // 32 for BitNet-b1.58
@@ -1542,13 +1601,15 @@ impl TransformerModel {
             }
         }
 
-        let mut mask_data = vec![0.0f32; seq_len * seq_len];
-        for i in 0..seq_len {
-            for j in (i + 1)..seq_len {
-                mask_data[i * seq_len + j] = NEG_INFINITY;
+        let mut mask_data = crate::tensor::f32_zeros_2d(seq_len, seq_len);
+        if mask_data.len() == seq_len.saturating_mul(seq_len) {
+            for i in 0..seq_len {
+                for j in (i + 1)..seq_len {
+                    mask_data[i * seq_len + j] = NEG_INFINITY;
+                }
             }
         }
-        let mask = Tensor::from_row_major((seq_len, seq_len), mask_data).unwrap_or_else(|| Tensor::zero((seq_len, seq_len)));
+        let mask = Tensor::from_row_major((seq_len, seq_len), mask_data).unwrap_or_else(|| Tensor::zero((seq_len.max(1), seq_len.max(1))));
 
         let layer_count = self.layers.len();
         for (layer_idx, layer) in self.layers.iter().enumerate() {
@@ -1576,7 +1637,7 @@ impl TransformerModel {
             // GQA attention: each KV head serves q_group_size query heads
             let k_dim = k.shape.1;
             let v_dim = v.shape.1;
-            let mut attn_out_data = vec![0.0f32; seq_len * kv_dim];
+            let mut attn_out_data = crate::tensor::f32_zeros_2d(seq_len, kv_dim);
 
             for kv_g in 0..num_kv_heads {
                 let kv_start = kv_g * qk_head_dim;
@@ -3585,13 +3646,6 @@ pub fn slim_prompt_tokens_for_heavy(tokens: &[u32], use_bpe: bool) -> Vec<u32> {
 }
 
 pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder: Option<&mut StructuredDecoder>) -> alloc::string::String {
-    // Respect model context: large models (hidden>=2048) use more tokens.
-    // Small demo models cap at 64; real models use their configured max_seq.
-    let max_seq = if model.hidden >= 2048 {
-        model.max_seq.min(512) // Falcon3: up to 512 tokens (KV-cache safe)
-    } else {
-        model.max_seq.min(64)  // Demo: cap at 64
-    };
     let use_bpe = crate::bpe::is_loaded();
     let eos: u32 = if use_bpe { crate::bpe::eos_id() as u32 } else { EOS as u32 };
     let eot: u32 = if use_bpe { crate::bpe::eot_id() as u32 } else { EOS as u32 };
@@ -3612,6 +3666,25 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
     // Heavy model: slim prompt
     if model.hidden >= 2048 && tokens.len() > 1 {
         tokens = slim_prompt_tokens_for_heavy(&tokens, use_bpe);
+    }
+
+    let is_greeting = crate::bpe::prompt_is_greeting(prompt);
+    let base = crate::difficulty_gate::classify(prompt, is_greeting, model.hidden);
+    // SESSION_351: mesmo plano Heap AIOS que InferQueue (não só difficulty_gate).
+    let plan = crate::heap_aios::plan_for(base, model.hidden, use_bpe, is_greeting);
+    crate::heap_aios::apply_plan(plan, model.hidden);
+    if plan.kind == crate::heap_aios::HeapPlanKind::Escalate {
+        return crate::heap_aios::escalate_message(&plan);
+    }
+    let max_seq = plan.ctx_cap.min(if model.hidden >= 2048 {
+        model.max_seq.min(512)
+    } else {
+        model.max_seq.min(64)
+    });
+    let tier = plan.tier;
+    if tokens.len() > max_seq {
+        let keep = max_seq.max(1);
+        tokens = tokens[tokens.len() - keep..].to_vec();
     }
     let prompt_len = tokens.len();
     k_nano::slog_cortex!("GEN", "info",
@@ -3643,16 +3716,12 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
         }
     };
 
-    let is_greeting = crate::bpe::prompt_is_greeting(prompt);
-    let tier = crate::difficulty_gate::classify(prompt, is_greeting, model.hidden);
-    crate::difficulty_gate::apply_tier(tier, model.hidden);
-
     let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     let (mut last_hidden, mut last_logits) = model.forward_with_kv(&tokens, &mut cache);
     let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     k_nano::slog_cortex!("GEN", "info", "prompt fwd: {} ticks", t1 - t0);
 
-    let max_gen = crate::difficulty_gate::max_gen_for(tier, model.hidden, use_bpe, is_greeting);
+    let max_gen = plan.max_gen.min(crate::difficulty_gate::max_gen_for(tier, model.hidden, use_bpe, is_greeting));
     k_nano::slog_cortex!("GEN", "info", "max_gen={} greet={} tier={}", max_gen, is_greeting as u8, tier.name());
     // Wall-clock só do decode (pós-prefill) — tok/s honesto p/ Hub / microbench.
     let decode_t0_us = k_nano::tsc::now_us();

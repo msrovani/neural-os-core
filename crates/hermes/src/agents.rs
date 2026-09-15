@@ -568,6 +568,8 @@ impl InferWorker {
     pub fn new() -> Self {
         // Hook AP idle → poll_slice (sem AGENT_TICK_BUSY).
         k_nano::smp::install_infer_poll_fn(cortex::infer_queue::poll_slice);
+        // SESSION_350: Remember heap_aios → SGDB (host aprende ctx≤N).
+        crate::cognitive_bridge::install_heap_aios_remember();
         InferWorker
     }
 }

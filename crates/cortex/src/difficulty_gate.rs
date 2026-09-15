@@ -55,6 +55,18 @@ pub fn soft_stride_for(tier: ComputeTier, hidden: usize) -> usize {
     }
 }
 
+/// Ctx tokens (heavy): Full 512 / Normal 256 / Cheap 64 — heap_aios pode apertar mais.
+pub fn ctx_cap_for(tier: ComputeTier, hidden: usize) -> usize {
+    if hidden < 2048 {
+        return 64;
+    }
+    match tier {
+        ComputeTier::Full => 512,
+        ComputeTier::Normal => 256,
+        ComputeTier::Cheap => 64,
+    }
+}
+
 pub fn max_gen_for(tier: ComputeTier, hidden: usize, use_bpe: bool, is_greeting: bool) -> usize {
     let forced = FORCE_MAX_GEN.load(Ordering::Acquire);
     if forced > 0 {

@@ -1,5 +1,19 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s351] - 2026-09-15 — OOM fail-closed + usb_hw full pack
+
+- `f32_zeros`/`f32_zeros_2d` + forwards KV/mask/`generate_speculative` sob HeapAIOS
+- GlobalAlloc: refuse só se size > janela bump (~2 GB) — cap 256 MiB era falso positivo no load (~315 MB)
+- WHPX: LLM LOADED + ~0.159 tok/s; aberto `capacity overflow` T+800 pós-CTX user
+- HW: `target/usb_hw.img` 8319 MB (`PACK_LLM=all`, Falcon3-3B lab + AGENT/RUSTCDR3/BGE/PIPER/…)
+
+## [1.9.99-s350] - 2026-09-15 — Heap AIOS (Observe→Plan→Act→Verify→Remember)
+
+- Observe: `note_alloc_refused` + `heap_observe` (atomics; EventBus fora do grow)
+- Plan/Act: `cortex::heap_aios` + InferQueue (degrade ctx/stride/slim; escalate HITL)
+- Verify/Remember: `finish_job` → SGDB `heap_aios` via hermes seam
+- Tensor: refuse pró-ativo se headroom &lt; pedido (+64MB margem)
+
 ## [1.9.99-s349] - 2026-09-15 — Falcon3 WHPX measure + OOM UI guards
 
 - Lab: `tools/measure-falcon3-toks.ps1` canónico WHPX (~0.15 tok/s; usar `milli=`/`us=`)
