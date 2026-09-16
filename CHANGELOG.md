@@ -1,5 +1,20 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s352] - 2026-09-16 — Auditoria do pipeline de voz (docs; sem mudança de código)
+
+- Playback é drenado por **tick** e não pelo clock: a 60 Hz o mixer puxa 61 440/s contra 16 000/s do
+  dispositivo e rajadas > 341 ms (buffer do DMA) perdem até ~74% da fala (`PLAY_SAMPLES_DROPPED`);
+  o ADR-0104 tornou o tick adaptativo → a cadência da UI altera a fidelidade do áudio (#558)
+- **Auto-barge-in**: VAD `start` durante playback limpa a fala **e** cancela a inferência; não existe
+  AEC no repositório (#559)
+- `STT_UNCERTAIN` publicado por `stt.rs` e **sem consumidor** → incerteza = silêncio (#560); `pcm_buffer`
+  sem teto + matriz CTC `n_frames × vocab` (#561); `AUDIO_FRAME` a 50 Hz num barramento que clona por
+  assinante em fila ilimitada (#562); wake-word lê os 16 frames mais **velhos** de 1,28 s (#563)
+- Plano em ondas V1–V5: `docs/implementation/2026-09-16-voice-pipeline-audit-s352.md`;
+  toggle `docs/memory/SESSION_352.md` + IDEA_BANK #558–#566 + seção ADR-0045 no `TODO.md`
+- AGENTS.md: lição "QEMU não tem codec HDA" substituída (provada errada na s346 — o QEMU emula
+  `hda-duplex`; o bug era do driver)
+
 ## [1.9.99-s351] - 2026-09-15 — OOM fail-closed + usb_hw full pack
 
 - `f32_zeros`/`f32_zeros_2d` + forwards KV/mask/`generate_speculative` sob HeapAIOS

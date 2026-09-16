@@ -161,6 +161,17 @@
 - [x] Feature `smp-runqueue` no `default` do bin + `MAX_CORES=256` (s307)
 - [ ] Aceite metal K23: `online==madt-1` + hybrid P/E
 
+### 11. ADR-0045 — Pipeline de voz (auditoria s352)
+**Goal:** o caminho wake→mic→STT→LLM→TTS→alto-falante com fidelidade, duplexidade explícita e latência medida.
+Plano completo + evidência: `docs/implementation/2026-09-16-voice-pipeline-audit-s352.md` (IDEA_BANK #558–#566).
+
+- [ ] **V1** Pacing do playback pelo clock (`PLAY_SAMPLES_DROPPED == 0` em `/tick 30/60/120`) + resample fora do laço de escrita — #558, #1.2
+- [ ] **V2** Duplexidade explícita (fim do auto-barge-in) + `STT_UNCERTAIN` falado — #559, #560
+- [ ] **V3** Teto de utterance + CTC incremental + ring SPSC para `AUDIO_FRAME` — #561, #562
+- [ ] **V4** Wake-word: janela deslizante, log-mel + `tools/train_wakeword.py`, FPPH em holdout disjunto — #563
+- [ ] **V5** `VOICE_LATENCY` + orçamento de contexto/SGDB episódico + identidade `voice_input`/HITL — #564, #565, #566
+- [ ] Menores: doc drift de `audio/mod.rs` (`AudioPipelineAgent`/`MIC_CAPTURE_RING` não existem), `wake_window.min(120)`, saída dupla HDA+UAC no mixer
+
 ---
 
 ## 🔗 DEPENDÊNCIAS (ordem obrigatória)
