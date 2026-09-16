@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s352] - 2026-09-15 — HDA em QEMU: enumeração de codec + tabela de parâmetros
+
+- Enumeração em 2 níveis: root → AFG via `FUNCTION_TYPE` (0x05), widgets via NODE_COUNT do AFG
+- Tabela de params corrigida: `PIN_CAP=0x0C` (não 0x0A), `AMP_IN=0x0D`, `AMP_OUT=0x12`, `VOL_KNB=0x13`
+- Pin de microfone por Default Device (0xA Mic In > 0x8 Line In); `widget_type==0x1` no nível 2 é ADC, não AFG
+- Aceite QEMU: `capture path ready CAD 0` + `SD0 capture: BDL @ … size=64KB` + `SD1 playback` (init deixa de falhar)
+
 ## [1.9.99-s351] - 2026-09-15 — OOM fail-closed + usb_hw full pack
 
 - `f32_zeros`/`f32_zeros_2d` + forwards KV/mask/`generate_speculative` sob HeapAIOS

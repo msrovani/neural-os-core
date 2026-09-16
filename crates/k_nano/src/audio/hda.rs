@@ -147,23 +147,30 @@ const VERB_GET_CONFIG_DEFAULT: u32 = 0xF1C;
 const VERB_GET_SUBSYSTEM_ID: u32 = 0xF20;
 const VERB_SET_POWER_STATE: u32 = 0x705;
 
-// Parameter IDs
+// Parameter IDs — tabela canônica (HDA §7.3.4 == `AC_PAR_*` do QEMU
+// `hw/audio/intel-hda-defs.h` == Linux `sound/pci/hda/hda_codec.h`).
+// NÃO renumere por analogia: 0x0A é PCM Size/Rates, PIN_CAP é 0x0C e
+// AMP_OUT_CAP é 0x12. Pedir o ID errado NÃO falha — o codec responde 0,
+// o que vira "pin sem capacidade" (era o caso de `PARAM_PCAP = 0x0A`,
+// que deixava `mic_pin=0 spk=0` e derrubava o capture path, SESSION_346).
 const PARAM_VENDOR_ID: u32 = 0x00;
 const PARAM_REVISION_ID: u32 = 0x02;
 const PARAM_SUB_NODE_COUNT: u32 = 0x04;
 const PARAM_FUNCTION_GROUP_TYPE: u32 = 0x05;
 const PARAM_AUDIO_FG_CAP: u32 = 0x08;
 const PARAM_AUDIO_WIDGET_CAP: u32 = 0x09;
-const PARAM_PCAP: u32 = 0x0A;
-const PARAM_IN_AMP_CAP: u32 = 0x0B;
-const PARAM_OUT_AMP_CAP: u32 = 0x0C;
+const PARAM_PCAP: u32 = 0x0C;
+const PARAM_IN_AMP_CAP: u32 = 0x0D;
+const PARAM_OUT_AMP_CAP: u32 = 0x12;
 const PARAM_CONNLIST_LEN: u32 = 0x0E;
 const PARAM_POWER_STATE: u32 = 0x0F;
 const PARAM_PROC_WIDGET_CAP: u32 = 0x10;
-/// Get Parameter 0x0A — Supported Stream Formats (só faz sentido em conversores).
-const PARAM_SUPP_STREAM_FORMATS: u32 = 0x0A;
+/// Get Parameter 0x0A — Supported PCM Size/Rates (só em conversores).
+/// Layout §7.3.4.7: bits 0–7 = taxas, 8–10 = bits/amostra, 11–13 = ×2..×4.
+/// (0x0B é "Supported Stream Formats" — outro parâmetro.)
+const PARAM_PCM_SIZE_RATES: u32 = 0x0A;
 const PARAM_GPIO_CAP: u32 = 0x11;
-const PARAM_VOLUME_KNOB_CAP: u32 = 0x12;
+const PARAM_VOLUME_KNOB_CAP: u32 = 0x13;
 
 // Widget Types
 const WIDGET_TYPE_AUDIO_OUTPUT: u32 = 0x0;
@@ -568,12 +575,37 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
         
         slog_nano!("HDA", "info", "Codec {}: vendor={:#08x} rev={:#08x}", cad, vendor_id, revision_id);
         
-        // Get sub-node count (widgets)
-        let sub_resp = icw_send(bar, cad, 0x00, VERB_GET_PARAMETER, PARAM_SUB_NODE_COUNT);
-        let (start_nid, total_widgets) = match sub_resp {
-            Some(v) => ((v >> 16) as u8, (v & 0xFF) as u8),
-            None => continue,
-        };
+        // ── Enumeração em DOIS níveis (HDA §7.3.4.1 + §7.3.4.5) ───────────
+        // NÍVEL 1: o root (NID 0) lista os Audio Function Groups.
+        // O tipo do AFG vem de FUNCTION_TYPE (0x05), NÃO de AUDIO_WIDGET_CAP —
+        // o AFG não reporta widget cap (QEMU `duplex_params_audio_func_` não tem
+        // AC_PAR_AUDIO_WIDGET_CAP). Ler caps no NID 1 devolvia 0 → `widget_type=0`
+        // → a enumeração parava no AFG, nenhum ADC/DAC/pin era descoberto e
+        // `configure_capture_path` falhava com `mic_pin=0 adc=0` (SESSION_346).
+        let (root_start, root_count) =
+            match icw_send(bar, cad, 0x00, VERB_GET_PARAMETER, PARAM_SUB_NODE_COUNT) {
+                Some(v) => (((v >> 16) & 0xFF) as u8, (v & 0xFF) as u8),
+                None => continue,
+            };
+        let mut fg_nid = 0u8;
+        for nid in root_start..root_start.saturating_add(root_count) {
+            let fg_type = icw_send(bar, cad, nid, VERB_GET_PARAMETER, PARAM_FUNCTION_GROUP_TYPE)
+                .unwrap_or(0);
+            if fg_type & 0xFF == 0x01 {
+                fg_nid = nid;
+                break;
+            }
+        }
+        if fg_nid == 0 {
+            continue; // CAD sem Audio Function Group — nada de áudio a descobrir.
+        }
+
+        // NÍVEL 2: sub-nós do AFG (DAC=0x0, ADC=0x1, mixer=0x2, seletor=0x3, pin=0x4).
+        let (start_nid, total_widgets) =
+            match icw_send(bar, cad, fg_nid, VERB_GET_PARAMETER, PARAM_SUB_NODE_COUNT) {
+                Some(v) => (((v >> 16) & 0xFF) as u8, (v & 0xFF) as u8),
+                None => continue,
+            };
         
         let mut codec = CodecInfo {
             cad,
@@ -581,7 +613,7 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
             revision_id,
             widgets: [WidgetInfo { nid: 0, widget_type: 0, caps: 0, connections: [0; 8], num_connections: 0 }; 32],
             num_widgets: 0,
-            audio_fg_nid: 0,
+            audio_fg_nid: fg_nid,
             mic_pin_nid: 0,
             adc_nid: 0,
             speaker_pin_nid: 0,
@@ -590,7 +622,9 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
         
         // Enumerate widgets
         let mut widget_idx = 0;
-        for nid in start_nid..(start_nid + total_widgets) {
+        // Rank do pin de entrada escolhido (0xA Mic In > 0x8 Line In > outros).
+        let mut mic_rank = 0u8;
+        for nid in start_nid..start_nid.saturating_add(total_widgets) {
             if widget_idx >= 32 { break; }
             
             // Get widget capabilities
@@ -625,15 +659,10 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
                 }
             }
             
-            // Check for Audio Function Group
-            if widget_type == 0x1 { // Function group
-                let fg_type_resp = icw_send(bar, cad, nid, VERB_GET_PARAMETER, PARAM_FUNCTION_GROUP_TYPE);
-                if let Some(fg_type) = fg_type_resp {
-                    if fg_type & 0xFF == 0x01 { // Audio Function Group
-                        codec.audio_fg_nid = nid;
-                    }
-                }
-            }
+            // (O Audio Function Group NÃO está neste nível: ele é o PAI destes nós
+            //  e já foi resolvido por FUNCTION_TYPE. `widget_type == 0x1` aqui é um
+            //  ADC — AC_WID_AUD_IN — e escrevê-lo em `audio_fg_nid` mandava o
+            //  SET_POWER_STATE para o widget errado.)
             
             // Pin Complex: mic (IN) e speaker/HP (OUT) via PCAP + Config Default.
             // PCAP §7.3.4.9: bit4=OutputCapable, bit5=InputCapable.
@@ -645,9 +674,18 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
                 let cfg = icw_send(bar, cad, nid, VERB_GET_CONFIG_DEFAULT, 0).unwrap_or(0);
                 let device = (cfg >> 20) & 0xF;
                 if input_cap == 1 {
-                    if device == 0x4 || codec.mic_pin_nid == 0 {
-                        codec.mic_pin_nid = nid;
-                    } else if device == 0xA && codec.mic_pin_nid == 0 {
+                    // Default Device (§7.3.3.31): 0xA = Mic In, 0x8 = Line In.
+                    // (0x4 é S/PDIF **Out** — o código antigo escolhia o microfone
+                    //  olhando para um device de saída, e cedia ao 1º pin por ordem.)
+                    // Rank ≥1 para QUALQUER pin de entrada: um device inesperado
+                    // continua a ser último recurso, nunca `mic_pin = 0`.
+                    let rank = match device {
+                        0xA => 3,
+                        0x8 => 2,
+                        _ => 1,
+                    };
+                    if rank > mic_rank {
+                        mic_rank = rank;
                         codec.mic_pin_nid = nid;
                     }
                 }
@@ -814,7 +852,7 @@ unsafe fn configure_capture_path(bar: u64) -> bool {
         // Bit 0 = 8 kHz, 1 = 11.025, 2 = 16 kHz, 3 = 22.05, 4 = 24, 5 = 32,
         // 6 = 44.1, 7 = 48 kHz; bits 8–10 = 16/20/24/32-bit; 11–13 = taxas ×2..×4.
         // Fica registrado para decidir o switch gated para 16 kHz mono em HW real.
-        if let Some(fmt) = icw_send(bar, cad, codec.adc_nid, VERB_GET_PARAMETER, PARAM_SUPP_STREAM_FORMATS) {
+        if let Some(fmt) = icw_send(bar, cad, codec.adc_nid, VERB_GET_PARAMETER, PARAM_PCM_SIZE_RATES) {
             CAP_ADC_SUPPORTED_FMT.store(fmt, Ordering::Release);
             let sixteen_k = fmt & (1 << 2) != 0;
             slog_nano!(
