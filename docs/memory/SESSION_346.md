@@ -157,8 +157,50 @@ entradas/s, `CARRY_OVERFLOW == 0`, `PLAY_SAMPLES_DROPPED`) seguem como critério
 de metal. O `STT.BIN` atual (front-end legado, dataset de bipes) continua impreciso:
 precisa de `gen_stt_corpus.py` + `train_stt.py` com espeak-ng.
 
+## FIX 2 — HDA em QEMU: o codec SEMPRE respondeu (mesma sessão)
+
+O `No codecs found (degraded expected — aceite=HW)` registrado acima era o sintoma, não a
+causa. Quatro bugs do driver mantinham o bring-up morto em qualquer lugar:
+
+1. **GCTL.CRST invertido** — a sequência fazia `CRST=1` e depois `CRST=0` e *validava*
+   `CRST==0` como sucesso, deixando o controlador EM RESET e seguindo a usar ICW/CORB/RIRB
+   (registradores que só existem fora do reset). Semântica: 0 = em reset, 1 = ativo.
+2. **ICW sem kick** — escrevia ICW e lia o próprio ICW (write-only) esperando um bit busy
+   que mora em ICS; nenhum CAD era executado. Correto: ICW ← verbo, ICS.BUSY=1 dispara,
+   ICS.VALID=1 sinaliza, resposta em IR.
+3. **Verbo em [11:0]** — `VERB | payload` põe o Verb ID em [11:0]; o codec decodifica em
+   [19:8] (QEMU `hda_audio_command`: `(data & 0x70000) == 0x70000` → 12/8, senão 4/16).
+   Resultado do bug: `Codec 0: vendor=0x000000`.
+4. **Enumeração só do root + IDs de parâmetro errados** — NID 0 lista só o AFG; os widgets
+   vêm do NODE_COUNT do AFG (`0x00020004`). E `PARAM_PCAP=0x0A` é `PCM Size/Rates` — o
+   PIN_CAP é `0x0C`: o codec responde 0 e o pin vira "sem capacidade" (`mic_pin=0 spk=0`).
+
+### Aceite (QEMU 8c, `logs/boot_whpx_20260915_232621.txt`)
+
+```
+[HDA] CRST ok (fora de reset) STATESTS=0x0001
+[HDA] Codec 0: vendor=0x1af40022 rev=0x100101
+[HDA] enum cad=0 start_nid=2 total=4 widgets=4 fg=1 mic_pin=5 adc=4 spk=3 dac=2 icw_fails=0
+[HDA] capture CAD=0 PIN=5 ADC=4
+[HDA] ADC fmt cap=0x000201FC 16k=true (fmt ativo=0x1100 48k/est)
+[HDA] capture path ready CAD 0
+[HDA] SD0 capture: BDL @ 0x112a9000 buf @ 0x112aa000 size=64KB
+[HDA] playback CAD=0 PIN=3 DAC=2 | SD1 playback: BDL @ 0x112ba000 buf @ 0x112bb000
+[HDA] Intel HDA capture driver initialized successfully
+```
+
+`cargo test -p k-nano --lib` → 192 pass / 0 fail; `cargo build --release` → 0 erros.
+
+**Não-regressão:** o log imediatamente antes do fix (`232130`) para em `K33[28] sgdb...`
+e o de depois (`232621`) para na MESMA linha — código de áudio diferente, mesmo ponto ⇒ o
+stall é da frente de boot (pins/FAT/tickv), não do HDA. Consequência: PHASE 6/7 não rodam
+no 8c, então `poll_hda_audio` (drain por LPIB) e o `VOICE_STATE` continuam sem aceite de
+runtime — a captura passa a *poder* rodar pela primeira vez, e o risco mudou de lugar
+(antes: init falhava; agora: o drain nunca foi exercitado).
+
 ## Residuais
-1. **Aceite QEMU/HW** dos contadores de captura e do `VOICE_STATE` no HUD.
+1. **Aceite QEMU/HW** dos contadores de captura (`CAP_ENTRIES_DRAINED`, `CAP_LPIB_STALE`)
+   e do `VOICE_STATE` no HUD — bloqueado pelo stall `K33[28] sgdb`, não pelo áudio.
 2. **Retreinar o STT** com fala real (espeak-ng/Piper) — 840 frases já disponíveis.
 3. **Filterbank Mel triangular + DCT-II** no lugar do filterbank atual (centers em mel,
    sem DCT): exige treino e kernel mudando juntos → `FEAT_VERSION=2`.
