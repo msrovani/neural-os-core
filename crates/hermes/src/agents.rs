@@ -566,11 +566,19 @@ pub struct InferWorker;
 
 impl InferWorker {
     pub fn new() -> Self {
-        // Hook AP idle → poll_slice (sem AGENT_TICK_BUSY).
-        k_nano::smp::install_infer_poll_fn(cortex::infer_queue::poll_slice);
+        // Hook AP idle → poll_slice com stamp OOM (SESSION_351).
+        k_nano::smp::install_infer_poll_fn(Self::poll_slice_stamped);
         // SESSION_350: Remember heap_aios → SGDB (host aprende ctx≤N).
         crate::cognitive_bridge::install_heap_aios_remember();
         InferWorker
+    }
+
+    /// AP idle / BSP: stamp `infer_worker` antes do slice (OOM honesto).
+    fn poll_slice_stamped() -> bool {
+        agent_core::note_background_agent("infer_worker");
+        let did = cortex::infer_queue::poll_slice();
+        agent_core::clear_background_agent("infer_worker");
+        did
     }
 }
 
@@ -581,7 +589,7 @@ impl Agent for InferWorker {
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         // Sempre 1 slice no BSP: single-core / !ap_pollable; com APs, SLICE_BUSY serializa.
-        let _ = cortex::infer_queue::poll_slice();
+        let _ = Self::poll_slice_stamped();
         AgentTickResult::Pending
     }
 }

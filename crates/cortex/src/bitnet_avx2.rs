@@ -32,11 +32,13 @@ fn avx2_available() -> bool {
 pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Tensor> {
     let (k, n) = weight.shape;
     let (m, k2) = input.shape;
-    if k != k2 { return None; }
+    if k != k2 || !input.is_valid() || m == 0 || n == 0 || k == 0 {
+        return None;
+    }
 
     // ADR-0057 WS-C: NPU/GPU/parallel dispatch
     if let Some(r) = crate::compute::dispatch_ternary(weight, input) {
-        return Some(r);
+        return if r.is_valid() { Some(r) } else { None };
     }
 
     // ADR-0084 F4 (GATED): W2A8 maddubs — só WHPX/HW real + gaps resolvidos.
@@ -45,7 +47,7 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
         #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
         unsafe {
             if let Some(r) = crate::bitnet_w2a8::w2a8_ternary_matmul(weight, input) {
-                return Some(r);
+                return if r.is_valid() { Some(r) } else { None };
             }
         }
     }
@@ -57,18 +59,25 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
     if big_m && avx2_available() {
         #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
         unsafe {
-            return Some(avx2_bitwise_matmul(weight, input, m, k, n));
+            let r = avx2_bitwise_matmul(weight, input, m, k, n);
+            return if r.is_valid() { Some(r) } else { None };
         }
     }
 
     // ADR-0061 unified dispatch: AVX-512 → AVX2 → SSE4.2 → scalar
-    crate::bitnet_sse::ternary_matmul(weight, input)
+    match crate::bitnet_sse::ternary_matmul(weight, input) {
+        Some(r) if r.is_valid() => Some(r),
+        _ => None,
+    }
 }
 
 // ─── Scalar Fallback ────────────────────────────────────────────────────
 
 fn scalar_ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
     let mut result = Tensor::new((m, n));
+    if !result.is_valid() || !input.is_valid() {
+        return Tensor::zero((0, 0));
+    }
     for i in 0..m {
         for j in 0..n {
             let mut sum = 0.0f32;

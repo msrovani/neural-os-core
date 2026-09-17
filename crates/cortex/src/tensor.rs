@@ -157,9 +157,32 @@ impl Tensor {
                 data: alloc::vec::Vec::new(),
             };
         }
-        Tensor {
-            shape,
-            data: f32_zeros(len),
+        // SESSION_351: f32_zeros pode falhar pós-can_alloc → shape cheio + data vazia
+        // é OOB no attn. Invariante: data.len() == rows*cols, senão (0,0).
+        let data = f32_zeros(len);
+        if data.len() != len {
+            k_nano::slog_cortex!(
+                "Tensor",
+                "fail",
+                "new refuse after f32_zeros {}x{} got={}",
+                shape.0,
+                shape.1,
+                data.len()
+            );
+            return Tensor {
+                shape: (0, 0),
+                data: alloc::vec::Vec::new(),
+            };
+        }
+        Tensor { shape, data }
+    }
+
+    /// True se `data.len() == rows*cols` (inclui (0,0) vazio).
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        match self.shape.0.checked_mul(self.shape.1) {
+            Some(n) => n == self.data.len(),
+            None => false,
         }
     }
 
@@ -181,10 +204,13 @@ impl Tensor {
     pub fn matmul(&self, other: &Tensor) -> Option<Tensor> {
         let (m, k) = self.shape;
         let (k2, n) = other.shape;
-        if k != k2 {
+        if k != k2 || !self.is_valid() || !other.is_valid() {
             return None;
         }
         let mut result = Tensor::new((m, n));
+        if !result.is_valid() {
+            return None;
+        }
         // ADR-0057 WS-B: f32 grande distribui linhas entre P-cores (APs), só
         // quando os APs são workers vivos (`ap_pollable`, WS-F).
         if m >= 8
@@ -300,8 +326,14 @@ impl Tensor {
 
     pub fn transposed(&self) -> Self {
         let (rows, cols) = self.shape;
-        let mut data = f32_zeros_2d(rows, cols);
-        if data.len() != rows.saturating_mul(cols) {
+        if !self.is_valid() {
+            return Tensor {
+                shape: (0, 0),
+                data: alloc::vec::Vec::new(),
+            };
+        }
+        let mut data = f32_zeros_2d(cols, rows);
+        if data.len() != cols.saturating_mul(rows) {
             return Tensor {
                 shape: (0, 0),
                 data: alloc::vec::Vec::new(),
@@ -372,12 +404,18 @@ impl PackedTernaryTensor {
 
     pub fn get_weight(&self, index: usize) -> i8 {
         let byte_idx = index / 4;
+        let Some(&byte) = self.packed_data.get(byte_idx) else {
+            return 0;
+        };
         let bit_pos = (index % 4) * 2;
-        let bits = (self.packed_data[byte_idx] >> bit_pos) & 0b11;
+        let bits = (byte >> bit_pos) & 0b11;
         Self::decode_weight(bits)
     }
 
     pub fn matmul_hybrid(&self, input: &Tensor) -> Option<Tensor> {
+        if !input.is_valid() {
+            return None;
+        }
         crate::bitnet_avx2::ternary_matmul(self, input)
     }
 }

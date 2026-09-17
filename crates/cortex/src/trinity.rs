@@ -220,8 +220,14 @@ impl TrinityRouter {
     /// posições não tocadas preservam o estado atual (não viram 0 no delta).
     pub fn unpack_router_weights(&self) -> Option<Vec<i8>> {
         let t = self.router_weight.as_ref()?;
-        let mut out = Vec::with_capacity(t.shape.0 * t.shape.1);
-        for i in 0..(t.shape.0 * t.shape.1) {
+        let Some(n) = t.shape.0.checked_mul(t.shape.1) else {
+            return None;
+        };
+        let mut out = Vec::new();
+        if out.try_reserve_exact(n).is_err() {
+            return None;
+        }
+        for i in 0..n {
             out.push(t.get_weight(i));
         }
         Some(out)

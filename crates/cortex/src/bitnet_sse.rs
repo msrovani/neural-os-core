@@ -37,12 +37,12 @@ pub fn detect_simd_level() -> SimdLevel {
 pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Tensor> {
     let (k, n) = weight.shape;
     let (m, k2) = input.shape;
-    if k != k2 {
+    if k != k2 || !input.is_valid() || m == 0 || n == 0 || k == 0 {
         return None;
     }
 
     if let Some(r) = crate::bitnet_avx512::ternary_matmul_avx512(weight, input) {
-        return Some(r);
+        return if r.is_valid() { Some(r) } else { None };
     }
 
     // Bare-metal: SSE2 ADD/SUB/SKIP antes do stub AVX2 (ADR-0101 Onda 0).
@@ -63,6 +63,9 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
 
     if n >= 4 {
         let mut result = Tensor::new((m, n));
+        if !result.is_valid() {
+            return None;
+        }
         for i in 0..m {
             for j in (0..n).step_by(4) {
                 let mut sums = [0.0f32; 4];
@@ -86,7 +89,12 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
         return Some(result);
     }
 
-    Some(scalar_ternary_matmul(weight, input, m, k, n))
+    let r = scalar_ternary_matmul(weight, input, m, k, n);
+    if r.is_valid() {
+        Some(r)
+    } else {
+        None
+    }
 }
 
 /// Alias legado (nome antigo mentia mul).
@@ -113,6 +121,9 @@ pub(crate) unsafe fn sse2_ternary_matmul_add_sub_skip(
 ) -> Tensor {
     use core::arch::x86_64::*;
     let mut result = Tensor::new((m, n));
+    if !result.is_valid() || !input.is_valid() {
+        return Tensor::zero((0, 0));
+    }
     for i in 0..m {
         for j in (0..n).step_by(4) {
             let lanes = core::cmp::min(4, n - j);
@@ -144,6 +155,9 @@ pub(crate) unsafe fn sse2_ternary_matmul_add_sub_skip(
 
 fn scalar_ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
     let mut result = Tensor::new((m, n));
+    if !result.is_valid() || !input.is_valid() {
+        return Tensor::zero((0, 0));
+    }
     for i in 0..m {
         for j in 0..n {
             let mut sum = 0.0f32;

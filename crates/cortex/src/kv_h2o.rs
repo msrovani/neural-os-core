@@ -80,8 +80,18 @@ pub fn h2o_evict(cache: &mut KvCache, recent: usize, heavy: usize) -> usize {
     for l in 0..num_layers {
         let old_k = core::mem::take(&mut cache.k[l]);
         let old_v = core::mem::take(&mut cache.v[l]);
-        let mut nk = Vec::with_capacity(new_len * k_dim);
-        let mut nv = Vec::with_capacity(new_len * k_dim);
+        let Some(cap) = new_len.checked_mul(k_dim) else {
+            cache.k[l] = old_k;
+            cache.v[l] = old_v;
+            continue;
+        };
+        let mut nk = Vec::new();
+        let mut nv = Vec::new();
+        if nk.try_reserve_exact(cap).is_err() || nv.try_reserve_exact(cap).is_err() {
+            cache.k[l] = old_k;
+            cache.v[l] = old_v;
+            continue;
+        }
         for &pos in &keep_idx {
             let base = pos * k_dim;
             if base + k_dim <= old_k.len() {

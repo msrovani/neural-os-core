@@ -160,7 +160,8 @@ pub fn apply_plan(plan: HeapPlan, hidden: usize) {
 pub fn last_ctx_cap() -> usize {
     let c = LAST_PLAN_CTX.load(Ordering::Acquire);
     if c == 0 {
-        512
+        // SESSION_351: default barato até apply_plan — 512 mentia headroom.
+        64
     } else {
         c
     }
@@ -253,5 +254,14 @@ mod tests {
         };
         let m = escalate_message(&p);
         assert!(m.contains("HITL") || m.contains("escalate"));
+    }
+
+    #[test]
+    fn last_ctx_cap_default_when_unset() {
+        // Contrato SESSION_351/353: sem plano → 64 (não 512).
+        let c = LAST_PLAN_CTX.swap(0, Ordering::AcqRel);
+        let got = last_ctx_cap();
+        LAST_PLAN_CTX.store(c, Ordering::Release); // restaura
+        assert_eq!(got, 64);
     }
 }

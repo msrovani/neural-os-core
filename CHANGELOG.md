@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s353] - 2026-09-16 — Bughunt heap/infer (deep)
+
+- Fonte única de layer: `forward_with_kv*` → `apply_one_layer` (fim da dupla attn insegura)
+- `Tensor::is_valid` em new/matmul/ternary dispatch (AVX2/SSE/W2A8); mask nunca `(1,1)`
+- soft_stride pad KV; GLOBAL_KV reuse; OOM stamp `infer_worker`; embed/rms_norm fail-closed
+- SESSION_353; WHPX re-teste saudação ainda aberto
+
 ## [1.9.99-s352] - 2026-09-16 — Auditoria do pipeline de voz (docs; sem mudança de código)
 
 - Playback é drenado por **tick** e não pelo clock: a 60 Hz o mixer puxa 61 440/s contra 16 000/s do

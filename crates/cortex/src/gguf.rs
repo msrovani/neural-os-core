@@ -1244,8 +1244,15 @@ fn optimal_threshold(data: &[f32]) -> f32 {
 /// não global fixo em 0.1 — recupera ~0.5-1.0 perplexity sem custo de runtime.
 pub fn f32_to_ternary_packed(data: &[f32], rows: usize, cols: usize) -> PackedTernaryTensor {
     let threshold = optimal_threshold(data);
-    let mut vals = Vec::with_capacity(rows * cols);
-    for &v in data.iter().take(rows * cols) {
+    let mut vals = alloc::vec::Vec::new();
+    let take = rows.checked_mul(cols).unwrap_or(0).min(data.len());
+    if vals.try_reserve_exact(take).is_err() {
+        return PackedTernaryTensor {
+            shape: (rows, cols),
+            packed_data: alloc::vec::Vec::new(),
+        };
+    }
+    for &v in data.iter().take(take) {
         vals.push(if v > threshold { 1 } else if v < -threshold { -1 } else { 0 });
     }
     let packed = PackedTernaryTensor::pack_weights(&vals);
@@ -1375,7 +1382,13 @@ impl GgufBackedModel {
         // Embedding: (vocab, hidden) → transpose to (hidden, vocab) for packed ternary
         let (embed_raw, embed_cols, embed_rows) = dequantize_tensor_by_name(&self.file, "token_embd")?;
         let embed = {
-            let mut t = Vec::with_capacity(h * embed_cols);
+            let mut t = alloc::vec::Vec::new();
+            let Some(need) = h.checked_mul(embed_cols) else {
+                return None;
+            };
+            if t.try_reserve_exact(need).is_err() {
+                return None;
+            }
             for hi in 0..h {
                 for vi in 0..embed_cols {
                     t.push(embed_raw[vi * h + hi]);

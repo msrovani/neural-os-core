@@ -771,6 +771,37 @@ pub fn tick_in_progress() -> Option<(&'static str, u64)> {
     })
 }
 
+/// SESSION_351: stamp OOM p/ trabalho fora de AGENT_TICK_BUSY (InferWorker AP idle).
+/// `name` deve ser `&'static str` de manifesto/.rodata.
+pub fn note_background_agent(name: &'static str) {
+    CUR_AGENT_PTR.store(
+        name.as_ptr() as u64,
+        core::sync::atomic::Ordering::Relaxed,
+    );
+    CUR_AGENT_LEN.store(name.len(), core::sync::atomic::Ordering::Relaxed);
+    // Sentinela ≠0 p/ tick_in_progress; não sobrescreve ms real se tick ativo.
+    let _ = TICK_ENTERED_MS.compare_exchange(
+        0,
+        1,
+        core::sync::atomic::Ordering::Relaxed,
+        core::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// Limpa stamp de background se ainda apontar para `name` e foi set via note (entered=1).
+pub fn clear_background_agent(name: &'static str) {
+    let entered = TICK_ENTERED_MS.load(core::sync::atomic::Ordering::Relaxed);
+    if entered != 1 {
+        return; // tick real do scheduler — não mexer
+    }
+    let ptr = CUR_AGENT_PTR.load(core::sync::atomic::Ordering::Relaxed);
+    if ptr == name.as_ptr() as u64 {
+        TICK_ENTERED_MS.store(0, core::sync::atomic::Ordering::Relaxed);
+        CUR_AGENT_PTR.store(0, core::sync::atomic::Ordering::Relaxed);
+        CUR_AGENT_LEN.store(0, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// ADR-0089: se true, ring≥1 vão para run-queue AP (BSP só tick ring0).
 static mut SMP_OFFLOAD_PREDICATE: Option<fn() -> bool> = None;
 /// Batch: (idx, affinity_ring, priority, coherence_partner, urgency) → distributed count.

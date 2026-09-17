@@ -1,6 +1,5 @@
 //! Parallel Matmul — ADR-0055: chunks + barreira + IPI wake nos APs.
 
-use alloc::vec::Vec;
 use crate::tensor::Tensor;
 use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
@@ -47,12 +46,17 @@ unsafe fn matmul_worker(_job_id: usize, _worker: usize) {
 pub fn parallel_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     let (m, k) = a.shape;
     let (k2, n) = b.shape;
-    if k != k2 {
+    if k != k2 || !a.is_valid() || !b.is_valid() {
         return None;
     }
-
-    let mut c_data = Vec::with_capacity(m * n);
-    c_data.resize(m * n, 0.0f32);
+    let Some(need) = m.checked_mul(n) else {
+        return None;
+    };
+    // SESSION_351: nunca `with_capacity(m*n)` cru (wrap + capacity overflow).
+    let mut c_data = crate::tensor::f32_zeros_2d(m, n);
+    if c_data.len() != need {
+        return None;
+    }
 
     let smp_ok = k_nano::platform_probe::allow_smp()
         && k_nano::smp::ap_pollable()
@@ -179,6 +183,9 @@ pub fn parallel_ternary_matmul(
     }
 
     let mut result = Tensor::new((m, n));
+    if !result.is_valid() {
+        return None;
+    }
     let mut ctx = TernaryJobCtx {
         w_ptr: weight as *const _,
         x_ptr: input.data.as_ptr(),

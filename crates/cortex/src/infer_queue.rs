@@ -670,6 +670,23 @@ fn run_prefill_setup(st: &mut ActiveState) {
     }
 
     let (x, mask, start_pos, new_len, total_seq) = model.embed_for_kv(&tokens, &cache);
+    if !x.is_valid()
+        || !mask.is_valid()
+        || mask.shape != (new_len, total_seq)
+        || new_len == 0
+    {
+        k_nano::slog_cortex!(
+            "InferQ",
+            "fail",
+            "embed/mask refuse id={} x={:?} mask={:?}",
+            st.job_id,
+            x.shape,
+            mask.shape
+        );
+        drop(guard);
+        finish_job(st, "[heap: embed/mask refuse — HITL escalate]");
+        return;
+    }
     st.tokens = tokens;
     st.cache = Some(cache);
     st.prefill_x = Some(x);
@@ -736,9 +753,17 @@ fn run_prefill_step(st: &mut ActiveState) {
         let li = st.prefill_layer;
         st.prefill_layer += 1;
         if soft_stride > 1 && (li % soft_stride) != 0 {
+            // SESSION_351: pad KV zeros — cache.len alinhado em todas as layers.
+            let kd = cache.k_dim();
+            let zk = Tensor::new((st.prefill_new_len, kd));
+            let zv = Tensor::new((st.prefill_new_len, kd));
+            if zk.is_valid() && zv.is_valid() {
+                cache.append(li, &zk, &zv);
+            }
             continue;
         }
         let layer = &model.layers[li];
+        let x_before = x.shape;
         model.apply_one_layer(
             li,
             layer,
@@ -749,6 +774,11 @@ fn run_prefill_step(st: &mut ActiveState) {
             st.prefill_total_seq,
             mask,
         );
+        if !x.is_valid() || x.shape != x_before {
+            drop(guard);
+            finish_job(st, "[heap: apply_one_layer refuse — HITL escalate]");
+            return;
+        }
         applied += 1;
     }
 

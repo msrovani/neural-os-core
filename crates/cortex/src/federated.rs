@@ -69,8 +69,14 @@ pub fn seed_router_weights(num_experts: usize) -> Vec<i8> {
     for _ in 0..((crate::cortex::VOCAB_SIZE as usize) * ROUTER_HIDDEN) {
         seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
     }
-    let mut w = Vec::with_capacity(ROUTER_HIDDEN * num_experts);
-    for _ in 0..(ROUTER_HIDDEN * num_experts) {
+    let mut w = Vec::new();
+    let Some(need) = ROUTER_HIDDEN.checked_mul(num_experts) else {
+        return Vec::new();
+    };
+    if w.try_reserve_exact(need).is_err() {
+        return Vec::new();
+    }
+    for _ in 0..need {
         seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
         let r = (seed % 3) as i8;
         w.push(if r == 2 { -1i8 } else { r });

@@ -82,6 +82,9 @@ pub unsafe fn w2a8_ternary_matmul(w: &PackedTernaryTensor, x: &Tensor) -> Option
     let w8 = repack_col_major(w);
 
     let mut result = Tensor::new((m, n));
+    if !result.is_valid() {
+        return None;
+    }
 
     for i in 0..m {
         let row = &x.data[i * k..(i + 1) * k];
@@ -96,7 +99,11 @@ pub unsafe fn w2a8_ternary_matmul(w: &PackedTernaryTensor, x: &Tensor) -> Option
         let si = if max_abs > 1e-9 { max_abs / 127.0 } else { 1.0 };
         let inv_si = 1.0 / si;
         // ativações u8 = clamp(round(x/si) + 128, 0, 255) — no_std: libm::roundf
-        let mut xq = vec![0u8; k];
+        let mut xq = alloc::vec::Vec::new();
+        if xq.try_reserve_exact(k).is_err() {
+            return None;
+        }
+        xq.resize(k, 0u8);
         for (t, &v) in row.iter().enumerate() {
             let q = unsafe { libm::roundf(v * inv_si) } as i32 + 128;
             xq[t] = q.clamp(0, 255) as u8;
