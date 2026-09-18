@@ -243,7 +243,7 @@ impl CellNetwork {
 
         // Fase 3: CONSOLIDATE
         self.tick = self.tick.saturating_add(1);
-        k_nano::slog_cortex!("CELL", "info", "SleepCycle consolidate cells={} tick={}", count, self.tick);
+        k_nano::slog_cortex!("CELL", "ok", "SleepCycle consolidate cells={} tick={}", count, self.tick);
 
         // Fase 4: PRUNE — remove células mortas há muito tempo
         let before = self.cells.len();
@@ -251,7 +251,7 @@ impl CellNetwork {
             self.cells.retain(|c| c.dead_since == 0 || c.dead_since < 1000);
             let pruned = before.saturating_sub(self.cells.len());
             if pruned > 0 {
-                k_nano::slog_cortex!("CELL", "info", "SleepCycle prune: {} removed ({} remain)", pruned, self.cells.len());
+                k_nano::slog_cortex!("CELL", "ok", "SleepCycle prune: {} removed ({} remain)", pruned, self.cells.len());
             }
         }
     }

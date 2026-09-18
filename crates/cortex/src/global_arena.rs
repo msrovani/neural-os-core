@@ -44,7 +44,7 @@ pub fn reset_moe_cache() {
         k_nano::mhi::record_access(arena.virt_base() as u64, 0);
         k_nano::slog_cortex!(
             "R3",
-            "info",
+            "ok",
             "reset_moe_cache: arena liberada ({} MB capacity)",
             arena.capacity_bytes() / (1024 * 1024)
         );

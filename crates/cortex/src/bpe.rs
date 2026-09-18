@@ -160,7 +160,7 @@ impl BpeVocab {
                 out.push(id);
                 s = String::from(&s[len..]);
             } else {
-                let ch = s.chars().next().unwrap();
+                let Some(ch) = s.chars().next() else { break; };
                 let l = ch.len_utf8();
                 out.push(0);
                 s = String::from(&s[l..]);
@@ -462,7 +462,7 @@ pub fn init_from_bpb1(data: &[u8]) -> Result<(), &'static str> {
         rev,
         merges,
     };
-    k_nano::slog_bin!("BPE", "info", "BPB1 LOADED vocab_n={} bos={} eos={} heap={}KB rev={} merges={} sp32={}",
+    k_nano::slog_bin!("BPE", "ok", "BPB1 LOADED vocab_n={} bos={} eos={} heap={}KB rev={} merges={} sp32={}",
         vocab.vocab_n,
         vocab.bos,
         vocab.eos,
@@ -498,13 +498,13 @@ fn scan_and_load_bpb1(phys_off: u64, start: u64, end: u64, step: u64) -> bool {
         unsafe {
             let magic = core::slice::from_raw_parts(va, 4);
             if magic == b"BPB1" {
-                k_nano::slog_bin!("BPE", "info", "BPB1 found @0x{:x} (scan)",
+                k_nano::slog_bin!("BPE", "ok", "BPB1 found @0x{:x} (scan)",
                     addr);
                 let vocab_n = u32::from_le_bytes([
                     *va.add(18), *va.add(19), *va.add(20), *va.add(21),
                 ]) as usize;
                 if vocab_n == 0 || vocab_n > 200_000 {
-                    k_nano::slog_bin!("BPE", "info", "bad vocab_n={} @0x{:x}",
+                    k_nano::slog_bin!("BPE", "warn", "bad vocab_n={} @0x{:x}",
                         vocab_n, addr);
                     addr = addr.saturating_add(step);
                     continue;
@@ -549,7 +549,7 @@ fn scan_and_load_bpb1(phys_off: u64, start: u64, end: u64, step: u64) -> bool {
                 match init_from_bpb1(slice) {
                     Ok(()) => return true,
                     Err(e) => {
-                        k_nano::slog_bin!("BPE", "info",
+                        k_nano::slog_bin!("BPE", "fail",
                             "BPB1 parse FAILED @0x{:x}: {}", addr, e);
                     }
                 }
@@ -557,7 +557,7 @@ fn scan_and_load_bpb1(phys_off: u64, start: u64, end: u64, step: u64) -> bool {
         }
         addr = addr.saturating_add(step);
     }
-    k_nano::slog_bin!("BPE", "info",
+    k_nano::slog_bin!("BPE", "warn",
         "QEMU-loader scan [{:#x}..{:#x}] — BPB1 ausente", start, end);
     false
 }
@@ -577,13 +577,13 @@ pub fn try_load_from_fat() -> bool {
                         if let Some(data) = fs.read_file(name) {
                             match init_from_bpb1(&data) {
                                 Ok(()) => {
-                                    k_nano::slog_bin!("BPE", "info", "BPB1 LOADED from FAT {} ({}KB)",
+                                    k_nano::slog_bin!("BPE", "ok", "BPB1 LOADED from FAT {} ({}KB)",
                                         name,
                                         data.len() / 1024);
                                     return true;
                                 }
                                 Err(e) => {
-                                    k_nano::slog_bin!("BPE", "info", "FAT {} parse FAILED: {}",
+                                    k_nano::slog_bin!("BPE", "fail", "FAT {} parse FAILED: {}",
                                         name,
                                         e);
                                 }
@@ -594,7 +594,7 @@ pub fn try_load_from_fat() -> bool {
             }
         }
     }
-    k_nano::slog_bin!("BPE", "info", "FAT ausente (BPE.BIN)");
+    k_nano::slog_bin!("BPE", "warn", "FAT ausente (BPE.BIN)");
     false
 }
 

@@ -748,17 +748,21 @@ fn run_prefill_step(st: &mut ActiveState) {
     let soft_stride: usize = crate::difficulty_gate::effective_soft_stride(model.hidden);
     let layers_per_slice: usize = if model.hidden >= 2048 { 1 } else { 2 };
     let mut applied = 0usize;
+    let mut pad_oom = false;
 
     while st.prefill_layer < n_layers && applied < layers_per_slice {
         let li = st.prefill_layer;
         st.prefill_layer += 1;
         if soft_stride > 1 && (li % soft_stride) != 0 {
-            // SESSION_351: pad KV zeros — cache.len alinhado em todas as layers.
+            // SESSION_351/359: pad KV — OOM aborta job (não desalinha silenciosamente)
             let kd = cache.k_dim();
             let zk = Tensor::new((st.prefill_new_len, kd));
             let zv = Tensor::new((st.prefill_new_len, kd));
             if zk.is_valid() && zv.is_valid() {
                 cache.append(li, &zk, &zv);
+            } else {
+                pad_oom = true;
+                break;
             }
             continue;
         }
@@ -797,6 +801,13 @@ fn run_prefill_step(st: &mut ActiveState) {
             n_layers,
             slice_us
         );
+    }
+
+    if pad_oom {
+        k_nano::slog_cortex!("InferQ", "fail", "soft_stride pad OOM — abort prefill");
+        drop(guard);
+        finish_job(st, "[oom]");
+        return;
     }
 
     if st.prefill_layer < n_layers {
@@ -952,7 +963,14 @@ fn run_coarse(st: &mut ActiveState) {
     }
     DECODE_JOB_TOKS.store(0, Ordering::Release);
     DECODE_T0_US.store(k_nano::tsc::now_us(), Ordering::Release);
-    // Uma slice = generate completo (AirLLM / GGUF) — ainda fora de AGENT_TICK_BUSY.
+    // SESSION_359: coarse = generate() bloqueante sem yield — barge-in só
+    // observável após o retorno. Log honesto; se cancelou durante generate, descarta.
+    k_nano::slog_cortex!(
+        "InferQ",
+        "warn",
+        "coarse generate id={} (uncancellable mid-call)",
+        st.job_id
+    );
     let text = {
         if let Some(ref sm) = *CURRENT_STREAMING_MODEL.lock() {
             sm.generate(&st.prompt)
@@ -962,7 +980,10 @@ fn run_coarse(st: &mut ActiveState) {
             String::from(NO_MODEL_MSG)
         }
     };
-    // Coarse: 1 "token-unidade" = job completo (não dá tok/s fino; marca ≥1 p/ wall).
+    if ACTIVE_CANCEL.load(Ordering::Acquire) {
+        finish_job(st, "[cancelled]");
+        return;
+    }
     DECODE_JOB_TOKS.store(1, Ordering::Release);
     emit_msg_delta(&text);
     st.acc_text = text.clone();

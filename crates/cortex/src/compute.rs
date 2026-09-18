@@ -35,13 +35,13 @@ static N_MESH: AtomicU64 = AtomicU64::new(0);
 /// Ring 0 (intent/router) — registrado por `k_ai` quando uma NPU fica pronta.
 pub fn register_npu_ternary(f: TernaryFn) {
     NPU_TERNARY.store(f as usize, Ordering::Release);
-    k_nano::slog_nano!("COMPUTE", "info", "NPU ternary backend registrado (Ring0)");
+    k_nano::slog_nano!("COMPUTE", "ok", "NPU ternary backend registrado (Ring0)");
 }
 
 /// Ring 1 (matmul pesado) — registrado por `k_hal` quando o canário GPU passa.
 pub fn register_gpu_ternary(f: TernaryFn) {
     GPU_TERNARY.store(f as usize, Ordering::Release);
-    k_nano::slog_nano!("COMPUTE", "info", "GPU ternary backend registrado (Ring1)");
+    k_nano::slog_nano!("COMPUTE", "ok", "GPU ternary backend registrado (Ring1)");
 }
 
 #[inline]
@@ -219,7 +219,7 @@ fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     // broadcast — reduz colisões. Fallback para broadcast se unicast falhar.
     let ok = k_nano::net::udp_broadcast::send_fragmented(&signed, 42069);
     k_nano::slog_cortex!(
-        "MESH", "info",
+        "MESH", "warn",
         "matmul request node={} size={} sent={}", node_id, payload.len(), ok
     );
     if !ok {
@@ -262,7 +262,7 @@ fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
                         .wrapping_sub(start);
                     k_nano::net::mesh::record_peer_success(sender, rtt);
                     k_nano::slog_cortex!(
-                        "MESH", "info",
+                        "MESH", "ok",
                         "matmul resposta node={} ok shape={:?} rtt={}", node_id, t.shape, rtt
                     );
                     return Some(t);
@@ -274,7 +274,7 @@ fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     }
     // Phase 3: timeout → registra falha no circuit breaker.
     k_nano::net::mesh::record_peer_failure(0xFF);
-    k_nano::slog_cortex!("MESH", "info", "matmul timeout node={} - fallback local", node_id);
+    k_nano::slog_cortex!("MESH", "warn", "matmul timeout node={} - fallback local", node_id);
     None
 }
 
@@ -378,13 +378,13 @@ pub fn poll_mesh_requests() {
         // em sign_packet_tiered (HMAC Relativized / Ed25519 Full). O Worker só
         // aceita MR verificado/aberto contra a pk vinculada do remetente.
         let Some(signed) = k_nano::net::udp_broadcast::seal_packet_tiered(&buf, req_src) else {
-            k_nano::slog_cortex!("MESH", "info", "matmul resposta node={} sem sessao - skip", req_src);
+            k_nano::slog_cortex!("MESH", "warn", "matmul resposta node={} sem sessao - skip", req_src);
             continue;
         };
         // SESSION_237: resposta grande (ex: matmul 64x64) fragmentada.
         let ok = k_nano::net::udp_broadcast::send_fragmented(&signed, 42069);
         k_nano::slog_cortex!(
-            "MESH", "info",
+            "MESH", "ok",
             "matmul resposta node={} sent={}", req_src, ok
         );
     }
@@ -419,12 +419,12 @@ pub fn mesh_matmul_self_test() {
     let my_id = k_nano::net::mesh::node_id();
     match dispatch_ternary(&w, &x) {
         Some(r) => k_nano::slog_cortex!(
-            "MESH", "info",
+            "MESH", "ok",
             "self-test node={} shape=({}, {}) primeiro={:.1} (mesh dispatch)",
             my_id, r.shape.0, r.shape.1, r.data.first().copied().unwrap_or(0.0)
         ),
         None => k_nano::slog_cortex!(
-            "MESH", "info",
+            "MESH", "warn",
             "self-test node={} fallback local (timeout/MTU/sem Master)", my_id
         ),
     }

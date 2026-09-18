@@ -125,14 +125,23 @@ impl MoELayer {
     pub fn forward_sequence(&self, x: &Tensor) -> Tensor {
         let (seq_len, hidden) = x.shape;
         let mut output = Tensor::new((seq_len, hidden));
+        if !output.is_valid() {
+            return Tensor::zero((0, 0));
+        }
         for s in 0..seq_len {
             let start = s * hidden;
+            if start + hidden > x.data.len() {
+                break;
+            }
             let token_data = x.data[start..start + hidden].to_vec();
-            let token_t = Tensor::from_row_major((1, hidden), token_data)
-                .expect("forward_sequence: slice");
+            let Some(token_t) = Tensor::from_row_major((1, hidden), token_data) else {
+                continue;
+            };
             let token_out = self.forward(&token_t);
             for j in 0..hidden {
-                output.data[start + j] = token_out.data[j];
+                if start + j < output.data.len() && j < token_out.data.len() {
+                    output.data[start + j] = token_out.data[j];
+                }
             }
         }
         output
@@ -336,7 +345,7 @@ impl DynamicMoE {
         self.expert_confidence.push(0.0);
         self.expert_entropy.push(0.0);
 
-        k_nano::slog_cortex!("MOE", "info",
+        k_nano::slog_cortex!("MOE", "ok",
             "birth expert #{} (cloned from #{}, hint: {})",
             new_id, best_idx, intent_hint);
         Some(new_id)
@@ -395,7 +404,7 @@ impl DynamicMoE {
         self.expert_entropy.remove(remove);
         self.expert_entropy[keep] = ent_avg;
 
-        k_nano::slog_cortex!("MOE", "info",
+        k_nano::slog_cortex!("MOE", "ok",
             "merged #{} + #{} → #{} (sim={:.2})", id_a, id_b, keep, sim);
         true
     }
@@ -429,7 +438,7 @@ impl DynamicMoE {
         self.expert_hits[id] /= 2;
         self.expert_entropy[id] /= 2.0;
 
-        k_nano::slog_cortex!("MOE", "info",
+        k_nano::slog_cortex!("MOE", "ok",
             "split #{} → #{} + #{}", id, id, child_id);
         Some(child_id)
     }

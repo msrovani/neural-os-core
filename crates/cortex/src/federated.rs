@@ -143,7 +143,7 @@ pub fn apply_router_weights(weights: &[i8]) -> bool {
     r3::store_trained_router(weights);
     *FED_PENDING_LIVE.lock() = Some(weights.to_vec());
     k_nano::slog_cortex!(
-        "FED", "info",
+        "FED", "ok",
         "router fundido aplicado: {}x{} ({} i8)", ROUTER_HIDDEN, n_exp, weights.len()
     );
     true
@@ -179,7 +179,7 @@ pub fn broadcast_router_delta() -> bool {
         r3::clear_trained_router_changed();
         FED_ROUNDS.fetch_add(1, Ordering::Relaxed);
         k_nano::slog_cortex!(
-            "FED", "info",
+            "FED", "ok",
             "TX delta node={} bytes={}", mesh::node_id(), delta.len()
         );
     }
@@ -191,7 +191,7 @@ fn subscribe_p2p() {
     let mut recv = RECV.lock();
     if recv.is_none() {
         *recv = Some(k_nano::EVENT_BUS.subscribe(mesh::TOPIC_P2P_PACKET));
-        k_nano::slog_cortex!("FED", "info", "subscribed P2P_PACKET (EventBus)");
+        k_nano::slog_cortex!("FED", "ok", "subscribed P2P_PACKET (EventBus)");
     }
 }
 
@@ -238,7 +238,7 @@ pub fn poll_p2p() {
                 None => buf.push((sid, delta)),
             }
             k_nano::slog_cortex!(
-                "FED", "info",
+                "FED", "ok",
                 "RX delta node={} bytes={} peers={}", sid, rest[1..].len(), buf.len()
             );
         } else if payload.starts_with(PREFIX_FEDW) {
@@ -265,7 +265,7 @@ pub fn poll_p2p() {
             }
             if apply_router_weights(&w) {
                 k_nano::slog_cortex!(
-                    "FED", "info",
+                    "FED", "ok",
                     "RX FEDW master: {}x{} pesos aplicados", ROUTER_HIDDEN, n_exp
                 );
             }
@@ -331,11 +331,13 @@ pub fn fed_tick(role: NodeRole, node_count: u8) -> bool {
                 }
                 let sent = mesh::mesh_send_large(&payload);
                 k_nano::slog_cortex!(
-                    "FED", "info",
+                    "FED", if sent { "ok" } else { "warn" },
                     "Master: merge {} deltas de {} nos → FEDW {}B sent={}",
                     ds.len(), node_count, merged.len(), sent
                 );
-                return true; // aplicou localmente (broadcast pode falhar sem sessão)
+                // SESSION_358: não reportar federação OK se o broadcast falhou
+                // (merge local já aplicou; caller precisa distinguir mesh).
+                return sent;
             }
             false
         }
@@ -379,7 +381,7 @@ pub fn federated_self_test() -> bool {
     let ok = ok_size && merged.len() == seed.len() && ok_vote0 && ok_tie1;
     if ok {
         k_nano::slog_cortex!(
-            "FED", "info",
+            "FED", "warn",
             "federated self-test PASS (seed={}B merged={}B)", seed.len(), merged.len()
         );
     } else {

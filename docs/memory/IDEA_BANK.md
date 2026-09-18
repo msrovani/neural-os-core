@@ -1,6 +1,6 @@
 ﻿# 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-09-18 — s357: neural-kernel bughunt bin (#576–#578); s356 k_ai (#573–#575); s355 k_hal (#570–#572).
+**Última atualização:** 2026-09-18 — s358: cortex bughunt R2 (#579–#581); s357 neural-kernel (#576–#578); s356 k_ai (#573–#575).
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -1886,6 +1886,9 @@ elabel_*.py |
 | 2026-09-18 | **#573** | **SelfHeal bridges honesty** - respawn `read_volatile` no código; migrate Ok sem I/O; checkpoint valid sem bitmap; AI JSON +11; slog HEAL/n2 TRACE. ✅ transmute fn; TargetFoundNotMigrated; save refuse; JSON quoted; sev ok/warn. | ✅ | — (fix) | SESSION_356 | `self_heal*.rs`, `self_heal_agent.rs` |
 | 2026-09-18 | **#574** | **SGDB volatile + LIGHT cold** - put_kv RAM Ok silencioso; LIGHT HEAVY_DONE+skip ingest; Tickv Flushed em ram; L4 texto→BQ. ✅ warn+volatile=; keep deferred+ingest; Buffered se ram; BQ só ≥8 f32 dims. | ✅ | ADR-0063 | SESSION_356 | `sgdb/{store,tickv_adapter,engine}.rs` |
 | 2026-09-18 | **#575** | **Safety I1–I4 wired** - `k_ai::safety_invariants` morto; hermes SafetyAgent teatro. ✅ `check_all` no tick; I2 count=0 Warning; I3 proxy warn. Residual: Trust Observe-allow; TransformerTrainer backward. | ✅ | IDEA #315.18 | SESSION_356 | `safety_invariants.rs`, `hermes/safety.rs` |
+| 2026-09-18 | **#579** | **GGUF type IDs + nbytes** - SESSION_309 mapeou 2=BF16/25=TQ2_0; nbytes Q4_1/Q8_K inventados; dequant trunc→Ok zeros. ✅ ggml 2=Q4_0/30=BF16/35=TQ2_0; nbytes oficiais; trunc→None; load bounds. | ✅ | — (fix) | SESSION_358 | `gguf.rs`, `gen_test_gguf.py` |
+| 2026-09-18 | **#580** | **Forward honesty** - `forward_hidden` paralelo panic; matmul None→zeros; soft_stride pad OOM desalinha KV; unembed zeros falsos. ✅ delega apply_one_layer; refuse; abort pad; unembed (0,0). | ✅ | — (fix) | SESSION_358 | `cortex.rs`, `infer_queue.rs` |
+| 2026-09-18 | **#581** | **Hub/Infer/slog** - HwExpert mark sem store; DECODER dangling; coarse cancel; AVX512 CPUID; MODEL sticky; slog info mudo. ✅ set_hwexpert_v4; take residual; warn+check; allow_avx512; clear_model; 15× ok/warn/fail. | ✅ | — (fix) | SESSION_358 | `model_hub.rs`, `nn.rs`, `trinity.rs`, `tensor.rs` |
 | 2026-09-18 | **#576** | **Bin boot honesty** - PS/2 spin eterno; skip USB/StorageBus=`ok`; slog TRACE/FAIL=`info`; urgency pré-register/`audio_pipeline`; spsc espelho; link MMIO fantasma. ✅ TSC budget; warn; sev; pós-register+`audio_input`; pub use spsc; Down honesto. | ✅ | — (fix) | SESSION_357 | `main.rs`, `smp/spsc.rs`, `link_watcher.rs`, `netfs.rs` |
 | 2026-09-18 | **#577** | **RESPAWN + SelfHeal fleet** - `hermes_console`→DisplayAgent; arms faltando voz/infer/boot_log. ✅ ConsoleAgent; arms Continuous; unknown warn. | ✅ | — (fix) | SESSION_357 | `main.rs` RESPAWN match |
 | 2026-09-18 | **#578** | **BEI/GGUF/boot_log dual** - expect MPMC panic; connect mentia; Range truncado→Ok; k_ai≠bin FAT walk. ✅ try_new DEGRADED; PARTIAL noop; Err truncado; `register_read_boot_log`. | ✅ | — (fix) | SESSION_357 | `bei_init.rs`, `gguf_streaming.rs`, `k_ai/boot_log_agent.rs` |

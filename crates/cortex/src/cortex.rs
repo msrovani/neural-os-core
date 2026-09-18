@@ -380,7 +380,7 @@ pub fn load_hwexpert_v5(data: &[u8]) -> Option<HwExpertV4Model> {
     let (caps_head, _) = read_prefixed_ternary(data, &mut off, hidden, 10)?;
     let (next_head, _) = read_prefixed_ternary(data, &mut off, hidden, 9)?;
 
-    k_nano::slog_cortex!("HWEXPERT", "info", "v5 multi-head loaded: hidden={} layers={} heads=[17,8,9,10,9] {}KB",
+    k_nano::slog_cortex!("HWEXPERT", "ok", "v5 multi-head loaded: hidden={} layers={} heads=[17,8,9,10,9] {}KB",
         hidden, num_layers, data.len() / 1024);
     GLOBAL_MODEL_PARAMS.store(data.len() as u64, core::sync::atomic::Ordering::Relaxed);
 
@@ -433,7 +433,7 @@ pub fn load_hwexpert_v6(data: &[u8]) -> Option<HwExpertV4Model> {
     let has_ffn = (feat & 0x02) != 0;
     let kv_head_dim = q_dim / num_heads.max(1);
 
-    k_nano::slog_cortex!("HWEXPERT", "info",
+    k_nano::slog_cortex!("HWEXPERT", "ok",
         "v6 multi-head h={} L={} q_dim={} vocab={} ff={} feat=0x{:02x}",
         hidden, num_layers, q_dim, vocab_size, intermediate_size, feat);
 
@@ -474,7 +474,7 @@ pub fn load_hwexpert_v6(data: &[u8]) -> Option<HwExpertV4Model> {
     let (caps_head, _) = read_ternary_tensor_with_scale(data, &mut off, hidden, 10)?;
     let (next_head, _) = read_ternary_tensor_with_scale(data, &mut off, hidden, 9)?;
 
-    k_nano::slog_cortex!("HWEXPERT", "info",
+    k_nano::slog_cortex!("HWEXPERT", "ok",
         "v6 multi-head loaded: hidden={} layers={} heads=[17,8,9,10,9] {}KB",
         hidden, num_layers, data.len() / 1024);
     GLOBAL_MODEL_PARAMS.store(data.len() as u64, core::sync::atomic::Ordering::Relaxed);
@@ -717,7 +717,7 @@ pub fn predict_hw_v4(model: &HwExpertV4Model, vid: u16, did: u16) -> crate::tens
         }
     }
 
-    k_nano::slog_cortex!("HWEXPERT", "info", "predict {:04x}:{:04x} → family={} fw={} agent={} caps={:#x} next={}", 
+    k_nano::slog_cortex!("HWEXPERT", "ok", "predict {:04x}:{:04x} → family={} fw={} agent={} caps={:#x} next={}", 
         vid, did, family_id, fw_id, agent_id, caps_bits, next_action);
 
     crate::tensor::HwPrediction { family_id, fw_id, agent_id, caps_bits, next_action }
@@ -732,7 +732,7 @@ pub fn hwexpert_v4_is_loaded() -> bool {
 
 pub fn set_hwexpert_v4_model(model: HwExpertV4Model) {
     *HWEXPERT_V4_MODEL.lock() = Some(model);
-    k_nano::slog_cortex!("HWEXPERT", "info", "HW Expert v4 model loaded (multi-head).");
+    k_nano::slog_cortex!("HWEXPERT", "ok", "HW Expert v4 model loaded (multi-head).");
 }
 
 /// Predict HW card from VID/DID using loaded v4 model. Returns None if model not loaded.
@@ -993,15 +993,31 @@ impl TransformerModel {
             if let Some(q6k) = &self.embed_q6k {
                 let data = crate::gguf::q6k_matmul_row(q6k, self.hidden, vocab, &hidden.data);
                 let mut t = Tensor::from_row_major((1, vocab), data)
-                    .unwrap_or_else(|| Tensor::zero((1, vocab)));
+                    .unwrap_or_else(|| Tensor::zero((0, 0)));
+                if !t.is_valid() {
+                    k_nano::slog_cortex!("FWD", "fail", "unembed q6k from_row refuse");
+                    return t;
+                }
                 t.mul_scalar(self.embed_scale);
                 return t;
             }
         }
         let mut logits = if self.tie_embeddings {
-            self.embed.matmul_hybrid(hidden).unwrap_or_else(|| Tensor::zero((1, vocab)))
+            match self.embed.matmul_hybrid(hidden) {
+                Some(t) => t,
+                None => {
+                    k_nano::slog_cortex!("FWD", "fail", "unembed tied matmul refuse");
+                    return Tensor::zero((0, 0));
+                }
+            }
         } else {
-            self.unembed.matmul_hybrid(hidden).unwrap_or_else(|| Tensor::zero((1, vocab)))
+            match self.unembed.matmul_hybrid(hidden) {
+                Some(t) => t,
+                None => {
+                    k_nano::slog_cortex!("FWD", "fail", "unembed matmul refuse");
+                    return Tensor::zero((0, 0));
+                }
+            }
         };
         logits.mul_scalar(if self.tie_embeddings { self.embed_scale } else { self.unembed_scale });
         logits
@@ -1071,14 +1087,14 @@ impl TransformerModel {
         // ADR-0101 Onda 2: soft_stride via difficulty_gate (override) ou legado heavy=3.
         let soft_stride: usize = crate::difficulty_gate::effective_soft_stride(self.hidden);
         if is_first_pass && soft_stride > 1 {
-            k_nano::slog_cortex!("FWD", "info", "soft_stride={} layers≈{}/{}",
+            k_nano::slog_cortex!("FWD", "ok", "soft_stride={} layers≈{}/{}",
                 soft_stride,
                 (_layer_count + soft_stride - 1) / soft_stride,
                 _layer_count);
         }
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             if soft_stride > 1 && (layer_idx % soft_stride) != 0 {
-                // SESSION_351: pad KV zeros p/ cache.len alinhar em todas as layers.
+                // SESSION_351/359: pad KV zeros; OOM → abort (KV desalinhado pior que skip)
                 let kd = cache.k_dim();
                 let zk = Tensor::new((new_len, kd));
                 let zv = Tensor::new((new_len, kd));
@@ -1087,15 +1103,16 @@ impl TransformerModel {
                 } else {
                     k_nano::slog_cortex!(
                         "FWD",
-                        "warn",
-                        "soft_stride pad refuse layer={}",
+                        "fail",
+                        "soft_stride pad OOM layer={} — abort fwd",
                         layer_idx
                     );
+                    return (Tensor::zero((0, 0)), Tensor::zero((0, 0)));
                 }
                 continue;
             }
             if is_first_pass && (layer_idx % 5 == 0 || layer_idx + 1 == _layer_count) {
-                k_nano::slog_cortex!("FWD", "info", "layer {}/{}", layer_idx, _layer_count);
+                k_nano::slog_cortex!("FWD", "ok", "layer {}/{}", layer_idx, _layer_count);
             }
             // SESSION_353 deep: um único caminho seguro (= AirLLM / InferQueue).
             self.apply_one_layer(
@@ -1286,17 +1303,27 @@ impl TransformerModel {
 
         let norm = self.rms_norm_tensor(x, &layer.rms_attn);
 
-        let mut q = layer.q.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, self.kv_dim)));
+        // SESSION_359: matmul fail → abort layer (não zero-fill fingindo OK)
+        let Some(mut q) = layer.q.matmul_hybrid(&norm) else {
+            k_nano::slog_cortex!("FWD", "fail", "L{} q matmul refuse", layer_idx);
+            return;
+        };
         if !q.is_valid() {
             return;
         }
         q.mul_scalar(layer.q_scale);
-        let mut k = layer.k.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
+        let Some(mut k) = layer.k.matmul_hybrid(&norm) else {
+            k_nano::slog_cortex!("FWD", "fail", "L{} k matmul refuse", layer_idx);
+            return;
+        };
         if !k.is_valid() {
             return;
         }
         k.mul_scalar(layer.k_scale);
-        let mut v = layer.v.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
+        let Some(mut v) = layer.v.matmul_hybrid(&norm) else {
+            k_nano::slog_cortex!("FWD", "fail", "L{} v matmul refuse", layer_idx);
+            return;
+        };
         if !v.is_valid() {
             return;
         }
@@ -1443,7 +1470,10 @@ impl TransformerModel {
             return;
         };
         let attn_out_norm = self.rms_norm_tensor(&attn_out, &layer.rms_inner_attn);
-        let mut proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap_or_else(|| Tensor::new((new_len, self.hidden)));
+        let Some(mut proj) = layer.o.matmul_hybrid(&attn_out_norm) else {
+            k_nano::slog_cortex!("FWD", "fail", "L{} o matmul refuse", layer_idx);
+            return;
+        };
         if !proj.is_valid() {
             return;
         }
@@ -1453,12 +1483,18 @@ impl TransformerModel {
         }
 
         let norm2 = self.rms_norm_tensor(x, &layer.rms_ffn);
-        let mut gate = layer.gate.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::new((new_len, layer.ffn_group_size)));
+        let Some(mut gate) = layer.gate.matmul_hybrid(&norm2) else {
+            k_nano::slog_cortex!("FWD", "fail", "L{} gate matmul refuse", layer_idx);
+            return;
+        };
         if !gate.is_valid() {
             return;
         }
         gate.mul_scalar(layer.gate_scale);
-        let mut up = layer.up.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::new((new_len, layer.ffn_group_size)));
+        let Some(mut up) = layer.up.matmul_hybrid(&norm2) else {
+            k_nano::slog_cortex!("FWD", "fail", "L{} up matmul refuse", layer_idx);
+            return;
+        };
         if !up.is_valid() {
             return;
         }
@@ -1488,8 +1524,10 @@ impl TransformerModel {
         }
 
         let gated_norm = self.rms_norm_tensor(&gated_full, &layer.rms_ffn_norm);
-        let mut down = layer.down.matmul_hybrid(&gated_norm)
-            .unwrap_or_else(|| Tensor::new((new_len, down_out.max(1))));
+        let Some(mut down) = layer.down.matmul_hybrid(&gated_norm) else {
+            k_nano::slog_cortex!("FWD", "fail", "L{} down matmul refuse", layer_idx);
+            return;
+        };
         if !down.is_valid() {
             return;
         }
@@ -1585,238 +1623,38 @@ impl TransformerModel {
 
     /// Final RMS + unembed after all layers (AirLLM helper).
     pub fn finalize_logits(&self, x: &Tensor, new_len: usize) -> (Tensor, Tensor) {
+        if new_len == 0 || !x.is_valid() {
+            k_nano::slog_cortex!("FWD", "fail", "finalize_logits refuse new_len={} x={:?}", new_len, x.shape);
+            return (Tensor::zero((0, 0)), Tensor::zero((0, 0)));
+        }
         let final_norm = self.rms_norm_tensor(x, &self.rms_final);
-        let last_hidden = Tensor::from_row_major(
-            (1, self.hidden),
-            final_norm.data[(new_len - 1) * self.hidden..new_len * self.hidden].to_vec(),
-        ).unwrap();
+        let row_start = (new_len - 1).saturating_mul(self.hidden);
+        let row_end = row_start.saturating_add(self.hidden).min(final_norm.data.len());
+        let mut padded = crate::tensor::f32_zeros(self.hidden);
+        if padded.len() != self.hidden {
+            return (Tensor::zero((0, 0)), Tensor::zero((0, 0)));
+        }
+        if row_end > row_start {
+            let n = (row_end - row_start).min(self.hidden);
+            padded[..n].copy_from_slice(&final_norm.data[row_start..row_start + n]);
+        }
+        let last_hidden = Tensor {
+            shape: (1, self.hidden),
+            data: padded,
+        };
         let logits = self.unembed_logits(&last_hidden, self.vocab_size as usize);
         (last_hidden, logits)
     }
 
+    /// Prefill sem KV externo — SESSION_358: delega a `forward_with_kv` (fonte única =
+    /// `apply_one_layer`). Path paralelo pré-s353 (OOM→panic, `up.data[i]` unbound) removido.
     pub fn forward_hidden(&self, tokens: &[u32]) -> (Tensor, Tensor) {
-        let ctx_cap = if self.hidden >= 2048 {
-            crate::heap_aios::last_ctx_cap().min(self.max_seq.min(512))
-        } else {
-            self.max_seq.min(64)
-        };
-        let seq_len = tokens.len().min(ctx_cap);
-        let num_heads = self.num_heads;
-        let num_kv_heads = self.num_kv_heads;
-        let qk_head_dim = self.kv_dim / num_heads; // 32 for BitNet-b1.58
-        let kv_dim = self.kv_dim;
-        let q_group_size = num_heads / num_kv_heads; // 4 Q heads per KV head
-        let mut x = Tensor::new((seq_len, self.hidden));
-        for (i, &t) in tokens.iter().enumerate().take(seq_len) {
-            let emb = self.embed_lookup(t);
-            for j in 0..self.hidden {
-                x.data[i * self.hidden + j] = emb.data[j];
-            }
+        if self.layers.is_empty() {
+            return (Tensor::zero((0, 0)), Tensor::zero((0, 0)));
         }
-
-        let mut mask_data = crate::tensor::f32_zeros_2d(seq_len, seq_len);
-        if mask_data.len() == seq_len.saturating_mul(seq_len) {
-            for i in 0..seq_len {
-                for j in (i + 1)..seq_len {
-                    mask_data[i * seq_len + j] = NEG_INFINITY;
-                }
-            }
-        }
-        let mask = Tensor::from_row_major((seq_len, seq_len), mask_data).unwrap_or_else(|| Tensor::zero((seq_len.max(1), seq_len.max(1))));
-
-        let layer_count = self.layers.len();
-        for (layer_idx, layer) in self.layers.iter().enumerate() {
-            let lt0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let norm = self.rms_norm_tensor(&x, &layer.rms_attn);
-
-            // QKV projections with GQA dimensions
-            let t_q0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let mut q = layer.q.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::zero((seq_len, self.kv_dim)));  // (seq, kv_dim)
-            q.mul_scalar(layer.q_scale);
-            let t_q1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let mut k = layer.k.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::zero((seq_len, layer.kv_dim)));  // (seq, k_dim)
-            k.mul_scalar(layer.k_scale);
-            let _t_k1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let mut v = layer.v.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::zero((seq_len, layer.kv_dim)));  // (seq, k_dim)
-            v.mul_scalar(layer.v_scale);
-            let t_v1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-
-            // RoPE on Q and K
-            rope_apply_heads(&mut q.data, seq_len, num_heads, qk_head_dim,
-                &self.rope_cos, &self.rope_sin, 0);
-            rope_apply_heads(&mut k.data, seq_len, num_kv_heads, qk_head_dim,
-                &self.rope_cos, &self.rope_sin, 0);
-
-            // GQA attention: each KV head serves q_group_size query heads
-            let k_dim = k.shape.1;
-            let v_dim = v.shape.1;
-            let mut attn_out_data = crate::tensor::f32_zeros_2d(seq_len, kv_dim);
-
-            for kv_g in 0..num_kv_heads {
-                let kv_start = kv_g * qk_head_dim;
-                // Extract K and V for this KV group
-                let mut k_g = Tensor::new((seq_len, qk_head_dim));
-                let mut v_g = Tensor::new((seq_len, qk_head_dim));
-                for s in 0..seq_len {
-                    for d in 0..qk_head_dim {
-                        let kd = kv_start + d;
-                        if kd < k_dim {
-                            k_g.data[s * qk_head_dim + d] = k.data[s * k_dim + kd];
-                        }
-                        if kd < v_dim {
-                            v_g.data[s * qk_head_dim + d] = v.data[s * v_dim + kd];
-                        }
-                    }
-                }
-
-                // FlashAttention tiling adaptativo (#414)
-                let block_size = crate::tensor::optimal_attention_block(qk_head_dim);
-                for qh in 0..q_group_size {
-                    let head_idx = kv_g * q_group_size + qh;
-                    let head_start = head_idx * qk_head_dim;
-
-                    for qb in (0..seq_len).step_by(block_size) {
-                        let qb_end = (qb + block_size).min(seq_len);
-                        let qb_len = qb_end - qb;
-
-                        let mut q_block = Tensor::new((qb_len, qk_head_dim));
-                        for s in 0..qb_len {
-                            for d in 0..qk_head_dim {
-                                q_block.data[s * qk_head_dim + d] =
-                                    q.data[(qb + s) * kv_dim + head_start + d];
-                            }
-                        }
-
-                        for kb in (0..seq_len).step_by(block_size) {
-                            let kb_end = (kb + block_size).min(seq_len);
-                            let kb_len = kb_end - kb;
-
-                            let mut k_block = Tensor::new((kb_len, qk_head_dim));
-                            for s in 0..kb_len {
-                                for d in 0..qk_head_dim {
-                                    k_block.data[s * qk_head_dim + d] =
-                                        k_g.data[(kb + s) * qk_head_dim + d];
-                                }
-                            }
-                            let k_block_t = k_block.transposed();
-                            let mut scores = q_block.matmul(&k_block_t).unwrap_or_else(|| Tensor::zero((qb_len, kb_len)));
-                            let scale = 1.0 / libm::sqrtf(qk_head_dim as f32);
-
-                            for si in 0..qb_len {
-                                for sj in 0..kb_len {
-                                    let idx = si * kb_len + sj;
-                                    scores.data[idx] *= scale;
-                                    scores.data[idx] += mask.data[(qb + si) * seq_len + kb + sj];
-                                }
-                            }
-
-                            for si in 0..qb_len {
-                                let start = si * kb_len;
-                                for sj in 0..kb_len {
-                                    if (qb + si) < (kb + sj) {
-                                        scores.data[start + sj] = -1e9;
-                                    }
-                                }
-                                softmax_inplace(&mut scores.data[start..start + kb_len]);
-                            }
-
-                            let mut v_block = Tensor::new((kb_len, qk_head_dim));
-                            for s in 0..kb_len {
-                                for d in 0..qk_head_dim {
-                                    v_block.data[s * qk_head_dim + d] =
-                                        v_g.data[(kb + s) * qk_head_dim + d];
-                                }
-                            }
-                            let attn_block = scores.matmul(&v_block).unwrap_or_else(|| Tensor::zero((qb_len, qk_head_dim)));
-
-                            for s in 0..qb_len {
-                                for d in 0..qk_head_dim {
-                                    attn_out_data[(qb + s) * kv_dim + head_start + d] +=
-                                        attn_block.data[s * qk_head_dim + d];
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            let t_attn1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-
-            let attn_out = Tensor::from_row_major((seq_len, kv_dim), attn_out_data).unwrap_or_else(|| Tensor::zero((seq_len, kv_dim)));
-            let attn_out_norm = self.rms_norm_tensor(&attn_out, &layer.rms_inner_attn);
-            let mut proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap_or_else(|| Tensor::zero((seq_len, self.hidden)));
-            proj.mul_scalar(layer.o_scale);
-            x = x.add(&proj).unwrap_or_else(|| Tensor::zero(x.shape));
-            let t_proj1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-
-            // BitFFN
-            let norm2 = self.rms_norm_tensor(&x, &layer.rms_ffn);
-            let mut gate = layer.gate.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::zero((seq_len, layer.ffn_group_size)));
-            gate.mul_scalar(layer.gate_scale);
-            let mut up = layer.up.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::zero((seq_len, layer.ffn_group_size)));
-            up.mul_scalar(layer.up_scale);
-            let t_ffn1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let ffn_group = gate.shape.1;
-            let mut gated = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap_or_else(|| Tensor::zero(gate.shape));
-            for (i, g) in gated.data.iter_mut().enumerate() {
-                *g = self.ffn_act(*g) * up.data[i];
-            }
-
-            // Expand gated by repeating 4x for full intermediate dim
-            // gated: (seq, ffn_group) -> expand -> (seq, intermediate_size)
-            let intermediate_size = layer.intermediate_size;
-            let down_out = layer.down.shape.1; // kv_dim for BitNet
-            let num_groups = intermediate_size / ffn_group;
-            let mut gated_full = Tensor::new((seq_len, intermediate_size));
-            for s in 0..seq_len {
-                for g in 0..num_groups {
-                    let g_off = g * ffn_group;
-                    for d in 0..ffn_group {
-                        gated_full.data[s * intermediate_size + g_off + d] = gated.data[s * ffn_group + d];
-                    }
-                }
-            }
-
-            let gated_norm = self.rms_norm_tensor(&gated_full, &layer.rms_ffn_norm);
-            let mut down = layer.down.matmul_hybrid(&gated_norm).unwrap_or_else(|| Tensor::zero((seq_len, layer.down.shape.1)));
-            down.mul_scalar(layer.down_scale);
-
-            // Add FFN output to residual (first down_out dims)
-            for s in 0..seq_len {
-                for d in 0..down_out.min(self.hidden) {
-                    x.data[s * self.hidden + d] += down.data[s * down_out + d];
-                }
-            }
-
-            let lt1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            if layer_idx == 0 {
-                k_nano::slog_cortex!("FWD", "info", "L0 qkv:{} attn:{} proj:{} ffn_gateup:{} down:{} total:{}",
-                    t_q1 - t_q0, t_attn1 - t_v1, t_proj1 - t_attn1, t_ffn1 - t_proj1, lt1 - t_ffn1, lt1 - lt0);
-            }
-            if lt1 - lt0 > 5 || layer_idx == 0 || layer_idx + 1 == layer_count {
-                k_nano::slog_cortex!("FWD", "info", "layer {}/{}: {} ticks", layer_idx + 1, layer_count, lt1 - lt0);
-            }
-        }
-
-        let final_norm = self.rms_norm_tensor(&x, &self.rms_final);
-        let last_hidden = Tensor::from_row_major((1, self.hidden),
-            final_norm.data[(seq_len - 1) * self.hidden..seq_len * self.hidden].to_vec())
-            .unwrap_or_else(|| {
-                let start = ((seq_len - 1) * self.hidden).min(final_norm.data.len().saturating_sub(1));
-                let end = (seq_len * self.hidden).min(final_norm.data.len());
-                let mut padded = vec![0.0f32; self.hidden];
-                for (i, &v) in final_norm.data[start..end].iter().enumerate() {
-                    if i < self.hidden { padded[i] = v; }
-                }
-                Tensor { shape: (1, self.hidden), data: padded }
-            });
-        let t_unembed0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-        let logits = self.unembed_logits(&last_hidden, self.vocab_size as usize);
-        let t_unembed1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-        if t_unembed1 - t_unembed0 > 10 {
-            k_nano::slog_cortex!("FWD", "info", "unembed: {} ticks", t_unembed1 - t_unembed0);
-        }
-        (last_hidden, logits)
+        let k_dim = self.layers[0].k.shape.1;
+        let mut cache = KvCache::new(self.layers.len(), k_dim, self.kv_dim);
+        self.forward_with_kv(tokens, &mut cache)
     }
 
     pub fn forward(&self, tokens: &[u32]) -> Tensor {
@@ -1964,7 +1802,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             naive_mb
         };
         let cur_mb = k_nano::allocator::CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::Relaxed);
-        k_nano::slog_cortex!("LLM", "info", "load_model ver={} h={} L={} file={}MB est={}MB heap={}MB", version, hidden, num_layers, file_mb, estimated, cur_mb);
+        k_nano::slog_cortex!("LLM", "ok", "load_model ver={} h={} L={} file={}MB est={}MB heap={}MB", version, hidden, num_layers, file_mb, estimated, cur_mb);
         // Header lixo (ex. FAT 64MB sem v6 valido): h=0/L=0 ou vocab gigante
         // aloca Vec no heap e congela o FB em K49 (AudioMixer ja passou).
         if hidden == 0
@@ -1974,7 +1812,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         {
             k_nano::slog_cortex!(
                 "LLM",
-                "info",
+                "warn",
                 "load_model REJECT header invalido h={} L={} — skip (evita hang K49)",
                 hidden,
                 num_layers
@@ -1986,9 +1824,9 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         let total_needed = file_mb + estimated + 64;
         if total_needed > cur_mb {
             let total_mb = total_needed.min(4096); // cap 4GB (llama8b: 1915MB×2≈3.9GB)
-            k_nano::slog_cortex!("LLM", "info", "resize_heap {} → {} MB (file={} est={})...", cur_mb, total_mb, file_mb, estimated);
+            k_nano::slog_cortex!("LLM", "ok", "resize_heap {} → {} MB (file={} est={})...", cur_mb, total_mb, file_mb, estimated);
             k_nano::allocator::resize_heap_to_mb(total_mb);
-            k_nano::slog_cortex!("LLM", "info", "resize_heap done");
+            k_nano::slog_cortex!("LLM", "ok", "resize_heap done");
         }
     }
     // Reset offset past magic+version+num_params+hidden+num_layers for main parsing
@@ -2020,7 +1858,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         if tok_len > 0 && off + tok_len <= data.len() {
             let tok_data = &data[off..off + tok_len];
             let first = if tok_len >= 8 { &tok_data[..8] } else { tok_data };
-            k_nano::slog_cortex!("BPE", "info", "Tokenizer data: {} bytes, starts {:02x?}", tok_len, first);
+            k_nano::slog_cortex!("BPE", "warn", "Tokenizer data: {} bytes, starts {:02x?}", tok_len, first);
             // BPE tokenizer skipped for v3 (large tokenizer needs proper JSON parser)
         }
         off += tok_len;
@@ -2048,7 +1886,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
                 && num_kv_heads == 5
                 && q_dim == hidden
             {
-                k_nano::slog_cortex!("LLM", "info", "q_dim header {} → 640 (legacy dump ~203MB; need~{}MB)",
+                k_nano::slog_cortex!("LLM", "ok", "q_dim header {} → 640 (legacy dump ~203MB; need~{}MB)",
                     q_dim,
                     need / (1024 * 1024));
                 q_dim = 640;
@@ -2102,7 +1940,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             (best_basic, best_d)
         };
         // Nao sobrescrever feat bits com heuristica (inner/ffn).
-        k_nano::slog_cortex!("LLM", "info", "q_dim={} head_dim={} k_dim={} ffn_g={} layout rms={} inner={} ffn_ln={} rem={}KB d={}KB",
+        k_nano::slog_cortex!("LLM", "ok", "q_dim={} head_dim={} k_dim={} ffn_g={} layout rms={} inner={} ffn_ln={} rem={}KB d={}KB",
             q_dim,
             kv_head_dim,
             k_dim,
@@ -2116,7 +1954,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         let mut layers = Vec::with_capacity(num_layers);
         for li in 0..num_layers {
             if li % 5 == 0 || li + 1 == num_layers {
-                k_nano::slog_cortex!("LLM", "info", "loading layer {}/{} off={}KB", li, num_layers, off / 1024);
+                k_nano::slog_cortex!("LLM", "ok", "loading layer {}/{} off={}KB", li, num_layers, off / 1024);
             }
             let rms_attn = if has_basic_rms {
                 read_f32_vec(data, &mut off, hidden)?
@@ -2219,10 +2057,10 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
                 }
             }
         }
-        k_nano::slog_cortex!("LLM", "info", "RoPE precompute seq={} theta={} feat_rope={}", rope_seq, theta as u32, has_rope as u8);
+        k_nano::slog_cortex!("LLM", "ok", "RoPE precompute seq={} theta={} feat_rope={}", rope_seq, theta as u32, has_rope as u8);
         let (rope_cos, rope_sin) = rope_precompute(rope_seq, kv_head_dim, theta);
 
-        k_nano::slog_cortex!("LLM", "info", "model OK layers={} q_dim={} tied={} off={}KB", num_layers, q_dim, tie_embeddings as u8, off / 1024);
+        k_nano::slog_cortex!("LLM", "ok", "model OK layers={} q_dim={} tied={} off={}KB", num_layers, q_dim, tie_embeddings as u8, off / 1024);
 
         let model = TransformerModel {
             embed, embed_scale, layers, rms_final, unembed, unembed_scale, medusa_heads,
@@ -2623,8 +2461,8 @@ pub fn load_model_v6(data: &[u8]) -> Option<TransformerModel> {
     off += 3;
     match model_type {
         0 => load_llm_v6(data, &mut off),
-        1 => { k_nano::slog_cortex!("LLM", "info", "v6 HWExpert"); None }
-        2 => { k_nano::slog_cortex!("LLM", "info", "v6 Router"); None }
+        1 => { k_nano::slog_cortex!("LLM", "ok", "v6 HWExpert"); None }
+        2 => { k_nano::slog_cortex!("LLM", "ok", "v6 Router"); None }
         _ => None
     }
 }
@@ -2671,7 +2509,7 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
         max_seq = 4096;
     }
 
-    k_nano::slog_cortex!("LLM", "info",
+    k_nano::slog_cortex!("LLM", "ok",
         "v6 LLM h={} L={} q_dim={} vocab={} act={} emb={} feat=0x{:02x} max_seq={}",
         hidden, num_layers, q_dim, vocab_size, act_type, embed_type, feat, max_seq);
 
@@ -2735,7 +2573,7 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
             ffn_group_size: ffn_group,
         });
         if li % 10 == 0 || li + 1 == num_layers {
-            k_nano::slog_cortex!("LLM", "info", "v6 layer {}/{} off={}KB", li, num_layers, *off/1024);
+            k_nano::slog_cortex!("LLM", "ok", "v6 layer {}/{} off={}KB", li, num_layers, *off/1024);
         }
     }
 
@@ -2777,7 +2615,7 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
         act_type, embed_type,
         rope_theta: theta, rope_cos, rope_sin,
     };
-    k_nano::slog_cortex!("LLM", "info", "v6 model OK L={} {}KB", num_layers, data.len()/1024);
+    k_nano::slog_cortex!("LLM", "ok", "v6 model OK L={} {}KB", num_layers, data.len()/1024);
     Some(model)
 }
 
@@ -3119,7 +2957,7 @@ pub fn model_save_roundtrip_self_test() -> bool {
     }
 
     if tensors_ok {
-        k_nano::slog_cortex!("LLM", "info", "model save/load roundtrip self-test PASS ({} bytes, L={})", bytes.len(), num_layers);
+        k_nano::slog_cortex!("LLM", "fail", "model save/load roundtrip self-test PASS ({} bytes, L={})", bytes.len(), num_layers);
     } else {
         k_nano::slog_cortex!("LLM", "warn", "model save/load roundtrip self-test FAIL ({} bytes, L={})", bytes.len(), num_layers);
     }
@@ -3451,7 +3289,7 @@ pub fn dump_logits_top(logits: &Tensor, n: usize) {
     top.truncate(n);
     let ids: Vec<u32> = top.iter().map(|(id, _)| *id).collect();
     let bits: Vec<i32> = top.iter().map(|(_, v)| (v * 64.0) as i32).collect();
-    k_nano::slog_cortex!("FWD", "info", "logits_top_n={} ids={:?} logits_bits={:?}", n, ids, bits);
+    k_nano::slog_cortex!("FWD", "ok", "logits_top_n={} ids={:?} logits_bits={:?}", n, ids, bits);
 }
 
 // ── F1–F3: Coherence buffer (temperature + top-k + repetition penalty + Gumbel-max) ──
@@ -3470,7 +3308,7 @@ pub fn set_coherence(enabled: bool, temp: f32, top_k: usize, repeat: f32) {
     COHERENCE_TEMP.store(f32::to_bits(temp), core::sync::atomic::Ordering::Relaxed);
     COHERENCE_TOP_K.store(top_k, core::sync::atomic::Ordering::Relaxed);
     COHERENCE_REPEAT.store(f32::to_bits(repeat), core::sync::atomic::Ordering::Relaxed);
-    k_nano::slog_cortex!("GEN", "info",
+    k_nano::slog_cortex!("GEN", "ok",
         "coherence set enabled={} temp={} top_k={} repeat={}",
         enabled as u8, temp, top_k, repeat);
 }
@@ -3539,7 +3377,7 @@ pub fn sample_token_coherence(logits: &Tensor, row: usize, recent: &[u16]) -> u3
         let noisy = cand[i].1 + rng.gumbel();
         if noisy > best_val { best_val = noisy; best = cand[i].0; }
     }
-    k_nano::slog_cortex!("GEN", "info", "coherence temp={} top_k={} best={} n_cand={}", t, k, best, n);
+    k_nano::slog_cortex!("GEN", "ok", "coherence temp={} top_k={} best={} n_cand={}", t, k, best, n);
     best
 }
 
@@ -3700,7 +3538,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
         tokens = tokens[tokens.len() - keep..].to_vec();
     }
     let prompt_len = tokens.len();
-    k_nano::slog_cortex!("GEN", "info",
+    k_nano::slog_cortex!("GEN", "ok",
         "prompt_len={} (raw={}) max_seq={} h={} L={} bpe={} first={} last={}",
         prompt_len, raw_len, max_seq,
         model.hidden, model.num_layers,
@@ -3735,10 +3573,10 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
     let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     let (mut last_hidden, mut last_logits) = model.forward_with_kv(&tokens, &mut cache);
     let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-    k_nano::slog_cortex!("GEN", "info", "prompt fwd: {} ticks", t1 - t0);
+    k_nano::slog_cortex!("GEN", "ok", "prompt fwd: {} ticks", t1 - t0);
 
     let max_gen = plan.max_gen.min(crate::difficulty_gate::max_gen_for(tier, model.hidden, use_bpe, is_greeting));
-    k_nano::slog_cortex!("GEN", "info", "max_gen={} greet={} tier={}", max_gen, is_greeting as u8, tier.name());
+    k_nano::slog_cortex!("GEN", "ok", "max_gen={} greet={} tier={}", max_gen, is_greeting as u8, tier.name());
     // Wall-clock só do decode (pós-prefill) — tok/s honesto p/ Hub / microbench.
     let decode_t0_us = k_nano::tsc::now_us();
 
@@ -3765,7 +3603,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
             let dropped = crate::kv_h2o::h2o_evict(&mut cache, 8, h2o_heavy);
             if dropped > 0 {
                 crate::cognitive_runtime::note_h2o_drops(dropped);
-                k_nano::slog_cortex!("GEN", "info", "h2o evict: dropped={} cache_len={}", dropped, cache.len);
+                k_nano::slog_cortex!("GEN", "ok", "h2o evict: dropped={} cache_len={}", dropped, cache.len);
             }
             // After eviction, update tokens to match cache
             if dropped > 0 && tokens.len() > cache.len {
@@ -3826,11 +3664,11 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
         }
 
         if next == eos || next == eot {
-            k_nano::slog_cortex!("GEN", "info", "eos/special at step={} id={}", step + 1, next);
+            k_nano::slog_cortex!("GEN", "ok", "eos/special at step={} id={}", step + 1, next);
             break;
         }
 
-        k_nano::slog_cortex!("GEN", "info", "step={} next={} cols={}", step + 1, next, last_logits.shape.1);
+        k_nano::slog_cortex!("GEN", "ok", "step={} next={} cols={}", step + 1, next, last_logits.shape.1);
 
         // ── Speculative decoding (ngram draft + verify) ──
         tokens.push(next);
@@ -3845,7 +3683,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
         if use_bpe {
             let partial = crate::bpe::decode(&tokens[prompt_len..]);
             if is_greeting && crate::bpe::text_is_greetingish(&partial) {
-                k_nano::slog_cortex!("GEN", "info", "early_exit greetingish step={}", step);
+                k_nano::slog_cortex!("GEN", "warn", "early_exit greetingish step={}", step);
                 break;
             }
         }
@@ -3917,7 +3755,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
                 let (extra_accept, bonus_u16) = verify_draft(&all_logits, &drafts_u16);
                 let kept = (1 + extra_accept).min(drafts_u16.len());
                 record_spec_hit(kept as u64);
-                k_nano::slog_cortex!("GEN", "info", "medusa draft kept={}/{}", kept, drafts_u16.len());
+                k_nano::slog_cortex!("GEN", "ok", "medusa draft kept={}/{}", kept, drafts_u16.len());
                 for &t in drafts_u16.iter().take(kept) {
                     tokens.push(t as u32);
                     recent_u16.push(t);
@@ -3968,7 +3806,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
             let (new_hidden, new_logits) = model.forward_with_kv(&[next], &mut cache);
             crate::vocab_shortlist::set_skip_full_unembed(false);
             let t_step1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            k_nano::slog_cortex!("GEN", "info", "step={} token={} kv_cache: {} ticks (ctx={} shortlist={})",
+            k_nano::slog_cortex!("GEN", "ok", "step={} token={} kv_cache: {} ticks (ctx={} shortlist={})",
                 step, next, t_step1 - t_step, tokens.len(), use_sl as u8);
             last_hidden = new_hidden;
             last_logits = new_logits;
@@ -4011,7 +3849,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
     } else { "CHAR" };
     let stop_label = if gen.last().copied().map_or(false, |t| t == eos || t == eot) { "EOS" } else { "MAX_GEN" };
     let coh = COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed);
-    k_nano::slog_cortex!("GEN", "info",
+    k_nano::slog_cortex!("GEN", "ok",
         "result first={} last={} stop={} bpe={} coherence={} ids={:?}",
         gen.first().copied().unwrap_or(0xFFFF),
         gen.last().copied().unwrap_or(0xFFFF),
@@ -4028,11 +3866,11 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
         Tokenizer::decode(&u16s)
     };
     if out.is_empty() {
-        k_nano::slog_cortex!("GEN", "info", "decoded_empty n={} first_gen={}",
+        k_nano::slog_cortex!("GEN", "ok", "decoded_empty n={} first_gen={}",
             gen.len(), gen.first().copied().unwrap_or(0xFFFF));
     } else {
         let preview: alloc::string::String = out.chars().take(64).collect();
-        k_nano::slog_cortex!("GEN", "info", "decoded_len={} text='{}'", out.len(), preview);
+        k_nano::slog_cortex!("GEN", "ok", "decoded_len={} text='{}'", out.len(), preview);
     }
     out
 }
@@ -4091,7 +3929,7 @@ pub static CURRENT_STREAMING_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::
 /// Registra modelo streaming (chamado pelo bin quando needs_airllm()=true).
 pub fn set_streaming_model(model: Box<dyn Model>) {
     *CURRENT_STREAMING_MODEL.lock() = Some(model);
-    k_nano::slog_bin!("GGUF", "info", "AirLLM streaming model registered");
+    k_nano::slog_bin!("GGUF", "ok", "AirLLM streaming model registered");
 }
 pub static RUSTCODER_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
 /// Gate do W2A8 (ADR-0084 §3 F4): true só quando soft_stride=1, MAX_SEQ
@@ -4188,7 +4026,15 @@ pub fn set_model(model: Box<dyn Model>) {
     crate::model_hub::mark_active(true);
     let dim = CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
     let name = loaded_model_name();
-    k_nano::slog_cortex!("CORTEX", "info", "model=AI_READY dim={} header={}", dim, name);
+    k_nano::slog_cortex!("CORTEX", "ok", "model=AI_READY dim={} header={}", dim, name);
+}
+
+/// Drop do modelo ativo — invalida `MODEL_LOADED` (SESSION_359 sticky fix).
+pub fn clear_model() {
+    *CURRENT_MODEL.lock() = None;
+    MODEL_LOADED.store(false, core::sync::atomic::Ordering::Release);
+    CURRENT_MODEL_EMBED_DIM.store(0, core::sync::atomic::Ordering::Relaxed);
+    crate::model_hub::mark_active(false);
 }
 
 static INFER_IN_FLIGHT: core::sync::atomic::AtomicBool =
@@ -4246,11 +4092,15 @@ pub fn generate_via_model(prompt: &str) -> String {
 pub fn generate_via_model_with_decoder(prompt: &str, dec: &mut StructuredDecoder) -> String {
     let _busy = infer_guard();
     DECODER_CELL.set(dec as *mut StructuredDecoder);
-    let guard = CURRENT_MODEL.lock();
-    match guard.as_ref() {
-        Some(m) => m.generate(prompt),
-        None => String::from("[CORTEX] No model loaded"),
-    }
+    let out = {
+        let guard = CURRENT_MODEL.lock();
+        match guard.as_ref() {
+            Some(m) => m.generate(prompt),
+            None => String::from("[CORTEX] No model loaded"),
+        }
+    };
+    let _ = DECODER_CELL.take(); // SESSION_359: sem dangling se generate não take
+    out
 }
 
 /// Generate text with structured decoding by grammar constraint.
@@ -4345,13 +4195,13 @@ pub fn rustcoder_is_loaded() -> bool {
 pub fn set_rustcoder_model(model: Box<dyn Model>) {
     *RUSTCODER_MODEL.lock() = Some(model);
     crate::model_hub::mark_slot(crate::model_hub::ModelSlot::RustCoder, true);
-    k_nano::slog_cortex!("CORTEX", "info", "RustCoder expert model loaded (hub).");
+    k_nano::slog_cortex!("CORTEX", "ok", "RustCoder expert model loaded (hub).");
 }
 
 pub fn set_hwexpert_model(model: Box<dyn Model>) {
     *HWEXPERT_MODEL.lock() = Some(model);
     crate::model_hub::mark_slot(crate::model_hub::ModelSlot::HwExpert, true);
-    k_nano::slog_cortex!("CORTEX", "info", "HW Expert model loaded (SDIO MoE).");
+    k_nano::slog_cortex!("CORTEX", "ok", "HW Expert model loaded (SDIO MoE).");
 }
 
 /// Sintetiza um HardwareRegisterMap para um dispositivo PCI.

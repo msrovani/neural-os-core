@@ -13,12 +13,22 @@ impl Linear {
 
     pub fn forward(&self, input: &Tensor) -> Tensor {
         let w_t = self.weights.transposed();
-        let mut output = input.matmul(&w_t).expect("Linear::forward: shape mismatch");
+        let mut output = match input.matmul(&w_t) {
+            Some(t) => t,
+            None => {
+                k_nano::slog_cortex!("NN", "fail", "Linear::forward shape mismatch in={:?} w={:?}",
+                    input.shape, self.weights.shape);
+                return Tensor::zero(input.shape);
+            }
+        };
         if let Some(ref bias) = self.bias {
             let (batch_size, out_features) = output.shape;
             for i in 0..batch_size {
                 for j in 0..out_features {
-                    output.data[i * out_features + j] += bias.data[j];
+                    let idx = i * out_features + j;
+                    if idx < output.data.len() && j < bias.data.len() {
+                        output.data[idx] += bias.data[j];
+                    }
                 }
             }
         }
@@ -37,11 +47,19 @@ impl BitLinear {
     }
 
     pub fn forward(&self, input: &Tensor) -> Tensor {
-        let mut output = self.weights.matmul_hybrid(input)
-            .expect("BitLinear::forward: shape mismatch");
+        let mut output = match self.weights.matmul_hybrid(input) {
+            Some(t) => t,
+            None => {
+                k_nano::slog_cortex!("NN", "fail", "BitLinear::forward shape mismatch in={:?}",
+                    input.shape);
+                return Tensor::zero(input.shape);
+            }
+        };
         if let Some(ref bias) = self.bias {
             for j in 0..output.shape.1 {
-                output.data[j] += bias.data[j];
+                if j < output.data.len() && j < bias.data.len() {
+                    output.data[j] += bias.data[j];
+                }
             }
         }
         output

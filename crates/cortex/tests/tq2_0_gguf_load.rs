@@ -1,7 +1,7 @@
 //! Integration test: load synthetic TQ2_0 GGUF and validate dequantization.
 //!
 //! The test GGUF (target/test_tq2_0.gguf) contains a single tensor:
-//!   blk.0.attn_q.weight, shape [4,4], type TQ2_0 (GGUF type 25)
+//!   blk.0.attn_q.weight, shape [4,4], type TQ2_0 (GGUF type 35 = ggml TQ2_0)
 //!   scale=1.5, weights: +1,+1,-1,-1,0,0,+1,-1,+1,0,-1,+1,0,+1,-1,0
 
 #[test]

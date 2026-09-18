@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 358 | cortex R2 | Bughunt honesty | BitNet/GGUF/InferQueue | GgufType SESSION_309≠ggml (2≠BF16); forward_hidden paralelo; dequant trunc→Ok; HwExpert mark sem store; DECODER dangling; soft_stride pad OOM; slog info mudo; AVX512 ungated |
 | 357 | neural-kernel | Bughunt honesty | Bin integração + residuals | PS/2 spin sem budget; urgency pré-register/`audio_pipeline`; RESPAWN `hermes_console`→Display errado + arms faltando; GGUF Range truncado→Ok; BEI expect+connect mentia; boot_log dual→bridge; NETFS FAIL=`info`; link MMIO fantasma; spsc pub use |
 | 356 | k_ai R2 | Bughunt honesty | SelfHeal+SGDB+Safety | respawn `read_volatile` quebrava RestartDaemon; migrate Ok falso; JSON +11; Audit wrap; LIGHT `HEAVY_DONE` mentia; SafetyAgent wire `check_all`; RAM Tickv≠Flushed |
 | 355 | k_hal R1 | Bughunt honesty | Rings Intel + RF + flip | RCS `0x120000`→`0x2000`; TAIL estava no START; CTL `0x3001`; tail/HEAD **bytes**+mask; iwlwifi **não** fabrica SSID; page_flip DSPSURF readback; kv_dma/VRAM floor; CapGate DENY=`warn` |

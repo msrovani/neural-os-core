@@ -147,7 +147,7 @@ impl TrinityRouter {
     }
 
     pub fn register_expert(&mut self, expert: Expert) {
-        k_nano::slog_cortex!("TRINITY", "info", "Expert '{}' registered: {}", expert.name, expert.description);
+        k_nano::slog_cortex!("TRINITY", "ok", "Expert '{}' registered: {}", expert.name, expert.description);
         self.experts.push(expert);
     }
 
@@ -178,7 +178,7 @@ impl TrinityRouter {
         publish_cortex_posture(true);
         k_nano::slog_cortex!(
             "TRINITY",
-            "info",
+            "ok",
             "Router MoE loaded (trained): {} dim, {} experts",
             ROUTER_HIDDEN,
             self.experts.len()
@@ -203,7 +203,7 @@ impl TrinityRouter {
         }
         crate::global_arena::reset_moe_cache();
         k_nano::slog_cortex!(
-            "TRINITY", "info",
+            "TRINITY", "warn",
             "Router weights set: {}x{} (MoE cache reset)", ROUTER_HIDDEN, n_exp
         );
         true
@@ -265,8 +265,42 @@ impl TrinityRouter {
                 }
 
                 let num_exp = self.experts.len().min(ROUTER_MAX_EXPERTS);
-                let emb_tensor = crate::tensor::Tensor::from_row_major((1, ROUTER_HIDDEN), embedding.to_vec()).unwrap();
-                let scores_t = weight.matmul_hybrid(&emb_tensor).unwrap();
+                let Some(emb_tensor) =
+                    crate::tensor::Tensor::from_row_major((1, ROUTER_HIDDEN), embedding.to_vec())
+                else {
+                    k_nano::slog_cortex!("TRINITY", "warn", "router emb OOM — keyword fallback");
+                    let expert = self.classify_keywords(text);
+                    let emb = [0.0f32; ROUTER_HIDDEN];
+                    let logits = [1.0f32];
+                    let trace = crate::r3::record_router_trace(arena, &emb, &logits, 0)
+                        .unwrap_or(crate::r3::RouteTrace {
+                            embedding_addr: 0,
+                            logits_addr: 0,
+                            num_experts: 1,
+                            selected_expert: 0,
+                            old_log_prob: 0.0,
+                            token_ids_addr: 0,
+                            token_count: 0,
+                        });
+                    return (expert, trace);
+                };
+                let Some(scores_t) = weight.matmul_hybrid(&emb_tensor) else {
+                    k_nano::slog_cortex!("TRINITY", "warn", "router matmul fail — keyword fallback");
+                    let expert = self.classify_keywords(text);
+                    let emb = [0.0f32; ROUTER_HIDDEN];
+                    let logits = [1.0f32];
+                    let trace = crate::r3::record_router_trace(arena, &emb, &logits, 0)
+                        .unwrap_or(crate::r3::RouteTrace {
+                            embedding_addr: 0,
+                            logits_addr: 0,
+                            num_experts: 1,
+                            selected_expert: 0,
+                            old_log_prob: 0.0,
+                            token_ids_addr: 0,
+                            token_count: 0,
+                        });
+                    return (expert, trace);
+                };
                 let mut scores = scores_t.data;
                 scores.truncate(num_exp);
                 if scores.len() == num_exp {
@@ -286,7 +320,7 @@ impl TrinityRouter {
                             &scores,
                             best_idx,
                         ) {
-                            k_nano::slog_cortex!("TRINITY", "info", "MoE router (R3): expert {} (score={:.3}) arena_used={} B",
+                            k_nano::slog_cortex!("TRINITY", "ok", "MoE router (R3): expert {} (score={:.3}) arena_used={} B",
                                 self.experts[best_idx].name,
                                 best_score,
                                 arena.used_bytes());
@@ -338,9 +372,17 @@ impl TrinityRouter {
                     *v /= norm;
                 }
                 let num_exp = self.experts.len().min(ROUTER_MAX_EXPERTS);
-                let emb_tensor =
-                    crate::tensor::Tensor::from_row_major((1, ROUTER_HIDDEN), embedding).unwrap();
-                let scores_t = weight.matmul_hybrid(&emb_tensor).unwrap();
+                let Some(emb_tensor) =
+                    crate::tensor::Tensor::from_row_major((1, ROUTER_HIDDEN), embedding)
+                else {
+                    k_nano::slog_cortex!("TRINITY", "warn", "classify emb OOM — keyword");
+                    // fall through to keyword
+                    return self.classify_keywords(text);
+                };
+                let Some(scores_t) = weight.matmul_hybrid(&emb_tensor) else {
+                    k_nano::slog_cortex!("TRINITY", "warn", "classify matmul fail — keyword");
+                    return self.classify_keywords(text);
+                };
                 let mut scores = scores_t.data.clone();
                 scores.truncate(num_exp);
                 if scores.len() == num_exp {
@@ -357,7 +399,7 @@ impl TrinityRouter {
                         self.stats_neural.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                         k_nano::slog_cortex!(
                             "TRINITY",
-                            "info",
+                            "ok",
                             "MoE router: expert {} (score={:.3})",
                             self.experts[best_idx].name,
                             best_score
@@ -423,7 +465,7 @@ impl TrinityRouter {
         // 1) Controles de HW/plataforma — skill direta, sem LLM / sem hw_identify 128h
         if is_hw_control {
             if let Some(e) = self.experts.iter().find(|e| e.kind == ExpertKind::HwControl) {
-                k_nano::slog_cortex!("TRINITY", "info", "keyword: hw_control (volume/mute/brilho)");
+                k_nano::slog_cortex!("TRINITY", "ok", "keyword: hw_control (volume/mute/brilho)");
                 return e;
             }
         }
@@ -458,7 +500,7 @@ impl TrinityRouter {
 
         if is_chat {
             if let Some(gen) = self.experts.iter().find(|e| e.kind == ExpertKind::Generator) {
-                k_nano::slog_cortex!("TRINITY", "info", "keyword: chat/saudacao → generator");
+                k_nano::slog_cortex!("TRINITY", "ok", "keyword: chat/saudacao → generator");
                 return gen;
             }
         }
@@ -614,7 +656,7 @@ impl TrinityRouter {
         if crate::model_hub::slot_loaded(slot) {
             let names = crate::model_hub::fat_names_for(slot);
             if let Some(&name) = names.first() {
-                k_nano::slog_cortex!("TRINITY", "info",
+                k_nano::slog_cortex!("TRINITY", "ok",
                     "Expert {:?} residente no slot {} (pre-loaded)", kind, name);
             }
         }
@@ -625,7 +667,7 @@ impl TrinityRouter {
     pub fn set_expert_weight(&mut self, kind: ExpertKind, weight: PackedTernaryTensor) {
         if let Some(e) = self.experts.iter_mut().find(|e| e.kind == kind) {
             let nbytes = weight.packed_data.len();
-            k_nano::slog_cortex!("TRINITY", "info",
+            k_nano::slog_cortex!("TRINITY", "ok",
                 "Expert {:?} pesos injetados: {}KB (Efeito Matrix)",
                 kind, nbytes / 1024);
             e.weight = Some(weight);
@@ -791,7 +833,7 @@ pub fn load_router_from_file(data: &[u8]) -> bool {
     *ROUTER_WEIGHT.lock() = Some(weight_tensor);
     k_nano::slog_cortex!(
         "TRINITY",
-        "info",
+        "ok",
         "Router MoE loaded from file (v6): {} dim, {} experts",
         ROUTER_HIDDEN,
         n_exp

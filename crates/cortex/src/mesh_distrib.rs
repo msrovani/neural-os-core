@@ -108,10 +108,10 @@ impl MeshExpertDistributor {
 
         if first_init {
             if p2p_active {
-                k_nano::slog_cortex!("MESH_DISTRIB", "info",
+                k_nano::slog_cortex!("MESH_DISTRIB", "ok",
                     "P2P active (role={:?}), expert distribution enabled", role);
             } else {
-                k_nano::slog_cortex!("MESH_DISTRIB", "info",
+                k_nano::slog_cortex!("MESH_DISTRIB", "warn",
                     "P2P not active (role=Undecided), local-only fallback");
             }
         }
@@ -329,7 +329,7 @@ pub fn broadcast_local_experts() -> bool {
     };
     let ok = k_nano::net::udp_broadcast::send_fragmented(&signed, 42069);
     k_nano::slog_cortex!(
-        "MESH_DISTRIB", "info",
+        "MESH_DISTRIB", "ok",
         "experts enviados node={} n={} sent={}", node_id, experts.len(), ok
     );
     ok
@@ -511,7 +511,7 @@ fn apply_edr(payload: &[u8]) {
         d.my_assignment = my;
     }
     k_nano::slog_cortex!(
-        "MESH_DISTRIB", "info",
+        "MESH_DISTRIB", "ok",
         "EDR recebido: {} experts assignados para node={}", count, dest
     );
 }
@@ -602,13 +602,13 @@ pub fn poll_expert_requests() {
             if let Some(signed) = build_edr(target, &list) {
                 let ok = k_nano::net::udp_broadcast::send_fragmented(&signed, 42069);
                 k_nano::slog_cortex!(
-                    "MESH_DISTRIB", "info",
+                    "MESH_DISTRIB", "ok",
                     "EDR assign node={} experts={} sent={}", target, list.len(), ok
                 );
             }
         }
         k_nano::slog_cortex!(
-            "MESH_DISTRIB", "info",
+            "MESH_DISTRIB", "ok",
             "assign completo: {} experts em {} nos", assign.len(), n_targets
         );
     }

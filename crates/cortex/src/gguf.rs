@@ -49,25 +49,27 @@ pub enum GgufType {
 
 impl GgufType {
     fn from_u32(v: u32) -> Self {
-        // Standard GGUF type IDs (ggml-quants.h / gguf-py constants.py)
+        // ggml GGMLQuantizationType (llama.cpp gguf-py/constants.py) — SESSION_358
+        // SESSION_309 mapeou 2=BF16 / 25=TQ2_0 por engano; oficial: 2=Q4_0, 30=BF16, 35=TQ2_0.
+        // 4/5 = Q4_2/Q4_3 removidos → Unknown.
         match v {
             0 => GgufType::F32,
             1 => GgufType::F16,
-            2 => GgufType::BF16,
-            3 => GgufType::Q4_0,
-            4 => GgufType::Q4_1,
-            5 => GgufType::Q5_0,
-            6 => GgufType::Q5_1,
-            7 => GgufType::Q8_0,
-            8 => GgufType::Q8_1,
-            9 => GgufType::Q2_K,
-            10 => GgufType::Q3_K,
-            11 => GgufType::Q4_K,
-            12 => GgufType::Q5_K,
-            13 => GgufType::Q6_K,
-            14 => GgufType::Q8_K,
-            24 => GgufType::TQ1_0,
-            25 => GgufType::TQ2_0,
+            2 => GgufType::Q4_0,
+            3 => GgufType::Q4_1,
+            6 => GgufType::Q5_0,
+            7 => GgufType::Q5_1,
+            8 => GgufType::Q8_0,
+            9 => GgufType::Q8_1,
+            10 => GgufType::Q2_K,
+            11 => GgufType::Q3_K,
+            12 => GgufType::Q4_K,
+            13 => GgufType::Q5_K,
+            14 => GgufType::Q6_K,
+            15 => GgufType::Q8_K,
+            30 => GgufType::BF16,
+            34 => GgufType::TQ1_0,
+            35 => GgufType::TQ2_0,
             x => GgufType::Unknown(x),
         }
     }
@@ -131,20 +133,35 @@ impl GgufType {
             }
             GgufType::BF16 => ne.saturating_mul(2),
             GgufType::TQ1_0 => {
-                // TQ1_0: 32 bytes per 32-element block (same as Q4_0 layout)
-                let blocks = (ne + 31) / 32;
-                blocks.saturating_mul(32)
+                // ggml TQ1_0: QK=256, type_size = 2 + 4*13 = 54
+                let blocks = (ne + QK_K - 1) / QK_K;
+                blocks.saturating_mul(54)
             }
             GgufType::TQ2_0 => {
+                // Dequant local = 24B/32 (PrismML/SESSION_301). ggml oficial = 66B/256 —
+                // nbytes segue o layout que `dequantize_tq2_0` consome.
                 let blocks = (ne + TQ2_0_BLOCK_SIZE - 1) / TQ2_0_BLOCK_SIZE;
                 blocks.saturating_mul(TQ2_0_BLOCK_BYTES)
             }
             GgufType::Q8_K => {
+                // ggml: (256, 4 + QK_K + QK_K/8) = 292 B/block
                 let blocks = (ne + QK_K - 1) / QK_K;
-                blocks.saturating_mul(256 + 32) // simplified
+                blocks.saturating_mul(4 + QK_K + QK_K / 8)
             }
-            GgufType::Q4_1 | GgufType::Q5_1 | GgufType::Q8_1 => {
-                ne.saturating_mul(2) // bound until dedicated dequant
+            GgufType::Q4_1 => {
+                // ggml: (32, 2+2+16) = 20
+                let blocks = (ne + 31) / 32;
+                blocks.saturating_mul(20)
+            }
+            GgufType::Q5_1 => {
+                // ggml: (32, 2+2+4+16) = 24
+                let blocks = (ne + 31) / 32;
+                blocks.saturating_mul(24)
+            }
+            GgufType::Q8_1 => {
+                // ggml: (32, 4+32) wait — constants (32, 2+2+32)=36
+                let blocks = (ne + 31) / 32;
+                blocks.saturating_mul(36)
             }
             GgufType::Unknown(_) => ne.saturating_mul(4),
         }
@@ -383,11 +400,14 @@ pub fn load_gguf(data: &[u8]) -> Result<GgufFile, &'static str> {
     let metadata_kv_count = read_u64(data, &mut offset);
 
     let header = GgufHeader { magic, version, tensor_count, metadata_kv_count };
-    k_nano::slog_bin!("GGUF", "info", "Header: version={} tensors={} metadata={}", version, tensor_count, metadata_kv_count);
+    k_nano::slog_bin!("GGUF", "ok", "Header: version={} tensors={} metadata={}", version, tensor_count, metadata_kv_count);
 
     // Metadata
     let mut metadata = Vec::new();
     for _ in 0..metadata_kv_count {
+        if offset + 8 > data.len() {
+            return Err("GGUF: metadata truncado");
+        }
         let key = read_string(data, &mut offset);
         let value = read_metadata_value(data, &mut offset);
         metadata.push(GgufMetadata { key, value });
@@ -396,12 +416,20 @@ pub fn load_gguf(data: &[u8]) -> Result<GgufFile, &'static str> {
     // Tensor info
     let mut tensors = Vec::new();
     for _ in 0..tensor_count {
+        if offset + 8 > data.len() {
+            return Err("GGUF: tensor info truncado");
+        }
         let name = read_string(data, &mut offset);
         let n_dims = read_u32(data, &mut offset);
         // GGUF spec: n_dims ∈ 1..=4 — valida antes de with_capacity/dims[0]
         // (n_dims malformado = panic/OOM em dados de arquivo).
         if n_dims == 0 || n_dims > 4 {
             return Err("GGUF: n_dims fora de 1..=4");
+        }
+        // need 8*n_dims + 4(type) + 8(offset)
+        let need = (n_dims as usize).saturating_mul(8).saturating_add(12);
+        if offset + need > data.len() {
+            return Err("GGUF: tensor dims truncado");
         }
         let mut dims = Vec::with_capacity(n_dims as usize);
         for _ in 0..n_dims {
@@ -418,7 +446,7 @@ pub fn load_gguf(data: &[u8]) -> Result<GgufFile, &'static str> {
 
     let raw_data = data[data_start..].to_vec();
 
-    k_nano::slog_bin!("GGUF", "info", "Parse OK. Metadata: {} items, Tensors: {} items, Data: {} bytes", metadata.len(), tensors.len(), raw_data.len());
+    k_nano::slog_bin!("GGUF", "ok", "Parse OK. Metadata: {} items, Tensors: {} items, Data: {} bytes", metadata.len(), tensors.len(), raw_data.len());
 
     Ok(GgufFile { header, metadata, tensors, data_start: data_start as u64, data: raw_data })
 }
@@ -458,16 +486,18 @@ fn dequantize_q4_0_block(block: &[u8]) -> Result<[f32; 32], &'static str> {
 pub fn dequantize_q4_0(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
     let block_size = 32;
     let block_bytes = 18; // scale f16 (2) + 16 bytes de weights
-    let total_weights = rows * cols;
+    let total_weights = rows.checked_mul(cols)?;
     let num_blocks = (total_weights + block_size - 1) / block_size;
-    let expected_bytes = num_blocks * block_bytes;
+    let expected_bytes = num_blocks.checked_mul(block_bytes)?;
 
-    if data.len() < expected_bytes { return None; }
+    if data.len() < expected_bytes {
+        return None;
+    }
 
     let mut tensor_data = Vec::with_capacity(total_weights);
     for b in 0..num_blocks {
         let block_start = b * block_bytes;
-        let block_end = core::cmp::min(block_start + block_bytes, data.len());
+        let block_end = block_start + block_bytes;
         match dequantize_q4_0_block(&data[block_start..block_end]) {
             Ok(values) => {
                 let remaining = total_weights - tensor_data.len();
@@ -475,8 +505,9 @@ pub fn dequantize_q4_0(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> 
                 tensor_data.extend_from_slice(&values[..to_copy]);
             }
             Err(_) => {
-                // ponytail: truncated GGUF - partial block, weights stay zero
-                continue;
+                // SESSION_359: trunc/corrupt → None (nunca tensor "Ok" com zeros)
+                k_nano::slog_bin!("GGUF", "fail", "Q4_0 block {} dequant fail", b);
+                return None;
             }
         }
     }
@@ -497,18 +528,26 @@ fn dequantize_q8_0_block(block: &[u8]) -> Result<[f32; 32], &'static str> {
 
 /// Dequantiza tensor Q8_0 completo (llama.cpp QK8_0=32).
 pub fn dequantize_q8_0(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
-    let total_weights = rows * cols;
+    let total_weights = rows.checked_mul(cols)?;
     let num_blocks = (total_weights + 31) / 32;
-    let expected_bytes = num_blocks * 34;
-    if data.len() < expected_bytes { return None; }
+    let expected_bytes = num_blocks.checked_mul(34)?;
+    if data.len() < expected_bytes {
+        return None;
+    }
 
     let mut tensor_data = Vec::with_capacity(total_weights);
     for b in 0..num_blocks {
         let start = b * 34;
-        if let Ok(values) = dequantize_q8_0_block(&data[start..start + 34]) {
-            let remaining = total_weights - tensor_data.len();
-            let to_copy = core::cmp::min(32, remaining);
-            tensor_data.extend_from_slice(&values[..to_copy]);
+        match dequantize_q8_0_block(&data[start..start + 34]) {
+            Ok(values) => {
+                let remaining = total_weights - tensor_data.len();
+                let to_copy = core::cmp::min(32, remaining);
+                tensor_data.extend_from_slice(&values[..to_copy]);
+            }
+            Err(_) => {
+                k_nano::slog_bin!("GGUF", "fail", "Q8_0 block {} dequant fail", b);
+                return None;
+            }
         }
     }
     Tensor::from_row_major((rows, cols), tensor_data)
@@ -533,18 +572,26 @@ fn dequantize_q5_0_block(block: &[u8]) -> Result<[f32; 32], &'static str> {
 
 /// Dequantiza tensor Q5_0 completo.
 pub fn dequantize_q5_0(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
-    let total_weights = rows * cols;
+    let total_weights = rows.checked_mul(cols)?;
     let num_blocks = (total_weights + 31) / 32;
-    let expected_bytes = num_blocks * 22;
-    if data.len() < expected_bytes { return None; }
+    let expected_bytes = num_blocks.checked_mul(22)?;
+    if data.len() < expected_bytes {
+        return None;
+    }
 
     let mut tensor_data = Vec::with_capacity(total_weights);
     for b in 0..num_blocks {
         let start = b * 22;
-        if let Ok(values) = dequantize_q5_0_block(&data[start..start + 22]) {
-            let remaining = total_weights - tensor_data.len();
-            let to_copy = core::cmp::min(32, remaining);
-            tensor_data.extend_from_slice(&values[..to_copy]);
+        match dequantize_q5_0_block(&data[start..start + 22]) {
+            Ok(values) => {
+                let remaining = total_weights - tensor_data.len();
+                let to_copy = core::cmp::min(32, remaining);
+                tensor_data.extend_from_slice(&values[..to_copy]);
+            }
+            Err(_) => {
+                k_nano::slog_bin!("GGUF", "fail", "Q5_0 block {} dequant fail", b);
+                return None;
+            }
         }
     }
     Tensor::from_row_major((rows, cols), tensor_data)
@@ -594,7 +641,7 @@ fn dequantize_q4_k_block(block: &[u8], out: &mut [f32]) -> Result<(), &'static s
 
 /// Dequantiza tensor Q4_K (llama.cpp K-quant, QK_K=256).
 pub fn dequantize_q4_k(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
-    let total = rows * cols;
+    let total = rows.checked_mul(cols)?;
     let num_blocks = (total + QK_K - 1) / QK_K;
     let expected = num_blocks * Q4_K_BLOCK_BYTES;
     if data.len() < expected {
@@ -691,7 +738,7 @@ fn dequantize_q2_k_block(block: &[u8], out: &mut [f32]) -> Result<(), &'static s
 
 /// Dequantiza tensor Q2_K.
 pub fn dequantize_q2_k(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
-    let total = rows * cols;
+    let total = rows.checked_mul(cols)?;
     let num_blocks = (total + QK_K - 1) / QK_K;
     let expected = num_blocks * Q2_K_BLOCK_BYTES;
     if data.len() < expected {
@@ -742,7 +789,7 @@ fn dequantize_tq2_0_block(block: &[u8], out: &mut [f32]) -> Result<(), &'static 
 
 /// Dequantiza tensor TQ2_0 (ternary 2-bit GGUF).
 pub fn dequantize_tq2_0(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
-    let total = rows * cols;
+    let total = rows.checked_mul(cols)?;
     let num_blocks = (total + TQ2_0_BLOCK_SIZE - 1) / TQ2_0_BLOCK_SIZE;
     let expected = num_blocks * TQ2_0_BLOCK_BYTES;
     if data.len() < expected {
@@ -795,7 +842,7 @@ fn dequantize_q3_k_block(block: &[u8], out: &mut [f32]) -> Result<(), &'static s
 
 /// Dequantiza tensor Q3_K.
 pub fn dequantize_q3_k(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
-    let total = rows * cols;
+    let total = rows.checked_mul(cols)?;
     let num_blocks = (total + QK_K - 1) / QK_K;
     let expected = num_blocks * Q3_K_BLOCK_BYTES;
     if data.len() < expected {
@@ -848,7 +895,7 @@ fn dequantize_q5_k_block(block: &[u8], out: &mut [f32]) -> Result<(), &'static s
 
 /// Dequantiza tensor Q5_K.
 pub fn dequantize_q5_k(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
-    let total = rows * cols;
+    let total = rows.checked_mul(cols)?;
     let num_blocks = (total + QK_K - 1) / QK_K;
     let expected = num_blocks * Q5_K_BLOCK_BYTES;
     if data.len() < expected {
@@ -870,7 +917,7 @@ pub fn dequantize_q5_k(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> 
 
 /// Dequantiza tensor Q6_K.
 pub fn dequantize_q6_k(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
-    let total = rows * cols;
+    let total = rows.checked_mul(cols)?;
     let num_blocks = (total + QK_K - 1) / QK_K;
     let expected = num_blocks * Q6_K_BLOCK_BYTES;
     if data.len() < expected {
@@ -953,6 +1000,31 @@ pub(crate) fn q6k_matmul_row(data: &[u8], hidden: usize, vocab: usize, x: &[f32]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gguf_type_ids_match_ggml() {
+        // ggml GGMLQuantizationType (llama.cpp gguf-py/constants.py)
+        assert_eq!(GgufType::from_u32(0), GgufType::F32);
+        assert_eq!(GgufType::from_u32(1), GgufType::F16);
+        assert_eq!(GgufType::from_u32(2), GgufType::Q4_0);
+        assert_eq!(GgufType::from_u32(3), GgufType::Q4_1);
+        assert_eq!(GgufType::from_u32(6), GgufType::Q5_0);
+        assert_eq!(GgufType::from_u32(7), GgufType::Q5_1);
+        assert_eq!(GgufType::from_u32(8), GgufType::Q8_0);
+        assert_eq!(GgufType::from_u32(9), GgufType::Q8_1);
+        assert_eq!(GgufType::from_u32(10), GgufType::Q2_K);
+        assert_eq!(GgufType::from_u32(11), GgufType::Q3_K);
+        assert_eq!(GgufType::from_u32(12), GgufType::Q4_K);
+        assert_eq!(GgufType::from_u32(13), GgufType::Q5_K);
+        assert_eq!(GgufType::from_u32(14), GgufType::Q6_K);
+        assert_eq!(GgufType::from_u32(15), GgufType::Q8_K);
+        assert_eq!(GgufType::from_u32(30), GgufType::BF16);
+        assert_eq!(GgufType::from_u32(34), GgufType::TQ1_0);
+        assert_eq!(GgufType::from_u32(35), GgufType::TQ2_0);
+        // SESSION_309 errava: 2≠BF16, 25≠TQ2_0 (25=I16)
+        assert!(matches!(GgufType::from_u32(25), GgufType::Unknown(25)));
+        assert!(matches!(GgufType::from_u32(4), GgufType::Unknown(4))); // Q4_2 removed
+    }
 
     /// Cross-check Rust decoder × Python encoder (ADR-0085 F3).
     /// golden_q6k.bin gerado por bitnet_writer.py (LCG seed 42, 4×300 f32);
@@ -1580,7 +1652,7 @@ pub fn load_gguf_header_from_disk(path: &str) -> Option<GgufFile> {
                 let header_data = unsafe { fs.read_file_range(&name, 0, header_bytes)? };
                 match load_gguf_meta_only(&header_data) {
                     Ok(file) => {
-                        k_nano::slog_bin!("GGUF", "info", "Header OK path={} size={} meta_window={} tensors={} data_start={}",
+                        k_nano::slog_bin!("GGUF", "ok", "Header OK path={} size={} meta_window={} tensors={} data_start={}",
                             name, file_size, header_bytes, file.tensors.len(), file.data_start);
                         return Some(file);
                     }
@@ -1672,7 +1744,7 @@ pub fn load_gguf_streaming(path: &str) -> Result<(), &'static str> {
         .find(|m| m.key.contains("block_count"))
         .and_then(|m| m.value.parse().ok())
         .unwrap_or(0u64) as usize;
-    k_nano::slog_bin!("GGUF", "info", "STREAM loaded path={} tensors={} params={} layers={}",
+    k_nano::slog_bin!("GGUF", "ok", "STREAM loaded path={} tensors={} params={} layers={}",
         path, n_tensors, total_params, n_layers);
     let _msg = alloc::format!("[GGUF] Streaming '{}': {} tensors, {} params (est). Header only in RAM.",
         path, n_tensors, total_params);
@@ -1724,7 +1796,7 @@ pub fn write_fat_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
                 .ok_or("FAT write: Fat32Writer::new failed")?;
             let ok = unsafe { writer.write_file(&name, data) };
             if ok {
-                k_nano::slog_bin!("GGUF", "info", "FAT write OK path={} bytes={}",
+                k_nano::slog_bin!("GGUF", "fail", "FAT write OK path={} bytes={}",
                     name,
                     data.len());
                 return Ok(());
@@ -1755,7 +1827,7 @@ pub fn append_fat_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
             if ok {
                 k_nano::slog_bin!(
                     "GGUF",
-                    "info",
+                    "ok",
                     "FAT append OK path={} +{}B",
                     name,
                     data.len()

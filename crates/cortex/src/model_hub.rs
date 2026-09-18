@@ -86,13 +86,13 @@ pub fn register_model(slot: ModelSlot, model: Box<dyn Model>) {
         ModelSlot::Active | ModelSlot::RustCoder | ModelSlot::HwExpert
     ) {
         mark(slot, true);
-        k_nano::slog_bin!("MODEL", "info", "hub mark slot={}", slot.name());
+        k_nano::slog_bin!("MODEL", "ok", "hub mark slot={}", slot.name());
         return;
     }
     let i = idx(slot);
     HUB.lock().slots[i] = Some(model);
     mark(slot, true);
-    k_nano::slog_bin!("MODEL", "info", "hub slot={} loaded", slot.name());
+    k_nano::slog_bin!("MODEL", "ok", "hub slot={} loaded", slot.name());
 }
 
 /// Ponto único de carga por bytes (ADR-0085 §7): load_model_v6 → ModelView
@@ -144,13 +144,14 @@ pub fn register_bytes(slot: ModelSlot, data: &[u8]) -> bool {
                 HUB.lock().slots[i] = Some(boxed);
             }
             mark(slot, true);
-            k_nano::slog_bin!("MODEL", "info", "register_bytes slot={} LLM v6 ok", slot.name());
+            k_nano::slog_bin!("MODEL", "ok", "register_bytes slot={} LLM v6 ok", slot.name());
             true
         }
-        crate::model::ModelView::HwExpert(_m) => {
-            // HWExpert v6: statics legados em k_ai (set_hwexpert_v4_model).
+        crate::model::ModelView::HwExpert(m) => {
+            // SESSION_359: antes mark(true) descartava `_m` → hub mentia "loaded"
+            crate::cortex::set_hwexpert_v4_model(m);
             mark(slot, true);
-            k_nano::slog_bin!("MODEL", "info", "register_bytes slot={} HWExpert (legado v5)", slot.name());
+            k_nano::slog_bin!("MODEL", "ok", "register_bytes slot={} HWExpert v6 → static", slot.name());
             true
         }
     }
@@ -184,8 +185,13 @@ pub fn generate_structured_from_slot(
 ) -> Option<String> {
     let mut dec = crate::structured_decode::StructuredDecoder::new(grammar.into());
     crate::cortex::DECODER_CELL.set(&mut dec as *mut crate::structured_decode::StructuredDecoder);
-    let hub = HUB.lock();
-    hub.slots[idx(slot)].as_ref().map(|m| m.generate(prompt))
+    let out = {
+        let hub = HUB.lock();
+        hub.slots[idx(slot)].as_ref().map(|m| m.generate(prompt))
+    };
+    // SESSION_359: limpa ponteiro residual se generate não consumiu (slot vazio / path sem take)
+    let _ = crate::cortex::DECODER_CELL.take();
+    out
 }
 
 pub fn is_complex_conversation(prompt: &str) -> bool {
@@ -262,7 +268,7 @@ fn pick_fit_fallback(preferred: ModelSlot) -> ModelSlot {
             if s != preferred {
                 k_nano::slog_bin!(
                     "FIT",
-                    "info",
+                    "ok",
                     "escalate slot={} → {} reason=too_tight",
                     preferred.name(),
                     s.name()
@@ -273,7 +279,7 @@ fn pick_fit_fallback(preferred: ModelSlot) -> ModelSlot {
     }
     k_nano::slog_bin!(
         "FIT",
-        "info",
+        "warn",
         "escalate slot={} reason=too_tight (no Good+ fallback)",
         preferred.name()
     );
@@ -339,7 +345,7 @@ pub fn slot_from_bitnet_bytes(data: &[u8]) -> ModelSlot {
     // Tenta parse do header v6 (autônomo — zero hardcoded)
     if let Some(h) = crate::model::parse_model_header(data) {
         let params = h.estimated_params();
-        k_nano::slog_cortex!("MODEL", "info",
+        k_nano::slog_cortex!("MODEL", "ok",
             "slot_from_header: params={} MB={} hidden={}",
             params, h.file_size_mb(), h.hidden);
         return match params {

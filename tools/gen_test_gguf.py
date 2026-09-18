@@ -49,12 +49,12 @@ write_string(data, 'general.type')
 write_u32(data, 8)   # STRING
 write_string(data, 'model')
 
-# Tensor info: blk.0.attn_q.weight [4,4] TQ2_0(type=25)
+# Tensor info: blk.0.attn_q.weight [4,4] TQ2_0(type=35 — ggml GGMLQuantizationType.TQ2_0)
 write_string(data, 'blk.0.attn_q.weight')
 write_u32(data, 2)   # n_dims=2
 write_u64(data, 4)   # dim0
 write_u64(data, 4)   # dim1
-write_u32(data, 25)  # tensor_type=TQ2_0
+write_u32(data, 35)  # tensor_type=TQ2_0 (oficial; 25=I16)
 write_u64(data, 0)   # offset=0 (relative to data_start)
 
 # Align to 32 bytes

@@ -139,7 +139,7 @@ pub fn log_probe(model: Option<&TransformerModel>) {
                     LayerStatus::Degraded => "D",
                     LayerStatus::Absent => "A",
                 };
-                k_nano::slog_cortex!("PROBE", "info", "L{} {} mean={:.4} std={:.4}", lr.index, st, lr.mean_abs, lr.std_approx);
+                k_nano::slog_cortex!("PROBE", "ok", "L{} {} mean={:.4} std={:.4}", lr.index, st, lr.mean_abs, lr.std_approx);
             }
         }
     }

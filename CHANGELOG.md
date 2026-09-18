@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s358] - 2026-09-18 — cortex bughunt (R2 honesty)
+
+- GGUF: `GgufType` IDs ggml (2=Q4_0, 30=BF16, 35=TQ2_0); nbytes Q4_1/Q8_K/TQ1_0; dequant trunc→None; load bounds
+- Forward: `forward_hidden`→`forward_with_kv`; QKV/FFN/unembed refuse; soft_stride pad OOM abort; `clear_model`
+- Hub/Infer: HwExpert store real; DECODER_CELL take; coarse cancel honesty; `has_avx512`=FeatureGate
+- slog: 15 arquivos `info`→`ok`/`warn`/`fail` (ADR-0092); nn/moe/trinity/federated sem panic
+- SESSION_358; IDEA #579–#581
+
 ## [1.9.99-s357] - 2026-09-18 — neural-kernel bughunt (bin honesty)
 
 - Boot: PS/2 i8042 com budget TSC; USB/StorageBus skip=`warn`; slog ok/warn/fail; TICKV FAIL≠SKIP
