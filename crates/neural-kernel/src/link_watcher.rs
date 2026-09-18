@@ -1,10 +1,7 @@
 //! Link Watcher — monitoramento de saude, failover automatico, histerese.
 //! Gerencia dual WiFi+Ethernet: decide qual interface roteia trafego IP.
 //! Histerese: evita flapping com janela temporal e margem de recuperacao.
-
-use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::Ordering;
-use k_nano::memory::PHYS_MEM_OFFSET;
+//! MMIO WiFi fantasma removido (SESSION_357) — use hermes::link_watcher + HalOffer.
 
 // ── 1. STATUS DE LINK ─────────────────────────────────────────
 
@@ -38,13 +35,14 @@ pub struct WlanInterface {
 }
 impl NetworkInterface for WlanInterface {
     fn name(&self) -> &'static str { "wlan0" }
+    /// RSSI via HalOffer / driver — sem MMIO fantasma (0x10000000+#PF).
     fn check_health(&mut self) -> LinkStatus {
-        if self.drops > 10 { return LinkStatus::Down; }
-        // Le RSSI do registrador do chip WiFi (offset 0x90)
-        let pm = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
-        let rssi = unsafe { read_volatile((0x10000000 + 0x90 + pm as usize) as *const u32) };
-        self.rssi = (rssi & 0xFF) as i8;
-        if self.rssi < -85 { LinkStatus::Degraded(self.rssi) } else { LinkStatus::Up }
+        if self.drops > 10 {
+            return LinkStatus::Down;
+        }
+        // Placeholder: sem BAR WiFi wired aqui → Down honesto (hermes::link_watcher usa HalOffer).
+        self.rssi = -100;
+        LinkStatus::Down
     }
     fn set_active(&mut self, _a: bool) {}
 }
@@ -125,9 +123,8 @@ impl FailoverEngine {
         if self.profiles[next].is_some() {
             self.profile_idx = next;
             self.switch_to(1, &mut EthInterface, _wlan);
-            // Comando de reassociacao via register MMIO
-            let pm = PHYS_MEM_OFFSET.load(Ordering::Relaxed) as usize;
-            unsafe { write_volatile((0x1000000C + pm) as *mut u32, 0x02); }
+            // Reassociação real exige driver WiFi (HalOffer) — sem write MMIO fantasma.
+            k_nano::slog_bin!("LINK", "warn", "wifi failover profile={} (MMIO reassoc AWAITING_HW)", next);
         }
     }
 }

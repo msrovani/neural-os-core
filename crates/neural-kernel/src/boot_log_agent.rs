@@ -47,11 +47,12 @@ impl BootLogAgent {
     /// Le o ultimo log de boot e retorna como string para o Cortex.
     /// Walk FAT orçado (MAX_ROOT_CLUSTERS) + fim de dir (first==0) + tamanho capado.
     pub fn read_last_boot_log() -> Option<alloc::string::String> {
-        // QEMU/VBox: ATA PIO no walk do root engasga WHPX (minutos) e prende init_phase.
-        // Persistencia em disco so em HW real; sandbox usa serial + LogFs fallback.
-        if crate::env::is_sandbox() {
-            k_nano::slog_bin!("BOOTLOG", "info", "SKIP FAT walk (sandbox) — SelfHeal nao bloqueia NetAgent");
-            // Fallback LogFs abaixo ainda roda
+        // Boot USB unificado: walk FAT via MSC trava init_phase (parity k_ai).
+        if crate::USB_MSC.lock().is_some() {
+            k_nano::slog_bin!("BOOTLOG", "warn", "skip FAT walk (USB-MSC boot)");
+        } else if crate::env::is_sandbox() {
+            // QEMU/VBox: ATA PIO no walk do root engasga WHPX; SelfHeal nao bloqueia NetAgent.
+            k_nano::slog_bin!("BOOTLOG", "warn", "SKIP FAT walk (sandbox)");
         } else {
         let ata_guard = crate::ATA_DRIVER.lock();
         let ata = (*ata_guard).as_ref()?;
@@ -73,13 +74,13 @@ impl BootLogAgent {
                             && !hit_eod
                         {
                             if cluster == prev {
-                                k_nano::slog_bin!("BOOTLOG", "info", "root FAT self-loop cluster={} — abort walk", cluster);
+                                k_nano::slog_bin!("BOOTLOG", "warn", "root FAT self-loop cluster={} — abort walk", cluster);
                                 break;
                             }
                             prev = cluster;
                             walked += 1;
                             if walked == 1 || walked % 4 == 0 {
-                                k_nano::slog_bin!("BOOTLOG", "info", "root walk cluster={} n={}", cluster, walked);
+                                k_nano::slog_bin!("BOOTLOG", "ok", "root walk cluster={} n={}", cluster, walked);
                             }
 
                             let lba = fat32.cluster_lba(cluster);
@@ -137,7 +138,7 @@ impl BootLogAgent {
                         }
 
                         if walked >= MAX_ROOT_CLUSTERS {
-                            k_nano::slog_bin!("BOOTLOG", "info", "root walk budget hit ({} clusters) — skip rest", MAX_ROOT_CLUSTERS);
+                            k_nano::slog_bin!("BOOTLOG", "warn", "root walk budget hit ({} clusters) — skip rest", MAX_ROOT_CLUSTERS);
                         }
 
                         if !best_name.is_empty() {
@@ -155,7 +156,7 @@ impl BootLogAgent {
                 _ => {}
             }
         }
-        } // end else !sandbox FAT
+        } // end else !usb_msc && !sandbox FAT
         // Fallback: ler do LogFsAgent (memoria)
         if let Some(ref vfs) = *crate::vfs::VFS.lock() {
             let files = vfs.list_dir("/logs");

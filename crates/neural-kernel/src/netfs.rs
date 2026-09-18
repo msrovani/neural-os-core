@@ -56,19 +56,19 @@ pub fn smoke_if_online() {
         return;
     }
     if crate::network_agent::early_smoke_status() != "L5_OK" {
-        k_nano::slog_bin!("NETFS", "info", "smoke skip (net not L5_OK)");
+        k_nano::slog_bin!("NETFS", "warn", "smoke skip (net not L5_OK)");
         return;
     }
     let list = match netfs_send(2, b".") {
         Some(d) => d,
         None => {
-            k_nano::slog_bin!("NETFS", "info", "VERDICT=FAIL reason=list");
+            k_nano::slog_bin!("NETFS", "fail", "VERDICT=FAIL reason=list");
             return;
         }
     };
     let entries = parse_list_entries(&list);
     if entries.is_empty() {
-        k_nano::slog_bin!("NETFS", "info", "VERDICT=FAIL reason=empty_list");
+        k_nano::slog_bin!("NETFS", "fail", "VERDICT=FAIL reason=empty_list");
         return;
     }
     let marker = b"neural-netfs-smoke";
@@ -77,20 +77,20 @@ pub fn smoke_if_online() {
     wpay.push(0);
     wpay.extend_from_slice(marker);
     if netfs_send(1, &wpay).is_none() {
-        k_nano::slog_bin!("NETFS", "info", "VERDICT=FAIL reason=write");
+        k_nano::slog_bin!("NETFS", "fail", "VERDICT=FAIL reason=write");
         return;
     }
     match netfs_send(0, b"smoke.tmp") {
         Some(body) if body.as_slice() == marker => {
             k_nano::slog_bin!(
                 "NETFS",
-                "info",
+                "ok",
                 "VERDICT=PASS list={} write/read ok",
                 entries.len()
             );
         }
-        Some(_) => k_nano::slog_bin!("NETFS", "info", "VERDICT=FAIL reason=read_mismatch"),
-        None => k_nano::slog_bin!("NETFS", "info", "VERDICT=FAIL reason=read"),
+        Some(_) => k_nano::slog_bin!("NETFS", "fail", "VERDICT=FAIL reason=read_mismatch"),
+        None => k_nano::slog_bin!("NETFS", "fail", "VERDICT=FAIL reason=read"),
     }
 }
 

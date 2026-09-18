@@ -41,33 +41,32 @@ pub struct BeiState {
 }
 
 impl BeiState {
-    /// Initialize all BEI components (called after heap is ready)
-    pub fn new() -> Self {
-        k_nano::slog_bin!("BEI", "init", "Starting BEI initialization (8 waves)");
+    /// Initialize all BEI components (called after heap is ready).
+    /// `None` = OOM/capacidadefalha — boot continua DEGRADED (sem panic).
+    pub fn try_new() -> Option<Self> {
+        k_nano::slog_bin!("BEI", "ok", "Starting BEI initialization (8 waves)");
         
         // ─── Wave 0: MPMC Queue ───
         let cell_message_queue = Arc::new(
-            MpmcQueue::<cortex_crate::cellular::CellMessage>::new(256)
-                .expect("Failed to create MPMC queue for cell messages")
+            MpmcQueue::<cortex_crate::cellular::CellMessage>::new(256)?
         );
-        k_nano::slog_bin!("BEI", "wave0", "MPMC queue created (cap=256)");
+        k_nano::slog_bin!("BEI", "ok", "wave0 MPMC queue created (cap=256)");
         
         // ─── Wave 1: Economy + Expert Lifecycle ───
         let budget_manager = Arc::new(Mutex::new(
             BudgetManager::new(64 * 1024 * 1024) // 64MB budget
         ));
         let expert_lifecycle = Arc::new(Mutex::new(ExpertLifecycleManager::new()));
-        k_nano::slog_bin!("BEI", "wave1", "BudgetManager + ExpertLifecycleManager created");
+        k_nano::slog_bin!("BEI", "ok", "wave1 BudgetManager + ExpertLifecycleManager created");
         
         // ─── Wave 2: Cellular Network + Plasticity ───
         let cell_network = Arc::new(Mutex::new(
-            CellNetwork::new(64, 10) // inbox_cap=64, budget_per_tick=10
-                .expect("Failed to create CellNetwork")
+            CellNetwork::new(64, 10)? // inbox_cap=64, budget_per_tick=10
         ));
         let plasticity_controller = Arc::new(Mutex::new(
             PlasticityController::new(8, 0.7, 0.1) // 8 regions, growth=0.7, prune=0.1
         ));
-        k_nano::slog_bin!("BEI", "wave2", "CellNetwork (8 regions) + PlasticityController created");
+        k_nano::slog_bin!("BEI", "ok", "wave2 CellNetwork (8 regions) + PlasticityController created");
         
         // Spawn initial cells per region
         {
@@ -77,13 +76,13 @@ impl BeiState {
                 let _ = net.spawn_cell(CellType::Reasoning, region);
                 let _ = net.spawn_cell(CellType::Memory, region);
             }
-            k_nano::slog_bin!("BEI", "wave2", "Spawned {} cells across 8 regions", net.cell_count());
+            k_nano::slog_bin!("BEI", "ok", "wave2 Spawned {} cells across 8 regions", net.cell_count());
         }
         
         // ─── Wave 3: Dynamic MoE ───
         // Note: DynamicMoE needs a base MoELayer. We'll create a minimal one.
         let dynamic_moe = Arc::new(Mutex::new(Self::create_dynamic_moe()));
-        k_nano::slog_bin!("BEI", "wave3", "DynamicMoE created");
+        k_nano::slog_bin!("BEI", "ok", "wave3 DynamicMoE created");
         
         // ─── Wave 4: Memory L0-L7 ───
         let memory_store = Arc::new(Mutex::new({
@@ -91,20 +90,20 @@ impl BeiState {
             store.init_default_tiers();
             store
         }));
-        k_nano::slog_bin!("BEI", "wave4", "MemoryStore L0-L7 initialized");
+        k_nano::slog_bin!("BEI", "ok", "wave4 MemoryStore L0-L7 initialized");
         
         // ─── Wave 5: Affect Regulator ───
         let affect_regulator = Arc::new(Mutex::new(AffectRegulator::new()));
-        k_nano::slog_bin!("BEI", "wave5", "AffectRegulator created (neutral state)");
+        k_nano::slog_bin!("BEI", "ok", "wave5 AffectRegulator created (neutral state)");
         
         // ─── Wave 6: Executive Supervisor ───
         let executive_supervisor = Arc::new(Mutex::new(ExecutiveSupervisor::new()));
-        k_nano::slog_bin!("BEI", "wave6", "ExecutiveSupervisor created (7-phase loop)");
+        k_nano::slog_bin!("BEI", "ok", "wave6 ExecutiveSupervisor created (7-phase loop)");
         
         // ─── Wave 7: Soul Mirror ───
         // Estado do orb mora no compositor (jarbas::display::soul_mirror);
         // o BEI só publica o affect via AFFECT_SNAPSHOT (bridge abaixo).
-        k_nano::slog_bin!("BEI", "wave7", "Soul Mirror: affect via AFFECT_SNAPSHOT (compositor owns render)");
+        k_nano::slog_bin!("BEI", "ok", "wave7 Soul Mirror: affect via AFFECT_SNAPSHOT (compositor owns render)");
         
         // ─── Cross-connections ───
         Self::connect_components(
@@ -118,9 +117,9 @@ impl BeiState {
             &budget_manager,
         );
         
-        k_nano::slog_bin!("BEI", "init", "All 8 waves initialized and connected");
+        k_nano::slog_bin!("BEI", "ok", "All 8 waves allocated (wire cross-component = tick-time)");
         
-        BeiState {
+        Some(BeiState {
             cell_message_queue,
             budget_manager,
             expert_lifecycle,
@@ -131,7 +130,7 @@ impl BeiState {
             affect_regulator,
             executive_supervisor,
             current_tick: Arc::new(Mutex::new(0)),
-        }
+        })
     }
     
     fn create_dynamic_moe() -> DynamicMoE {
@@ -181,7 +180,12 @@ impl BeiState {
         // Connect BudgetManager to DynamicMoE (compression tier decisions)
         // This will be done in the BEI tick function
         
-        k_nano::slog_bin!("BEI", "connect", "Cross-component connections established");
+        // Wire real: plasticity/dmoe/budget rodam no tick() — não há graph edges aqui.
+        k_nano::slog_bin!(
+            "BEI",
+            "warn",
+            "connect_components = PARTIAL/noop (cross-wire deferred to bei_tick)"
+        );
     }
     
     /// Main BEI tick - called every scheduler tick
@@ -393,11 +397,22 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 /// allocation, guaranteeing 'static lifetime for subsequent read-only access.
 static BEI_STATE: AtomicPtr<BeiState> = AtomicPtr::new(core::ptr::null_mut());
 
-/// Initialize BEI (call after heap init in main.rs)
+/// Initialize BEI (call after heap init in main.rs). Fail-closed: OOM → skip, no panic.
 pub fn init_bei() {
-    let state = BeiState::new();
-    let ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(state));
-    BEI_STATE.store(ptr, Ordering::Release);
+    match BeiState::try_new() {
+        Some(state) => {
+            let ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(state));
+            BEI_STATE.store(ptr, Ordering::Release);
+            k_nano::slog_bin!("BEI", "ok", "BitNet Ecosystem Intelligence ready (8 waves)");
+        }
+        None => {
+            k_nano::slog_bin!(
+                "BEI",
+                "fail",
+                "init SKIP (MPMC/CellNetwork alloc fail) — boot DEGRADED sem BEI"
+            );
+        }
+    }
 }
 
 /// Get BEI state (call from agents/ticks)

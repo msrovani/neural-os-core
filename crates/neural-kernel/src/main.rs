@@ -765,19 +765,19 @@ impl Agent for SystemAgent {
             {
                 let trust_ok = crate::TRUST_CACHE.lock().check_or_cache(token_val, "diagnostic", now, 360);
                 if !trust_ok {
-                    k_nano::slog_bin!("Trust", "deny", "diagnostic skill denied before execute_skill");
+                    k_nano::slog_bin!("Trust", "fail", "diagnostic skill denied before execute_skill");
                     return AgentTickResult::Crashed;
                 }
             }
             match reg.execute_skill("diagnostic", &[], &event.token) {
-                Ok(out) => k_nano::slog_bin!("Agent", "info", "DiagnosticSkill OK ({} bytes)", out.len()),
-                Err(e) => k_nano::slog_bin!("Agent", "info", "DiagnosticSkill: {}", e),
+                Ok(out) => k_nano::slog_bin!("Agent", "ok", "DiagnosticSkill OK ({} bytes)", out.len()),
+                Err(e) => k_nano::slog_bin!("Agent", "warn", "DiagnosticSkill: {}", e),
             }
 
             {
                 let trust_ok = crate::TRUST_CACHE.lock().check_or_cache(token_val, "echo", now, 360);
                 if !trust_ok {
-                    k_nano::slog_bin!("Trust", "deny", "echo skill denied before execute_skill");
+                    k_nano::slog_bin!("Trust", "fail", "echo skill denied before execute_skill");
                     return AgentTickResult::Crashed;
                 }
             }
@@ -974,18 +974,34 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
                 "network_agent" => Some(Box::new(agents::NetAgent::new())),
                 "input" => Some(Box::new(agents::InputAgent::new())),
                 "cortex_llm" => Some(Box::new(agents::CortexAgent::new())),
+                "infer_worker" => Some(Box::new(agents::InferWorker::new())),
                 "intent_router" => Some(Box::new(agents::HermesAgent::new())),
-                "hermes_console" => Some(Box::new(display::agent::DisplayAgent::new())),
+                // hermes_console = ConsoleAgent (VGA/serial), NÃO DisplayAgent (compositor).
+                "hermes_console" => Some(Box::new(agents::ConsoleAgent::new())),
                 "display" => Some(Box::new(display::agent::DisplayAgent::new())),
                 "sys_metrics" => Some(Box::new(display::metrics_agent::MetricsAgent::new())),
-                // DEAD CODE: "cron" => Some(Box::new(cron::CronAgent::new())), // (HERMES_AUDIT.md)
+                "sysinfo" => Some(Box::new(agents::sysinfo_agent::SysInfoAgent::new())),
                 "mcp" => Some(Box::new(mcp::McpAgent::new())),
                 "security" => Some(Box::new(security::SecurityAgent::new())),
-                // DEAD CODE: "safety" => Some(Box::new(safety::SafetyAgent::new())), // (HERMES_AUDIT.md)
-                // DEAD CODE: "optimizer" => Some(Box::new(optimizer::OptimizerAgent::new())), // (HERMES_AUDIT.md)
                 "mouse" => Some(Box::new(agents::mouse_agent::MouseAgent::new())),
                 "self_heal" => Some(Box::new(k_ai::self_heal_agent::SelfHealAgent::new())),
-                _ => None,
+                "boot_log" => Some(Box::new(boot_log_agent::BootLogAgent::new())),
+                "auto_learn" => Some(Box::new(agents::AutoLearnAgent::new())),
+                "sleep_cycle" => Some(Box::new(agents::SleepCycleAgent::new())),
+                "JARBAS" => Some(Box::new(audio::jarvis::JarbasAgent::new())),
+                "jarvis_voice" => Some(Box::new(audio::voice::JarbasVoiceAgent::new())),
+                "wakeword" => Some(Box::new(audio::wakeword::WakeWordAgent::new())),
+                "audio_input" => Some(Box::new(audio::capture::AudioInputAgent::new())),
+                "audio_mixer" => Some(Box::new(audio::mixer::AudioMixerAgent::new())),
+                other => {
+                    k_nano::slog_bin!(
+                        "Sched",
+                        "warn",
+                        "Respawn UNKNOWN agent '{}' — bridge no-op (adicione arm)",
+                        other
+                    );
+                    None
+                }
             };
             agent
         },
@@ -1012,7 +1028,7 @@ fn adr0047_mvp_gates() {
     let got = rx.try_receive().is_some();
     let (p2, r2) = crate::LATENT_BUS.stats();
     let l1 = if got || p2 > 0 { "OK" } else { "ABSENT" };
-    k_nano::slog_bin!("ADR", "0047-L1", "latent publish/recv {} (pub={} recv_slots={})", l1, p2, r2);
+    k_nano::slog_bin!("ADR", "ok", "0047-L1 latent publish/recv {} (pub={} recv_slots={})", l1, p2, r2);
 
     // L2 Evolve WASM hot-swap + Genesis
     let l2 = crate::evolve::evolve_gate_status();
@@ -1719,14 +1735,13 @@ pub(crate) fn kernel_boot(
     let heap_budget = k_nano::memory::heap_budget_mb(detected_ram_mb);
     allocator::resize_bump_heap(heap_budget.min(512));
     k_nano::allocator::set_heap_budget_mb(heap_budget);
-    k_nano::slog_bin!("HEAP", "AIOS", "heap piso_t0=512MB RAM={}MB budget={}MB (75%-keep)",
+    k_nano::slog_bin!("HEAP", "ok", "heap piso_t0=512MB RAM={}MB budget={}MB (75%-keep)",
         detected_ram_mb, heap_budget);
     // TALC init — APÓS init_global_allocator (alloc_physical_frame disponível)
     allocator::talc_init_post_memory().expect("talc post-init failed");
 
     // ADR-0060: Initialize BEI (BitNet Ecosystem Intelligence) — 8 waves
-    let _bei_state = bei_init::init_bei();
-    k_nano::slog_bin!("BEI", "init", "BitNet Ecosystem Intelligence initialized (8 waves)");
+    bei_init::init_bei(); // slog ok|fail inside; OOM → DEGRADED sem panic
 
     publish_boot_phase(BootPhase::Diagnostics, "Allocator global pronto (DiagnosticSkill depois)");
 
@@ -1734,7 +1749,7 @@ pub(crate) fn kernel_boot(
 
     let slab_metrics = { let s = k_nano::slab::SLAB_ALLOCATOR.lock(); (s.metrics().0, s.metrics().1) };
 
-    k_nano::slog_bin!("Boot", "dbg", "slab metrics: {} {}", slab_metrics.0, slab_metrics.1);
+    k_nano::slog_bin!("Boot", "ok", "slab metrics: {} {}", slab_metrics.0, slab_metrics.1);
 
     
 
@@ -1789,7 +1804,7 @@ pub(crate) fn kernel_boot(
     let (obs_n, nic_n) = k_ai::boot_observe::observe_and_plan(trusted);
     k_nano::slog_bin!(
         "Boot",
-        "aios",
+        "ok",
         "H1 devices={} observe={} nic_plan={} trust={} (evidencia+recipe+Trust)",
         h1_n,
         obs_n,
@@ -2052,37 +2067,65 @@ pub(crate) fn kernel_boot(
         crate::display::fb::boot_ckpt(15, "xhci init done");
     } else {
         crate::display::fb::boot_ckpt(15, "xhci skip (plano sem UsbHost)");
-        k_nano::slog_nano!("USB", "xhci", "skip — DeviceTree sem UsbHost");
+        k_nano::slog_nano!("USB", "warn", "xhci skip — DeviceTree sem UsbHost");
     }
 
-    // PS/2 mouse init (i8042) — always works in QEMU, fallback for xHCI HID
+    // PS/2 mouse init (i8042) — QEMU OK; HW sem 8042 não pode hangar o boot.
     {
         use x86_64::instructions::port::Port;
+        /// Espera bit em 0x64 com budget TSC (SESSION_354 honesty — spin eterno = hang).
+        fn wait_status(mask: u8, want_set: bool, budget_us: u64) -> bool {
+            let t0 = k_nano::tsc::now_us();
+            while k_nano::tsc::now_us().saturating_sub(t0) < budget_us {
+                let st = unsafe { Port::<u8>::new(0x64).read() };
+                if ((st & mask) != 0) == want_set {
+                    return true;
+                }
+                core::hint::spin_loop();
+            }
+            false
+        }
+        const PS2_BUDGET_US: u64 = 50_000; // 50 ms por passo
         unsafe {
-            // Wait for input buffer empty
-            while Port::<u8>::new(0x64).read() & 0x02 != 0 { core::hint::spin_loop(); }
-            // Enable auxiliary device
-            Port::<u8>::new(0x64).write(0xA8u8);
-            // Wait
-            while Port::<u8>::new(0x64).read() & 0x02 != 0 { core::hint::spin_loop(); }
-            // Read config byte
-            Port::<u8>::new(0x64).write(0x20u8);
-            while Port::<u8>::new(0x64).read() & 0x01 == 0 { core::hint::spin_loop(); }
-            let cfg: u8 = Port::<u8>::new(0x60).read();
-            // Enable IRQ12 (bit1)
-            while Port::<u8>::new(0x64).read() & 0x02 != 0 { core::hint::spin_loop(); }
-            Port::<u8>::new(0x64).write(0x60u8);
-            while Port::<u8>::new(0x64).read() & 0x02 != 0 { core::hint::spin_loop(); }
-            Port::<u8>::new(0x60).write(cfg | 0x02);
-            // Enable data reporting
-            while Port::<u8>::new(0x64).read() & 0x02 != 0 { core::hint::spin_loop(); }
-            Port::<u8>::new(0x64).write(0xD4u8);
-            while Port::<u8>::new(0x64).read() & 0x02 != 0 { core::hint::spin_loop(); }
-            Port::<u8>::new(0x60).write(0xF4u8);
-            // Wait for ACK
-            while Port::<u8>::new(0x64).read() & 0x01 == 0 { core::hint::spin_loop(); }
-            let ack: u8 = Port::<u8>::new(0x60).read();
-            k_nano::slog_nano!("PS2", "warn", "mouse init cfg={:#x} ack={:#x}", cfg, ack);
+            let mut ok = true;
+            // Wait for input buffer empty, enable aux
+            ok &= wait_status(0x02, false, PS2_BUDGET_US);
+            if ok {
+                Port::<u8>::new(0x64).write(0xA8u8);
+            }
+            ok &= wait_status(0x02, false, PS2_BUDGET_US);
+            let mut cfg = 0u8;
+            let mut ack = 0u8;
+            if ok {
+                Port::<u8>::new(0x64).write(0x20u8);
+                ok &= wait_status(0x01, true, PS2_BUDGET_US);
+                if ok {
+                    cfg = Port::<u8>::new(0x60).read();
+                }
+            }
+            if ok {
+                ok &= wait_status(0x02, false, PS2_BUDGET_US);
+                Port::<u8>::new(0x64).write(0x60u8);
+                ok &= wait_status(0x02, false, PS2_BUDGET_US);
+                Port::<u8>::new(0x60).write(cfg | 0x02);
+                ok &= wait_status(0x02, false, PS2_BUDGET_US);
+                Port::<u8>::new(0x64).write(0xD4u8);
+                ok &= wait_status(0x02, false, PS2_BUDGET_US);
+                Port::<u8>::new(0x60).write(0xF4u8);
+                ok &= wait_status(0x01, true, PS2_BUDGET_US);
+                if ok {
+                    ack = Port::<u8>::new(0x60).read();
+                }
+            }
+            if ok {
+                k_nano::slog_nano!("PS2", "ok", "mouse init cfg={:#x} ack={:#x}", cfg, ack);
+            } else {
+                k_nano::slog_nano!(
+                    "PS2",
+                    "warn",
+                    "mouse init TIMEOUT (i8042 morto/ausente) — segue sem PS/2"
+                );
+            }
         }
     }
 
@@ -2103,7 +2146,7 @@ pub(crate) fn kernel_boot(
                     crate::display::fb::boot_ckpt(16, "USB-MSC skip retry (qemu)");
                     k_nano::slog_nano!(
                         "USB",
-                        "ok",
+                        "warn",
                         "home=k_hal::usb profile=qemu | skip re-probe apos early FAIL (sem stick MSC — aceite=HW)"
                     );
                 } else {
@@ -2299,7 +2342,7 @@ pub(crate) fn kernel_boot(
         }
     } else {
         crate::boot_logger::log("BOOT: DiskAgent skip ATA (live USB)");
-        k_nano::slog_bin!("StorageBus", "ok", "skip internal disks (live USB)");
+        k_nano::slog_bin!("StorageBus", "warn", "skip internal disks (live USB)");
     }
 
     if crate::USB_MSC.lock().is_some() {
@@ -2507,13 +2550,13 @@ pub(crate) fn kernel_boot(
     if k_nano::storage::tickv_smoke() {
         k_nano::slog_bin!(
             "TICKV",
-            "smoke",
+            "ok",
             "put/get PASS backend={}",
             k_nano::storage::backend_name()
         );
         crate::boot_logger::log("BOOT: [TICKV] put/get smoke PASS");
     } else {
-        k_nano::slog_bin!("TICKV", "smoke", "FAIL or skip");
+        k_nano::slog_bin!("TICKV", "fail", "put/get smoke FAIL");
         crate::boot_logger::log("BOOT: [TICKV] smoke FAIL");
     }
     k33_step!("tickv");
@@ -2539,14 +2582,14 @@ pub(crate) fn kernel_boot(
     }
     {
         let p = k_ai::sgdb::hamming_kernel_name();
-        k_nano::slog_bin!("sgdb", "hamming", "{}", p);
+        k_nano::slog_bin!("sgdb", "ok", "hamming={}", p);
         crate::boot_logger::log("BOOT: [sgdb] hamming kernel selected");
     }
     if k_ai::sgdb::demo() {
-        k_nano::slog_bin!("sgdb", "demo", "Q-jump PASS");
+        k_nano::slog_bin!("sgdb", "ok", "Q-jump PASS");
         crate::boot_logger::log("BOOT: [sgdb] quality demo PASS");
     } else {
-        k_nano::slog_bin!("sgdb", "demo", "Q-jump FAIL");
+        k_nano::slog_bin!("sgdb", "fail", "Q-jump FAIL");
         crate::boot_logger::log("BOOT: [sgdb] quality demo FAIL");
     }
     k33_step!("sgdb_demo");
@@ -2556,7 +2599,7 @@ pub(crate) fn kernel_boot(
     // trava/leva minutos, e em RAM o e2e revelou FAIL latente. Validação fica
     // em cargo test host. metrics/audit (leves) seguem rodando.
     if k_nano::storage::is_ready() {
-        k_nano::slog_bin!("TICKV", "smoke", "SKIP (smokes de storage não rodam no boot — cargo test host)");
+        k_nano::slog_bin!("TICKV", "warn", "SKIP (smokes de storage não rodam no boot — cargo test host)");
         crate::boot_logger::log("BOOT: [TICKV] smokes SKIP (fora do boot)");
     }
     {
@@ -2566,7 +2609,7 @@ pub(crate) fn kernel_boot(
         // Status leve: hamming path + tickv stats, SEM bench.
         let h = k_ai::sgdb::hamming_kernel_name();
         let t = k_nano::storage::tickv_status();
-        k_nano::slog_bin!("sgdb", "bench", "hamming={} tickv={} (bench D-series fora do boot)", h, t);
+        k_nano::slog_bin!("sgdb", "ok", "hamming={} tickv={} (bench D-series fora do boot)", h, t);
         crate::boot_logger::log("BOOT: [sgdb] status (bench pesado fora do boot)");
     }
     k33_step!("sgdb_metrics");
@@ -2574,7 +2617,7 @@ pub(crate) fn kernel_boot(
     {
         let mut trail = hermes_globals::AUDIT_TRAIL.lock();
         if trail.load_from_sgdb() {
-            k_nano::slog_bin!("sgdb", "audit", "loaded from TickvLite");
+            k_nano::slog_bin!("sgdb", "ok", "loaded from TickvLite");
         }
     }
     k33_step!("tickv_smokes");
@@ -2597,8 +2640,8 @@ pub(crate) fn kernel_boot(
     if crate::USB_MSC.lock().is_none() && crate::ATA_DRIVER.lock().is_none() {
         crate::boot_logger::maybe_uefi_flush_reboot("K37 hub ok — sem MSC/ATA");
     }
-    k_nano::slog_bin!("Log", "msg", "{}", hermes_globals::AUDIT_TRAIL.lock().status());
-    k_nano::slog_bin!("Log", "msg", "{}", crate::skill_opt::status());
+    k_nano::slog_bin!("Log", "ok", "{}", hermes_globals::AUDIT_TRAIL.lock().status());
+    k_nano::slog_bin!("Log", "ok", "{}", crate::skill_opt::status());
 
     kjson!("BOOT", "WASM", "runtime", "skills", 2);
     kjson!("BOOT", "DECODE", "structured", "ready", 1);
@@ -3116,7 +3159,7 @@ pub(crate) fn kernel_boot(
     // P3 (ADR-0041): Hermes host Caps — non-fatal
     match crate::capability_gate::demo_hermes_caps() {
         Ok(()) => {
-            k_nano::slog_bin!("Cap", "p3", "CapGate demo OK");
+            k_nano::slog_bin!("Cap", "ok", "CapGate demo OK");
             crate::boot_logger::log("BOOT: P3 CapGate OK");
         }
         Err(e) => {
@@ -3128,7 +3171,7 @@ pub(crate) fn kernel_boot(
     // P4 (ADR-0041): JARBAS FB MMIO + double-buffer — non-fatal
     match crate::jarbas_fb::demo_jarbas_fb() {
         Ok(()) => {
-            k_nano::slog_bin!("Cap", "p4", "JARBAS FB demo OK");
+            k_nano::slog_bin!("Cap", "ok", "JARBAS FB demo OK");
             crate::boot_logger::log("BOOT: P4 JARBAS FB OK");
         }
         Err(e) => {
@@ -3295,6 +3338,8 @@ pub(crate) fn kernel_boot(
     let mut registry = agent_core::AgentRegistry::new();
 
     // BootLogAgent cedo: consome BOOT_PHASE via EventBus
+    // Bridge: Hermes/k_ai SelfHeal usam a mesma read (sandbox/USB-MSC orçada).
+    k_ai::boot_log_agent::register_read_boot_log(boot_log_agent::BootLogAgent::read_last_boot_log);
     registry.register(Box::new(boot_log_agent::BootLogAgent::new()));
 
     // PlatformAgent: idempotente se init_platform_sync ja rodou
@@ -3377,47 +3422,23 @@ pub(crate) fn kernel_boot(
     // Posição também atualiza no IRQ (MOUSE_ABS_*) independente do tick.
     registry.register(Box::new(agents::mouse_agent::MouseAgent::new()));
 
-    // Interativos são isentos do rate-limit do scheduler (agent-core: set_urgency
-    // >0 = NÃO rate-limited). Sem isso, InputAgent/HwBridgeAgent retornam Pending
-    // sempre e após 50 ticks o scheduler os skipa 80% — teclado/rede morrem de
-    // fome (polled=1) e o shell nunca recebe o sendkey (bug real de HW + QEMU).
+    // Interativos já registrados: isentos do rate-limit (urgency>0).
+    // Display/voz/Hermes: set_urgency DEPOIS do register (SESSION_258 — nome ausente = no-op).
     registry.set_urgency("hw_bridge", 200);
     registry.set_urgency("network_agent", 180);
     registry.set_urgency("input", 200);
     registry.set_urgency("mouse", 150);
-    // Display: splash no 1º tick; sem urgency vira Pending eterno → rate-limit 80%
-    // após 50 ticks e o compositor nunca substitui "Inicializando..." (HW real).
-    registry.set_urgency("display", 220);
-    // BOOT.LOG/NSGDB no stick: SysInfo deve rodar mesmo sob pressão do compositor.
-    registry.set_urgency("sysinfo", 160);
-    // Orb = voz/mic: sem urgency, Continuous Pending → rate-limit → "Jarvis morto".
-    registry.set_urgency("jarvis_voice", 210);
-    registry.set_urgency("wakeword", 200);
-    registry.set_urgency("audio_pipeline", 190);
-    registry.set_urgency("audio_mixer", 190);
-    registry.set_urgency("JARBAS", 180);
-    // ADR-0089: críticos BSP (ring0); migráveis ring≥1 com smp-runqueue + ap_pollable.
     let _ = registry.set_affinity_ring("hw_bridge", 0);
     let _ = registry.set_affinity_ring("input", 0);
     let _ = registry.set_affinity_ring("mouse", 0);
-    let _ = registry.set_affinity_ring("display", 0);
-    let _ = registry.set_affinity_ring("security", 0);
-    // Voz/mic no BSP: sem affinity, APs podem roubar e a UI parece "morta".
-    let _ = registry.set_affinity_ring("jarvis_voice", 0);
-    let _ = registry.set_affinity_ring("wakeword", 0);
-    let _ = registry.set_affinity_ring("audio_pipeline", 0);
-    let _ = registry.set_affinity_ring("audio_mixer", 0);
-    let _ = registry.set_affinity_ring("JARBAS", 0);
     let _ = registry.set_affinity_ring("cortex_llm", 1);
     let _ = registry.set_affinity_ring("infer_worker", 1);
-    let _ = registry.set_affinity_ring("intent_router", 2);
-    // ring3 → CoreRole::Memory (fallback Worker em N=4 sem Memory).
     let _ = registry.set_affinity_ring("network_agent", 3);
-    k_nano::slog_bin!("Sched", "info", "urgency+affinity UI/voz ring0; net ring3");
+    k_nano::slog_bin!("Sched", "ok", "urgency+affinity early (bridge/input/net/cortex)");
 
     // SysInfoAgent — painel de debug com CPU/memória/agentes na tela
     registry.register(Box::new(agents::sysinfo_agent::SysInfoAgent::new()));
-
+    registry.set_urgency("sysinfo", 160);
     // Display + Metrics ANTES do Hermes: Continuous ring0 polla por ordem de
     // registro. Hermes THINK/LLM soft-float pode bloquear o tick por minutos —
     // se Display vier depois, o orb/HUD nunca sobe (QEMU e HW). Claim graphics
@@ -3426,11 +3447,14 @@ pub(crate) fn kernel_boot(
     crate::display::fb::boot_ckpt(40, "pos fb_remap");
     crate::display::fb::boot_ckpt(41, "antes DisplayAgent");
     registry.register(Box::new(display::agent::DisplayAgent::new()));
+    registry.set_urgency("display", 220);
+    let _ = registry.set_affinity_ring("display", 0);
     crate::display::fb::boot_ckpt(42, "DisplayAgent OK");
     registry.register(Box::new(display::metrics_agent::MetricsAgent::new()));
     crate::display::fb::boot_ckpt(51, "MetricsAgent OK");
 
     registry.register(Box::new(agents::HermesAgent::new()));
+    let _ = registry.set_affinity_ring("intent_router", 2);
     // Hub Health: política do painel F12 (EventDriven) — compositor só renderiza.
     registry.register(Box::new(hermes_crate::hub_health::HubHealthAgent::new()));
 
@@ -3450,15 +3474,21 @@ pub(crate) fn kernel_boot(
     crate::display::fb::boot_ckpt(43, "VisionAgent OK");
 
     registry.register(Box::new(audio::jarvis::JarbasAgent::new()));
+    registry.set_urgency("JARBAS", 180);
+    let _ = registry.set_affinity_ring("JARBAS", 0);
     crate::display::fb::boot_ckpt(44, "JarbasAgent OK");
     // HW sem MSC: saudacao + BOOT.LOG AGORA (hang comum logo apos K44 nos agents audio).
     audio::jarvis::emit_hw_greeting_at_register();
 
     crate::display::fb::boot_ckpt(45, "antes JarvisVoice");
     registry.register(Box::new(audio::voice::JarbasVoiceAgent::new()));
+    registry.set_urgency("jarvis_voice", 210);
+    let _ = registry.set_affinity_ring("jarvis_voice", 0);
     crate::display::fb::boot_ckpt(46, "JarvisVoice OK");
 
     registry.register(Box::new(audio::wakeword::WakeWordAgent::new()));
+    registry.set_urgency("wakeword", 200);
+    let _ = registry.set_affinity_ring("wakeword", 0);
     crate::display::fb::boot_ckpt(47, "WakeWord OK");
 
     // WS2: dono ÚNICO do microfone (poll HDA/UAC + 48k estéreo→16k mono + frames
@@ -3466,10 +3496,15 @@ pub(crate) fn kernel_boot(
     // (barge-in) passou para a sessão de voz — onde é possível invalidar a geração
     // de TTS em vez de só limpar o ring.
     registry.register(Box::new(audio::capture::AudioInputAgent::new()));
+    registry.set_urgency("audio_input", 190);
+    let _ = registry.set_affinity_ring("audio_input", 0);
     crate::display::fb::boot_ckpt(48, "AudioInput OK");
 
     registry.register(Box::new(audio::mixer::AudioMixerAgent::new()));
+    registry.set_urgency("audio_mixer", 190);
+    let _ = registry.set_affinity_ring("audio_mixer", 0);
     crate::display::fb::boot_ckpt(49, "AudioMixer OK");
+    k_nano::slog_bin!("Sched", "ok", "urgency+affinity UI/voz ring0 apos register");
 
     // DEAD CODE: let mut cron = cron::CronAgent::new(); // (HERMES_AUDIT.md)
 
@@ -3479,6 +3514,7 @@ pub(crate) fn kernel_boot(
 
     registry.register(Box::new(mcp::McpAgent::new()));
     registry.register(Box::new(security::SecurityAgent::new()));
+    let _ = registry.set_affinity_ring("security", 0);
     // DEAD CODE: registry.register(Box::new(safety::SafetyAgent::new())); // (HERMES_AUDIT.md)
     // DEAD CODE: registry.register(Box::new(optimizer::OptimizerAgent::new())); // (HERMES_AUDIT.md)
     registry.register(Box::new(browser_agent::BrowserAgent::new()));
@@ -3506,11 +3542,11 @@ pub(crate) fn kernel_boot(
         let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         let trust_ok = crate::TRUST_CACHE.lock().check_or_cache(1, "diagnostic", now, 360);
         if !trust_ok {
-            k_nano::slog_bin!("Trust", "deny", "boot diagnostic: trust deny");
+            k_nano::slog_bin!("Trust", "fail", "boot diagnostic: trust deny");
         } else {
             match k_nano::SKILL_REGISTRY.lock().execute_skill("diagnostic", &[], &tok) {
-                Ok(out) => k_nano::slog_bin!("Boot", "info", "DiagnosticSkill executada ({} bytes)", out.len()),
-                Err(e) => k_nano::slog_bin!("Boot", "info", "DiagnosticSkill falhou: {}", e),
+                Ok(out) => k_nano::slog_bin!("Boot", "ok", "DiagnosticSkill executada ({} bytes)", out.len()),
+                Err(e) => k_nano::slog_bin!("Boot", "warn", "DiagnosticSkill falhou: {}", e),
             }
         }
     }
@@ -4036,12 +4072,12 @@ pub(crate) fn kernel_boot(
                 if magic == 0xBE11BE11 {
                     // Bounds check: não ler além do fim do range do scan
                     if addr + (size as u64) > end {
-                        k_nano::slog_bin!("Asset", "loader",
+                        k_nano::slog_bin!("Asset", "warn",
                             "{} @{:#x} size {} bytes beyond scan end — skipping", label, addr, size);
                         addr = addr.saturating_add(0x100000);
                         continue;
                     }
-                    k_nano::slog_bin!("Asset", "loader",
+                    k_nano::slog_bin!("Asset", "ok",
                         "{} magic 0xBE11BE11 found @{:#x} — tentando parse {} KB",
                         label, addr, size / 1024);
                     let data = unsafe { core::slice::from_raw_parts(ptr, size) };
@@ -4052,7 +4088,7 @@ pub(crate) fn kernel_boot(
                         // (ex: BITNET2B cujo parse com tamanho pequeno falha, ou
                         // Piper TTS que tem ver=3 h=0 L=0 e seria aceito como expert).
                         if nl == 0 || hd == 0 {
-                            k_nano::slog_bin!("Asset", "loader",
+                            k_nano::slog_bin!("Asset", "warn",
                                 "{} @{:#x} degenerado layers={} hidden={} — pulando",
                                 label, addr, nl, hd);
                             addr = addr.saturating_add(0x100000);
@@ -4063,18 +4099,18 @@ pub(crate) fn kernel_boot(
                         } else {
                             crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(model));
                         }
-                        k_nano::slog_bin!("Asset", "loader",
+                        k_nano::slog_bin!("Asset", "ok",
                             "{} LOADED (QEMU-loader @{:#x}) size={}KB layers={} hidden={}",
                             label, addr, size / 1024, nl, hd);
                         return true;
                     } else {
-                        k_nano::slog_bin!("Asset", "loader",
+                        k_nano::slog_bin!("Asset", "warn",
                             "{} @{:#x} parse FAILED (proximo endereco)", label, addr);
                     }
                 }
                 addr = addr.saturating_add(0x100000); // 1MB steps
             }
-            k_nano::slog_bin!("Asset", "loader",
+            k_nano::slog_bin!("Asset", "warn",
                 "{} QEMU-loader scan [{:#x}..{:#x}] — 0xBE11BE11 ausente",
                 label, start, end);
             false
@@ -4915,15 +4951,15 @@ pub(crate) fn kernel_boot(
         let live_isa = k_nano::platform_probe::hw_info().isa_name();
         let hw_profile = match k_ai::sgdb::hw_get("cpu/isa") {
             Some(p) if p == live_isa => {
-                k_nano::slog_bin!("HW", "onda", "Onda CPU loop OK: /hw/cpu/isa={} (releitura)", p);
+                k_nano::slog_bin!("HW", "ok", "Onda CPU loop OK: /hw/cpu/isa={} (releitura)", p);
                 Some(p)
             }
             Some(p) => {
-                k_nano::slog_bin!("HW", "onda", "Onda CPU divergencia: sgdb={} live={} (usa live)", p, live_isa);
+                k_nano::slog_bin!("HW", "warn", "Onda CPU divergencia: sgdb={} live={} (usa live)", p, live_isa);
                 Some(String::from(live_isa))
             }
             None => {
-                k_nano::slog_bin!("HW", "onda", "Onda CPU: /hw/cpu/isa indisponivel (fallback live={})", live_isa);
+                k_nano::slog_bin!("HW", "warn", "Onda CPU: /hw/cpu/isa indisponivel (fallback live={})", live_isa);
                 Some(String::from(live_isa))
             }
         };
@@ -4962,11 +4998,11 @@ pub(crate) fn kernel_boot(
         if rx == 0 {
             k_nano::slog_bin!(
                 "NET-HW",
-                "info",
+                "warn",
                 "VERDICT=AWAITING_REAL_HW reason=rx_count_zero_at_runtime"
             );
         } else {
-            k_nano::slog_bin!("NET-HW", "info", "VERDICT=PASS reason=rx_count={} at_runtime", rx);
+            k_nano::slog_bin!("NET-HW", "ok", "VERDICT=PASS reason=rx_count={} at_runtime", rx);
         }
     }
 

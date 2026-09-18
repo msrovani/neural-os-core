@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 357 | neural-kernel | Bughunt honesty | Bin integração + residuals | PS/2 spin sem budget; urgency pré-register/`audio_pipeline`; RESPAWN `hermes_console`→Display errado + arms faltando; GGUF Range truncado→Ok; BEI expect+connect mentia; boot_log dual→bridge; NETFS FAIL=`info`; link MMIO fantasma; spsc pub use |
 | 356 | k_ai R2 | Bughunt honesty | SelfHeal+SGDB+Safety | respawn `read_volatile` quebrava RestartDaemon; migrate Ok falso; JSON +11; Audit wrap; LIGHT `HEAVY_DONE` mentia; SafetyAgent wire `check_all`; RAM Tickv≠Flushed |
 | 355 | k_hal R1 | Bughunt honesty | Rings Intel + RF + flip | RCS `0x120000`→`0x2000`; TAIL estava no START; CTL `0x3001`; tail/HEAD **bytes**+mask; iwlwifi **não** fabrica SSID; page_flip DSPSURF readback; kv_dma/VRAM floor; CapGate DENY=`warn` |
 | 354 | Boot/NSGDB/k_nano | Sync + K33 + R0 bughunt | Timeout honesto + GC fora do boot | neural-sgdb **1.1.20** (junction/sync); K33[28]=compact FileFlash no put → GC suspend + deferred Runtime; ATA TSC 5s; Tickv mount deadline 3s DEGRADED; **AHCI CI timeout era falso sucesso**; e1000/virtio-net reset fail-closed; QEMU re-teste AWAITING |

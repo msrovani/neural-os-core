@@ -1,4 +1,6 @@
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
+use core::sync::atomic::{AtomicPtr, Ordering};
+
 const MANIFEST: AgentManifest = AgentManifest {
     name: "boot_log",
     kind: AgentKind::Skill,
@@ -10,6 +12,14 @@ const MANIFEST: AgentManifest = AgentManifest {
 const MAX_ROOT_CLUSTERS: u32 = 8;
 const MAX_BOOT_LOG_BYTES: usize = 64 * 1024;
 
+/// Bridge: bin instala a implementação orçada (sandbox/USB-MSC). Sem bridge = fallback ATA local.
+type ReadBootLogFn = fn() -> Option<alloc::string::String>;
+static READ_BOOT_LOG_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+
+pub fn register_read_boot_log(f: ReadBootLogFn) {
+    READ_BOOT_LOG_FN.store(f as *mut (), Ordering::Release);
+}
+
 pub struct BootLogAgent;
 
 impl BootLogAgent {
@@ -18,9 +28,18 @@ impl BootLogAgent {
     /// Le o ultimo log de boot e retorna como string para o Cortex
     /// Suporta FAT32 (B<TICK>.LOG) e LogFsAgent (memoria)
     pub fn read_last_boot_log() -> Option<alloc::string::String> {
+        let ptr = READ_BOOT_LOG_FN.load(Ordering::Acquire);
+        if !ptr.is_null() {
+            let f: ReadBootLogFn = unsafe { core::mem::transmute(ptr) };
+            return f();
+        }
+        Self::read_last_boot_log_local()
+    }
+
+    fn read_last_boot_log_local() -> Option<alloc::string::String> {
         // Boot USB unificado: MSC no mesmo stick — walk FAT via BOT trava init_phase.
         if k_nano::globals::USB_MSC.lock().is_some() {
-            k_nano::slog_kai!("BOOTLOG", "info", "skip FAT walk (USB-MSC boot)");
+            k_nano::slog_kai!("BOOTLOG", "warn", "skip FAT walk (USB-MSC boot)");
         } else {
         // Tenta ler do disco ATA primeiro
         let ata_guard = k_nano::ATA_DRIVER.lock();

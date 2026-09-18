@@ -1,6 +1,6 @@
-# STATE — neural-os-core v1.9.99-s356 — k_ai bughunt R2 honesty
+# STATE — neural-os-core v1.9.99-s357 — neural-kernel bughunt bin honesty
 
-#   PISTA ATIVA: s356 — SelfHeal respawn/migrate/checkpoint; Safety wire; SGDB volatile/LIGHT/L4 BQ
-#   Residual: TransformerTrainer backward; BQ dim era; Agency DEGRADED; token budget
-#   PISTA ANTERIOR: s355 k_hal R1 Intel/WiFi; s354 NSGDB 1.1.20 + K33 Tickv
+#   PISTA ATIVA: s357 — PS/2 TSC; RESPAWN ConsoleAgent+voz; BEI try_new; GGUF truncado; boot_log bridge
+#   Residual: dual MemoryAgent; isolation_ring exit0; órfãos shell/fs; Cap-only Ok
+#   PISTA ANTERIOR: s356 k_ai R2; s355 k_hal; s354 NSGDB/K33
 #   Não declarar v2.0.0

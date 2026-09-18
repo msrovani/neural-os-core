@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s357] - 2026-09-18 — neural-kernel bughunt (bin honesty)
+
+- Boot: PS/2 i8042 com budget TSC; USB/StorageBus skip=`warn`; slog ok/warn/fail; TICKV FAIL≠SKIP
+- Fleet: urgency pós-register (`audio_input`); RESPAWN ConsoleAgent + voz/infer/boot_log; unknown=`warn`
+- BEI: `try_new` sem panic; connect PARTIAL/noop; boot_log bridge k_ai←bin; GGUF refuse truncado
+- Limpeza: `smp/spsc` pub use; link_watcher sem MMIO fantasma; NETFS/Cap slog honesty
+- SESSION_357; IDEA #576–#578
+
 ## [1.9.99-s356] - 2026-09-18 — k_ai bughunt (R2 honesty)
 
 - SelfHeal: respawn bridge transmute; migrate `TargetFoundNotMigrated`; checkpoint refuse sem bitmap; snapshot heap; AI JSON parse; slog `ok`/`warn`

@@ -55,10 +55,17 @@ pub fn hot_swap_from_net(path: &str) -> Result<alloc::string::String, alloc::str
             break; // server parou de mandar
         }
     }
+    if total_written < total {
+        return Err(alloc::format!(
+            "Range truncado wrote={}/{} — refuse load parcial",
+            total_written,
+            total
+        ));
+    }
     crate::gguf::load_gguf_streaming(&dest).map_err(|e| alloc::format!("GGUF header: {}", e))?;
     k_nano::slog_bin!(
         "GGUF",
-        "info",
+        "ok",
         "Net stream-to-disk OK dest={} bytes={}/{}",
         dest,
         total_written,
@@ -75,7 +82,7 @@ pub fn hot_swap_from_ata(path: &str) -> Result<(), alloc::string::String> {
 pub fn log_airllm_residuals() {
     k_nano::slog_bin!(
         "GGUF",
-        "info",
+        "warn",
         "AirLLM residuals: ATA/Net hot-swap OK; K-quants Q2_K/Q3_K/Q5_K OK; forward_streaming OK; DMA prefetch = AWAITING"
     );
 }
