@@ -216,9 +216,31 @@ impl E1000Driver {
 
         // Reset
         self.write32(REG_CTRL, CTRL_RST);
-        for _ in 0..100_000 {
-            if self.read32(REG_CTRL) & CTRL_RST == 0 { break; }
-            core::hint::spin_loop();
+        let mut rst_ok = false;
+        if crate::tsc::tsc_hz() != 0 {
+            let t0 = crate::tsc::now_us();
+            loop {
+                if self.read32(REG_CTRL) & CTRL_RST == 0 {
+                    rst_ok = true;
+                    break;
+                }
+                if crate::tsc::now_us().saturating_sub(t0) > 2_000_000 {
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+        } else {
+            for _ in 0..100_000 {
+                if self.read32(REG_CTRL) & CTRL_RST == 0 {
+                    rst_ok = true;
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+        }
+        if !rst_ok {
+            crate::slog_nano!("Net", "warn", "e1000 Reset TIMEOUT — CTRL_RST stuck");
+            return false;
         }
         crate::slog_nano!("Net", "e1000", "Reset OK");
 

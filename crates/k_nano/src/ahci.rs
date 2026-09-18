@@ -39,6 +39,34 @@ const SATA_SIG_ATAPI: u32 = 0xEB140101;
 const SATA_SIG_PM: u32 = 0x96690101;
 const SATA_SIG_SEMB: u32 = 0xCD340101;
 
+/// Espera PxCI bit0 limpar. Antes: 100k spin + return true mesmo se CI ainda set
+/// (falso sucesso). Agora: TSC 5s ou spin fallback; timeout → false.
+unsafe fn wait_ci_clear(port_base: u64) -> bool {
+    const BUDGET_US: u64 = 5_000_000;
+    const SPIN_FALLBACK: u32 = 100_000;
+    if crate::tsc::tsc_hz() != 0 {
+        let t0 = crate::tsc::now_us();
+        loop {
+            let ci = core::ptr::read_volatile((port_base + PXCI) as *const u32);
+            if ci & 1 == 0 {
+                return true;
+            }
+            if crate::tsc::now_us().saturating_sub(t0) > BUDGET_US {
+                return false;
+            }
+            core::hint::spin_loop();
+        }
+    }
+    for _ in 0..SPIN_FALLBACK {
+        let ci = core::ptr::read_volatile((port_base + PXCI) as *const u32);
+        if ci & 1 == 0 {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
+}
+
 const AHCI_DEV_NONE: u32 = 0;
 const AHCI_DEV_ATA: u32 = 1;  // SATA drive
 const AHCI_DEV_ATAPI: u32 = 2; // SATAPI drive
@@ -237,10 +265,9 @@ impl AhciDriver {
         // para CLB/CT/FIS/PRDT chegaram ao barramento PCIe)
         core::arch::asm!("sfence", options(nostack, preserves_flags));
         core::ptr::write_volatile((port_base + PXCI) as *mut u32, 1);
-        for _ in 0..100000 {
-            let ci = core::ptr::read_volatile((port_base + PXCI) as *const u32);
-            if ci & 1 == 0 { break; }
-            core::hint::spin_loop();
+        if !wait_ci_clear(port_base) {
+            crate::slog_nano!("Disk", "warn", "AHCI read CI TIMEOUT port={}", port_idx);
+            return false;
         }
         // Verifica erro: PxIS.TFES (bit 30) = Task File Error Status
         let is = core::ptr::read_volatile((port_base + PXIS) as *const u32);
@@ -297,10 +324,9 @@ impl AhciDriver {
 
         core::arch::asm!("sfence", options(nostack, preserves_flags));
         core::ptr::write_volatile((port_base + PXCI) as *mut u32, 1);
-        for _ in 0..100000 {
-            let ci = core::ptr::read_volatile((port_base + PXCI) as *const u32);
-            if ci & 1 == 0 { break; }
-            core::hint::spin_loop();
+        if !wait_ci_clear(port_base) {
+            crate::slog_nano!("Disk", "warn", "AHCI write CI TIMEOUT port={}", port_idx);
+            return false;
         }
         let is = core::ptr::read_volatile((port_base + PXIS) as *const u32);
         if is & (1 << 30) != 0 {

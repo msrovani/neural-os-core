@@ -31,9 +31,9 @@ pub use memory_doc::{MemoryDoc, MemoryDocView, MemoryLayer, VectorClock};
 pub use e2e_smoke::memory_checkpoint_e2e_smoke;
 pub use metrics::report_line as metrics_report;
 pub use store::{
-    backend, boot_init, checkpoint_working, get_doc, get_hanr, get_kv, get_pkg_body, get_pkg_meta,
-    hw_get, ns, prune_working_ram, put_doc, put_hanr, put_kv, put_pkg_body, put_pkg_meta,
-    put_skill_blob, ready, status as store_status, with_store,
+    backend, boot_init, boot_init_deferred, boot_sgdb_heavy_pending, checkpoint_working, get_doc,
+    get_hanr, get_kv, get_pkg_body, get_pkg_meta, hw_get, ns, prune_working_ram, put_doc, put_hanr,
+    put_kv, put_pkg_body, put_pkg_meta, put_skill_blob, ready, status as store_status, with_store,
 };
 
 use alloc::vec::Vec;

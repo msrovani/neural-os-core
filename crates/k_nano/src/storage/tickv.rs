@@ -10,6 +10,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
 use super::flash::{init_flash, ActiveFlash, FlashController, FLASH, RamFlash};
@@ -38,6 +39,40 @@ fn hdr_tickv_shaped(hdr: &[u8]) -> bool {
 }
 /// Dispara GC se append_off ultrapassar isto (ou dead/live).
 const HIGH_WATER: u64 = 256 * 1024;
+
+/// Boot/FileFlash: `compact()` reescreve o log via ATA PIO (wipe+rewrite) —
+/// minutos de silêncio se append_off ≫ HIGH_WATER (K33[28] soft-hang).
+/// Suspenso do mount file/nvme até `set_gc_suspended(false)` no Runtime.
+static GC_SUSPENDED: AtomicBool = AtomicBool::new(false);
+
+/// Teto wall-clock p/ scan de mount (ckpt + recover). Sem TSC = sem teto (host tests).
+const MOUNT_SCAN_BUDGET_US: u64 = 3_000_000;
+
+fn mount_scan_deadline() -> u64 {
+    let now = crate::tsc::now_us();
+    if now == 0 {
+        return u64::MAX; // TSC não calibrado — não aborta (testes host)
+    }
+    now.saturating_add(MOUNT_SCAN_BUDGET_US)
+}
+
+fn mount_scan_expired(deadline: u64) -> bool {
+    deadline != u64::MAX && crate::tsc::now_us() >= deadline
+}
+
+/// Suspende / retoma `maybe_gc` (boot alive). Idempotente.
+pub fn set_gc_suspended(suspended: bool) {
+    GC_SUSPENDED.store(suspended, Ordering::Release);
+    if suspended {
+        crate::slog_nano!("TICKV", "warn", "GC compact SUSPENDED (boot/FileFlash ATA)");
+    } else {
+        crate::slog_nano!("TICKV", "ok", "GC compact RESUMED");
+    }
+}
+
+pub fn gc_is_suspended() -> bool {
+    GC_SUSPENDED.load(Ordering::Acquire)
+}
 const DEAD_RATIO_NUM: u64 = 1; // dead > live * ratio → GC
 const DEAD_RATIO_DEN: u64 = 1;
 
@@ -244,11 +279,17 @@ impl TickvLite {
                 self.backend = init_flash();
             }
         }
-        // D3: tenta ckpt rápido; fallback full scan
-        if self.try_mount_from_ckpt().is_err() {
-            self.recover()?;
+        // D3: tenta ckpt rápido; fallback full scan (um deadline TSC p/ os dois)
+        let deadline = mount_scan_deadline();
+        if self.try_mount_from_ckpt(deadline).is_err() {
+            self.recover(deadline)?;
         }
         self.ready = true;
+        // File/NVMe: nunca compact automático no boot — wipe de MB via PIO
+        // congela K33 (SESSION_354 deep). Runtime chama set_gc_suspended(false).
+        if self.backend == "file" || self.backend == "nvme" {
+            set_gc_suspended(true);
+        }
         Ok(())
     }
 
@@ -297,7 +338,7 @@ impl TickvLite {
         self.put_raw("sys/tickv_ckpt", &body)
     }
 
-    fn try_mount_from_ckpt(&mut self) -> Result<(), &'static str> {
+    fn try_mount_from_ckpt(&mut self, deadline: u64) -> Result<(), &'static str> {
         self.index.clear();
         self.append_off = 0;
         // Scan: só CRC do record `sys/tickv_ckpt` (demais só lê key) — mais barato que recover.
@@ -306,6 +347,16 @@ impl TickvLite {
         let mut hdr = [0u8; HEADER];
         let mut found: Option<Vec<u8>> = None;
         while off + HEADER as u64 <= size {
+            if mount_scan_expired(deadline) {
+                crate::slog_nano!(
+                    "TICKV",
+                    "warn",
+                    "ckpt scan TIMEOUT off={}/{} — fallback recover",
+                    off,
+                    size
+                );
+                return Err("ckpt scan timeout");
+            }
             self.with_flash(|fl| fl.read(off, &mut hdr))??;
             if !hdr_tickv_shaped(&hdr) {
                 if hdr.iter().all(|&b| b == 0 || b == 0xFF) {
@@ -422,7 +473,8 @@ impl TickvLite {
     }
 
     /// Recover: CRC fail → corrupt++, tenta avançar 512B; magic break = fim do log.
-    fn recover(&mut self) -> Result<(), &'static str> {
+    /// Timeout TSC → mount degradado (índice parcial + append_off = off atual).
+    fn recover(&mut self, deadline: u64) -> Result<(), &'static str> {
         self.index.clear();
         self.append_off = 0;
         self.stats.live_bytes = 0;
@@ -431,6 +483,17 @@ impl TickvLite {
         let mut off = 0u64;
         let mut hdr = [0u8; HEADER];
         while off + HEADER as u64 <= size {
+            if mount_scan_expired(deadline) {
+                crate::slog_nano!(
+                    "TICKV",
+                    "warn",
+                    "recover TIMEOUT off={}/{} keys={} — mount DEGRADED",
+                    off,
+                    size,
+                    self.index.len()
+                );
+                break;
+            }
             self.with_flash(|fl| fl.read(off, &mut hdr))??;
             if !hdr_tickv_shaped(&hdr) {
                 // skip aligned hole (pós-GC / padding) até achar magic ou zeros longos
@@ -509,6 +572,14 @@ impl TickvLite {
     }
 
     fn maybe_gc(&mut self) -> Result<(), &'static str> {
+        if GC_SUSPENDED.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        // File/NVMe: compact = wipe+rewrite via PIO — nunca no hot path de put.
+        // Compact explícito (`compact()` / SleepCycle) continua OK.
+        if self.backend == "file" || self.backend == "nvme" {
+            return Ok(());
+        }
         let need = self.append_off > HIGH_WATER
             || (self.stats.live_bytes > 0
                 && self.stats.dead_bytes * DEAD_RATIO_DEN

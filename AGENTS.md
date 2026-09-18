@@ -190,8 +190,8 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: **v1.9.99-s328 TEST** — Full Infer D+B+C (Falcon3 off BSP / InferQueue WS-H);
-# s327 freeze bisector + MSC Port Power; s321 k_nano slimming;
+# Current Sprint: **v1.9.99-s354 TEST** — NSGDB 1.1.20 + K33 Tickv GC + k_nano timeout honesty;
+# s353 bughunt heap/infer; s328 Full Infer D+B+C; s327 freeze bisector;
 # s307 SMP AIOS N-cores (roles∝N, MAX_CORES=256 RQ, smp-runqueue);
 
 # s306 Dual QEMU 4c mesh Master/Worker; s305 4c P6+Jarbas; s302 Ring3 Onda 6;
@@ -323,6 +323,7 @@ ID=9001) retry periódico até FAT_READY=true.
 - **Skills a quente via LLM**: Nenhum skill é hardcoded. O LLM gera skills sob demanda e o SkillObserver registra. Ex: "grava video", "imprime formulario" viram skills gerados pelo LLM, não por enum Rust.
 
 # Lições Críticas Aprendidas
+- **Timeout que retorna sucesso é pior que hang (SESSION_354):** AHCI CI poll 100k spins + `return true` e e1000 slog `Reset OK` com CTRL_RST stuck = honesty falsa (IO “ok” com device morto). Padrão: budget TSC (`now_us`) + `false`/`None` + slog `warn`. Idem Tickv mount: deadline compartilhado ckpt+recover → DEGRADED parcial, nunca hang eterno. Compact FileFlash no `put` (`HIGH_WATER`→`maybe_gc`) = K33[28] — suspender GC no mount file/nvme até Runtime.
 - **HDA stream format `0x21` != "16-bit 48k stereo" (SESSION_346):** no layout Intel HDA §3.7.1 (bits 14:12 canais−1, 10:8 bits/amostra, 6:4 base rate, 3:0 mult/div) `0x21` = **8-bit mono 32 kHz NÃO-PCM** — o comentário ao lado mentia. 16-bit/48k/estéreo = `0x1100`; 16k mono = `0x0150`. Conferir contra a tabela (Linux `AC_FMT_*` / QEMU `hda-codec-common.h`), nunca contra o comentário.
 - **Loop que "processa 16 entradas" mas captura o índice FORA do loop (SESSION_346):** `let rpi = RPI.load(); for _ in 0..16 { idx = rpi % 16; ... RPI.store((rpi+1)%16) }` lê a MESMA entrada 16× e publica 32k amostras duplicadas por interrupção. Índice derivado do HW sempre vem de LPIB (posição no buffer cíclico), e IRQ não aloca/publisha — só sinaliza (`PENDING`) para o tick drenar.
 - **`chunks(N)` + `if chunk.len() < N { continue }` = descarte silencioso de `len % N` (SESSION_346):** com eventos de 512 e frame 320, 192/512 (37,5%) do áudio ia embora, sempre nas mesmas fronteiras. Produtor de áudio deve publicar frames de tamanho FIXO com carry-over; o consumidor não fatia.

@@ -15,8 +15,9 @@ agent-core = { path = "../agent-core" }
 cortex = { path = "../cortex" }
 k-nano = { path = "../k_nano" }
 k-hal = { path = "../k_hal" }
-# neural-sgdb v1.1.16: no_std puro sem default features (SSE2 gateado off
-# x86_64-unknown-none no upstream 3cc3010) — host E bare-metal.
+# neural-sgdb: path = junction local → C:\DEV\neural-sgdb (repo comunitário).
+# Sempre acompanhar a tip de lá (hoje v1.1.20). default-features=false =
+# no_std puro (SSE2 gateado off em x86_64-unknown-none desde upstream 3cc3010).
 neural-sgdb = { path = "../neural-sgdb", default-features = false }
 
 [features]

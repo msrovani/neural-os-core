@@ -152,25 +152,70 @@ impl AtaDriver {
         st != 0 && st != 0xFF
     }
 
-    unsafe fn wait_bsy(&self) {
-        for _ in 0..10000000 {
-            if read_io(self.io_base + 7) & 0x80 == 0 { return; }
+    /// Budget wall-clock p/ BSY/DRQ (SESSION_285/354). Spin fixo mente em TCG/WHPX.
+    const WAIT_BUDGET_US: u64 = 5_000_000;
+    const WAIT_SPIN_FALLBACK: u32 = 10_000_000;
+
+    /// Espera BSY=0. Retorna false em timeout (não emite cmd depois).
+    unsafe fn wait_bsy(&self) -> bool {
+        if crate::tsc::tsc_hz() != 0 {
+            let t0 = crate::tsc::now_us();
+            loop {
+                if read_io(self.io_base + 7) & 0x80 == 0 {
+                    return true;
+                }
+                if crate::tsc::now_us().saturating_sub(t0) > Self::WAIT_BUDGET_US {
+                    crate::slog_nano!("Disk", "warn", "ATA wait_bsy TIMEOUT 5s io={:#x}", self.io_base);
+                    return false;
+                }
+                core::hint::spin_loop();
+            }
+        }
+        for _ in 0..Self::WAIT_SPIN_FALLBACK {
+            if read_io(self.io_base + 7) & 0x80 == 0 {
+                return true;
+            }
             core::hint::spin_loop();
         }
+        crate::slog_nano!("Disk", "warn", "ATA wait_bsy TIMEOUT spin io={:#x}", self.io_base);
+        false
     }
 
     unsafe fn wait_drq(&self) -> bool {
-        for _ in 0..10000000 {
+        if crate::tsc::tsc_hz() != 0 {
+            let t0 = crate::tsc::now_us();
+            loop {
+                let st = read_io(self.io_base + 7);
+                if st & 0x08 != 0 {
+                    return true;
+                }
+                if st & 0x01 != 0 {
+                    return false;
+                }
+                if crate::tsc::now_us().saturating_sub(t0) > Self::WAIT_BUDGET_US {
+                    crate::slog_nano!("Disk", "warn", "ATA wait_drq TIMEOUT 5s io={:#x}", self.io_base);
+                    return false;
+                }
+                core::hint::spin_loop();
+            }
+        }
+        for _ in 0..Self::WAIT_SPIN_FALLBACK {
             let st = read_io(self.io_base + 7);
-            if st & 0x08 != 0 { return true; }
-            if st & 0x01 != 0 { return false; }
+            if st & 0x08 != 0 {
+                return true;
+            }
+            if st & 0x01 != 0 {
+                return false;
+            }
             core::hint::spin_loop();
         }
         false
     }
 
     unsafe fn cmd(&self, lba: u32, count: u8, cmd: u8) {
-        self.wait_bsy();
+        if !self.wait_bsy() {
+            return;
+        }
         let head = if self.slave { 0xF0u8 } else { 0xE0u8 };
         // Delay apos wait_bsy
         for _ in 0..100 { core::hint::spin_loop(); }
@@ -189,7 +234,9 @@ impl AtaDriver {
 
     /// ATA IDENTIFY — obtem informacoes do disco
     unsafe fn identify(&self) -> Option<[u16; 256]> {
-        self.wait_bsy();
+        if !self.wait_bsy() {
+            return None;
+        }
 
         // Comando IDENTIFY — select master (0xA0) or slave (0xB0)
         let sel = if self.slave { 0xB0u8 } else { 0xA0u8 };
@@ -201,7 +248,9 @@ impl AtaDriver {
         write_io(self.io_base + 7, 0xEC);
         let st = read_io(self.io_base + 7);
         if st == 0 { return None; }
-        self.wait_bsy();
+        if !self.wait_bsy() {
+            return None;
+        }
         if !self.wait_drq() { return None; }
         let mut data = [0u16; 256];
         for i in 0..256 {
@@ -266,7 +315,10 @@ impl AtaDriver {
         // 400ns delay pós-comando (ATA spec t0). Em TSC calibrado ~100-400 cycles.
         crate::tsc::sleep_us(1);
         for s in 0..count as usize {
-            self.wait_bsy();
+            if !self.wait_bsy() {
+                crate::slog_nano!("Disk", "ata", "read: BSY timeout LBA={} s={}/{} slave={}", lba, s, count, self.slave);
+                return false;
+            }
             if !self.wait_drq() {
                 crate::slog_nano!("Disk", "ata", "read: DRQ nao pronto LBA={} s={}/{} slave={}", lba, s, count, self.slave);
                 return false;
@@ -292,15 +344,19 @@ impl AtaDriver {
         buf[4..8].copy_from_slice(&0u32.to_le_bytes()); // LBA high (LBA48)
         buf[8..10].copy_from_slice(&(count as u16).to_le_bytes());
         self.cmd(lba_start, 1, 0x06); // DATA SET MANAGEMENT
-        self.wait_bsy();
+        if !self.wait_bsy() {
+            return false;
+        }
         if !self.wait_drq() { return false; }
         for i in 0..256 {
             let w = (buf[i * 2] as u16) | ((buf[i * 2 + 1] as u16) << 8);
             core::arch::asm!("out dx, ax", in("dx") self.io_base, in("ax") w, options(nostack, preserves_flags));
         }
-        self.wait_bsy();
+        if !self.wait_bsy() {
+            return false;
+        }
         write_io(self.io_base + 7, 0xE7);
-        self.wait_bsy();
+        let _ = self.wait_bsy();
         true
     }
 
@@ -349,7 +405,9 @@ impl AtaDriver {
         if count == 0 { return false; }
         self.cmd(lba, count, 0x30);
         for s in 0..count as usize {
-            self.wait_bsy();
+            if !self.wait_bsy() {
+                return false;
+            }
             if !self.wait_drq() { return false; }
             let off = s * 512;
             for i in 0..256 {
@@ -359,9 +417,11 @@ impl AtaDriver {
                 core::arch::asm!("out dx, ax", in("dx") self.io_base, in("ax") w, options(nostack, preserves_flags));
             }
         }
-        self.wait_bsy();
+        if !self.wait_bsy() {
+            return false;
+        }
         write_io(self.io_base + 7, 0xE7);
-        self.wait_bsy();
+        let _ = self.wait_bsy();
         true
     }
 }

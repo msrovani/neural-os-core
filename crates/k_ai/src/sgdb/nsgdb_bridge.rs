@@ -54,7 +54,7 @@ pub fn nsgdb_init() -> usize {
     k_nano::slog_kai!(
         "NSGDB",
         "init",
-        "OK — neural-sgdb v1.1.11 via TickvStorageAdapter (records={})",
+        "OK — neural-sgdb via TickvStorageAdapter (records={})",
         n
     );
     n
@@ -64,6 +64,11 @@ pub fn nsgdb_init() -> usize {
 pub fn with_nsgdb<R>(f: impl FnOnce(&mut neural_sgdb::Sgdb) -> R) -> Option<R> {
     let mut g = NSGDB.lock();
     g.as_mut().map(|s| f(&mut s.0))
+}
+
+/// True se `nsgdb_init` já abriu o Sgdb global.
+pub fn nsgdb_is_ready() -> bool {
+    NSGDB.lock().is_some()
 }
 
 // ─── Fase 2.5-A: Recall Tipado (Hits completos) ─────────────────────────────

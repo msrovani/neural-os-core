@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s354] - 2026-09-18 — NSGDB 1.1.20 + K33 + k_nano bughunt
+
+- Sync neural-sgdb → **1.1.20** (`tools/sync-neural-sgdb.ps1` + junction); bridge `k_ai` alinhada
+- Boot K33[28]: Tickv `set_gc_suspended` file/nvme; `boot_init` LIGHT + deferred no Runtime
+- k_nano: ATA waits TSC 5s; Tickv mount deadline 3s (DEGRADED); AHCI `wait_ci_clear` fail-closed;
+  e1000 reset timeout → false; virtio-net reset capped
+- SESSION_354; IDEA #567–#569; QEMU re-boot AWAITING
+
 ## [1.9.99-s353] - 2026-09-16 — Bughunt heap/infer (deep)
 
 - Fonte única de layer: `forward_with_kv*` → `apply_one_layer` (fim da dupla attn insegura)

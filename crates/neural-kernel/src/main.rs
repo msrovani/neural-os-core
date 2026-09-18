@@ -2521,11 +2521,22 @@ pub(crate) fn kernel_boot(
     k33_step!("sgdb...");
     k_ai::sgdb::boot_init();
     k33_step!("sgdb_boot");
-    // IDEA #539c: ramlog → memória L3 episódica (Remember entre boots). Roda
-    // APÓS boot_init para o recall cross-boot enxergar o NSGDB montado (Sgdb::open).
-    k_ai::boot_observe::ingest_bootlog();
-    // ADR-0100 T-001 Onda 0.1 + 0102 §11.5: final BOOT_AI após boot_init+ingest (observe/plan/act/verify)
-    k_nano::boot_report::publish_boot_ai();
+    // IDEA #539c: ramlog → L3. Só se NSGDB já abriu (RAM); em file/nvme o
+    // ingest vai com boot_init_deferred no Runtime (evita K33[28] stall).
+    if k_ai::sgdb::nsgdb_bridge::nsgdb_is_ready() {
+        k_ai::boot_observe::ingest_bootlog();
+        // ADR-0100 T-001 Onda 0.1 + 0102 §11.5: final BOOT_AI após boot_init+ingest
+        k_nano::boot_report::publish_boot_ai();
+    } else if k_ai::sgdb::boot_sgdb_heavy_pending() {
+        k_nano::slog_bin!(
+            "SGDB",
+            "warn",
+            "ingest_bootlog deferred (heavy pending) → Runtime"
+        );
+    } else {
+        k_ai::boot_observe::ingest_bootlog();
+        k_nano::boot_report::publish_boot_ai();
+    }
     {
         let p = k_ai::sgdb::hamming_kernel_name();
         k_nano::slog_bin!("sgdb", "hamming", "{}", p);
@@ -4939,6 +4950,9 @@ pub(crate) fn kernel_boot(
 
     // SESSION_345 F1: pins FAT só após Runtime vivo (overwrite-only se TLSPINS prealloc).
     crate::tls_trust::persist_pins_to_fat();
+
+    // SESSION_354: rebuild+nsgdb adiado do K33 (backend=file ATA stall).
+    k_ai::sgdb::boot_init_deferred();
 
     // Onda 6 — residuals AirLLM (ATA soft path OK; DMA/stream/K-quant AWAITING).
     crate::gguf_streaming::log_airllm_residuals();

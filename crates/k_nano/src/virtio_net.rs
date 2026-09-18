@@ -151,7 +151,15 @@ impl VirtIoDevice {
 
             // Reset
             io.write8(REG_STATUS, 0);
-            while io.read8(REG_STATUS) != 0 { core::hint::spin_loop(); }
+            let mut spins = 0u32;
+            while io.read8(REG_STATUS) != 0 {
+                core::hint::spin_loop();
+                spins += 1;
+                if spins > 1_000_000 {
+                    crate::slog_nano!("VIRTIO", "fail", "reset nao completa");
+                    return None;
+                }
+            }
 
             // Acknowledge + Driver
             io.add_status(STATUS_ACK);

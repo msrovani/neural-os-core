@@ -35,19 +35,147 @@ pub fn backend() -> &'static str {
     }
 }
 
-/// Boot / init: Hamming dispatch + engine + rebuild ART/BQ.
-/// ADR-0082 Onda CPU: popula /hw/* no SGDB (valores string lowercase).
+use core::sync::atomic::AtomicBool;
+
+/// Rebuild+nsgdb_open adiado (K33[28] soft-hang em backend=file ATA — SESSION_346/354).
+static HEAVY_DEFERRED: AtomicBool = AtomicBool::new(false);
+static HEAVY_DONE: AtomicBool = AtomicBool::new(false);
+
+fn boot_ckpt(tag: &str) {
+    k_nano::slog_kai!("SGDB", "ok", "boot_init:{}", tag);
+}
+
+/// Boot / init: Hamming + engine leve. Em `backend=file|nvme`:
+/// - rebuild ART/BQ + `nsgdb_init` → [`boot_init_deferred`] (Runtime)
+/// - `populate_hw` também adiado (cada put_kv podia disparar compact ATA)
+/// Causa raiz deep (SESSION_354): `HIGH_WATER=256KB` + `maybe_gc→compact`
+/// wipe do NSGDB.BIN via PIO = soft-hang em `K33[28] sgdb...`.
+/// RAM continua síncrono (dev/test rápido).
 pub fn boot_init() {
+    boot_ckpt("hamming");
     super::hamming_dispatch::select_best_hamming_kernel();
+    boot_ckpt("ensure");
     ensure_ready();
     if k_nano::storage::is_ready() {
-        let n = with_engine(|e| e.rebuild_indices_from_tickv()).unwrap_or(0);
-        let _ = n;
-        // Fase 2: inicializa neural-sgdb global (ART/BQ externos)
-        let _nsgdb_n = super::nsgdb_bridge::nsgdb_init();
-        populate_hw_namespace();
+        let backend = k_nano::storage::backend_name();
+        let (md_keys, append_off, live) = k_nano::storage::with_tickv(|kv| {
+            (
+                kv.keys_with_prefix("md/").len(),
+                kv.append_off(),
+                kv.live_keys(),
+            )
+        })
+        .unwrap_or((0, 0, 0));
+        boot_ckpt(&format!(
+            "probe backend={} md_keys={} live={} append_off={}",
+            backend, md_keys, live, append_off
+        ));
+        if backend == "ram" {
+            run_heavy_index_boot(backend, md_keys);
+            boot_ckpt("hw_ns");
+            populate_hw_namespace();
+        } else {
+            HEAVY_DEFERRED.store(true, Ordering::Release);
+            k_nano::slog_kai!(
+                "SGDB",
+                "warn",
+                "boot_init LIGHT — defer rebuild+nsgdb+hw_ns (backend={} md_keys={} live={} append={}) → Runtime",
+                backend,
+                md_keys,
+                live,
+                append_off
+            );
+        }
+    } else {
+        boot_ckpt("tickv_not_ready");
     }
+    boot_ckpt("hydrate");
+    // hydrate pode put_hanr — GC auto off em file (tickv); seguro.
     crate::boot_observe::hydrate_memory();
+    boot_ckpt("done");
+}
+
+fn run_heavy_index_boot(backend: &str, md_keys: usize) {
+    let t0 = k_nano::tsc::now_us();
+    boot_ckpt("rebuild_k_ai");
+    let n = with_engine(|e| e.rebuild_indices_from_tickv()).unwrap_or(0);
+    let t1 = k_nano::tsc::now_us();
+    k_nano::slog_kai!(
+        "SGDB",
+        "ok",
+        "rebuild_indices n={} md_keys={} backend={} us={}",
+        n,
+        md_keys,
+        backend,
+        t1.saturating_sub(t0)
+    );
+    boot_ckpt("nsgdb_open");
+    let nsgdb_n = super::nsgdb_bridge::nsgdb_init();
+    let t2 = k_nano::tsc::now_us();
+    k_nano::slog_kai!(
+        "SGDB",
+        "ok",
+        "nsgdb_init records≈{} us={}",
+        nsgdb_n,
+        t2.saturating_sub(t1)
+    );
+    HEAVY_DONE.store(true, Ordering::Release);
+    HEAVY_DEFERRED.store(false, Ordering::Release);
+}
+
+/// Runtime: completa rebuild+nsgdb se [`boot_init`] adiou (backend file/nvme).
+/// Idempotente. Depois `ingest_bootlog` + `publish_boot_ai`.
+pub fn boot_init_deferred() {
+    if HEAVY_DONE.load(Ordering::Acquire) {
+        return;
+    }
+    if !HEAVY_DEFERRED.load(Ordering::Acquire) && super::nsgdb_bridge::nsgdb_is_ready() {
+        HEAVY_DONE.store(true, Ordering::Release);
+        return;
+    }
+    if !k_nano::storage::is_ready() {
+        k_nano::slog_kai!("SGDB", "warn", "boot_init_deferred SKIP (tickv not ready)");
+        return;
+    }
+    let backend = k_nano::storage::backend_name();
+    let md_keys = k_nano::storage::with_tickv(|kv| kv.keys_with_prefix("md/").len())
+        .unwrap_or(0);
+    k_nano::slog_kai!(
+        "SGDB",
+        "ok",
+        "boot_init_deferred START backend={} md_keys={}",
+        backend,
+        md_keys
+    );
+    // Corpus enorme no stick: não bloquear o scheduler (UI/fleet). Índices
+    // ficam frios até SleepCycle/recall forçar rebuild pontual.
+    if md_keys > 512 {
+        k_nano::slog_kai!(
+            "SGDB",
+            "warn",
+            "boot_init_deferred SKIP heavy (md_keys={} >512) — scheduler first",
+            md_keys
+        );
+        boot_ckpt("hw_ns_deferred");
+        populate_hw_namespace();
+        HEAVY_DEFERRED.store(false, Ordering::Release);
+        HEAVY_DONE.store(true, Ordering::Release);
+        k_nano::storage::set_gc_suspended(false);
+        return;
+    }
+    run_heavy_index_boot(backend, md_keys);
+    boot_ckpt("hw_ns_deferred");
+    populate_hw_namespace();
+    crate::boot_observe::ingest_bootlog();
+    k_nano::boot_report::publish_boot_ai();
+    // Retoma flag de suspend; file/nvme ainda não auto-compactam em put
+    // (maybe_gc skip) — SleepCycle/compact() explícito.
+    k_nano::storage::set_gc_suspended(false);
+}
+
+/// True se o caminho pesado (rebuild+nsgdb) ainda não correu.
+pub fn boot_sgdb_heavy_pending() -> bool {
+    HEAVY_DEFERRED.load(Ordering::Acquire) && !HEAVY_DONE.load(Ordering::Acquire)
 }
 
 /// ADR-0082 Onda CPU: `hw/<categoria>/<propriedade>` — valores string lowercase,
