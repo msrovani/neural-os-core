@@ -47,26 +47,26 @@ pub fn demo() -> bool {
     let view = match MemoryDocView::parse(&enc) {
         Ok(v) => v,
         Err(_) => {
-            k_nano::slog_kai!("SGDB", "Q-jump", "Q1 FAIL: MemoryDocView::parse error");
+            k_nano::slog_kai!("SGDB", "fail", "Q1 FAIL: MemoryDocView::parse error");
             return false;
         }
     };
     if view.key() != "hello" || view.payload() != b"world" {
-        k_nano::slog_kai!("SGDB", "Q-jump", "Q1 FAIL: view key/payload mismatch");
+        k_nano::slog_kai!("SGDB", "fail", "Q1 FAIL: view key/payload mismatch");
         return false;
     }
     let dec = match MemoryDoc::decode(&enc) {
         Ok(d) => d,
         Err(_) => {
-            k_nano::slog_kai!("SGDB", "Q-jump", "Q1 FAIL: MemoryDoc::decode error");
+            k_nano::slog_kai!("SGDB", "fail", "Q1 FAIL: MemoryDoc::decode error");
             return false;
         }
     };
     if dec.key != "hello" || dec.payload.as_slice() != b"world" {
-        k_nano::slog_kai!("SGDB", "Q-jump", "Q1 FAIL: decoded key/payload mismatch");
+        k_nano::slog_kai!("SGDB", "fail", "Q1 FAIL: decoded key/payload mismatch");
         return false;
     }
-    k_nano::slog_kai!("SGDB", "Q-jump", "Q1 PASS: MemoryDoc roundtrip");
+    k_nano::slog_kai!("SGDB", "ok", "Q1 PASS: MemoryDoc roundtrip");
 
     // Q2: ART smoke (3 inserts + get + scan_prefix + delete)
     let mut art = ArtIndex::new();
@@ -74,26 +74,26 @@ pub fn demo() -> bool {
     art.insert("md/L1/b", 20);
     art.insert("md/L2/c", 30);
     if art.get("md/L1/a") != Some(10) || art.get("md/L1/b") != Some(20) {
-        k_nano::slog_kai!("SGDB", "Q-jump", "Q2 FAIL: ART get after insert");
+        k_nano::slog_kai!("SGDB", "fail", "Q2 FAIL: ART get after insert");
         return false;
     }
     if art.scan_prefix("md/L1/").len() < 2 {
-        k_nano::slog_kai!("SGDB", "Q-jump", "Q2 FAIL: ART scan_prefix <2");
+        k_nano::slog_kai!("SGDB", "fail", "Q2 FAIL: ART scan_prefix <2");
         return false;
     }
     let _ = art.delete("md/L1/b");
     if art.get("md/L1/b").is_some() {
-        k_nano::slog_kai!("SGDB", "Q-jump", "Q2 FAIL: ART delete did not remove");
+        k_nano::slog_kai!("SGDB", "fail", "Q2 FAIL: ART delete did not remove");
         return false;
     }
-    k_nano::slog_kai!("SGDB", "Q-jump", "Q2 PASS: ART smoke");
+    k_nano::slog_kai!("SGDB", "ok", "Q2 PASS: ART smoke");
 
     // Q3: BQ smoke (hamming + top_k)
     if !bq::smoke() {
-        k_nano::slog_kai!("SGDB", "Q-jump", "Q3 FAIL: BQ smoke");
+        k_nano::slog_kai!("SGDB", "fail", "Q3 FAIL: BQ smoke");
         return false;
     }
-    k_nano::slog_kai!("SGDB", "Q-jump", "Q3 PASS: BQ smoke");
+    k_nano::slog_kai!("SGDB", "ok", "Q3 PASS: BQ smoke");
 
     // Q4: Engine L1 put/get + L4/BQ top_k
     init_global(1);
@@ -123,40 +123,40 @@ pub fn demo() -> bool {
         hits.len() == 1 && hits[0].1 == 0
     });
     if ok != Some(true) {
-        k_nano::slog_kai!("SGDB", "Q-jump", "Q4 FAIL: engine put/get or L4 top_k");
+        k_nano::slog_kai!("SGDB", "fail", "Q4 FAIL: engine put/get or L4 top_k");
         return false;
     }
-    k_nano::slog_kai!("SGDB", "Q-jump", "Q4 PASS: engine + BQ");
+    k_nano::slog_kai!("SGDB", "ok", "Q4 PASS: engine + BQ");
 
     // Q5: remember_exchange + prompt_slice
     layers::remember_exchange("ping", "pong");
     let _ = layers::prompt_slice(512);
-    k_nano::slog_kai!("SGDB", "Q-jump", "Q5 PASS: remember_exchange + prompt_slice");
+    k_nano::slog_kai!("SGDB", "ok", "Q5 PASS: remember_exchange + prompt_slice");
 
     // Q6: HANR put/get
     if store::ready() {
         if store::put_hanr("demo", "ok").is_err() {
-            k_nano::slog_kai!("SGDB", "Q-jump", "Q6 FAIL: HANR put");
+            k_nano::slog_kai!("SGDB", "fail", "Q6 FAIL: HANR put");
             return false;
         }
         match store::get_hanr("demo") {
             Ok(Some(s)) if s == "ok" => {}
             _ => {
-                k_nano::slog_kai!("SGDB", "Q-jump", "Q6 FAIL: HANR get mismatch");
+                k_nano::slog_kai!("SGDB", "fail", "Q6 FAIL: HANR get mismatch");
                 return false;
             }
         }
-        k_nano::slog_kai!("SGDB", "Q-jump", "Q6 PASS: HANR");
+        k_nano::slog_kai!("SGDB", "ok", "Q6 PASS: HANR");
     } else {
-        k_nano::slog_kai!("SGDB", "Q-jump", "Q6 SKIP: store not ready");
+        k_nano::slog_kai!("SGDB", "warn", "Q6 SKIP: store not ready");
     }
 
     // Q7: mini-bench 128/64
     let (b_ok, msg) = bench::bench_smoke(128, 64);
     if b_ok {
-        k_nano::slog_kai!("SGDB", "Q-jump", "Q7 PASS: bench 128/64 ({})", msg);
+        k_nano::slog_kai!("SGDB", "ok", "Q7 PASS: bench 128/64 ({})", msg);
     } else {
-        k_nano::slog_kai!("SGDB", "Q-jump", "Q7 FAIL: bench 128/64 ({})", msg);
+        k_nano::slog_kai!("SGDB", "fail", "Q7 FAIL: bench 128/64 ({})", msg);
     }
     b_ok
 }

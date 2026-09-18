@@ -109,11 +109,12 @@ impl SelfLearningAgent {
         }
         self.persist();
 
-        // 5. Mark Learner slot in ModelHub
+        // 5. Mark Learner slot — honesty: pesos são placeholder 64-dim byte-embed,
+        // NÃO um modelo BitNet treinado. Slot = “memória associativa ativa”.
         cortex::model_hub::mark_slot(cortex::model_hub::ModelSlot::Learner, true);
 
-        k_nano::slog_kai!("SELF-LEARN", "info",
-            "cycle={} samples={} loss={:.4} learned={}",
+        k_nano::slog_kai!("SELF-LEARN", "ok",
+            "cycle={} samples={} loss={:.4} learned={} (placeholder weights + associative recall)",
             self.cycle, pairs.len(), loss, self.learned.len());
 
         loss
@@ -125,15 +126,15 @@ impl SelfLearningAgent {
     pub fn learner_recall(&self, text: &str) -> Option<String> {
         match self.learner_recall_scored(text) {
             Some((out, sim)) if sim >= RECALL_THRESHOLD => {
-                k_nano::slog_kai!("SELF-LEARN", "recall", "hit sim={:.3} -> {}", sim, out);
+                k_nano::slog_kai!("SELF-LEARN", "ok", "hit sim={:.3} -> {}", sim, out);
                 Some(out)
             }
             Some((_, sim)) => {
-                k_nano::slog_kai!("SELF-LEARN", "recall", "miss best_sim={:.3}", sim);
+                k_nano::slog_kai!("SELF-LEARN", "warn", "miss best_sim={:.3}", sim);
                 None
             }
             None => {
-                k_nano::slog_kai!("SELF-LEARN", "recall", "miss (no pairs)");
+                k_nano::slog_kai!("SELF-LEARN", "warn", "miss (no pairs)");
                 None
             }
         }
@@ -325,7 +326,7 @@ impl SelfLearningAgent {
             }
         }
         if self.restored {
-            k_nano::slog_kai!("SELF-LEARN", "info",
+            k_nano::slog_kai!("SELF-LEARN", "ok",
                 "restored weights + {} pairs from SGDB", self.learned.len());
         }
     }
@@ -342,7 +343,7 @@ impl Agent for SelfLearningAgent {
     }
 
     fn on_activate(&mut self) {
-        k_nano::slog_kai!("SELF-LEARN", "info", "SelfLearningAgent activated");
+        k_nano::slog_kai!("SELF-LEARN", "ok", "SelfLearningAgent activated");
     }
 }
 

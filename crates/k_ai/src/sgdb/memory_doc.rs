@@ -110,6 +110,24 @@ pub struct MemoryDoc {
 
 const MAGIC: &[u8; 4] = b"NMD1";
 
+#[inline]
+fn read_u32_le(data: &[u8], off: usize) -> Result<u32, &'static str> {
+    let bytes: [u8; 4] = data
+        .get(off..off + 4)
+        .and_then(|s| s.try_into().ok())
+        .ok_or("trunc u32")?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+#[inline]
+fn read_u64_le(data: &[u8], off: usize) -> Result<u64, &'static str> {
+    let bytes: [u8; 8] = data
+        .get(off..off + 8)
+        .and_then(|s| s.try_into().ok())
+        .ok_or("trunc u64")?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
 impl MemoryDoc {
     pub fn new(layer: MemoryLayer, key: &str, payload: Vec<u8>) -> Self {
         MemoryDoc {
@@ -168,7 +186,7 @@ impl MemoryDoc {
         if off + 4 > data.len() {
             return Err("trunc keylen");
         }
-        let klen = u32::from_le_bytes(data[off..off + 4].try_into().unwrap()) as usize;
+        let klen = read_u32_le(data, off)? as usize;
         off += 4;
         if off + klen > data.len() {
             return Err("trunc key");
@@ -182,7 +200,7 @@ impl MemoryDoc {
         if off + 4 > data.len() {
             return Err("trunc plen");
         }
-        let plen = u32::from_le_bytes(data[off..off + 4].try_into().unwrap()) as usize;
+        let plen = read_u32_le(data, off)? as usize;
         off += 4;
         if off + plen > data.len() {
             return Err("trunc payload");
@@ -198,14 +216,14 @@ impl MemoryDoc {
             if off + 4 > data.len() {
                 return Err("trunc bvlen");
             }
-            let n = u32::from_le_bytes(data[off..off + 4].try_into().unwrap()) as usize;
+            let n = read_u32_le(data, off)? as usize;
             off += 4;
             if off + n * 8 > data.len() {
                 return Err("trunc bv");
             }
             let mut bv = Vec::with_capacity(n);
             for _ in 0..n {
-                bv.push(u64::from_le_bytes(data[off..off + 8].try_into().unwrap()));
+                bv.push(read_u64_le(data, off)?);
                 off += 8;
             }
             Some(bv)
@@ -241,7 +259,7 @@ impl<'a> MemoryDocView<'a> {
         if off + 4 > data.len() {
             return Err("trunc keylen");
         }
-        let klen = u32::from_le_bytes(data[off..off + 4].try_into().unwrap()) as usize;
+        let klen = read_u32_le(data, off)? as usize;
         off += 4;
         if off + klen > data.len() {
             return Err("trunc key");
@@ -256,7 +274,7 @@ impl<'a> MemoryDocView<'a> {
         if off + 4 > data.len() {
             return Err("trunc plen");
         }
-        let plen = u32::from_le_bytes(data[off..off + 4].try_into().unwrap()) as usize;
+        let plen = read_u32_le(data, off)? as usize;
         off += 4;
         if off + plen > data.len() {
             return Err("trunc payload");

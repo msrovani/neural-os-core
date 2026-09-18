@@ -153,13 +153,18 @@ pub fn boot_init_deferred() {
         k_nano::slog_kai!(
             "SGDB",
             "warn",
-            "boot_init_deferred SKIP heavy (md_keys={} >512) — scheduler first",
+            "boot_init_deferred SKIP heavy (md_keys={} >512) — indices COLD; ingest only",
             md_keys
         );
         boot_ckpt("hw_ns_deferred");
         populate_hw_namespace();
-        HEAVY_DEFERRED.store(false, Ordering::Release);
-        HEAVY_DONE.store(true, Ordering::Release);
+        // Honesty: NÃO marcar HEAVY_DONE — ART/BQ/NSGDB ainda frios.
+        // Mantém HEAVY_DEFERRED para SleepCycle/recall forçar rebuild.
+        HEAVY_DEFERRED.store(true, Ordering::Release);
+        HEAVY_DONE.store(false, Ordering::Release);
+        // Remember cross-boot é barato vs rebuild — não engolir no skip.
+        crate::boot_observe::ingest_bootlog();
+        k_nano::boot_report::publish_boot_ai();
         k_nano::storage::set_gc_suspended(false);
         return;
     }
@@ -287,6 +292,20 @@ pub fn put_kv(key: &str, data: &[u8]) -> Result<(), &'static str> {
         // honesty: sem TickvLite só indexa se for MemoryDoc path; KV puro exige flash
         return Err("tickv not ready");
     }
+    let backend = k_nano::storage::backend_name();
+    if backend == "ram" {
+        // Rate-limit: uma vez por processo de boot (AtomicBool).
+        static WARNED: core::sync::atomic::AtomicBool =
+            core::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+            k_nano::slog_kai!(
+                "SGDB",
+                "warn",
+                "put_kv on VOLATILE backend=ram — persists until reboot only (key example={})",
+                key
+            );
+        }
+    }
     let result = k_nano::storage::put_blob(key, data);
     if result.is_ok() {
         super::nsgdb_bridge::sync_write_to_nsgdb(key, data, 3); // default L3
@@ -388,7 +407,13 @@ pub fn get_pkg_body(package_id: &str) -> Result<Option<Vec<u8>>, &'static str> {
 pub fn put_skill_blob(name: &str, description: &str) -> Result<(), &'static str> {
     super::layers::index_skill(name, description);
     if !ready() {
-        return Ok(()); // ART indexado; TickvLite opcional
+        k_nano::slog_kai!(
+            "SGDB",
+            "warn",
+            "put_skill_blob {}: ART only — Tickv not ready (volatile index)",
+            name
+        );
+        return Err("tickv not ready");
     }
     put_kv(
         &format!("{}{}", ns::SKILL, name),
@@ -402,9 +427,12 @@ pub fn with_store<R>(f: impl FnOnce(&mut AiosDatabaseEngine) -> R) -> Option<R> 
 }
 
 pub fn status() -> String {
+    let backend = backend();
+    let volatile = backend == "ram";
     format!(
-        "SgdbStore ready={} backend={}",
+        "SgdbStore ready={} backend={} volatile={}",
         ready(),
-        backend()
+        backend,
+        volatile
     )
 }

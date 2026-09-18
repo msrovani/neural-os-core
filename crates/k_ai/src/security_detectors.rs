@@ -26,11 +26,11 @@ pub struct SecurityAlert {
 // in a short time window (< 1s / ~200 ticks).
 
 pub struct PortScanDetector {
-    /// Ring buffer: (source_ip_addr as u32, tick)
-    attempts: VecDeque<(u32, u64)>,
+    /// Ring buffer: (source_ip, dst_port, tick)
+    attempts: VecDeque<(u32, u16, u64)>,
     /// Threshold: N unique ports in window = alert
     pub threshold: usize,
-    /// Window in ticks (~5ms each)
+    /// Window in ticks (PIT ~18.2 Hz ≈ 55 ms/tick — 200 ≈ 11 s, não 1 s)
     pub window_ticks: u64,
 }
 
@@ -39,32 +39,47 @@ impl PortScanDetector {
         Self {
             attempts: VecDeque::with_capacity(64),
             threshold: 10,
-            window_ticks: 200, // ~1s at 5ms/tick
+            window_ticks: 200,
         }
     }
 
     /// Feed a TCP connection attempt. Returns Some(alert) if scan detected.
-    pub fn feed(&mut self, src_ip: u32, _dst_port: u16, tick: u64) -> Option<SecurityAlert> {
+    pub fn feed(&mut self, src_ip: u32, dst_port: u16, tick: u64) -> Option<SecurityAlert> {
         // Remove old entries outside window
-        while let Some(&(_, t)) = self.attempts.front() {
+        while let Some(&(_, _, t)) = self.attempts.front() {
             if tick.wrapping_sub(t) > self.window_ticks {
                 self.attempts.pop_front();
             } else {
                 break;
             }
         }
-        // Count unique ports for this source in the window
-        let count = self.attempts.iter().filter(|&&(ip, _)| ip == src_ip).count();
-        self.attempts.push_back((src_ip, tick));
+        // Dedup same (ip, port) already in window — count UNIQUE ports
+        let already = self
+            .attempts
+            .iter()
+            .any(|&(ip, port, _)| ip == src_ip && port == dst_port);
+        if !already {
+            self.attempts.push_back((src_ip, dst_port, tick));
+        }
+        let unique_ports = self
+            .attempts
+            .iter()
+            .filter(|&&(ip, _, _)| ip == src_ip)
+            .count();
 
-        if count >= self.threshold {
+        if unique_ports >= self.threshold {
             Some(SecurityAlert {
                 detector: "PortScanDetector",
                 severity: AlertSeverity::High,
-                message: alloc::format!("Port scan detected from IP {}.{}.{}.{}: {} ports in {} ticks",
-                    (src_ip >> 24) & 0xFF, (src_ip >> 16) & 0xFF,
-                    (src_ip >> 8) & 0xFF, src_ip & 0xFF,
-                    count + 1, self.window_ticks),
+                message: alloc::format!(
+                    "Port scan detected from IP {}.{}.{}.{}: {} unique ports in {} ticks",
+                    (src_ip >> 24) & 0xFF,
+                    (src_ip >> 16) & 0xFF,
+                    (src_ip >> 8) & 0xFF,
+                    src_ip & 0xFF,
+                    unique_ports,
+                    self.window_ticks
+                ),
                 source: None,
                 timestamp: tick,
             })
@@ -87,18 +102,36 @@ impl ArpSpoofDetector {
 
     pub fn feed(&mut self, ip: u32, mac: [u8; 6], tick: u64) -> Option<SecurityAlert> {
         for &(known_ip, known_mac) in &self.known {
-            if known_ip == ip && known_mac != mac {
-                return Some(SecurityAlert {
-                    detector: "ArpSpoofDetector",
-                    severity: AlertSeverity::High,
-                    message: alloc::format!("ARP spoof: IP {}.{}.{}.{} claimed by {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (was {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x})",
-                        (ip>>24)&0xFF, (ip>>16)&0xFF, (ip>>8)&0xFF, ip&0xFF,
-                        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-                        known_mac[0], known_mac[1], known_mac[2],
-                        known_mac[3], known_mac[4], known_mac[5]),
-                    source: Some(mac),
-                    timestamp: tick,
-                });
+            if known_ip == ip {
+                if known_mac != mac {
+                    return Some(SecurityAlert {
+                        detector: "ArpSpoofDetector",
+                        severity: AlertSeverity::High,
+                        message: alloc::format!(
+                            "ARP spoof: IP {}.{}.{}.{} claimed by {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (was {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x})",
+                            (ip >> 24) & 0xFF,
+                            (ip >> 16) & 0xFF,
+                            (ip >> 8) & 0xFF,
+                            ip & 0xFF,
+                            mac[0],
+                            mac[1],
+                            mac[2],
+                            mac[3],
+                            mac[4],
+                            mac[5],
+                            known_mac[0],
+                            known_mac[1],
+                            known_mac[2],
+                            known_mac[3],
+                            known_mac[4],
+                            known_mac[5]
+                        ),
+                        source: Some(mac),
+                        timestamp: tick,
+                    });
+                }
+                // Same IP+MAC — already tracked; do not grow unbounded
+                return None;
             }
         }
         self.known.push((ip, mac));
@@ -125,11 +158,15 @@ impl PingFloodDetector {
                 } else {
                     *count += 1;
                     if *count > 100 {
+                        let n = *count;
                         *count = 0; // prevent re-trigger
                         return Some(SecurityAlert {
                             detector: "PingFloodDetector",
                             severity: AlertSeverity::Medium,
-                            message: alloc::format!("ICMP flood from IP {:08x}: {} pings/s", src_ip, *count),
+                            message: alloc::format!(
+                                "ICMP flood from IP {:08x}: {} pings in window",
+                                src_ip, n
+                            ),
                             source: None,
                             timestamp: tick,
                         });

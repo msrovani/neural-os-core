@@ -42,6 +42,8 @@ impl BudgetedRecovery {
 }
 
 pub struct SilentFailureDetector {
+    /// Last activity tick per agent (misnamed legacy: not only failures).
+    /// Agents that never heartbeat are invisible — only tracks known heartbeats.
     failures: BTreeMap<String, u64>,
     threshold: u64,
     tick: u64,
@@ -376,7 +378,7 @@ impl SelfHeal {
             let skill_ok = self.check_device_skill(vid, did, class, &desc);
             if fw_ok && skill_ok {
                 report.noop = report.noop.saturating_add(1);
-                k_nano::slog_kai!("Gate", "n2", "noop VID={:04X}:{:04X} class={:02X}", vid, did, class);
+                k_nano::slog_kai!("Gate", "ok", "noop VID={:04X}:{:04X} class={:02X}", vid, did, class);
             } else {
                 report.heal_issues = report.heal_issues.saturating_add(1);
                 if !fw_ok {
@@ -385,10 +387,10 @@ impl SelfHeal {
                 if !skill_ok {
                     report.health_published = report.health_published.saturating_add(1);
                 }
-                k_nano::slog_kai!("Gate", "n2", "heal VID={:04X}:{:04X} class={:02X} fw_ok={} skill_ok={}", vid, did, class, fw_ok, skill_ok);
+                k_nano::slog_kai!("Gate", "ok", "heal VID={:04X}:{:04X} class={:02X} fw_ok={} skill_ok={}", vid, did, class, fw_ok, skill_ok);
             }
         }
-        k_nano::slog_kai!("Gate", "n2", "done scanned={} noop={} heal={} HEALTH_ISSUE={}",
+        k_nano::slog_kai!("Gate", "ok", "done scanned={} noop={} heal={} HEALTH_ISSUE={}",
             report.scanned, report.noop, report.heal_issues, report.health_published);
         report
     }
@@ -409,7 +411,7 @@ impl SelfHeal {
                 id: 0, topic: alloc::string::String::from("HEALTH_ISSUE"),
                 payload: msg.into_bytes(), token: event_bus::CapabilityToken::Legacy(1),
             });
-            k_nano::slog_kai!("SelfHeal", "info", "I3: {} precisa de firmware", dev);
+            k_nano::slog_kai!("SelfHeal", "warn", "I3: {} precisa de firmware", dev);
             return false;
         }
         true
@@ -427,7 +429,7 @@ impl SelfHeal {
                 id: 0, topic: alloc::string::String::from("HEALTH_ISSUE"),
                 payload: msg.into_bytes(), token: event_bus::CapabilityToken::Legacy(1),
             });
-            k_nano::slog_kai!("SelfHeal", "info", "I4: {} sem skill '{}'", desc, skill_name);
+            k_nano::slog_kai!("SelfHeal", "warn", "I4: {} sem skill '{}'", desc, skill_name);
             return false;
         }
         true
@@ -439,17 +441,32 @@ impl SelfHeal {
     }
 
     pub fn save_checkpoint(&mut self) {
-        k_nano::slog_kai!("CHECKPOINT", "info", "Salvando estado do kernel...");
-        let guard = GLOBAL_ALLOCATOR.lock();
-        if let Some(ref alloc) = *guard {
-            self.checkpoint.ensure_bitmap_buf();
-            self.checkpoint.bitmap.copy_from_slice(&alloc.bitmap);
-            self.checkpoint.next_free_bit = alloc.next_free_bit;
-            self.checkpoint.total_frames = alloc.total_frames;
-            self.checkpoint.usable_frames = alloc.usable_frames;
-            self.checkpoint.allocated_count = alloc.allocated_count;
+        k_nano::slog_kai!("CHECKPOINT", "ok", "Salvando estado do kernel...");
+        let mut bitmap_ok = false;
+        {
+            let guard = GLOBAL_ALLOCATOR.lock();
+            if let Some(ref alloc) = *guard {
+                self.checkpoint.ensure_bitmap_buf();
+                if self.checkpoint.bitmap.len() == BITMAP_SIZE {
+                    self.checkpoint.bitmap.copy_from_slice(&alloc.bitmap);
+                    self.checkpoint.next_free_bit = alloc.next_free_bit;
+                    self.checkpoint.total_frames = alloc.total_frames;
+                    self.checkpoint.usable_frames = alloc.usable_frames;
+                    self.checkpoint.allocated_count = alloc.allocated_count;
+                    bitmap_ok = true;
+                }
+            }
         }
-        drop(guard);
+        if !bitmap_ok {
+            self.checkpoint.valid = false;
+            k_nano::slog_kai!(
+                "CHECKPOINT",
+                "fail",
+                "save abort — GLOBAL_ALLOCATOR ausente ou bitmap len≠{}",
+                BITMAP_SIZE
+            );
+            return;
+        }
         self.checkpoint.mhi_dram_bytes = Self::get_mhi_dram_bytes();
         self.checkpoint.tick = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
         self.checkpoint.heap_start = 0x_4000_0000_0000; // ponytail: fixed heap addr from AGENTS.md
@@ -470,13 +487,13 @@ impl SelfHeal {
         self.checkpoint.save_count = self.checkpoint.save_count.wrapping_add(1);
         self.checkpoint.checkpoint_version = 3; // v3 = save_count field
         self.checkpoint.valid = true;
-        k_nano::slog_kai!("CHECKPOINT", "info", "Salvo #{} @ tick {} — {} frames alocados ({} KB bitmap)",
+        k_nano::slog_kai!("CHECKPOINT", "ok", "Salvo #{} @ tick {} — {} frames alocados ({} KB bitmap)",
             self.checkpoint.save_count, self.checkpoint.tick, self.checkpoint.allocated_count, BITMAP_SIZE / 1024);
         // Persist to SGDB
         let blob = self.checkpoint.serialize();
         match crate::sgdb::put_kv("sys/checkpoint", &blob) {
-            Ok(()) => k_nano::slog_kai!("CHECKPOINT", "info", "SGDB persist OK bytes={}", blob.len()),
-            Err(e) => k_nano::slog_kai!("CHECKPOINT", "info", "SGDB persist SKIP {:?}", e),
+            Ok(()) => k_nano::slog_kai!("CHECKPOINT", "ok", "SGDB persist OK bytes={}", blob.len()),
+            Err(e) => k_nano::slog_kai!("CHECKPOINT", "warn", "SGDB persist SKIP {:?}", e),
         }
     }
 
@@ -487,10 +504,13 @@ impl SelfHeal {
         use cortex::delta::xor_buffers;
         use k_nano::memory::BITMAP_SIZE;
 
-        // Copia o bitmap atual para análise fora do lock
-        let current_bmp = {
+        // Copia o bitmap atual para o HEAP — NUNCA `[u8; BITMAP_SIZE]` na stack (2 MiB).
+        let current_bmp: Vec<u8> = {
             let guard = GLOBAL_ALLOCATOR.lock();
-            guard.as_ref().map_or([0u8; BITMAP_SIZE], |a| a.bitmap)
+            match guard.as_ref() {
+                Some(a) => a.bitmap.to_vec(),
+                None => alloc::vec![0u8; BITMAP_SIZE],
+            }
         };
 
         if prev_bitmap.is_empty() || prev_bitmap.len() != BITMAP_SIZE {
@@ -498,7 +518,7 @@ impl SelfHeal {
             let chunks: Vec<Vec<u8>> = ranges.iter()
                 .map(|&(off, len)| current_bmp[off..off + len].to_vec())
                 .collect();
-            k_nano::slog_kai!("SNAPSHOT", "info", "Primeiro: {} chunks CDC", chunks.len());
+            k_nano::slog_kai!("SNAPSHOT", "ok", "Primeiro: {} chunks CDC", chunks.len());
             return (chunks, Vec::new());
         }
 
@@ -514,7 +534,7 @@ impl SelfHeal {
             .map(|&(off, len)| current_bmp[off..off + len].to_vec())
             .collect();
 
-        k_nano::slog_kai!("SNAPSHOT", "info", "Delta: {}/{} chunks modificados", nonzero.len(), full_chunks.len());
+        k_nano::slog_kai!("SNAPSHOT", "ok", "Delta: {}/{} chunks modificados", nonzero.len(), full_chunks.len());
 
         (full_chunks, nonzero)
     }
@@ -549,31 +569,42 @@ impl SelfHeal {
                 Ok(Some(data)) => {
                     if let Some(cp) = Checkpoint::deserialize(&data) {
                         self.checkpoint = cp;
-                        k_nano::slog_kai!("CHECKPOINT", "info", "SGDB load OK @ tick {}", self.checkpoint.tick);
+                        k_nano::slog_kai!("CHECKPOINT", "ok", "SGDB load OK @ tick {}", self.checkpoint.tick);
                     }
                 }
-                Ok(None) => k_nano::slog_kai!("CHECKPOINT", "info", "SGDB miss"),
-                Err(e) => k_nano::slog_kai!("CHECKPOINT", "info", "SGDB load error {:?}", e),
+                Ok(None) => k_nano::slog_kai!("CHECKPOINT", "warn", "SGDB miss"),
+                Err(e) => k_nano::slog_kai!("CHECKPOINT", "warn", "SGDB load error {:?}", e),
             }
         }
         if !self.checkpoint.valid {
-            k_nano::slog_kai!("CHECKPOINT", "info", "Nenhum checkpoint valido para restaurar.");
+            k_nano::slog_kai!("CHECKPOINT", "warn", "Nenhum checkpoint valido para restaurar.");
             return false;
         }
-        k_nano::slog_kai!("CHECKPOINT", "info", "Restaurando checkpoint #{} v{} @ tick {}...",
+        if self.checkpoint.bitmap.len() != BITMAP_SIZE {
+            k_nano::slog_kai!(
+                "CHECKPOINT",
+                "fail",
+                "bitmap len={} != {} — refuse restore (evita cursor/counts inconsistentes)",
+                self.checkpoint.bitmap.len(),
+                BITMAP_SIZE
+            );
+            return false;
+        }
+        k_nano::slog_kai!("CHECKPOINT", "ok", "Restaurando checkpoint #{} v{} @ tick {}...",
             self.checkpoint.save_count, self.checkpoint.checkpoint_version, self.checkpoint.tick);
         let mut guard = GLOBAL_ALLOCATOR.lock();
         if let Some(ref mut alloc) = *guard {
-            if self.checkpoint.bitmap.len() == BITMAP_SIZE {
-                alloc.bitmap.copy_from_slice(&self.checkpoint.bitmap);
-            }
+            alloc.bitmap.copy_from_slice(&self.checkpoint.bitmap);
             alloc.next_free_bit = self.checkpoint.next_free_bit;
             alloc.total_frames = self.checkpoint.total_frames;
             alloc.usable_frames = self.checkpoint.usable_frames;
             alloc.allocated_count = self.checkpoint.allocated_count;
+        } else {
+            k_nano::slog_kai!("CHECKPOINT", "fail", "GLOBAL_ALLOCATOR ausente — restore abortado");
+            return false;
         }
         drop(guard);
-        k_nano::slog_kai!("CHECKPOINT", "info",
+        k_nano::slog_kai!("CHECKPOINT", "ok",
             "RESTORED bitmap={}/{} frames allocated_count={} heap={:#x}+{}MB",
             self.checkpoint.next_free_bit, self.checkpoint.total_frames,
             self.checkpoint.allocated_count,
@@ -584,7 +615,7 @@ impl SelfHeal {
             self.checkpoint.page_table_pml4_addr,
             self.checkpoint.mhi_dram_bytes,
             self.checkpoint.driver_state_hash);
-        k_nano::slog_kai!("SELF-HEAL", "info",
+        k_nano::slog_kai!("SELF-HEAL", "ok",
             "checkpoint loaded: saved={} version={} heap={}",
             self.checkpoint.save_count,
             self.checkpoint.checkpoint_version,
@@ -597,11 +628,11 @@ impl SelfHeal {
     }
 
     pub fn record_failure(&mut self, msg: String, action: String, tick: u64) {
-        k_nano::slog_kai!("SELF", "HEAL", "Falha registrada: '{}' + '{}'", msg, action);
+        k_nano::slog_kai!("SELF", "warn", "Falha registrada: '{}' + '{}'", msg, action);
         self.lessons.push(FailedStrategy { error_msg: msg, attempted_action: action, tick });
     }    pub fn analyze(&mut self, ctx: &ErrorContext, recover: bool) -> RecoveryAction {
         let class = FailureClass::classify(ctx.kind, &ctx.message);
-        k_nano::slog_kai!("SELF", "HEAL", "{:?}: {} daemon '{}' ({} lessons)", class, ctx.kind, ctx.daemon, self.lessons.len());
+        k_nano::slog_kai!("SELF", "warn", "{:?}: {} daemon '{}' ({} lessons)", class, ctx.kind, ctx.daemon, self.lessons.len());
 
         if !recover { return RecoveryAction::LogAndContinue; }
 
@@ -629,7 +660,7 @@ impl SelfHeal {
             payload: healing_prompt.into_bytes(),
             token: CapabilityToken::Legacy(1),
         });
-        k_nano::slog_kai!("SELF", "HEAL", "HEALING_LLM_REQUEST published for {:?}", class);
+        k_nano::slog_kai!("SELF", "ok", "HEALING_LLM_REQUEST published for {:?}", class);
 
         match class {
             FailureClass::MemoryFault if !self.already_tried(&ctx.message, "restart") => {
@@ -709,13 +740,13 @@ use core::sync::atomic::AtomicPtr;
 /// Registered at boot by neural-kernel; called by SelfHealAgent when
 /// RecoveryAction::RestartDaemon is selected.
 type PushRespawnFn = fn(&str);
-static PUSH_RESPAWN_FN: AtomicPtr<PushRespawnFn> =
-    AtomicPtr::new(core::ptr::null_mut());
+/// Stores the function pointer bits (not a pointer-to-fn-pointer).
+static PUSH_RESPAWN_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
 /// Register the RESPAWN_QUEUE push bridge.
 /// Called once at boot by neural-kernel after RESPAWN_QUEUE is initialized.
 pub fn register_respawn_bridge(push_fn: PushRespawnFn) {
-    PUSH_RESPAWN_FN.store(push_fn as *mut PushRespawnFn, Ordering::Release);
+    PUSH_RESPAWN_FN.store(push_fn as *mut (), Ordering::Release);
 }
 
 /// Push a daemon name to RESPAWN_QUEUE via the bridge.
@@ -725,7 +756,8 @@ pub fn push_respawn(daemon_name: &str) -> bool {
     if ptr.is_null() {
         return false;
     }
-    let f: PushRespawnFn = unsafe { core::ptr::read_volatile(ptr) };
+    // transmute ptr bits → fn(&str); register stored the fn address, not &fn.
+    let f: PushRespawnFn = unsafe { core::mem::transmute(ptr) };
     f(daemon_name);
     true
 }

@@ -51,9 +51,9 @@ impl SelfHealAgent {
             &format!("md/L3/{}", key),
             content.as_bytes(),
         ) {
-            slog_kai!("SELF", "HEAL", "NSGDB ingest failed: {}", e);
+            slog_kai!("SELF", "warn", "NSGDB ingest failed: {}", e);
         } else {
-            slog_kai!("SELF", "HEAL", "NSGDB ingest OK: {}", key);
+            slog_kai!("SELF", "warn", "NSGDB ingest OK: {}", key);
         }
     }
 
@@ -69,7 +69,7 @@ impl SelfHealAgent {
             &format!("md/L3/{}", key),
             content.as_bytes(),
         ) {
-            slog_kai!("SELF", "HEAL", "NSGDB result ingest failed: {}", e);
+            slog_kai!("SELF", "warn", "NSGDB result ingest failed: {}", e);
         }
     }
 
@@ -134,7 +134,7 @@ impl SelfHealAgent {
             payload: detail.into_bytes(),
             token: CapabilityToken::Legacy(1),
         });
-        slog_kai!("SELF", "HEAL", "User notified: {}", msg);
+        slog_kai!("SELF", "warn", "User notified: {}", msg);
     }
 
     // ── AI Diagnosis (Phase 3 + NSGDB enrichment) ────────────────────────────
@@ -142,81 +142,92 @@ impl SelfHealAgent {
     /// Phase 3: Apply AI-generated diagnosis from HEALING_LLM_RESPONSE.
     /// Parses the JSON response and executes the recommended action.
     fn apply_ai_diagnosis(&self, response: &str) {
-        // Simple JSON parser for: {"action":"restart_daemon","reason":"...","params":{...}}
-        let action_start = response.find("\"action\":");
-        let reason_start = response.find("\"reason\":");
-        let dq: char = '"';
-        let bs: char = '\\';
-
-        if let Some(a_pos) = action_start {
-            let a_val_start = a_pos + 11; // len of "\"action\":"
-            let a_val_end = response[a_val_start..]
-                .find(',')
-                .unwrap_or(response[a_val_start..].find('}').unwrap_or(0))
-                + a_val_start;
-            let action_str = response[a_val_start..a_val_end]
-                .trim()
-                .trim_matches(dq)
-                .trim_matches(bs);
-
-            let reason = if let Some(r_pos) = reason_start {
-                let r_val_start = r_pos + 10; // len of "\"reason\":"
-                let r_val_end = response[r_val_start..]
-                    .find(',')
-                    .unwrap_or(response[r_val_start..].find('}').unwrap_or(0))
-                    + r_val_start;
-                response[r_val_start..r_val_end]
-                    .trim()
-                    .trim_matches(dq)
-                    .trim_matches(bs)
-            } else {
-                ""
-            };
-
-            let daemon = self
-                .pending_diagnosis
-                .as_ref()
-                .map(|ctx| ctx.daemon.as_str())
-                .unwrap_or("unknown");
-            let tick = TIMER_TICKS.load(Ordering::Relaxed) as u64;
-
-            k_nano::slog_kai!("SELF", "HEAL", "AI diagnosis: action='{}' reason='{}'", action_str, reason);
-
-            // Ingest recovery result to NSGDB
-            SelfHealAgent::ingest_recovery_to_nsgdb(action_str, daemon, tick);
-
-            match action_str {
-                "restart_daemon" => {
-                    let pushed = push_respawn(daemon);
-                    slog_kai!("SELF", "HEAL", "AI->RestartDaemon '{}' pushed={}", daemon, pushed);
-                    let mut heal = GLOBAL_SELF_HEAL.lock();
-                    heal.record_failure(daemon.into(), "ai_restart".into(), tick);
-                    // Notify user
-                    SelfHealAgent::notify_user("restart", daemon, reason, tick);
+        // `"action":` / `"reason":` = 9 chars each. Old code used +11/+10 (off-by-two).
+        fn json_string_after(hay: &str, key: &str) -> Option<String> {
+            let pos = hay.find(key)?;
+            let mut i = pos + key.len();
+            let b = hay.as_bytes();
+            while i < b.len() && (b[i] == b' ' || b[i] == b'\t') {
+                i += 1;
+            }
+            if i >= b.len() || b[i] != b'"' {
+                return None;
+            }
+            i += 1;
+            let start = i;
+            while i < b.len() {
+                if b[i] == b'\\' {
+                    i = i.saturating_add(2);
+                    continue;
                 }
-                "checkpoint_restore" => {
-                    slog_kai!("SELF", "HEAL", "AI->CheckpointRestore");
-                    let mut heal = GLOBAL_SELF_HEAL.lock();
-                    heal.restore_checkpoint();
-                    SelfHealAgent::notify_user("checkpoint", daemon, reason, tick);
+                if b[i] == b'"' {
+                    return Some(String::from(
+                        core::str::from_utf8(&b[start..i]).unwrap_or(""),
+                    ));
                 }
-                "create_skill" => {
-                    slog_kai!("SELF", "HEAL", "AI->CreateSkill (reason: {})", reason);
-                    let _ = EVENT_BUS.publish(Event {
-                        id: 0,
-                        topic: "SKILL_CREATE".into(),
-                        payload: reason.as_bytes().to_vec(),
-                        token: CapabilityToken::Legacy(1),
-                    });
-                    SelfHealAgent::notify_user("create_skill", daemon, reason, tick);
-                }
-                "log_continue" => {
-                    slog_kai!("SELF", "HEAL", "AI->LogContinue (reason: {})", reason);
-                    // No notification for log_continue (too noisy)
-                }
-                _ => {
-                    slog_kai!("SELF", "HEAL", "AI->unknown action '{}', logging only", action_str);
-                }
+                i += 1;
+            }
+            None
+        }
+
+        let Some(action_str) = json_string_after(response, "\"action\":") else {
+            slog_kai!("SELF", "warn", "AI diagnosis: no \"action\" field");
+            return;
+        };
+        let reason_owned = json_string_after(response, "\"reason\":");
+        let reason = reason_owned.as_deref().unwrap_or("");
+
+        let daemon = self
+            .pending_diagnosis
+            .as_ref()
+            .map(|ctx| ctx.daemon.as_str())
+            .unwrap_or("unknown");
+        let tick = TIMER_TICKS.load(Ordering::Relaxed) as u64;
+
+        k_nano::slog_kai!(
+            "SELF",
+            "warn",
+            "AI diagnosis: action='{}' reason='{}'",
+            action_str,
+            reason
+        );
+
+        SelfHealAgent::ingest_recovery_to_nsgdb(&action_str, daemon, tick);
+
+        match action_str.as_str() {
+            "restart_daemon" => {
+                let pushed = push_respawn(daemon);
+                slog_kai!("SELF", "warn", "AI->RestartDaemon '{}' pushed={}", daemon, pushed);
+                let mut heal = GLOBAL_SELF_HEAL.lock();
+                heal.record_failure(daemon.into(), "ai_restart".into(), tick);
+                SelfHealAgent::notify_user("restart", daemon, reason, tick);
+            }
+            "checkpoint_restore" => {
+                slog_kai!("SELF", "warn", "AI->CheckpointRestore");
+                let mut heal = GLOBAL_SELF_HEAL.lock();
+                heal.restore_checkpoint();
+                SelfHealAgent::notify_user("checkpoint", daemon, reason, tick);
+            }
+            "create_skill" => {
+                slog_kai!("SELF", "warn", "AI->CreateSkill (reason: {})", reason);
+                let _ = EVENT_BUS.publish(Event {
+                    id: 0,
+                    topic: "SKILL_CREATE".into(),
+                    payload: reason.as_bytes().to_vec(),
+                    token: CapabilityToken::Legacy(1),
+                });
+                SelfHealAgent::notify_user("create_skill", daemon, reason, tick);
+            }
+            "log_continue" => {
+                slog_kai!("SELF", "warn", "AI->LogContinue (reason: {})", reason);
+            }
+            _ => {
+                slog_kai!(
+                    "SELF",
+                    "warn",
+                    "AI->unknown action '{}', logging only",
+                    action_str
+                );
             }
         }
     }
@@ -225,10 +236,10 @@ impl SelfHealAgent {
         let tick = TIMER_TICKS.load(Ordering::Relaxed) as u64;
         match action {
             RecoveryAction::RestartDaemon(name, verify) => {
-                slog_kai!("SELF", "HEAL", "RestartDaemon: {} (via RESPAWN_QUEUE bridge)", name);
+                slog_kai!("SELF", "warn", "RestartDaemon: {} (via RESPAWN_QUEUE bridge)", name);
                 let pushed = push_respawn(&name);
                 if !pushed {
-                    slog_kai!("SELF", "HEAL", "RestartDaemon: bridge not registered -- fallback log only");
+                    slog_kai!("SELF", "warn", "RestartDaemon: bridge not registered -- fallback log only");
                 }
                 SelfHealAgent::ingest_recovery_to_nsgdb("restart", &name, tick);
                 SelfHealAgent::notify_user("restart", &name, "auto-heal restart", tick);
@@ -240,7 +251,7 @@ impl SelfHealAgent {
                 }
             }
             RecoveryAction::CreateSkill(daemon, fix, verify) => {
-                slog_kai!("SELF", "HEAL", "CreateSkill: {} - {}", daemon, fix);
+                slog_kai!("SELF", "warn", "CreateSkill: {} - {}", daemon, fix);
                 {
                     let mut heal = GLOBAL_SELF_HEAL.lock();
                     heal.pending_fixes.push((daemon.clone(), fix.clone()));
@@ -261,7 +272,7 @@ impl SelfHealAgent {
                 }
             }
             RecoveryAction::AwaitLLM(daemon) => {
-                slog_kai!("SELF", "HEAL", "AwaitLLM: {}", daemon);
+                slog_kai!("SELF", "warn", "AwaitLLM: {}", daemon);
                 let mut heal = GLOBAL_SELF_HEAL.lock();
                 heal.lessons.push(FailedStrategy {
                     error_msg: daemon,
@@ -270,7 +281,7 @@ impl SelfHealAgent {
                 });
             }
             RecoveryAction::CheckpointRestore => {
-                slog_kai!("SELF", "HEAL", "CheckpointRestore requested");
+                slog_kai!("SELF", "warn", "CheckpointRestore requested");
                 let mut heal = GLOBAL_SELF_HEAL.lock();
                 heal.restore_checkpoint();
                 SelfHealAgent::ingest_recovery_to_nsgdb("checkpoint_restore", "system", tick);
@@ -304,7 +315,7 @@ impl Agent for SelfHealAgent {
         while let Some(event) = self.healing_response_rx.try_receive() {
             let response = core::str::from_utf8(&event.payload).unwrap_or("");
             if !response.is_empty() {
-                slog_kai!("SELF", "HEAL", "HEALING_LLM_RESPONSE: {}", response);
+                slog_kai!("SELF", "warn", "HEALING_LLM_RESPONSE: {}", response);
                 self.apply_ai_diagnosis(response);
             }
         }
@@ -323,10 +334,10 @@ impl Agent for SelfHealAgent {
                     let history = SelfHealAgent::query_nsgdb_for_patterns(&ctx.daemon);
                     let past_recoveries = SelfHealAgent::query_nsgdb_for_successful_recoveries(&ctx.daemon);
                     if !history.is_empty() {
-                        slog_kai!("SELF", "HEAL", "NSGDB history for '{}': {}", ctx.daemon, history);
+                        slog_kai!("SELF", "warn", "NSGDB history for '{}': {}", ctx.daemon, history);
                     }
                     if !past_recoveries.is_empty() {
-                        slog_kai!("SELF", "HEAL", "NSGDB past recoveries for '{}': {}", ctx.daemon, past_recoveries);
+                        slog_kai!("SELF", "warn", "NSGDB past recoveries for '{}': {}", ctx.daemon, past_recoveries);
                     }
 
                     let action = {
@@ -335,7 +346,7 @@ impl Agent for SelfHealAgent {
                     };
                     self.execute_recovery(action);
                 } else {
-                    slog_kai!("SELF", "HEAL", "budget exhausted -- logging only");
+                    slog_kai!("SELF", "warn", "budget exhausted -- logging only");
                     let mut heal = GLOBAL_SELF_HEAL.lock();
                     let _ = heal.analyze(&ctx, false);
                 }

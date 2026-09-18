@@ -2,12 +2,14 @@
 //! 4 invariantes checados a cada tick pelo SecurityAgent.
 //! Se qualquer invariante falha, o sistema entra em modo fail-closed (shutdown ordenado).
 //!
-//! I1: Heap integrity — allocator não corrompido
+//! I1: Heap integrity — allocator não corrompido (smoke alloc; não é full heap audit)
 //! I2: Agents alive — agents esperados estão rodando
-//! I3: Trust intact — TrustCache não foi violado
-//! I4: Scheduler tick — scheduler está avançando
+//! I3: Trust intact — **proxy observe-only em k_ai** (TRUST_CACHE vive em hermes;
+//!     Pass aqui ≠ "íntegro verificado"; SecurityAgent/hermes faz o check real)
+//! I4: Scheduler tick — detecta salto grande entre checks (não "tick parado":
+//!     se o tick congela, este checker também para de rodar)
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Resultado da verificação de invariantes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,12 +96,17 @@ impl SafetyInvariants {
     /// After Phase 6 (AgentFleet), we expect at least 10 agents.
     /// Warning if count drops below 8, Violation if below 5.
     fn check_agents_alive(&self) -> InvariantResult {
-        // Read from the bin's SCHED_AGENT_COUNT static (updated each tick
-        // by the scheduler halt callback via agent_stats::update_agent_count).
         // Read from the bin's SCHED_AGENT_COUNT (updated by sched_metrics_hook).
-        // agent_stats module provides a decoupled accessor.
         let agent_count = crate::agent_stats::current_agent_count();
-        if agent_count < 5 {
+        // 0 = snapshot ainda não wired (pré-fleet) — Warning, não Violation fail-closed.
+        if agent_count == 0 {
+            k_nano::slog_kai!(
+                "Safety",
+                "warn",
+                "I2: agent_count=0 (scheduler snapshot not yet updated)"
+            );
+            InvariantResult::Warning
+        } else if agent_count < 5 {
             k_nano::slog_kai!("Safety", "warn", "I2: only {} agents alive — expected ≥10", agent_count);
             InvariantResult::Violation
         } else if agent_count < 8 {
@@ -111,27 +118,29 @@ impl SafetyInvariants {
     }
 
     /// I3: Trust intact check.
-    /// Verify that no trust entries have been revoked unexpectedly.
-    /// Note: TrustCache lives in hermes::globals (TicketLock). k_ai cannot
-    /// access it directly due to crate dependency direction (k_ai → hermes forbidden).
-    /// The check is done by SecurityAgent (hermes ring) which reads TRUST_CACHE
-    /// directly. Here we do a lightweight proxy: check if trust module exists
-    /// and report Pass (real check delegated to SecurityAgent).
+    /// Honesty: k_ai não pode ler hermes::TRUST_CACHE (dep direction).
+    /// Pass = "não verificado neste anel", NÃO "trust íntegro".
+    /// O check real fica no SecurityAgent (hermes). Log warn uma vez.
     fn check_trust_intact(&self) -> InvariantResult {
-        // Phase 3: Real check delegated to SecurityAgent (hermes ring).
-        // k_ai cannot access hermes::globals::TRUST_CACHE.
-        // SecurityAgent calls check_all() and reads TRUST_CACHE directly.
+        static WARNED: AtomicBool = AtomicBool::new(false);
+        if !WARNED.swap(true, Ordering::Relaxed) {
+            k_nano::slog_kai!(
+                "Safety",
+                "warn",
+                "I3 proxy: TrustCache check delegated to hermes SecurityAgent (k_ai cannot read TRUST_CACHE)"
+            );
+        }
         InvariantResult::Pass
     }
 
     /// I4: Scheduler tick check.
-    /// Verifica se o scheduler está avançando (tick não parou).
+    /// Detecta salto grande entre chamadas (lag/starvation do checker).
+    /// NÃO detecta freeze absoluto: se TIMER_TICKS para, este código também para.
     fn check_scheduler_tick(&self, tick: u64) -> InvariantResult {
         let last = self.last_tick.load(Ordering::Relaxed);
         if last != 0 {
             let delta = tick.wrapping_sub(last);
             if delta > 1000 {
-                // Tick parou por muito tempo
                 return InvariantResult::Violation;
             }
             if delta > 100 {

@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s356] - 2026-09-18 — k_ai bughunt (R2 honesty)
+
+- SelfHeal: respawn bridge transmute; migrate `TargetFoundNotMigrated`; checkpoint refuse sem bitmap; snapshot heap; AI JSON parse; slog `ok`/`warn`
+- Safety: `SafetyAgent` chama `k_ai::safety_invariants::check_all`; I2 count=0 Warning; detectors PortScan/PingFlood/Arp
+- SGDB: RAM warn+`volatile=`; LIGHT keep deferred+ingest; Tickv durability Buffered em ram; L4 texto≠BQ; AuditTrail wrap
+- SESSION_356; IDEA #573–#575
+
 ## [1.9.99-s355] - 2026-09-18 — k_hal bughunt (R1 honesty)
 
 - Intel RCS: base Gen9 `0x2000`, START GGTT, CTL `0x3001`, tail/HEAD bytes + `RING_PTR_MASK` (BCS igual)

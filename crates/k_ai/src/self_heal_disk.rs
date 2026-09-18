@@ -11,6 +11,8 @@ use k_nano::storage_bus::STORAGE_BUS;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MigrationResult {
     Ok(String),
+    /// Alvo escolhido mas cópia NÃO executada (StorageBus sem BlockDevice por nome).
+    TargetFoundNotMigrated(String),
     Failed(&'static str),
     NoTargetFound,
 }
@@ -19,6 +21,8 @@ pub enum MigrationResult {
 /// 1. Escaneia StorageBus por discos alternativos
 /// 2. Escolhe o maior disco disponível (não-boot)
 /// 3. Executa SysInstaller::install() source → target
+///
+/// Honesty: hoje só escolhe o alvo — **não** copia. Nunca retorna `Ok` sem migração.
 pub fn migrate_to_another_disk(
     failed_dev: &str,
     kernel_elf: &[u8],
@@ -48,8 +52,15 @@ pub fn migrate_to_another_disk(
     let _ = failed_dev;
     let _ = kernel_elf;
 
-    MigrationResult::Ok(format!(
-        "Migration target found: {} ({} sectors). Run install() to proceed.",
+    k_nano::slog_kai!(
+        "SelfHeal",
+        "warn",
+        "disk migrate NOT wired — target={} sectors={} (would need install())",
+        target_name,
+        best.1
+    );
+    MigrationResult::TargetFoundNotMigrated(format!(
+        "target={} sectors={} — migrate not wired (StorageBus lacks BlockDevice by name)",
         target_name, best.1,
     ))
 }

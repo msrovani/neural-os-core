@@ -43,7 +43,7 @@ pub fn nsgdb_init() -> usize {
     let mut db = match neural_sgdb::Sgdb::open(adapter) {
         Ok(db) => db,
         Err(e) => {
-            k_nano::slog_kai!("NSGDB", "init", "FAIL: Sgdb::open error={}", e);
+            k_nano::slog_kai!("NSGDB", "fail", "FAIL: Sgdb::open error={}", e);
             return 0;
         }
     };
@@ -53,7 +53,7 @@ pub fn nsgdb_init() -> usize {
     *NSGDB.lock() = Some(SafeSgdb(db));
     k_nano::slog_kai!(
         "NSGDB",
-        "init",
+        "ok",
         "OK — neural-sgdb via TickvStorageAdapter (records={})",
         n
     );

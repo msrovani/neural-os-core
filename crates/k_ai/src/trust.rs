@@ -215,7 +215,7 @@ impl TrustCache {
                 true
             }
             PolicyState::Contain | PolicyState::Enforce => {
-                k_nano::slog_kai!("Trust", "info", "DENY uncached ({:?}): token={} skill={} — use trust_allow",
+                k_nano::slog_kai!("Trust", "warn", "DENY uncached ({:?}): token={} skill={} — use trust_allow",
                     self.global_policy,
                     token,
                     skill);
@@ -236,13 +236,10 @@ impl TrustCache {
         }
     }
 
-    /// #259: verifica se hardware está apto antes de executar skill
+    /// #259: verifica se hardware está apto antes de executar skill.
+    /// Honesty: k_ai não possui `net::NET_CONFIG` (feature `kernel` era fantasma).
+    /// Gate de rede fica em hermes/NetAgent; aqui só path-local / sempre apto.
     pub fn posture_check(_skill: &str) -> bool {
-        #[cfg(feature = "kernel")]
-        if _skill.contains("net_") && !crate::net::NET_CONFIG.lock().online {
-            k_nano::slog_kai!("Trust", "info", "Posture: net offline, skill '{}' bloqueada", _skill);
-            return false;
-        }
         true
     }
 
@@ -263,7 +260,7 @@ impl TrustCache {
             if let Some(ref rule) = entry.path_rule {
                 let allowed = rule.allowed_prefixes.iter().any(|p| path.starts_with(p));
                 if !allowed {
-                    k_nano::slog_kai!("Trust", "info", "Path denied: {} for token={} skill={}", path, token, skill);
+                    k_nano::slog_kai!("Trust", "warn", "Path denied: {} for token={} skill={}", path, token, skill);
                 }
                 return allowed;
             }

@@ -74,11 +74,15 @@ impl HardwareInventory {
             let guard = k_nano::memory::GLOBAL_ALLOCATOR.lock();
             guard.as_ref().map_or(0, |a| a.usable_memory_bytes())
         };
+        let lapics = {
+            let ids = k_nano::acpi::BOOT_APIC_IDS.lock();
+            core::cmp::max(ids.len() as u16, 1)
+        };
         HardwareInventory {
-            cpu_count: 1,
+            cpu_count: lapics,
             total_ram_bytes,
             pci_devices: Vec::new(),
-            lapic_count: 1,
+            lapic_count: lapics,
             has_virtio_net,
             has_virtio_gpu,
             has_nvme,
@@ -123,7 +127,7 @@ pub struct SystemArchitecture {
 impl SystemArchitecture {
     pub fn infer(inv: &HardwareInventory) -> Self {
         let has_gpu = inv.has_gpu || inv.pci_devices.iter().any(|d| d.class == 0x03);
-        let ram_gb = inv.total_ram_bytes as f64 / 1_073_741_824.0;
+        let ram_mb = inv.total_ram_bytes / (1024 * 1024);
         let is_many_cores = inv.cpu_count > 4;
 
         SystemArchitecture {
@@ -134,7 +138,14 @@ impl SystemArchitecture {
                 .load(core::sync::atomic::Ordering::Relaxed) as u32,
             trust_level: 1,
             power_mode: if is_many_cores { 1 } else { 0 },
-            tensor_tier: 0,
+            // Honesty: tier por RAM medida (não f64 soft-float desnecessário).
+            tensor_tier: if ram_mb >= 8192 {
+                2
+            } else if ram_mb >= 4096 {
+                1
+            } else {
+                0
+            },
         }
     }
 }

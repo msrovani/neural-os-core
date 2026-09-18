@@ -97,9 +97,11 @@ impl AiosDatabaseEngine {
             MemoryLayer::L4Semantic | MemoryLayer::L5Procedural => {
                 if let Some(ref bv) = doc.bitvec {
                     self.bq.insert(id, bv.clone());
-                } else if !doc.payload.is_empty() {
+                } else if !doc.payload.is_empty() && doc.payload.len() % 4 == 0 {
+                    // Só trata como embedding f32 se o payload for tipado (len%4==0)
+                    // E parecer vetor denso (≥8 dims). Texto L4 ("semantic:…") → ART-only.
                     let n = doc.payload.len() / 4;
-                    if n > 0 {
+                    if n >= 8 {
                         let mut f = Vec::with_capacity(n);
                         for i in 0..n {
                             let o = i * 4;

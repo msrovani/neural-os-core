@@ -158,6 +158,8 @@ pub struct SafetyAgent {
     receiver: event_bus::Receiver,
     violations: Vec<(u8, String, u64)>,
     verify_counter: u64,
+    /// Runtime fail-closed I1–I4 (heap/agents/trust proxy/scheduler) — k_ai.
+    runtime_inv: k_ai::safety_invariants::SafetyInvariants,
 }
 
 impl SafetyAgent {
@@ -166,6 +168,7 @@ impl SafetyAgent {
             receiver: EVENT_BUS.subscribe("SAFETY_CHECK"),
             violations: Vec::new(),
             verify_counter: 0,
+            runtime_inv: k_ai::safety_invariants::SafetyInvariants::new(),
         }
     }
 
@@ -186,7 +189,7 @@ impl SafetyAgent {
 
 impl Agent for SafetyAgent {
     fn manifest(&self) -> &AgentManifest { &SAFETY_MANIFEST }
-    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+    fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
         while let Some(event) = self.receiver.try_receive() {
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
             let verdict = check_safety(text);
@@ -204,14 +207,28 @@ impl Agent for SafetyAgent {
                 });
             }
         }
-        // I4: periodic Merkle chain verify — every 100 ticks audita a trilha.
+        // k_ai runtime invariants (heap / agents / trust-proxy / scheduler lag)
+        let status = self.runtime_inv.check_all(tick);
+        if !status.all_pass() {
+            k_nano::slog_hermes!(
+                "SAFETY",
+                "warn",
+                "runtime_inv I1={:?} I2={:?} I3={:?} I4={:?} violations={}",
+                status.i1_heap,
+                status.i2_agents,
+                status.i3_trust,
+                status.i4_scheduler,
+                status.violations
+            );
+        }
+        // Audit Merkle verify — every 100 ticks
         self.verify_counter = self.verify_counter.wrapping_add(1);
         if self.verify_counter % 100 == 0 {
             let (ok, count) = {
                 let trail = crate::globals::AUDIT_TRAIL.lock();
                 (trail.verify(), trail.entry_count())
             };
-            k_nano::slog_hermes!("SAFETY", "I4", "Merkle chain verify={} (entries={})", ok, count);
+            k_nano::slog_hermes!("SAFETY", "ok", "Merkle chain verify={} (entries={})", ok, count);
         }
         AgentTickResult::Pending
     }

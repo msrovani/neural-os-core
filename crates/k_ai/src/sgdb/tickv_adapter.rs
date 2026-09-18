@@ -30,8 +30,11 @@ impl Storage for TickvStorageAdapter {
     }
 
     fn durability(&self) -> Durability {
-        // TickvLite: append-log com CRC; flushed por write (não fsync automático)
-        Durability::Flushed
+        // Honesty: RAM Tickv = Buffered (volátil). File/NVMe = Flushed (append+CRC, sem fsync).
+        match k_nano::storage::backend_name() {
+            "ram" => Durability::Buffered,
+            _ => Durability::Flushed,
+        }
     }
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<(), SgdbError> {
