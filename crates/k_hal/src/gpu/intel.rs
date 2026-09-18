@@ -6,11 +6,17 @@ use crate::gpu::detect::{GpuInfo, GpuVendor, GpuArch};
 use k_nano::kjson;
 use core::sync::atomic::{fence, Ordering};
 
-// MMIO offsets para ring buffer (Gen9+)
-const RENDER_RING_BASE: u64 = 0x120000;
-const RENDER_RING_HEAD: u64 = 0x120034;
-const RENDER_RING_TAIL: u64 = 0x120038;
-const RENDER_RING_CTL: u64 = 0x12003C;
+// MMIO offsets — Gen9 RCS0 @ 0x2000 (i915_reg.h). Era 0x120000 (hex a mais,
+// mesma classe do BCS 0x220000→0x22000, ADR-0087). TAIL=+0x30 HEAD=+0x34
+// START=+0x38 CTL=+0x3C — o layout antigo tinha TAIL no slot de START.
+const RENDER_RING_TAIL: u64 = 0x2030;
+const RENDER_RING_HEAD: u64 = 0x2034;
+const RENDER_RING_START: u64 = 0x2038;
+const RENDER_RING_CTL: u64 = 0x203C;
+/// RING_CTL 16KB: ((16384/4096)-1)<<12 | VALID = 0x3001 (não o size cru).
+const RENDER_RING_CTL_16K: u32 = 0x3001;
+/// HEAD/TAIL: offset em **bytes**; bits de wrap descartados no poll.
+const RING_PTR_MASK: u32 = 0x001F_FFFC;
 const FORCE_WAKEUP: u64 = 0x0A278;
 
 // GPU commands (dwords)
@@ -69,21 +75,21 @@ impl IntelRing {
 
         unsafe { core::ptr::write_bytes(ring_va, 0, 16384); }
 
-        unsafe {
-            core::ptr::write_volatile((mmio + RENDER_RING_BASE) as *mut u64, ring_pa);
-            core::ptr::write_volatile((mmio + RENDER_RING_CTL) as *mut u32, 4096);
-            core::ptr::write_volatile((mmio + RENDER_RING_HEAD) as *mut u32, 0);
-            core::ptr::write_volatile((mmio + RENDER_RING_TAIL) as *mut u32, 0);
-        }
-
-        // GGTT com bias WOPCM (ADR-0050 P2) — ring pinado acima WOPCM.
+        // GGTT primeiro — RING_START recebe offset GGTT (padrão BCS / i915 xcs_resume).
         let gtt_off = unsafe {
             let mut gtt = crate::gpu::intel_gtt::GgttPin::new(mmio);
             gtt.pin_sys(ring_pa, 4)
         };
         if gtt_off.is_none() {
-            // Fallback legado se pin WOPCM falhar (índices esgotados).
             unsafe { init_gtt(mmio, ring_pa, 4); }
+        }
+        let start = gtt_off.unwrap_or(ring_pa);
+
+        unsafe {
+            core::ptr::write_volatile((mmio + RENDER_RING_START) as *mut u32, start as u32);
+            core::ptr::write_volatile((mmio + RENDER_RING_CTL) as *mut u32, RENDER_RING_CTL_16K);
+            core::ptr::write_volatile((mmio + RENDER_RING_HEAD) as *mut u32, 0);
+            core::ptr::write_volatile((mmio + RENDER_RING_TAIL) as *mut u32, 0);
         }
 
         let gen = match gpu.arch {
@@ -93,47 +99,79 @@ impl IntelRing {
             _ => 9,
         };
 
-        k_nano::slog_hal!("GPU", "intel", "Ring OK: {} (Gen{}) mmio={:#x} ring={:#x} gtt={:?}", gpu.name, gen, mmio, ring_pa, gtt_off);
-        Some(IntelRing { mmio, ring_pa, ring_va, ring_size: 4096, tail: 0, has_render: true, gen, shader_pa: 0, shader_loaded: false })
+        k_nano::slog_hal!(
+            "GPU",
+            "intel",
+            "Ring OK: {} (Gen{}) mmio={:#x} ring={:#x} start_gtt={:#x}",
+            gpu.name,
+            gen,
+            mmio,
+            ring_pa,
+            start
+        );
+        // ring_size = dwords; `tail` = offset em **bytes** (contrato HEAD/TAIL HW).
+        Some(IntelRing {
+            mmio,
+            ring_pa,
+            ring_va,
+            ring_size: 4096,
+            tail: 0,
+            has_render: true,
+            gen,
+            shader_pa: 0,
+            shader_loaded: false,
+        })
     }
 
-    /// Escreve comandos no ring buffer e avanca tail
+    /// Escreve comandos no ring buffer e avanca tail (bytes).
     pub fn write(&mut self, cmd: &[u32]) {
-        let len = cmd.len();
-        if len > self.ring_size as usize {
-            k_nano::slog_hal!("INTEL", "info", "WARNING: cmd len {} > ring size {}, truncating!", len, self.ring_size);
-        }
-        let len = len.min(self.ring_size as usize);
-        let wrap = (self.tail as usize + len).saturating_sub(self.ring_size as usize);
+        let ring_bytes = self.ring_size.saturating_mul(4);
+        let len = cmd.len().min(self.ring_size as usize);
+        let dword_idx = (self.tail / 4) as usize;
+        let wrap = (dword_idx + len).saturating_sub(self.ring_size as usize);
         if wrap > 0 {
             let first = len - wrap;
             for i in 0..first {
-                unsafe { self.ring_va.add(self.tail as usize + i).write_volatile(cmd[i]); }
+                unsafe {
+                    self.ring_va.add(dword_idx + i).write_volatile(cmd[i]);
+                }
             }
             for i in 0..wrap {
-                unsafe { self.ring_va.add(i).write_volatile(cmd[first + i]); }
+                unsafe {
+                    self.ring_va.add(i).write_volatile(cmd[first + i]);
+                }
             }
         } else {
             for i in 0..len {
-                unsafe { self.ring_va.add(self.tail as usize + i).write_volatile(cmd[i]); }
+                unsafe {
+                    self.ring_va.add(dword_idx + i).write_volatile(cmd[i]);
+                }
             }
         }
-        self.tail = (self.tail + len as u32) % self.ring_size;
+        self.tail = (self.tail + (len as u32).saturating_mul(4)) % ring_bytes;
     }
 
     /// Notifica GPU para processar o ring buffer
     pub fn submit(&mut self) {
         unsafe {
             core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-            core::ptr::write_volatile((self.mmio + RENDER_RING_TAIL) as *mut u32, self.tail);
+            core::ptr::write_volatile(
+                (self.mmio + RENDER_RING_TAIL) as *mut u32,
+                self.tail & RING_PTR_MASK,
+            );
         }
     }
 
-    /// Espera GPU completar (poll head == tail)
+    /// Espera GPU completar (HEAD addr == TAIL addr, mask de wrap).
     pub fn wait_idle(&self, timeout: u32) -> bool {
+        let want = self.tail & RING_PTR_MASK;
         for _ in 0..timeout {
-            let head = unsafe { core::ptr::read_volatile((self.mmio + RENDER_RING_HEAD) as *const u32) };
-            if head == self.tail { return true; }
+            let head = unsafe {
+                core::ptr::read_volatile((self.mmio + RENDER_RING_HEAD) as *const u32)
+            } & RING_PTR_MASK;
+            if head == want {
+                return true;
+            }
             core::hint::spin_loop();
         }
         false
@@ -307,35 +345,52 @@ impl BcsRing {
     }
 
     pub fn write(&mut self, cmd: &[u32]) {
+        let ring_bytes = self.ring_size.saturating_mul(4);
         let len = cmd.len().min(self.ring_size as usize);
-        let wrap = (self.tail as usize + len).saturating_sub(self.ring_size as usize);
+        let dword_idx = (self.tail / 4) as usize;
+        let wrap = (dword_idx + len).saturating_sub(self.ring_size as usize);
         if wrap > 0 {
             let first = len - wrap;
             for i in 0..first {
-                unsafe { self.ring_va.add(self.tail as usize + i).write_volatile(cmd[i]); }
+                unsafe {
+                    self.ring_va.add(dword_idx + i).write_volatile(cmd[i]);
+                }
             }
             for i in 0..wrap {
-                unsafe { self.ring_va.add(i).write_volatile(cmd[first + i]); }
+                unsafe {
+                    self.ring_va.add(i).write_volatile(cmd[first + i]);
+                }
             }
         } else {
             for i in 0..len {
-                unsafe { self.ring_va.add(self.tail as usize + i).write_volatile(cmd[i]); }
+                unsafe {
+                    self.ring_va.add(dword_idx + i).write_volatile(cmd[i]);
+                }
             }
         }
-        self.tail = (self.tail + len as u32) % self.ring_size;
+        // `tail` = bytes (contrato HEAD/TAIL HW), não índice dword.
+        self.tail = (self.tail + (len as u32).saturating_mul(4)) % ring_bytes;
     }
 
     pub fn submit(&mut self) {
         unsafe {
             core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-            core::ptr::write_volatile((self.mmio + BCS_RING_TAIL) as *mut u32, self.tail);
+            core::ptr::write_volatile(
+                (self.mmio + BCS_RING_TAIL) as *mut u32,
+                self.tail & RING_PTR_MASK,
+            );
         }
     }
 
     pub fn wait_idle(&self, timeout: u32) -> bool {
+        let want = self.tail & RING_PTR_MASK;
         for _ in 0..timeout {
-            let head = unsafe { core::ptr::read_volatile((self.mmio + BCS_RING_HEAD) as *const u32) };
-            if head == self.tail { return true; }
+            let head = unsafe {
+                core::ptr::read_volatile((self.mmio + BCS_RING_HEAD) as *const u32)
+            } & RING_PTR_MASK;
+            if head == want {
+                return true;
+            }
             core::hint::spin_loop();
         }
         false

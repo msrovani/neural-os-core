@@ -79,7 +79,7 @@ pub fn clear_hal_as() { HAL_AS_ACTIVE.store(false, Ordering::SeqCst); HAL_AS_BAR
 pub fn check_map_bar(caller_ring: u8, has_cap: bool) -> CapResult {
     if !CAP_ENFORCE.load(Ordering::SeqCst) { return CapResult::Allow; }
     if caller_ring <= 1 { return CapResult::Allow; }
-    if caller_ring >= 3 && !has_cap { k_nano::slog_hal!("Cap", "MAP_BAR", "DENY ring={}", caller_ring); return CapResult::Deny; }
+    if caller_ring >= 3 && !has_cap { k_nano::slog_hal!("Cap", "warn", "MAP_BAR DENY ring={}", caller_ring); return CapResult::Deny; }
     if has_cap { CapResult::Allow } else { CapResult::Deny }
 }
 pub fn check_fe(caller_ring: u8, cap: HalCap, has_cap: bool) -> CapResult {
@@ -88,7 +88,7 @@ pub fn check_fe(caller_ring: u8, cap: HalCap, has_cap: bool) -> CapResult {
     match cap {
         HalCap::FeNet | HalCap::FeDisplay | HalCap::FeAudio | HalCap::FeCompute | HalCap::FeVideo => {
             if has_cap || caller_ring == 2 { CapResult::Allow }
-            else if caller_ring >= 3 && !has_cap { k_nano::slog_hal!("Cap", "FE", "DENY {:?} ring={}", cap, caller_ring); CapResult::Deny } else { CapResult::Deny }
+            else if caller_ring >= 3 && !has_cap { k_nano::slog_hal!("Cap", "warn", "FE DENY {:?} ring={}", cap, caller_ring); CapResult::Deny } else { CapResult::Deny }
         }
         _ => check_map_bar(caller_ring, has_cap),
     }
@@ -152,12 +152,12 @@ pub fn required_cap(host_fn: &str) -> Option<Cap> {
 pub fn check(host_fn: &str, held: Cap) -> Result<(), &'static str> {
     let Some(need) = required_cap(host_fn) else {
         DENY_COUNT.fetch_add(1, Ordering::Relaxed);
-        k_nano::slog_hal!("CapGate", "info", "DENY unknown host_fn={}", host_fn);
+        k_nano::slog_hal!("CapGate", "warn", "DENY unknown host_fn={}", host_fn);
         return Err("EPERM: host_fn desconhecida");
     };
     if !held.contains(need) {
         DENY_COUNT.fetch_add(1, Ordering::Relaxed);
-        k_nano::slog_hal!("CapGate", "info", "DENY fn={} need=0x{:x} held=0x{:x}", host_fn, need.bits(), held.bits());
+        k_nano::slog_hal!("CapGate", "warn", "DENY fn={} need=0x{:x} held=0x{:x}", host_fn, need.bits(), held.bits());
         return Err("EPERM: Cap insuficiente");
     }
     ALLOW_COUNT.fetch_add(1, Ordering::Relaxed);

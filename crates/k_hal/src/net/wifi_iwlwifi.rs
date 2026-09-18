@@ -242,19 +242,17 @@ impl IwlWifi {
                    1, 0, 0, 0];    // n_ssids = 1 (probe all)
         self.send_cmd(0x34, &cmd)?;
 
-        // Poll por resposta (simplificado)
-        for _ in 0..50000 {
+        // Poll por IRQ RX — sem parse de beacon ainda = honesty, não inventa SSID.
+        for _ in 0..50_000 {
             let int = self.r32(CSR_INT);
             if int & CSR_INT_BIT_RX != 0 {
                 self.w32(CSR_INT, int); // clear
-                // Parse scan results from RX descriptors
-                // (em producao: iterar RX ring buffers, extrair beacon/probe responses)
-                let results = alloc::vec![
-                    ScanResult { ssid: alloc::string::String::from("JARVIS-NET"), bssid: [0; 6], channel: 6, signal: -45, security: "WPA2" },
-                    ScanResult { ssid: alloc::string::String::from("MeuWiFi"), bssid: [0; 6], channel: 1, signal: -60, security: "WPA2" },
-                ];
-                k_nano::slog_hal!("IWL", "info", "Scan completo: {} APs encontrados", results.len());
-                return Ok(results);
+                k_nano::slog_hal!(
+                    "IWL",
+                    "warn",
+                    "scan RX visto mas parse beacon = residual — 0 APs (não fabricar SSID)"
+                );
+                return Ok(alloc::vec::Vec::new());
             }
             core::hint::spin_loop();
         }

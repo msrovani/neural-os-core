@@ -74,8 +74,14 @@ pub fn parse_firmware_ies(file: &[u8]) -> Result<(Vec<u8>, Vec<u8>, [u8; 32], us
     let mut ver_len = 0usize;
 
     while off + 8 <= file.len() {
-        let id = u32::from_le_bytes(file[off..off + 4].try_into().unwrap());
-        let len = u32::from_le_bytes(file[off + 4..off + 8].try_into().unwrap()) as usize;
+        let id = u32::from_le_bytes(match file[off..off + 4].try_into() {
+            Ok(b) => b,
+            Err(_) => return Err("ie_hdr"),
+        });
+        let len = u32::from_le_bytes(match file[off + 4..off + 8].try_into() {
+            Ok(b) => b,
+            Err(_) => return Err("ie_hdr"),
+        }) as usize;
         off += 8;
         if off + len > file.len() {
             return Err("ie_truncated");

@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s355] - 2026-09-18 — k_hal bughunt (R1 honesty)
+
+- Intel RCS: base Gen9 `0x2000`, START GGTT, CTL `0x3001`, tail/HEAD bytes + `RING_PTR_MASK` (BCS igual)
+- iwlwifi scan: remove SSIDs fabricados; generic_wifi usa `pci_bar::decode_bar`
+- page_flip: DSPSURF readback (não ENABLE); kv_dma/VRAM floor; CapGate DENY visível (`warn`)
+- SESSION_355; IDEA #570–#572
+
 ## [1.9.99-s354] - 2026-09-18 — NSGDB 1.1.20 + K33 + k_nano bughunt
 
 - Sync neural-sgdb → **1.1.20** (`tools/sync-neural-sgdb.ps1` + junction); bridge `k_ai` alinhada

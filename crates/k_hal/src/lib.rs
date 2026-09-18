@@ -42,10 +42,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 static H1_RAN: AtomicBool = AtomicBool::new(false);
 
 /// Bring-up H1: DeviceTree + UnlockDAG tokens + HalOffer (ADR-0056).
-/// Idempotente: o 1Âº call popula PCI; calls seguintes sÃ³ refrescam a oferta
-/// (nÃ£o `clear_tree` â€” senÃ£o o plano k_ai do boot some).
+/// Idempotente: o 1º call popula PCI; calls seguintes só refrescam a oferta
+/// (não `clear_tree` — senão o plano k_ai do boot some).
 pub fn init_h1() -> usize {
-    if H1_RAN.load(Ordering::Relaxed) {
+    if H1_RAN.load(Ordering::Acquire) {
         offer::refresh_from_tree();
         crate::usb::install_bringup_hooks();
         return discovery::device_count();
@@ -54,7 +54,7 @@ pub fn init_h1() -> usize {
     let fat = device_recipe::fat_readable_hint();
     unlock_dag::boot_platform_tokens(n > 0, fat);
     offer::refresh_from_tree();
-    H1_RAN.store(true, Ordering::Relaxed);
+    H1_RAN.store(true, Ordering::Release);
     // USB host BE: hubâ†’MSC vive em k_hal; registra hook antes do DriverInit probe.
     crate::usb::install_bringup_hooks();
     k_nano::slog_hal!(

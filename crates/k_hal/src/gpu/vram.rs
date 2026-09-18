@@ -24,7 +24,18 @@ pub struct VramBuddy {
 
 fn order(size: u64) -> u32 {
     let mut o = MIN_ORDER;
-    while (1u64 << o) < size && o < MAX_ORDER { o += 1; }
+    while (1u64 << o) < size && o < MAX_ORDER {
+        o += 1;
+    }
+    o
+}
+
+/// Maior potência de 2 **≤** `size` (nunca cresce além da VRAM física).
+fn floor_order(size: u64) -> u32 {
+    let mut o = MIN_ORDER;
+    while o < MAX_ORDER && (1u64 << (o + 1)) <= size {
+        o += 1;
+    }
     o
 }
 
@@ -34,24 +45,50 @@ fn buddy(addr: u64, size: u64) -> u64 {
 
 impl VramBuddy {
     pub fn new(base: u64, size: u64, gpu_name: &'static str) -> Self {
-        let aligned_size = 1u64 << order(size);
-        // Inicializa free lists manualmente (sem const { Vec::new() })
+        // Floor: se size não for potência de 2, NÃO arredondar para cima
+        // (ceil 3GB→4GB alocaria além da aperture).
+        let o = floor_order(size.max(1u64 << MIN_ORDER));
+        let aligned_size = 1u64 << o;
         let mut vram = VramBuddy {
             base,
             size: aligned_size,
             free: [
-                Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-                Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-                Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
-                Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
                 Vec::new(),
             ],
             total_allocated: 0,
             gpu_name,
         };
-        let o = order(aligned_size);
         vram.free[(o - MIN_ORDER) as usize].push(base);
-        k_nano::slog_hal!("VRAM", "BUDDY", "{}: base={:#x} size={}MB ordem={}", gpu_name, base, aligned_size/(1024*1024), o);
+        k_nano::slog_hal!(
+            "VRAM",
+            "BUDDY",
+            "{}: base={:#x} size={}MB ordem={} (floor of {}MB)",
+            gpu_name,
+            base,
+            aligned_size / (1024 * 1024),
+            o,
+            size / (1024 * 1024)
+        );
         vram
     }
 

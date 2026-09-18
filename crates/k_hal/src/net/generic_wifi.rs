@@ -407,8 +407,11 @@ pub fn detect_wifi() -> bool {
     let devices = unsafe { k_nano::pci::scan_pci() };
     for dev in &devices {
         if dev.class == 0x02 && dev.subclass == 0x80 {
-            let bar_raw = (dev.bar0 as u64) | ((dev.bar1 as u64) << 32);
-            let bar = (bar_raw & !0xF) as usize;
+            // decode_bar: NÃO OR bar1 em BAR 32-bit (pci_bar.rs / ADR).
+            let bar = crate::pci_bar::decode_bar(dev.bar0 as u64, dev.bar1 as u64) as usize;
+            if bar == 0 {
+                continue;
+            }
             if unsafe { runtime_probe_and_bind(dev.vendor_id, dev.device_id, bar).is_ok() } {
                 crate::net::register_net_bound(dev.bus, dev.device, dev.function, true);
                 return true;

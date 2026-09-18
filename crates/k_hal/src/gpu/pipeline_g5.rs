@@ -40,9 +40,15 @@ pub fn avg_decode_ticks() -> u64 {
 
 /// Gate: exercise one tiny matmul; report μs estimate if timer ~1kHz (honest: ticks only).
 pub fn gate_status() -> &'static str {
-    // 2x2 identity-ish matmul smoke
-    let a = Tensor::from_row_major((2, 2), alloc::vec![1.0, 0.0, 0.0, 1.0]).unwrap();
-    let b = Tensor::from_row_major((2, 2), alloc::vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+    // 2x2 identity-ish matmul smoke — sem unwrap (Tensor::from_row_major pode falhar).
+    let Some(a) = Tensor::from_row_major((2, 2), alloc::vec![1.0, 0.0, 0.0, 1.0]) else {
+        k_nano::slog_hal!("ADR", "0047-G5", "pipeline=CPU FAIL tensor_a");
+        return "CPU_PIPELINE_FAIL";
+    };
+    let Some(b) = Tensor::from_row_major((2, 2), alloc::vec![1.0, 0.0, 0.0, 1.0]) else {
+        k_nano::slog_hal!("ADR", "0047-G5", "pipeline=CPU FAIL tensor_b");
+        return "CPU_PIPELINE_FAIL";
+    };
     let _ = decode_step_cpu(&a, &b);
     let avg = avg_decode_ticks();
     k_nano::slog_hal!("ADR", "0047-G5", "pipeline=CPU decode_avg_ticks={} target_us=50 (HW shader deferred)", avg);

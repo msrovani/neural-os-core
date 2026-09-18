@@ -1,6 +1,6 @@
 ﻿# 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-09-18 — s354: NSGDB sync + K33 + k_nano bughunt (#567–#569).
+**Última atualização:** 2026-09-18 — s355: k_hal bughunt R1 (#570–#572); s354 NSGDB+K33+k_nano (#567–#569).
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -1880,3 +1880,6 @@ elabel_*.py |
 | 2026-09-18 | **#567** | **Timeout de dispositivo NUNCA retorna sucesso** - AHCI CI poll 100k spins + `true` e e1000 "Reset OK" com RST stuck = honesty falsa (pior que hang). Padrão: TSC budget + `false`/`None` + slog `warn`. ✅ ATA/AHCI/e1000/virtio-net/Tickv mount s354. Residual: NVMe disable sem check RDY; AHCI stop-port 1000 spins. | ✅ | — (fix) | SESSION_354 | `crates/k_nano/src/{ata,ahci,e1000,virtio_net,storage/tickv}.rs` |
 | 2026-09-18 | **#568** | **Tickv FileFlash: compact fora do hot-path de boot** - `HIGH_WATER` 256KB + `maybe_gc`→compact PIO = K33[28] soft-hang. ✅ `set_gc_suspended` no mount file/nvme + skip auto-compact; Runtime `boot_init_deferred`. Aceite: QEMU PHASE 6/7 + NSGDB Runtime (AWAITING re-teste). | ✅ | ADR-0063 | SESSION_354 | `tickv.rs`, `k_ai/sgdb`, `neural-kernel/main.rs` |
 | 2026-09-18 | **#569** | **AIOS trackea neural-sgdb por junction/sync** - MCP 1.1.20 vs crate stale. ✅ `tools/sync-neural-sgdb.ps1` + junction `crates/neural-sgdb` → `C:\DEV\neural-sgdb`. Ritual: sync antes de bridge/version bump. | ✅ | ADR-0091 | SESSION_354 | `tools/sync-neural-sgdb.ps1`, `k_ai/Cargo.toml` |
+| 2026-09-18 | **#570** | **Intel RCS/BCS: offsets Gen9 + tail em bytes** - base `0x120000` (hex a mais), TAIL no slot START, CTL=4096, `wait_idle` comparava dword vs HEAD com wrap. ✅ `0x2000`/`0x3001`/START GGTT/`RING_PTR_MASK`; BCS alinhado. Aceite metal blit AWAITING. | ✅ | ADR-0087 | SESSION_355 | `crates/k_hal/src/gpu/intel.rs` |
+| 2026-09-18 | **#571** | **WiFi scan nunca fabrica SSID** - iwlwifi retornava JARVIS-NET/MeuWiFi em qualquer RX. ✅ 0 APs + warn; parse beacon = residual. generic_wifi: `decode_bar` (não OR bar1). | ✅ | — (fix) | SESSION_355 | `wifi_iwlwifi.rs`, `generic_wifi.rs` |
+| 2026-09-18 | **#572** | **Display/KV honesty k_hal** - page_flip poll ENABLE=falso sucesso; kv_dma wait infinito; VramBuddy ceil. ✅ DSPSURF readback; kv_dma bar_memcpy+VRAM_READY; floor_order. | ✅ | ADR-0047 | SESSION_355 | `intel_display.rs`, `kv_dma.rs`, `vram.rs` |

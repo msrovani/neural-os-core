@@ -123,10 +123,11 @@ pub unsafe fn page_flip_hw(gpu: &GpuInfo, surface_pa: u64, stride: u32, width: u
     dspcntr &= !DSPCNTR_ENABLE;
     core::ptr::write_volatile(bar0_virt.add(dspcntr_off), dspcntr);
 
-    // 2. Configura novo surface address (DSPSURF)
+    // 2. Surface = offset GGTT 32-bit (Gen9). NÃO escrever dword alto —
+    //    DSPSURF+4 é outro reg (mesmo class de bug CURBASE/CURPOS, SESSION_335).
     let dsp_surf_off = (DSPSURF / 4) as usize;
-    core::ptr::write_volatile(bar0_virt.add(dsp_surf_off), surface_pa as u32);
-    core::ptr::write_volatile(bar0_virt.add(dsp_surf_off + 1), (surface_pa >> 32) as u32);
+    let surf32 = surface_pa as u32;
+    core::ptr::write_volatile(bar0_virt.add(dsp_surf_off), surf32);
 
     // 3. Configura stride (DSPSTRIDE)
     let dsp_stride_off = (DSPSTRIDE / 4) as usize;
@@ -140,18 +141,46 @@ pub unsafe fn page_flip_hw(gpu: &GpuInfo, surface_pa: u64, stride: u32, width: u
     dspcntr |= DSPCNTR_ENABLE | DSPCNTR_FORMAT_BGRA8888 | DSPCNTR_GAMMA_ENABLE;
     core::ptr::write_volatile(bar0_virt.add(dspcntr_off), dspcntr);
 
-    // 6. Aguarda vblank para confirmar flip (polling simples)
-    // Em produção, usar interrupt de vblank
-    for _ in 0..100000 {
-        let status = core::ptr::read_volatile(bar0_virt.add(dspcntr_off));
-        if status & DSPCNTR_ENABLE != 0 {
-            slog_hal!("INTEL_DISP", "flip", "Page-flip HW OK: surface={:#x} stride={} {}x{}", surface_pa, stride, width, height);
+    // 6. Aceite = readback DSPSURF (não DSPCNTR_ENABLE — acabamos de setar
+    //    ENABLE, então "aguardar ENABLE" era falso sucesso imediato).
+    //    Vblank real (PIPESTAT) fica residual metal; aqui honesty mínima.
+    const BUDGET_US: u64 = 50_000; // 50ms
+    let t0 = k_nano::tsc::now_us();
+    let use_tsc = k_nano::tsc::tsc_hz() != 0;
+    let mut spins = 0u32;
+    loop {
+        let got = core::ptr::read_volatile(bar0_virt.add(dsp_surf_off));
+        if got == surf32 {
+            slog_hal!(
+                "INTEL_DISP",
+                "flip",
+                "Page-flip surface latch OK: surface={:#x} stride={} {}x{}",
+                surface_pa,
+                stride,
+                width,
+                height
+            );
             return true;
+        }
+        if use_tsc {
+            if k_nano::tsc::now_us().saturating_sub(t0) > BUDGET_US {
+                break;
+            }
+        } else {
+            spins = spins.saturating_add(1);
+            if spins > 100_000 {
+                break;
+            }
         }
         core::hint::spin_loop();
     }
 
-    slog_hal!("INTEL_DISP", "flip", "TIMEOUT aguardando vblank");
+    slog_hal!(
+        "INTEL_DISP",
+        "warn",
+        "TIMEOUT DSPSURF readback want={:#x} — flip NÃO confirmado",
+        surf32
+    );
     false
 }
 

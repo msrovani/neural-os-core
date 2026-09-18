@@ -1,74 +1,122 @@
-//! CPU→GPU KV cache DMA — transfere KV cache entre RAM e VRAM.
-//! Usa DMA engine da GPU ou cópia via BAR1 quando DMA não disponível.
-//! Referência: dmaplane (arXiv 2603.10030).
+//! CPU↔GPU KV cache transfer via aperture BAR (memcpy UC), não CE/DMA real.
+//! Referência aspiracional: dmaplane (arXiv 2603.10030) — residual Layer S.
+//!
+//! Honesty: VRAM phys só é tocável após `init_vram_tier` mapear UC
+//! (`phys + pmoff`). Sem VRAM_READY → recusa. `wait()` nunca gira eterno.
 
 use crate::gpu::detect::GpuInfo;
-use crate::gpu::vram::vram_alloc;
-#[derive(Debug, Clone, Copy)]
-pub enum DmaDir { CpuToGpu, GpuToCpu }
+use crate::gpu::vram::{vram_alloc, VRAM_READY};
+use core::sync::atomic::Ordering;
 
-/// Transferência DMA de KV cache entre CPU RAM e GPU VRAM
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DmaDir {
+    CpuToGpu,
+    GpuToCpu,
+}
+
+/// Transferência de KV cache entre CPU RAM e GPU VRAM (BAR memcpy).
 pub struct KvDmaTransfer {
-    pub cpu_paddr: u64,       // virtual address in CPU RAM
-    pub gpu_paddr: u64,       // physical address in GPU VRAM
-    pub size: u64,            // bytes
+    pub cpu_paddr: u64,
+    pub gpu_paddr: u64,
+    pub size: u64,
     pub dir: DmaDir,
     pub done: bool,
 }
 
 impl KvDmaTransfer {
     pub fn new(cpu_vaddr: u64, size: u64, dir: DmaDir, _gpu: &GpuInfo) -> Option<Self> {
+        if !VRAM_READY.load(Ordering::Acquire) || size == 0 {
+            k_nano::slog_hal!("GPU", "kvdma", "refuse — VRAM não ready ou size=0");
+            return None;
+        }
         let gpu_paddr = vram_alloc(size as usize)?;
+        let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+        // Aperture já mapeada UC em init_vram_tier: VA = phys + pmoff.
+        let bar_va = (gpu_paddr.wrapping_add(pmoff)) as *mut u8;
 
-        if dir as u32 == 0 { // CpuToGpu
-            let src = cpu_vaddr as *const u8;
-            let dst_pa = (gpu_paddr + k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed)) as *mut u8;
-            unsafe { core::ptr::copy_nonoverlapping(src, dst_pa, size as usize); }
-            unsafe { core::arch::asm!("sfence", options(nostack, preserves_flags)); }
-        } else {
-            let src_pa = (gpu_paddr + k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed)) as *const u8;
-            let dst = cpu_vaddr as *mut u8;
-            unsafe {
-                core::ptr::copy_nonoverlapping(src_pa, dst, size as usize);
-                core::arch::asm!("sfence", options(nostack, preserves_flags));
+        match dir {
+            DmaDir::CpuToGpu => {
+                let src = cpu_vaddr as *const u8;
+                unsafe {
+                    core::ptr::copy_nonoverlapping(src, bar_va, size as usize);
+                    core::arch::asm!("sfence", options(nostack, preserves_flags));
+                }
+            }
+            DmaDir::GpuToCpu => {
+                let dst = cpu_vaddr as *mut u8;
+                unsafe {
+                    core::ptr::copy_nonoverlapping(bar_va as *const u8, dst, size as usize);
+                    core::arch::asm!("lfence", options(nostack, preserves_flags));
+                }
             }
         }
 
-        k_nano::slog_hal!("GPU", "kvdma", "cpu_vaddr={:#x} gpu_paddr={:#x} ({} bytes) dir={:?}", cpu_vaddr, gpu_paddr, size, dir);
+        k_nano::slog_hal!(
+            "GPU",
+            "kvdma",
+            "cpu_vaddr={:#x} gpu_paddr={:#x} ({} bytes) dir={:?} path=bar_memcpy",
+            cpu_vaddr,
+            gpu_paddr,
+            size,
+            dir
+        );
 
-        Some(KvDmaTransfer { cpu_paddr: cpu_vaddr, gpu_paddr, size, dir, done: true })
+        Some(KvDmaTransfer {
+            cpu_paddr: cpu_vaddr,
+            gpu_paddr,
+            size,
+            dir,
+            done: true,
+        })
     }
 
-    pub fn wait(&mut self) { while !self.done { core::hint::spin_loop(); } }
+    /// Síncrono no `new` (memcpy). Nunca spin infinito.
+    pub fn wait(&mut self) -> bool {
+        self.done
+    }
 }
 
-/// Transfere KV cache layer entre RAM e VRAM
+/// Transfere KV cache layer entre RAM e VRAM (BAR memcpy; exige VRAM_READY).
 pub fn kv_transfer_layer(
-    layer_k_cpu: &[f32], layer_v_cpu: &[f32],
-    seq_len: usize, hidden: usize,
+    layer_k_cpu: &[f32],
+    layer_v_cpu: &[f32],
+    seq_len: usize,
+    hidden: usize,
     _gpu: &GpuInfo,
 ) -> Option<(u64, u64)> {
-    let layer_bytes = seq_len * hidden * 4; // f32 = 4 bytes
-    let pmoff = unsafe { k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed) };
+    if !VRAM_READY.load(Ordering::Acquire) {
+        return None;
+    }
+    let layer_bytes = seq_len.checked_mul(hidden)?.checked_mul(4)?;
+    let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
 
     let k_gpu = vram_alloc(layer_bytes)?;
     let v_gpu = vram_alloc(layer_bytes)?;
 
     unsafe {
-        // CPU virtual addr → GPU VRAM (via BAR2 UC mapping)
         core::ptr::copy_nonoverlapping(
             layer_k_cpu.as_ptr(),
             (k_gpu + pmoff) as *mut f32,
-            seq_len * hidden);
+            seq_len * hidden,
+        );
         core::ptr::copy_nonoverlapping(
             layer_v_cpu.as_ptr(),
             (v_gpu + pmoff) as *mut f32,
-            seq_len * hidden);
+            seq_len * hidden,
+        );
         core::arch::asm!("sfence", options(nostack, preserves_flags));
     }
 
-    k_nano::slog_hal!("GPU", "kvdma", "Layer K@{:#x} V@{:#x} ({} seq, {} hidden, {} MB)",
-        k_gpu, v_gpu, seq_len, hidden, (layer_bytes * 2) / (1024*1024));
+    k_nano::slog_hal!(
+        "GPU",
+        "kvdma",
+        "Layer K@{:#x} V@{:#x} ({} seq, {} hidden, {} MB) path=bar_memcpy",
+        k_gpu,
+        v_gpu,
+        seq_len,
+        hidden,
+        (layer_bytes * 2) / (1024 * 1024)
+    );
 
     Some((k_gpu, v_gpu))
 }
