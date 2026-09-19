@@ -20,8 +20,10 @@ pub const TOPIC_HUB_HEALTH_STATE: &str = "HUB_HEALTH_STATE";
 // ── Estado lock-free (agente escreve, compositor lê) ────────────────────────
 // gen incrementa a cada mudança de estado — o compositor compara e marca
 // dirty_panel. Sem locks no caminho do render.
-static PANEL_GEN: AtomicU64 = AtomicU64::new(0);
-static PANEL_VISIBLE: AtomicBool = AtomicBool::new(false);
+static PANEL_GEN: AtomicU64 = AtomicU64::new(1); // ≠0 → compositor sync no 1º paint
+/// Default aberto: painel SystemInfo/Hub Health visível no boot (F12/Esc ainda
+/// alternam; HEALTH_ISSUE não fecha mais sozinho após 8s).
+static PANEL_VISIBLE: AtomicBool = AtomicBool::new(true);
 /// Pill do header: 0=ok 1=warn 2=fail 3=n/a (código, não cor — a cor é render).
 static PANEL_PILL: AtomicU8 = AtomicU8::new(3);
 /// Índice da pior linha (0..); 0xFF = nenhuma (todas n/a).
@@ -140,8 +142,8 @@ impl Agent for HubHealthAgent {
         }
         while let Some(ev) = self.health_receiver.try_receive() {
             let _ = core::str::from_utf8(&ev.payload).unwrap_or("");
-            let now = k_nano::tsc::now_us();
-            self.auto_close_us = if now == 0 { 0 } else { now + 8_000_000 };
+            // Mantém painel aberto — sem auto-close 8s (SystemInfo sempre à vista).
+            self.auto_close_us = 0;
             self.apply(true, SAMPLE_PILL.load(Ordering::Relaxed), SAMPLE_WORST_ROW.load(Ordering::Relaxed));
         }
         while self.mesh_receiver.try_receive().is_some() {}
@@ -170,7 +172,7 @@ mod tests {
     fn sample_statics_default_na() {
         assert_eq!(SAMPLE_PILL.load(Ordering::Relaxed), 3);
         assert_eq!(SAMPLE_WORST_ROW.load(Ordering::Relaxed), 0xFF);
-        assert!(!PANEL_VISIBLE.load(Ordering::Relaxed));
+        assert!(PANEL_VISIBLE.load(Ordering::Relaxed));
     }
 
     #[test]

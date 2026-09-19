@@ -4,7 +4,8 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 const MANIFEST: AgentManifest = AgentManifest {
     name: "boot_log",
     kind: AgentKind::Skill,
-    schedule: ScheduleKind::Continuous,
+    // PollEvery: evita FAT walk Continuous engasgar scheduler em nós 1G.
+    schedule: ScheduleKind::PollEvery(500),
     auto_start: true,
     persist: true,
 };
@@ -20,10 +21,12 @@ pub fn register_read_boot_log(f: ReadBootLogFn) {
     READ_BOOT_LOG_FN.store(f as *mut (), Ordering::Release);
 }
 
-pub struct BootLogAgent;
+pub struct BootLogAgent {
+    analyzed: bool,
+}
 
 impl BootLogAgent {
-    pub fn new() -> Self { BootLogAgent }
+    pub fn new() -> Self { BootLogAgent { analyzed: false } }
 
     /// Le o ultimo log de boot e retorna como string para o Cortex
     /// Suporta FAT32 (B<TICK>.LOG) e LogFsAgent (memoria)
@@ -152,11 +155,16 @@ impl Agent for BootLogAgent {
     fn manifest(&self) -> &AgentManifest { &MANIFEST }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        // Uma análise FAT — re-walk Continuous/Poll era o tick lento em mesh 1G.
+        if self.analyzed {
+            return AgentTickResult::Pending;
+        }
+        self.analyzed = true;
         if let Some(log) = Self::read_last_boot_log() {
             let diagnostics = Self::analyze_log(&log);
             for (kind, msg) in &diagnostics {
-                k_nano::slog_kai!("BOOT", "LOG-AGENT", "{}: {}", kind, msg);
-                
+                k_nano::slog_kai!("BOOT", "ok", "{}: {}", kind, msg);
+
                 // Panic detectado → publica HEALTH_ISSUE (Ring 1 não segura SELF_HEAL global hermes)
                 if *kind == "PANIC" || *kind == "GPU_HUNG" {
                     let msg_out = alloc::format!("BOOT_{}: {}", kind, msg);
@@ -166,7 +174,7 @@ impl Agent for BootLogAgent {
                         payload: msg_out.into_bytes(),
                         token: event_bus::CapabilityToken::Legacy(1),
                     });
-                    k_nano::slog_kai!("BOOTLOG", "info", "Health issue publicado: {}", kind);
+                    k_nano::slog_kai!("BOOTLOG", "ok", "Health issue publicado: {}", kind);
                 }
             }
         }

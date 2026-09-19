@@ -454,16 +454,65 @@ impl FrameDeallocator<Size4KiB> for BitmapFrameAllocator {
     }
 }
 
-/// Heap = min(75% RAM, RAM − 12.5% kernel/FB/DMA). Frações medidas, sem SKU 8/16GB.
+/// Heap = min(75% RAM, RAM − keep). Em nós apertados (<1.5G) o keep sobe:
+/// FB + PMM + FRAG working-set — senão o piso 512MB + TALC OOM em aloc minúscula.
 pub fn heap_budget_mb(ram_mb: u64) -> usize {
     if ram_mb == 0 {
         return 512;
     }
     let pct75 = ram_mb.saturating_mul(3) / 4;
-    let kernel_keep = (ram_mb / 8).max(128);
+    let kernel_keep = if ram_mb < 1536 {
+        // Lab mesh 1G / metal frugal: reserva ~⅓ pra kernel+FB+mesh, piso 384MB.
+        (ram_mb / 3).max(384)
+    } else {
+        (ram_mb / 8).max(128)
+    };
+    let floor = if ram_mb < 1536 { 128 } else { 256 };
     pct75
         .min(ram_mb.saturating_sub(kernel_keep))
-        .max(256) as usize
+        .max(floor) as usize
+}
+
+/// Piso inicial do bump no boot — AIOS mede RAM, não hardcode 512 em 1G.
+pub fn heap_piso_mb(ram_mb: u64) -> usize {
+    if ram_mb == 0 {
+        return 512;
+    }
+    if ram_mb < 1536 {
+        256
+    } else {
+        512
+    }
+}
+
+/// Budget máximo p/ reassembly FRAG neste nó (Observe→Plan: RAM baixa = DEGRADED).
+/// Acima disso o RX dropa o payload (slog warn) em vez de OOM/halt.
+pub fn frag_reassembly_budget_bytes(ram_mb: u64) -> usize {
+    if ram_mb == 0 {
+        return 64 * 1000;
+    }
+    if ram_mb < 1280 {
+        // ~1G: só pacotes ≤ MTU — matmul 64×64 (~17KB) é recusado honestamente.
+        1200
+    } else if ram_mb < 2048 {
+        // ~1.5–2G: cabe matmul FRAG (~17.5KB) com margem.
+        24 * 1024
+    } else {
+        64 * 1000
+    }
+}
+
+#[inline]
+pub fn can_afford_frag(bytes: usize) -> bool {
+    let ram = TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
+    bytes <= frag_reassembly_budget_bytes(ram)
+}
+
+/// True quando o nó deve evitar carga pesada de mesh (FRAG matmul, self-test grande).
+#[inline]
+pub fn mesh_frag_pressure() -> bool {
+    let ram = TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
+    ram > 0 && ram < 1536
 }
 
 pub fn with_pmm<F, R>(f: F) -> R

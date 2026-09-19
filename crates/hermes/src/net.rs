@@ -281,7 +281,8 @@ pub fn detect_qemu_net_mode() -> QemuNetMode {
             .load(core::sync::atomic::Ordering::Relaxed)
             .saturating_mul(1024 * 1024)
             .min(0x200000000);
-        // Endereços canônicos do run-qemu-p2p-mesh.ps1 (acima de 4GiB).
+        // Endereços canônicos do run-qemu-p2p-mesh.ps1 (acima de 4GiB) +
+        // 0x0200_0000 p/ lab 3-node com -m≤2G (host sem 3×4G).
         const CANDIDATES: &[u64] = &[
             0x13E0_00000,
             NETMODE_LOADER_PHYS,
@@ -291,9 +292,20 @@ pub fn detect_qemu_net_mode() -> QemuNetMode {
             0x1400_00000,
             0x1500_00000,
             0x1600_00000,
+            0x0200_0000,
         ];
         let try_flag = |addr: u64| -> Option<QemuNetMode> {
-            if addr < 0x100000000 || (ram_end > 0x100000000 && addr >= ram_end) {
+            let ram_end_u = if ram_end == 0 {
+                u64::MAX
+            } else {
+                ram_end
+            };
+            // Flag acima de 4GiB exige guest RAM >4GiB; flag baixa (lab) cabe em -m 1–2G.
+            if addr >= 0x1000_00000 {
+                if ram_end_u <= 0x1000_00000 || addr >= ram_end_u {
+                    return None;
+                }
+            } else if addr >= ram_end_u {
                 return None;
             }
             k_nano::apic::map_page_uc(addr, pmoff);

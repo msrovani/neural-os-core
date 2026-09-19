@@ -168,6 +168,20 @@ pub unsafe fn wake_aps() {
 /// Full Infer D+B+C: cortex registra `poll_slice` — APs chamam sem AGENT_TICK_BUSY.
 static INFER_POLL_FN: AtomicUsize = AtomicUsize::new(0);
 
+/// UI atrasada (frame >2× período): APs/BSP InferWorker param de queimar CPU em
+/// matmul para o host WHPX devolver fatia ao BSP que pinta o compositor.
+/// Sem isto: smp=12 + InferQueue = CPU alto e desktop congelado (Display só no BSP).
+static UI_YIELD_INFER: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+pub fn set_ui_yield_infer(yield_infer: bool) {
+    UI_YIELD_INFER.store(yield_infer, Ordering::Release);
+}
+
+pub fn ui_yield_infer() -> bool {
+    UI_YIELD_INFER.load(Ordering::Acquire)
+}
+
 pub fn install_infer_poll_fn(f: fn() -> bool) {
     INFER_POLL_FN.store(f as usize, Ordering::Release);
 }
@@ -177,6 +191,10 @@ pub fn try_infer_poll_slice() -> bool {
     // ADR-0057 WS-F: sem APs pollable (IDT/IPI pleno) o idle loop dos APs
     // chamava isto incondicionalmente mesmo com a feature off (freeze s330).
     if !ap_pollable() {
+        return false;
+    }
+    // Compositor atrasado: não saturar host com 11 APs em matmul.
+    if ui_yield_infer() {
         return false;
     }
     let s = INFER_POLL_FN.load(Ordering::Acquire);

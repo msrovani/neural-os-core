@@ -1796,7 +1796,8 @@ pub fn write_fat_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
                 .ok_or("FAT write: Fat32Writer::new failed")?;
             let ok = unsafe { writer.write_file(&name, data) };
             if ok {
-                k_nano::slog_bin!("GGUF", "fail", "FAT write OK path={} bytes={}",
+                // Honesty: sucesso ≠ fail — TLSPINS/CFG no FAT não são erro (ADR-0092 sev).
+                k_nano::slog_bin!("GGUF", "ok", "FAT write OK path={} bytes={}",
                     name,
                     data.len());
                 return Ok(());

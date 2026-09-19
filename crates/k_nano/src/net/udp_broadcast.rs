@@ -493,7 +493,8 @@ pub fn send_fragmented(payload: &[u8], port: u16) -> bool {
             ok = false;
         }
     }
-    crate::slog_nano!("P2P", "info", "frag TX id={} partes={} len={}", id, total_frags, payload.len());
+    // "info" → TRACE mudo (ADR-0092); gate FRAG precisa de "ok" na serial.
+    crate::slog_nano!("P2P", "ok", "frag TX id={} partes={} len={}", id, total_frags, payload.len());
     ok
 }
 
@@ -558,6 +559,19 @@ pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
         if total_frags == 0 || total_frags > FRAG_MAX_PARTS || idx >= total_frags || total_len == 0 || total_len > max_legit_len {
             continue; // cabeçalho inválido — descarta
         }
+        // AIOS: RAM baixa → DEGRADED (drop FRAG grande), nunca OOM/halt no reassembly.
+        if !crate::memory::can_afford_frag(total_len) {
+            crate::slog_nano!(
+                "P2P", "warn",
+                "frag DROP pressure len={} budget={} RAM={}MB (DEGRADED)",
+                total_len,
+                crate::memory::frag_reassembly_budget_bytes(
+                    crate::memory::TOTAL_RAM_MB.load(Ordering::Relaxed)
+                ),
+                crate::memory::TOTAL_RAM_MB.load(Ordering::Relaxed)
+            );
+            continue;
+        }
         let chunk = &pkt[FRAG_HEADER_SIZE..];
         if chunk.is_empty() {
             continue;
@@ -610,7 +624,21 @@ pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
         if rs.chunks.len() <= idx as usize {
             rs.chunks.resize(idx as usize + 1, Vec::new());
         }
-        rs.chunks[idx as usize] = chunk.to_vec();
+        // try_reserve: sob pressão, drop em vez de OOM handler (AIOS DEGRADED).
+        {
+            let dest = &mut rs.chunks[idx as usize];
+            if dest.try_reserve(chunk.len()).is_err() {
+                crate::slog_nano!(
+                    "P2P", "warn",
+                    "frag DROP alloc pressure idx={} len={} (DEGRADED)",
+                    idx, chunk.len()
+                );
+                table[slot_pos] = None;
+                continue;
+            }
+            dest.clear();
+            dest.extend_from_slice(chunk);
+        }
         rs.received += 1;
         rs.last_tick = now;
 
@@ -626,7 +654,7 @@ pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
             table[slot_pos] = None;
             drop(table);
             crate::slog_nano!(
-                "P2P", "info",
+                "P2P", "ok",
                 "frag RX id={} partes={} len={}", complete_id, complete_parts, complete_len
             );
             return Some(out);
@@ -766,6 +794,15 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
         if total_frags == 0 || total_frags > FRAG_MAX_PARTS || idx >= total_frags || total_len == 0 || total_len > max_legit_len {
             continue; // cabeçalho inválido — descarta
         }
+        if !crate::memory::can_afford_frag(total_len) {
+            crate::slog_nano!(
+                "P2P", "warn",
+                "frag DROP pressure (ucast) len={} RAM={}MB (DEGRADED)",
+                total_len,
+                crate::memory::TOTAL_RAM_MB.load(Ordering::Relaxed)
+            );
+            continue;
+        }
         let chunk = &pkt[FRAG_HEADER_SIZE..];
         if chunk.is_empty() {
             continue;
@@ -821,7 +858,21 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
         if rs.chunks.len() <= idx as usize {
             rs.chunks.resize(idx as usize + 1, Vec::new());
         }
-        rs.chunks[idx as usize] = chunk.to_vec();
+        // try_reserve: sob pressão, drop em vez de OOM handler (AIOS DEGRADED).
+        {
+            let dest = &mut rs.chunks[idx as usize];
+            if dest.try_reserve(chunk.len()).is_err() {
+                crate::slog_nano!(
+                    "P2P", "warn",
+                    "frag DROP alloc pressure idx={} len={} (DEGRADED)",
+                    idx, chunk.len()
+                );
+                table[slot_pos] = None;
+                continue;
+            }
+            dest.clear();
+            dest.extend_from_slice(chunk);
+        }
         rs.received += 1;
         rs.last_tick = now;
         

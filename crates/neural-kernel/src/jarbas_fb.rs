@@ -207,7 +207,8 @@ impl JarbasDoubleBuffer {
     /// Present: copia back → FB kernel VA (canto superior). Cap::WRITE_FB.
     pub fn present(&mut self, held: Cap) -> Result<(), &'static str> {
         if !held.contains(Cap::WRITE_FB) {
-            k_nano::slog_bin!("CapGate", "warn", "DENY WRITE_FB held=0x{:x}", held.bits());
+            // Demo CapGate sem WRITE_FB = deny esperado (PoC), não regressão.
+            k_nano::slog_bin!("CapGate", "ok", "DENY WRITE_FB held=0x{:x}", held.bits());
             return Err("EPERM: Cap::WRITE_FB");
         }
         let _ = syscall::dispatch(SYS_PRESENT_FB, 0, held)?;

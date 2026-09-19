@@ -220,6 +220,38 @@ pub fn draw_text(fb: &mut DoubleBuffer, x: usize, y: usize, text: &str, scr_w: u
     crate::display::font::draw_text_blit(fb, x, y, text, scr_w, r, g, b);
 }
 
+/// "MST #2" / "WRK #3" em buffer de stack — zero alloc no hot path do grafo.
+fn fmt_mesh_tag<'a>(role: &str, nid: u8, out: &'a mut [u8; 12]) -> &'a str {
+    let rb = role.as_bytes();
+    let mut i = 0usize;
+    for &b in rb.iter().take(3) {
+        out[i] = b;
+        i += 1;
+    }
+    if i < out.len() {
+        out[i] = b' ';
+        i += 1;
+    }
+    if i < out.len() {
+        out[i] = b'#';
+        i += 1;
+    }
+    if nid >= 100 && i + 2 < out.len() {
+        out[i] = b'0' + nid / 100;
+        out[i + 1] = b'0' + (nid / 10) % 10;
+        out[i + 2] = b'0' + nid % 10;
+        i += 3;
+    } else if nid >= 10 && i + 1 < out.len() {
+        out[i] = b'0' + nid / 10;
+        out[i + 1] = b'0' + nid % 10;
+        i += 2;
+    } else if i < out.len() {
+        out[i] = b'0' + nid;
+        i += 1;
+    }
+    core::str::from_utf8(&out[..i]).unwrap_or("?")
+}
+
 // FASE 4.3: Hover zone detection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HoverZone {
@@ -256,6 +288,25 @@ static LAST_PRESENT_US: core::sync::atomic::AtomicU64 = core::sync::atomic::Atom
 /// Período-alvo do paint em µs (constante — NÃO derivar da cadência do rail).
 pub fn target_period_us() -> u64 {
     1_000_000 / TARGET_FPS
+}
+
+/// True se o último present atrasou >2× o período-alvo (UI “travada” sob carga).
+/// `LAST_PRESENT_US==0` = desktop ainda não pintou → false (não gatear Infer no boot).
+pub fn present_overdue() -> bool {
+    let last = LAST_PRESENT_US.load(core::sync::atomic::Ordering::Relaxed);
+    if last == 0 {
+        return false;
+    }
+    let now = k_nano::tsc::now_us();
+    if now == 0 {
+        return false;
+    }
+    now.wrapping_sub(last) > target_period_us().saturating_mul(2)
+}
+
+/// Propaga `present_overdue` → `k_nano::smp::set_ui_yield_infer` (APs/InferWorker).
+pub fn sync_ui_yield_infer() {
+    k_nano::smp::set_ui_yield_infer(present_overdue());
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1292,51 +1343,16 @@ impl JarbasDesktop {
             );
         }
 
-        // Diálogo de energia (modal central) — 3 opções
-        // #1: o rect do modal (inclui sombra) entra no dano sempre que o estado
-        // muda — cobre abrir E fechar (sem full swap).
-        if self.dirty_dialog {
+        // Diálogo de energia — NÃO só em dirty_dialog: o orb limpa o centro
+        // a cada paint (dirty_orb sticky) e apagava o modal no frame seguinte.
+        // Dano no open/close; paint sempre enquanto aberto (após o orb).
+        if self.dirty_dialog || self.power_dialog {
             let (dx, dy, dw, dh) = power_dialog_rect(self.w, self.h);
             self.damage
                 .push(dx.saturating_sub(4), dy.saturating_sub(4), dw + 8, dh + 8, w, h);
         }
-        if self.power_dialog && self.dirty_dialog {
-            let (dx, dy, dw, dh) = power_dialog_rect(self.w, self.h);
-            // Sombra
-            self.fb.fill_rect(dx + 4, dy + 4, dw, dh, 0, 0, 0);
-            // Fundo
-            self.fb.fill_rect(dx, dy, dw, dh, theme.bg_alt.0, theme.bg_alt.1, theme.bg_alt.2);
-            // Borda superior de acento
-            self.fb.fill_rect(dx, dy, dw, 2, theme.accent.0, theme.accent.1, theme.accent.2);
-            // Título
-            draw_text(&mut self.fb, dx + 16, dy + 12, "Opcoes de Energia", self.w,
-                      theme.fg.0, theme.fg.1, theme.fg.2);
-            // Instrução
-            draw_text(&mut self.fb, dx + 16, dy + 36, "Selecione uma acao:", self.w,
-                      theme.fg_muted.0, theme.fg_muted.1, theme.fg_muted.2);
-            // 3 botões em linha
-            let btn_y = dy + dh - 44;
-            let btn_h = 28;
-            let btn_w = 68;
-            let gap = 10;
-            let total_w = btn_w * 3 + gap * 2;
-            let start_x = dx + (dw.saturating_sub(total_w)) / 2;
-
-            // Desligar (error)
-            self.fb.fill_rect(start_x, btn_y, btn_w, btn_h,
-                              theme.error.0, theme.error.1, theme.error.2);
-            draw_text(&mut self.fb, start_x + 8, btn_y + 6, "Desligar", self.w, 255, 255, 255);
-
-            // Hibernar (success - energia)
-            self.fb.fill_rect(start_x + btn_w + gap, btn_y, btn_w, btn_h,
-                              theme.success.0, theme.success.1, theme.success.2);
-            draw_text(&mut self.fb, start_x + btn_w + gap + 8, btn_y + 6, "Hibernar", self.w, 255, 255, 255);
-
-            // Reiniciar (warning)
-            self.fb.fill_rect(start_x + (btn_w + gap) * 2, btn_y, btn_w, btn_h,
-                              theme.warning.0, theme.warning.1, theme.warning.2);
-            draw_text(&mut self.fb, start_x + (btn_w + gap) * 2 + 8, btn_y + 6, "Reiniciar", self.w, 255, 255, 255);
-        }
+        // Placeholder: paint real DEPOIS do Hub Health (z-order modal > plaque).
+        let paint_power = self.power_dialog;
 
         // Virtual console
         let vcon_active = crate::vconsole::active();
@@ -1351,7 +1367,7 @@ impl JarbasDesktop {
             draw_text(&mut self.fb, self.w - 60, 0, &alloc::format!("F{}", vcon_active + 1), self.w, 255, 255, 100);
         }
 
-        // Hub Health plaque (por cima de tudo exceto o cursor; SESSION_261).
+        // Hub Health plaque (por cima de tudo exceto modal de energia + cursor).
         if self.dirty_panel {
             let bbox = if orb_drawn {
                 Some((self.last_orb_x0, self.last_orb_y0, self.last_orb_w, self.last_orb_h))
@@ -1360,6 +1376,33 @@ impl JarbasDesktop {
             };
             self.draw_hub_panel(now, bbox);
             self.dirty_panel = false;
+        }
+
+        // Modal energia: sempre por cima do orb/hub enquanto aberto.
+        if paint_power {
+            let (dx, dy, dw, dh) = power_dialog_rect(self.w, self.h);
+            self.fb.fill_rect(dx + 4, dy + 4, dw, dh, 0, 0, 0);
+            self.fb.fill_rect(dx, dy, dw, dh, theme.bg_alt.0, theme.bg_alt.1, theme.bg_alt.2);
+            self.fb.fill_rect(dx, dy, dw, 2, theme.accent.0, theme.accent.1, theme.accent.2);
+            draw_text(&mut self.fb, dx + 16, dy + 12, "Opcoes de Energia", self.w,
+                      theme.fg.0, theme.fg.1, theme.fg.2);
+            draw_text(&mut self.fb, dx + 16, dy + 36, "Selecione uma acao:", self.w,
+                      theme.fg_muted.0, theme.fg_muted.1, theme.fg_muted.2);
+            let btn_y = dy + dh - 44;
+            let btn_h = 28;
+            let btn_w = 68;
+            let gap = 10;
+            let total_w = btn_w * 3 + gap * 2;
+            let start_x = dx + (dw.saturating_sub(total_w)) / 2;
+            self.fb.fill_rect(start_x, btn_y, btn_w, btn_h,
+                              theme.error.0, theme.error.1, theme.error.2);
+            draw_text(&mut self.fb, start_x + 8, btn_y + 6, "Desligar", self.w, 255, 255, 255);
+            self.fb.fill_rect(start_x + btn_w + gap, btn_y, btn_w, btn_h,
+                              theme.success.0, theme.success.1, theme.success.2);
+            draw_text(&mut self.fb, start_x + btn_w + gap + 8, btn_y + 6, "Hibernar", self.w, 255, 255, 255);
+            self.fb.fill_rect(start_x + (btn_w + gap) * 2, btn_y, btn_w, btn_h,
+                              theme.warning.0, theme.warning.1, theme.warning.2);
+            draw_text(&mut self.fb, start_x + (btn_w + gap) * 2 + 8, btn_y + 6, "Reiniciar", self.w, 255, 255, 255);
         }
 
         // Cursor do mouse.
@@ -1507,38 +1550,62 @@ impl JarbasDesktop {
     }
 
     /// Mesh P2P — arestas + satélites em torno do orb (brand = Soul Mirror).
-    /// Sem peers: no-op (orb sozinho = composição limpa). Redesenhado junto do
-    /// orb (a bbox é limpa a cada paint); posições via SIN_LUT, sem trig.
+    /// Labels MST/MEM/CMP/WRK: hub local sempre; satélites se MESH_GRAPH vivo.
     fn draw_mesh_graph(&mut self) {
         let peers = crate::display::agent::MESH_GRAPH.lock();
-        let n = peers.len().min(8);
-        if n == 0 {
-            return;
-        }
+        let alive: alloc::vec::Vec<_> = peers.iter().filter(|p| p.reachable).copied().collect();
+        let n = alive.len().min(8);
         let (w, h) = (self.w, self.h);
         let cx = (w / 2) as isize;
         let cy = (h / 2) as isize;
         let orbit = (core::cmp::min(w, h) as f32 * 0.32) as isize;
         let phase = (k_nano::tsc::now_us() / 31_250) as u8; // ~8 s/volta
-        for (i, p) in peers.iter().take(n).enumerate() {
+
+        // Hub local: papel próprio sempre (mesmo sem peers — AIOS identity).
+        let local_role = k_nano::net::mesh::local_role() as u8;
+        let mesh_live = k_nano::net::mesh::MESH_ENGINE.lock().is_some();
+        if mesh_live {
+            let (hr, hg, hb) = crate::display::agent::mesh_role_rgb(local_role);
+            let mut hub_buf = [0u8; 12];
+            let hub_txt = fmt_mesh_tag(
+                crate::display::agent::mesh_role_label(local_role),
+                k_nano::net::mesh::node_id(),
+                &mut hub_buf,
+            );
+            let hx = (cx as usize).saturating_sub(hub_txt.len() * 4);
+            let hy = (cy as usize).saturating_add((orbit as usize) / 3 + 8);
+            draw_text(&mut self.fb, hx, hy, hub_txt, w, hr, hg, hb);
+        }
+        if n == 0 {
+            return;
+        }
+
+        for (i, p) in alive.iter().take(n).enumerate() {
             let a8 = ((i as u32 * 256) / n as u32) as u8;
             let s = sin_q8(a8) as isize;
             let c = cos_q8(a8) as isize;
             let px = cx + ((c * orbit) >> 7);
             let py = cy + ((s * orbit) >> 7);
             let pulse = (sin_q8(phase.wrapping_add((i as u8) * 32)) as isize) / 24;
-            let (er, eg, eb) = if p.reachable {
-                let t = (p.p99_rtt.min(1500) as f32 / 1500.0).clamp(0.0, 1.0);
-                let rr = (60.0 + t * 180.0) as u8;
-                let gg = (220.0 - t * 160.0) as u8;
-                (rr, gg, 60u8)
-            } else {
-                (70, 70, 70)
-            };
+            let (br, bg, bb) = crate::display::agent::mesh_role_rgb(p.role);
+            let t = (p.p99_rtt.min(1500) as f32 / 1500.0).clamp(0.0, 1.0);
+            let er = (br as f32 * (1.0 - 0.35 * t) + 200.0 * t) as u8;
+            let eg = (bg as f32 * (1.0 - 0.45 * t)) as u8;
+            let eb = (bb as f32 * (1.0 - 0.25 * t)) as u8;
             self.fb.draw_line(cx, cy, px, py, er, eg, eb);
-            let r = 5 + pulse;
-            self.fb.fill_circle_glow(px, py, r + 6, er, eg, eb, 40);
-            self.fb.fill_circle_glow(px, py, r, er, eg, eb, 90);
+            let r = 6 + pulse;
+            self.fb.fill_circle_glow(px, py, r + 8, er, eg, eb, 55);
+            self.fb.fill_circle_glow(px, py, r, er, eg, eb, 110);
+            let mut tag_buf = [0u8; 12];
+            let txt = fmt_mesh_tag(
+                crate::display::agent::mesh_role_label(p.role),
+                p.node_id,
+                &mut tag_buf,
+            );
+            let outward = 16isize;
+            let lx = (px + ((c * outward) >> 7)).max(0) as usize;
+            let ly = (py + ((s * outward) >> 7) - 4).max(0) as usize;
+            draw_text(&mut self.fb, lx, ly, txt, w, er, eg, eb);
         }
     }
 
@@ -2070,9 +2137,9 @@ impl JarbasDesktop {
         }
     }
 
-    /// Soul Mirror — orb afetivo (Onda 7) substitui o orb cyan fixo.
-    /// Movimento vem do AffectVector + LoopPhase; cor/acento do OrbState
-    /// (sinais reais setados pelo DisplayAgent em `set_orb_signals`).
+    /// Soul Mirror — orb afetivo (Onda 7).
+    /// Movimento + camadas ← AffectVector; corpo ciano ← OrbState; acento
+    /// Thinking = Processing laranja (ADR-0047); mesh puxa anéis (SESSION_261).
     fn draw_orb_layer(&mut self) {
         let snap = hermes::globals::AFFECT_SNAPSHOT.lock();
         let affect = hermes::affect::AffectVector {

@@ -249,7 +249,10 @@ pub struct XhciState {
     pub(crate) mouse_port: u8,
     pub(crate) mouse_tr_va: u64,
     pub(crate) mouse_report_va: u64,
-    pub(crate) mouse_last: [u8; 4],
+    /// Último report (até 8 B). QEMU tablet = 6 B abs; boot mouse = 3–4 B rel.
+    pub(crate) mouse_last: [u8; 8],
+    /// true = report abs 0..0x7FFF (usb-tablet). Latch após 1º frame abs.
+    pub(crate) mouse_abs: bool,
     /// UAC (USB Audio Class) — device isócrono enumerado (ADR-0045).
     pub(crate) uac_ready: bool,
     pub(crate) uac_slot: u8,
@@ -834,7 +837,8 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
         mouse_port: 0,
         mouse_tr_va: 0,
         mouse_report_va: 0,
-        mouse_last: [0; 4],
+        mouse_last: [0; 8],
+        mouse_abs: false,
         uac_ready: false,
         uac_slot: 0,
         uac_port: 0,
@@ -908,7 +912,8 @@ pub unsafe fn poll_keyboard() -> Option<u8> {
     Some(sc)
 }
 
-/// Poll HID boot mouse — injeta no path PS/2 canônico (`mouse_inject_hid_boot`).
+/// Poll HID mouse — QEMU `usb-tablet` = abs 6 B; boot mouse = rel 3–4 B.
+/// IDEA 542: ler 6 B e mapear abs; relativo só se ainda não latched abs.
 pub unsafe fn poll_mouse() -> bool {
     // Display/Input nunca devem esperar atrás de enumeração ou I/O xHCI.
     // Se o HC estiver ocupado, o próximo tick tenta novamente.
@@ -923,8 +928,8 @@ pub unsafe fn poll_mouse() -> bool {
         return false;
     }
     let report = state.mouse_report_va as *const u8;
-    let mut cur = [0u8; 4];
-    for i in 0..4 {
+    let mut cur = [0u8; 8];
+    for i in 0..6 {
         cur[i] = report.add(i).read_volatile();
     }
     if cur == state.mouse_last {
@@ -933,6 +938,18 @@ pub unsafe fn poll_mouse() -> bool {
     }
     state.mouse_last = cur;
     let buttons = cur[0];
+    let x16 = u16::from_le_bytes([cur[1], cur[2]]);
+    let y16 = u16::from_le_bytes([cur[3], cur[4]]);
+    // Tablet QEMU: Logical Max 0x7FFF. Latch se algum eixo >255 (sai do canto).
+    let looks_abs = state.mouse_abs
+        || (x16 <= 0x7FFF && y16 <= 0x7FFF && (x16 > 255 || y16 > 255));
+    if looks_abs {
+        state.mouse_abs = true;
+        queue_mouse_interrupt_read(state);
+        drop(state_lock);
+        crate::interrupts::mouse_inject_hid_abs(buttons, x16, y16);
+        return true;
+    }
     let dx = cur[1] as i8;
     let dy = cur[2] as i8;
     queue_mouse_interrupt_read(state);
@@ -964,7 +981,7 @@ pub(crate) unsafe fn queue_mouse_interrupt_read(state: &mut XhciState) {
     let report_pa = state.mouse_report_va - state.pmoff;
     trb.add(0).write_volatile(report_pa as u32);
     trb.add(1).write_volatile((report_pa >> 32) as u32);
-    trb.add(2).write_volatile(4); // 4-byte boot mouse
+    trb.add(2).write_volatile(8); // tablet 6 B + folga; boot mouse ≤4
     trb.add(3).write_volatile((1u32 << 10) | (1 << 5) | 1);
     core::arch::asm!("sfence", options(nostack, preserves_flags));
     w32(state.base, state.db_off + (state.mouse_slot as u64) * 4, 3);

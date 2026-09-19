@@ -496,17 +496,36 @@ pub fn bei_tick(_tick: u64) {
     // MemoryDocs (throttled ~500 ticks interno). RX "MEM\0" de qualquer layer
     // já é aplicado via put_doc no mesh_knowledge::poll_p2p.
     crate::mesh_knowledge::broadcast_learner_memory();
-    // Self-test do matmul distribuído: o Worker exercita o round-trip MW→MR
-    // com o Master (DIAG do boot roda antes da eleição — role Undecided, então
-    // nunca pegava o caminho P2P). Retry até 5x: sob TCG o Master pode ainda
-    // não ter eleito quando o 1º request chega (timeout curto ~200 ticks).
+    // Self-test matmul 64×64 (~17KB → FRAG): qualquer não-Master após TOFU.
+    // AIOS: sob pressão de RAM (<1.5G) NÃO dispara FRAG — DEGRADED honesto.
+    // Antes: só role==Worker → ROLE\0 Memory/Compute matava o path antes do FRAG.
     static MESH_SELFTEST_TRIES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    let role = k_nano::net::mesh::local_role();
+    let non_master = matches!(
+        role,
+        k_nano::net::mesh::NodeRole::Worker
+            | k_nano::net::mesh::NodeRole::Memory
+            | k_nano::net::mesh::NodeRole::Compute
+    );
     if MESH_SELFTEST_TRIES.load(core::sync::atomic::Ordering::Relaxed) < 5
-        && k_nano::net::mesh::local_role() == k_nano::net::mesh::NodeRole::Worker
+        && non_master
         && k_nano::net::mesh::MESH_ENGINE.lock().as_ref().map_or(false, |e| e.node_count() >= 1)
     {
-        MESH_SELFTEST_TRIES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        cortex::compute::mesh_matmul_self_test();
+        if k_nano::memory::mesh_frag_pressure() {
+            // Uma vez: registra a decisão (Observe→Act→Remember via slog).
+            if MESH_SELFTEST_TRIES.fetch_add(1, core::sync::atomic::Ordering::Relaxed) == 0 {
+                let ram = k_nano::memory::TOTAL_RAM_MB
+                    .load(core::sync::atomic::Ordering::Relaxed);
+                k_nano::slog_bin!(
+                    "MESH", "warn",
+                    "self-test FRAG skip DEGRADED RAM={}MB (AIOS: nó frugal — mesh UI ok, matmul local)"
+                    , ram
+                );
+            }
+        } else {
+            MESH_SELFTEST_TRIES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            cortex::compute::mesh_matmul_self_test();
+        }
     }
     // ADR-0081 Fase C (C4/C5): CRDT version sync + FL federado via P2P real.
     // k_ai consome o EventBus P2P_PACKET (assinatura já verificada no ingress
@@ -527,11 +546,12 @@ pub fn bei_tick(_tick: u64) {
             r, gr, nw, cv, peers
         );
     }
-    // Phase 4: Publica MESH_HEALTH snapshot a cada ~500 ticks.
+    // Phase 4: MESH_HEALTH — periódico + flush se peer subiu/caiu (grafo dinâmico).
+    k_nano::net::mesh::flush_mesh_health_if_dirty();
     static LAST_MESH_HEALTH: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
     let mh_now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
     let mh_last = LAST_MESH_HEALTH.load(core::sync::atomic::Ordering::Relaxed);
-    if mh_last == 0 || mh_now.wrapping_sub(mh_last) >= 500 {
+    if mh_last == 0 || mh_now.wrapping_sub(mh_last) >= 110 {
         LAST_MESH_HEALTH.store(mh_now, core::sync::atomic::Ordering::Relaxed);
         k_nano::net::mesh::publish_mesh_health();
     }

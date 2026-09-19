@@ -238,7 +238,7 @@ pub struct MeshNode {
     pub capabilities: NodeCapabilities,
     /// Current role
     pub role: NodeRole,
-    /// Last heartbeat timestamp (ms)
+    /// Last heartbeat (TIMER_TICKS wall — não tick_count do engine).
     pub last_heartbeat: u64,
     /// Is this node online
     pub online: bool,
@@ -247,24 +247,31 @@ pub struct MeshNode {
 impl MeshNode {
     /// Create a new mesh node
     #[must_use]
-    pub const fn new(capabilities: NodeCapabilities) -> Self {
+    pub fn new(capabilities: NodeCapabilities) -> Self {
+        let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         Self {
             capabilities,
             role: NodeRole::Undecided,
-            last_heartbeat: 0,
+            last_heartbeat: now,
             online: true,
         }
     }
 
-    /// Update heartbeat timestamp
-    pub fn update_heartbeat(&mut self, timestamp: u64) {
-        self.last_heartbeat = timestamp;
+    /// Update heartbeat timestamp (TIMER_TICKS).
+    pub fn update_heartbeat(&mut self, _timestamp: u64) {
+        self.last_heartbeat =
+            crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        self.online = true;
     }
 
-    /// Check if node is stale (no heartbeat for > 30 seconds)
+    /// Stale = sem HB por > ~2 intervalos (HB ~110 ticks @18 Hz → ~12 s).
+    /// Antes: `> 30_000` no tick_count do engine (~horas) — peer morto eternamente.
     #[must_use]
-    pub fn is_stale(&self, current_time: u64) -> bool {
-        current_time.saturating_sub(self.last_heartbeat) > 30_000
+    pub fn is_stale(&self, _current_time: u64) -> bool {
+        const STALE_TICKS: u64 = 220;
+        let now =
+            crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        now.saturating_sub(self.last_heartbeat) > STALE_TICKS
     }
 }
 
@@ -295,13 +302,14 @@ pub struct PeerHealth {
 }
 
 impl PeerHealth {
-    /// Serializa PeerHealth como JSON string (no_std compatível).
-    /// Formato: {"node_id":N,"reachable":bool,"avg_rtt":N,"p99_rtt":N,"tx":N,"ack":N,"fail":N,"probe_to":N}
-    pub fn to_json(&self, node_id: u8) -> alloc::string::String {
+    /// Serializa PeerHealth + role do MESH_ENGINE (UI grafo dinâmico).
+    /// Formato: {"node_id":N,"role":R,"reachable":bool,"avg_rtt":N,...}
+    pub fn to_json(&self, node_id: u8, role: u8) -> alloc::string::String {
         let p99 = peer_p99_rtt(node_id);
         alloc::format!(
-            "{{\"node_id\":{},\"reachable\":{},\"avg_rtt\":{},\"p99_rtt\":{},\"tx\":{},\"ack\":{},\"fail\":{},\"probe_to\":{}}}",
+            "{{\"node_id\":{},\"role\":{},\"reachable\":{},\"avg_rtt\":{},\"p99_rtt\":{},\"tx\":{},\"ack\":{},\"fail\":{},\"probe_to\":{}}}",
             node_id,
+            role,
             self.reachable,
             self.avg_rtt_ticks / 100,
             p99 / 100,
@@ -461,8 +469,10 @@ impl BrainMeshEngine {
                     // 1º peer: agenda HB imediato + settle timer (ROLE/skills
                     // esperam TOFU bilateral — evita drop "peer desconhecido").
                     note_first_peer_discovered();
+                    MESH_HEALTH_DIRTY.store(true, Ordering::Release);
+                    bump_mesh_orb_activity();
                     crate::slog_nano!(
-                        "P2P", "info",
+                        "P2P", "ok",
                         "peer discovered node={} — HB imediato, settle em {} ticks",
                         capabilities.node_id[0], TOFU_SETTLE_TICKS
                     );
@@ -519,14 +529,24 @@ impl BrainMeshEngine {
         if best_node.is_none() {
             self.become_master();
         } else {
+            // Peer vencedor = Master no grafo local (labels MST antes do ROLE).
+            if let Some(bi) = best_node {
+                if let Some(ref mut n) = self.nodes[bi] {
+                    if n.role != NodeRole::Master {
+                        n.role = NodeRole::Master;
+                        MESH_HEALTH_DIRTY.store(true, Ordering::Release);
+                    }
+                }
+            }
             self.become_worker();
         }
     }
 
     /// Become Master node
-    fn become_master(&self) {
+    fn become_master(&mut self) {
         self.is_master.store(true, Ordering::Release);
         self.local_role.store(NodeRole::Master as u8, Ordering::Release);
+        bump_mesh_orb_activity();
 
         // Assign roles to other nodes
         self.assign_roles();
@@ -547,8 +567,12 @@ impl BrainMeshEngine {
     /// Aplica papel atribuído pelo Master (propagação via ROLE\0{node}\0{role}).
     /// SESSION_235: receptor filtra pelo node_id e aplica no MESH_ENGINE.
     pub fn set_role(&self, role: NodeRole) {
+        let prev = self.local_role.load(Ordering::Acquire);
         self.local_role.store(role as u8, Ordering::Release);
-        crate::slog_nano!("P2P", "info", "role aplicado: {:?}", role);
+        if prev != role as u8 {
+            bump_mesh_orb_activity();
+        }
+        crate::slog_nano!("P2P", "ok", "role aplicado: {:?}", role);
     }
 
     /// Assign roles to nodes based on capabilities
@@ -557,7 +581,7 @@ impl BrainMeshEngine {
     /// Simple heuristics: highest RAM → Memory, AVX2/AVX-512 → Compute.
     /// SESSION_235: envia ROLE\0{node_id}\0{role_u8} via broadcast para cada
     /// nó conhecido (transporte não tem unicast — receptor filtra pelo node_id).
-    fn assign_roles(&self) {
+    fn assign_roles(&mut self) {
         if !self.is_master.load(Ordering::Acquire) {
             return;
         }
@@ -579,14 +603,12 @@ impl BrainMeshEngine {
         LAST_ASSIGN.store(now, Ordering::Relaxed);
 
         let mut memory_node: Option<usize> = None;
-        let mut compute_nodes: Vec<usize> = Vec::new();
+        let mut compute_nodes: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
 
         for (i, node) in self.nodes.iter().enumerate() {
             if let Some(n) = node {
                 if n.online {
-                    // Capacidades anunciadas no heartbeat (CAP\0) do peer.
                     let caps = peer_caps(n.capabilities.node_id[0]).unwrap_or(0);
-                    // Memory ← maior RAM OU bit memory anunciado (CAP_MEMORY).
                     if (caps & CAP_MEMORY) != 0
                         || memory_node.is_none()
                         || n.capabilities.ram_gb
@@ -594,7 +616,6 @@ impl BrainMeshEngine {
                     {
                         memory_node = Some(i);
                     }
-                    // Compute ← SIMD AVX2/AVX-512 OU bit compute (CAP_COMPUTE).
                     if (caps & CAP_COMPUTE) != 0
                         || n.capabilities.simd == SimdWeight::Avx512
                         || n.capabilities.simd == SimdWeight::Avx2
@@ -605,14 +626,13 @@ impl BrainMeshEngine {
             }
         }
 
-        // Envia papel para cada nó conhecido (broadcast — filtro no receptor).
-        for (i, node) in self.nodes.iter().enumerate() {
+        let mut dirty = false;
+        let mut assigns: alloc::vec::Vec<(u8, NodeRole)> = alloc::vec::Vec::new();
+        for (i, node) in self.nodes.iter_mut().enumerate() {
             let Some(n) = node else { continue };
             if !n.online {
                 continue;
             }
-            // node_id do peer = primeiro byte das capabilities (source_id do
-            // heartbeat que o registrou: sender_mac = [source_id, 0,0,0,0,0]).
             let target = n.capabilities.node_id[0];
             let role = if Some(i) == memory_node {
                 NodeRole::Memory
@@ -621,7 +641,19 @@ impl BrainMeshEngine {
             } else {
                 NodeRole::Worker
             };
+            if n.role != role {
+                n.role = role;
+                dirty = true;
+            }
+            assigns.push((target, role));
+        }
+        // Master anuncia a si mesmo (ROLE\0{self}\0{0}) — peers pintam MST #N.
+        assigns.push((node_id(), NodeRole::Master));
+        for (target, role) in assigns {
             self.send_role_assign(target, role);
+        }
+        if dirty {
+            MESH_HEALTH_DIRTY.store(true, Ordering::Release);
         }
     }
 
@@ -643,7 +675,10 @@ impl BrainMeshEngine {
             return;
         };
         let ok = crate::net::udp_broadcast::udp_broadcast_send(&signed, 42069);
-        crate::slog_nano!("P2P", "info", "role-assign node={} role={:?} sent={}", target_node, role, ok);
+        if ok {
+            bump_mesh_orb_activity();
+        }
+        crate::slog_nano!("P2P", "ok", "role-assign node={} role={:?} sent={}", target_node, role, ok);
     }
 
     /// Get current timestamp (tick-based)
@@ -687,26 +722,48 @@ impl BrainMeshEngine {
         self.nodes.iter().filter_map(|n| n.as_ref().filter(|n| n.online))
     }
 
-    /// Clean up stale nodes (no heartbeat for > 30 s)
-    pub fn cleanup_stale_nodes(&mut self) {
+    /// Clean up stale nodes (sem HB ~12 s). Retorna true se removeu alguém
+    /// (caller publica MESH_HEALTH *fora* do lock do engine — anti-deadlock).
+    pub fn cleanup_stale_nodes(&mut self) -> bool {
         let current_time = self.get_timestamp();
+        let mut dropped = false;
 
         for node in &mut self.nodes {
             if let Some(n) = node {
                 if n.is_stale(current_time) {
+                    let nid = n.capabilities.node_id[0];
+                    crate::slog_nano!(
+                        "P2P", "warn",
+                        "peer stale drop node={} (sem HB)", nid
+                    );
+                    bump_mesh_orb_activity();
+                    {
+                        let mut table = PEER_HEALTH.lock();
+                        for slot in table.iter_mut() {
+                            if let Some((id, _)) = slot {
+                                if *id == nid {
+                                    *slot = None;
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     *node = None;
                     self.node_count.fetch_sub(1, Ordering::Release);
+                    dropped = true;
                 }
             }
         }
+        dropped
     }
 
     /// Main tick: heartbeat → cleanup → election.
     /// Call once per scheduler tick from NetAgent.
-    pub fn step(&mut self) {
+    pub fn step(&mut self) -> bool {
         self.tick();
-        self.cleanup_stale_nodes();
+        let dropped = self.cleanup_stale_nodes();
         self.check_election();
+        dropped
     }
 }
 
@@ -722,10 +779,61 @@ pub fn init(caps: NodeCapabilities) {
 
 /// Tick do mesh: chamado pelo NetAgent a cada ciclo do scheduler.
 /// Executa heartbeat logico, cleanup de nos mortos, e re-eleicao.
+/// Se um peer caiu, publica MESH_HEALTH imediatamente (grafo dinâmico).
+/// AIOS: republica periodicamente — DisplayAgent assina tarde no EventBus
+/// (subscribe-after-publish = grafo vazio para sempre).
 pub fn mesh_tick() {
-    if let Some(ref mut engine) = *MESH_ENGINE.lock() {
-        engine.step();
+    let dropped = if let Some(ref mut engine) = *MESH_ENGINE.lock() {
+        engine.step()
+    } else {
+        false
+    };
+    if dropped {
+        publish_mesh_health();
+    } else {
+        flush_mesh_health_if_dirty();
     }
+    // Sync UI ~a cada intervalo de HB (~110 ticks): fonte de verdade → EventBus.
+    static LAST_UI_PUB: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    let last = LAST_UI_PUB.load(Ordering::Relaxed);
+    if last == 0 || now.wrapping_sub(last) >= 55 {
+        LAST_UI_PUB.store(now, Ordering::Relaxed);
+        publish_mesh_health();
+    }
+}
+
+/// Snapshot tipado p/ UI (Observe direto — sem depender só do EventBus).
+/// Retorna (node_id, role_u8, reachable, avg_rtt_ms, p99_rtt_ms).
+pub fn mesh_peers_ui_snapshot() -> alloc::vec::Vec<(u8, u8, bool, u32, u32)> {
+    let mut out = alloc::vec::Vec::new();
+    let guard = MESH_ENGINE.lock();
+    let Some(eng) = guard.as_ref() else {
+        return out;
+    };
+    let self_id = node_id();
+    for n in eng.online_nodes() {
+        let nid = n.capabilities.node_id[0];
+        if nid == 0 || nid == self_id {
+            continue;
+        }
+        if !n.online {
+            continue;
+        }
+        let (avg, p99, reachable) = match peer_health(nid) {
+            Some(h) => (
+                (h.avg_rtt_ticks / 100) as u32,
+                (peer_p99_rtt(nid) / 100) as u32,
+                h.reachable,
+            ),
+            // Sem PEER_HEALTH ainda (só HB) → online no engine = reachable p/ UI.
+            None => (0, 0, true),
+        };
+        if reachable {
+            out.push((nid, n.role as u8, true, avg, p99));
+        }
+    }
+    out
 }
 
 /// Retorna o papel local no mesh (Master, Worker, etc).
@@ -819,6 +927,23 @@ static PEER_KEYS: Mutex<[Option<(u8, [u8; PUBLIC_KEY_LEN], u64)>; 16]> = Mutex::
 static FIRST_PEER_TICK: AtomicU64 = AtomicU64::new(0);
 /// Força TX de heartbeat no próximo `p2p_tick` (descoberta de peer novo).
 static FORCE_HEARTBEAT: AtomicBool = AtomicBool::new(false);
+/// Grafo UI: peer discover/drop → republicar MESH_HEALTH sem esperar 500 ticks.
+static MESH_HEALTH_DIRTY: AtomicBool = AtomicBool::new(false);
+
+/// Contador lock-free p/ Soul Mirror: HB/ROLE/discover/drop/FRAG → Thinking + Affect.
+/// DisplayAgent observa deltas (não sticky em InferQueue/LLM ausente).
+static MESH_ORB_ACTIVITY: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+pub fn bump_mesh_orb_activity() {
+    MESH_ORB_ACTIVITY.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Snapshot monotônico — DisplayAgent: delta > 0 ⇒ pulse Thinking / Novelty.
+#[inline]
+pub fn mesh_orb_activity() -> u64 {
+    MESH_ORB_ACTIVITY.load(Ordering::Relaxed)
+}
 /// Intervalo mínimo (ticks) após 1º peer antes de ROLE/SkillSync — >110 HB.
 const TOFU_SETTLE_TICKS: u64 = 130;
 
@@ -1626,27 +1751,77 @@ pub fn chunk_self_test() -> bool {
 /// Tópico do EventBus para pacotes P2P não-heartbeat (payload = NoProto + payload bruto).
 pub const TOPIC_P2P_PACKET: &str = "P2P_PACKET";
 
-/// Tópico do EventBus para health snapshot do mesh (payload = Vec<(u8, PeerHealth)> serializado).
-/// Publicado a cada ~500 ticks pelo bei_tick. Consumido por Jarbas (dashboard) e SecurityAgent.
+/// Tópico do EventBus para health snapshot do mesh.
+/// Publicado periodicamente + on-demand (peer discover/drop). Consumido por Jarbas.
 pub const TOPIC_MESH_HEALTH: &str = "MESH_HEALTH";
 
-/// Publica snapshot de health de todos os peers no EventBus (tópico MESH_HEALTH).
-/// Chamado pelo bei_tick a cada ~500 ticks.
-/// Payload: JSON array de objetos PeerHealth.
+/// Se peer subiu/caiu, publica MESH_HEALTH agora (DisplayAgent → MESH_GRAPH).
+pub fn flush_mesh_health_if_dirty() {
+    if MESH_HEALTH_DIRTY.swap(false, Ordering::AcqRel) {
+        publish_mesh_health();
+    }
+}
+
+/// Marca grafo sujo (discover). Publish fora do lock via `flush_mesh_health_if_dirty`.
+pub fn mark_mesh_health_dirty() {
+    MESH_HEALTH_DIRTY.store(true, Ordering::Release);
+}
+
+/// Publica snapshot online → EventBus MESH_HEALTH.
+/// Array vazio `[]` limpa satélites na UI imediatamente.
 pub fn publish_mesh_health() {
-    let snapshot = peer_health_snapshot();
+    let mut snapshot: alloc::vec::Vec<(u8, PeerHealth, u8)> = alloc::vec::Vec::new();
+    if let Some(eng) = MESH_ENGINE.lock().as_ref() {
+        for n in eng.online_nodes() {
+            let nid = n.capabilities.node_id[0];
+            if nid == 0 || nid == node_id() {
+                continue;
+            }
+            if !n.online {
+                continue;
+            }
+            let h = peer_health(nid).unwrap_or(PeerHealth {
+                last_rtt_ticks: 0,
+                consecutive_failures: 0,
+                tx_count: 0,
+                ack_count: 0,
+                unreachable_since: 0,
+                reachable: true,
+                probe_failures: 0,
+                probe_timeout_ticks: PROBE_BASE_TIMEOUT_TICKS,
+                last_activity_ticks: crate::interrupts::TIMER_TICKS
+                    .load(Ordering::Relaxed) as u64,
+                avg_rtt_ticks: 0,
+                rtt_samples: [0u64; 32],
+                rtt_sample_idx: 0,
+                rtt_sample_count: 0,
+            });
+            // Engine diz online → UI mostra (PEER_HEALTH.reachable=false só via circuit breaker).
+            if h.reachable || n.online {
+                let mut hh = h;
+                hh.reachable = true;
+                snapshot.push((nid, hh, n.role as u8));
+            }
+        }
+    }
     if snapshot.is_empty() {
+        let _ = crate::EVENT_BUS.publish(event_bus::Event {
+            id: 0,
+            topic: alloc::string::String::from(TOPIC_MESH_HEALTH),
+            payload: alloc::vec![b'[', b']'],
+            token: event_bus::CapabilityToken::Legacy(1),
+        });
         return;
     }
-    // Serializa como JSON array: [{"node_id":1,"reachable":true,...},...]
     let mut json = alloc::string::String::from("[");
-    for (i, (nid, h)) in snapshot.iter().enumerate() {
+    for (i, (nid, h, role)) in snapshot.iter().enumerate() {
         if i > 0 {
             json.push(',');
         }
-        json.push_str(&h.to_json(*nid));
+        json.push_str(&h.to_json(*nid, *role));
     }
     json.push(']');
+    let npeers = snapshot.len();
     let payload = json.into_bytes();
     let _ = crate::EVENT_BUS.publish(event_bus::Event {
         id: 0,
@@ -1654,6 +1829,14 @@ pub fn publish_mesh_health() {
         payload,
         token: event_bus::CapabilityToken::Legacy(1),
     });
+    // Throttle slog: 1x / ~200 ticks — prova que o path UI está vivo.
+    static LAST_LOG: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    let last = LAST_LOG.load(Ordering::Relaxed);
+    if last == 0 || now.wrapping_sub(last) >= 200 {
+        LAST_LOG.store(now, Ordering::Relaxed);
+        crate::slog_nano!("P2P", "ok", "MESH_HEALTH peers={} (UI sync)", npeers);
+    }
 }
 
 /// Heartbeat P2P + processamento de descoberta. Usa TIMER_TICKS global
@@ -1672,12 +1855,21 @@ pub fn p2p_tick(_tick: u64) {
             // sempre true → todo mundo vira Worker).
             let nid = node_id();
             let local_id = [nid, 0, 0, 0, 0, 0];
+            // AIOS: anuncia RAM real (MB→GB ceil) — eleição Memory e peers sabem o budget.
+            let ram_mb = crate::memory::TOTAL_RAM_MB.load(Ordering::Relaxed);
+            let ram_gb = ((ram_mb + 1023) / 1024).max(1) as u32;
             let caps = NodeCapabilities::new_tiered(
-                local_tier(), local_id, 1, 1000, 1, 0,
+                local_tier(), local_id, 1, 1000, ram_gb, 0,
                 SimdWeight::None, false, false,
             );
             *eng = Some(BrainMeshEngine::new(caps));
-            crate::slog_nano!("P2P", "ok", "MESH_ENGINE inicializado (ADR-0081) node_id={}", nid);
+            crate::slog_nano!(
+                "P2P", "ok",
+                "MESH_ENGINE inicializado (ADR-0081) node_id={} ram={}MB frag_budget={}",
+                nid,
+                ram_mb,
+                crate::memory::frag_reassembly_budget_bytes(ram_mb)
+            );
         }
     }
 
@@ -1729,6 +1921,10 @@ pub fn p2p_tick(_tick: u64) {
             match crate::net::udp_broadcast::sign_packet_authentic(&buf) {
                 Some(signed) => {
                     let ok = crate::net::udp_broadcast::udp_broadcast_send(&signed, P2P_PORT);
+                    if ok {
+                        // Pulso vivo do mesh (~1/6s) → orb Thinking mesmo sem LLM/FRAG.
+                        bump_mesh_orb_activity();
+                    }
                     crate::slog_nano!("P2P", "ok", "TX heartbeat node={} t={} sent={}", node_id, now, ok);
                 }
 None => {
@@ -1913,9 +2109,6 @@ None => {
             let role_u8 = parts.next().and_then(|s| core::str::from_utf8(s).ok())
                 .and_then(|s| s.parse::<u8>().ok())
                 .unwrap_or(4); // fallback Undecided
-            if target != node_id() {
-                continue; // é de outro nó — ignora
-            }
             let role = match role_u8 {
                 0 => NodeRole::Master,
                 1 => NodeRole::Memory,
@@ -1923,13 +2116,25 @@ None => {
                 3 => NodeRole::Worker,
                 _ => NodeRole::Undecided,
             };
+            // Todos os nós aprendem o papel do alvo (grafo UI) — não só o alvo.
             {
-                let eng = MESH_ENGINE.lock();
-                if let Some(ref engine) = *eng {
-                    engine.set_role(role);
+                let mut eng = MESH_ENGINE.lock();
+                if let Some(ref mut engine) = *eng {
+                    for node in engine.nodes.iter_mut() {
+                        if let Some(n) = node {
+                            if n.capabilities.node_id[0] == target {
+                                n.role = role;
+                                break;
+                            }
+                        }
+                    }
+                    if target == node_id() {
+                        engine.set_role(role);
+                    }
                 }
             }
-            crate::slog_nano!("P2P", "info", "role aplicado node={} role={:?}", target, role);
+            MESH_HEALTH_DIRTY.store(true, Ordering::Release);
+            crate::slog_nano!("P2P", "ok", "role aplicado node={} role={:?}", target, role);
             continue; // consumido — não publica no EVENT_BUS
         }
         // (f) Chunking (Fase B): payload "CHK\0" — insere no slot de remontagem
@@ -1971,14 +2176,18 @@ None => {
                 sender_mac, 1, 1000, 1, 0,
                 SimdWeight::None, false, false,
             );
-            let mut eng = MESH_ENGINE.lock();
-            if let Some(ref mut engine) = *eng {
-                engine.add_or_update_node(caps);
-                engine.check_election();
-                let role = engine.local_role();
-                let count = engine.node_count();
-                crate::slog_nano!("P2P", "ok", "mesh role={:?} nodes={}", role, count);
+            {
+                let mut eng = MESH_ENGINE.lock();
+                if let Some(ref mut engine) = *eng {
+                    engine.add_or_update_node(caps);
+                    engine.check_election();
+                    let role = engine.local_role();
+                    let count = engine.online_nodes().count();
+                    crate::slog_nano!("P2P", "ok", "mesh role={:?} nodes={}", role, count);
+                }
             }
+            // Discover → MESH_GRAPH na UI (fora do lock do engine).
+            flush_mesh_health_if_dirty();
         }
     }
 }

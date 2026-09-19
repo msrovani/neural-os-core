@@ -76,16 +76,21 @@ static SNAPSHOT_READY: AtomicBool = AtomicBool::new(false);
 static CACHED_HD_SECTORS: AtomicU64 = AtomicU64::new(u64::MAX);
 
 fn sample_mem() -> (f32, u32, u32) {
+    // Honesty: TOTAL_RAM_MB é a RAM detectada no memmap (ex. 7168).
+    // usable_frames do bitmap pode ser bem menor (ex. ~3GB) — mostrar isso
+    // como "RAM total" mente no HUD (boot_whpx_20260918_225627).
+    let tot_mb = k_nano::memory::TOTAL_RAM_MB
+        .load(Ordering::Relaxed)
+        .max(1) as u32;
     let guard = k_nano::memory::GLOBAL_ALLOCATOR.lock();
     if let Some(ref alloc) = *guard {
         let usable = alloc.usable_frames.max(1);
         let used = alloc.allocated_count.min(usable);
-        let pct = used as f32 / usable as f32;
         let used_mb = ((used as u64) * 4 / 1024) as u32;
-        let tot_mb = ((usable as u64) * 4 / 1024) as u32;
-        (pct.clamp(0.0, 1.0), used_mb, tot_mb.max(1))
+        let pct = (used_mb as f32 / tot_mb as f32).clamp(0.0, 1.0);
+        (pct, used_mb.min(tot_mb), tot_mb)
     } else {
-        (0.0, 0, 0)
+        (0.0, 0, tot_mb)
     }
 }
 

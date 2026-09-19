@@ -152,12 +152,13 @@ pub fn required_cap(host_fn: &str) -> Option<Cap> {
 pub fn check(host_fn: &str, held: Cap) -> Result<(), &'static str> {
     let Some(need) = required_cap(host_fn) else {
         DENY_COUNT.fetch_add(1, Ordering::Relaxed);
-        k_nano::slog_hal!("CapGate", "warn", "DENY unknown host_fn={}", host_fn);
+        // PoC deny-by-default = comportamento esperado — ok (não warn spam no dmesg).
+        k_nano::slog_hal!("CapGate", "ok", "DENY unknown host_fn={}", host_fn);
         return Err("EPERM: host_fn desconhecida");
     };
     if !held.contains(need) {
         DENY_COUNT.fetch_add(1, Ordering::Relaxed);
-        k_nano::slog_hal!("CapGate", "warn", "DENY fn={} need=0x{:x} held=0x{:x}", host_fn, need.bits(), held.bits());
+        k_nano::slog_hal!("CapGate", "ok", "DENY fn={} need=0x{:x} held=0x{:x}", host_fn, need.bits(), held.bits());
         return Err("EPERM: Cap insuficiente");
     }
     ALLOW_COUNT.fetch_add(1, Ordering::Relaxed);

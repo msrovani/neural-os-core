@@ -287,6 +287,17 @@ impl Agent for NetAgent {
     fn manifest(&self) -> &AgentManifest { &NETAGENT_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         crate::network_agent::network_agent_tick();
+        // Mesh sob desktop: NÃO a cada tick — 7s+ no BSP congela o compositor
+        // (boot_whpx_20260918_223346: network_agent 7.5s). Com UI live, mesh 1/16.
+        if k_nano::smp::ui_yield_infer() {
+            return AgentTickResult::Pending;
+        }
+        static MESH_DIV: core::sync::atomic::AtomicU64 =
+            core::sync::atomic::AtomicU64::new(0);
+        let n = MESH_DIV.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if k_nano::boot_logger::ui_is_live() && (n % 16) != 0 {
+            return AgentTickResult::Pending;
+        }
         // ADR-0081 B1: mesh tick — heartbeat → cleanup → election
         k_nano::net::mesh::mesh_tick();
 
@@ -471,6 +482,31 @@ impl Agent for CortexAgent {
                 _ => prompt,
             };
             agent_core::tick_stage(6);
+            // Honesty: sem pesos não enfileira InferQueue (evita spam TTS "AI indisponível").
+            if !cortex::cortex::model_is_loaded() {
+                static LAST_ABSENT_TTS: core::sync::atomic::AtomicU64 =
+                    core::sync::atomic::AtomicU64::new(0);
+                let now = k_nano::interrupts::TIMER_TICKS
+                    .load(core::sync::atomic::Ordering::Relaxed) as u64;
+                let last = LAST_ABSENT_TTS.load(core::sync::atomic::Ordering::Relaxed);
+                if last == 0 || now.wrapping_sub(last) >= 1000 {
+                    LAST_ABSENT_TTS.store(now, core::sync::atomic::Ordering::Relaxed);
+                    k_nano::slog_cortex!(
+                        "LLM",
+                        "warn",
+                        "skip InferQueue — model ABSENT (QEMU-loader/HW FAT)"
+                    );
+                    let _ = EVENT_BUS.publish(Event {
+                        id: 0,
+                        topic: alloc::string::String::from(cortex::cortex::TOPIC_LLM_RESPONSE),
+                        payload: alloc::string::String::from(cortex::cortex::NO_MODEL_MSG)
+                            .into_bytes(),
+                        token: CapabilityToken::Legacy(1),
+                    });
+                }
+                agent_core::tick_stage(8);
+                return AgentTickResult::Pending;
+            }
             match cortex::infer_queue::submit(
                 submit_prompt,
                 cortex::infer_queue::InferMode::Plain,
@@ -588,7 +624,17 @@ impl Agent for InferWorker {
     }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        // Sempre 1 slice no BSP: single-core / !ap_pollable; com APs, SLICE_BUSY serializa.
+        // UI atrasada: ceder BSP ao Display.
+        if k_nano::smp::ui_yield_infer() {
+            return AgentTickResult::Pending;
+        }
+        // Com APs pollable, matmul vive no idle AP (fora de AGENT_TICK_BUSY).
+        // Rodar poll_slice no BSP com Falcon3 = 5–18s de freeze do compositor
+        // (boot_whpx_20260918_222459: dezenas de "tick lento: infer_worker").
+        if k_nano::smp::ap_pollable() {
+            return AgentTickResult::Pending;
+        }
+        // Fallback single-core / APs sem IDT: 1 slice no BSP.
         let _ = Self::poll_slice_stamped();
         AgentTickResult::Pending
     }
@@ -2190,6 +2236,9 @@ impl Agent for BootTrustAgent {
         // ADR-0042 N2: Trust por (token, agent, skill)
         tc.trust_allow_agent(1, "self_heal", "recover", _tick);
         tc.trust_allow_agent(1, "self_heal", "inventory_vid", _tick);
+        // SystemAgent no SYSTEM_READY (token Legacy(1)) — Contain exige allow explícito
+        tc.trust_allow(1, "diagnostic", _tick);
+        tc.trust_allow(1, "echo", _tick);
         kjson!("AGENT", "Trust", "ready", "tick", _tick);
         AgentTickResult::Done
     }
@@ -3106,6 +3155,29 @@ impl SleepCycleAgent {
 impl Agent for SleepCycleAgent {
     fn manifest(&self) -> &AgentManifest { &SLEEPCYCLE_MANIFEST }
     fn tick(&mut self, _t: u64, _c: u64) -> AgentTickResult {
+        // Desktop vivo: sleep cycle é background — federated+execute_phase ~1.5s
+        // no BSP congela o orb. Adia trabalho pesado; só avança o relógio de fase.
+        if k_nano::boot_logger::ui_is_live() {
+            let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            if self.phase == 0 {
+                if self.cycle_count == 0 || now > self.phase_tick + 5000 {
+                    self.phase = 1;
+                    self.phase_tick = now;
+                }
+                return AgentTickResult::Pending;
+            }
+            if now < self.phase_tick + 200 {
+                return AgentTickResult::Pending;
+            }
+            self.phase_tick = now;
+            if self.phase >= 5 {
+                self.phase = 0;
+                self.cycle_count += 1;
+            } else {
+                self.phase += 1;
+            }
+            return AgentTickResult::Pending;
+        }
         // ── F4: aprendizado federado (best-effort — try_lock p/ não travar o scheduler) ──
         cortex::federated::poll_p2p();
         let node_count = match k_nano::net::mesh::MESH_ENGINE.try_lock() {

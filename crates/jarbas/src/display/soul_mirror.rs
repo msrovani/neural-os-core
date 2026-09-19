@@ -1,14 +1,16 @@
 //! Orb JARVIS (Soul Mirror) — holograma MCU dirigido por relógio de parede.
 //!
-//! Contrato visual:
-//!   - corpo SEMPRE família ciano (tint por estado, sem misturar hue de estado);
-//!   - acentos (halo/rim/ticks/anéis/ripples) por `OrbState`;
+//! Contrato visual (ADR-0047 §7 + SESSION_261 + mesh roles):
+//!   - corpo Idle = ciano; mesh vivo = tint por papel (MST ouro / MEM violeta /
+//!     CMP coral / WRK menta) — não só blink laranja;
+//!   - acentos = processamento: Thinking→laranja; Dreaming→violeta;
+//!   - camadas: halo←arousal/urgency, anéis←curiosity (+ mesh peers/role),
+//!     inner/core seguem o papel quando a malha está viva;
 //!   - hot path sem `/` por pixel, sem `sqrtf`, sem `sinf/cosf` — `SIN_LUT`
-//!     para ângulo e spans/bands (LUT de meias-larguras) para preenchimento.
+//!     + spans/bands (LUT de meias-larguras).
 //!
-//! Camadas (trás → frente): lattice hex (cache) → halo (bandas de linha) →
-//! metade traseira dos anéis → corpo/inner/core/specular (spans planos) →
-//! bandas de scan → rim + anéis dianteiros → ticks radiais → sparks → ripple.
+//! Camadas (trás → frente): lattice hex → halo → anéis traseiros → corpo →
+//! scan → rim/anéis dianteiros → ticks → sparks → ripple.
 //! LOD adaptativo pelo custo EWMA do frame (`compositor::frame_cost_us`).
 
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -51,21 +53,22 @@ impl OrbState {
         match self {
             OrbState::Idle => (0, 212, 255),      // ciano base
             OrbState::Listening => (0, 255, 255), // ciano claro
-            OrbState::Thinking => (150, 90, 255), // violeta
+            // ADR-0047 Processing = laranja (infer/carga); violeta fica p/ Dreaming.
+            OrbState::Thinking => (255, 148, 48),
             OrbState::Speaking => (0, 230, 255),  // ciano elétrico
-            OrbState::Dreaming => (130, 100, 235), // violeta vivo (rim/ticks legíveis)
+            OrbState::Dreaming => (130, 100, 235), // violeta (sleep)
             OrbState::Degraded => (255, 176, 32), // âmbar
             OrbState::Alert => (255, 48, 56),     // vermelho
             OrbState::Updating => (64, 255, 160), // verde
         }
     }
 
-    /// Tint do corpo — sempre família ciano (B ≥ G > 0).
+    /// Tint do corpo — família ciano; Thinking aquece levemente (processamento visível).
     pub fn body_tint(&self) -> (u8, u8, u8) {
         match self {
             OrbState::Idle => (0, 160, 235),
             OrbState::Listening => (0, 185, 245),
-            OrbState::Thinking => (0, 150, 230),
+            OrbState::Thinking => (48, 150, 210),
             OrbState::Speaking => (0, 205, 250),
             OrbState::Dreaming => (0, 140, 225),
             OrbState::Degraded => (0, 160, 215),
@@ -79,7 +82,7 @@ impl OrbState {
         match self {
             OrbState::Idle => 46,
             OrbState::Listening => 56,
-            OrbState::Thinking => 68,
+            OrbState::Thinking => 96,
             OrbState::Speaking => 82,
             OrbState::Dreaming => 56,
             OrbState::Degraded => 56,
@@ -115,8 +118,46 @@ pub struct OrbSignals {
     pub updating: bool,
     /// Peers de mesh visíveis (≤8 desenhados).
     pub peers: u8,
+    /// `NodeRole as u8` local (0 MST … 3 WRK, 4 Undecided) — paleta do orb.
+    pub local_role: u8,
     /// Contador cumulativo de eventos cognitivos (tokens LLM/TTS) — acende ticks.
     pub activity: u32,
+}
+
+/// Paleta mesh por papel: (accent, body, inner, core).
+fn mesh_role_colors(role: u8) -> [(u8, u8, u8); 4] {
+    match role {
+        0 => [
+            (255, 200, 48),
+            (190, 130, 36),
+            (120, 72, 18),
+            (255, 236, 170),
+        ], // Master — ouro
+        1 => [
+            (176, 96, 255),
+            (110, 55, 175),
+            (70, 32, 120),
+            (230, 210, 255),
+        ], // Memory — violeta
+        2 => [
+            (255, 120, 56),
+            (175, 75, 48),
+            (110, 42, 28),
+            (255, 210, 180),
+        ], // Compute — coral
+        3 => [
+            (48, 230, 170),
+            (32, 140, 115),
+            (20, 85, 70),
+            (190, 255, 230),
+        ], // Worker — menta
+        _ => [
+            (190, 72, 255),
+            (100, 45, 155),
+            (55, 28, 100),
+            (230, 200, 255),
+        ], // hub / Undecided — púrpura
+    }
 }
 
 /// Máquina de estado com dwell ≥400 ms; ALERT preempta; SPEAKING tem cauda 1.5 s.
@@ -165,12 +206,14 @@ impl OrbMachine {
             OrbState::Updating
         } else if sig.dreaming {
             OrbState::Dreaming
-        } else if sig.thinking {
-            OrbState::Thinking
         } else if speaking {
+            // Fala/TTS preempta Thinking — InferQueue contínua deixava o orb
+            // roxo forever (has_work=true) mesmo com VOICE SPEAKING.
             OrbState::Speaking
         } else if listening {
             OrbState::Listening
+        } else if sig.thinking {
+            OrbState::Thinking
         } else if sig.degraded {
             OrbState::Degraded
         } else {
@@ -363,6 +406,30 @@ fn scale_color(c: (u8, u8, u8), bright: i32) -> (u8, u8, u8) {
     )
 }
 
+/// Espelha `AffectVector::valence_to_rgb` (sem depender do hermes no hot path).
+#[inline]
+fn valence_rgb(valence: f32) -> (u8, u8, u8) {
+    if valence >= 0.0 {
+        let g = 128 + (valence * 127.0) as u8;
+        (80, g, 180)
+    } else {
+        let r = 128 + (-valence * 127.0) as u8;
+        (r, 90, 160)
+    }
+}
+
+/// `mix` 0..=256: 0=a, 256=b.
+#[inline]
+fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), mix: u16) -> (u8, u8, u8) {
+    let m = mix.min(256) as u32;
+    let n = 256 - m;
+    (
+        ((a.0 as u32 * n + b.0 as u32 * m) >> 8) as u8,
+        ((a.1 as u32 * n + b.1 as u32 * m) >> 8) as u8,
+        ((a.2 as u32 * n + b.2 as u32 * m) >> 8) as u8,
+    )
+}
+
 pub struct SoulMirrorRenderer {
     pub machine: OrbMachine,
     pub fb_w: usize,
@@ -370,11 +437,15 @@ pub struct SoulMirrorRenderer {
     pub cx: isize,
     pub cy: isize,
     pub base_r: f32,
-    // Affect (movimento): escala/respiração/energia.
+    // Affect: movimento + snapshot p/ camadas (processamento).
     size_scale: f32,
     pulse_speed: f32,
     ring_count: u32,
     rotation_deg: u32,
+    affect_valence: f32,
+    affect_arousal: f32,
+    affect_urgency: f32,
+    affect_curiosity: f32,
     // Relógio de parede + fase acumulada.
     now_us: u64,
     anim_us: u64,
@@ -409,6 +480,10 @@ impl SoulMirrorRenderer {
             pulse_speed: 0.55,
             ring_count: 2,
             rotation_deg: 0,
+            affect_valence: 0.0,
+            affect_arousal: 0.5,
+            affect_urgency: 0.0,
+            affect_curiosity: 0.3,
             now_us: 0,
             anim_us: 0,
             spin_deg256: 0,
@@ -434,12 +509,17 @@ impl SoulMirrorRenderer {
         self.lut_r = -1;
     }
 
-    /// Affect do supervisor: só parâmetros de movimento (cores = OrbState).
+    /// Affect do supervisor: movimento + camadas (ADR-0060). Cores de estado
+    /// continuam em `OrbState`; camadas leem estes campos no `paint`.
     pub fn set_affect(&mut self, affect: &hermes::affect::AffectVector, phase_deg: u32) {
-        self.pulse_speed = 0.5 + affect.arousal * 0.5;
-        self.size_scale = 0.5 + affect.dominance * 0.5;
-        self.ring_count = (2 + (affect.curiosity * 2.0) as u32).min(3);
+        self.pulse_speed = affect.arousal_to_pulse();
+        self.size_scale = affect.dominance_to_size().clamp(0.45, 1.15);
+        self.ring_count = (2 + affect.curiosity_to_rings().min(2)).min(3);
         self.rotation_deg = phase_deg.wrapping_add((affect.urgency * 120.0) as u32);
+        self.affect_valence = affect.valence;
+        self.affect_arousal = affect.arousal;
+        self.affect_urgency = affect.urgency;
+        self.affect_curiosity = affect.curiosity;
     }
 
     /// Raio da bbox que o compositor precisa limpar/swapar (2.9R + margem).
@@ -493,8 +573,27 @@ impl SoulMirrorRenderer {
         self.anim_us = self.anim_us.wrapping_add(dt);
 
         let st = self.machine.update(sig, now_us);
-        self.body = converge(self.body, st.body_tint(), 51);
-        self.accent = converge(self.accent, st.accent(), 51);
+        let mesh_alive = sig.peers > 0;
+        let [role_acc, role_body, role_inner, role_core] = mesh_role_colors(sig.local_role);
+        // Baseline mesh = cor do papel; Thinking sobrescreve halo p/ laranja.
+        let accent_tgt = if st == OrbState::Thinking {
+            OrbState::Thinking.accent()
+        } else if mesh_alive {
+            role_acc
+        } else {
+            st.accent()
+        };
+        let body_tgt = if mesh_alive {
+            if st == OrbState::Thinking {
+                lerp_rgb(role_body, (90, 110, 160), 70)
+            } else {
+                role_body
+            }
+        } else {
+            st.body_tint()
+        };
+        self.body = converge(self.body, body_tgt, 51);
+        self.accent = converge(self.accent, accent_tgt, 51);
         self.update_lod();
 
         // Atividade cognitiva: acende ticks e dispara ripple.
@@ -531,7 +630,8 @@ impl SoulMirrorRenderer {
 
         // Spin fixed-point (grau·256): 12°/s · pulse_speed · mesh (peers vivos).
         let inc = ((dt as u64 * 12 * 256) / 1_000_000) as u32;
-        let mesh_boost = 1.0 + (sig.peers.min(8) as f32) * 0.02;
+        // Mesh ativa: spin um pouco mais vivo (SESSION_261 hub), sem mudar corpo.
+        let mesh_boost = 1.0 + (sig.peers.min(8) as f32) * 0.05;
         self.spin_deg256 = self
             .spin_deg256
             .wrapping_add(((inc as f32) * self.pulse_speed * mesh_boost) as u32);
@@ -548,27 +648,53 @@ impl SoulMirrorRenderer {
         };
         px += blit_grid(fb, ring_phase, grid_stride) as u32;
 
-        // 2. Halo externo (acento) + interno (ciano) — bandas de linha.
+        // 2. Halo externo (acento = processamento / papel mesh) + interno.
         let halo_r = (r * 2.1) as isize;
         if halo_r > 0 {
             let (ar, ag, ab) = self.accent;
-            let strength = st.halo_strength();
+            let strength = {
+                let base = st.halo_strength() as u16;
+                let mesh_boost = if mesh_alive { 28u16 } else { 0 };
+                let boost =
+                    (self.affect_arousal * 28.0 + self.affect_urgency * 36.0) as u16 + mesh_boost;
+                (base + boost).min(130) as u8
+            };
             let lut = self.ensure_lut(halo_r as usize);
             px += fb.fill_circle_alpha_bands(cx, cy, halo_r, lut, ar, ag, ab, strength) as u32;
         }
         let inner_halo = (r * 1.28) as isize;
         if inner_halo > 0 {
+            // Inner: papel mesh OU ciano+valência.
+            let (ir, ig, ib) = if mesh_alive {
+                lerp_rgb(role_inner, valence_rgb(self.affect_valence), 40)
+            } else {
+                let (vr, vg, vb) = valence_rgb(self.affect_valence);
+                (
+                    ((0u16 * 3 + vr as u16) / 4) as u8,
+                    ((175u16 * 3 + vg as u16) / 4) as u8,
+                    ((240u16 * 3 + vb as u16) / 4) as u8,
+                )
+            };
             let lut = self.ensure_lut(inner_halo as usize);
-            px += fb.fill_circle_alpha_bands(
-                cx, cy, inner_halo, lut, 0, 175, 240, 140,
-            ) as u32;
+            px += fb.fill_circle_alpha_bands(cx, cy, inner_halo, lut, ir, ig, ib, 150) as u32;
         }
 
         // 3. Anéis (metade traseira, dy<0) + rim traseiro — atrás do corpo.
+        // Curiosity + peers mesh → mais anéis (teto LOD).
+        let want_rings = self
+            .ring_count
+            .saturating_add(if sig.peers > 0 { 1 } else { 0 })
+            .min(3);
         let nrings = match self.lod {
-            2 => self.ring_count.min(3) as usize,
-            1 => (self.ring_count.min(2)) as usize,
+            2 => want_rings as usize,
+            1 => want_rings.min(2) as usize,
             _ => 0,
+        };
+        // Mesh: anéis na cor do papel (sólida), não só lerp fraco púrpura.
+        let ring_col = if mesh_alive {
+            role_acc
+        } else {
+            self.accent
         };
         let mut ring_geo = [(0isize, 0isize, 0u8); 3];
         for i in 0..nrings {
@@ -577,7 +703,8 @@ impl SoulMirrorRenderer {
             let ry = (rx as f32 * 0.30) as isize;
             ring_geo[i] = (rx, ry, ring_phase.wrapping_add((i as u8) * 64));
             if ry >= 2 {
-                let col = scale_color(self.accent, 110);
+                let bright = 110 + (self.affect_curiosity * 40.0) as i32;
+                let col = scale_color(ring_col, bright);
                 let lut = self.ensure_lut(ry as usize);
                 px += fb.ring_spans(
                     cx, cy, rx, ry, 2, col.0, col.1, col.2,
@@ -586,28 +713,29 @@ impl SoulMirrorRenderer {
             }
         }
         if r_i > 0 {
-            let col = scale_color(self.accent, 150);
+            let col = scale_color(ring_col, 150);
             let lut = self.ensure_lut(r_i as usize);
             px += fb.ring_spans(cx, cy, r_i, r_i, 2, col.0, col.1, col.2, spin8, -r_i, -1, lut) as u32;
         }
 
         // 4. Corpo / inner / core / specular — spans planos.
+        // Mesh: corpo+inner+core na paleta do papel (centro deixava de ser ciano puro).
         if r_i > 0 {
-            let bc = self.body;
+            let (br, bg, bb) = self.body;
             let lut = self.ensure_lut(r_i as usize);
-            px += fb.fill_circle_flat_spans(cx, cy, r_i, lut, bc.0, bc.1, bc.2) as u32;
+            px += fb.fill_circle_flat_spans(cx, cy, r_i, lut, br, bg, bb) as u32;
         }
         let ir = (r * 0.68) as isize;
         if ir > 0 {
+            let ic = if mesh_alive { role_inner } else { BODY_INNER };
             let lut = self.ensure_lut(ir as usize);
-            px += fb.fill_circle_flat_spans(
-                cx, cy, ir, lut, BODY_INNER.0, BODY_INNER.1, BODY_INNER.2,
-            ) as u32;
+            px += fb.fill_circle_flat_spans(cx, cy, ir, lut, ic.0, ic.1, ic.2) as u32;
         }
         let cr = ((r * 0.22) as isize).max(4);
         {
+            let cc = if mesh_alive { role_core } else { CORE };
             let lut = self.ensure_lut(cr as usize);
-            px += fb.fill_circle_flat_spans(cx, cy, cr, lut, CORE.0, CORE.1, CORE.2) as u32;
+            px += fb.fill_circle_flat_spans(cx, cy, cr, lut, cc.0, cc.1, cc.2) as u32;
         }
         let sr = ((r * 0.05) as isize).max(2);
         let spx = cx - (r * 0.20) as isize;
@@ -635,7 +763,7 @@ impl SoulMirrorRenderer {
         for i in 0..nrings {
             let (rx, ry, ph) = ring_geo[i];
             if ry >= 2 {
-                let col = scale_color(self.accent, 190);
+                let col = scale_color(ring_col, 190);
                 let lut = self.ensure_lut(ry as usize);
                 px += fb.ring_spans(
                     cx, cy, rx, ry, 2, col.0, col.1, col.2, ph, 0, ry, lut,
@@ -643,7 +771,7 @@ impl SoulMirrorRenderer {
             }
         }
         if r_i > 0 {
-            let col = scale_color(self.accent, 220);
+            let col = scale_color(ring_col, 220);
             let lut = self.ensure_lut(r_i as usize);
             px += fb.ring_spans(cx, cy, r_i, r_i, 2, col.0, col.1, col.2, spin8, 0, r_i, lut) as u32;
         }
@@ -818,6 +946,13 @@ mod tests {
         assert_eq!(m.update(&speak, 1_950_000), OrbState::Speaking);
         assert_eq!(m.update(&none, 2_400_000), OrbState::Speaking);
         assert_eq!(m.update(&none, 3_600_000), OrbState::Idle);
+        // Speaking preempta Thinking (InferQueue sticky ≠ orb roxo).
+        let think_speak = OrbSignals {
+            thinking: true,
+            speaking: true,
+            ..Default::default()
+        };
+        assert_eq!(m.update(&think_speak, 4_100_000), OrbState::Speaking);
     }
 
     #[test]

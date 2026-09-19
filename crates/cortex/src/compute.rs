@@ -31,6 +31,20 @@ static N_AVX512: AtomicU64 = AtomicU64::new(0);
 static N_CPU: AtomicU64 = AtomicU64::new(0);
 // ADR-0081 C1: ops despachadas para o mesh (Worker → Master)
 static N_MESH: AtomicU64 = AtomicU64::new(0);
+/// Orb: Thinking laranja enquanto round-trip MW/MR (FRAG) está em voo.
+#[cfg(feature = "p2p")]
+static MESH_MATMUL_BUSY: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// True se um matmul mesh (FRAG) está em curso — DisplayAgent → OrbSignals.thinking.
+#[cfg(feature = "p2p")]
+pub fn mesh_matmul_busy() -> bool {
+    MESH_MATMUL_BUSY.load(Ordering::Acquire)
+}
+#[cfg(not(feature = "p2p"))]
+pub fn mesh_matmul_busy() -> bool {
+    false
+}
 
 /// Ring 0 (intent/router) — registrado por `k_ai` quando uma NPU fica pronta.
 pub fn register_npu_ternary(f: TernaryFn) {
@@ -60,32 +74,34 @@ pub fn dispatch_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     let (k, n) = w.shape;
     let big = n >= 64 && k >= 64;
 
-    // ADR-0081 C1: Mesh-aware dispatch (Phase 3 — role-aware + circuit breaker).
-    // Worker só despacha para Compute nodes (não para Master a menos que
-    // Master=Compute). Verifica circuit breaker antes de enviar.
+    // ADR-0081 C1: Mesh-aware dispatch — protocolo MW→Master→MR (não Worker→Compute).
+    // Memory/Compute/Worker (qualquer não-Master) despacham para o Master quando
+    // há peer na malha. Gate antigo "só Worker + Compute peer" matava o path
+    // assim que ROLE\0 aplicava Memory/Compute (self-test nunca FRAG-ava).
     #[cfg(feature = "p2p")]
     {
         let role = k_nano::net::mesh::local_role();
-        if role == k_nano::net::mesh::NodeRole::Worker {
-            // Role-aware: verifica se existe um Compute node reachable.
-            let compute_ok = k_nano::net::mesh::MESH_ENGINE.lock()
+        let can_send = matches!(
+            role,
+            k_nano::net::mesh::NodeRole::Worker
+                | k_nano::net::mesh::NodeRole::Memory
+                | k_nano::net::mesh::NodeRole::Compute
+        );
+        if can_send {
+            let peers = k_nano::net::mesh::MESH_ENGINE
+                .lock()
                 .as_ref()
-                .map_or(false, |eng| {
-                    eng.online_nodes().any(|n| {
-                        n.role == k_nano::net::mesh::NodeRole::Compute
-                            && k_nano::net::mesh::peer_health(n.capabilities.node_id[0])
-                                .map_or(true, |h| h.reachable)
-                    })
-                });
-            if compute_ok {
+                .map_or(0, |eng| eng.node_count());
+            if peers >= 1 {
                 N_MESH.fetch_add(1, Ordering::Relaxed);
-                if let Some(t) = mesh_matmul_worker(w, x) {
+                MESH_MATMUL_BUSY.store(true, Ordering::Release);
+                let got = mesh_matmul_worker(w, x);
+                MESH_MATMUL_BUSY.store(false, Ordering::Release);
+                if let Some(t) = got {
                     return Some(t);
                 }
-                // Timeout → registra falha no circuit breaker.
                 k_nano::net::mesh::record_peer_failure(0xFF);
             }
-            // Sem Compute reachable → fallback local.
         }
     }
 
@@ -201,7 +217,24 @@ fn deserialize_mesh_response(data: &[u8]) -> Option<Tensor> {
 /// descartados (não re-injetados no RX do mesh).
 #[cfg(feature = "p2p")]
 fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
+    // AIOS: nó frugal não inicia FRAG — fallback local (Observe→Act, sem OOM).
+    if k_nano::memory::mesh_frag_pressure() {
+        k_nano::slog_cortex!(
+            "MESH", "warn",
+            "matmul mesh skip DEGRADED RAM={}MB",
+            k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed)
+        );
+        return None;
+    }
     let payload = serialize_mesh_request(w, x)?;
+    if !k_nano::memory::can_afford_frag(payload.len().saturating_add(128)) {
+        k_nano::slog_cortex!(
+            "MESH", "warn",
+            "matmul mesh skip payload={} > frag budget (DEGRADED)",
+            payload.len()
+        );
+        return None;
+    }
     let node_id = k_nano::net::mesh::node_id();
     // ADR-0081 follow-up: clock monotônico único por fonte (anti-replay de
     // dados exige clk estritamente crescente; clock=0 seria dropado).
@@ -385,7 +418,7 @@ pub fn poll_mesh_requests() {
         let ok = k_nano::net::udp_broadcast::send_fragmented(&signed, 42069);
         k_nano::slog_cortex!(
             "MESH", "ok",
-            "matmul resposta node={} sent={}", req_src, ok
+            "matmul resposta node={} sent={} bytes={}", req_src, ok, signed.len()
         );
     }
 }
@@ -417,12 +450,20 @@ pub fn mesh_matmul_self_test() {
     let x = crate::tensor::Tensor::from_row_major((64, 64), xdata)
         .unwrap_or_else(|| crate::tensor::Tensor::zero((64, 64)));
     let my_id = k_nano::net::mesh::node_id();
+    let before = N_MESH.load(Ordering::Relaxed);
     match dispatch_ternary(&w, &x) {
-        Some(r) => k_nano::slog_cortex!(
-            "MESH", "ok",
-            "self-test node={} shape=({}, {}) primeiro={:.1} (mesh dispatch)",
-            my_id, r.shape.0, r.shape.1, r.data.first().copied().unwrap_or(0.0)
-        ),
+        Some(r) => {
+            let via_mesh = N_MESH.load(Ordering::Relaxed) > before;
+            k_nano::slog_cortex!(
+                "MESH", "ok",
+                "self-test node={} shape=({}, {}) primeiro={:.1} ({})",
+                my_id,
+                r.shape.0,
+                r.shape.1,
+                r.data.first().copied().unwrap_or(0.0),
+                if via_mesh { "mesh FRAG" } else { "local accel" }
+            );
+        }
         None => k_nano::slog_cortex!(
             "MESH", "warn",
             "self-test node={} fallback local (timeout/MTU/sem Master)", my_id

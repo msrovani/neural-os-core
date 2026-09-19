@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s360] - 2026-09-19 — mesh WHPX lab + fail/warn honesty
+
+- Mesh lab: 6-node WHPX + `tools/qemu_l2_hub.py`; orb/SoulMirror por MESH_HEALTH+role; HubHealth default open; HDA QEMU
+- Honesty: TLSPINS/FAT write slog `fail`→`ok`; Trust `diagnostic`/`echo` allow + SystemAgent skip≠Crashed; CapGate PoC DENY→`ok`
+- Tick: boot_log `PollEvery` + 1× analyze; MouseAgent soft F4 (sem reset/E9) + timeout curto
+- UI/scheduler: mesh/infer/sleep throttle com `ui_is_live` / `ui_yield_infer`
+- SESSION_360; IDEA #585–#587
+
 ## [1.9.99-s359] - 2026-09-18 — bin honesty wave2/3 + emagreçer Bei/MoE
 - Cap P4–P9 Cap-only→Err; AirLLM stub; N5 FB exige present (Cap≠OK)
 - SkillSync/marketplace reativados; slog gates ok|warn|fail; RESPAWN memory_budget; heap halt

@@ -11,7 +11,8 @@ const MAX_BOOT_LOG_BYTES: usize = 64 * 1024;
 const MANIFEST: AgentManifest = AgentManifest {
     name: "boot_log",
     kind: AgentKind::Skill,
-    schedule: ScheduleKind::Continuous,
+    // BOOT_PHASE + push periódico — não precisa Continuous a cada tick.
+    schedule: ScheduleKind::PollEvery(32),
     auto_start: true,
     persist: true,
 };

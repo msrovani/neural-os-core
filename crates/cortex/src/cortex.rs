@@ -2957,7 +2957,7 @@ pub fn model_save_roundtrip_self_test() -> bool {
     }
 
     if tensors_ok {
-        k_nano::slog_cortex!("LLM", "fail", "model save/load roundtrip self-test PASS ({} bytes, L={})", bytes.len(), num_layers);
+        k_nano::slog_cortex!("LLM", "ok", "model save/load roundtrip self-test PASS ({} bytes, L={})", bytes.len(), num_layers);
     } else {
         k_nano::slog_cortex!("LLM", "warn", "model save/load roundtrip self-test FAIL ({} bytes, L={})", bytes.len(), num_layers);
     }

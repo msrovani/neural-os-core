@@ -74,7 +74,7 @@ pub fn self_test() -> bool {
     clear_allow_mask();
     let ok = free == 1 && constrained == 2;
     if ok {
-        k_nano::slog_cortex!("DECODE", "fail", "structured-decode self-test PASS (free=1 constrained=2)");
+        k_nano::slog_cortex!("DECODE", "ok", "structured-decode self-test PASS (free=1 constrained=2)");
     } else {
         k_nano::slog_cortex!(
             "DECODE",

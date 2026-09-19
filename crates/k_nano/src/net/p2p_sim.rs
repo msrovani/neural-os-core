@@ -126,7 +126,7 @@ impl SimNode {
         // 2. Engine step (heartbeat logico + cleanup + eleicao)
         let prev_role = self.engine.local_role();
         self.engine.tick();
-        self.engine.cleanup_stale_nodes();
+        let _ = self.engine.cleanup_stale_nodes(); // ignore dirty — sim host
         self.engine.check_election();
         let new_role = self.engine.local_role();
 
@@ -472,7 +472,7 @@ fn p2p_heartbeat_timeout() {
         // Engine steps
         for node in &mut sim.nodes {
             node.engine.tick();
-            node.engine.cleanup_stale_nodes();
+            let _ = node.engine.cleanup_stale_nodes();
         }
     }
 

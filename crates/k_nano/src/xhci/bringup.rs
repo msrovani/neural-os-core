@@ -567,12 +567,17 @@ unsafe fn bringup_hid_boot(kind: HidBootKind) -> bool {
         // proto==0: best-effort (descriptor curto) — tenta mesmo assim
 
         let _ = ep0_set_configuration(slot, max_packet, 1);
-        let _ = ep0_hid_set_protocol(slot, max_packet, 0);
+        // QEMU usb-tablet (HID_TABLET): SET_PROTOCOL → STALL (só kbd/mouse).
+        // Não chamar no path mouse — stall no EP0 pode matar o interrupt IN.
+        if kind == HidBootKind::Keyboard {
+            let _ = ep0_hid_set_protocol(slot, max_packet, 0); // boot keyboard
+        }
         let _ = ep0_hid_set_idle(slot, max_packet);
 
         let report_mps: u16 = match kind {
             HidBootKind::Keyboard => 8,
-            HidBootKind::Mouse => 4,
+            // QEMU usb-tablet report = 6 B abs; EP max ≥8. Boot rel mouse ≤4.
+            HidBootKind::Mouse => 8,
         };
         if !configure_hid_interrupt_ep(slot, port, speed, report_mps, kind) {
             crate::slog_nano!("USB", "hid", "{} Configure EP FAIL slot={}", tag, slot);
@@ -600,11 +605,13 @@ unsafe fn bringup_hid_boot(kind: HidBootKind) -> bool {
                         st.mouse_ready = true;
                         st.mouse_slot = slot;
                         st.mouse_port = port;
-                        st.mouse_last = [0; 4];
+                        st.mouse_last = [0; 8];
+                        // Prefer abs: QEMU usb-tablet; relativo só se coords ≤255.
+                        st.mouse_abs = true;
                         crate::slog_nano!(
                             "USB",
-                            "hid",
-                            "P24b HID boot mouse OK slot={} port={}",
+                            "ok",
+                            "P24b HID mouse OK slot={} port={} abs=1 dma_uc",
                             slot,
                             port
                         );
@@ -803,16 +810,27 @@ unsafe fn configure_hid_interrupt_ep(
     max_packet: u16,
     kind: HidBootKind,
 ) -> bool {
-    let tr = match alloc_phys(1) {
+    // DMA UC obrigatório: alloc_phys (WB) fazia o CPU ler report sempre-zero
+    // enquanto o xHCI gravava (IDEA 542 — tablet “vivo” mas pos congelada).
+    let tr = match crate::dma::dma_alloc(4096) {
         Some(t) => t,
         None => return false,
     };
-    let report = match alloc_phys(1) {
+    let report = match crate::dma::dma_alloc(4096) {
         Some(t) => t,
         None => return false,
     };
-    core::ptr::write_bytes(tr.1, 0, 4096);
-    core::ptr::write_bytes(report.1, 0, 4096);
+    let tr_pa = tr.phys;
+    let report_pa = report.phys;
+    let tr_va = tr.virt;
+    let report_va = report.virt;
+    // Leak proposital: EP vive o runtime inteiro (mesmo padrão MSC/isoc).
+    core::mem::forget(tr);
+    core::mem::forget(report);
+    unsafe {
+        core::ptr::write_bytes(tr_va, 0, 4096);
+        core::ptr::write_bytes(report_va, 0, 4096);
+    }
 
     let ctx = match alloc_phys(2) {
         Some(c) => c,
@@ -833,8 +851,8 @@ unsafe fn configure_hid_interrupt_ep(
     ep_in.add(0).write_volatile(0);
     // EP Type Interrupt IN = 7, CErr=3, MaxPacketSize
     ep_in.add(1).write_volatile((3u32 << 1) | (7u32 << 3) | ((max_packet as u32) << 16));
-    ep_in.add(2).write_volatile(tr.0 as u32 | 1);
-    ep_in.add(3).write_volatile((tr.0 >> 32) as u32);
+    ep_in.add(2).write_volatile(tr_pa as u32 | 1);
+    ep_in.add(3).write_volatile((tr_pa >> 32) as u32);
     // Average TRB length / Interval
     let avg = max_packet as u32;
     ep_in.add(4).write_volatile(avg | ((4u32) << 16)); // interval ~8ms for FS/LS
@@ -852,12 +870,12 @@ unsafe fn configure_hid_interrupt_ep(
         if let Some(ref mut st) = *g {
             match kind {
                 HidBootKind::Keyboard => {
-                    st.hid_tr_va = tr.0 + pmoff;
-                    st.hid_report_va = report.0 + pmoff;
+                    st.hid_tr_va = tr_pa + pmoff;
+                    st.hid_report_va = report_pa + pmoff;
                 }
                 HidBootKind::Mouse => {
-                    st.mouse_tr_va = tr.0 + pmoff;
-                    st.mouse_report_va = report.0 + pmoff;
+                    st.mouse_tr_va = tr_pa + pmoff;
+                    st.mouse_report_va = report_pa + pmoff;
                 }
             }
         }

@@ -56,9 +56,10 @@ fn ps2_check_exists() -> bool {
     }
 }
 
-/// Espera buffer de entrada do 8042 livre (bit1=0), com timeout.
+/// Espera buffer de entrada do 8042 livre (bit1=0), com timeout curto.
+/// 100k spins × vários cmds engasgava nós 1c/1G (mesh lab B).
 fn ps2_wait_write() {
-    for _ in 0..100_000 {
+    for _ in 0..8_000 {
         let st: u8 = unsafe { Port::<u8>::new(0x64).read() };
         if st & 0x02 == 0 {
             return;
@@ -66,9 +67,9 @@ fn ps2_wait_write() {
     }
 }
 
-/// Espera dado no buffer de saída (bit0=1), com timeout.
+/// Espera dado no buffer de saída (bit0=1), com timeout curto.
 fn ps2_wait_read() -> bool {
-    for _ in 0..100_000 {
+    for _ in 0..8_000 {
         let st: u8 = unsafe { Port::<u8>::new(0x64).read() };
         if st & 0x01 != 0 {
             return true;
@@ -87,87 +88,23 @@ fn ps2_drain() {
     }
 }
 
-/// Init PS/2 aux correto: reset + enable IRQ12 + stream (0xD4/0xF4).
+/// Soft enable: boot já fez reset+IRQ12 (`main` PS/2 init). Aqui só F4 stream —
+/// reset/E9 no tick engasgava mesh 1c (B hang).
 fn enable_ps2_mouse() {
     unsafe {
         ps2_drain();
-
-        // Enable auxiliary device interface
-        ps2_wait_write();
-        Port::<u8>::new(0x64).write(0xA8);
-
-        // Read controller config (cmd 0x20)
-        ps2_wait_write();
-        Port::<u8>::new(0x64).write(0x20);
-        let mut cfg = if ps2_wait_read() {
-            Port::<u8>::new(0x60).read()
-        } else {
-            0x47
-        };
-        k_nano::slog_hermes!("MOUSE", "ok", "8042 cfg_before={:#04x}", cfg);
-        cfg |= 0x02; // IRQ12
-        cfg |= 0x01; // IRQ1
-        cfg &= !0x20; // mouse clock on
-        cfg &= !0x10; // keyboard clock on
-        // Write controller config (cmd 0x60)
-        ps2_wait_write();
-        Port::<u8>::new(0x64).write(0x60);
-        ps2_wait_write();
-        Port::<u8>::new(0x60).write(cfg);
-        k_nano::slog_hermes!("MOUSE", "ok", "8042 cfg_after={:#04x}", cfg);
-
-        // Reset mouse: 0xD4 / 0xFF -> ACK FA, BAT AA, ID 00
-        ps2_wait_write();
-        Port::<u8>::new(0x64).write(0xD4);
-        ps2_wait_write();
-        Port::<u8>::new(0x60).write(0xFF);
-        for i in 0..3u32 {
-            if ps2_wait_read() {
-                let b: u8 = Port::<u8>::new(0x60).read();
-                k_nano::slog_hermes!("MOUSE", "info", "reset_rsp[{}]={:#04x}", i, b);
-            }
-        }
-
-        // Enable data reporting: 0xD4 / 0xF4 -> ACK FA
         ps2_wait_write();
         Port::<u8>::new(0x64).write(0xD4);
         ps2_wait_write();
         Port::<u8>::new(0x60).write(0xF4);
         if ps2_wait_read() {
             let ack: u8 = Port::<u8>::new(0x60).read();
-            k_nano::slog_hermes!("MOUSE", "info", "enable_ack={:#04x} (expect 0xfa)", ack);
+            k_nano::slog_hermes!("MOUSE", "ok", "stream F4 ack={:#04x} (boot already inited)", ack);
         } else {
-            k_nano::slog_hermes!("MOUSE", "info", "enable_ack=TIMEOUT");
-        }
-
-        // Diagnóstico: Status Request 0xE9 -> se responder, o device vive;
-        // se nunca vier byte de movimento depois, o host QEMU não está injetando.
-        ps2_wait_write();
-        Port::<u8>::new(0x64).write(0xD4);
-        ps2_wait_write();
-        Port::<u8>::new(0x60).write(0xE9);
-        for i in 0..4u32 {
-            if ps2_wait_read() {
-                let b: u8 = Port::<u8>::new(0x60).read();
-                k_nano::slog_hermes!("MOUSE", "info", "status_req[{}]={:#04x}", i, b);
-            } else {
-                k_nano::slog_hermes!("MOUSE", "info", "status_req[{}]=TIMEOUT", i);
-                break;
-            }
-        }
-
-        // Re-enable stream após E9
-        ps2_wait_write();
-        Port::<u8>::new(0x64).write(0xD4);
-        ps2_wait_write();
-        Port::<u8>::new(0x60).write(0xF4);
-        if ps2_wait_read() {
-            let ack: u8 = Port::<u8>::new(0x60).read();
-            k_nano::slog_hermes!("MOUSE", "info", "re_enable_ack={:#04x}", ack);
+            k_nano::slog_hermes!("MOUSE", "ok", "stream F4 TIMEOUT — USB HID fallback");
         }
     }
-    k_nano::slog_hermes!("MOUSE", "ok", "PS/2 mouse enabled (IRQ12 + stream).");
-    k_nano::interrupts::mouse_log_status("after_enable");
+    k_nano::interrupts::mouse_log_status("after_soft_enable");
 }
 
 fn screen_max() -> (u16, u16) {

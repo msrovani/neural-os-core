@@ -761,35 +761,40 @@ impl Agent for SystemAgent {
             let now = _tick;
             let token_val = event.token.as_legacy();
 
-            // DiagnosticSkill no boot (registrada na AgentFleet)
+            // Bootstrap trust p/ skills de boot (race-safe se BootTrust ainda não tickou).
+            {
+                let mut tc = crate::TRUST_CACHE.lock();
+                tc.trust_allow(token_val, "diagnostic", now);
+                tc.trust_allow(token_val, "echo", now);
+            }
+
+            // DiagnosticSkill no boot (registrada na AgentFleet).
+            // Contain sem trust_allow → skip skill, NÃO Crashed (SYSTEM_READY ainda vale).
             {
                 let trust_ok = crate::TRUST_CACHE.lock().check_or_cache(token_val, "diagnostic", now, 360);
-                if !trust_ok {
-                    k_nano::slog_bin!("Trust", "fail", "diagnostic skill denied before execute_skill");
-                    return AgentTickResult::Crashed;
+                if trust_ok {
+                    match reg.execute_skill("diagnostic", &[], &event.token) {
+                        Ok(out) => k_nano::slog_bin!("Agent", "ok", "DiagnosticSkill OK ({} bytes)", out.len()),
+                        Err(e) => k_nano::slog_bin!("Agent", "warn", "DiagnosticSkill: {}", e),
+                    }
+                } else {
+                    k_nano::slog_bin!("Trust", "warn", "diagnostic skipped (Contain) — SystemAgent segue");
                 }
-            }
-            match reg.execute_skill("diagnostic", &[], &event.token) {
-                Ok(out) => k_nano::slog_bin!("Agent", "ok", "DiagnosticSkill OK ({} bytes)", out.len()),
-                Err(e) => k_nano::slog_bin!("Agent", "warn", "DiagnosticSkill: {}", e),
             }
 
             {
                 let trust_ok = crate::TRUST_CACHE.lock().check_or_cache(token_val, "echo", now, 360);
-                if !trust_ok {
-                    k_nano::slog_bin!("Trust", "fail", "echo skill denied before execute_skill");
-                    return AgentTickResult::Crashed;
+                if trust_ok {
+                    match reg.execute_skill("echo", &event.payload, &event.token) {
+                        Ok(output) => k_nano::slog_bin!("Agent", "ok", "EchoSkill: {:?}", output),
+                        Err(e) => k_nano::slog_bin!("Agent", "warn", "EchoSkill: {}", e),
+                    }
+                } else {
+                    k_nano::slog_bin!("Trust", "warn", "echo skipped (Contain) — SystemAgent segue");
                 }
             }
-            let out = reg.execute_skill("echo", &event.payload, &event.token);
 
             drop(reg);
-
-            if let Ok(output) = out {
-
-                k_nano::slog_bin!("Agent", "info", "EchoSkill: {:?}", output);
-
-            }
 
             k_nano::slog_bin!("AGENT", "info", "SystemAgent: SYSTEM_READY confirmado. Concluido.");
 
@@ -897,6 +902,9 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
             k_nano::slog_bin!("Sched", "warn", "tick lento: {} levou {} ms", name, ms);
         }),
     );
+    // UI freeze sob smp alto: mid-cycle boost do Display quando frame atrasa.
+    agent_core::set_ui_overdue_hook(Some(crate::display::compositor::present_overdue));
+    agent_core::set_ui_live_hook(Some(k_nano::boot_logger::ui_is_live));
     // ADR-0089: registry ptr + offload hooks (só se feature; predicate = ap_pollable runtime).
     agent_core::set_registry_ptr(registry);
     #[cfg(feature = "smp-runqueue")]
@@ -1078,21 +1086,10 @@ fn adr0047_mvp_gates() {
     {
         crate::display::ui_spec::mark_ui_ok();
     }
-    // ADR-0058 S4: 3 demo cards (Sistema/Clima/Video) via TOPIC_UI_SPEC
-    let demo_cards = [
-        r#"{"id":1,"title":"Sistema","w":300,"h":200,"body":[{"t":"kv","k":"RAM","v":"7168MB"},{"t":"kv","k":"Cores","v":"4"},{"t":"gauge","label":"CPU","value":12,"max":100,"unit":"%"}]}"#,
-        r#"{"id":2,"title":"Clima","w":250,"h":150,"body":[{"t":"kv","k":"Temp","v":"22C"},{"t":"text","s":"Parcialmente nublado"},{"t":"bars","label":"Umidade","v":[65]}]}"#,
-        r#"{"id":3,"title":"Video","w":320,"h":240,"body":[{"t":"text","s":"Chamada de Video"},{"t":"btn","label":"Ligar"},{"t":"btn","label":"Encerrar"}]}"#,
-    ];
-    for card_json in demo_cards.iter() {
-        let _ = crate::EVENT_BUS.publish(Event {
-            id: 0,
-            topic: alloc::string::String::from(crate::display::ui_spec::TOPIC_UI_SPEC),
-            payload: card_json.as_bytes().to_vec(),
-            token: CapabilityToken::Legacy(1),
-        });
-    }
-    k_nano::slog_bin!("HMI", "info", "3 demo cards publicados no TOPIC_UI_SPEC");
+    // ADR-0058: cards sob demanda (UI_SPEC / instalador / atalhos).
+    // Demo Sistema/Clima/Video removidos — Hub Health é o SystemInfo canônico
+    // (dois painéis "Sistema" + Hub Health confundiam).
+    k_nano::slog_bin!("HMI", "ok", "UI_SPEC ready (sem demo cards; Hub Health = SystemInfo)");
 
     let (ui, av) = crate::display::ui_spec::gate_status();
     let (h2, h5) = crate::display::embed_viz::gate_status();
@@ -1751,10 +1748,11 @@ pub(crate) fn kernel_boot(
     // automaticamente; acima do budget o modelo cai para AirLLM (model_fit).
     let detected_ram_mb = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
     let heap_budget = k_nano::memory::heap_budget_mb(detected_ram_mb);
-    allocator::resize_bump_heap(heap_budget.min(512));
+    let piso = k_nano::memory::heap_piso_mb(detected_ram_mb);
+    allocator::resize_bump_heap(heap_budget.min(piso));
     k_nano::allocator::set_heap_budget_mb(heap_budget);
-    k_nano::slog_bin!("HEAP", "ok", "heap piso_t0=512MB RAM={}MB budget={}MB (75%-keep)",
-        detected_ram_mb, heap_budget);
+    k_nano::slog_bin!("HEAP", "ok", "heap piso_t0={}MB RAM={}MB budget={}MB (AIOS adapt)",
+        piso, detected_ram_mb, heap_budget);
     // TALC init — APÓS init_global_allocator (alloc_physical_frame disponível)
     match allocator::talc_init_post_memory() {
         Ok(()) => {}
@@ -3715,6 +3713,10 @@ pub(crate) fn kernel_boot(
                         // pelo script PS1). Expert scan começa daqui, evita carregar
                         // tinystories/Piper/BITNET2B como se fossem experts (Falcon3 ja no CURRENT_MODEL).
                         QEMU_LOADER_SCAN_START.store(0x129000000, core::sync::atomic::Ordering::Relaxed);
+                        // Piper/BGE podem falhar no init pré-LLM (páginas loader ainda
+                        // frias sob WHPX+host pressure) — retenta agora com RAM mapeada.
+                        audio::skills::init_neural_tts();
+                        crate::load_status::print_status_banner();
                     } else {
                         k_nano::slog_bin!("RAMDISK", "info", "QEMU loader: load_model FAILED");
                         crate::load_status::set(

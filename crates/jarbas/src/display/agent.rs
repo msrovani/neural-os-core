@@ -21,6 +21,8 @@ mod mesh_health_json {
     #[derive(Debug, Clone)]
     pub struct PeerHealthJson {
         pub node_id: u8,
+        /// NodeRole: 0=Master 1=Memory 2=Compute 3=Worker 4=Undecided
+        pub role: u8,
         pub reachable: bool,
         pub avg_rtt: u64,
         pub p99_rtt: u64,
@@ -30,7 +32,7 @@ mod mesh_health_json {
         pub probe_to: u64,
     }
 
-    /// Parse JSON array: [{"node_id":1,"reachable":true,"avg_rtt":10,"p99_rtt":20,"tx":100,"ack":90,"fail":0,"probe_to":50},...]
+    /// Parse JSON array: [{"node_id":1,"role":0,"reachable":true,...},...]
     pub fn parse(json: &str) -> Vec<PeerHealthJson> {
         let mut result = Vec::new();
         let mut i = 0;
@@ -57,6 +59,7 @@ mod mesh_health_json {
 
             // Parse object
             let mut node_id = 0u8;
+            let mut role = 4u8; // Undecided default
             let mut reachable = false;
             let mut avg_rtt = 0u64;
             let mut p99_rtt = 0u64;
@@ -97,6 +100,7 @@ mod mesh_health_json {
 
                 match key {
                     "node_id" => node_id = val_str.parse().unwrap_or(0),
+                    "role" => role = val_str.parse().unwrap_or(4),
                     "reachable" => reachable = val_str == "true",
                     "avg_rtt" => avg_rtt = val_str.parse().unwrap_or(0),
                     "p99_rtt" => p99_rtt = val_str.parse().unwrap_or(0),
@@ -111,7 +115,7 @@ mod mesh_health_json {
                 i += 1;
             }
             result.push(PeerHealthJson {
-                node_id, reachable, avg_rtt, p99_rtt, tx, ack, fail, probe_to,
+                node_id, role, reachable, avg_rtt, p99_rtt, tx, ack, fail, probe_to,
             });
         }
         result
@@ -119,11 +123,38 @@ mod mesh_health_json {
 }
 
 /// Snapshot de um peer do mesh, consumido pelo compositor (draw_mesh_graph).
+#[derive(Clone, Copy)]
 pub struct MeshPeerNode {
     pub node_id: u8,
+    /// NodeRole: 0=Master 1=Memory 2=Compute 3=Worker 4=Undecided
+    pub role: u8,
     pub reachable: bool,
     pub avg_rtt: u32,
     pub p99_rtt: u32,
+}
+
+/// Rótulo curto do papel no grafo (MST/MEM/CMP/WRK/?).
+#[inline]
+pub fn mesh_role_label(role: u8) -> &'static str {
+    match role {
+        0 => "MST",
+        1 => "MEM",
+        2 => "CMP",
+        3 => "WRK",
+        _ => "?",
+    }
+}
+
+/// Cor do satélite por papel (além do tint por RTT).
+#[inline]
+pub fn mesh_role_rgb(role: u8) -> (u8, u8, u8) {
+    match role {
+        0 => (0, 212, 255),   // Master — cyan brand
+        1 => (120, 180, 255), // Memory — azul
+        2 => (255, 180, 40),  // Compute — âmbar
+        3 => (80, 220, 120),  // Worker — verde
+        _ => (140, 140, 150), // Undecided — cinza
+    }
 }
 pub(crate) static MESH_GRAPH: IrqSafeLock<alloc::vec::Vec<MeshPeerNode>> =
     IrqSafeLock::new(alloc::vec::Vec::new());
@@ -175,7 +206,12 @@ pub struct DisplayAgent {
     orb_alert_until_us: u64,
     orb_degraded_until_us: u64,
     orb_dream_until_us: u64,
+    /// Pulse Thinking (não sticky em InferQueue contínua).
+    orb_think_until_us: u64,
+    orb_think_armed: bool,
     orb_activity: u32,
+    /// Último `mesh_orb_activity()` visto — delta arma Thinking + Affect.
+    last_mesh_orb_act: u64,
     gpu_inited: bool,
     demo_ui_sent: bool,
     input_buffer: alloc::string::String,
@@ -188,6 +224,8 @@ pub struct DisplayAgent {
     /// Última posição do mouse (para dirty_cursor só no movimento).
     last_pointer_x: usize,
     last_pointer_y: usize,
+    /// try_enable_hw_cursor adiado — 1º tick só pinta orb (anti-splash hang).
+    hw_cursor_tried: bool,
 }
 
 impl DisplayAgent {
@@ -227,7 +265,10 @@ impl DisplayAgent {
             orb_alert_until_us: 0,
             orb_degraded_until_us: 0,
             orb_dream_until_us: 0,
+            orb_think_until_us: 0,
+            orb_think_armed: false,
             orb_activity: 0,
+            last_mesh_orb_act: 0,
             gpu_inited: false,
             demo_ui_sent: false,
             input_buffer: alloc::string::String::new(),
@@ -238,6 +279,7 @@ impl DisplayAgent {
             power_armed_until: 0,
             last_pointer_x: usize::MAX,
             last_pointer_y: usize::MAX,
+            hw_cursor_tried: false,
         }
     }
 
@@ -653,46 +695,50 @@ impl Agent for DisplayAgent {
                 MOUSE_X.store((fw / 2) as usize, core::sync::atomic::Ordering::Relaxed);
                 MOUSE_Y.store((fh / 2) as usize, core::sync::atomic::Ordering::Relaxed);
                 crate::display::fb::claim_graphics();
-                // Bisector v2 (s319): scheduler carimba o agente em curso
-                // direto no FB — frame congelado mostra o agente travado.
-                agent_core::set_tick_stamp_fn(Some(crate::display::fb::diag_stamp_agent));
-                // Bisector v3 (s320): exceções (#UD/#GP/#PF) estampadas no FB —
-                // o dump serial é invisível no metal; hlt loop = freeze.
-                k_nano::interrupts::set_exception_fb_fn(Some(
-                    crate::display::fb::diag_stamp_exception,
-                ));
-                // Bisector v4 (s321): sub-estágios do tick em curso (linha 2
-                // de barras, y=32) — agentes marcam progresso via tick_stage.
-                agent_core::set_tick_stage_fn(Some(crate::display::fb::diag_stage_row1));
-                // Bisector v6 (s326): heartbeat do timer no FB (y=80) —
-                // discriminador vivo-vs-morto no frame congelado.
-                k_nano::interrupts::set_heartbeat_fb_fn(Some(
-                    crate::display::fb::heartbeat_stamp,
-                ));
-                // Cursor HW (default OFF): só ativa em Intel + display engine +
-                // BAR mapeado + readback OK. QEMU/não-Intel → cursor software.
-                if unsafe { k_hal::gpu::intel_display::try_enable_hw_cursor() } {
-                    k_nano::slog_jarbas!("Jarbas", "info", "cursor HW ativo (plano CUR_*)");
-                } else {
-                    k_nano::slog_jarbas!("Jarbas", "info", "cursor software (HW não gateado)");
-                }
-                // 1º frame imediato: splash no tick 1; sem render+swap aqui depende do tick 2
-                // (Hermes/LLM pode bloquear minutos — SESSION_168 / HW real freeze no splash).
+                // 1º paint IMEDIATO — claim_graphics deixa splash "Inicializando...".
+                // NÃO chamar try_enable_hw_cursor / detect_all antes: PCI/MMIO pode
+                // hangar o tick e o usuário fica no splash para sempre
+                // (boot_whpx_20260918_225627: Desktop limpo sem Desktop iniciado).
                 if let Some(ref mut desktop) = *COMPOSITOR.lock() {
                     desktop.invalidate_all();
-                    // Animação usa tick do scheduler: se o IRQ timer falhar, a UI
-                    // continua responsiva enquanto o runtime ainda progride.
                     desktop.render(tick);
                 }
                 k_nano::boot_logger::mark_ui_live();
-                // Mic aberto pós-desktop: STT/VAD sem depender só do wakeword.
+                crate::display::compositor::sync_ui_yield_infer();
+                // Bridges FB (após 1º paint — freeze no splash ainda mostra orb).
+                agent_core::set_tick_stamp_fn(Some(crate::display::fb::diag_stamp_agent));
+                k_nano::interrupts::set_exception_fb_fn(Some(
+                    crate::display::fb::diag_stamp_exception,
+                ));
+                agent_core::set_tick_stage_fn(Some(crate::display::fb::diag_stage_row1));
+                k_nano::interrupts::set_heartbeat_fb_fn(Some(
+                    crate::display::fb::heartbeat_stamp,
+                ));
+                // Cursor HW: tick seguinte (não bloquear 1º frame).
+                k_nano::slog_jarbas!("Jarbas", "info", "Desktop iniciado @ {}x{} (cursor HW deferred)", fw, fh);
                 crate::audio::settings::enable_open_mic();
-                k_nano::slog_jarbas!("Jarbas", "info", "Desktop iniciado @ {}x{}", fw, fh);
                 k_nano::interrupts::mouse_log_status("desktop_ready");
+                self.gpu_inited = true;
+                self.hw_cursor_tried = false;
+                return AgentTickResult::Pending;
             }
             self.gpu_inited = true;
             return AgentTickResult::Pending;
         }
+
+        // Cursor HW uma vez, fora do caminho crítico do 1º frame.
+        if !self.hw_cursor_tried {
+            self.hw_cursor_tried = true;
+            if unsafe { k_hal::gpu::intel_display::try_enable_hw_cursor() } {
+                k_nano::slog_jarbas!("Jarbas", "info", "cursor HW ativo (plano CUR_*)");
+            } else {
+                k_nano::slog_jarbas!("Jarbas", "info", "cursor software (HW não gateado)");
+            }
+        }
+
+        // WHPX/smp alto: se o frame atrasou, pedimos aos APs para pausar Infer
+        // e liberar CPU do host para este tick (paint + mouse).
+        crate::display::compositor::sync_ui_yield_infer();
 
         // Poll mouse todo frame (IRQ pode ter atualizado MOUSE_ABS_* durante Hermes)
         k_nano::interrupts::mouse_poll_bytes();
@@ -937,9 +983,12 @@ impl Agent for DisplayAgent {
             } // while pkt
         } // if latent_receiver
 
-        // Mesh Health: drena MESH_HEALTH (JSON) → MESH_GRAPH (compositor renderiza).
+        // Mesh Health: EventBus + Observe direto do engine (AIOS — não depende
+        // de subscribe-before-publish). Sync periódico garante grafo/cores.
         if self.mesh_health_receiver.is_none() {
             self.mesh_health_receiver = Some(EVENT_BUS.subscribe(TOPIC_MESH_HEALTH));
+            // Pull imediato pós-subscribe (eventos anteriores já evaporaram).
+            k_nano::net::mesh::publish_mesh_health();
         }
         if let Some(ref rx) = self.mesh_health_receiver {
             let mut drained = 0;
@@ -953,6 +1002,7 @@ impl Agent for DisplayAgent {
                 for health in peers {
                     graph.push(MeshPeerNode {
                         node_id: health.node_id,
+                        role: health.role,
                         reachable: health.reachable,
                         avg_rtt: health.avg_rtt as u32,
                         p99_rtt: health.p99_rtt as u32,
@@ -960,6 +1010,28 @@ impl Agent for DisplayAgent {
                 }
                 drop(graph);
             }
+        }
+        // Reconcile a cada ~16 ticks: fonte de verdade = MESH_ENGINE.
+        static MESH_PULL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+        let pull_n = MESH_PULL.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if pull_n % 16 == 0 {
+            let snap = k_nano::net::mesh::mesh_peers_ui_snapshot();
+            let mut graph = MESH_GRAPH.lock();
+            // Só substitui se o engine tiver peers OU o graph já tinha algo
+            // a limpar (evita clear em race com EventBus no mesmo tick).
+            if !snap.is_empty() || !graph.is_empty() {
+                graph.clear();
+                for (nid, role, reachable, avg, p99) in snap {
+                    graph.push(MeshPeerNode {
+                        node_id: nid,
+                        role,
+                        reachable,
+                        avg_rtt: avg,
+                        p99_rtt: p99,
+                    });
+                }
+            }
+            drop(graph);
         }
         crate::display::fb::diag_mark(3);
 
@@ -1105,9 +1177,11 @@ impl Agent for DisplayAgent {
 
         // OrbState (s328): sinais REAIS → OrbSignals ────────────────────
         // Janelas temporais ficam aqui; a máquina de estados com dwell vive
-        // no SoulMirror. thinking = InferQueue (job ativo/fila); updating =
-        // instalador (SYS_INSTALL_UI/INSTALLER_BUSY); sleep cycle publica
-        // SLEEP_PHASE; saúde crítica (I5/panic/fault) → ALERT.
+        // no SoulMirror. thinking = InferQueue user-visible (job ativo), mas
+        // Speaking/Listening têm prioridade no SoulMirror (orb não fica roxo
+        // com TTS/VAD enquanto a fila de inferência anda em background).
+        // updating = instalador (SYS_INSTALL_UI/INSTALLER_BUSY); sleep cycle
+        // publica SLEEP_PHASE; saúde crítica (I5/panic/fault) → ALERT.
         // Auto-open do Hub Health é política do HubHealthAgent (hermes).
         let sig = {
             let now = k_nano::tsc::now_us();
@@ -1150,10 +1224,60 @@ impl Agent for DisplayAgent {
                     self.orb_dream_until_us = 0;
                 }
             }
-            let peers = MESH_GRAPH.lock().len().min(8) as u8;
+            // Thinking = pulse na borda has_work (não sticky). InferQueue
+            // contínua (saudação/heal) deixava violeta forever.
+            let hw = cortex::infer_queue::has_work();
+            if hw {
+                if !self.orb_think_armed {
+                    self.orb_think_armed = true;
+                    self.orb_think_until_us = if now == 0 {
+                        u64::MAX
+                    } else {
+                        now + 4_000_000
+                    };
+                }
+            } else {
+                self.orb_think_armed = false;
+                self.orb_think_until_us = 0;
+            }
+            let peers = {
+                let g = MESH_GRAPH.lock();
+                g.iter().filter(|p| p.reachable).count().min(8) as u8
+            };
+            // Mesh matmul FRAG em voo → Thinking (laranja Processing).
+            let mesh_busy = cortex::compute::mesh_matmul_busy();
+            if mesh_busy {
+                self.orb_think_until_us = if now == 0 {
+                    u64::MAX
+                } else {
+                    now + 4_000_000
+                };
+            }
+            // Mesh vivo sem LLM: HB/ROLE/discover/drop → Thinking + Affect.
+            // Lab NoModels deixava orb Idle eterno (só InferQueue/FRAG armavam).
+            let mesh_act = k_nano::net::mesh::mesh_orb_activity();
+            if mesh_act != self.last_mesh_orb_act {
+                let delta = mesh_act.wrapping_sub(self.last_mesh_orb_act);
+                self.last_mesh_orb_act = mesh_act;
+                self.orb_think_until_us = if now == 0 {
+                    u64::MAX
+                } else {
+                    now + 2_800_000
+                };
+                self.orb_activity = self.orb_activity.wrapping_add(delta.min(4) as u32);
+                if let Some(bei) = hermes::bei::bei_state() {
+                    bei.incorporate_affect(hermes::affect::AffectEvent::Novelty(0.35));
+                    if matches!(
+                        k_nano::net::mesh::local_role(),
+                        k_nano::net::mesh::NodeRole::Master
+                    ) {
+                        bei.incorporate_affect(hermes::affect::AffectEvent::Success(0.35));
+                    }
+                }
+            }
             OrbSignals {
                 listening: active(self.orb_listen_until_us),
-                thinking: cortex::infer_queue::has_work(),
+                thinking: active(self.orb_think_until_us) || mesh_busy,
                 speaking: active(self.orb_speak_until_us),
                 alert: active(self.orb_alert_until_us),
                 degraded: active(self.orb_degraded_until_us),
@@ -1161,6 +1285,7 @@ impl Agent for DisplayAgent {
                 updating: k_nano::installer_agent::INSTALLER_BUSY
                     .load(core::sync::atomic::Ordering::Relaxed),
                 peers,
+                local_role: k_nano::net::mesh::local_role() as u8,
                 activity: self.orb_activity,
             }
         };
@@ -1180,6 +1305,8 @@ impl Agent for DisplayAgent {
             desktop.render(tick);
         }
         drop(comp);
+        // Pós-paint: se o present andou, libera Infer nos APs.
+        crate::display::compositor::sync_ui_yield_infer();
 
         self.input_buffer.clear();
         AgentTickResult::Pending

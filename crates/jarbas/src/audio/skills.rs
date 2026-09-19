@@ -127,26 +127,65 @@ fn try_load_piper_from_loader_scan() -> Option<PiperEngine> {
             addr = addr.saturating_add(0x100_000);
             continue;
         }
-        let n = u32::from_le_bytes(hdr[8..12].try_into().ok()?) as usize;
+        k_nano::slog_jarbas!(
+            "Audio",
+            "ok",
+            "Piper magic v3 @{:#x} — probing blob…",
+            addr
+        );
+        let n = match hdr.get(8..12).and_then(|s| <&[u8] as TryInto<[u8; 4]>>::try_into(s).ok()) {
+            Some(b) => u32::from_le_bytes(b) as usize,
+            None => {
+                k_nano::slog_jarbas!("Audio", "warn", "Piper @{:#x} bad header n field", addr);
+                addr = addr.saturating_add(0x100_000);
+                continue;
+            }
+        };
         let idx_bytes = 16usize.saturating_add(n.saturating_mul(40)).min(256 * 1024);
-        if mapped_len(va, idx_bytes) < idx_bytes {
+        let mapped_idx = mapped_len(va, idx_bytes);
+        if mapped_idx < idx_bytes {
+            k_nano::slog_jarbas!(
+                "Audio",
+                "warn",
+                "Piper @{:#x} idx not mapped ({}/{} B) — skip",
+                addr,
+                mapped_idx,
+                idx_bytes
+            );
             addr = addr.saturating_add(0x100_000);
             continue;
         }
         let idx = unsafe { core::slice::from_raw_parts(ptr, idx_bytes) };
         let Some(mut sz) = piper_blob_size(idx) else {
+            k_nano::slog_jarbas!(
+                "Audio",
+                "warn",
+                "Piper @{:#x} piper_blob_size=None n={}",
+                addr,
+                n
+            );
             addr = addr.saturating_add(0x100_000);
             continue;
         };
+        // Toca todas as páginas do blob antes de medir mapped (lazy HHDM).
+        fault_in_range(va, sz);
         let mapped = mapped_len(va, sz);
-        if mapped < 4096 {
+        if mapped < sz.saturating_mul(9) / 10 {
+            k_nano::slog_jarbas!(
+                "Audio",
+                "warn",
+                "Piper @{:#x} blob incomplete (mapped={}KB want={}KB)",
+                addr,
+                mapped / 1024,
+                sz / 1024
+            );
             addr = addr.saturating_add(0x100_000);
             continue;
         }
         sz = mapped.min(sz);
         k_nano::slog_jarbas!(
             "Audio",
-            "piper",
+            "ok",
             "QEMU-loader @{:#x} Piper v3 — parse {} KB…",
             addr,
             sz / 1024
@@ -165,8 +204,8 @@ fn try_load_piper_from_loader_scan() -> Option<PiperEngine> {
         }
         k_nano::slog_jarbas!(
             "Audio",
-            "piper",
-            "QEMU-loader @{:#x} parse FAILED — fallback FAT",
+            "warn",
+            "QEMU-loader @{:#x} Piper parse FAILED — fallback FAT",
             addr
         );
         addr = addr.saturating_add(0x100_000);
@@ -184,6 +223,22 @@ fn mapped_len(base_va: u64, want: usize) -> usize {
         ok = ok.saturating_add(page).min(want);
     }
     ok
+}
+
+/// QEMU-loader: páginas podem estar PRESENT mas ainda não faulted no HHDM até
+/// o primeiro touch — `mapped_len` sozinho mentia ~15KB no Piper 60MB.
+fn fault_in_range(base_va: u64, want: usize) {
+    let page = 4096usize;
+    let mut off = 0usize;
+    while off < want {
+        let va = base_va.saturating_add(off as u64);
+        if k_nano::memory::is_page_present(va) {
+            unsafe {
+                let _ = core::ptr::read_volatile(va as *const u8);
+            }
+        }
+        off = off.saturating_add(page);
+    }
 }
 
 unsafe fn try_load_piper_from_fat_dev(
@@ -269,6 +324,16 @@ fn try_load_piper_from_virtio_fat() -> Option<PiperEngine> {
 }
 
 fn try_load_piper_from_ata_fat() -> Option<PiperEngine> {
+    // QEMU/WHPX: ATA PIO ~0.1MB/s — Piper 60MB estoura qualquer budget de boot.
+    // Aceite Piper em sandbox = QEMU-loader ou virtio-blk.
+    if k_nano::platform_probe::hypervisor().is_sandbox() {
+        k_nano::slog_jarbas!(
+            "Audio",
+            "warn",
+            "skip ATA Piper FAT PIO (sandbox) — use QEMU-loader/virtio"
+        );
+        return None;
+    }
     let slow_ata = k_nano::storage_bw::skip_measure()
         || k_nano::virtio_blk::VIRTIO_BLK_DEV.lock().is_some();
     let max_bytes = if slow_ata {

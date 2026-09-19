@@ -536,6 +536,24 @@ impl AgentRegistry {
             // Scheduler-stage (freeze s330): boundary pré-loop. Se o frame congelar
             // aqui, o hang é ANTES do 1º agente (order/budget/respawn).
             tick_stage(SCHED_STAGE_PRE_LOOP);
+            let ui_live = unsafe { UI_LIVE_HOOK.map(|p| p()).unwrap_or(false) };
+            let ui_overdue_now = unsafe { UI_OVERDUE_HOOK.map(|p| p()).unwrap_or(false) };
+
+            // Display SEMPRE primeiro com UI viva — não espera o fim da fila de 50 agentes.
+            if ui_live {
+                if let Some(di) = self.agents.iter().position(|a| a.name == "display") {
+                    if self.agents[di].state == AgentState::Active {
+                        let _ = with_agent_tick_lock(|| {
+                            self.agents[di].tick_counter += 1;
+                            let tc = self.agents[di].tick_counter;
+                            self.agents[di].agent.tick(tick_id, tc)
+                        });
+                        polled = polled.saturating_add(1);
+                        self.agents[di].last_poll = tick_id;
+                    }
+                }
+            }
+
             // Scheduler por affinity ring R0→R1→R2 (ADR-0055) + FlowTrigger
             let order = self.poll_order_by_affinity();
             for &i in &order {
@@ -547,6 +565,39 @@ impl AgentRegistry {
                 if smp_offload && self.agents[i].affinity_ring >= 1 {
                     continue;
                 }
+                let agent_name = self.agents[i].name;
+                // Já pintou no topo do ciclo — não duplicar já.
+                if ui_live && agent_name == "display" {
+                    continue;
+                }
+                // Frame atrasado: não gastar BSP em Infer/Net/Sleep pesados.
+                if ui_overdue_now
+                    && (agent_name == "infer_worker"
+                        || agent_name == "network_agent"
+                        || agent_name == "cortex_llm"
+                        || agent_name == "sleep_cycle"
+                        || agent_name == "auto_learn"
+                        || agent_name == "self_evolve")
+                {
+                    continue;
+                }
+                // Desktop vivo: Continuous não-crítico só 1/8 dos ciclos (BSP livre p/ UI).
+                let schedule = self.agents[i].schedule;
+                if ui_live
+                    && !ui_critical_agent(agent_name)
+                    && schedule == ScheduleKind::Continuous
+                    && (tick_id % 8) != 0
+                {
+                    continue;
+                }
+                // PollEvery pesado (sleep/auto_learn): com UI, só 1/4 das janelas.
+                if ui_live
+                    && !ui_critical_agent(agent_name)
+                    && matches!(schedule, ScheduleKind::PollEvery(_))
+                    && (tick_id % 4) != 0
+                {
+                    continue;
+                }
                 let flow = &self.agents[i].crew.flow;
                 // Rate-limiting: passive agents (Pending >50x consec) skipped 80% of ticks
                 // Goal-aware: agents with urgency > 0 are NOT rate-limited
@@ -555,7 +606,6 @@ impl AgentRegistry {
                 if urgency == 0 && consecutive > 50 && tick_id % 5 != 0 {
                     continue;
                 }
-                let schedule = self.agents[i].schedule;
                 // EventDriven: polla no 1º tick ou quando o agente sinaliza
                 // trabalho pendente (has_pending) — nunca por consecutive_pending
                 // (self-referential: dormência eterna após 20 Pending, sem wake).
@@ -576,7 +626,6 @@ impl AgentRegistry {
                 }
 
                 // PreTick hook: block agent execution if any hook returns Block
-                let agent_name = self.agents[i].name;
                 if !self.hooks.check(hooks::HookType::PreTick, agent_name, tick_id) {
                     continue;
                 }
@@ -623,6 +672,24 @@ impl AgentRegistry {
 
                 // PostTick hook: always run, even after Pending
                 self.hooks.run(hooks::HookType::PostTick, agent_name, tick_id);
+
+                // UI boost: se o frame atrasou após este agente, pinta já
+                // (render() tem gate de período — barato se acabou de pintar).
+                if agent_name != "display" {
+                    let overdue = unsafe { UI_OVERDUE_HOOK.map(|p| p()).unwrap_or(false) };
+                    if overdue {
+                        if let Some(di) = self.agents.iter().position(|a| a.name == "display") {
+                            if self.agents[di].state == AgentState::Active {
+                                let _ = with_agent_tick_lock(|| {
+                                    self.agents[di].tick_counter += 1;
+                                    let tc = self.agents[di].tick_counter;
+                                    self.agents[di].agent.tick(tick_id, tc)
+                                });
+                                polled = polled.saturating_add(1);
+                            }
+                        }
+                    }
+                }
 
                 // Watchdog: detecta loops infinitos (10000+ ticks sem Done).
                 // Só crashea agentes SEM urgency (espelha a isenção do rate-limit
@@ -686,6 +753,30 @@ static mut BEI_TICK_HOOK: Option<fn(u64)> = None;
 /// (agent, ms) quando um tick ultrapassa `TICK_WATCHDOG_MS`. Sem hooks = no-op.
 static mut TICK_CLOCK_HOOK: Option<fn() -> u64> = None;
 static mut SLOW_TICK_HOOK: Option<fn(&str, u64)> = None;
+
+/// UI boost: predicado "frame overdue" (jarbas compositor). Quando true, o
+/// scheduler força um tick do `display` entre outros agentes — Display só
+/// roda no BSP (`agent_tick_offload_safe=false`); sob smp alto o ciclo completo
+/// demora demais e o orb congela com CPU alto nos APs.
+static mut UI_OVERDUE_HOOK: Option<fn() -> bool> = None;
+
+/// Desktop já claimou graphics — modo UI-critical (pula Continuous não-essencial).
+static mut UI_LIVE_HOOK: Option<fn() -> bool> = None;
+
+/// Agentes que devem pollar todo ciclo com desktop vivo (mouse/teclado/orb/voz).
+fn ui_critical_agent(name: &str) -> bool {
+    matches!(
+        name,
+        "display"
+            | "input"
+            | "hw_bridge"
+            | "mouse"
+            | "audio_mixer"
+            | "JARBAS"
+            | "intent_router"
+            | "hermes_console"
+    )
+}
 
 /// Limiar do watchdog de tick (ms). Acima disso o agente bloqueou o scheduler
 /// cooperativo — é exatamente o sintoma do freeze pós-1º-frame no metal.
@@ -881,6 +972,20 @@ pub fn set_tick_watchdog_hooks(clock: Option<fn() -> u64>, slow: Option<fn(&str,
     unsafe {
         TICK_CLOCK_HOOK = clock;
         SLOW_TICK_HOOK = slow;
+    }
+}
+
+/// Predicado "compositor frame overdue" — força tick `display` no meio do ciclo.
+pub fn set_ui_overdue_hook(hook: Option<fn() -> bool>) {
+    unsafe {
+        UI_OVERDUE_HOOK = hook;
+    }
+}
+
+/// Predicado "desktop gráfico vivo" — agenda UI-critical (pula Continuous pesado).
+pub fn set_ui_live_hook(hook: Option<fn() -> bool>) {
+    unsafe {
+        UI_LIVE_HOOK = hook;
     }
 }
 

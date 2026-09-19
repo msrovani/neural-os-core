@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s328 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s360 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 360 | Mesh/UI + honesty | Lab WHPX 6-node | Orb MESH_HEALTH + fail/warn | Hub L2; orb role palette; HubHealth=SystemInfo; TLSPINS slog fail→ok; Trust Contain+allow diagnostic/echo (não Crashed); CapGate PoC DENY→ok; mouse soft-F4; boot_log PollEvery |
 | 359 | neural-kernel | Bughunt + emagreçer | wave2/3 + Bei/MoE out of bin | Cap-only≠Ok; AirLLM stub; N5 Cap≠FB; SkillSync wire; TIMER→TSC; RESPAWN memory_budget; slog ADR-0092; delete fs/vfs/shell; Bei→hermes::bei; MoE→cortex + volume bridge; hermes cortex/p2p |
 | 358 | cortex R2 | Bughunt honesty | BitNet/GGUF/InferQueue | GgufType SESSION_309≠ggml (2≠BF16); forward_hidden paralelo; dequant trunc→Ok; HwExpert mark sem store; DECODER dangling; soft_stride pad OOM; slog info mudo; AVX512 ungated |
 | 357 | neural-kernel | Bughunt honesty | Bin integração + residuals | PS/2 spin sem budget; urgency pré-register/`audio_pipeline`; RESPAWN `hermes_console`→Display errado + arms faltando; GGUF Range truncado→Ok; BEI expect+connect mentia; boot_log dual→bridge; NETFS FAIL=`info`; link MMIO fantasma; spsc pub use |

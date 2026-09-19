@@ -59,7 +59,9 @@ pub fn piper_blob_size(data: &[u8]) -> Option<usize> {
             end_bytes = part_end;
         }
     }
-    Some(end_bytes.min(data.len()))
+    // NÃO min(data.len()): caller do QEMU-loader passa só o índice (~16KB) e
+    // precisa do tamanho TOTAL do blob (~60MB) para fault-in + slice completo.
+    Some(end_bytes)
 }
 
 fn sigmoid(x: f32) -> f32 { 1.0 / (1.0 + expf(-x)) }

@@ -190,7 +190,8 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: **v1.9.99-s359 TEST** — bin wave2/3 honesty + Bei→hermes + MoE→cortex;
+# Current Sprint: **v1.9.99-s360 TEST** — mesh WHPX 6-node + fail/warn honesty (TLSPINS/Trust/CapGate/mouse);
+# s359 bin wave2/3 honesty + Bei→hermes + MoE→cortex;
 # s358 cortex R2 honesty (GGUF IDs/forward/dequant/slog);
 # s357 neural-kernel bin honesty (RESPAWN/BEI/GGUF/boot);
 # s356 k_ai R2 honesty (SelfHeal/SGDB/Safety);
@@ -380,6 +381,7 @@ ID=9001) retry periódico até FAT_READY=true.
 - **Heap dual-range demand-page (SESSION_299):** `try_fault_in_heap` DEVE cobrir AMBOS os ranges: `HEAP_START` (0x_4000_0000_0000 = TALC pós-boot) E `HEAP_BUFFER` linker address (bump boot+runtime). O `.kheap` NOLOAD pode ter páginas não mapeadas. Sem check duplo, #PF loop em CR2=0xffffffffa0cea000 após ATA+FAT32 mount.
 - **skip_measure ≠ skip_probe (SESSION_299):** A distinção entre "skip benchmark" e "skip probe" é fundamental. Benchmarks que travam ≠ probes que funcionam. Regra: se a função mede performance (256 setores), skip em TCG. Se identifica hardware (identify + 1 setor), SEMPRE roda.
 - **slog severity é contrato de visibilidade (SESSION_299):** Sub como `"ramdisk"`, `"Asset"`, `"BGE"` mapeiam para `Sev::Trace` (hidden). Mensagens que o operador PRECISA ver ("por que X falhou?") devem usar sub `"ok"` ou `"warn"`. Regra: se responde diagnostic question, deve ser visível.
+- **Sucesso com sev `fail` / PoC DENY com `warn` = dmesg mentiroso (SESSION_360):** `FAT write OK` em TLSPINS era `fail`; CapGate deny-by-default PoC era `warn` spam. Sucesso e deny esperado → sev `ok`. Trust Contain: skills de boot (`diagnostic`/`echo`) precisam `trust_allow`; SystemAgent **não** Crashed por skill opcional — skip/`warn`. MouseAgent: boot já init PS/2 — reset+E9 no tick engasga 1c; só soft F4 + timeout curto.
 - **Kernel virtual ≠ HHDM (SESSION_301):** Kernel virtual addresses (0xffffffff80000000+) SÃO MAPEAMENTOS SEPARADOS do HHDM (0xffff800000000000+). `cr2 - HHDM_OFFSET` NÃO funciona para kernel virtual — dá 140 PB (errado). A fórmula correta é `kernel_phys + (cr2 - kernel_virt)`. Fix: armazenar `KERNEL_PHYS_BASE`/`KERNEL_VIRT_BASE` no boot e usar na #PF handler. Resultado: 11 #PFs → 0.
 - **`serial_print!` deadlock em interrupt handlers (SESSION_301):** UART spinlock deadlock dentro de #PF handler. Usar `puts`/`puthex` (lock-free raw I/O) ou contadores atômicos (`PF_DIAG_*`) para diagnóstico em handlers. `serial_print!` só é seguro fora de interrupt context.
 - **Per-layer head_dim obrigatório em cognitive.rs (SESSION_301):** `model.head_dim` / `model.kv_dim` pode não corresponder ao shape real do tensor Q/K/V após `matmul_hybrid`. Derivar `hd = q.shape.1 / num_heads` POR LAYER dentro do loop. Usar `min()` para clamp de `hd` em `gqa_attn_forward`. `rms_backward` precisa de bounds checking: `len = min(x, dy, dx)`.

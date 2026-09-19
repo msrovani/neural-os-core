@@ -495,9 +495,16 @@ pub fn network_agent_tick() {
     let ms = tick * 55;
     agent_core::tick_stage(2); // pós NET_STATE.lock
 
-    // UI live: não engolir o BSP a cada tick — poll leve 1/4; HTTP/DHCP no full.
+    // UI live: não engolir o BSP a cada tick — poll leve 1/8; HTTP/DHCP no full.
     let ui_live = k_nano::boot_logger::ui_is_live();
-    if ui_live && (tick % 4) != 0 {
+    if ui_live && (tick % 8) != 0 {
+        if let Some(ref mut ns) = *NETSTACK.lock() {
+            ns.poll(ms as i64);
+        }
+        return;
+    }
+    // Frame atrasado: só poll leve (sem HTTP/DHCP/dump).
+    if k_nano::smp::ui_yield_infer() {
         if let Some(ref mut ns) = *NETSTACK.lock() {
             ns.poll(ms as i64);
         }

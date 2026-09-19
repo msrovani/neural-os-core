@@ -1102,16 +1102,29 @@ impl<'a> Fat32Reader<'a> {
                 name, file_size / (1024 * 1024));
             return None;
         }
-        // Lê dados do arquivo (cluster chain via ATA PIO, com timeout)
-        let deadline = crate::tsc::now_us() + 2_000_000;
+        // Timeout TSC escala com tamanho (ATA PIO WHPX ~0.1–1 MB/s).
+        // Piso 5s; +1s/128KB; teto 90s — Piper~60MB cabe; Falcon>256MB já recusa acima.
+        let budget_us = {
+            let kb = (file_size as u64 / 1024).max(1);
+            let scaled = 5_000_000u64.saturating_add((kb / 128).saturating_mul(1_000_000));
+            scaled.min(90_000_000)
+        };
+        let deadline = crate::tsc::now_us() + budget_us;
         let mut data = Vec::with_capacity(file_size);
         let mut fc = start_cluster;
         let max_clusters = (file_size / self.bytes_per_sector as usize).max(1) * 2;
         let mut cluster_iter = 0usize;
         while fc < 0x0FFF_FFF8 && fc >= 2 && data.len() < file_size && cluster_iter < max_clusters {
             if crate::tsc::now_us() > deadline {
-                crate::slog_nano!("FAT", "warn", "read_file {} timeout after 2s ({}KB read)",
-                    name, data.len() / 1024);
+                crate::slog_nano!(
+                    "FAT",
+                    "warn",
+                    "read_file {} timeout after {}s ({}KB/{}KB read)",
+                    name,
+                    budget_us / 1_000_000,
+                    data.len() / 1024,
+                    file_size / 1024
+                );
                 return None;
             }
             let clba = self.cluster_lba(fc);

@@ -534,6 +534,39 @@ pub fn mouse_inject_hid_boot(buttons: u8, dx: i8, dy: i8) {
     }
 }
 
+/// QEMU `usb-tablet` (e HID abs): X/Y lógicos 0..=0x7FFF → pixels da tela.
+/// IDEA 542 / SESSION_294: tablet não alimentava MOUSE_ABS_* porque o poll lia
+/// boot relativo de 4 B; o report real é 6 B (btn + X16 + Y16 [+ wheel]).
+pub fn mouse_inject_hid_abs(buttons: u8, x_logic: u16, y_logic: u16) {
+    let max_x = MOUSE_MAX_X.load(Ordering::Relaxed) as u32;
+    let max_y = MOUSE_MAX_Y.load(Ordering::Relaxed) as u32;
+    let xl = (x_logic as u32).min(0x7FFF);
+    let yl = (y_logic as u32).min(0x7FFF);
+    let nx = if max_x == 0 {
+        0
+    } else {
+        (xl * max_x) / 0x7FFF
+    };
+    let ny = if max_y == 0 {
+        0
+    } else {
+        (yl * max_y) / 0x7FFF
+    };
+    let packet = (buttons & 0x07) as u32
+        | (((nx as u16) as u32) << 8)
+        | ((((ny as u16) as u32) & 0xFF) << 24);
+    LAST_MOUSE_PACKET.store(packet, Ordering::Release);
+    MOUSE_ABS_X.store(nx, Ordering::Release);
+    MOUSE_ABS_Y.store(ny, Ordering::Release);
+    let btn = buttons & 0x07;
+    let prev = MOUSE_ABS_BTN.swap(btn, Ordering::AcqRel);
+    mouse_paint_irq_cursor(nx, ny);
+    let pressed = btn & !prev;
+    if pressed != 0 {
+        MOUSE_CLICK_FLASH.store(12, Ordering::Release);
+    }
+}
+
 /// Alimenta a máquina de estados do pacote PS/2 (3 bytes). Usado por IRQ e poll.
 pub fn mouse_feed_byte(byte: u8) {
     let n = MOUSE_BYTE_LOG.fetch_add(1, Ordering::Relaxed);
