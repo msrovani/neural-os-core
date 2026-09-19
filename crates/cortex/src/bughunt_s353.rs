@@ -25,7 +25,7 @@ fn tensor_new_overflow_shape_is_empty() {
     let t = Tensor::new((usize::MAX / 2 + 2, 3));
     assert_eq!(t.shape, (0, 0));
     assert!(t.data.is_empty());
-    assert!(t.is_valid()); // (0,0)+empty is valid
+    assert!(!t.is_valid()); // (0,0)+empty = OOM/overflow → SEMPRE inválido
 }
 
 #[test]

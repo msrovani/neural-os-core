@@ -33,13 +33,20 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
     let (k, n) = weight.shape;
     let (m, k2) = input.shape;
     if k != k2 || !input.is_valid() || m == 0 || n == 0 || k == 0 {
+        crate::matmul_diag::note_guard_fail();
         return None;
     }
 
     // ADR-0057 WS-C: NPU/GPU/parallel dispatch
     if let Some(r) = crate::compute::dispatch_ternary(weight, input) {
-        return if r.is_valid() { Some(r) } else { None };
+        if r.is_valid() {
+            crate::matmul_diag::note_dispatch_ok();
+            return Some(r);
+        }
+        crate::matmul_diag::note_dispatch_invalid();
+        return None;
     }
+    crate::matmul_diag::note_dispatch_none();
 
     // ADR-0084 F4 (GATED): W2A8 maddubs — só WHPX/HW real + gaps resolvidos.
     // w2a8_enabled() hoje = false; kernel verificado por self-test de paridade.
@@ -47,7 +54,12 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
         #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
         unsafe {
             if let Some(r) = crate::bitnet_w2a8::w2a8_ternary_matmul(weight, input) {
-                return if r.is_valid() { Some(r) } else { None };
+                if r.is_valid() {
+                    crate::matmul_diag::note_dispatch_ok();
+                    return Some(r);
+                }
+                crate::matmul_diag::note_w2a8_invalid();
+                return None;
             }
         }
     }
@@ -60,14 +72,30 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
         #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
         unsafe {
             let r = avx2_bitwise_matmul(weight, input, m, k, n);
-            return if r.is_valid() { Some(r) } else { None };
+            if r.is_valid() {
+                crate::matmul_diag::note_bitwise_ok();
+                return Some(r);
+            }
+            crate::matmul_diag::note_bitwise_invalid();
+            return None;
         }
     }
 
     // ADR-0061 unified dispatch: AVX-512 → AVX2 → SSE4.2 → scalar
     match crate::bitnet_sse::ternary_matmul(weight, input) {
-        Some(r) if r.is_valid() => Some(r),
-        _ => None,
+        Some(r) if r.is_valid() => {
+            crate::matmul_diag::note_sse_ok();
+            Some(r)
+        }
+        Some(r) => {
+            crate::matmul_diag::note_sse_invalid();
+            crate::matmul_diag::note_invalid_shape(r.shape.0, r.shape.1, r.data.len());
+            None
+        }
+        None => {
+            crate::matmul_diag::note_sse_none();
+            None
+        }
     }
 }
 

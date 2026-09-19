@@ -44,6 +44,7 @@ pub mod install_adviser;
 pub mod nn;
 pub mod parallel_matmul;
 pub mod tensor;
+pub mod matmul_diag;
 pub mod trinity;
 pub mod tv_dsl;
 pub mod ngram_spec;

@@ -38,27 +38,41 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
     let (k, n) = weight.shape;
     let (m, k2) = input.shape;
     if k != k2 || !input.is_valid() || m == 0 || n == 0 || k == 0 {
+        crate::matmul_diag::note_call(k, n, m, 0, false);
         return None;
     }
 
     if let Some(r) = crate::bitnet_avx512::ternary_matmul_avx512(weight, input) {
-        return if r.is_valid() { Some(r) } else { None };
+        if r.is_valid() {
+            crate::matmul_diag::note_call(k, n, m, 1, true);
+            return Some(r);
+        }
+        crate::matmul_diag::note_call(k, n, m, 2, false);
+        crate::matmul_diag::note_avx512_invalid();
+        return None;
     }
 
     // Bare-metal: SSE2 ADD/SUB/SKIP antes do stub AVX2 (ADR-0101 Onda 0).
     #[cfg(all(target_arch = "x86_64", target_os = "none"))]
     if n >= 4 {
-        return Some(unsafe { sse2_ternary_matmul_add_sub_skip(weight, input, m, k, n) });
+        let r = unsafe { sse2_ternary_matmul_add_sub_skip(weight, input, m, k, n) };
+        crate::matmul_diag::note_sse2_ok();
+        crate::matmul_diag::note_call(k, n, m, 3, r.is_valid());
+        return Some(r);
     }
 
     // Host AVX2 (FMA dequant — bandwidth ≠ contrato lab; ok em testes)
     if k_nano::platform_probe::allow_avx2() && k >= 8 && n >= 8 && n % 4 == 0 {
-        return Some(unsafe { crate::bitnet_avx2::avx2_ternary_matmul_impl(weight, input, m, k, n) });
+        let r = unsafe { crate::bitnet_avx2::avx2_ternary_matmul_impl(weight, input, m, k, n) };
+        crate::matmul_diag::note_call(k, n, m, 4, r.is_valid());
+        return Some(r);
     }
 
     #[cfg(target_arch = "x86_64")]
     if n >= 4 {
-        return Some(unsafe { sse2_ternary_matmul_add_sub_skip(weight, input, m, k, n) });
+        let r = unsafe { sse2_ternary_matmul_add_sub_skip(weight, input, m, k, n) };
+        crate::matmul_diag::note_call(k, n, m, 5, r.is_valid());
+        return Some(r);
     }
 
     if n >= 4 {
@@ -86,10 +100,12 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
                 }
             }
         }
+        crate::matmul_diag::note_call(k, n, m, 6, result.is_valid());
         return Some(result);
     }
 
     let r = scalar_ternary_matmul(weight, input, m, k, n);
+    crate::matmul_diag::note_call(k, n, m, 7, r.is_valid());
     if r.is_valid() {
         Some(r)
     } else {
@@ -122,6 +138,17 @@ pub(crate) unsafe fn sse2_ternary_matmul_add_sub_skip(
     use core::arch::x86_64::*;
     let mut result = Tensor::new((m, n));
     if !result.is_valid() || !input.is_valid() {
+        crate::matmul_diag::note_sse2_zero_guard();
+        k_nano::slog_cortex!(
+            "MatmulDiag",
+            "warn",
+            "sse2 zero-guard: result.shape=({},{}) result.len={} valid={} input_valid={}",
+            result.shape.0,
+            result.shape.1,
+            result.data.len(),
+            result.is_valid() as u32,
+            input.is_valid() as u32
+        );
         return Tensor::zero((0, 0));
     }
     for i in 0..m {
@@ -150,6 +177,7 @@ pub(crate) unsafe fn sse2_ternary_matmul_add_sub_skip(
             }
         }
     }
+    crate::matmul_diag::note_kernel_shape(result.shape.0, result.shape.1, result.data.len());
     result
 }
 

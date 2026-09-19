@@ -169,11 +169,13 @@ impl Tensor {
         Tensor { shape, data }
     }
 
-    /// True se `data.len() == rows*cols` (inclui (0,0) vazio).
+    /// True se o tensor tem dados e o shape bate com `data.len()`.
+    /// Um tensor vazio `(0,0)` (OOM, overflow, refuse) NÃO é válido — callers devem
+    /// propagar `None`/erro em vez de distribuir zero. (SESSION_362+)
     #[inline]
     pub fn is_valid(&self) -> bool {
         match self.shape.0.checked_mul(self.shape.1) {
-            Some(n) => n == self.data.len(),
+            Some(n) => n > 0 && n == self.data.len(),
             None => false,
         }
     }

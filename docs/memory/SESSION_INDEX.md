@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s360 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s362 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,8 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 362 | Router encode + tensor invariant | WHPX diag | Encode alinhado + is_valid reject (0,0) | ROUTER.BITNET carrega mas NUNCA roteia (MoE router R3=0, 12 boots). Encode desalinhado: b+2/trunc64/VOCAB256 → 17.1% ECE 39.7pp; encode trainer (s362) → 82.9% ECE 5.4pp. SSE2 sret corrupt: shape.0=usize::MAX ABI boundary (kernel valid, chamador corrompido). Fixture parity 12 casos + teste host. is_valid((0,0)) → false. |
+| 361 | GPU Multi-ISA | Waves 0–5 | KernelImage + Falcon3 AIOS | CUBIN/HSACO/zebin; pack `--op w2a8` NV/AMD/Intel; dual iGPU/dGPU; SKU 1B/3B/7B/10B; Ready=pack+golden; device W2A8 Layer S; ADR-0105 |
 | 360 | Mesh/UI + honesty | Lab WHPX 6-node | Orb MESH_HEALTH + fail/warn | Hub L2; orb role palette; HubHealth=SystemInfo; TLSPINS slog fail→ok; Trust Contain+allow diagnostic/echo (não Crashed); CapGate PoC DENY→ok; mouse soft-F4; boot_log PollEvery |
 | 359 | neural-kernel | Bughunt + emagreçer | wave2/3 + Bei/MoE out of bin | Cap-only≠Ok; AirLLM stub; N5 Cap≠FB; SkillSync wire; TIMER→TSC; RESPAWN memory_budget; slog ADR-0092; delete fs/vfs/shell; Bei→hermes::bei; MoE→cortex + volume bridge; hermes cortex/p2p |
 | 358 | cortex R2 | Bughunt honesty | BitNet/GGUF/InferQueue | GgufType SESSION_309≠ggml (2≠BF16); forward_hidden paralelo; dequant trunc→Ok; HwExpert mark sem store; DECODER dangling; soft_stride pad OOM; slog info mudo; AVX512 ungated |

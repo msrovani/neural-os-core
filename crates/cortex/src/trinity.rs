@@ -101,27 +101,43 @@ pub struct TrinityRouter {
     router_embed: Option<Vec<f32>>,
     /// Só true se veio de ROUTER.BITNET (não LCG).
     router_trained: bool,
+    /// Linhas da embedding table carregada (vocab real do arquivo; 0 = sem arquivo).
+    /// O clamp de índice usa ESTE valor, não a const VOCAB — SESSION_362.
+    router_vocab: usize,
     /// Telemetria de routing (AtomicU64 para contadores lock-free).
     pub stats_neural: core::sync::atomic::AtomicU64,
     pub stats_keyword: core::sync::atomic::AtomicU64,
     pub stats_fallback: core::sync::atomic::AtomicU64,
 }
 
+/// Largura de tabela ACEITA do v6 (legado 256). NÃO é o espaço de tokens do
+/// encoder: o ROUTER.BITNET real tem vocab=99 e o encode cai em 3..=97.
 const VOCAB: usize = 256;
+/// Truncagem canônica do roteador — espelha tools/train_router.py::MAX_TOKENS.
+const ROUTER_MAX_TOKENS: usize = 32;
 pub const ROUTER_HIDDEN: usize = 64;
 pub const ROUTER_MAX_EXPERTS: usize = 8;
 const BOS: u16 = 0;
 const EOS: u16 = 1;
 const CHAR_OFFSET: u16 = 3;
 
+/// Tokenização canônica do roteador — espelho EXATO de `tools/train_router.py::encode`
+/// e de `tools/validate_router_v6.py::encode`: BOS(0) + ASCII imprimível 32..=126
+/// mapeado a `(b-32)+CHAR_OFFSET` (3..=97, pulando acentos/controle) + EOS(1),
+/// truncado em ROUTER_MAX_TOKENS(32).
+///
+/// O `ROUTER.BITNET` foi treinado com ESTE mapeamento: `b+2`/256/64 indexava a
+/// linha errada da tabela (e fora dela) — medido como 82.9% → 17.1% de acerto
+/// (SESSION_362). Não "otimizar" esta função sem reexportar o artefato.
 fn encode(text: &str) -> Vec<u16> {
     let mut tokens = vec![BOS];
     for b in text.bytes() {
-        // Map all 256 byte values to tokens 2-257 (BOS=0, EOS=1, bytes+2)
-        tokens.push(b as u16 + 2);
+        if (32..=126).contains(&b) {
+            tokens.push((b - 32) as u16 + CHAR_OFFSET);
+        }
     }
     tokens.push(EOS);
-    tokens.truncate(64); // suporta frases mais longas com vocab expandido
+    tokens.truncate(ROUTER_MAX_TOKENS);
     tokens
 }
 
@@ -140,6 +156,7 @@ impl TrinityRouter {
             router_weight: None,
             router_embed: None,
             router_trained: false,
+            router_vocab: 0,
             stats_neural: core::sync::atomic::AtomicU64::new(0),
             stats_keyword: core::sync::atomic::AtomicU64::new(0),
             stats_fallback: core::sync::atomic::AtomicU64::new(0),
@@ -163,6 +180,7 @@ impl TrinityRouter {
             self.router_embed = None;
             self.router_weight = None;
             self.router_trained = false;
+            self.router_vocab = 0;
             publish_cortex_posture(false);
             k_nano::slog_cortex!(
                 "TRINITY",
@@ -172,6 +190,7 @@ impl TrinityRouter {
             let _ = (embed, weight);
             return;
         }
+        self.router_vocab = embed.len() / ROUTER_HIDDEN;
         self.router_embed = Some(embed);
         self.router_weight = Some(weight);
         self.router_trained = true;
@@ -207,6 +226,16 @@ impl TrinityRouter {
             "Router weights set: {}x{} (MoE cache reset)", ROUTER_HIDDEN, n_exp
         );
         true
+    }
+
+    /// Vocab efetivo do roteador: linhas da tabela carregada (fallback: const VOCAB
+    /// quando não há tabela). O índice de token é clampado por este valor.
+    pub fn router_vocab(&self) -> usize {
+        if self.router_vocab == 0 {
+            VOCAB
+        } else {
+            self.router_vocab
+        }
     }
 
     /// Número de experts da matriz de pesos carregada (0 se ausente).
@@ -251,9 +280,10 @@ impl TrinityRouter {
         if let (Some(ref embed_table), Some(ref weight)) = (&self.router_embed, &self.router_weight) {
             let tokens = encode(text);
             if !tokens.is_empty() {
+                let vocab = self.router_vocab();
                 let mut embedding = [0.0f32; ROUTER_HIDDEN];
                 for &tok in &tokens {
-                    let idx = (tok as usize).min(VOCAB - 1);
+                    let idx = (tok as usize).min(vocab - 1);
                     let start = idx * ROUTER_HIDDEN;
                     for j in 0..ROUTER_HIDDEN {
                         embedding[j] += embed_table.get(start + j).copied().unwrap_or(0.0);
@@ -359,9 +389,10 @@ impl TrinityRouter {
             {
             let tokens = encode(text);
             if !tokens.is_empty() {
+                let vocab = self.router_vocab();
                 let mut embedding = vec![0.0f32; ROUTER_HIDDEN];
                 for &tok in &tokens {
-                    let idx = (tok as usize).min(VOCAB - 1);
+                    let idx = (tok as usize).min(vocab - 1);
                     let start = idx * ROUTER_HIDDEN;
                     for j in 0..ROUTER_HIDDEN {
                         embedding[j] += embed_table.get(start + j).copied().unwrap_or(0.0);
@@ -380,6 +411,15 @@ impl TrinityRouter {
                     return self.classify_keywords(text);
                 };
                 let Some(scores_t) = weight.matmul_hybrid(&emb_tensor) else {
+                    crate::matmul_diag::note_router_fail(&crate::matmul_diag::FailSnapshot {
+                        w_shape: weight.shape,
+                        w_packed_len: weight.packed_data.len(),
+                        x_shape: emb_tensor.shape,
+                        x_len: emb_tensor.data.len(),
+                        x_valid: emb_tensor.is_valid(),
+                        num_experts: num_exp,
+                        emb_zero: emb_tensor.data.iter().all(|v| *v == 0.0),
+                    });
                     k_nano::slog_cortex!("TRINITY", "warn", "classify matmul fail — keyword");
                     return self.classify_keywords(text);
                 };
@@ -898,14 +938,19 @@ lazy_static! {
 #[cfg(test)]
 mod tests {
     use super::{
-        generate_random_router_weights, init_trinity, load_router_from_file, ROUTER_EMBED,
-        ROUTER_HIDDEN, ROUTER_WEIGHT,
+        generate_random_router_weights, init_router_weights, init_trinity, load_router_from_file,
+        ROUTER_EMBED, ROUTER_HIDDEN, ROUTER_WEIGHT,
     };
+
+    /// Serializa os testes que usam os statics ROUTER_EMBED/ROUTER_WEIGHT (o
+    /// roundtrip os limpa ao terminar; sem lock, um teste rouba os pesos do outro).
+    static ROUTER_TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
 
     /// Monta um blob v6 posicional em memória (espelha tools/train_router.py export_bitnet)
     /// e valida que o loader Rust o parseia — a ponte treino→kernel (item 11 ADR-0083).
     #[test]
     fn load_router_v6_roundtrip() {
+        let _g = ROUTER_TEST_LOCK.lock();
         const VOCAB: usize = 256;
         const N_EXPERTS: usize = 7;
         let embed: Vec<f32> = (0..VOCAB * ROUTER_HIDDEN).map(|i| (i % 7) as f32 * 0.01).collect();
@@ -944,5 +989,85 @@ mod tests {
         assert!(!r2.moe_router_loaded());
         assert!(!super::moe_posture_trained());
         assert_eq!(r2.classify_intent("mute volume").name, "hw_control");
+    }
+
+    /// SESSION_362 — paridade CONTRA O ARTEFATO (não contra blob sintético, lição
+    /// SESSION_255): o `encode` do kernel tem de bater token-a-token com a
+    /// referência Python (`tools/validate_router_v6.py`) e a decisão tem de bater
+    /// com o top-1 dela, sobre o MESMO `ROUTER.BITNET`.
+    ///
+    /// Fixture: `python tools/gen_router_parity_fixture.py`.
+    /// Regressão que este teste trava: `b+2`/256/64 (mapa errado, clamp fora da
+    /// tabela de 99 linhas) → 82.9% do artefato viravam 17.1%.
+    #[test]
+    fn router_encode_and_decision_match_python_reference() {
+        use core::sync::atomic::Ordering;
+        let _g = ROUTER_TEST_LOCK.lock();
+        const FIXTURE: &str = include_str!("../../../tools/router_parity_fixture.txt");
+        // Cópia RASTREADA do artefato: `target1/` é gitignored, então include_bytes!
+        // nele quebraria o compile num clone limpo. O par artefato+fixture fica
+        // travado pelo FNV-1a 64 registrado no header da fixture.
+        let file = include_bytes!("../../../tools/router_reference.BITNET");
+
+        let want_hash = FIXTURE
+            .lines()
+            .find_map(|l| l.strip_prefix("# copia: tools/router_reference.BITNET size="))
+            .and_then(|s| s.split("fnv1a64=").nth(1))
+            .and_then(|s| u64::from_str_radix(s.split_whitespace().next().unwrap_or(""), 16).ok())
+            .expect("header da fixture deve trazer o fnv1a64 do artefato");
+        let mut h: u64 = 0xCBF2_9CE4_8422_2325;
+        for &b in file {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100_0000_01B3);
+        }
+        assert_eq!(
+            h, want_hash,
+            "fixture e artefato divergiram — rode `python tools/gen_router_parity_fixture.py`"
+        );
+
+        assert!(load_router_from_file(file), "ROUTER.BITNET deve parsear (v6, vocab 99)");
+        // 7 = n_experts do header do ROUTER.BITNET (o parâmetro é ignorado hoje).
+        let (embed, weight) = init_router_weights(7).expect("pesos do router nos statics");
+        let mut router = init_trinity();
+        router.load_router(embed, weight, true);
+        assert!(router.moe_router_loaded(), "router treinado deve carregar");
+        assert_eq!(
+            router.router_vocab(),
+            99,
+            "vocab = linhas da tabela do arquivo (99), não a const VOCAB (256)"
+        );
+
+        let mut cases = 0usize;
+        for line in FIXTURE.lines() {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut f = line.split('\t');
+            let want_name = f.next().unwrap_or("");
+            let want_ids: Vec<u16> = f
+                .next()
+                .unwrap_or("")
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.parse::<u16>().unwrap_or(u16::MAX))
+                .collect();
+            let _probs = f.next().unwrap_or(""); // referência (top-1 é o que decidimos)
+            let text = f.next().unwrap_or("");
+
+            assert_eq!(super::encode(text), want_ids, "encode divergiu p/ {:?}", text);
+
+            let before = router.stats_neural.load(Ordering::Relaxed);
+            let expert = router.classify_intent(text);
+            let after = router.stats_neural.load(Ordering::Relaxed);
+            assert_eq!(
+                after - before,
+                1,
+                "rota NEURAL (não keyword) esperada p/ {:?}",
+                text
+            );
+            assert_eq!(expert.name, want_name, "decisão divergiu p/ {:?}", text);
+            cases += 1;
+        }
+        assert!(cases >= 10, "fixture com poucos casos: {}", cases);
     }
 }

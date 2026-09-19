@@ -153,10 +153,12 @@ pub fn ternary_matmul_avx512(
         return None;
     }
     if !avx512_available() {
+        crate::matmul_diag::note_avx512_none();
         return None;
     }
     // n deve ser múltiplo de 4 (packed 4/byte) e >= 16 para ZMM
     if n < 16 || n % 4 != 0 {
+        crate::matmul_diag::note_avx512_none();
         return None;
     }
 
