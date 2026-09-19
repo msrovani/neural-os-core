@@ -350,6 +350,8 @@ pub enum Command {
     Install,
     /// ADR-0102 Onda 6: status | approve (HITL Escalate → T-053 mark + T-054 promote)
     Ring3(String),
+    /// ADR-0106: status | theta <auto> <review> | persist
+    Decisions(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +586,15 @@ pub fn parse_command(line: &str) -> Command {
         if name.eq_ignore_ascii_case("ring3") {
             let arg = parts.next().unwrap_or("status").trim().to_string();
             return Command::Ring3(if arg.is_empty() {
+                String::from("status")
+            } else {
+                arg
+            });
+        }
+        if name.eq_ignore_ascii_case("decisions") || name.eq_ignore_ascii_case("decide") {
+            let rest = parts.collect::<alloc::vec::Vec<_>>().join(" ");
+            let arg = rest.trim().to_string();
+            return Command::Decisions(if arg.is_empty() {
                 String::from("status")
             } else {
                 arg

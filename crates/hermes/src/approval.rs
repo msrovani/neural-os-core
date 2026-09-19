@@ -85,25 +85,24 @@ impl ApprovalGate {
                 if approve { "approve" } else { "deny" },
                 detail.as_bytes(),
             );
+            // ADR-0106 D4 seed: label honesto a partir do HITL
+            cortex::decision::note_outcome(
+                "skill.risk",
+                if approve {
+                    cortex::decision::OutcomeKind::AutoOk
+                } else {
+                    cortex::decision::OutcomeKind::AutoBad
+                },
+            );
             true
         } else { false }
     }
 
     /// Avalia nivel necessario para uma skill.
+    /// ADR-0106: delega a `site_policy::classify_skill_risk` (Noul + θ).
+    /// Callers: PermissionGate / PackageHub / shell — religado.
     pub fn classify(skill: &str) -> ApprovalLevel {
-        let s = skill.to_lowercase();
-        if s.contains("shutdown") || s.contains("reboot") || s.contains("format") || s.contains("delete")
-            || s == "llm_generate"
-            || s == "ring3_register"
-        {
-            ApprovalLevel::Escalate
-        } else if s.contains("write") || s.contains("exec") || s.contains("net") || s.contains("disk") {
-            ApprovalLevel::Confirm
-        } else if s.contains("echo") || s.contains("calc") || s.contains("read") || s.contains("list") {
-            ApprovalLevel::Auto
-        } else {
-            ApprovalLevel::Confirm
-        }
+        crate::site_policy::classify_skill_risk(skill)
     }
 
     /// ADR-0051: classificação explícita por tipo de pacote / op / assinatura.

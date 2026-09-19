@@ -41,6 +41,8 @@ pub mod memory;
 pub mod marketplace;
 pub mod membrane;
 pub mod cognitive_bridge;
+pub mod site_policy;
+pub mod typed_sites;
 pub mod executive;
 pub mod skill_observer;
 pub mod self_evolve;

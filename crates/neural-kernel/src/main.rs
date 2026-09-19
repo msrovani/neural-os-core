@@ -2593,6 +2593,14 @@ pub(crate) fn kernel_boot(
         crate::boot_logger::log("BOOT: [TICKV] smoke FAIL");
     }
     k33_step!("tickv");
+    // s363+: canário SSE2 sret ANTES de K33[28] sgdb — prova rebuild soft-float
+    // sem depender de Tickv/ROUTER (stall K33 ≠ matmul).
+    k33_step!("sse2_sret...");
+    let sret_ok = cortex_crate::bitnet_sse::sse2_sret_boot_canary();
+    if !sret_ok {
+        k_nano::slog_bin!("BOOT", "warn", "sse2 sret canary FAIL — MoE matmul degradado");
+    }
+    k33_step!("sse2_sret");
     // ADR-0063: facade + demo + Hamming dispatch
     k33_step!("sgdb...");
     k_ai::sgdb::boot_init();

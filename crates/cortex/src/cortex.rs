@@ -4590,59 +4590,25 @@ pub struct Cortex {
 impl Cortex {
     pub const fn new() -> Self { Cortex { tokenizer: Tokenizer } }
 
+    /// ADR-0106: wrapper sobre `intent_decide::decide_intent`.
+    /// Abstenção → `Unknown` (LLM path); não escala HITL.
     pub fn think(&self, text: &str) -> Intent {
-        let lower = text.to_ascii_lowercase();
-        // Controles HW antes de chat/status (evita LLM para "ajuste o volume").
-        if lower.contains("volume")
-            || lower.contains("mute")
-            || lower.contains("brilho")
-            || lower.contains("brightness")
-        {
-            Intent::AudioVolume
-        } else if lower.contains("hello")
-            || lower.contains("hey")
-            || lower.contains("ola")
-            || lower.contains("olá")
-            || lower.contains("oi")
-            || lower.contains("bom dia")
-            || lower.contains("boa tarde")
-            || lower.contains("boa noite")
-        {
-            Intent::Greeting
-        } else if lower.contains("status") || lower.contains("system info") {
-            Intent::SystemStatus
-        } else if lower.contains("echo") || lower.contains("reverse") || lower.contains("repeat") {
-            Intent::Echo
-        } else if lower.contains("hw") || lower.contains("hardware") {
-            if lower.contains("identify") || lower.contains("identifique") || lower.contains("id ") || lower == "hw" {
-                Intent::HardwareIdentify
-            } else {
-                Intent::HardwareInfo
-            }
-        } else if lower.contains("trust allow") {
-            Intent::TrustAllow
-        } else if lower.contains("trust deny") {
-            Intent::TrustDeny
-        } else if lower.contains("ping") || lower.contains("net") || lower.contains("diag") {
-            Intent::Network
-        } else if lower.contains("fetch") || lower.contains("http") {
-            Intent::HttpFetch
-        } else if lower.contains("help") || lower.contains("?") {
-            Intent::Help
-        } else if lower.contains("conv") || lower.contains("history") {
-            Intent::Conversation
-        } else if lower.contains("usage") || lower.contains("metrics") {
-            Intent::Usage
-        } else {
-            Intent::Chat
-        }
+        let d = crate::intent_decide::decide_intent(text);
+        crate::intent_decide::resolve_intent(&d)
+    }
+
+    /// Decisão tipada completa (confiança/margem/dist) — callers que aplicam θ.
+    pub fn decide(&self, text: &str) -> crate::intent_decide::IntentDecision {
+        crate::intent_decide::decide_intent(text)
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Intent {
     SystemStatus, Echo, HardwareInfo, HardwareIdentify, TrustAllow, TrustDeny,
     Network, HttpFetch, Help, Conversation, Usage, Greeting, Chat, AudioVolume,
+    /// ADR-0106 — abstenção / OOD; conversacional → LLM.
+    Unknown,
 }
 
 // ── M2: Consciência — Métricas Cognitivas ─────────────────────
@@ -4890,6 +4856,7 @@ impl Intent {
             Intent::Greeting => "greeting",
             Intent::Chat => "chat",
             Intent::AudioVolume => "audio_set_volume",
+            Intent::Unknown => "unknown",
         }
     }
 }

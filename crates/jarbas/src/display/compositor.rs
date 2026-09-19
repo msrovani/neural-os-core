@@ -2258,8 +2258,7 @@ impl JarbasDesktop {
         self.fb.fill_rect_fast(x + pad / 2, cy, pw.saturating_sub(pad), 1, HUB_DIV.0, HUB_DIV.1, HUB_DIV.2);
         cy += (8 * s_q) >> 8;
 
-        // ~13-15 linhas agrupadas: 0 xhci/usb | 2 timer/frame | 4 storage/bootlog/kv
-        // | 7 heap/ram/arena/model | 11 agents/mesh/infer/fault.
+        // ~13-16 linhas: … | 11 agents/mesh/infer/fault/decide.
         const GROUP_START: [usize; 5] = [0, 2, 4, 7, 11];
         let worst_row = hermes::hub_health::panel_worst_row();
         let pitch = (23 * s_q) >> 8;

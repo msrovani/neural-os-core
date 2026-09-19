@@ -48,6 +48,25 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
     }
     crate::matmul_diag::note_dispatch_none();
 
+    // s364+: nó frugal (<1.5G) — após mesh skip, local big #GP (SSE2 sret /
+    // heap). Recusa honesta; matmul pequeno (<64) segue no SSE/scalar.
+    #[cfg(feature = "p2p")]
+    if n >= 64
+        && k >= 64
+        && k_nano::memory::mesh_frag_pressure()
+    {
+        k_nano::slog_cortex!(
+            "MESH",
+            "warn",
+            "matmul local skip DEGRADED RAM={}MB shape={}x{}x{}",
+            k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed),
+            m,
+            k,
+            n
+        );
+        return None;
+    }
+
     // ADR-0084 F4 (GATED): W2A8 maddubs — só WHPX/HW real + gaps resolvidos.
     // w2a8_enabled() hoje = false; kernel verificado por self-test de paridade.
     if crate::bitnet_w2a8::w2a8_enabled() && (m == 1 || m >= 8) {

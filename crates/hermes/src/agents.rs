@@ -694,6 +694,7 @@ pub struct HermesAgent {
 
 impl HermesAgent {
     pub fn new() -> Self {
+        crate::cognitive_bridge::init_decision_layer();
         HermesAgent {
             user_receiver: EVENT_BUS.subscribe(hermes::TOPIC_USER_INTENT),
             llm_receiver: EVENT_BUS.subscribe(cortex::cortex::TOPIC_LLM_RESPONSE),
@@ -1068,6 +1069,7 @@ impl Agent for HermesAgent {
                 hermes::Command::Commands => "Commands",
                 hermes::Command::Install => "Install",
                 hermes::Command::Ring3(_) => "Ring3",
+                hermes::Command::Decisions(_) => "Decisions",
                 hermes::Command::Chat(_) => "Chat",
                 hermes::Command::ModelSwap(_) => "ModelSwap",
             };
@@ -1576,6 +1578,80 @@ impl Agent for HermesAgent {
                         String::from("Ring3: /ring3 status | /ring3 approve")
                     }
                 }
+                hermes::Command::Decisions(ref arg) => {
+                    let a = arg.trim();
+                    let lower = a.to_ascii_lowercase();
+                    if lower.is_empty() || lower == "status" {
+                        let mut s = cortex::decision::status_line();
+                        s.push('\n');
+                        s.push_str(&crate::cognitive_bridge::status_line());
+                        s
+                    } else if lower.starts_with("theta") {
+                        let mut parts = a.split_whitespace();
+                        let _ = parts.next();
+                        let auto: u8 = parts
+                            .next()
+                            .and_then(|x| x.parse().ok())
+                            .unwrap_or(160);
+                        let review: u8 = parts
+                            .next()
+                            .and_then(|x| x.parse().ok())
+                            .unwrap_or(auto.saturating_sub(30));
+                        cortex::decision::pin_theta(auto, review);
+                        alloc::format!("[Decide] theta pinned auto={} review={}", auto, review)
+                    } else if lower == "persist" {
+                        let ok = cortex::decision::persist_reliability();
+                        alloc::format!("[Decide] persist={}", ok)
+                    } else if lower == "hydrate" {
+                        cortex::decision::hydrate_reliability();
+                        String::from("[Decide] hydrate requested")
+                    } else if lower.starts_with("correct") {
+                        // /decisions correct <expert> <utterance...>
+                        let rest = a.strip_prefix("correct").unwrap_or("").trim();
+                        let mut parts = rest.splitn(2, char::is_whitespace);
+                        let expert_s = parts.next().unwrap_or("").trim();
+                        let utter = parts.next().unwrap_or("").trim();
+                        if expert_s.is_empty() || utter.is_empty() {
+                            String::from(
+                                "[Decide] usage: /decisions correct <expert> <text>\n\
+                                 experts: generator hw_control hw_identify rust_coder disk_diag security speech_synth",
+                            )
+                        } else {
+                            let expert = match expert_s {
+                                "generator" => Some(0u8),
+                                "hw_control" => Some(1),
+                                "hw_identify" => Some(2),
+                                "rust_coder" => Some(3),
+                                "disk_diag" => Some(4),
+                                "security" => Some(5),
+                                "speech_synth" => Some(6),
+                                _ => None,
+                            };
+                            match expert {
+                                Some(e) => {
+                                    cortex::decision::note_labeled_utterance(utter, e, true);
+                                    cortex::decision::note_outcome(
+                                        "intent.think",
+                                        cortex::decision::OutcomeKind::AutoOk,
+                                    );
+                                    alloc::format!(
+                                        "[Decide] HITL label expert={} text={:?} (n={})",
+                                        expert_s,
+                                        utter,
+                                        cortex::decision::labeled_count()
+                                    )
+                                }
+                                None => String::from("[Decide] expert desconhecido"),
+                            }
+                        }
+                    } else if lower == "export" || lower == "labels" {
+                        cortex::decision::export_labels_jsonl()
+                    } else {
+                        String::from(
+                            "Decisions: status | theta <a> <r> | persist | export | correct <expert> <text>",
+                        )
+                    }
+                }
                 hermes::Command::AddSkill(ref name, ref desc) => {
                     let prompt = alloc::format!(
                         "Crie uma skill para o Neural OS Hermes (SKILL.md).\nNome: {}\nDescricao: {}\n\
@@ -1706,15 +1782,23 @@ impl Agent for HermesAgent {
                             let tick_now = k_nano::interrupts::TIMER_TICKS
                                 .load(core::sync::atomic::Ordering::Relaxed)
                                 as u64;
-                            let intent = self.cortex.think(msg);
+                            let decision = self.cortex.decide(msg);
+                            let intent = cortex::intent_decide::resolve_intent(&decision);
                             let structured_skill = match intent {
                                 cortex::cortex::Intent::Greeting
-                                | cortex::cortex::Intent::Chat => None,
+                                | cortex::cortex::Intent::Chat
+                                | cortex::cortex::Intent::Unknown => None,
                                 cortex::cortex::Intent::AudioVolume => {
                                     Some("audio_set_volume")
                                 }
                                 _ => Some(intent.skill_name()),
                             };
+                            // Política conversacional: abstenção → LLM (não HITL)
+                            let _pol = crate::site_policy::apply_decision(
+                                crate::site_policy::SitePolicy::INTENT_THINK,
+                                &decision,
+                                false,
+                            );
                             // Single Trinity classify — pending_route for Cortex (SESSION_273)
                             let classified = cortex::global_arena::with_arena(|arena| {
                                 let trinity = crate::globals::TRINITY.lock();

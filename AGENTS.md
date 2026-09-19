@@ -191,7 +191,9 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: **v1.9.99-s363 TEST** — QEMU 8c UI liveness (timer_alive/open_mic/HID) + GPU Multi-ISA s361;
+# Current Sprint: **v1.9.99-s366 TEST** — ADR-0106 D0–D4+M0–M4 fechados (labels→train, Hub `decide`, M4 OUT);
+# s365 typed_sites; s364 Decision contract; s363 UI liveness; s362 router encode + is_valid;
+# s361 KernelImage/W2A8 ADR-0105; s360 mesh WHPX 6-node;
 # s362 router encode + is_valid (0,0); s361 KernelImage/W2A8 ADR-0105;
 # s360 mesh WHPX 6-node + fail/warn honesty (TLSPINS/Trust/CapGate/mouse);
 # s359 bin wave2/3 honesty + Bei→hermes + MoE→cortex;

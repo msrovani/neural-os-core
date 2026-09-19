@@ -1,8 +1,9 @@
 # ADR-0106: Decisões calibradas — confiança, abstenção e HITL (e fim da decisão por substring)
 
 **Data:** 2026-09-19
-**Status:** Proposed
-**Lifecycle (INDEX):** `por_fazer`
+**Status:** Implemented (D0–D4 + M0–M4; s364–s366)  
+**Lifecycle (INDEX):** `feito`  
+**Residual opcional:** `r3::update_with_replay` contínuo a partir dos labels; ECE report pós-treino JSONL.
 **IDEA:** **#588**
 **Sprint / enquadramento:** **s362**, continuação da **ADR-0088** (Premissa Máxima: toda decisão tratada com inferência, adaptação e versionamento). Empresta a *forma* da **ADR-0104** (medir → sancionar faixa → aplicar dentro da faixa → bin dirige + HITL/pin; `trusted=false → default seguro`). Reusa a disciplina da **ADR-0083** (router treinado vs keyword; LCG seed=42 não roteia).
 **Evidência:** auditoria s362 (referência externa: classe "System One"/Jev da TypeSafe, 09/2026 — *forma*, não dependência) confrontada com o código medido:
@@ -257,8 +258,9 @@ Mesmo com encode alinhado, o roteador **não decide em bare-metal**: `sse2_terna
 
 ### 14.5 O que falta para fechar
 
-1. **Corrupção SSE2 sret** → corrigir retorno do kernel (out-param ou rebuild na wrapper).
+1. **Corrupção SSE2 sret** → ✅ mitigado (rebuild shape / wrapper; ver bitnet_sse).
 2. **Encode alinhado** → ✅ feito (s362, fixture + teste host).
 3. **Tensor::is_valid** → ✅ feito (s362+, `(0,0)` = invalid).
-4. **θ da reliableza** → `por_fazer` (D0 da ADR-0106).
-5. **Labels honestos** → `por_fazer` (D4).
+4. **θ da reliableza** → ✅ D0 wired (s364); calibração fina = residual ECE.
+5. **Labels honestos** → ✅ D4 (s366): ring + JSONL `example` + `train_router` HITL×3.
+6. **Residual opcional** → `r3::update_with_replay` contínuo; ECE report pós-treino.

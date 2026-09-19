@@ -3,8 +3,12 @@
 //! Honesty: **não** é early-exit treinado com KL(P_inter‖P_final). É política
 //! de budget (cheap/normal/full) sobre soft_stride + max_gen. PonderNet/BEI
 //! continuam orquestração Hermes — este gate é o gancho no forward 3B.
+//!
+//! ADR-0106 D3: `decide_tier` devolve `Decision<ComputeTier>` (Score 3 níveis).
 
 use core::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::decision::{Decision, DecisionSource, Q8Dist};
 
 /// 0 = auto (legado hidden≥2048 → stride 3); senão força stride.
 static SOFT_STRIDE_OVERRIDE: AtomicUsize = AtomicUsize::new(0);
@@ -31,16 +35,44 @@ impl ComputeTier {
     }
 }
 
-/// Classifica sem modelo treinado: heurística honesta (comprimento + greeting).
-pub fn classify(prompt: &str, is_greeting: bool, hidden: usize) -> ComputeTier {
+const TIER_OPTS: [ComputeTier; 3] = [ComputeTier::Cheap, ComputeTier::Normal, ComputeTier::Full];
+
+/// Score tipado (critérios por situação, não por grau vago).
+pub fn decide_tier(prompt: &str, is_greeting: bool, hidden: usize) -> Decision<ComputeTier, 3> {
     let chars = prompt.len();
+    // Pesos por situação: greeting/curto → Cheap; longo+heavy → Full; senão Normal.
+    let mut w = [0u16; 3];
     if is_greeting || chars < 48 {
-        return ComputeTier::Cheap;
+        w[0] = 12;
+        w[1] = 2;
+        w[2] = 1;
+    } else if hidden >= 2048 && chars > 200 {
+        w[0] = 1;
+        w[1] = 3;
+        w[2] = 14;
+    } else if chars > 120 {
+        w[0] = 2;
+        w[1] = 10;
+        w[2] = 4;
+    } else {
+        w[0] = 3;
+        w[1] = 10;
+        w[2] = 2;
     }
-    if hidden >= 2048 && chars > 200 {
-        return ComputeTier::Full;
-    }
-    ComputeTier::Normal
+    let dist = Q8Dist::from_weights(&w);
+    let (theta_c, theta_m, _) = crate::decision::theta_for_site("compute.tier", 100, 40);
+    let d = Decision::from_dist(&TIER_OPTS, dist, DecisionSource::Heuristic, theta_c, theta_m);
+    let name = d.choice.map(|t| t.name()).unwrap_or("abstain");
+    d.slog_fields("compute.tier", name);
+    d
+}
+
+/// Classifica sem modelo treinado: heurística honesta (comprimento + greeting).
+/// Wrapper: abstenção → Normal (seguro, não Full).
+pub fn classify(prompt: &str, is_greeting: bool, hidden: usize) -> ComputeTier {
+    decide_tier(prompt, is_greeting, hidden)
+        .choice
+        .unwrap_or(ComputeTier::Normal)
 }
 
 /// soft_stride: Full→1; Normal→2 (se heavy); Cheap→3 (legado soft-float).

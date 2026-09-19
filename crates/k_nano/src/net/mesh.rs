@@ -566,9 +566,17 @@ impl BrainMeshEngine {
 
     /// Aplica papel atribuído pelo Master (propagação via ROLE\0{node}\0{role}).
     /// SESSION_235: receptor filtra pelo node_id e aplica no MESH_ENGINE.
+    /// s364: sincroniza `is_master` — ROLE Worker/Memory/Compute com is_master
+    /// preso true fazia Worker emitir role-assign (dual Master / eleição confusa).
     pub fn set_role(&self, role: NodeRole) {
         let prev = self.local_role.load(Ordering::Acquire);
         self.local_role.store(role as u8, Ordering::Release);
+        match role {
+            NodeRole::Master => self.is_master.store(true, Ordering::Release),
+            NodeRole::Memory | NodeRole::Compute | NodeRole::Worker | NodeRole::Undecided => {
+                self.is_master.store(false, Ordering::Release);
+            }
+        }
         if prev != role as u8 {
             bump_mesh_orb_activity();
         }
@@ -582,7 +590,10 @@ impl BrainMeshEngine {
     /// SESSION_235: envia ROLE\0{node_id}\0{role_u8} via broadcast para cada
     /// nó conhecido (transporte não tem unicast — receptor filtra pelo node_id).
     fn assign_roles(&mut self) {
-        if !self.is_master.load(Ordering::Acquire) {
+        // Belt: is_master E local_role — evita assign após ROLE demote (s364).
+        if !self.is_master.load(Ordering::Acquire)
+            || self.local_role() != NodeRole::Master
+        {
             return;
         }
         // Settle TOFU: não envia ROLE até o peer ter janela de receber nosso HB

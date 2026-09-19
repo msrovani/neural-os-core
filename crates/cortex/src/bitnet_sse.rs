@@ -53,13 +53,22 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
     }
 
     // Bare-metal: SSE2 ADD/SUB/SKIP antes do stub AVX2 (ADR-0101 Onda 0).
+    // s364: Tensor alocado FORA de #[target_feature] — sret soft-float
+    // corrompia Vec/shape e #GP em memcpy no mesh 1G (pós mesh-skip).
     #[cfg(all(target_arch = "x86_64", target_os = "none"))]
     if n >= 4 {
-        let r = unsafe { sse2_ternary_matmul_add_sub_skip(weight, input, m, k, n) };
-        // SESSION_336/362: o sret deste fn #[target_feature] corrompe shape.0
-        // no target soft-float (data Vec intacto — len verificado). Rebuild
-        // com shape correta no caller (fora do target_feature).
-        let r = Tensor { shape: (m, n), data: r.data };
+        let mut result = Tensor::new((m, n));
+        if !result.is_valid() || !input.is_valid() {
+            crate::matmul_diag::note_sse2_zero_guard();
+            return None;
+        }
+        unsafe {
+            sse2_ternary_matmul_fill(weight, input, m, k, n, &mut result.data);
+        }
+        let r = Tensor {
+            shape: (m, n),
+            data: result.data,
+        };
         crate::matmul_diag::note_sse2_ok();
         crate::matmul_diag::note_call(k, n, m, 3, r.is_valid());
         return Some(r);
@@ -75,6 +84,11 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
     #[cfg(target_arch = "x86_64")]
     if n >= 4 {
         let r = unsafe { sse2_ternary_matmul_add_sub_skip(weight, input, m, k, n) };
+        // Mesmo rebuild do path bare-metal (SESSION_336/362 sret soft-float).
+        let r = Tensor {
+            shape: (m, n),
+            data: r.data,
+        };
         crate::matmul_diag::note_call(k, n, m, 5, r.is_valid());
         return Some(r);
     }
@@ -130,31 +144,19 @@ pub(crate) unsafe fn sse2_ternary_matmul_skip_native(
 }
 
 /// Matmul ternário: por peso ADD/SUB/SKIP; acc em `_mm_add_ps` (4 lanes).
+/// Preenche `out` (len == m*n) — **não** retorna Tensor (sret soft-float #GP).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-pub(crate) unsafe fn sse2_ternary_matmul_add_sub_skip(
+pub(crate) unsafe fn sse2_ternary_matmul_fill(
     weight: &PackedTernaryTensor,
     input: &Tensor,
     m: usize,
     k: usize,
     n: usize,
-) -> Tensor {
+    out: &mut [f32],
+) {
     use core::arch::x86_64::*;
-    let mut result = Tensor::new((m, n));
-    if !result.is_valid() || !input.is_valid() {
-        crate::matmul_diag::note_sse2_zero_guard();
-        k_nano::slog_cortex!(
-            "MatmulDiag",
-            "warn",
-            "sse2 zero-guard: result.shape=({},{}) result.len={} valid={} input_valid={}",
-            result.shape.0,
-            result.shape.1,
-            result.data.len(),
-            result.is_valid() as u32,
-            input.is_valid() as u32
-        );
-        return Tensor::zero((0, 0));
-    }
+    debug_assert_eq!(out.len(), m.saturating_mul(n));
     for i in 0..m {
         for j in (0..n).step_by(4) {
             let lanes = core::cmp::min(4, n - j);
@@ -174,15 +176,104 @@ pub(crate) unsafe fn sse2_ternary_matmul_add_sub_skip(
                 let dv = _mm_loadu_ps(delta.as_ptr());
                 acc = _mm_add_ps(acc, dv);
             }
-            let mut out = [0.0f32; 4];
-            _mm_storeu_ps(out.as_mut_ptr(), acc);
+            let mut tmp = [0.0f32; 4];
+            _mm_storeu_ps(tmp.as_mut_ptr(), acc);
             for lane in 0..lanes {
-                result.data[i * n + j + lane] = out[lane];
+                out[i * n + j + lane] = tmp[lane];
             }
         }
     }
+}
+
+/// Wrapper legado: aloca fora e chama fill (seguro p/ soft-float sret).
+#[cfg(target_arch = "x86_64")]
+pub(crate) unsafe fn sse2_ternary_matmul_add_sub_skip(
+    weight: &PackedTernaryTensor,
+    input: &Tensor,
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Tensor {
+    let mut result = Tensor::new((m, n));
+    if !result.is_valid() || !input.is_valid() {
+        crate::matmul_diag::note_sse2_zero_guard();
+        k_nano::slog_cortex!(
+            "MatmulDiag",
+            "warn",
+            "sse2 zero-guard: result.shape=({},{}) result.len={} valid={} input_valid={}",
+            result.shape.0,
+            result.shape.1,
+            result.data.len(),
+            result.is_valid() as u32,
+            input.is_valid() as u32
+        );
+        return Tensor::zero((0, 0));
+    }
+    sse2_ternary_matmul_fill(weight, input, m, k, n, &mut result.data);
     crate::matmul_diag::note_kernel_shape(result.shape.0, result.shape.1, result.data.len());
-    result
+    // Rebuild shape fora de qualquer target_feature residue.
+    Tensor {
+        shape: (m, n),
+        data: result.data,
+    }
+}
+
+/// Canário de boot (pré-K33[28] sgdb): matmul tiny via `ternary_matmul`.
+///
+/// Prova o rebuild de shape pós-SSE2 soft-float (SESSION_336/362) **sem**
+/// ROUTER.BITNET, Tickv nem `classify_intent`. Aceite QEMU = slog
+/// `sret canary PASS` + `shape=(1,4)`.
+pub fn sse2_sret_boot_canary() -> bool {
+    const M: usize = 1;
+    const K: usize = 4;
+    const N: usize = 4;
+    let weights: [i8; 16] = [
+        1, 0, -1, 1, //
+        0, 1, 0, -1, //
+        1, -1, 0, 1, //
+        0, 0, 1, -1,
+    ];
+    let w = PackedTernaryTensor {
+        shape: (K, N),
+        packed_data: PackedTernaryTensor::pack_weights(&weights),
+    };
+    let Some(x) = Tensor::from_row_major((M, K), alloc::vec![1.0f32, 2.0, 3.0, 4.0]) else {
+        k_nano::slog_cortex!("MatmulDiag", "fail", "sret canary: x alloc fail");
+        return false;
+    };
+    let Some(y) = ternary_matmul(&w, &x) else {
+        k_nano::slog_cortex!(
+            "MatmulDiag",
+            "fail",
+            "sret canary: ternary_matmul None | {}",
+            crate::matmul_diag::status_line()
+        );
+        return false;
+    };
+    let ok = y.is_valid() && y.shape == (M, N) && y.data.len() == M * N;
+    if ok {
+        k_nano::slog_cortex!(
+            "MatmulDiag",
+            "ok",
+            "sret canary PASS shape=({},{}) len={} | {}",
+            y.shape.0,
+            y.shape.1,
+            y.data.len(),
+            crate::matmul_diag::status_line()
+        );
+    } else {
+        k_nano::slog_cortex!(
+            "MatmulDiag",
+            "fail",
+            "sret canary FAIL shape=({},{}) len={} valid={} | {}",
+            y.shape.0,
+            y.shape.1,
+            y.data.len(),
+            y.is_valid() as u32,
+            crate::matmul_diag::status_line()
+        );
+    }
+    ok
 }
 
 fn scalar_ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
@@ -295,5 +386,13 @@ mod ternary_native_contract {
         for (a, b) in scalar.data.iter().zip(simd.data.iter()) {
             assert!((a - b).abs() < 1e-4, "falcon-shape parity {a} vs {b}");
         }
+    }
+
+    #[test]
+    fn sse2_sret_boot_canary_passes_on_host() {
+        assert!(
+            super::sse2_sret_boot_canary(),
+            "tiny canary must pass on host (ABI nativo ≠ prova soft-float)"
+        );
     }
 }

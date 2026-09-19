@@ -159,6 +159,22 @@ impl Agent for HubHealthAgent {
             } else {
                 self.refresh_from_sample();
             }
+            // Postura Decide: linha Hub `decide` (gauges) é a fonte; slog só se fail
+            let sev = cortex::decision::hub_posture_sev();
+            if sev == 2 {
+                static LAST_FAIL_US: core::sync::atomic::AtomicU64 =
+                    core::sync::atomic::AtomicU64::new(0);
+                let last = LAST_FAIL_US.load(core::sync::atomic::Ordering::Relaxed);
+                if now.saturating_sub(last) >= 30_000_000 {
+                    LAST_FAIL_US.store(now, core::sync::atomic::Ordering::Relaxed);
+                    k_nano::slog_hermes!(
+                        "Decide",
+                        "warn",
+                        "posture FAIL {}",
+                        cortex::decision::hub_posture_line()
+                    );
+                }
+            }
         }
         AgentTickResult::Pending
     }

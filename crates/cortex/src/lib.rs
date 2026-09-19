@@ -61,6 +61,8 @@ pub mod speculative;
 pub mod infer_queue;
 pub mod vocab_shortlist;
 pub mod difficulty_gate;
+pub mod decision;
+pub mod intent_decide;
 pub mod cognitive_runtime;
 pub mod heap_aios;
 #[cfg(test)]

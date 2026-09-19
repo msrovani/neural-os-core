@@ -93,14 +93,19 @@ pub fn dispatch_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
                 .as_ref()
                 .map_or(0, |eng| eng.node_count());
             if peers >= 1 {
-                N_MESH.fetch_add(1, Ordering::Relaxed);
-                MESH_MATMUL_BUSY.store(true, Ordering::Release);
-                let got = mesh_matmul_worker(w, x);
-                MESH_MATMUL_BUSY.store(false, Ordering::Release);
-                if let Some(t) = got {
-                    return Some(t);
+                // s364: frugal não tenta FRAG nem marca peer failure (skip ≠ timeout).
+                if k_nano::memory::mesh_frag_pressure() {
+                    // Fall through — ternary_matmul recusa local big sob pressure.
+                } else {
+                    N_MESH.fetch_add(1, Ordering::Relaxed);
+                    MESH_MATMUL_BUSY.store(true, Ordering::Release);
+                    let got = mesh_matmul_worker(w, x);
+                    MESH_MATMUL_BUSY.store(false, Ordering::Release);
+                    if let Some(t) = got {
+                        return Some(t);
+                    }
+                    k_nano::net::mesh::record_peer_failure(0xFF);
                 }
-                k_nano::net::mesh::record_peer_failure(0xFF);
             }
         }
     }
@@ -312,10 +317,20 @@ fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
 }
 
 /// Master side: processa request "MW\0" e retorna resposta "MR\0" serializada.
+/// SESSION_360 fechou só o TX frugal; lab 6-node 1G #GP aqui no RX (s364) —
+/// mesma `mesh_frag_pressure` / `can_afford_frag` antes de qualquer alloc.
 #[cfg(feature = "p2p")]
 pub fn handle_mesh_request(payload: &[u8]) -> Option<Vec<u8>> {
     // "MW\0" + k u32 + n u32 + packed + rows u32 + cols u32 + data f32 LE
     if payload.len() < 19 || &payload[0..3] != b"MW\0" {
+        return None;
+    }
+    // AIOS: nó frugal não serve FRAG — Observe→Act, skip honesto (sem #GP).
+    if k_nano::memory::mesh_frag_pressure() {
+        return None;
+    }
+    // Resposta MR + FRAG reassembly ≥ payload; margem p/ header/sign.
+    if !k_nano::memory::can_afford_frag(payload.len().saturating_add(256)) {
         return None;
     }
     let k = u32::from_le_bytes([payload[3], payload[4], payload[5], payload[6]]) as usize;
@@ -361,7 +376,7 @@ static MESH_RECV: Mutex<Option<event_bus::Receiver>> = Mutex::new(None);
 
 /// Drena os pacotes P2P do EventBus e responde requests "MW\0" (Master side).
 /// Chamado pelo bin a cada tick (bei_tick), depois do k_nano p2p_tick (que
-/// publica). Só responde se `local_role() == Master`.
+/// publica). Só Master|Undecided e sem pressão de RAM (s364 fecha RX 1G).
 #[cfg(feature = "p2p")]
 pub fn poll_mesh_requests() {
     {
@@ -370,20 +385,29 @@ pub fn poll_mesh_requests() {
             *recv = Some(k_nano::EVENT_BUS.subscribe(k_nano::net::mesh::TOPIC_P2P_PACKET));
         }
     }
+    // Drain sempre (não encher o bus), mas só Master/Undecided processa MW.
+    // Memory/Compute/Worker: broadcast MW não é pra eles — servir #GP em 1G.
+    let role = k_nano::net::mesh::local_role();
+    let may_serve = matches!(
+        role,
+        k_nano::net::mesh::NodeRole::Master | k_nano::net::mesh::NodeRole::Undecided
+    );
+    let frugal = k_nano::memory::mesh_frag_pressure();
     loop {
         let evt = MESH_RECV.lock().as_ref().and_then(|r| r.try_receive());
         let Some(evt) = evt else { break };
         if evt.topic != k_nano::net::mesh::TOPIC_P2P_PACKET {
             continue;
         }
+        if !may_serve || frugal {
+            continue;
+        }
         let Some(pkt) = k_nano::net::udp_broadcast::parse(&evt.payload) else { continue };
         if pkt.task_type != k_nano::net::noproto::TaskType::Inference {
             continue;
         }
-        // SESSION_235: responde MW mesmo se Undecided — o request só chega
-        // a quem recebeu o broadcast (o Worker não recebe o próprio TX); sob
-        // TCG o Master pode ainda não ter eleito (Undecided) quando o request
-        // chega, e o gate "só Master" fazia o Worker dar timeout.
+        // SESSION_235: Undecided ainda responde (eleição tardia sob TCG).
+        // s364: Worker/Memory/Compute NÃO — evita dual-MR + #GP em 1G.
         let payload = if evt.payload.len() > k_nano::net::noproto::PACKET_HEADER_SIZE {
             &evt.payload[k_nano::net::noproto::PACKET_HEADER_SIZE..]
         } else {
@@ -393,7 +417,14 @@ pub fn poll_mesh_requests() {
             continue;
         }
         let req_src = pkt.source_id;
-        let Some(resp) = handle_mesh_request(payload) else { continue };
+        let Some(resp) = handle_mesh_request(payload) else {
+            k_nano::slog_cortex!(
+                "MESH", "warn",
+                "matmul serve skip node={} (frag pressure/budget)",
+                req_src
+            );
+            continue;
+        };
 
         // Resposta "MR\0" — dest_id = node_id do Worker (filtro lógico no
         // receptor; o transporte é broadcast).

@@ -1,0 +1,3 @@
+{"type":"header","contract":1,"provenance":"demo_stub"}
+{"type":"example","text":"aumenta o volume do alto-falante","expert":"hw_control","provenance":"hitl"}
+{"type":"site","k":"intent.think","ok":3,"bad":0,"abs":1,"esc":0,"trusted":0,"provenance":"hitl_or_auto"}

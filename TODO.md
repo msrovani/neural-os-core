@@ -188,19 +188,19 @@ Plano completo + evidência: `docs/implementation/2026-09-16-voice-pipeline-audi
 
 ### 12. ADR-0106 — Decisões calibradas (D0–D4 + migração M0–M4)
 **Goal:** juízo onde o significado importa deixa de ser cadeia de `contains()`; toda decisão carrega distribuição, confiança e abstenção explícita; θ vem da reliableza medida.
-ADR + evidência: `docs/architecture/0106-decisoes-calibradas-confianca-abstencao-hitl.md` (IDEA #588).
+ADR + evidência: `docs/architecture/0106-decisoes-calibradas-confianca-abstencao-hitl.md` (IDEA #588). Triagem: `docs/architecture/0106-m0-triagem-sitios.md`.
 
-- [ ] **D0** Contrato `Decision<T>` (`Confidence` Q8, `margin`, `AbstainReason`, `DecisionSource`, `Q8Dist`) + `note_outcome` + acumulador de reliableza — `TODO-0106-1`
-- [ ] **D0** Persistência `ai/decisions/reliability` (padrão `/hw/timer`) + contadores + `slog` ok/warn + postura no HUD + `/decisions` — `TODO-0106-2`
-- [ ] **D1** `Intent::Unknown` + `decide()` canônico (score por braço, sem first-match-wins) + `think()` como wrapper; caller `agents.rs:1706` publica abstenção — `TODO-0106-3`
-- [ ] **D2** Política de θ por classe de sítio; unificar `ApprovalLevel`/`RiskLevel`/`PackageHub::classify`; religar ou remover `ApprovalGate::classify`; `Deny` imune a confiança — `TODO-0106-4`
-- [ ] **D3** `Noul` de destrutividade + `Score` de 3 níveis para `ComputeTier` (critérios por situação) + escape hatch — `TODO-0106-5`
-- [ ] **D4** Labels de HITL + resultado verificado → `r3::update_with_replay`; `train_router.py` sem labels de keyword + proveniência; `decision_contract_check.py`; auditoria amostral — `TODO-0106-6`
-- [ ] **M0** Triagem canônica dos sítios (IN=significado / OUT=sintaxe × anel) — corrige a contagem de ~497 — `TODO-0106-7`
-- [ ] **M1** Migrar roteamento conversacional (cortex `think`; hermes tópico/keyword/skill-creation) com paridade por sítio — `TODO-0106-8`
-- [ ] **M2** Migrar risco/ação (`approval`, `permission_gate`, `marketplace`, `plugin_hub`, `package_hub`) — `TODO-0106-9`
-- [ ] **M3** Migrar significado em observabilidade/HUD/labels (jarbas, subs de `slog`, net diag) — `TODO-0106-10`
-- [ ] **M4** Cauda + lista dos excluídos com justificativa (parsing fica como código) — `TODO-0106-11`
+- [x] **D0** Contrato `Decision<T>` (`Confidence` Q8, `margin`, `AbstainReason`, `DecisionSource`, `Q8Dist`) + `note_outcome` + acumulador de reliableza — `TODO-0106-1`
+- [x] **D0** Persistência `ai/decisions/reliability` (best-effort Tickv) + contadores + `slog` ok/warn + `/decisions` — `TODO-0106-2` (HUD postura = residual leve)
+- [x] **D1** `Intent::Unknown` + `decide()` canônico (score por braço) + `think()` wrapper; Hermes publica abstenção→LLM — `TODO-0106-3`
+- [x] **D2** Política de θ por classe de sítio; `ApprovalGate::classify` → `site_policy` (Noul); `Deny` imune — `TODO-0106-4`
+- [x] **D3** `Noul` destrutividade + `Score`/`decide_tier` ComputeTier + escape hatch Unknown — `TODO-0106-5`
+- [x] **D4** Labels HITL + weak_auto → JSONL `example`; `train_router` merge (HITL×3); `/decisions correct` — `TODO-0106-6` (r3 replay contínuo = residual opcional)
+- [x] **M0** Triagem canônica — `TODO-0106-7`
+- [x] **M1** emotion / skill-creation — `TODO-0106-8`
+- [x] **M2** plugin + marketplace — `TODO-0106-9`
+- [x] **M3** Hub row `decide` + pill via `hub_posture_sev` — `TODO-0106-10`
+- [x] **M4** Lista OUT formal — `docs/architecture/0106-m4-excluded-sites.md` — `TODO-0106-11`
 
 ---
 

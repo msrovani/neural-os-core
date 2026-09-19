@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s363 — QEMU UI liveness + GPU Multi-ISA
+# STATE — neural-os-core v1.9.99-s366 — ADR-0106 D4+M3+M4 fechados
 
-#   PISTA ATIVA: s363 — boot hang (Falcon3/IPI/BPE) + jarvis_voice freeze
-#   (open_mic/barge-in/formant) + timer_alive falso DEAD; WHPX 8c/6G PASS past T550
-#   PISTA ANTERIOR: s361 GPU Multi-ISA KernelImage/W2A8 (ADR-0105); s362 router encode
-#   Residual: NKP Ready metal; W2A8 device; BEI slog spam; USB MSC QEMU
+#   PISTA ATIVA: s366 — decision_labels→train_router; Hub row `decide`; M4 OUT
+#   Residual opcional: r3::update_with_replay contínuo; ECE pós-treino JSONL
+#   PISTA ANTERIOR: s365 typed_sites; s364 Decision; s363 UI; s362 router
+#   ADR-0106 D0–D4 + M0–M4 = [x] em TODO.md
 #   Não declarar v2.0.0

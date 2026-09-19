@@ -41,17 +41,9 @@ fn heap_aios_remember_impl(note: &str) {
 
 /// Ponte de guarda do Hermes: detecta se a mensagem e sobre criacao de skill.
 /// Se for, o Hermes DEVE garantir que o skill_writer esteja no contexto do LLM.
-/// Usado no Chat handler do HermesAgent como pre-flight check.
+/// ADR-0106 M1: Noul tipado (`typed_sites`) — API estável.
 pub fn is_skill_creation_request(msg: &str) -> bool {
-    let lower = msg.to_ascii_lowercase();
-    lower.contains("cria") && lower.contains("skill")
-        || lower.contains("create") && lower.contains("skill")
-        || lower.contains("novo skill")
-        || lower.contains("new skill")
-        || lower.contains("/add_skill")
-        || lower.contains("/learn")
-        || lower.contains("registra") && lower.contains("skill")
-        || lower.contains("register") && lower.contains("skill")
+    crate::typed_sites::is_skill_creation(msg)
 }
 
 // ─── IterationBudget (HANR-class, bare-metal) ─────────────────────────────
@@ -458,26 +450,9 @@ pub struct RouteDecision {
 }
 
 /// Emotion lite (sem dependência Jarbas — evita ciclo hermes↔jarbas).
+/// ADR-0106 M1: Choice tipado (`typed_sites::decide_emotion`).
 pub fn emotion_hint(text: &str) -> &'static str {
-    let l = text.to_ascii_lowercase();
-    if l.contains("obrigad")
-        || l.contains("feliz")
-        || l.contains("otimo")
-        || l.contains("ótimo")
-        || l.contains("ador")
-    {
-        "joy"
-    } else if l.contains("raiva") || l.contains("irritad") || l.contains("odei") {
-        "anger"
-    } else if l.contains("trist") || l.contains("pena") {
-        "sadness"
-    } else if l.contains("medo") || l.contains("perigo") {
-        "fear"
-    } else if l.contains('?') {
-        "curious"
-    } else {
-        "neutral"
-    }
+    crate::typed_sites::emotion_str(text)
 }
 
 /// Enriquece o prompt com o estado emocional real do sistema (AFFECT_SNAPSHOT).
@@ -700,6 +675,32 @@ pub fn note_route(d: &RouteDecision) {
         "{}→{:?} moe={} emo={}",
         d.expert, d.kind, d.moe_loaded, d.emotion
     ));
+    k_nano::slog_hermes!(
+        "ROUTE",
+        "ok",
+        "expert={} kind={:?} moe={} skill={:?}",
+        d.expert,
+        d.kind,
+        d.moe_loaded,
+        d.skill
+    );
+}
+
+/// ADR-0106: reidrata reliableza uma vez (best-effort Tickv).
+pub fn init_decision_layer() {
+    static ONCE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    if ONCE
+        .compare_exchange(
+            false,
+            true,
+            core::sync::atomic::Ordering::AcqRel,
+            core::sync::atomic::Ordering::Relaxed,
+        )
+        .is_ok()
+    {
+        cortex::decision::hydrate_reliability();
+        k_nano::slog_hermes!("Decide", "ok", "{}", cortex::decision::status_line());
+    }
 }
 
 // ─── Prompt enriquecido Cortex (superior ao HANR context dump) ─────────────
@@ -961,7 +962,7 @@ pub fn session_len() -> u64 {
 
 pub fn status_line() -> String {
     format!(
-        "{} | session_n={} | nudges={} | route={} | {} | {}",
+        "{} | session_n={} | nudges={} | route={} | {} | {} | {}",
         budget_status(),
         SESSION.lock().entries.len(),
         NUDGE_QUEUE.lock().len(),
@@ -971,7 +972,8 @@ pub fn status_line() -> String {
             .map(|s| s.as_str())
             .unwrap_or("-"),
         k_ai::memory_systems::bge_status(),
-        cortex::cognitive_runtime::status_line()
+        cortex::cognitive_runtime::status_line(),
+        cortex::decision::status_line()
     )
 }
 

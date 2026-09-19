@@ -52,60 +52,24 @@ impl PluginHub {
     }
 
     /// Escaneia bytes WASM por segurança.
-    /// Análise heurística baseada em strings suspeitas, tamanho, padrões de
-    /// acesso a hardware.
+    /// ADR-0106 M2: Score tipado (`typed_sites::decide_plugin_risk`).
     pub fn scan(&mut self, name: &str, wasm_bytes: &[u8]) -> PluginScan {
-        let mut details = Vec::new();
-        let mut suspicious = false;
-        let mut blocked = false;
-
-        // Check for suspicious strings in WASM binary (strings are preserved
-        // in most WASM toolchains as custom sections or data segments).
-        let text = core::str::from_utf8(wasm_bytes).unwrap_or("");
-
-        // ── Blocked patterns: direct hardware access ──
-        if text.contains("io_port") || text.contains("outb") || text.contains("inb") {
-            details.push(String::from("Direct port I/O access — BLOCKED"));
-            blocked = true;
+        let (veredict, details) = crate::typed_sites::plugin_verdict(wasm_bytes);
+        if details.is_empty() && matches!(veredict, ScanVerdict::Safe) {
+            // keep empty details for Safe
         }
-        if text.contains("lgdt") || text.contains("lidt") || text.contains("write_cr3") {
-            details.push(String::from("Privileged instruction access — BLOCKED"));
-            blocked = true;
-        }
-
-        // ── Suspicious patterns: physical/dma memory access ──
-        if text.contains("write_phys") || text.contains("dma_alloc") || text.contains("phys_to_virt") {
-            details.push(String::from("Physical memory access — SUSPICIOUS"));
-            suspicious = true;
-        }
-
-        // ── Suspicious patterns: size heuristic ──
-        if wasm_bytes.len() > 100_000 {
-            details.push(String::from("Plugin >100KB — SUSPICIOUS"));
-            suspicious = true;
-        }
-
-        // ── Suspicious patterns: obfuscation ──
-        if text.contains("eval") || text.contains("base64_decode") {
-            details.push(String::from("Dynamic code patterns — SUSPICIOUS"));
-            suspicious = true;
-        }
-
-        let veredict = if blocked {
-            ScanVerdict::Blocked
-        } else if suspicious {
-            ScanVerdict::Suspicious
-        } else {
-            ScanVerdict::Safe
-        };
-
         let scan = PluginScan {
             name: String::from(name),
             veredict,
             details,
         };
-
         self.plugins.insert(String::from(name), scan.clone());
+        let tag = match veredict {
+            ScanVerdict::Safe => "SAFE",
+            ScanVerdict::Suspicious => "SUSPICIOUS",
+            ScanVerdict::Blocked => "BLOCKED",
+        };
+        k_nano::slog_hermes!("PLUGIN", "ok", "[{}] VERDICT={} (ADR-0106)", name, tag);
         scan
     }
 

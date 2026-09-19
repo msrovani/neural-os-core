@@ -14,6 +14,10 @@ Expert index order (must match `init_trinity` registration):
 Label semantics = check ORDER of the production keyword classifier that this
 training distills (hw_control first, then greeting, then the loop
 hw_identify -> rust_coder -> disk_diag -> security -> speech_synth -> generator).
+
+ADR-0106 D4 (s366): `data/decision_labels.jsonl` via `/decisions export`
+(HITL + weak_auto, `type=example`) mescla no train set (HITL×3). Sem arquivo =
+fallback CURATED/templates (honesto).
 """
 
 import datetime
@@ -442,8 +446,68 @@ def adam_step(params, grads, m, v, t, lr, b1=0.9, b2=0.999, eps=1e-8):
         p[:] -= lr * mh / (np.sqrt(vh) + eps)
 
 
-def train(seed=7, lr=1e-2, l2=1e-4, epochs=500, patience=60, batch=48):
+def load_decision_labels(path: Path):
+    """ADR-0106 D4: carrega exemplos utterance→expert do JSONL runtime.
+
+    Formato:
+      {"type":"header","contract":1,...}
+      {"type":"site",...}           # ignorado no treino (só métricas)
+      {"type":"example","text":"...","expert":"hw_control","provenance":"hitl|weak_auto"}
+    """
+    if not path.exists():
+        return [], {}
+    examples = []
+    sites = {}
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            t = obj.get("type")
+            if t == "header":
+                if int(obj.get("contract", -1)) != 1:
+                    print(f"[ADR-0106] WARN contract={obj.get('contract')} (want 1)")
+            elif t == "site":
+                sites[obj.get("k", "?")] = obj
+            elif t == "example":
+                text = (obj.get("text") or "").strip()
+                expert = obj.get("expert") or ""
+                if not text or expert not in EXPERT_NAMES:
+                    continue
+                idx = EXPERT_NAMES.index(expert)
+                prov = obj.get("provenance", "weak_auto")
+                examples.append((text, idx, prov))
+    return examples, sites
+
+
+def expand_examples(examples, rng):
+    """HITL ×3, weak_auto ×1 — peso sem f32 no kernel, só no host trainer."""
+    out = []
+    for text, idx, prov in examples:
+        reps = 3 if prov == "hitl" else 1
+        for _ in range(reps):
+            out.append((text, idx))
+    rng.shuffle(out)
+    return out
+
+
+def train(seed=7, lr=1e-2, l2=1e-4, epochs=500, patience=60, batch=48,
+          labels_jsonl: Path | None = None):
     rng = np.random.default_rng(seed)
+
+    labels_path = labels_jsonl or (Path(__file__).resolve().parents[1] / "data" / "decision_labels.jsonl")
+    runtime_ex, sites = load_decision_labels(labels_path)
+    if runtime_ex:
+        print(f"[ADR-0106] loaded {len(runtime_ex)} labeled utterances from {labels_path} "
+              f"(sites={len(sites)})")
+    elif labels_path.exists():
+        print(f"[ADR-0106] {labels_path} present but no type=example lines — CURATED only")
+    else:
+        print(f"[ADR-0106] no {labels_path} — training on CURATED/templates (honest fallback)")
 
     # --- data splits -------------------------------------------------------
     test, rest = stratified_split(CURATED, 0.28, seed=seed)
@@ -451,6 +515,8 @@ def train(seed=7, lr=1e-2, l2=1e-4, epochs=500, patience=60, batch=48):
     templates = build_templates(seed=1234)
 
     train_items = templates + train_cur
+    # Merge runtime labels (não entram no test holdout CURATED)
+    train_items = train_items + expand_examples(runtime_ex, rng)
     test_texts = {t for t, _ in test}
     train_items = [(t, l) for (t, l) in train_items if t not in test_texts]
     Xtr = encode_batch([t for t, _ in train_items])

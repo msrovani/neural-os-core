@@ -74,10 +74,17 @@ impl PermissionGate {
             return PermissionVerdict::Allow;
         }
 
-        // Escalate: classifica por risco
+        // Escalate: classifica por risco (ADR-0106 site_policy)
         let risk = RiskLevel::classify(namespace, name);
+        let full_name = alloc::format!("{}::{}", namespace, name);
+        // Unifica com ApprovalLevel tipado (Deny imune a confiança).
+        let level = crate::approval::ApprovalGate::classify(&full_name);
+        if matches!(level, crate::approval::ApprovalLevel::Deny) {
+            k_nano::telemetry::TELEMETRY.push(4, 0, &[0; 32]);
+            return PermissionVerdict::Deny;
+        }
         match risk {
-            RiskLevel::Auto => {
+            RiskLevel::Auto if matches!(level, crate::approval::ApprovalLevel::Auto) => {
                 k_nano::telemetry::TELEMETRY.push(5, 0, &[0; 32]);
                 PermissionVerdict::Allow
             }
@@ -85,19 +92,23 @@ impl PermissionGate {
                 k_nano::telemetry::TELEMETRY.push(4, 0, &[0; 32]);
                 PermissionVerdict::Deny
             }
-            RiskLevel::Confirm | RiskLevel::Escalate => {
-                // Submete ao ApprovalGate + HITL
-                let full_name = alloc::format!("{}::{}", namespace, name);
-                let reason = alloc::format!("Permission Gate: {} requer aprovação (risco={:?})",
-                    full_name, risk);
-                let level = if risk == RiskLevel::Escalate {
+            _ => {
+                let reason = alloc::format!(
+                    "Permission Gate: {} requer aprovação (risco={:?} level={})",
+                    full_name,
+                    risk,
+                    level.name()
+                );
+                let hitl_level = if matches!(level, crate::approval::ApprovalLevel::Escalate)
+                    || risk == RiskLevel::Escalate
+                {
                     crate::approval::ApprovalLevel::Escalate
                 } else {
                     crate::approval::ApprovalLevel::Confirm
                 };
 
                 let id = crate::globals::APPROVAL_GATE.lock().request(
-                    &full_name, "wasm", &reason, level,
+                    &full_name, "wasm", &reason, hitl_level,
                 );
 
                 k_nano::slog_hermes!("PERM", "info",

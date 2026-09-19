@@ -343,7 +343,7 @@ pub fn snapshot() -> GaugeSnapshot {
 // Honestidade: dado ausente = `n/a`, nunca 0 inventado.
 // ══════════════════════════════════════════════════════════════════════════
 
-pub const HUB_ROWS: usize = 15;
+pub const HUB_ROWS: usize = 16;
 pub const HUB_ROW_LEN: usize = 36;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -741,6 +741,17 @@ pub fn refresh_hub_health() {
         )
     };
     hub_set(&mut hh.rows[14], "fault", st, pill, val);
+
+    // ── Decide (ADR-0106) — postura tipada ──
+    let sev = cortex::decision::hub_posture_sev();
+    let line = cortex::decision::hub_posture_line();
+    let (st, pill) = match sev {
+        0 => (HubState::Ok, true),
+        1 => (HubState::Warn, true),
+        2 => (HubState::Fail, true),
+        _ => (HubState::Na, false),
+    };
+    hub_set(&mut hh.rows[15], "decide", st, pill, line);
 
     // ── Live line + worst + checksum ──
     let wall = k_nano::interrupts::wall_ticks();

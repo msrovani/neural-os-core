@@ -102,6 +102,18 @@ pub fn install_local(
     let (level, op) = PACKAGE_HUB
         .lock()
         .stage_create(kind, name, &sealed, "market install")?;
+    // ADR-0106 M2: reforça com política tipada (Deny imune; Escalate se skill destrutiva).
+    let risk = crate::approval::ApprovalGate::classify(&alloc::format!(
+        "market_{}_{}",
+        kind.as_str(),
+        name
+    ));
+    let level = match (level, risk) {
+        (ApprovalLevel::Deny, _) | (_, ApprovalLevel::Deny) => ApprovalLevel::Deny,
+        (ApprovalLevel::Escalate, _) | (_, ApprovalLevel::Escalate) => ApprovalLevel::Escalate,
+        (ApprovalLevel::Confirm, _) | (_, ApprovalLevel::Confirm) => ApprovalLevel::Confirm,
+        _ => ApprovalLevel::Auto,
+    };
     if level == ApprovalLevel::Deny {
         return Err("denied");
     }
