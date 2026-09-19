@@ -107,6 +107,26 @@ C:\msys64\ucrt64\bin
 
 ## 4. QEMU — Teste Local
 
+### Lab mesh 6-node (s360) — UI + rede + compute distribuído
+
+Marco validado em WHPX: **seis VMs** (Master 3G/3c, Worker 2G/2c, quatro peers 1G/1c) falam pelo hub L2, elegem roles, trocam FRAG (matmul) e pintam o orb do Jarbas por `MESH_HEALTH`.
+
+```powershell
+# 1) Build imagem UEFI (kernel + ESP)
+cargo build --release -p boot
+
+# 2) Hub Ethernet L2 (bridge entre guests — porta tipica 19000)
+python tools/qemu_l2_hub.py
+
+# 3) Subir os 6 QEMU (script de relaunch do lab / run-qemu-*-mesh)
+# Topologia: A=3G/3c Master · B=2G/2c · C–F=1G/1c
+# STATIC 10.0.3.x — ver netmode_*.flag / logs/boot_mesh_*.txt
+```
+
+Aceite visual: orb com peers coloridos por role, Hub Health aberto como SystemInfo, HDA armado no QEMU. Aceite serial: `MESH_ENGINE` / `mesh role=` / FRAG TX/RX com sev `ok`. Residual: estabilizar peer B em toda a topologia.
+
+---
+
 ### Instalar QEMU
 
 **Windows:** Baixe de https://qemu.org ou use winget:

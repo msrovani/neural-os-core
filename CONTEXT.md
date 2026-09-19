@@ -46,8 +46,10 @@ Linguagem compartilhada entre humanos e agentes. Este arquivo só fixa **vocabul
 - **e1000 TX 0x3800/0x3818** — offsets 0x0420/0x0438 são aliases Intel não-wired no QEMU (write no-op).
 - **DMA pages UC** — buffers de DMA (TX/RX rings) DEVEM usar `map_page_uc` (PWT|PCD); senão o NIC lê cache stale (RX=0).
 - **Mesh P2P (ADR-0081)** — transporte em k_nano R0; reassembly 16 slots + ACK seletivo (FRAG\0→FRACK\0), tiers de segurança (L=HMAC-SHA256 dados, F=Ed25519 controle/TOFU), token bucket, PeerHealth com p99 EWMA.
+- **Mesh lab 6-node (s360)** — seis QEMU WHPX (topologia 3G/3c + 2G/2c + 4×1G/1c) + hub L2 (`tools/qemu_l2_hub.py`); roles Master/Memory/Compute/Worker; FRAG matmul = compute distribuído; `MESH_HEALTH` pinta o orb.
+- **Hub Health** — agente decide estado do painel SystemInfo; compositor só desenha (SESSION_331/360).
 - **smoltcp clock** — TIMER_TICKS ≠ ms (~55ms/tick); sempre `Instant::from_millis(now * 55)`.
-- **WHPX** — aceleração QEMU nativa; TCG = fallback lento/não-determinístico. Wifi bridge sobre TCG é instável.
+- **WHPX** — aceleração QEMU nativa (lab mesh preferido); TCG = fallback lento/não-determinístico. Wifi bridge sobre TCG é instável.
 
 ## Build & Dev
 

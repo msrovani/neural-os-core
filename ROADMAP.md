@@ -1,9 +1,10 @@
 # Roadmap — neural-os-core
 
-**Última atualização:** 2026-09-11
-**Versão release:** **v1.9.99-s332 TEST / NÃO ESTÁVEL**
-**Estado:** ~148K LOC, ~671 arquivos Rust (12 crates do workspace), 41 agentes nativos, 0 erros (`cargo nk`), 829 testes host (0 fail)
-**Pista ativa:** s331 orb v2 (MCU-JARVIS) + FFT Goertzel + Hub Health panel (agent-driven); s330 freeze/timer x2APIC + ADR-0104 (tick adaptativo); s328 InferQueue WS-H; s321 k_nano slimming. **Aberto:** USB/MSC no metal + mouse (diagnóstico FB pronto p/ ler).
+**Última atualização:** 2026-09-19
+**Versão release:** **v1.9.99-s360 TEST / NÃO ESTÁVEL**
+**Estado:** ~148K LOC, ~671 arquivos Rust (12 crates do workspace), 41 agentes nativos, 0 erros (`cargo nk`)
+**Marco s360:** interface Jarbas **funcional** + rede mesh + computação distribuída em **6 QEMU** (WHPX, hub L2, FRAG matmul, orb/`MESH_HEALTH` por role).
+**Pista ativa:** s360 mesh lab + fail/warn honesty; s359 bin emagreçer Bei/MoE; s358 cortex GGUF; s328 InferQueue. **Aberto:** aceite metal USB/MSC; peer B estável no mesh 6-node; gate v2.0.0.
 
 ---
 
@@ -237,6 +238,7 @@ Auto-skill generation, verification, self-improvement, meta-reflect — **CLOSED
 | **Residuals 0–7** | PreFlight + ondas FS/Sound/GPU/AirLLM + LAN | ✅ SESSION_151 |
 | **LAN L3.5–L5** | e1000 TX 0x3800 + DNS raw + HTTP smoke | ✅ SESSION_149/150 |
 | **Pós-LAN B-01** | net_bridge · NetFs · SelfUpdate HTTP · TLS stub | ✅ SESSION_152 |
+| **Mesh 6-node + UI** | WHPX lab + hub L2 + FRAG matmul + orb/HubHealth | ✅ SESSION_360 |
 | **Gate v2.0.0** | Review ADR + AWAITING_HW / TLS / WiFi | ⏳ |
 | WiFi RF / TLS real | `depends_on: wifi` + embedded-tls | ▶️ AWAITING / BLOCKED |
 | Sprint 108 | Self-evolving agents | ✅ |

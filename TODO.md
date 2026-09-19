@@ -1,22 +1,34 @@
 # 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s328 TEST
-**Data:** 2026-09-10
-**Fonte:** ADRs 0089–0103 (`docs/architecture/`) + SESSION_316/321/328
+**Versão:** v1.9.99-s360 TEST
+**Data:** 2026-09-19
+**Fonte:** ADRs 0081/0089–0103 + SESSION_360 (mesh 6-node + UI)
 **Legenda:** ✅ feito | 🟡 em andamento | `[~]` parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | `[ ]` pendente
+
+---
+
+## ✅ MARCO s360 — UI + mesh + compute distribuído
+
+- [x] Desktop Jarbas funcional (orb + Hub Health + compositor) no WHPX
+- [x] Rede mesh 6 QEMU (3G/3c + 2G/2c + 4×1G/1c) + hub L2 (`tools/qemu_l2_hub.py`)
+- [x] Computação distribuída FRAG matmul Master↔peers (Memory/Compute/Worker)
+- [x] Fail/warn honesty (TLSPINS/Trust/CapGate/mouse soft-F4)
+- [ ] Peer B estável em toda a topologia 6-node (residual)
+- [ ] Re-boot mesh pós-fix s360 (AWAITING operador)
 
 ---
 
 ## 🎯 OBJETIVOS
 
-1. **Aceite metal pós-s328** — flash `usb_hw.img` (6271MB READY) e validar InferQueue/UI/BOOT.LOG no Alienware.
+1. **Aceite metal pós-s328** — flash `usb_hw.img` e validar InferQueue/UI/BOOT.LOG no Alienware.
 2. **Gate v2.0.0** — fechar ADR-0100 Ondas 0–3 + review formal + OK maintainer.
 3. **Emagrecer `k_nano`** — primitivos R0 + hooks (ADR-0103; FASE A–H feita, S1 metal pendente).
 4. **Sandbox Ring3 CPL=3** — um sandbox para blob nativo B/C; wasmi default até T-055 (ADR-0102).
 5. **Kernel ternário-nativo** — Falcon3-3B 1.58-bit com ADD/SUB/SKIP packed no metal (ADR-0101).
 6. **Observabilidade de boot** — 3 canais + `BOOT SCORE` + instrumentos FB (ADR-0092).
-7. **Desktop Jarbas v2** — production-grade (ADR-0090).
+7. **Desktop Jarbas v2** — production-grade (ADR-0090); **s360 = desktop vivo + mesh no orb** ✅ parcial.
 8. **SMP per-CPU runqueue** — feature ON; falta aceite metal (ADR-0089).
+9. **Mesh cluster** — escalar 6-node lab → HW LAN real (ADR-0081).
 
 ---
 

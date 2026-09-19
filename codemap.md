@@ -1,7 +1,7 @@
 # Repository Atlas: neural-os-core (K³CHJ Core)
 
 ## Project Responsibility
-AI-native bare-metal OS written in Rust (`no_std` + `no_main`, x86_64). Everything is an Agent or a Skill — no tasks, no services, no standalone drivers. Logical dependency rings: R0 `k_nano` (foundation) ← R1 `k_hal` (HW abstraction) ← R2 `cortex`/`k_ai` (inference/autonomy) ← R3 `hermes`/`jarbas` (orchestration/UI). ~148K LOC, ~671 `.rs` files (12 workspace crates), 41 native agents. Boot via Limine UEFI, 8-phase event-driven sequence (SafeHarbor → MemoryCore → SystemBringup → Diagnostics → HardwareDiscovery → DriverInit → AgentFleet → Runtime). Current line: v1.9.99-s332 TEST, K³CHJ = k-nano + k-hal + k-ai + Cortex + Hermes + Jarbas. 829 host tests passing (0 fail).
+AI-native bare-metal OS written in Rust (`no_std` + `no_main`, x86_64). Everything is an Agent or a Skill — no tasks, no services, no standalone drivers. Logical dependency rings: R0 `k_nano` (foundation) ← R1 `k_hal` (HW abstraction) ← R2 `cortex`/`k_ai` (inference/autonomy) ← R3 `hermes`/`jarbas` (orchestration/UI). ~148K LOC, ~671 `.rs` files (12 workspace crates), 41 native agents. Boot via Limine UEFI, 8-phase event-driven sequence (SafeHarbor → MemoryCore → SystemBringup → Diagnostics → HardwareDiscovery → DriverInit → AgentFleet → Runtime). Current line: **v1.9.99-s360 TEST** — functional Jarbas desktop + P2P mesh + distributed FRAG matmul across **6 QEMU** (WHPX/L2 hub). K³CHJ = k-nano + k-hal + k-ai + Cortex + Hermes + Jarbas.
 
 ## System Entry Points
 - `crates/neural-kernel/` — boot binary: Limine `_start` → `kernel_boot()` (limine_boot.rs), 8-phase boot, agent fleet, K³CHJ wiring via `pub use` re-exports.

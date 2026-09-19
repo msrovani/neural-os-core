@@ -44,6 +44,8 @@ Sentence-level TTS streaming provides sub-200ms first-phrase latency via Piper.
 
 ## Status
 
+**v1.9.99-s360 TEST** — Jarbas UI live on the framebuffer, P2P mesh across **six QEMU VMs**, and distributed matmul over FRAG — a working AIOS desktop talking to a small cluster, not a slide deck.
+
 The project is honest about what is done and what is not. Anything marked
 "gated" or "pending" below will fail or is disabled at runtime — we prefer an
 explicit gate over a silent promise.
@@ -55,14 +57,14 @@ explicit gate over a silent promise.
 | UEFI boot (Limine) | Booting through all 8 phases in QEMU (WHPX/TCG); BIOS legacy boot is **not** supported |
 | Memory management | AIOS self-adapting heap: modest 512MB floor, `grow_bump_auto` expands on demand (256MB steps) up to 75% of detected RAM; Limine kernel stack reserved in the frame allocator (fixes a `#PF ip=0` with large QEMU-loader models at 4GB+) |
 | Networking | Intel e1000 driver (TX/RX, DMA fixed via uncached mapping), raw DNS, HTTP GET via smoltcp, NTP, TLS 1.3 (`embedded-tls`, wired through hermes), NetFs (TCP file server, smoke-tested) |
-| P2P mesh | Two QEMU instances discover each other over UDP broadcast (port 42069), exchange skills; selective ACK per fragment, 16-slot reassembly, HMAC-SHA256/Ed25519 crypto tiers, token-bucket rate limiting |
+| P2P mesh + distributed compute | **6-node WHPX lab** (3G/3c + 2G/2c + 4×1G/1c) over L2 hub (`tools/qemu_l2_hub.py`); STATIC `10.0.3.x`, TOFU/ROLE election, FRAG matmul Master↔Compute/Memory/Worker; `MESH_HEALTH` → orb palette by role (SESSION_360 / ADR-0081) |
 | Storage | ATA PIO, FAT32 read/write (data partition), exFAT (opt-in), VirtIO-blk (QEMU) |
 | WASM | `wasmi` `no_std` runtime with fuel metering, capability-gated host imports (`aios::*`); self-test `add(2,3)=5` passes |
 | Inference | Falcon3-3B ternary (22 layers, hidden 3072) run off the BSP through the `InferQueue` MPMC worker (ADR-0057 WS-H); Trinity MoE router with on-demand experts; token streaming (`LLM_STREAM`) + per-sentence TTS |
-| Audio/voice | Intel HDA capture + playback, Piper TTS (PT-BR/EN), CTC STT (55K params), wake word "Jarvis" |
+| Audio/voice | Intel HDA capture + playback (armed in QEMU), Piper TTS (PT-BR/EN), CTC STT (55K params), wake word "Jarvis" |
 | GPU compute | NVIDIA PUSH_BUFFER submit (HW-real on a GTX 1050), VirtIO-GPU 2D (QEMU), Intel GEN ring (canary). Ternary **W2A8 compute kernels are pending** (KernelPack) — matmul runs on the CPU until then |
 | SMP | 4-core AP wake (3 APs) via directed sequential SIPI, per-AP stacks |
-| UI | `embedded-graphics` card desktop, Z-order compositor, PS/2 mouse, FFT-driven orb |
+| UI (Jarbas) | **Functional desktop**: orb + mesh peer graph (role colors), Hub Health as sole SystemInfo (default open), compositor + HDA; PS/2 soft-enable; power dialog always on top |
 | Security | Ed25519 trust chain, capability gates, fail-closed mesh authentication |
 | Self-installer (ADR-0079) | Detects PCI hardware, partitions, formats FAT32 ESP, deploys bootloader and only the needed firmware/models |
 | Host tests | `cargo test --workspace --exclude neural-kernel --exclude boot --no-fail-fast` runs on the host (784 passing / 6 failing at this revision) |
