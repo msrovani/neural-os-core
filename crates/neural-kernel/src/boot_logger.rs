@@ -89,7 +89,7 @@ pub fn maybe_uefi_flush_reboot(reason: &str) {
         for sec in (0..3u32).rev() {
             let msg = alloc::format!(">>> FOTO K{} | go boot {}s <<<", k, sec);
             crate::display::fb::console_print(&msg);
-            for _ in 0..40_000_000 { core::hint::spin_loop(); }
+            k_nano::tsc::sleep_us(1_000_000);
         }
         k_nano::boot_ramlog::mark_skip_flush_reboot();
         crate::display::fb::console_print(

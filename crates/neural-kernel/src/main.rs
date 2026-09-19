@@ -993,6 +993,12 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
                 "wakeword" => Some(Box::new(audio::wakeword::WakeWordAgent::new())),
                 "audio_input" => Some(Box::new(audio::capture::AudioInputAgent::new())),
                 "audio_mixer" => Some(Box::new(audio::mixer::AudioMixerAgent::new())),
+                "memory" => Some(Box::new(agents::MemoryAgent::new())),
+                "memory_budget" => Some(Box::new(crate::memory_agent::MemoryAgent::new())),
+                "hub_health_agent" => Some(Box::new(hermes_crate::hub_health::HubHealthAgent::new())),
+                "vision" => Some(Box::new(vision_agent::VisionAgent::new())),
+                "browser" => Some(Box::new(browser_agent::BrowserAgent::new())),
+                "auto-installer" => Some(Box::new(k_nano::installer_agent::AutoInstallerAgent::new())),
                 other => {
                     k_nano::slog_bin!(
                         "Sched",
@@ -1182,46 +1188,46 @@ fn n4_hermes_gate(intent_e2e: Option<bool>) {
         && crate::jarbas_bridge::topics_in_sync();
     let llm_loaded = crate::cortex::model_is_loaded();
 
-    k_nano::slog_hermes!("Gate", "n4", "intent_router=REGISTERED topics={}/{} react=7phase",
+    k_nano::slog_hermes!("Gate", "ok", "intent_router=REGISTERED topics={}/{} react=7phase",
         crate::hermes::TOPIC_USER_INTENT,
         crate::hermes::TOPIC_HERMES_RESPONSE
     );
-    k_nano::slog_hermes!("Gate", "n4", "skills={} wasm_sfi={} CapGate allow={} deny={}",
+    k_nano::slog_hermes!("Gate", "ok", "skills={} wasm_sfi={} CapGate allow={} deny={}",
         skills,
         WASM_HUB_BUILTINS,
         cap_allow,
         cap_deny
     );
-    k_nano::slog_hermes!("Gate", "n4", "cortex_orchestrate={} route=global_arena pending→generate_via_model",
+    k_nano::slog_hermes!("Gate", if llm_loaded { "ok" } else { "warn" }, "cortex_orchestrate={} route=global_arena pending→generate_via_model",
         if llm_loaded { "OK" } else { "ABSENT" }
     );
     match intent_e2e {
         Some(true) => {
             k_nano::slog_hermes!(
                 "Gate",
-                "n4",
+                "ok",
                 "intent_e2e=OK STT→USER_INTENT→cortex (weather-e2e)"
             )
         }
-        Some(false) => k_nano::slog_hermes!("Gate", "n4", "intent_e2e=FAILED"),
+        Some(false) => k_nano::slog_hermes!("Gate", "fail", "intent_e2e=FAILED"),
         None => {
             // Não afirmar "prior L5 OK" — hist Sprint107 ≠ smoke deste boot.
             // Gate net = bootstrap_early [smoltcp/NIC]; L5_OK só se este boot passou.
             let net = crate::network_agent::early_smoke_status();
             k_nano::slog_hermes!(
                 "Gate",
-                "n4",
+                "warn",
                 "intent_e2e=GATED boot default (feature=weather-e2e; hist Sprint107 != this-boot)"
             );
             k_nano::slog_hermes!(
                 "Gate",
-                "n4",
+                "ok",
                 "this-boot net_smoke={} [smoltcp/NIC] (bootstrap_early; L5_OK so se smoke passou)",
                 net
             );
         }
     }
-    k_nano::slog_hermes!("Gate", "n4", "IPC→jarbas topics_mirror={} full_wire={}",
+    k_nano::slog_hermes!("Gate", if topics_ok { "ok" } else { "warn" }, "IPC→jarbas topics_mirror={} full_wire={}",
         if topics_ok { "OK" } else { "DRIFT" },
         if topics_ok { "OK(hermes-crate)" } else { "DRIFT" }
     );
@@ -1238,7 +1244,7 @@ fn n4_hermes_gate(intent_e2e: Option<bool>) {
     };
     let n45 = topics_ok;
     let met = n41 && n42 && n43 && n44 && n45;
-    k_nano::slog_hermes!("Gate", "n4", "gate complete n4.1={} n4.2={} n4.3={} n4.4={} n4.5={} criteria={} (N4.6 hermes-crate wired)",
+    k_nano::slog_hermes!("Gate", if met { "ok" } else { "warn" }, "gate complete n4.1={} n4.2={} n4.3={} n4.4={} n4.5={} criteria={} (N4.6 hermes-crate wired)",
         if n41 { "OK" } else { "FAIL" },
         if n42 { "OK" } else { "FAIL" },
         if n43 { "OK" } else { "FAIL" },
@@ -1276,14 +1282,15 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
         .unwrap_or(false);
     let p4_present = crate::jarbas_fb::present_count() > 0;
     let p4_cap = crate::jarbas_fb::cap_only_ok();
-    let fb_ready = gpu_present || p4_present || p4_cap;
+    // Honesty: Cap-only ≠ FB real — gate N5 exige gpu ou present físico.
+    let fb_ready = gpu_present || p4_present;
     let compositor_ready = display_reg && fb_ready;
     let p4_status = if p4_present {
         "OK"
     } else if p4_cap {
-        "CAP-OK"
-    } else {
         "CAP-ONLY"
+    } else {
+        "ABSENT"
     };
 
     let soul = crate::jarvis::SoulProfile::default_jarbas();
@@ -1291,7 +1298,7 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
 
     k_nano::slog_jarbas!(
         "Compositor",
-        "register",
+        if display_reg && fb_ready { "ok" } else { "warn" },
         "display={} gpu={} p4_present={} apps=HermesChat+Settings+Power",
         if display_reg { "OK" } else { "MISSING" },
         if gpu_present { "OK" } else { "ABSENT" },
@@ -1299,7 +1306,7 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
     );
     k_nano::slog_jarbas!(
         "Persona",
-        "register",
+        if jarvis_reg { "ok" } else { "warn" },
         "jarvis={} pipeline=16stage {}",
         if jarvis_reg { "OK" } else { "MISSING" },
         persona_desc
@@ -1307,20 +1314,20 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
     match voice_e2e {
         Some(true) => k_nano::slog_jarbas!(
             "Voice",
-            "e2e",
-            "OK Hermes->TTS->FB (weather-e2e; jarvis_voice+wakeword registered)"
+            "ok",
+            "e2e=OK Hermes->TTS->FB (weather-e2e; jarvis_voice+wakeword registered)"
         ),
-        Some(false) => k_nano::slog_jarbas!("Voice", "e2e", "FAILED"),
+        Some(false) => k_nano::slog_jarbas!("Voice", "fail", "e2e=FAILED"),
         None => k_nano::slog_jarbas!(
             "Voice",
-            "e2e",
-            "GATED boot default (feature=weather-e2e; prior Sprint107 TTS+FB OK)"
+            "warn",
+            "e2e=GATED boot default (feature=weather-e2e; prior Sprint107 TTS+FB OK)"
         ),
     }
     k_nano::slog_jarbas!(
         "Voice",
-        "agents",
-        "jarvis_voice={} wakeword={} mixer={} hermes_only=OK (no direct ATA/PCI)",
+        if voice_reg && wake_reg && mixer_reg { "ok" } else { "warn" },
+        "agents jarvis_voice={} wakeword={} mixer={} hermes_only=OK (no direct ATA/PCI)",
         if voice_reg { "OK" } else { "MISSING" },
         if wake_reg { "OK" } else { "MISSING" },
         if mixer_reg { "OK" } else { "MISSING" }
@@ -1328,8 +1335,8 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
     let topics_ok = crate::jarbas_bridge::topics_in_sync();
     k_nano::slog_jarbas!(
         "IPC",
-        "hermes",
-        "topics_mirror={} full_wire=OK(jarbas-crate)",
+        if topics_ok { "ok" } else { "warn" },
+        "hermes topics_mirror={} full_wire=OK(jarbas-crate)",
         if topics_ok { "OK" } else { "DRIFT" }
     );
 
@@ -1348,15 +1355,16 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
     let met = n51 && n52 && n53 && n54 && n55 && n56;
     k_nano::slog_jarbas!(
         "Gate",
-        "n5",
-        "complete n5.1={} n5.2={} n5.3={} n5.4={} n5.5={} n5.6={} criteria={} (N5.7 jarbas-crate wired)",
+        if met { "ok" } else { "warn" },
+        "N5 complete n5.1={} n5.2={} n5.3={} n5.4={} n5.5={} n5.6={} criteria={} (N5.7 jarbas-crate wired; cap_only={})",
         if n51 { "OK" } else { "FAIL" },
         if n52 { "OK" } else { "FAIL" },
         if n53 { "OK" } else { "FAIL" },
         if n54 { "OK" } else { "FAIL" },
         if n55 { "OK" } else { "FAIL" },
         if n56 { "OK" } else { "FAIL" },
-        if met { "MET" } else { "PARTIAL" }
+        if met { "MET" } else { "PARTIAL" },
+        if p4_cap { "yes" } else { "no" }
     );
     if met {
         crate::boot_logger::log("BOOT: N5 jarbas gate MET");
@@ -1508,10 +1516,20 @@ pub(crate) fn kernel_boot(
         // init_heap AGORA — TALC usa HEAP_BUFFER+SLAB_SIZE como span (.bss, páginas iniciais mapeadas)
         // Slab init removido (escreve em .bss identity não-mapeado).
         // TALC só registra o span (não escreve nele) — o LazyBumpAllocator cobre as allocs iniciais.
-        allocator::init_heap().expect("heap init failed");
+        match allocator::init_heap() {
+            Ok(()) => {}
+            Err(e) => {
+                k_nano::slog_bin!("Boot", "fail", "heap init failed: {} — halt", e);
+                loop {
+                    unsafe {
+                        core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+                    }
+                }
+            }
+        }
         crate::boot_logger::mark_heap_ready();
         allocator::resize_bump_heap(512);
-        k_nano::slog_bin!("Boot", "dbg", "heap init OK (Tier 1 talc)");
+        k_nano::slog_bin!("Boot", "ok", "heap init OK (Tier 1 talc)");
         crate::display::fb::boot_ckpt(11, "heap OK");
 
         let arena_sz = arena::auto_arena_size();
@@ -1738,7 +1756,17 @@ pub(crate) fn kernel_boot(
     k_nano::slog_bin!("HEAP", "ok", "heap piso_t0=512MB RAM={}MB budget={}MB (75%-keep)",
         detected_ram_mb, heap_budget);
     // TALC init — APÓS init_global_allocator (alloc_physical_frame disponível)
-    allocator::talc_init_post_memory().expect("talc post-init failed");
+    match allocator::talc_init_post_memory() {
+        Ok(()) => {}
+        Err(e) => {
+            k_nano::slog_bin!("HEAP", "fail", "talc post-init failed: {} — halt", e);
+            loop {
+                unsafe {
+                    core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+                }
+            }
+        }
+    }
 
     // ADR-0060: Initialize BEI (BitNet Ecosystem Intelligence) — 8 waves
     bei_init::init_bei(); // slog ok|fail inside; OOM → DEGRADED sem panic
@@ -2006,6 +2034,8 @@ pub(crate) fn kernel_boot(
     crate::netfs::smoke_if_online();
     // TLS N4 smoke — só com L5_OK; fora do lock do bootstrap
     crate::net::smoke_https_if_online();
+    // T-024: auto-provision se NET L5 + first_boot residente (antes era dead wire).
+    crate::model_provisioner::maybe_on_net_ready();
     // Labor 10: NTP sync non-fatal (ADR-0069)
     let _ = hermes_crate::ntp::try_sync();
     publish_boot_phase(BootPhase::DriverInit, "Net bootstrap_early (static/DNS/HTTP/TLS/NTP smoke)");
@@ -2473,6 +2503,11 @@ pub(crate) fn kernel_boot(
     crate::boot_logger::log("BOOT: Desktop apps OK");
     k33_step!("audio...");
     audio::init_audio();
+    // MoE HwControl → volume: bridge cortex→jarbas (cortex não depende de jarbas)
+    cortex_crate::cortex::register_audio_volume_setter(|v| {
+        crate::audio::settings::AUDIO_VOLUME
+            .store(v, core::sync::atomic::Ordering::Relaxed);
+    });
     jarbas_bridge::log_bridge_status();
     k33_step!("audio ok");
 
@@ -2541,9 +2576,9 @@ pub(crate) fn kernel_boot(
     k33_step!("aead...");
     let _ = k_nano::crypto::aead_self_test();
     k33_step!("aead");
-    // ADR-0077: conectores do Ring3 isolation ring (ex-ADR-0060). NÃO registra ainda —
-    // porto seguro: B/C nativo gated até o ring passar o gate.
-    crate::isolation_ring::init_connectors();
+    // Ring3 connectors: uma vez só, pós-P6 demos (ver AgentFleet init_connectors).
+    // Não chamar aqui — demos Ring3 ainda não rodaram; stash prematuro é ok mas
+    // duplicar spam + obscuring status. Deferido para pós-P6.
     k33_step!("connectors");
     // ADR-0063 F0/F1a: TickvLite mount + smoke (NVMe ou RAM)
     k33_step!("tickv...");
@@ -3345,7 +3380,7 @@ pub(crate) fn kernel_boot(
     // PlatformAgent: idempotente se init_platform_sync ja rodou
     registry.register(Box::new(agents::PlatformAgent::new()));
 
-    registry.register(Box::new(agents::MemoryAgent::new()));
+    registry.register(Box::new(agents::MemoryAgent::new())); // hermes "memory" — ARCH+MHI
 
     // ADR-0042 N2: Trust antes de SelfHeal para (token,agent,skill) já estar concedido
     registry.register(Box::new(agents::BootTrustAgent));
@@ -3354,7 +3389,8 @@ pub(crate) fn kernel_boot(
     // Continuous SelfHealAgent for KERNEL_ERROR processing + silent failure detection
     registry.register(Box::new(k_ai::self_heal_agent::SelfHealAgent::new()));
 
-    registry.register(Box::new(crate::memory_agent::MemoryAgent::new()));
+    // Bin residual: orçamento heap/KV (nome distinto do hermes MemoryAgent).
+    registry.register(Box::new(crate::memory_agent::MemoryAgent::new())); // "memory_budget"
     registry.register(Box::new(agents::NetDriverAgent));
     registry.register(Box::new(agents::UsbDriverAgent));
     registry.register(Box::new(k_hal::audio::hda::HdaAudioAgent::new()));
@@ -3454,6 +3490,7 @@ pub(crate) fn kernel_boot(
     crate::display::fb::boot_ckpt(51, "MetricsAgent OK");
 
     registry.register(Box::new(agents::HermesAgent::new()));
+    registry.set_urgency("intent_router", 200); // Continuous+Pending — sem urgency = rate-limit (SESSION_252)
     let _ = registry.set_affinity_ring("intent_router", 2);
     // Hub Health: política do painel F12 (EventDriven) — compositor só renderiza.
     registry.register(Box::new(hermes_crate::hub_health::HubHealthAgent::new()));
@@ -3514,6 +3551,7 @@ pub(crate) fn kernel_boot(
 
     registry.register(Box::new(mcp::McpAgent::new()));
     registry.register(Box::new(security::SecurityAgent::new()));
+    registry.set_urgency("security", 140); // Continuous+Pending — evita starvation
     let _ = registry.set_affinity_ring("security", 0);
     // DEAD CODE: registry.register(Box::new(safety::SafetyAgent::new())); // (HERMES_AUDIT.md)
     // DEAD CODE: registry.register(Box::new(optimizer::OptimizerAgent::new())); // (HERMES_AUDIT.md)
@@ -4634,8 +4672,7 @@ pub(crate) fn kernel_boot(
     if already_greeted || qemu {
         crate::display::fb::boot_ckpt(50, "saudacao LLM skip (template/QEMU)");
         k_nano::slog_bin!(
-            "JARBAS",
-            "GREETING",
+            "JARBAS", "ok",
             "skip generate_via_model (emitted={} qemu={}) — segue Runtime",
             already_greeted,
             qemu
@@ -4664,7 +4701,7 @@ pub(crate) fn kernel_boot(
         }
     } else if model_ok && bpe_ok {
         crate::display::fb::boot_ckpt(49, "Gerando saudacao LLM...");
-        k_nano::slog_bin!("JARBAS", "GREETING",
+        k_nano::slog_bin!("JARBAS", "ok",
             "model LOADED + BPE LOADED — gerando saudacao via LLM");
         let greeting_prompt =
             "You are Jarbas, the Neural OS voice assistant. \
@@ -4672,42 +4709,42 @@ pub(crate) fn kernel_boot(
              Be concise, one sentence.";
         let raw = crate::cortex::generate_via_model(greeting_prompt);
         if raw.is_empty() || raw == crate::cortex::NO_MODEL_MSG {
-            k_nano::slog_bin!("JARBAS", "GREETING",
+            k_nano::slog_bin!("JARBAS", "ok",
                 "LLM generate vazio — fallback para saudacao fixa");
             n3_gen = Some(false);
             n4_intent = Some(false);
             n5_voice = Some(false);
         } else {
-            k_nano::slog_bin!("JARBAS", "GREETING", "LLM: \"{}\"", raw);
+            k_nano::slog_bin!("JARBAS", "ok", "LLM: \"{}\"", raw);
             n3_gen = Some(true);
             n4_intent = Some(true);
             let pcm = crate::audio::skills::synthesize_tts(&raw);
             crate::display::fb::paint_tts_response(&raw);
             n5_voice = Some(!pcm.is_empty());
-            k_nano::slog_bin!("JARBAS", "GREETING",
+            k_nano::slog_bin!("JARBAS", "ok",
                 "TTS samples={} FB painted",
                 pcm.len());
         }
     } else if model_ok && !bpe_ok {
-        k_nano::slog_bin!("JARBAS", "GREETING",
+        k_nano::slog_bin!("JARBAS", "ok",
             "model LOADED mas BPE ausente — generate com CHAR fallback");
         let raw = crate::cortex::generate_via_model("ola");
         if !raw.is_empty() && raw != crate::cortex::NO_MODEL_MSG {
-            k_nano::slog_bin!("JARBAS", "GREETING", "CHAR LLM: \"{}\"", raw);
+            k_nano::slog_bin!("JARBAS", "ok", "CHAR LLM: \"{}\"", raw);
             n3_gen = Some(true);
             n4_intent = Some(true);
             let pcm = crate::audio::skills::synthesize_tts(&raw);
             crate::display::fb::paint_tts_response(&raw);
             n5_voice = Some(!pcm.is_empty());
         } else {
-            k_nano::slog_bin!("JARBAS", "GREETING",
+            k_nano::slog_bin!("JARBAS", "ok",
                 "CHAR generate vazio — sem saudacao LLM");
             n3_gen = Some(false);
             n4_intent = Some(false);
             n5_voice = Some(false);
         }
     } else {
-        k_nano::slog_bin!("JARBAS", "GREETING",
+        k_nano::slog_bin!("JARBAS", "ok",
             "model ABSENT — saudacao LLM pulada");
     }
 
@@ -4723,18 +4760,18 @@ pub(crate) fn kernel_boot(
         if ctc_alpha(&stt_ctc) < 4 && crate::audio::skills::piper_is_loaded() {
             let pcm2 = crate::audio::skills::synthesize_tts("tempo");
             let ctc2 = crate::audio::stt::transcribe_global(&pcm2);
-            k_nano::slog_bin!("JARBAS", "STT", "retry piper-pcm len={} ctc_len={} ctc='{}' (prev='{}')",
+            k_nano::slog_bin!("JARBAS", "ok", "retry piper-pcm len={} ctc_len={} ctc='{}' (prev='{}')",
                 pcm2.len(), ctc2.len(), ctc2, stt_ctc);
             if ctc_alpha(&ctc2) > ctc_alpha(&stt_ctc) { stt_ctc = ctc2; }
         }
         if ctc_alpha(&stt_ctc) < 4 && crate::audio::skills::piper_is_loaded() {
             let pcm3 = crate::audio::skills::synthesize_tts("dia sol");
             let ctc3 = crate::audio::stt::transcribe_global(&pcm3);
-            k_nano::slog_bin!("JARBAS", "STT", "retry2 piper-pcm len={} ctc_len={} ctc='{}'",
+            k_nano::slog_bin!("JARBAS", "ok", "retry2 piper-pcm len={} ctc_len={} ctc='{}'",
                 pcm3.len(), ctc3.len(), ctc3);
             if ctc_alpha(&ctc3) > ctc_alpha(&stt_ctc) { stt_ctc = ctc3; }
         }
-        k_nano::slog_bin!("JARBAS", "STT", "pcm_len={} ctc_len={} ctc='{}'",
+        k_nano::slog_bin!("JARBAS", "ok", "pcm_len={} ctc_len={} ctc='{}'",
             pcm_probe.len(), stt_ctc.len(), stt_ctc);
         {
             let ctc_payload = if stt_ctc.is_empty() {
@@ -4756,7 +4793,7 @@ pub(crate) fn kernel_boot(
             }
         } else {
             if !stt_ctc.is_empty() {
-                k_nano::slog_bin!("JARBAS", "STT",
+                k_nano::slog_bin!("JARBAS", "ok",
                     "path_ctc_nonempty='{}' → seed LLM", stt_ctc);
             } else {
                 k_nano::slog_bin!("JARBAS-STT-SIM", "info",
@@ -4785,7 +4822,7 @@ pub(crate) fn kernel_boot(
                 n4_intent = Some(true);
                 let piper_on = crate::audio::skills::piper_is_loaded();
                 let _pcm = crate::audio::skills::synthesize_tts(&raw);
-                k_nano::slog_bin!("JARBAS", "TTS", "piper={} pcm_samples={}",
+                k_nano::slog_bin!("JARBAS", "ok", "piper={} pcm_samples={}",
                     if piper_on { "LOADED" } else { "OFF" }, _pcm.len());
                 crate::display::fb::paint_tts_response(&raw);
                 n5_voice = Some(!_pcm.is_empty() || piper_on);

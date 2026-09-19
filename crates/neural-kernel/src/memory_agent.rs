@@ -30,7 +30,7 @@ impl MemoryAgent {
     pub fn new() -> Self {
         MemoryAgent {
             manifest: AgentManifest {
-                name: "MemoryAgent", kind: AgentKind::System,
+                name: "memory_budget", kind: AgentKind::System,
                 schedule: ScheduleKind::Oneshot, auto_start: true, persist: false,
             },
             budget: None, ran: false,
@@ -87,29 +87,42 @@ impl MemoryAgent {
 
     pub fn budget(&self) -> Option<&MemoryBudget> { self.budget.as_ref() }
 
-    fn measure_cpu_freq() -> u64 {
-        let start_lo: u32; let start_hi: u32;
+    fn measure_cpu_freq() -> Option<u64> {
+        let start_lo: u32;
+        let start_hi: u32;
         unsafe {
             core::arch::asm!("rdtsc", out("eax") start_lo, out("edx") start_hi);
         }
-        let timer_ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        let timer_ticks =
+            crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         let target = timer_ticks + 10;
-        while crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) < target {
+        // Honesty: sem budget TSC o while trava se PIT/timer não avança (Oneshot hang).
+        let t0 = k_nano::tsc::now_us();
+        while crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) < target
+        {
+            if k_nano::tsc::now_us().saturating_sub(t0) > 200_000 {
+                k_nano::slog_bin!(
+                    "MEM",
+                    "warn",
+                    "CPU MHz measure timeout (TIMER_TICKS stuck) — n/a"
+                );
+                return None;
+            }
             core::hint::spin_loop();
         }
-        let end_lo: u32; let end_hi: u32;
+        let end_lo: u32;
+        let end_hi: u32;
         unsafe {
             core::arch::asm!("rdtsc", out("eax") end_lo, out("edx") end_hi);
         }
         let start = start_lo as u64 | ((start_hi as u64) << 32);
         let end = end_lo as u64 | ((end_hi as u64) << 32);
-        (end.wrapping_sub(start) * 12 / 10) / 1_000_000
+        Some((end.wrapping_sub(start) * 12 / 10) / 1_000_000)
     }
 
-    fn count_active_agents() -> usize {
-        // Heuristic: count Continuous + PollEvery agents that are always active
-        // In practice, this is tracked by the scheduler
-        15 // Default estimate
+    fn count_active_agents() -> Option<usize> {
+        // Sem acesso ao registry aqui — não inventar "15".
+        None
     }
 
     fn calibrate_tick_init(active: usize, _cpu_mhz: u64) -> u64 {
@@ -172,8 +185,30 @@ impl Agent for MemoryAgent {
         // ── Clock measurement + dynamic tick calibration ──
         let cpu_mhz = Self::measure_cpu_freq();
         let active = Self::count_active_agents();
-        let optimal_init = Self::calibrate_tick_init(active, cpu_mhz);
-        k_nano::slog_bin!("MEM", "info", "CPU: {} MHz | {} agentes ativos | tick init: {}", cpu_mhz, active, optimal_init);
+        let optimal_init = Self::calibrate_tick_init(active.unwrap_or(0), cpu_mhz.unwrap_or(0));
+        match (cpu_mhz, active) {
+            (Some(mhz), Some(n)) => k_nano::slog_bin!(
+                "MEM",
+                "ok",
+                "CPU: {} MHz | {} agentes ativos | tick init: {}",
+                mhz,
+                n,
+                optimal_init
+            ),
+            (Some(mhz), None) => k_nano::slog_bin!(
+                "MEM",
+                "warn",
+                "CPU: {} MHz | agentes=n/a | tick init: {} (sem inventar N)",
+                mhz,
+                optimal_init
+            ),
+            (None, _) => k_nano::slog_bin!(
+                "MEM",
+                "warn",
+                "CPU: n/a | tick init: {} (calibração best-effort)",
+                optimal_init
+            ),
+        }
 
         // Resize heap
         crate::allocator::resize_heap_to_mb(budget.heap_target_mb);

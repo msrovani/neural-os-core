@@ -190,11 +190,11 @@ pub fn demo_kia_dma() -> Result<(), &'static str> {
     let mut buf = match pin_frames(DEMO_PIN_PAGES, Cap::PIN_DMA) {
         Ok(b) => b,
         Err(e) => {
-            k_nano::slog_bin!("P5", "info", "WARN pin_frames: {} — Cap-only path", e);
+            k_nano::slog_bin!("P5", "warn", "pin_frames: {} — Cap-only path", e);
             syscall::dispatch(SYS_PIN_DMA, DEMO_PIN_PAGES as u64, Cap::PIN_DMA)?;
             syscall::dispatch(SYS_MAP_DMA, 0, Cap::MAP_DMA)?;
-            k_nano::slog_bin!("P5", "info", "SUCCESS Cap PIN_DMA/MAP_DMA (sem frames)");
-            return Ok(());
+            k_nano::slog_bin!("P5", "warn", "PARTIAL Cap PIN_DMA/MAP_DMA (sem frames)");
+            return Err("p5: cap_only (sem frames)");
         }
     };
 
@@ -217,7 +217,7 @@ pub fn demo_kia_dma() -> Result<(), &'static str> {
         return Err("p5: touch DMA VA falhou");
     }
 
-    k_nano::slog_bin!("P5", "info", "SUCCESS DMA pin pages={} phys={:x} va={:x} (VirtIO buf stub ready) pinned={}",
+    k_nano::slog_bin!("P5", "ok", "SUCCESS DMA pin pages={} phys={:x} va={:x} (VirtIO buf stub ready) pinned={}",
         buf.pages,
         virtio_buf_phys(&buf),
         mapped,

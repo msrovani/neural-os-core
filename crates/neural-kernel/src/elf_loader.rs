@@ -403,29 +403,29 @@ pub fn elf_boot_self_test() -> bool {
     let mut aspace = match address_space::create_sandbox_as() {
         Ok(a) => a,
         Err(e) => {
-            k_nano::slog_bin!("ELF", "selftest", "create_sandbox_as fail: {}", e);
+            k_nano::slog_bin!("ELF", "fail", "create_sandbox_as fail: {}", e);
             return false;
         }
     };
     let result = match ElfLoader::load(&elf, &mut aspace) {
         Ok(r) => r,
         Err(e) => {
-            k_nano::slog_bin!("ELF", "selftest", "load fail: {}", e);
+            k_nano::slog_bin!("ELF", "fail", "load fail: {}", e);
             return false;
         }
     };
     if result.entry != 0x1000 {
-        k_nano::slog_bin!("ELF", "selftest", "entry mismatch {:#x}", result.entry);
+        k_nano::slog_bin!("ELF", "fail", "entry mismatch {:#x}", result.entry);
         return false;
     }
     // BSS zeroed: frame_for_virt(0x2000) mapeado e zerado pelo loader
     if aspace.frame_for_virt(VirtAddr::new(0x2000)).is_none() {
-        k_nano::slog_bin!("ELF", "selftest", "BSS not mapped");
+        k_nano::slog_bin!("ELF", "fail", "BSS not mapped");
         return false;
     }
     k_nano::slog_bin!(
         "ELF",
-        "selftest",
+        "ok",
         "PASS entry={:#x} stack_top={:#x} (RX code + RW BSS mapeados no sandbox)",
         result.entry,
         result.stack_top

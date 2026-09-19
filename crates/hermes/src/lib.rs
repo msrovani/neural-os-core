@@ -31,7 +31,7 @@ pub mod network_agent;
 pub mod plugin_hub;
 pub mod security;
 pub mod self_update;
-pub mod shell;
+// pub mod shell; // DEAD — 0 callers; install via Command::Install (SESSION_293 / s359c)
 pub mod skill_gen;
 pub mod skill_loader;
 pub mod skill_manifest;
@@ -65,7 +65,9 @@ pub use soul::*;
 // pub mod notification_gate; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 // pub mod aios_api; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod skill_opt;
-// pub mod skill_sync; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
+pub mod bei; // ADR-0060 — BeiState/tick (emagreçer s359: saiu do bin)
+pub mod skill_sync; // reativado s359 — wire bei_tick (HERMES_AUDIT mentia "0 callers")
+pub mod skill_marketplace; // reativado s359 — mesh MKTP + poll_p2p
 pub mod mesh_knowledge;
 pub mod fs;
 pub mod neural_fs;

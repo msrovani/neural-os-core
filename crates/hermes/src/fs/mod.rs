@@ -53,9 +53,16 @@ pub fn read_vfs(path: &str) -> Result<Vec<u8>, &'static str> {
     let guard = FS_AGENTS.lock();
     for entry in guard.iter() {
         if entry.agent.name() == agent_name {
-            let data = entry.agent.read(&rel_path).unwrap_or_else(|_| Vec::new());
-            drop(guard);
-            return Ok(data);
+            match entry.agent.read(&rel_path) {
+                Ok(data) => {
+                    drop(guard);
+                    return Ok(data);
+                }
+                Err(_) => {
+                    drop(guard);
+                    return Err("read failed");
+                }
+            }
         }
     }
     drop(guard);
@@ -101,9 +108,16 @@ pub fn list_vfs(path: &str) -> Result<Vec<String>, &'static str> {
     let guard = FS_AGENTS.lock();
     for entry in guard.iter() {
         if entry.agent.name() == agent_name {
-            let items = entry.agent.list(&rel_path).unwrap_or_else(|_| Vec::new());
-            drop(guard);
-            return Ok(items);
+            match entry.agent.list(&rel_path) {
+                Ok(items) => {
+                    drop(guard);
+                    return Ok(items);
+                }
+                Err(_) => {
+                    drop(guard);
+                    return Err("list failed");
+                }
+            }
         }
     }
     Err("Agent not found")

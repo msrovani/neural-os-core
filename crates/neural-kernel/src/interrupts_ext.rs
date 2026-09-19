@@ -3,12 +3,10 @@
 //! `crate::interrupts` (agora facade de `k_nano::interrupts`). Code MOVE puro:
 //! mesma lógica, mesmos gates. Nenhum item aqui existe em k_nano (R0).
 
-use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 use x86_64::instructions::segmentation::Segment;
 use x86_64::structures::idt::{InterruptStackFrame, PageFaultErrorCode};
-use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
 
 use k_nano::interrupts::{PAGE_FAULT_COUNT, PIC_1_OFFSET, PIC_2_OFFSET};
@@ -18,78 +16,20 @@ const PAGE_FAULT_IST_INDEX: u16 = 1;
 const GENERAL_PROTECTION_IST_INDEX: u16 = 2;
 const TIMER_IST_INDEX: u16 = 3;
 
-// P6: TSS per-process (Ring3) — stacks RSP0 por slot; GDT/TSS canônicos em k_nano.
+// P6: só topos RSP0 por slot — TSS/IST vivos ficam em k_nano (ADR-0102 / SESSION_278).
+// Antes: TSS_ARRAY+IST estáticos nunca ltr'd (= dual truth + ~centenas KB desperdiçados).
 
-// Wrapper com interior mutability para TSS — só mutado single-threaded
-// durante transições Ring3 (CLI), portanto Sync é seguro.
-struct TssCell(UnsafeCell<TaskStateSegment>);
-unsafe impl Sync for TssCell {}
-
-impl TssCell {
-    fn new(tss: TaskStateSegment) -> Self {
-        Self(UnsafeCell::new(tss))
-    }
-
-    /// Atualiza RSP0 (per-process). Single-threaded durante Ring3.
-    fn set_rsp0(&self, stack_top: VirtAddr) {
-        unsafe { (*self.0.get()).privilege_stack_table[0] = stack_top; }
-    }
-}
-
-impl core::ops::Deref for TssCell {
-    type Target = TaskStateSegment;
-    fn deref(&self) -> &TaskStateSegment {
-        unsafe { &*self.0.get() }
-    }
-}
-
-/// Per-process TSS array for Ring3 isolation (F1.2).
-/// Each process gets its own TSS with dedicated RSP0.
-/// MAX_PROCS = 8 (configurable).
+/// Per-process RSP0 stack tops for Ring3 (F1.2). MAX_PROCS = 8.
 const MAX_PROCS: usize = 8;
 
 lazy_static! {
-    /// Array of TSS cells — one per process.
-    /// Index 0 = kernel/initial process; 1..MAX_PROCS-1 = user processes.
-    static ref TSS_ARRAY: [TssCell; MAX_PROCS] = {
-        let mut arr: [Option<TssCell>; MAX_PROCS] = [None, None, None, None, None, None, None, None];
-        for i in 0..MAX_PROCS {
-            let mut tss = TaskStateSegment::new();
-            // RSP0: stack kernel ao trapear de CPL=3 (int 0x90 / exceções)
-            tss.privilege_stack_table[0] = {
-                const STACK_SIZE: usize = 4096 * 4;
-                static mut STACKS: [[u8; 4096 * 4]; MAX_PROCS] = [[0; 4096 * 4]; MAX_PROCS];
-                let stack_start = unsafe { VirtAddr::from_ptr(core::ptr::addr_of!(STACKS[i])) };
-                stack_start + STACK_SIZE
-            };
-            tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
-                const STACK_SIZE: usize = 4096 * 5;
-                static mut IST_DF: [[u8; 4096 * 5]; MAX_PROCS] = [[0; 4096 * 5]; MAX_PROCS];
-                let stack_start = unsafe { VirtAddr::from_ptr(core::ptr::addr_of!(IST_DF[i])) };
-                stack_start + STACK_SIZE
-            };
-            tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = {
-                const STACK_SIZE: usize = 4096 * 4;
-                static mut IST_PF: [[u8; 4096 * 4]; MAX_PROCS] = [[0; 4096 * 4]; MAX_PROCS];
-                let stack_start = unsafe { VirtAddr::from_ptr(core::ptr::addr_of!(IST_PF[i])) };
-                stack_start + STACK_SIZE
-            };
-            tss.interrupt_stack_table[GENERAL_PROTECTION_IST_INDEX as usize] = {
-                const STACK_SIZE: usize = 4096 * 4;
-                static mut IST_GP: [[u8; 4096 * 4]; MAX_PROCS] = [[0; 4096 * 4]; MAX_PROCS];
-                let stack_start = unsafe { VirtAddr::from_ptr(core::ptr::addr_of!(IST_GP[i])) };
-                stack_start + STACK_SIZE
-            };
-            tss.interrupt_stack_table[TIMER_IST_INDEX as usize] = {
-                const STACK_SIZE: usize = 4096 * 4;
-                static mut IST_TIMER: [[u8; 4096 * 4]; MAX_PROCS] = [[0; 4096 * 4]; MAX_PROCS];
-                let stack_start = unsafe { VirtAddr::from_ptr(core::ptr::addr_of!(IST_TIMER[i])) };
-                stack_start + STACK_SIZE
-            };
-            arr[i] = Some(TssCell::new(tss));
-        }
-        // Safe: all elements initialized
-        core::array::from_fn(|i| arr[i].take().unwrap())
+    static ref RSP0_TOPS: [VirtAddr; MAX_PROCS] = {
+        const STACK_SIZE: usize = 4096 * 4;
+        static mut STACKS: [[u8; 4096 * 4]; MAX_PROCS] = [[0; 4096 * 4]; MAX_PROCS];
+        core::array::from_fn(|i| {
+            let stack_start = unsafe { VirtAddr::from_ptr(core::ptr::addr_of!(STACKS[i])) };
+            stack_start + STACK_SIZE
+        })
     };
 }
 
@@ -107,8 +47,7 @@ pub fn switch_to_proc_tss(proc_idx: usize) {
         return;
     }
     CURRENT_PROC_IDX.store(proc_idx, Ordering::SeqCst);
-    let rsp0 = TSS_ARRAY[proc_idx].privilege_stack_table[0];
-    k_nano::interrupts::set_rsp0_live(rsp0);
+    k_nano::interrupts::set_rsp0_live(RSP0_TOPS[proc_idx]);
 }
 
 // GDT fantasma removida (SESSION_278 / ADR-0102) — seletores user/kernel vivem em k_nano::gdt.

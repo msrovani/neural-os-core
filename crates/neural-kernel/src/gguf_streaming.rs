@@ -83,7 +83,7 @@ pub fn log_airllm_residuals() {
     k_nano::slog_bin!(
         "GGUF",
         "warn",
-        "AirLLM residuals: ATA/Net hot-swap OK; K-quants Q2_K/Q3_K/Q5_K OK; forward_streaming OK; DMA prefetch = AWAITING"
+        "AirLLM residuals: hot_swap_from_ata/net APIs exist (net=0 callers); generate=STUB load-only; K-quants wired in gguf; DMA prefetch=AWAITING"
     );
 }
 
@@ -118,15 +118,28 @@ impl StreamingCtx {
             file.metadata.iter().find(|m| m.key.contains(key))
                 .and_then(|m| m.value.parse().ok())
         };
-        let n_layers = meta("block_count").or_else(|| meta("num_hidden_layers")).unwrap_or(4);
-        let hidden = meta("hidden_size").or_else(|| meta("embed_dim")).unwrap_or(64);
-        let num_heads = meta("num_attention_heads").or_else(|| meta("num_heads")).unwrap_or(4);
+        // Honesty: sem inventar arch (antes unwrap_or 4L/64h/32k mentia GGUF incompleto).
+        let n_layers = meta("block_count")
+            .or_else(|| meta("num_hidden_layers"))
+            .ok_or("GGUF: missing block_count/num_hidden_layers")?;
+        let hidden = meta("hidden_size")
+            .or_else(|| meta("embed_dim"))
+            .ok_or("GGUF: missing hidden_size/embed_dim")?;
+        let num_heads = meta("num_attention_heads")
+            .or_else(|| meta("num_heads"))
+            .ok_or("GGUF: missing num_attention_heads")?;
         let num_kv_heads = meta("num_key_value_heads").unwrap_or(num_heads);
-        let kv_dim = hidden; // simplificado: assume kv_dim = hidden
-        let intermediate = meta("intermediate_size").or_else(|| meta("ffn_dim")).unwrap_or(hidden * 4);
-        let vocab_size = meta("vocab_size").unwrap_or(32000);
-        let rope_theta = file.metadata.iter().find(|m| m.key.contains("rope_theta"))
-            .and_then(|m| m.value.parse().ok()).unwrap_or(10000.0);
+        let kv_dim = hidden;
+        let intermediate = meta("intermediate_size")
+            .or_else(|| meta("ffn_dim"))
+            .unwrap_or(hidden.saturating_mul(4));
+        let vocab_size = meta("vocab_size").ok_or("GGUF: missing vocab_size")?;
+        let rope_theta = file
+            .metadata
+            .iter()
+            .find(|m| m.key.contains("rope_theta"))
+            .and_then(|m| m.value.parse().ok())
+            .unwrap_or(10000.0);
         Ok(StreamingCtx {
             file, path: alloc::string::String::from(path), n_layers, hidden, kv_dim,
             num_heads, num_kv_heads, intermediate, vocab_size, rope_theta,
@@ -210,7 +223,23 @@ pub fn forward_streaming_demo(path: &str) -> Result<usize, &'static str> {
             break;
         }
     }
-    k_nano::slog_bin!("GGUF", "info", "forward_streaming demo: {}/{} camadas carregadas", loaded, ctx.n_layers);
+    if loaded < ctx.n_layers {
+        k_nano::slog_bin!(
+            "GGUF",
+            "warn",
+            "forward_streaming demo PARTIAL: {}/{} camadas (não é forward)",
+            loaded,
+            ctx.n_layers
+        );
+        return Err("forward_streaming: loaded < n_layers");
+    }
+    k_nano::slog_bin!(
+        "GGUF",
+        "ok",
+        "forward_streaming demo: {}/{} camadas carregadas (load-only, sem attn)",
+        loaded,
+        ctx.n_layers
+    );
     Ok(loaded)
 }
 
@@ -219,8 +248,7 @@ pub fn forward_streaming_demo(path: &str) -> Result<usize, &'static str> {
 // ---------------------------------------------------------------------------
 
 use alloc::string::String;
-use cortex_crate::cortex::{KvCache, LayerWeights, Model, Tokenizer};
-use cortex_crate::tensor::Tensor;
+use cortex_crate::cortex::{KvCache, Model};
 
 /// Streaming Model: mantem APENAS header GGUF + config + embeddings em RAM.
 /// Pesos dos layers carregados do disco (FAT/ATA) sob demanda, 1 layer/forward.
@@ -241,23 +269,27 @@ impl StreamingModel {
         let kv_cache = KvCache::new(ctx.n_layers, ctx.kv_dim, ctx.kv_dim);
 
         // Carrega embedding weights (permanente — ~vocab*hidden floats)
-        let embed_weights = ctx.load_tensor_data("token_embd.weight")
+        let embed_weights = ctx
+            .load_tensor_data("token_embd.weight")
             .or_else(|| ctx.load_tensor_data("token_embd"))
-            .unwrap_or_else(|| {
-                k_nano::slog_bin!("GGUF", "warn", "AirLLM: embed weights not found, using zeros");
-                vec![0.0f32; ctx.vocab_size * ctx.hidden]
-            });
+            .ok_or("AirLLM: embed weights missing — refuse zeros")?;
 
         // Carrega unembed weights (permanente — tied com embed se ausente)
-        let unembed_weights = ctx.load_tensor_data("output.weight")
+        let unembed_weights = ctx
+            .load_tensor_data("output.weight")
             .unwrap_or_else(|| embed_weights.clone()); // tied
 
-        k_nano::slog_bin!("GGUF", "info",
+        k_nano::slog_bin!(
+            "GGUF",
+            "ok",
             "AirLLM StreamingModel: layers={} hidden={} vocab={} embed={}KB unembed={}KB path={}",
-            ctx.n_layers, ctx.hidden, ctx.vocab_size,
+            ctx.n_layers,
+            ctx.hidden,
+            ctx.vocab_size,
             embed_weights.len() * 4 / 1024,
             unembed_weights.len() * 4 / 1024,
-            path);
+            path
+        );
 
         Ok(StreamingModel {
             ctx, cache: kv_cache,
@@ -281,56 +313,17 @@ impl StreamingModel {
 
 impl Model for StreamingModel {
     fn generate(&self, prompt: &str) -> String {
-        let tokens = Tokenizer::encode(prompt);
-        if tokens.is_empty() {
-            return alloc::string::String::new();
-        }
-        let h = self.ctx.hidden;
-        let vocab = self.ctx.vocab_size;
-        let mut input_tokens: Vec<u32> = tokens.into_iter().map(|t| t as u32).collect();
-        let mut text = alloc::string::String::new();
-
-        // Generate up to 64 new tokens
-        for _step in 0..64 {
-            // 1. Embed last token
-            let tok = *input_tokens.last().unwrap_or(&0);
-            let mut x = self.embed_lookup(tok);
-
-            // 2. Layer-by-layer: load weights from disk -> simple attn -> drop
-            for li in 0..self.ctx.n_layers {
-                if let Some(_layer) = self.ctx.load_layer(li) {
-                    // Simplified: residual + norm pass-through
-                    // Full attention requires matmul_hybrid + RoPE + KV cache
-                    // This is the AirLLM core: weights loaded from disk, used, dropped
-                }
-            }
-
-            // 3. Unembed: x @ unembed^T -> logits
-            let mut best_val = f32::NEG_INFINITY;
-            let mut best_tok = 0u32;
-            for v in 0..vocab {
-                let mut sum = 0.0f32;
-                for j in 0..h {
-                    sum += x[j] * self.unembed_weights[v * h + j];
-                }
-                if sum > best_val {
-                    best_val = sum;
-                    best_tok = v as u32;
-                }
-            }
-
-            if best_tok == 0 || best_tok >= vocab as u32 {
-                break;
-            }
-
-            // Decode single byte
-            if best_tok < 128 {
-                text.push(best_tok as u8 as char);
-            }
-            input_tokens.push(best_tok);
-        }
-
-        text
+        // Honesty (s359): loop antigo carregava layers e unembedia x cru sem attn/FFN —
+        // inventava tokens. Até forward AirLLM real: recusa explícita.
+        let _ = prompt;
+        k_nano::slog_bin!(
+            "GGUF",
+            "warn",
+            "AirLLM generate STUB (layers load-only; attn/FFN não wired) — refuse inventar tokens"
+        );
+        alloc::string::String::from(
+            "[AirLLM stub: layer streaming load-only; full forward not wired]",
+        )
     }
     fn embed_dim(&self) -> usize { self.ctx.hidden }
     fn vocab_size(&self) -> u32 { self.ctx.vocab_size as u32 }

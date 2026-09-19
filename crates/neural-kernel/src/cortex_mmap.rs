@@ -162,10 +162,10 @@ pub fn demo_cortex_mmap() -> Result<(), &'static str> {
     {
         Ok(m) => m,
         Err(e) => {
-            k_nano::slog_bin!("P5", "warn", "WARN mmap_weights: {} — Cap-only path", e);
+            k_nano::slog_bin!("P5", "warn", "mmap_weights: {} — Cap-only path", e);
             syscall::dispatch(SYS_MAP_WEIGHTS, DEMO_WEIGHT_PAGES as u64, Cap::MAP_WEIGHTS)?;
             k_nano::slog_bin!("P5", "warn", "PARTIAL Cap MAP_WEIGHTS (sem frames)");
-            return Ok(());
+            return Err("p5: cap_only (sem frames)");
         }
     };
 
@@ -179,7 +179,7 @@ pub fn demo_cortex_mmap() -> Result<(), &'static str> {
         return Err("p5: touch weight page falhou");
     }
 
-    k_nano::slog_bin!("P5", "info", "SUCCESS mmap pesos pages={} va={:x} phys={:x} count={}",
+    k_nano::slog_bin!("P5", "ok", "SUCCESS mmap pesos pages={} va={:x} phys={:x} count={}",
         map.pages,
         map.virt,
         map.phys,
@@ -212,10 +212,10 @@ pub fn demo_demand_paging() -> Result<(), &'static str> {
     let map = match unsafe { mmap_weights_lazy(&mut as_cortex, DEMO_WEIGHT_PAGES, need) } {
         Ok(m) => m,
         Err(e) => {
-            k_nano::slog_bin!("P7", "warn", "WARN mmap_weights_lazy: {} — Cap-only path", e);
+            k_nano::slog_bin!("P7", "warn", "mmap_weights_lazy: {} — Cap-only path", e);
             syscall::dispatch(SYS_DEMAND_PAGE, DEMO_WEIGHT_PAGES as u64, need)?;
             k_nano::slog_bin!("P7", "warn", "PARTIAL Cap DEMAND_PAGE (sem frames)");
-            return Ok(());
+            return Err("p7: cap_only (sem frames)");
         }
     };
 

@@ -218,10 +218,10 @@ pub fn demo_gguf_mmap() -> Result<(), &'static str> {
     let map = match unsafe { mmap_file_weights(&mut as_cortex, DEMO_FILE_PAGES, need) } {
         Ok(m) => m,
         Err(e) => {
-            k_nano::slog_bin!("P9", "info", "WARN mmap_file_weights: {} — Cap-only path", e);
+            k_nano::slog_bin!("P9", "warn", "mmap_file_weights: {} — Cap-only path", e);
             syscall::dispatch(SYS_MAP_FILE, DEMO_FILE_PAGES as u64, need)?;
-            k_nano::slog_bin!("P9", "info", "SUCCESS Cap MAP_FILE (sem frames / sem FAT)");
-            return Ok(());
+            k_nano::slog_bin!("P9", "warn", "PARTIAL Cap MAP_FILE (sem frames / sem FAT)");
+            return Err("p9: cap_only (sem frames/FAT)");
         }
     };
 
@@ -238,7 +238,7 @@ pub fn demo_gguf_mmap() -> Result<(), &'static str> {
         return Err("p9: esperava >=1 cure #PF first-touch");
     }
     if got_magic != map.expected_magic {
-        k_nano::slog_bin!("P9", "info", "WARN magic got=0x{:08x} expected=0x{:08x} kind={:?}",
+        k_nano::slog_bin!("P9", "warn", "magic got=0x{:08x} expected=0x{:08x} kind={:?}",
             got_magic,
             map.expected_magic,
             map.kind);
@@ -253,7 +253,18 @@ pub fn demo_gguf_mmap() -> Result<(), &'static str> {
     } else {
         "FAT"
     };
-    k_nano::slog_bin!("P9", "info", "SUCCESS file-mmap pages={} va={:x} kind={:?} src={} magic=0x{:08x} cures={} hits={}",
+    if map.kind == BackingKind::Fallback {
+        k_nano::slog_bin!(
+            "P9",
+            "warn",
+            "PARTIAL file-mmap pages={} va={:x} kind=Fallback src={} (sem FAT real)",
+            map.pages,
+            map.virt,
+            src
+        );
+        return Err("p9: fallback stub (sem FAT model)");
+    }
+    k_nano::slog_bin!("P9", "ok", "SUCCESS file-mmap pages={} va={:x} kind={:?} src={} magic=0x{:08x} cures={} hits={}",
         map.pages,
         map.virt,
         map.kind,

@@ -64,7 +64,7 @@ pub fn limine_esp_evidence_smoke(boot_path: &str) {
         k_nano::slog_bin!(
             "BOOT",
             "info",
-            "step=limine_esp status=OK BootSmokeOk=1 VERDICT=PARTIAL reason=tags_ok esp_qemu=AWAITING_LAB"
+            "step=limine_esp status=PARTIAL BootSmokeOk=1 VERDICT=PARTIAL reason=tags_ok esp_qemu=AWAITING_LAB"
         );
     } else {
         k_nano::slog_bin!(
@@ -81,7 +81,7 @@ pub fn ext4_multiblock_smoke() {
     k_nano::slog_bin!(
         "EXT4",
         "info",
-        "step=multiblock_write status=OK VERDICT=PARTIAL reason=write_file_root_optin journal=absent"
+        "step=multiblock_write status=PARTIAL VERDICT=PARTIAL reason=write_file_root_optin journal=absent"
     );
 }
 
@@ -106,7 +106,7 @@ pub fn run_deferred_usb_live(boot_tag: &str) {
     k_nano::slog_bin!(
         "BOOT",
         "info",
-        "step=usb_live_smokes status=OK VERDICT=PARTIAL reason=sem_MSC_no_K25"
+        "step=usb_live_smokes status=PARTIAL VERDICT=PARTIAL reason=sem_MSC_no_K25"
     );
 }
 
@@ -150,6 +150,6 @@ pub fn run_deferred(boot_tag: &str) {
     k_nano::slog_bin!(
         "BOOT",
         "info",
-        "step=deferred_labor_smokes status=OK VERDICT=PARTIAL reason=post_driverinit"
+        "step=deferred_labor_smokes status=PARTIAL VERDICT=PARTIAL reason=post_driverinit"
     );
 }

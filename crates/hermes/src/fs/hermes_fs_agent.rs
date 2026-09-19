@@ -21,7 +21,7 @@ pub struct HermesFsAgent;
 
 impl HermesFsAgent {
     pub fn new() -> Self {
-        k_nano::slog_bin!("CHAT", "FS", "/chat/ pronto.");
+        k_nano::slog_bin!("CHAT", "ok", "/chat/ pronto.");
         HermesFsAgent
     }
 }
@@ -66,7 +66,7 @@ impl FilesystemAgent for HermesFsAgent {
                 if hist.len() > HISTORY_MAX { hist.pop_front(); }
                 CHAT_COUNTER.fetch_add(1, Ordering::Relaxed);
 
-                // Publish to EventBus for LLM processing
+                // Publish to EventBus for LLM — reply só confirma fila.
                 let _ = k_nano::globals::EVENT_BUS.publish(event_bus::Event {
                     id: CHAT_COUNTER.load(Ordering::Relaxed),
                     topic: String::from(cortex::cortex::TOPIC_LLM_REQUEST),
@@ -74,21 +74,23 @@ impl FilesystemAgent for HermesFsAgent {
                     token: event_bus::CapabilityToken::Legacy(1),
                 });
 
-                // Stub: echo response
-                let reply = alloc::format!("[Hermes] Recebido: {} (processed via LLM)\n", text.trim());
+                let reply = alloc::format!(
+                    "[Hermes] Recebido: {} (queued TOPIC_LLM_REQUEST; await LLM)\n",
+                    text.trim()
+                );
                 let mut resp = LAST_RESPONSE.lock();
                 *resp = reply.clone();
                 hist.push_back(reply);
                 if hist.len() > HISTORY_MAX { hist.pop_front(); }
 
-                k_nano::slog_bin!("CHAT", "FS", "Sent: {}", text.trim());
+                k_nano::slog_bin!("CHAT", "ok", "Sent (queued): {}", text.trim());
                 Ok(())
             }
             "clear" | "reset" => {
                 let mut hist = CHAT_HISTORY.lock();
                 hist.clear();
                 LAST_RESPONSE.lock().clear();
-                k_nano::slog_bin!("CHAT", "FS", "History cleared.");
+                k_nano::slog_bin!("CHAT", "ok", "History cleared.");
                 Ok(())
             }
             _ => Err("file not found"),

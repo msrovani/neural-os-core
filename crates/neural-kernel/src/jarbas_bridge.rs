@@ -34,7 +34,7 @@ pub fn settings_contract_ok() -> bool {
 pub fn log_bridge_status() {
     let topics = topics_in_sync();
     let settings = settings_contract_ok();
-    k_nano::slog_bin!("JARBAS", "BRIDGE", "jarbas-crate=linked topics_ok={} settings_ok={} audio_truth=jarbas-crate cutover=done(e51a48b)",
+    k_nano::slog_bin!("JARBAS", "ok", "jarbas-crate=linked topics_ok={} settings_ok={} audio_truth=jarbas-crate cutover=done(e51a48b)",
         topics,
         settings);
 }

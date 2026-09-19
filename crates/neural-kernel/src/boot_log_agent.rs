@@ -259,7 +259,7 @@ impl Agent for BootLogAgent {
         // Consumer mínimo de BOOT_PHASE (EventBus → serial)
         while let Some(ev) = self.boot_phase_rx.try_receive() {
             let msg = core::str::from_utf8(&ev.payload).unwrap_or("?");
-            k_nano::slog_bin!("BOOT", "LOG-AGENT", "fase={}", msg);
+            k_nano::slog_bin!("BOOT", "ok", "fase={}", msg);
         }
         crate::log_agent::maybe_push_periodic(_tick);
         // FAT so uma vez — senao Continuous remonta BPB e engasga o scheduler
@@ -268,7 +268,7 @@ impl Agent for BootLogAgent {
             if let Some(log) = Self::read_last_boot_log() {
                 let diagnostics = Self::analyze_log(&log);
                 for (kind, msg) in &diagnostics {
-                    k_nano::slog_bin!("BOOT", "LOG-AGENT", "{}: {}", kind, msg);
+                    k_nano::slog_bin!("BOOT", "ok", "{}: {}", kind, msg);
 
                     if *kind == "PANIC" || *kind == "GPU_HUNG" {
                         let ctx = crate::self_heal::ErrorContext {

@@ -195,7 +195,10 @@ impl JarbasDoubleBuffer {
             spins = spins.wrapping_add(1);
             core::hint::spin_loop();
         }
-        VSYNC_WAITS.fetch_add(1, Ordering::Relaxed);
+        // Honesty: só conta vsync se o timer avançou (timeout ≠ sucesso).
+        if TIMER_TICKS.load(Ordering::Relaxed) != start {
+            VSYNC_WAITS.fetch_add(1, Ordering::Relaxed);
+        }
         unsafe {
             core::arch::asm!("sfence", options(nostack, preserves_flags));
         }
@@ -204,7 +207,7 @@ impl JarbasDoubleBuffer {
     /// Present: copia back → FB kernel VA (canto superior). Cap::WRITE_FB.
     pub fn present(&mut self, held: Cap) -> Result<(), &'static str> {
         if !held.contains(Cap::WRITE_FB) {
-            k_nano::slog_bin!("CapGate", "info", "DENY WRITE_FB held=0x{:x}", held.bits());
+            k_nano::slog_bin!("CapGate", "warn", "DENY WRITE_FB held=0x{:x}", held.bits());
             return Err("EPERM: Cap::WRITE_FB");
         }
         let _ = syscall::dispatch(SYS_PRESENT_FB, 0, held)?;
@@ -232,13 +235,13 @@ pub fn p4_demo_ok() -> bool {
 
 /// Demo non-fatal: Cap deny/allow + AS map + checker + present.
 pub fn demo_jarbas_fb() -> Result<(), &'static str> {
-    k_nano::slog_bin!("Cap", "p4", "JARBAS FB MMIO + double-buffer demo");
+    k_nano::slog_bin!("Cap", "ok", "JARBAS FB MMIO + double-buffer demo");
 
     // Verifica PHYS_MEM_OFFSET antes de acessar page tables
     // Se 0, qualquer frame_as_table() acessa endereço físico sem HHDM → #PF
     let pm_off = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Acquire);
     if pm_off == 0 {
-        k_nano::slog_bin!("Cap", "p4", "PHYS_MEM_OFFSET=0 — Cap-only path (evita #PF)");
+        k_nano::slog_bin!("Cap", "warn", "PHYS_MEM_OFFSET=0 — Cap-only path (evita #PF)");
         if syscall::dispatch(SYS_MAP_FB, 0, Cap::EMPTY).is_ok() {
             return Err("p4: Cap vazia nao deveria MAP_FB");
         }
@@ -248,14 +251,18 @@ pub fn demo_jarbas_fb() -> Result<(), &'static str> {
         }
         syscall::dispatch(SYS_PRESENT_FB, 0, Cap::WRITE_FB)?;
         CAP_ONLY_OK.store(true, Ordering::Relaxed);
-        P4_DEMO_OK.store(true, Ordering::Relaxed);
-        k_nano::slog_bin!("Cap", "p4", "SUCCESS Cap MAP_FB/WRITE_FB (PHYS_MEM_OFFSET=0)");
-        return Ok(());
+        // Não setar P4_DEMO_OK — Cap-only ≠ FB present (gate N5).
+        k_nano::slog_bin!(
+            "Cap",
+            "warn",
+            "PARTIAL Cap MAP_FB/WRITE_FB (PHYS_MEM_OFFSET=0) — sem FB fisico"
+        );
+        return Err("p4: cap_only (PHYS_MEM_OFFSET=0)");
     }
 
     let contract = match probe_contract() {
         Ok(c) => {
-            k_nano::slog_bin!("Cap", "p4", "FB contract {}x{} bpp={} stride={} virt={:x} phys={:x}",
+            k_nano::slog_bin!("Cap", "ok", "FB contract {}x{} bpp={} stride={} virt={:x} phys={:x}",
                 c.width,
                 c.height,
                 c.bpp,
@@ -266,7 +273,7 @@ pub fn demo_jarbas_fb() -> Result<(), &'static str> {
         }
         Err(e) => {
             // Sem FB: ainda prova Cap deny/allow sem touch MMIO.
-            k_nano::slog_bin!("Cap", "p4", "{} — Cap-only path", e);
+            k_nano::slog_bin!("Cap", "warn", "{} — Cap-only path", e);
             if syscall::dispatch(SYS_MAP_FB, 0, Cap::EMPTY).is_ok() {
                 return Err("p4: Cap vazia nao deveria MAP_FB");
             }
@@ -276,9 +283,13 @@ pub fn demo_jarbas_fb() -> Result<(), &'static str> {
             }
             syscall::dispatch(SYS_PRESENT_FB, 0, Cap::WRITE_FB)?;
             CAP_ONLY_OK.store(true, Ordering::Relaxed);
-            P4_DEMO_OK.store(true, Ordering::Relaxed);
-            k_nano::slog_bin!("Cap", "p4", "SUCCESS Cap MAP_FB/WRITE_FB (sem FB fisico)");
-            return Ok(());
+            k_nano::slog_bin!(
+                "Cap",
+                "warn",
+                "PARTIAL Cap MAP_FB/WRITE_FB (sem FB fisico) — {}",
+                e
+            );
+            return Err("p4: cap_only (sem FB fisico)");
         }
     };
 
@@ -314,7 +325,7 @@ pub fn demo_jarbas_fb() -> Result<(), &'static str> {
     erase_present_region(&contract);
     crate::display::fb::boot_splash("AIOS");
 
-    k_nano::slog_bin!("Cap", "p4", "SUCCESS MAP_FB+AS+present count={} vsync_waits={} (checker cleared+splash)",
+    k_nano::slog_bin!("Cap", "ok", "MAP_FB+AS+present count={} vsync_waits={} (checker cleared+splash)",
         present_count(),
         VSYNC_WAITS.load(Ordering::Relaxed));
     P4_DEMO_OK.store(true, Ordering::Relaxed);

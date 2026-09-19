@@ -1,6 +1,6 @@
 ﻿# 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-09-18 — s358: cortex bughunt R2 (#579–#581); s357 neural-kernel (#576–#578); s356 k_ai (#573–#575).
+**Última atualização:** 2026-09-18 — s359: bin wave2/3 + Bei/MoE emagreçer (#582–#584); s358 cortex (#579–#581); s357 bin (#576–#578).
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -1889,6 +1889,9 @@ elabel_*.py |
 | 2026-09-18 | **#579** | **GGUF type IDs + nbytes** - SESSION_309 mapeou 2=BF16/25=TQ2_0; nbytes Q4_1/Q8_K inventados; dequant trunc→Ok zeros. ✅ ggml 2=Q4_0/30=BF16/35=TQ2_0; nbytes oficiais; trunc→None; load bounds. | ✅ | — (fix) | SESSION_358 | `gguf.rs`, `gen_test_gguf.py` |
 | 2026-09-18 | **#580** | **Forward honesty** - `forward_hidden` paralelo panic; matmul None→zeros; soft_stride pad OOM desalinha KV; unembed zeros falsos. ✅ delega apply_one_layer; refuse; abort pad; unembed (0,0). | ✅ | — (fix) | SESSION_358 | `cortex.rs`, `infer_queue.rs` |
 | 2026-09-18 | **#581** | **Hub/Infer/slog** - HwExpert mark sem store; DECODER dangling; coarse cancel; AVX512 CPUID; MODEL sticky; slog info mudo. ✅ set_hwexpert_v4; take residual; warn+check; allow_avx512; clear_model; 15× ok/warn/fail. | ✅ | — (fix) | SESSION_358 | `model_hub.rs`, `nn.rs`, `trinity.rs`, `tensor.rs` |
+| 2026-09-18 | **#582** | **Bin Cap/N5/AirLLM honesty** - Cap-only Ok; N5 Cap=FB; AirLLM inventava tokens; slog n4/n5 mudos; /chat LLM mentia. ✅ Err Cap-only; fb_ready física; stub; ok/warn/fail; gate honesty. | ✅ | — (fix) | SESSION_359 | `address_space`, `gguf_streaming`, `main` N4/N5 |
+| 2026-09-18 | **#583** | **Bin orphans + RESPAWN/boot** - fs/vfs/shell espelho; SkillSync morto; dual MemoryAgent; heap expect; TIMER hang. ✅ delete; reativar sync/MKTP; memory_budget; halt; sleep_us. | ✅ | ADR-0057 | SESSION_359 | `main.rs`, delete `fs/` `vfs/` `shell.rs` |
+| 2026-09-18 | **#584** | **Emagreçer Bei+MoE** - BeiState~550 LOC + MoE director~200 no bin. ✅ hermes::bei; cortex generate_via_model+volume bridge; hermes cortex/p2p. | ✅ | ADR-0057 | SESSION_359 | `hermes/bei.rs`, `cortex.rs`, `bei_init` wire |
 | 2026-09-18 | **#576** | **Bin boot honesty** - PS/2 spin eterno; skip USB/StorageBus=`ok`; slog TRACE/FAIL=`info`; urgency pré-register/`audio_pipeline`; spsc espelho; link MMIO fantasma. ✅ TSC budget; warn; sev; pós-register+`audio_input`; pub use spsc; Down honesto. | ✅ | — (fix) | SESSION_357 | `main.rs`, `smp/spsc.rs`, `link_watcher.rs`, `netfs.rs` |
 | 2026-09-18 | **#577** | **RESPAWN + SelfHeal fleet** - `hermes_console`→DisplayAgent; arms faltando voz/infer/boot_log. ✅ ConsoleAgent; arms Continuous; unknown warn. | ✅ | — (fix) | SESSION_357 | `main.rs` RESPAWN match |
 | 2026-09-18 | **#578** | **BEI/GGUF/boot_log dual** - expect MPMC panic; connect mentia; Range truncado→Ok; k_ai≠bin FAT walk. ✅ try_new DEGRADED; PARTIAL noop; Err truncado; `register_read_boot_log`. | ✅ | — (fix) | SESSION_357 | `bei_init.rs`, `gguf_streaming.rs`, `k_ai/boot_log_agent.rs` |

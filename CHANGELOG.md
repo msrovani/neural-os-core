@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s359] - 2026-09-18 — bin honesty wave2/3 + emagreçer Bei/MoE
+- Cap P4–P9 Cap-only→Err; AirLLM stub; N5 FB exige present (Cap≠OK)
+- SkillSync/marketplace reativados; slog gates ok|warn|fail; RESPAWN memory_budget; heap halt
+- Delete órfãos bin `fs/` `vfs/` `shell.rs`; BeiState→`hermes::bei`; MoE director→`cortex` + `register_audio_volume_setter`
+- hermes: `cortex` features=`[p2p]` para mesh no bei_tick
+- SESSION_359; IDEA #582–#584
+
 ## [1.9.99-s358] - 2026-09-18 — cortex bughunt (R2 honesty)
 
 - GGUF: `GgufType` IDs ggml (2=Q4_0, 30=BF16, 35=TQ2_0); nbytes Q4_1/Q8_K/TQ1_0; dequant trunc→None; load bounds

@@ -198,23 +198,19 @@ fn qemu_acpi_shutdown() {
 }
 
 fn ps2_reset() {
-    k_nano::slog_bin!("SHUTDOWN", "info", "ARCH.reboot via 0x64/FE");
+    k_nano::slog_bin!("SHUTDOWN", "ok", "ARCH.reboot via 0x64/FE");
     k_nano::hal::ARCH.reboot();
 }
 
 fn power_off_cascade() -> ! {
     let tried_s5 = k_nano::acpi::power_off_s5();
     if tried_s5 {
-        k_nano::slog_bin!("SHUTDOWN", "info", "S5 escrito — aguardando HW");
-        for _ in 0..5_000_000 {
-            core::hint::spin_loop();
-        }
+        k_nano::slog_bin!("SHUTDOWN", "warn", "S5 escrito — aguardando HW");
+        k_nano::tsc::sleep_us(100_000);
     }
-    k_nano::slog_bin!("SHUTDOWN", "info", "fallback=qemu_0x604");
+    k_nano::slog_bin!("SHUTDOWN", "warn", "fallback=qemu_0x604");
     qemu_acpi_shutdown();
-    for _ in 0..1_000_000 {
-        core::hint::spin_loop();
-    }
+    k_nano::tsc::sleep_us(20_000);
     ps2_reset();
     overlay(">>> halted — safe to power off");
     POWER_UI_STATE.store(3, Ordering::Release);

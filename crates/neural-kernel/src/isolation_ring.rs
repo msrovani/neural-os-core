@@ -33,7 +33,18 @@ pub fn ring3_run_native(code: &[u8], caps: u32) -> Result<i64, &'static str> {
         let pid = crate::elf_loader::load_and_spawn(code, "sandbox")?;
         crate::user_mode::run_process(pid)?;
         let _ = caps;
-        return Ok(0);
+        // Honesty: não inventar Ok(0) sem ler estado — Exited(code) do process manager.
+        let exit = {
+            let pm = crate::process::PROCESS_MANAGER.lock();
+            match pm.get(pid).map(|p| &p.state) {
+                Some(crate::process::ProcessState::Exited(c)) => *c as i64,
+                Some(_) => {
+                    return Err("ring3: ELF process not Exited after run_process");
+                }
+                None => return Err("ring3: ELF pid lost after run_process"),
+            }
+        };
+        return Ok(exit);
     }
     hal_run(code, caps)
 }
