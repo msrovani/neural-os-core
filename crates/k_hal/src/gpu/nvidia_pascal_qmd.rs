@@ -1,6 +1,9 @@
 //! QMD v01_07 (PASCAL_COMPUTE_B / NVC1C0) — bitfields oficiais `clc1c0qmd.h`.
 //!
 //! Degrau 4: monta o descriptor 256 B; não prova execução (fence/golden = silício).
+//! Wave 1: `from_kernel_image` — regs/shared/param vêm do CUBIN, não magic numbers.
+
+use crate::gpu::kernel_image::KernelImage;
 
 /// Tamanho canônico do QMD Pascal.
 pub const QMD_SIZE: usize = 256;
@@ -21,7 +24,7 @@ pub struct QmdLaunch {
 }
 
 impl QmdLaunch {
-    /// Defaults seguros para canário n=4, 1 CTA × 4 threads.
+    /// Defaults seguros para canário n=4, 1 CTA × 4 threads (só se sem KernelImage).
     pub fn vector_add_canary(cb0_iova: u64, fence_iova: u64) -> Self {
         Self {
             program_offset: 0,
@@ -30,9 +33,31 @@ impl QmdLaunch {
             shared_mem: 0,
             register_count: 16,
             barrier_count: 1,
-            sass_version: 0x61, // sm_61
+            sass_version: 0x61,
             cb0_iova,
             cb0_size: 256,
+            fence_iova,
+            fence_payload: 1,
+        }
+    }
+
+    /// Constrói launch a partir do CUBIN parseado (Wave 1 — fim dos magic numbers).
+    pub fn from_kernel_image(
+        img: &KernelImage,
+        cb0_iova: u64,
+        fence_iova: u64,
+        sass_version: u32,
+    ) -> Self {
+        Self {
+            program_offset: 0,
+            grid: (1, 1, 1),
+            block: (4, 1, 1),
+            shared_mem: img.shared,
+            register_count: img.regs.max(1),
+            barrier_count: img.barriers.max(1),
+            sass_version,
+            cb0_iova,
+            cb0_size: if img.param_size > 0 { img.param_size } else { 256 },
             fence_iova,
             fence_payload: 1,
         }
@@ -132,5 +157,27 @@ mod tests {
         }
         assert_eq!(ver & 0xF, 7);
         assert_eq!((ver >> 4) & 0xF, 1);
+    }
+
+    #[test]
+    fn from_kernel_image_copies_regs_shared() {
+        let img = KernelImage {
+            isa: crate::gpu::compute_abi::IsaTag::Sm61,
+            code: alloc::vec![0u8; 64],
+            regs: 32,
+            shared: 128,
+            barriers: 2,
+            param_base: 0,
+            param_size: 512,
+            ir: crate::gpu::kernel_pack::IrOrigin::Cubin,
+            is_stub: false,
+        };
+        let l = QmdLaunch::from_kernel_image(&img, 0x1000, 0x2000, 0x61);
+        assert_eq!(l.register_count, 32);
+        assert_eq!(l.shared_mem, 128);
+        assert_eq!(l.barrier_count, 2);
+        assert_eq!(l.cb0_size, 512);
+        assert_eq!(l.sass_version, 0x61);
+        let _ = build_qmd_v01_07(&l);
     }
 }

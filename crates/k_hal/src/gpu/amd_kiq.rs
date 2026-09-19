@@ -2,7 +2,9 @@
 //! Nenhum offset KIQ neste módulo para path MES (GFX11+).
 
 use crate::gpu::amd_discovery::AmdIpId;
-use crate::gpu::compute_abi::vector_add_check;
+use crate::gpu::compute_abi::{vector_add_check, IsaTag};
+use crate::gpu::kernel_image;
+use crate::gpu::kernel_pack::IrOrigin;
 use k_nano::dma::dma_alloc_coalesced;
 
 /// PACKET3 header: type=3, opcode, count (dwords after header - 1? amdgpu: n = count)
@@ -27,6 +29,7 @@ pub fn doorbell_offset(ip: &AmdIpId) -> u32 {
 
 /// Emite DISPATCH_DIRECT + EVENT_WRITE_EOP estrutural; fence em sysmem.
 /// Sem MEC FW + MQD reais → FenceTimeout esperado.
+/// Wave 1: dim/initiator informados por `KernelImage` (HSACO), não só magic 1×1×1.
 pub unsafe fn dispatch_vector_add_kiq(
     mmio: u64,
     ip: &AmdIpId,
@@ -43,7 +46,10 @@ pub unsafe fn dispatch_vector_add_kiq(
         return false;
     }
     let n = a.len();
-    let stub = hsaco.starts_with(b"CPU_VECTOR_ADD_STUB");
+    let img = kernel_image::from_blob(IsaTag::Gfx1030, IrOrigin::Hsaco, hsaco);
+    let stub = img.is_stub;
+    // workgroup X from image shared/regs proxy — DISPATCH dim_x
+    let dim_x = img.regs.max(1).min(256);
 
     let Some(vecs) = dma_alloc_coalesced(4096) else {
         return false;
@@ -74,7 +80,7 @@ pub unsafe fn dispatch_vector_add_kiq(
     // DISPATCH_DIRECT: dim_x, dim_y, dim_z, initiator
     r.add(i).write_volatile(packet3(PACKET3_DISPATCH_DIRECT, 3));
     i += 1;
-    r.add(i).write_volatile(1); // X
+    r.add(i).write_volatile(dim_x);
     i += 1;
     r.add(i).write_volatile(1);
     i += 1;
@@ -102,8 +108,19 @@ pub unsafe fn dispatch_vector_add_kiq(
         core::ptr::write_volatile((mmio + db as u64) as *mut u32, 1);
     }
 
-    k_nano::slog_hal!("AMD", "KIQ", "GC={}.{} pack={}B stub={} doorbell={:#x} pm4={}dw — poll fence",
-        ip.gfx_major, ip.gfx_minor, hsaco.len(), stub, db, _pm4_dwords);
+    k_nano::slog_hal!(
+        "AMD",
+        "KIQ",
+        "GC={}.{} img={}B regs={} stub={} doorbell={:#x} dim_x={} pm4={}dw — poll fence",
+        ip.gfx_major,
+        ip.gfx_minor,
+        img.code.len(),
+        img.regs,
+        stub,
+        db,
+        dim_x,
+        _pm4_dwords
+    );
 
     let mut hit = false;
     for _ in 0..FENCE_SPINS {

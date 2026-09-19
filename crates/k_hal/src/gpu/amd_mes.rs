@@ -2,7 +2,10 @@
 //! uni_mes / MES_KIQ residual; batch estrutural separado.
 
 use crate::gpu::amd_discovery::AmdIpId;
+use crate::gpu::compute_abi::IsaTag;
 use crate::gpu::firmware;
+use crate::gpu::kernel_image;
+use crate::gpu::kernel_pack::IrOrigin;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MesStage {
@@ -44,6 +47,7 @@ pub fn check_mes_blobs(ip: &AmdIpId) -> MesStage {
 }
 
 /// Canário MES: nunca usa amd_kiq::doorbell_offset.
+/// Wave 1: consome KernelImage (log regs/code); golden uni_mes residual.
 pub unsafe fn dispatch_vector_add_mes(
     mmio: u64,
     ip: &AmdIpId,
@@ -56,14 +60,21 @@ pub unsafe fn dispatch_vector_add_mes(
         k_nano::slog_hal!("AMD", "MES", "recusado GC={}.{} (use KIQ)", ip.gfx_major, ip.gfx_minor);
         return false;
     }
+    let img = kernel_image::from_blob(IsaTag::Gfx1103, IrOrigin::Hsaco, hsaco);
     let stage = check_mes_blobs(ip);
     let db = mes_doorbell_offset(ip);
-    k_nano::slog_hal!("AMD", "MES", "GC={}.{} pack={}B mes_fw={:?} doorbell={:#x} — golden incompleto (uni_mes residual)",
+    k_nano::slog_hal!(
+        "AMD",
+        "MES",
+        "GC={}.{} img={}B regs={} stub={} mes_fw={:?} doorbell={:#x} — golden incompleto (uni_mes residual)",
         ip.gfx_major,
         ip.gfx_minor,
-        hsaco.len(),
+        img.code.len(),
+        img.regs,
+        img.is_stub,
         stage,
-        db);
+        db
+    );
     if db != 0 {
         // Não escrever doorbell MES sem ring/MQD — só log.
         let _ = mmio;

@@ -1114,9 +1114,17 @@ mod tests {
     #[test]
     fn session_len_after_record() {
         let _g = GLOBAL_TEST_LOCK.lock();
+        // Isola do teste de cap: se SESSION já está em SESSION_CAP, record
+        // drena 1 e o len não cresce → falso negativo em paralelo.
+        SESSION.lock().entries.clear();
         let before = session_len();
         session_record("user", "test message", 999);
-        assert!(session_len() > before);
+        assert!(
+            session_len() > before,
+            "session_len should grow after record (before={}, after={})",
+            before,
+            session_len()
+        );
     }
 
     // ── memory nudge ─────────────────────────────────────────────────────

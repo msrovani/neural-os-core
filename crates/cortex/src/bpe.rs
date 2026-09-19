@@ -563,7 +563,19 @@ fn scan_and_load_bpb1(phys_off: u64, start: u64, end: u64, step: u64) -> bool {
 }
 
 /// FAT32 `BPE.BIN` / `BPEVOCAB.BIN` — path HW real (sem QEMU-loader).
+/// Sandbox (QEMU/WHPX): skip ATA PIO no boot — timeout 7–10s (paridade BGE SESSION_345).
 pub fn try_load_from_fat() -> bool {
+    if k_nano::platform_probe::probe_done()
+        && k_nano::platform_probe::hypervisor().is_sandbox()
+    {
+        k_nano::slog_bin!(
+            "BPE",
+            "warn",
+            "skip FAT PIO boot hv={} — Runtime/HW ou QEMU-loader BPB1",
+            k_nano::platform_probe::hypervisor().name()
+        );
+        return false;
+    }
     unsafe {
         let ata_guard = k_nano::ATA_DRIVER.lock();
         if let Some(ref ata) = *ata_guard {

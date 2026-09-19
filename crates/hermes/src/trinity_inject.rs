@@ -300,10 +300,15 @@ mod tests {
     use super::*;
     use cortex::trinity::{init_trinity, ExpertKind};
 
+    /// Serializa testes que tocam CapGate FE + TRINITY_MMAP_BRIDGE (statics
+    /// compartilhados — `cargo test` paralelo causava FeNet flaky).
+    static CAP_TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
     /// Host: bridge ausente → degrade honesto, mas skill WASM registrada e cap
     /// concedida (os 2 passos orquestráveis em host).
     #[test]
     fn inject_grants_skill_and_cap_degraded() {
+        let _g = CAP_TEST_LOCK.lock();
         // Garante bridge limpo (pode estar instalado por outro teste)
         *TRINITY_MMAP_BRIDGE.lock() = None;
         assert!(!trinity_bridge_installed());
@@ -325,6 +330,7 @@ mod tests {
     /// Bridge ativo (simulado com o router real do cortex) → Injected com bytes.
     #[test]
     fn inject_with_bridge_reports_injected() {
+        let _g = CAP_TEST_LOCK.lock();
         install_trinity_mmap_bridge(|_kind| Some(42));
         let out = inject_capability(ExpertKind::Generator, DeviceClass::Display, None).expect("inject");
         match out {
@@ -344,6 +350,7 @@ mod tests {
     /// Classe sem FE mapeado → erro explícito (nenhuma cap concedida).
     #[test]
     fn inject_rejects_class_without_fe() {
+        let _g = CAP_TEST_LOCK.lock();
         let err = inject_capability(ExpertKind::Generator, DeviceClass::Unknown, None).unwrap_err();
         assert!(err.contains("sem FE"));
     }
@@ -418,6 +425,7 @@ mod tests {
 
     #[test]
     fn try_inject_on_promote_triggers_for_expert_skill() {
+        let _g = CAP_TEST_LOCK.lock();
         // bridge ausente → degradado mas cap concedida
         *TRINITY_MMAP_BRIDGE.lock() = None;
         let wasm = crate::wasmi_rt::generate_wasm_module();
@@ -440,6 +448,7 @@ mod tests {
 
     #[test]
     fn try_inject_on_promote_grants_correct_cap_per_expert() {
+        let _g = CAP_TEST_LOCK.lock();
         *TRINITY_MMAP_BRIDGE.lock() = None;
         // hw_control → FeCompute (DeviceClass::Gpu)
         let wasm = crate::wasmi_rt::generate_wasm_module();
@@ -458,6 +467,7 @@ mod tests {
 
     #[test]
     fn try_inject_on_promote_with_bridge_reports_injected() {
+        let _g = CAP_TEST_LOCK.lock();
         install_trinity_mmap_bridge(|_kind| Some(1024));
         let wasm = crate::wasmi_rt::generate_wasm_module();
         let result = try_inject_on_promote("generator", &wasm);
@@ -504,6 +514,7 @@ mod tests {
 
     #[test]
     fn inject_for_hw_pnp_triggers_for_known_family() {
+        let _g = CAP_TEST_LOCK.lock();
         *TRINITY_MMAP_BRIDGE.lock() = None;
         let result = inject_for_hw_pnp("net", None);
         assert!(result.is_some());
@@ -521,6 +532,7 @@ mod tests {
 
     #[test]
     fn inject_for_hw_pnp_grants_correct_cap_per_family() {
+        let _g = CAP_TEST_LOCK.lock();
         *TRINITY_MMAP_BRIDGE.lock() = None;
         // gpu → FeCompute (DeviceClass::Gpu)
         let _r = inject_for_hw_pnp("gpu", None).unwrap().unwrap();
@@ -541,6 +553,7 @@ mod tests {
 
     #[test]
     fn inject_for_hw_pnp_with_bridge_reports_injected() {
+        let _g = CAP_TEST_LOCK.lock();
         install_trinity_mmap_bridge(|_kind| Some(2048));
         assert!(trinity_bridge_installed(), "bridge deveria estar ativo");
         let result = inject_for_hw_pnp("net", None);
@@ -569,6 +582,7 @@ mod tests {
     /// skill WASM registrada + CapGate FE concedido.
     #[test]
     fn matrix_effect_e2e_hw_pnp_sync_path() {
+        let _g = CAP_TEST_LOCK.lock();
         *TRINITY_MMAP_BRIDGE.lock() = None;
         // Simula o card de um NIC PCI (Realtek RTL8139, class 0x02)
         let result = inject_for_hw_pnp("net", None);
@@ -599,6 +613,7 @@ mod tests {
     /// para WASM injeta capacidade automaticamente (evolve.rs → try_inject_on_promote).
     #[test]
     fn matrix_effect_e2e_promote_skill_injects() {
+        let _g = CAP_TEST_LOCK.lock();
         *TRINITY_MMAP_BRIDGE.lock() = None;
         // Registra uma skill efêmera com nome de expert
         crate::skill_opt::record_python_run("disk_diag", "a*b", true);

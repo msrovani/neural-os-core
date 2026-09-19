@@ -154,7 +154,12 @@ impl Agent for WakeWordAgent {
         // Frames já chegam normalizados em 320 amostras @16 kHz mono (antes este
         // agente fatiava eventos de 512 e DESCARTAVA as 192 amostras restantes,
         // 37,5% do áudio, sempre nas mesmas fronteiras).
+        let mut drained = 0u32;
         while let Some(ev) = self.receiver.try_receive() {
+            if drained >= 16 {
+                break;
+            }
+            drained += 1;
             if ev.payload.len() < FRAME_SAMPLES * 2 {
                 continue;
             }

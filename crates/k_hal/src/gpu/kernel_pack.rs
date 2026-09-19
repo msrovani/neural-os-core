@@ -54,6 +54,10 @@ pub enum CompilerId {
     RustcAmdgcn = 3,
     OclocIgc = 4,
     HostCpuLogic = 5,
+    /// Rust-CUDA rustc_codegen_nvvm (host tool).
+    RustCudaNvvm = 6,
+    /// rustc stock nvptx64 + llvm-bitcode-linker.
+    RustcNvptx = 7,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +117,7 @@ fn isa_from_u32(v: u32) -> Option<IsaTag> {
         10 => Some(IsaTag::Sm52),
         11 => Some(IsaTag::Sm70),
         12 => Some(IsaTag::Sm80),
+        13 => Some(IsaTag::Sm86),
         _ => None,
     }
 }
@@ -154,6 +159,8 @@ pub fn parse_and_verify(buf: &[u8]) -> Option<KernelPack> {
         3 => CompilerId::RustcAmdgcn,
         4 => CompilerId::OclocIgc,
         5 => CompilerId::HostCpuLogic,
+        6 => CompilerId::RustCudaNvvm,
+        7 => CompilerId::RustcNvptx,
         _ => return None,
     };
     let ir = match read_u32(buf, 28)? {
@@ -218,6 +225,8 @@ pub fn load_named(name: &str) -> Option<KernelPack> {
         "NKP_GEN9.BIN" | "NKP_GEN9_BIN" => &["NKP_GEN9.BIN", "NKPGEN9.BIN", "NKP_GEN9_BIN"],
         "NKP_DG2.BIN" | "NKP_DG2_BIN" => &["NKP_DG2.BIN", "NKP_DG2_BIN"],
         "NKP_SM61.BIN" | "NKP_SM61_BIN" => &["NKP_SM61.BIN", "NKPSM61.BIN", "NKP_SM61_BIN"],
+        "NKP_W2A8_SM61.BIN" => &["NKP_W2A8_SM61.BIN", "NKPW2A861.BIN"],
+        "NKP_W2A8_GEN9.BIN" => &["NKP_W2A8_GEN9.BIN", "NKPW2A8G9.BIN"],
         "NKP_VECTOR_ADD.BIN" | "NKP_VECTOR_ADD_BIN" => {
             &["NKP_VADD.BIN", "NKPVADD.BIN", "NKP_VECTOR_ADD_BIN"]
         }
@@ -257,24 +266,68 @@ fn read_fat32_root(name: &str) -> Option<alloc::vec::Vec<u8>> {
     None
 }
 
-/// Match pack para vendor+isa+op.
+/// Nomes FAT candidatos por IsaTag — sem privilegiar sm_61.
+fn pack_name_candidates(isa: IsaTag, op: PackOp) -> &'static [&'static str] {
+    match (isa, op) {
+        (IsaTag::Sm61, PackOp::BitLinearW2A8) => &[
+            "NKP_W2A8_SM61.BIN",
+            "NKPW2A861.BIN",
+            "NKP_SM61.BIN",
+            "NKPSM61.BIN",
+        ],
+        (IsaTag::Sm61, _) => &["NKP_SM61.BIN", "NKPSM61.BIN", "NKP_SM61_BIN"],
+        (IsaTag::Sm52, PackOp::BitLinearW2A8) => &["NKP_W2A8_SM52.BIN", "NKP_SM52.BIN"],
+        (IsaTag::Sm52, _) => &["NKP_SM52.BIN", "NKPSM52.BIN"],
+        (IsaTag::Sm70, PackOp::BitLinearW2A8) => &["NKP_W2A8_SM70.BIN", "NKP_SM70.BIN"],
+        (IsaTag::Sm70, _) => &["NKP_SM70.BIN", "NKPSM70.BIN"],
+        (IsaTag::Sm75, PackOp::BitLinearW2A8) => &["NKP_W2A8_SM75.BIN", "NKP_SM75.BIN"],
+        (IsaTag::Sm75, _) => &["NKP_SM75.BIN", "NKPSM75.BIN"],
+        (IsaTag::Sm80, PackOp::BitLinearW2A8) => &["NKP_W2A8_SM80.BIN", "NKP_SM80.BIN"],
+        (IsaTag::Sm80, _) => &["NKP_SM80.BIN", "NKPSM80.BIN"],
+        (IsaTag::Sm86, PackOp::BitLinearW2A8) => &[
+            "NKP_W2A8_SM86.BIN",
+            "NKPW2A886.BIN",
+            "NKP_W2A8_SM80.BIN", // fallback Ampere baseline
+            "NKP_SM86.BIN",
+        ],
+        (IsaTag::Sm86, _) => &["NKP_SM86.BIN", "NKPSM86.BIN", "NKP_SM80.BIN"],
+        (IsaTag::Sm89, PackOp::BitLinearW2A8) => &["NKP_W2A8_SM89.BIN", "NKP_SM89.BIN"],
+        (IsaTag::Sm89, _) => &["NKP_SM89.BIN", "NKPSM89.BIN"],
+        (IsaTag::Gen9, PackOp::BitLinearW2A8) => &[
+            "NKP_W2A8_GEN9.BIN",
+            "NKPW2A8G9.BIN",
+            "NKP_GEN9.BIN",
+            "NKPGEN9.BIN",
+        ],
+        (IsaTag::Gen9, _) => &["NKP_GEN9.BIN", "NKPGEN9.BIN", "NKP_GEN9_BIN"],
+        (IsaTag::Dg2, PackOp::BitLinearW2A8) => &["NKP_W2A8_DG2.BIN", "NKP_DG2.BIN"],
+        (IsaTag::Dg2, _) => &["NKP_DG2.BIN", "NKP_DG2_BIN"],
+        (IsaTag::Gfx1030, PackOp::BitLinearW2A8) => &["NKP_W2A8_GFX1030.BIN", "NKP_GFX1030.BIN"],
+        (IsaTag::Gfx1030, _) => &["NKP_GFX1030.BIN", "NKPGFX30.BIN"],
+        (IsaTag::Gfx1036, _) => &["NKP_GFX1036.BIN", "NKPGFX36.BIN"],
+        (IsaTag::Gfx1103, PackOp::BitLinearW2A8) => &["NKP_W2A8_GFX1103.BIN", "NKP_GFX1103.BIN"],
+        (IsaTag::Gfx1103, _) => &["NKP_GFX1103.BIN", "NKPGFX03.BIN"],
+        (IsaTag::Gfx90c, _) => &["NKP_GFX90C.BIN", "NKPGFX90.BIN", "NKP_GFX90C_BIN"],
+        (IsaTag::None, _) => &[
+            "NKP_VECTOR_ADD.BIN",
+            "NKPVADD.BIN",
+            "NKP_VECADD.BIN",
+        ],
+    }
+}
+
+/// Match pack para vendor+isa+op (multi-ISA; sem hardcodar só sm_61).
 /// Aceita signature trusted **ou** promove unsigned (hash ok) com session key.
 pub fn find_active_pack(vendor: GpuVendor, isa: IsaTag, op: PackOp) -> Option<KernelPack> {
     let pv = PackVendor::from_gpu(vendor)?;
-    let names = [
-        "NKP_SM61.BIN",
-        "NKP_SM61_BIN",
-        "NKP_GEN9.BIN",
-        "NKP_GEN9_BIN",
-        "NKP_DG2.BIN",
-        "NKP_DG2_BIN",
+    let mut names: alloc::vec::Vec<&str> = pack_name_candidates(isa, op).to_vec();
+    // Fallbacks genéricos (vector_add / legacy).
+    names.extend_from_slice(&[
         "NKP_VECTOR_ADD.BIN",
         "NKP_VECTOR_ADD_BIN",
         "NKP_VECADD.BIN",
         "NKP_VECADD_BIN",
-        "NKP_GFX90C.BIN",
-        "NKP_GFX90C_BIN",
-    ];
+    ]);
     for n in &names {
         if let Some(mut pack) = load_named(n) {
             if pack.header.vendor != pv || pack.header.isa != isa || pack.header.op != op {
@@ -282,21 +335,36 @@ pub fn find_active_pack(vendor: GpuVendor, isa: IsaTag, op: PackOp) -> Option<Ke
             }
             if !pack.verified {
                 if let Some(p2) = promote_with_session(&pack) {
-                    k_nano::slog_hal!("NKP", "info", "session-promoted {} isa={} bytes={}",
+                    k_nano::slog_hal!(
+                        "NKP",
+                        "ok",
+                        "session-promoted {} isa={} op={} bytes={}",
                         n,
                         isa.as_str(),
-                        p2.payload.len());
+                        op as u32,
+                        p2.payload.len()
+                    );
                     pack = p2;
                 } else {
-                    k_nano::slog_hal!("NKP", "info", "{} hash ok but unsigned/session unavailable — skip Ready", n);
+                    k_nano::slog_hal!(
+                        "NKP",
+                        "ok",
+                        "{} hash ok but unsigned/session unavailable — skip Ready",
+                        n
+                    );
                     continue;
                 }
             }
             if pack.verified {
-                k_nano::slog_hal!("NKP", "info", "active pack {} isa={} bytes={}",
+                k_nano::slog_hal!(
+                    "NKP",
+                    "ok",
+                    "active pack {} isa={} op={} bytes={}",
                     n,
                     isa.as_str(),
-                    pack.payload.len());
+                    op as u32,
+                    pack.payload.len()
+                );
                 return Some(pack);
             }
         }

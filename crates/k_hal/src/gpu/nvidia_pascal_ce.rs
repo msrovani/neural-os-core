@@ -420,8 +420,10 @@ impl PascalCe {
         core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
         core::arch::asm!("sfence", options(nostack, preserves_flags));
 
+        let t0 = k_nano::tsc::now_us();
         let up = self.copy_phys(src.phys, vram, CANARY_BYTES);
         let down = up && self.copy_phys(vram, dst.phys, CANARY_BYTES);
+        let t1 = k_nano::tsc::now_us();
         let mut ok = up && down;
         if ok {
             let dr = dst.virt as *const u32;
@@ -432,6 +434,20 @@ impl PascalCe {
                     break;
                 }
             }
+        }
+        // 2×64KB round-trip → GB/s (Observe AIOS; boot clocks honestos).
+        if ok {
+            let elapsed_us = t1.saturating_sub(t0).max(1);
+            let bytes_moved = (CANARY_BYTES * 2) as u64;
+            let gbps = ((bytes_moved * 1_000_000) / elapsed_us / (1024 * 1024 * 1024)) as u32;
+            LAST_CE_GBPS.store(gbps, core::sync::atomic::Ordering::Relaxed);
+            k_nano::slog_hal!(
+                "GPU",
+                "ok",
+                "CE canary bandwidth≈{} GB/s ({} us, 2×64KB)",
+                gbps,
+                elapsed_us
+            );
         }
 
         vram_free(vram, CANARY_BYTES);
@@ -449,10 +465,23 @@ impl PascalCe {
 // ─── Seam global para o MHI (Fase 5 usa; mhi.rs NÃO é editado aqui) ────────
 
 static CE: Mutex<Option<PascalCe>> = Mutex::new(None);
+/// GB/s estimado do último canário CE (u32::MAX = não medido).
+static LAST_CE_GBPS: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(u32::MAX);
 
 /// True apenas após channel CE + canário 64KB passarem.
 pub fn ce_ready() -> bool {
     CE.lock().as_ref().map(|c| c.ready).unwrap_or(false)
+}
+
+/// Bandwidth CE observada no canário (None se não medido).
+pub fn last_canary_gbps() -> Option<u32> {
+    let v = LAST_CE_GBPS.load(core::sync::atomic::Ordering::Relaxed);
+    if v == u32::MAX {
+        None
+    } else {
+        Some(v)
+    }
 }
 
 /// copy phys→phys via CE (sem log) — pronto ou false.

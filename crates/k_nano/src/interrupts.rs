@@ -42,21 +42,34 @@ pub fn timer_jitter_ppm() -> u32 {
     ((diff.saturating_mul(1_000_000)) / nominal).min(1_000_000) as u32
 }
 
-/// `true` se `TIMER_TICKS` avançou entre duas amostras TSC-stamped (bounded
-/// ~2 ms). Sem timer vivo retorna `false` (não bloqueia além do limite).
+/// `true` se o timer IRQ avançou recentemente.
+///
+/// Usa o TSC do último `timer_handler` (não um spin de 2 ms): a rail canónica
+/// é 60 Hz (~16.7 ms), então esperar 2 ms dava **falso DEAD** no Hub Health
+/// (FAIL S3 / "lapic DEAD") com o LAPIC perfeitamente vivo.
 pub fn timer_alive() -> bool {
-    let before = TIMER_TICKS.load(Ordering::Relaxed);
-    let t0 = crate::tsc::rdtsc();
-    let limit = crate::tsc::tsc_hz() / 500; // ~2 ms
-    loop {
-        if TIMER_TICKS.load(Ordering::Relaxed) != before {
-            return true;
+    let last = LAST_TIMER_TSC.load(Ordering::Relaxed);
+    if last == 0 {
+        // Ainda sem IRQ — amostra curta só no boot precoce.
+        let before = TIMER_TICKS.load(Ordering::Relaxed);
+        let t0 = crate::tsc::rdtsc();
+        let limit = crate::tsc::tsc_hz() / 20; // ~50 ms
+        loop {
+            if TIMER_TICKS.load(Ordering::Relaxed) != before {
+                return true;
+            }
+            if crate::tsc::rdtsc().wrapping_sub(t0) > limit {
+                return false;
+            }
+            core::hint::spin_loop();
         }
-        if crate::tsc::rdtsc().wrapping_sub(t0) > limit {
-            return false;
-        }
-        core::hint::spin_loop();
     }
+    let now = crate::tsc::rdtsc();
+    let hz = crate::tsc::tsc_hz().max(1);
+    let tick_hz = TIMER_HZ.load(Ordering::Relaxed).max(1);
+    // Vivo se o último IRQ foi há < 3 períodos (60 Hz → ~50 ms).
+    let max_age = (hz / tick_hz).saturating_mul(3).max(hz / 20);
+    now.wrapping_sub(last) < max_age
 }
 
 /// Ticks de parede para UI: IRQ timer + soft (quando hlt não acorda).
@@ -711,23 +724,20 @@ extern "x86-interrupt" fn unhandled_interrupt_handler(stack_frame: InterruptStac
     }
 }
 
-// IPI handlers para SMP
+// IPI handlers para SMP — sem puts/serial (hot path; 8c corrompia boot log).
 extern "x86-interrupt" fn ipi_reschedule_handler(_stack_frame: InterruptStackFrame) {
     IPI_RESCHEDULE.fetch_add(1, Ordering::Relaxed);
-    puts(b"[IPI] Reschedule on CPU "); putdec(crate::smp::percpu::cpu_id()); putc(b'\n');
     unsafe { crate::apic::apic_eoi(); }
 }
 
 extern "x86-interrupt" fn ipi_halt_handler(_stack_frame: InterruptStackFrame) {
     IPI_HALT.fetch_add(1, Ordering::Relaxed);
-    puts(b"[IPI] Halt on CPU "); putdec(crate::smp::percpu::cpu_id()); putc(b'\n');
     unsafe { crate::apic::apic_eoi(); }
     loop { x86_64::instructions::hlt(); }
 }
 
 extern "x86-interrupt" fn ipi_call_function_handler(_stack_frame: InterruptStackFrame) {
     IPI_CALL_FUNCTION.fetch_add(1, Ordering::Relaxed);
-    puts(b"[IPI] Call function on CPU "); putdec(crate::smp::percpu::cpu_id()); putc(b'\n');
     unsafe { crate::apic::apic_eoi(); }
 }
 

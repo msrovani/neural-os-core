@@ -56,6 +56,10 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
     #[cfg(all(target_arch = "x86_64", target_os = "none"))]
     if n >= 4 {
         let r = unsafe { sse2_ternary_matmul_add_sub_skip(weight, input, m, k, n) };
+        // SESSION_336/362: o sret deste fn #[target_feature] corrompe shape.0
+        // no target soft-float (data Vec intacto — len verificado). Rebuild
+        // com shape correta no caller (fora do target_feature).
+        let r = Tensor { shape: (m, n), data: r.data };
         crate::matmul_diag::note_sse2_ok();
         crate::matmul_diag::note_call(k, n, m, 3, r.is_valid());
         return Some(r);

@@ -133,6 +133,19 @@ pub fn tts_generation_valid(gen: u64) -> bool {
     TTS_GENERATION.load(Ordering::Acquire) == gen
 }
 
+/// Abre mic só quando o playback ring está quieto (pós-greeting).
+/// Evita VAD→barge-in durante SPEAKING (SESSION_352 / s361).
+pub fn maybe_enable_open_mic_after_playback() {
+    if settings::open_mic_enabled() {
+        return;
+    }
+    if PLAYBACK_RING.available() > 0 {
+        return;
+    }
+    settings::enable_open_mic();
+    k_nano::slog_jarbas!("Jarbas", "ok", "open_mic ON (playback quiet)");
+}
+
 const VOICE_MANIFEST: AgentManifest = AgentManifest {
     name: "jarvis_voice",
     kind: AgentKind::Console,
@@ -380,29 +393,47 @@ impl Agent for JarbasVoiceAgent {
         }
 
         // --- VAD único (vindo do dono do mic) ---
-        while let Some(ev) = self.vad_in.try_receive() {
+        // Budget: EventBus sem teto + AUDIO_FRAME @50Hz = tick infinito (SESSION_352).
+        let mut vad_n = 0u32;
+        while vad_n < 8 {
+            let Some(ev) = self.vad_in.try_receive() else { break; };
+            vad_n += 1;
             let tag = core::str::from_utf8(&ev.payload).unwrap_or("");
             if !self.can_listen() {
                 continue;
             }
             if tag.starts_with("start") {
-                // Fala durante playback = pedido de interrupção, não novo turno.
+                // SESSION_352 / s361: sem AEC, VAD durante playback = eco do
+                // greeting → barge-in cancela TTS+infer e congela o UI.
+                // Só interrompe se já estávamos em Listening (turno real).
                 if PLAYBACK_RING.available() > 0 {
-                    publish_state(VoiceState::BargeIn);
-                    request_interrupt();
-                    settings::force_wake_open();
+                    if self.listening {
+                        publish_state(VoiceState::BargeIn);
+                        request_interrupt();
+                        settings::force_wake_open();
+                    } else {
+                        k_nano::slog_jarbas!(
+                            "Jarbas",
+                            "ok",
+                            "VAD start ignorado durante SPEAKING (sem AEC)"
+                        );
+                        continue;
+                    }
                 }
                 self.listening = true;
                 self.pcm_buffer.clear();
                 self.emotion_samples.clear();
-                k_nano::slog_jarbas!("Jarbas", "info", "Escutando...");
+                k_nano::slog_jarbas!("Jarbas", "ok", "Escutando...");
             } else if tag.starts_with("end") {
                 self.finish_utterance();
             }
         }
 
         // --- Frames fixos de 16 kHz mono ---
-        while let Some(ev) = self.frame_in.try_receive() {
+        let mut frame_n = 0u32;
+        while frame_n < 16 {
+            let Some(ev) = self.frame_in.try_receive() else { break; };
+            frame_n += 1;
             if ev.payload.len() < FRAME_SAMPLES * 2 {
                 continue;
             }
@@ -419,7 +450,10 @@ impl Agent for JarbasVoiceAgent {
         }
 
         // --- Pareamento de turno: HERMES_RESPONSE fecha (user, assistant) ---
-        while let Some(ev) = self.hermes_out.try_receive() {
+        let mut hermes_n = 0u32;
+        while hermes_n < 4 {
+            let Some(ev) = self.hermes_out.try_receive() else { break; };
+            hermes_n += 1;
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             if text.is_empty()
                 || text.starts_with("[JARBAS] Escutando")

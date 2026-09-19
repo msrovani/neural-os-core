@@ -39,6 +39,17 @@ pub enum IntelSubmission {
     GuC,
 }
 
+/// Perfil de op preferido após Observe (caps medidas) — ISA-agnóstico.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum OpProfile {
+    ScalarInt8 = 0,
+    Dp4aW2A8 = 1,
+    MadInt8 = 2,
+    WmmaI8 = 3,
+    DotInt8 = 4,
+}
+
 /// Capabilities publicadas no boot. `has_compute` só true após golden.
 #[derive(Debug, Clone, Copy)]
 pub struct ComputeCaps {
@@ -56,6 +67,14 @@ pub struct ComputeCaps {
     pub intel_submission: IntelSubmission,
     /// Host MAD/INT8 golden ok (≠ GPU Ready).
     pub mad_int8_host: bool,
+    /// dp4a / IDP.4A (sm_61+, RDNA2+ sudot4, etc.).
+    pub dp4a: bool,
+    pub mad_int8: bool,
+    pub wmma_i8: bool,
+    pub dpas: bool,
+    /// CE/copy canary GB/s; None até medido.
+    pub bandwidth_gbps_measured: Option<u32>,
+    pub preferred_op_profile: OpProfile,
 }
 
 impl ComputeCaps {
@@ -73,6 +92,31 @@ impl ComputeCaps {
             has_ccs: false,
             intel_submission: IntelSubmission::None,
             mad_int8_host: false,
+            dp4a: false,
+            mad_int8: false,
+            wmma_i8: false,
+            dpas: false,
+            bandwidth_gbps_measured: None,
+            preferred_op_profile: OpProfile::ScalarInt8,
+        }
+    }
+
+    /// Deriva features + perfil a partir do IsaTag (Observe; sem inventar ISA).
+    pub fn features_for_isa(isa: IsaTag) -> (bool, bool, bool, bool, OpProfile) {
+        match isa {
+            IsaTag::Sm61 | IsaTag::Sm70 | IsaTag::Sm75 | IsaTag::Sm80 | IsaTag::Sm86 | IsaTag::Sm89 => {
+                (true, false, false, false, OpProfile::Dp4aW2A8)
+            }
+            IsaTag::Sm52 => (false, true, false, false, OpProfile::MadInt8),
+            IsaTag::Gen9 => (false, true, false, false, OpProfile::MadInt8),
+            IsaTag::Dg2 => (true, true, false, true, OpProfile::Dp4aW2A8),
+            IsaTag::Gfx1030 | IsaTag::Gfx1036 => {
+                (true, true, false, false, OpProfile::DotInt8)
+            }
+            IsaTag::Gfx1103 | IsaTag::Gfx90c => {
+                (true, true, true, false, OpProfile::WmmaI8)
+            }
+            IsaTag::None => (false, false, false, false, OpProfile::ScalarInt8),
         }
     }
 }
@@ -95,8 +139,10 @@ pub enum IsaTag {
     Sm52 = 10,
     /// Volta sm_70
     Sm70 = 11,
-    /// Ampere sm_80
+    /// Ampere sm_80 (GA100)
     Sm80 = 12,
+    /// Ampere sm_86 (GA10x — RTX 3050/3060/etc.)
+    Sm86 = 13,
 }
 
 impl IsaTag {
@@ -115,6 +161,7 @@ impl IsaTag {
             IsaTag::Sm52 => "sm_52",
             IsaTag::Sm70 => "sm_70",
             IsaTag::Sm80 => "sm_80",
+            IsaTag::Sm86 => "sm_86",
         }
     }
 }

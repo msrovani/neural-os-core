@@ -306,9 +306,12 @@ pub fn emit_hw_greeting_at_register() {
     crate::display::compositor::announce_welcome(&body);
     crate::display::fb::console_print(&line);
     crate::display::fb::boot_ckpt(50, "jarvis greet OK");
-    // TCG: formant (Piper 50k+ samples trava DisplayAgent por segundos).
-    // Metal: Piper se carregado.
-    let pcm = if k_nano::storage_bw::skip_measure() {
+    // Sandbox (TCG/WHPX/KVM): formant só — Piper 50k–100k samples no register
+    // deixa SPEAKING+open_mic e congela o UI no jarvis_voice (s361).
+    // Metal bare: Piper se carregado.
+    let sandbox = k_nano::platform_probe::hypervisor().is_sandbox()
+        || k_nano::storage_bw::skip_measure();
+    let pcm = if sandbox {
         crate::audio::tts::synthesize(&body)
     } else {
         crate::audio::skills::synthesize_tts(&body)
@@ -319,11 +322,13 @@ pub fn emit_hw_greeting_at_register() {
         k_nano::slog_jarbas!(
             "Jarbas",
             "ok",
-            "TTS boot greeting {} frames (QEMU/HDA drain no mixer)",
-            pcm.len()
+            "TTS boot greeting {} frames (sandbox={} drain no mixer)",
+            pcm.len(),
+            sandbox
         );
     }
-    // NÃO republicar em HERMES_RESPONSE — já sintetizou; VoiceAgent refaria Piper e congela o orb.
+    // NÃO republicar em HERMES_RESPONSE — já sintetizou; VoiceAgent/JARBAS
+    // refaria Piper e congela o orb.
 }
 
 impl Agent for JarbasAgent {

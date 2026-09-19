@@ -1,6 +1,7 @@
-# STATE — neural-os-core v1.9.99-s360 — mesh WHPX lab + fail/warn honesty
+# STATE — neural-os-core v1.9.99-s363 — QEMU UI liveness + GPU Multi-ISA
 
-#   PISTA ATIVA: s360 — mesh 6-node WHPX + orb MESH_HEALTH; TLSPINS/Trust/CapGate sev; mouse soft-F4; boot_log PollEvery
-#   Residual: peer B estável em 6-node; BEI spam; QEMU relaunch pós-fix AWAITING
-#   PISTA ANTERIOR: s359 bin wave2/3 + Bei/MoE; s358 cortex; s357 bin; s356 k_ai
+#   PISTA ATIVA: s363 — boot hang (Falcon3/IPI/BPE) + jarvis_voice freeze
+#   (open_mic/barge-in/formant) + timer_alive falso DEAD; WHPX 8c/6G PASS past T550
+#   PISTA ANTERIOR: s361 GPU Multi-ISA KernelImage/W2A8 (ADR-0105); s362 router encode
+#   Residual: NKP Ready metal; W2A8 device; BEI slog spam; USB MSC QEMU
 #   Não declarar v2.0.0

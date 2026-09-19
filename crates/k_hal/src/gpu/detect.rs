@@ -1,7 +1,9 @@
 //! GPU Detection — scan PCI class 0x03, família/IP, caps honestas (has_compute=false até canário).
 
 use alloc::vec::Vec;
-use crate::gpu::compute_abi::{ComputeBackendKind, ComputeCaps, IsaTag, BackendState};
+use crate::gpu::compute_abi::{
+    BackendState, ComputeBackendKind, ComputeCaps, IsaTag,
+};
 use k_nano::pci::PciDevice;
 pub const VENDOR_INTEL: u16 = 0x8086;
 pub const VENDOR_NVIDIA: u16 = 0x10DE;
@@ -98,7 +100,7 @@ impl GpuInfo {
     }
 
     pub fn to_caps(&self, state: BackendState) -> ComputeCaps {
-        use crate::gpu::compute_abi::IntelSubmission;
+        use crate::gpu::compute_abi::{IntelSubmission, OpProfile};
         let has_ccs = matches!(
             self.arch,
             GpuArch::IntelXe | GpuArch::IntelXe2
@@ -107,6 +109,14 @@ impl GpuInfo {
             GpuArch::IntelGen9 => IntelSubmission::Ring,
             GpuArch::IntelGen12 | GpuArch::IntelXe | GpuArch::IntelXe2 => IntelSubmission::GuC,
             _ => IntelSubmission::None,
+        };
+        let (dp4a, mad_int8, wmma_i8, dpas, preferred_op_profile) =
+            ComputeCaps::features_for_isa(self.isa_tag);
+        // Se bandwidth CE baixa, Plan rebaixa dp4a → MadInt8 (adequação AIOS).
+        let bw = crate::gpu::backend::measured_bandwidth_gbps();
+        let preferred_op_profile = match (preferred_op_profile, bw) {
+            (OpProfile::Dp4aW2A8, Some(g)) if g < 20 => OpProfile::MadInt8,
+            (p, _) => p,
         };
         ComputeCaps {
             vendor: self.vendor,
@@ -121,6 +131,12 @@ impl GpuInfo {
             has_ccs,
             intel_submission,
             mad_int8_host: false,
+            dp4a,
+            mad_int8,
+            wmma_i8,
+            dpas,
+            bandwidth_gbps_measured: bw,
+            preferred_op_profile,
         }
     }
 }
@@ -229,7 +245,7 @@ fn select_backend_family(
             GpuArch::NvidiaPascal => (ComputeBackendKind::LegacyAcr, IsaTag::Sm61, true),
             GpuArch::NvidiaVolta => (ComputeBackendKind::LegacyAcr, IsaTag::Sm70, true),
             GpuArch::NvidiaTuring => (ComputeBackendKind::Gsp, IsaTag::Sm75, true),
-            GpuArch::NvidiaAmpere => (ComputeBackendKind::Gsp, IsaTag::Sm80, true),
+            GpuArch::NvidiaAmpere => (ComputeBackendKind::Gsp, IsaTag::Sm86, true),
             GpuArch::NvidiaAda | GpuArch::NvidiaBlackwell => {
                 (ComputeBackendKind::Gsp, IsaTag::Sm89, true)
             }

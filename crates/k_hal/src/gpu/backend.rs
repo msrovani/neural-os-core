@@ -25,6 +25,70 @@ static CURRENT_BACKEND: Mutex<Option<GpuAccel>> = Mutex::new(None);
 static JOB_RINGS: Mutex<Vec<GpuJobRing>> = Mutex::new(Vec::new());
 static COMPUTE_STATE: Mutex<BackendState> = Mutex::new(BackendState::CpuOnly);
 static LAST_PLAN: Mutex<Option<GpuAssignment>> = Mutex::new(None);
+/// IsaTag da GPU de **compute** (dGPU no dual; nunca a iGPU de display).
+static COMPUTE_ISA: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+static COMPUTE_VENDOR: core::sync::atomic::AtomicU8 =
+    core::sync::atomic::AtomicU8::new(0xFF);
+
+/// Plano display↔compute do último init (dual iGPU+dGPU ou single).
+pub fn last_assignment() -> Option<GpuAssignment> {
+    *LAST_PLAN.lock()
+}
+
+/// True se o boot viu iGPU display + dGPU compute separados.
+pub fn is_dual_gpu() -> bool {
+    last_assignment().map(|p| p.is_dual()).unwrap_or(false)
+}
+
+/// IsaTag do alvo W2A8/canary (compute owner). None se CPU-only.
+pub fn compute_isa_tag() -> Option<crate::gpu::compute_abi::IsaTag> {
+    use crate::gpu::compute_abi::IsaTag;
+    match COMPUTE_ISA.load(core::sync::atomic::Ordering::Acquire) {
+        0 => None,
+        1 => Some(IsaTag::Sm61),
+        2 => Some(IsaTag::Sm75),
+        3 => Some(IsaTag::Sm89),
+        4 => Some(IsaTag::Gfx90c),
+        5 => Some(IsaTag::Gfx1036),
+        6 => Some(IsaTag::Gfx1103),
+        7 => Some(IsaTag::Gfx1030),
+        8 => Some(IsaTag::Gen9),
+        9 => Some(IsaTag::Dg2),
+        10 => Some(IsaTag::Sm52),
+        11 => Some(IsaTag::Sm70),
+        12 => Some(IsaTag::Sm80),
+        _ => None,
+    }
+}
+
+fn remember_compute_target(gpu: &GpuInfo) {
+    COMPUTE_ISA.store(gpu.isa_tag as u32, core::sync::atomic::Ordering::Release);
+    let v = match gpu.vendor {
+        GpuVendor::Nvidia => 1,
+        GpuVendor::Amd => 2,
+        GpuVendor::Intel => 3,
+        _ => 0,
+    };
+    COMPUTE_VENDOR.store(v, core::sync::atomic::Ordering::Release);
+}
+/// CE/copy bandwidth GB/s (Observe); u32::MAX = não medido.
+static BANDWIDTH_GBPS: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(u32::MAX);
+
+/// Bandwidth CE medida (None se ainda não observou).
+pub fn measured_bandwidth_gbps() -> Option<u32> {
+    let v = BANDWIDTH_GBPS.load(core::sync::atomic::Ordering::Relaxed);
+    if v == u32::MAX {
+        None
+    } else {
+        Some(v)
+    }
+}
+
+pub fn set_measured_bandwidth_gbps(gbps: u32) {
+    BANDWIDTH_GBPS.store(gbps, core::sync::atomic::Ordering::Relaxed);
+}
 
 /// Mapeia BAR0/BAR2 como uncacheable (só R1 / Cap MAP_BAR).
 pub unsafe fn map_bars_uc(gpu: &GpuInfo) {
@@ -116,6 +180,10 @@ pub unsafe fn init_backend(gpus: &[GpuInfo]) {
 
 pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
     *LAST_PLAN.lock() = Some(*plan);
+    // AIOS: hook header→SKU + adapt (dual + Falcon3 1B/3B/7B/10B) sem hardcode.
+    cortex::model::register_model_header_hook(crate::gpu::aios_adapt::adapt_on_model_loaded);
+    let ram = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    let _aios = crate::gpu::aios_adapt::adapt_boot(gpus, ram);
     k_nano::slog_hal!("GPU", "BACKEND", "{}", display_coex::assignment_status(plan, gpus));
 
     if gpus.is_empty() || matches!(plan, GpuAssignment::CpuOnly) {
@@ -160,6 +228,16 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
             return;
         }
     };
+    remember_compute_target(gpu);
+    if plan.is_dual() {
+        k_nano::slog_hal!(
+            "GPU",
+            "ok",
+            "DUAL-GPU: display≠compute — W2A8/canary ISA={} vendor={:?} (iGPU display intocado)",
+            gpu.isa_tag.as_str(),
+            gpu.vendor
+        );
+    }
 
     // Se display != compute, mapear compute também
     if plan.display_index() != Some(ci) {
@@ -221,6 +299,21 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
                 // ADR-0087 Fase 4b — Copy Engine (DMA bulk RAM↔VRAM): channel CE
                 // + canário 64KB. HW-gated; ready só com golden (honesto).
                 nvidia_pascal_ce::probe_global(gpu);
+                // Observe: CE bandwidth (boot clocks honestos) — Plan usa em to_caps.
+                if let Some(gbps) = nvidia_pascal_ce::last_canary_gbps() {
+                    set_measured_bandwidth_gbps(gbps);
+                    k_nano::slog_hal!(
+                        "GPU",
+                        "ok",
+                        "Observe CE bandwidth={} GB/s (isa={})",
+                        gbps,
+                        gpu.isa_tag.as_str()
+                    );
+                    // C1: re-Plan profile (Dp4a→Mad/Scalar) com bw real
+                    let ram = k_nano::memory::TOTAL_RAM_MB
+                        .load(core::sync::atomic::Ordering::Relaxed);
+                    let _ = crate::gpu::aios_adapt::replan_after_bandwidth(gpus, ram);
+                }
                 *CURRENT_BACKEND.lock() = Some(GpuAccel::Nvidia(nv));
             } else {
                 k_nano::slog_hal!("GPU", "BACKEND", "NVIDIA init falhou, fallback CPU");

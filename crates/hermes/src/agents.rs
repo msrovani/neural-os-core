@@ -165,8 +165,10 @@ impl InputAgent {
 impl Agent for InputAgent {
     fn manifest(&self) -> &AgentManifest { &INPUT_MANIFEST }
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
-        // T+50 clássico; + retry T+120 se o 1º skipou (UI ainda não live / MSC).
-        if tick == 50 || tick == 120 {
+        // HID deferred: QEMU xhci EnableSlot timeout ~1.2s ×2 (tick 50+120) =
+        // "tick lento: input" e engasga o orb (s361). Skip em sandbox; metal OK.
+        let sandbox = k_nano::platform_probe::hypervisor().is_sandbox();
+        if !sandbox && (tick == 50 || tick == 120) {
             if tick == 120 {
                 k_nano::xhci::clear_hid_defer_flag();
             }
@@ -833,9 +835,10 @@ impl Agent for HermesAgent {
             self.boot_greeted,
         );
 
-        // Métricas críticas só reportam se houver anomalia
-        if !self.consciousness.critical_metrics().is_empty() {
-            k_nano::slog_hermes!("Hermes", "info", "Metricas criticas: {:?}", self.consciousness.critical_metrics());
+        // Métricas críticas: no máximo 1×/64 ticks (antes: slog+write_log
+        // TODO tick com lista sempre não-vazia → flood serial/FAT e engasga UI).
+        if !self.consciousness.critical_metrics().is_empty() && _tick % 64 == 0 {
+            k_nano::slog_hermes!("Hermes", "ok", "Metricas criticas: {:?}", self.consciousness.critical_metrics());
             let _ = log_analyst_agent::write_log("hermes",
                 &alloc::format!("Metricas criticas: {:?}", self.consciousness.critical_metrics()));
         }
@@ -2553,6 +2556,8 @@ pub struct AutoLearnAgent {
     needs: Vec<LearnNeed>,
     tick_count: u64,
     receiver: Receiver,
+    /// Probe de eficácia (lab): injeta unmatched×3 uma vez e loga METRIC.
+    efficacy_probed: bool,
 }
 
 impl AutoLearnAgent {
@@ -2561,6 +2566,7 @@ impl AutoLearnAgent {
             needs: Vec::new(),
             tick_count: 0,
             receiver: EVENT_BUS.subscribe("TRINITY_UNMATCHED"),
+            efficacy_probed: false,
         }
     }
 
@@ -2589,6 +2595,7 @@ impl AutoLearnAgent {
     }
 
     fn learn_topic(&mut self, topic: &str) {
+        k_nano::slog_hermes!("TRINITY", "ok", "METRIC learn_start topic={}", topic);
         k_nano::slog_hermes!("TRINITY", "Learn", "Iniciando aprendizado: {}...", topic);
         for need in &mut self.needs {
             if need.topic == topic { need.triggered = true; }
@@ -2599,6 +2606,12 @@ impl AutoLearnAgent {
         if knowledge.is_empty() {
             k_nano::slog_hermes!("TRINITY", "Learn", "{}: conhecimento indisponivel em FAT32", topic);
             k_nano::slog_hermes!("TRINITY", "Learn", "Coloque {}.BIN na FAT32 ou gere via SDIO pipeline", topic.to_uppercase());
+            k_nano::slog_hermes!(
+                "TRINITY",
+                "ok",
+                "METRIC learn_done topic={} knowledge_bytes=0 steps=0 status=no_fat_knowledge",
+                topic
+            );
             return;
         }
 
@@ -2651,6 +2664,14 @@ impl AutoLearnAgent {
         }
         cortex::global_arena::reset_moe_cache();
         k_nano::slog_hermes!("TRINITY", "Learn", "{}: TRINITY APRENDEU! (R3 reset O(1))", topic);
+        k_nano::slog_hermes!(
+            "TRINITY",
+            "ok",
+            "METRIC learn_done topic={} knowledge_bytes={} steps={} status=ok",
+            topic,
+            knowledge.len(),
+            steps.max(1)
+        );
     }
 
     fn load_knowledge(&self, topic: &str) -> Vec<u8> {
@@ -2716,6 +2737,19 @@ impl Agent for AutoLearnAgent {
     fn manifest(&self) -> &AgentManifest { &AUTOLEARN_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         self.tick_count += 1;
+        // Lab efficacy: injeta 3× unmatched security → dispara learn_topic (threshold≥3).
+        if !self.efficacy_probed && self.tick_count >= 8 {
+            self.efficacy_probed = true;
+            for _ in 0..3 {
+                self.report_unmatched("security cve ataque lab_metric");
+            }
+            k_nano::slog_hermes!(
+                "TRINITY",
+                "ok",
+                "METRIC probe unmatched_injected=3 topic=security needs={}",
+                self.needs.len()
+            );
+        }
         // Recebe eventos de intent nao classificado
         while let Some(event) = self.receiver.try_receive() {
             if let Ok(text) = core::str::from_utf8(&event.payload) {
@@ -3155,42 +3189,24 @@ impl SleepCycleAgent {
 impl Agent for SleepCycleAgent {
     fn manifest(&self) -> &AgentManifest { &SLEEPCYCLE_MANIFEST }
     fn tick(&mut self, _t: u64, _c: u64) -> AgentTickResult {
-        // Desktop vivo: sleep cycle é background — federated+execute_phase ~1.5s
-        // no BSP congela o orb. Adia trabalho pesado; só avança o relógio de fase.
-        if k_nano::boot_logger::ui_is_live() {
-            let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-            if self.phase == 0 {
-                if self.cycle_count == 0 || now > self.phase_tick + 5000 {
-                    self.phase = 1;
-                    self.phase_tick = now;
+        // Desktop vivo: federated+mesh lock engasga o orb — pula FED, mas
+        // execute_phase continua (senão eficácia = zero e METRIC nunca aparece).
+        let ui_live = k_nano::boot_logger::ui_is_live();
+        if !ui_live {
+            // ── F4: aprendizado federado (best-effort — try_lock p/ não travar o scheduler) ──
+            cortex::federated::poll_p2p();
+            let node_count = match k_nano::net::mesh::MESH_ENGINE.try_lock() {
+                Some(guard) => guard.as_ref().map(|e| e.node_count()).unwrap_or(0),
+                None => 0,
+            };
+            if cortex::federated::fed_tick(k_nano::net::mesh::local_role(), node_count) {
+                k_nano::slog_hermes!("SLEEP", "FED", "conhecimento trocado no mesh (rounds={})", cortex::federated::fed_rounds());
+            }
+            // Aplica pesos fundidos no router vivo (TRINITY), se houver.
+            if let Some(w) = cortex::federated::pending_live_weights() {
+                if TRINITY.lock().set_router_weights(&w) {
+                    k_nano::slog_hermes!("SLEEP", "FED", "router vivo atualizado ({} i8)", w.len());
                 }
-                return AgentTickResult::Pending;
-            }
-            if now < self.phase_tick + 200 {
-                return AgentTickResult::Pending;
-            }
-            self.phase_tick = now;
-            if self.phase >= 5 {
-                self.phase = 0;
-                self.cycle_count += 1;
-            } else {
-                self.phase += 1;
-            }
-            return AgentTickResult::Pending;
-        }
-        // ── F4: aprendizado federado (best-effort — try_lock p/ não travar o scheduler) ──
-        cortex::federated::poll_p2p();
-        let node_count = match k_nano::net::mesh::MESH_ENGINE.try_lock() {
-            Some(guard) => guard.as_ref().map(|e| e.node_count()).unwrap_or(0),
-            None => 0,
-        };
-        if cortex::federated::fed_tick(k_nano::net::mesh::local_role(), node_count) {
-            k_nano::slog_hermes!("SLEEP", "FED", "conhecimento trocado no mesh (rounds={})", cortex::federated::fed_rounds());
-        }
-        // Aplica pesos fundidos no router vivo (TRINITY), se houver.
-        if let Some(w) = cortex::federated::pending_live_weights() {
-            if TRINITY.lock().set_router_weights(&w) {
-                k_nano::slog_hermes!("SLEEP", "FED", "router vivo atualizado ({} i8)", w.len());
             }
         }
         let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
@@ -3207,6 +3223,16 @@ impl Agent for SleepCycleAgent {
             payload: self.phase_name().as_bytes().to_vec(),
             token: CapabilityToken::Legacy(1),
         });
+        k_nano::slog_hermes!(
+            "SLEEP",
+            "ok",
+            "METRIC phase={} cycle={} insights={} degraded={} ui_live={}",
+            self.phase_name(),
+            self.cycle_count,
+            self.insights.len(),
+            self.degraded as u8,
+            ui_live as u8
+        );
         self.phase_tick = now;
         if self.phase >= 5 { self.phase = 0; self.cycle_count += 1; }
         else { self.phase += 1; }

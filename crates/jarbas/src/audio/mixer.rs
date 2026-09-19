@@ -35,7 +35,11 @@ impl Agent for AudioMixerAgent {
     }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        while let Some(ev) = self.tts_receiver.try_receive() {
+        // Cap eventos AUDIO_OUT por tick — payload Piper 100k aloca/copia e congela UI.
+        let mut n_ev = 0u32;
+        while n_ev < 4 {
+            let Some(ev) = self.tts_receiver.try_receive() else { break; };
+            n_ev += 1;
             let vol = AUDIO_VOLUME.load(Ordering::Relaxed) as f32 / 100.0;
             let pcm: &[i16] = unsafe {
                 core::slice::from_raw_parts(
@@ -43,21 +47,29 @@ impl Agent for AudioMixerAgent {
                     ev.payload.len() / 2,
                 )
             };
-            let mut scaled: alloc::vec::Vec<i16> = alloc::vec::Vec::with_capacity(pcm.len());
-            for &s in pcm {
-                let v = (s as f32 * vol).clamp(-32768.0, 32767.0) as i16;
-                scaled.push(v);
+            // Escala só um chunk (push descarta o resto se ring cheio).
+            let take = pcm.len().min(4096);
+            if take == 0 {
+                continue;
             }
-            let written = self.out_ring.push(&scaled);
-            k_nano::slog_bin!("MIXER", "info", "{} samples -> playback ring (vol={}%)",
+            let mut scaled = [0i16; 4096];
+            for i in 0..take {
+                let v = (pcm[i] as f32 * vol).clamp(-32768.0, 32767.0) as i16;
+                scaled[i] = v;
+            }
+            let written = self.out_ring.push(&scaled[..take]);
+            k_nano::slog_bin!(
+                "MIXER",
+                "info",
+                "{} samples -> playback ring (vol={}%)",
                 written,
-                (vol * 100.0) as u8);
+                (vol * 100.0) as u8
+            );
         }
 
         let mut buf = [0i16; 1024];
         let n = self.out_ring.pop(&mut buf);
         if n > 0 {
-            // Alimenta orb FFT com playback (não só mic) — orb reage a voz do assistant
             crate::display::avatar::process_audio_fft(&buf[..n]);
             k_hal::audio::hda::write_hda_playback(&buf[..n]);
             crate::audio::usb::write_uac_playback(&buf[..n]);

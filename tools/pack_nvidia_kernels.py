@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Pack NVIDIA KernelPack (NKP1) — CUDA 12.9 → CUBIN sm_61/sm_75/sm_89.
+"""Pack NVIDIA KernelPack (NKP1) — nvcc → CUBIN sm_52..sm_89.
 
 Host-only. Does not run inside Neural OS.
+Lab: CTK 13.4 → sm_75+ (sm_86 = RTX 3050); CTK 12.9 still needed for ≤sm_70.
 
 Signing (optional, no secrets in-repo):
   NKP_SIGNING_SEED_HEX=<64 hex chars>  — Ed25519 seed (32 B); requires PyNaCl
@@ -25,10 +26,21 @@ from pathlib import Path
 MAGIC = b"NKP1"
 ABI = 1
 VENDOR_NVIDIA = 1
-ISA = {"sm_61": 1, "sm_75": 2, "sm_89": 3}
+ISA = {
+    "sm_52": 10,
+    "sm_61": 1,
+    "sm_70": 11,
+    "sm_75": 2,
+    "sm_80": 12,
+    "sm_86": 13,
+    "sm_89": 3,
+}
 OP_VECTOR_ADD = 1
+OP_W2A8 = 2
 GOLDEN_VECTOR_ADD = 1
+GOLDEN_W2A8 = 2
 COMPILER_CUDA129 = 1
+COMPILER_RUST_CUDA = 6
 COMPILER_HOST = 5
 IR_CUBIN = 1
 IR_CPU = 4
@@ -43,14 +55,16 @@ def fnv1a64(data: bytes) -> int:
     return h
 
 
-def build_header(isa: int, compiler: int, ir: int, wg: int, smem: int, plen: int) -> bytes:
+def build_header(
+    isa: int, op: int, golden: int, compiler: int, ir: int, wg: int, smem: int, plen: int
+) -> bytes:
     buf = bytearray()
     buf += MAGIC
     buf += struct.pack("<I", ABI)
     buf += struct.pack("<I", VENDOR_NVIDIA)
     buf += struct.pack("<I", isa)
-    buf += struct.pack("<I", OP_VECTOR_ADD)
-    buf += struct.pack("<I", GOLDEN_VECTOR_ADD)
+    buf += struct.pack("<I", op)
+    buf += struct.pack("<I", golden)
     buf += struct.pack("<I", compiler)
     buf += struct.pack("<I", ir)
     buf += struct.pack("<I", wg)
@@ -68,12 +82,34 @@ extern "C" __global__ void vector_add(const float* a, const float* b, float* c, 
 }
 """
 
+# BitLinear W2A8 decode GEMV (M=1): signed i8 act × ternary w — DP4A path (sm_61+).
+# Layout: x_i8[K], w_i8 col-major [N*K], out[N] = si * sum(x*w). Host golden = gpu_kernels.
+W2A8_CU = r"""
+extern "C" __global__ void bitlinear_w2a8(
+    const char* __restrict__ x_i8,
+    const char* __restrict__ w_i8,
+    float* __restrict__ out,
+    float si,
+    int K,
+    int N
+) {
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= N) return;
+    int acc = 0;
+    const char* wj = w_i8 + (size_t)j * (size_t)K;
+    for (int t = 0; t < K; ++t) {
+        acc += (int)x_i8[t] * (int)wj[t];
+    }
+    out[j] = si * (float)acc;
+}
+"""
 
-def compile_cubin(sm: str, out_cubin: Path) -> bool:
+
+def compile_cubin(sm: str, out_cubin: Path, source_text: str, src_name: str) -> bool:
     try:
         with tempfile.TemporaryDirectory() as td:
-            src = Path(td) / "vector_add.cu"
-            src.write_text(VECTOR_ADD_CU, encoding="utf-8")
+            src = Path(td) / src_name
+            src.write_text(source_text, encoding="utf-8")
             cmd = [
                 "nvcc",
                 "-cubin",
@@ -114,26 +150,49 @@ def try_sign(canonical: bytes, seed_hex: str | None) -> bytes:
     return bytes(sig)
 
 
-def pack(sm: str, out: Path, seed_hex: str | None, force_stub: bool) -> None:
+def pack(
+    sm: str,
+    out: Path,
+    seed_hex: str | None,
+    force_stub: bool,
+    op: str = "vector_add",
+    source: str = "cu",
+) -> None:
     isa = ISA[sm]
+    if op == "w2a8":
+        op_id, golden = OP_W2A8, GOLDEN_W2A8
+        stub_tag = b"CPU_W2A8_STUB\0"
+        cu_src, cu_name = W2A8_CU, "bitlinear_w2a8.cu"
+    else:
+        op_id, golden = OP_VECTOR_ADD, GOLDEN_VECTOR_ADD
+        stub_tag = b"CPU_VECTOR_ADD_STUB\0"
+        cu_src, cu_name = VECTOR_ADD_CU, "vector_add.cu"
     cubin_path = out.with_suffix(".cubin")
-    if not force_stub and compile_cubin(sm, cubin_path):
+    # Track Rust (--source rust): host tool only; without Rust-CUDA/nvptx → stub honest.
+    if source == "rust" and not force_stub:
+        print(
+            f"[pack_nvidia] --source rust op={op}: Rust-CUDA/nvptx host track — "
+            f"sem toolchain → stub (CTK 12.9 p/ ISA≤sm_70 se --source cu)"
+        )
+        payload = stub_tag + f"rust_{sm}".encode()
+        compiler, ir = COMPILER_RUST_CUDA, IR_CPU
+        print(f"[pack_nvidia] stub payload op={op} source=rust for {sm} ({len(payload)}B)")
+    elif not force_stub and source == "cu" and compile_cubin(sm, cubin_path, cu_src, cu_name):
         payload = cubin_path.read_bytes()
         compiler, ir = COMPILER_CUDA129, IR_CUBIN
-        print(f"[pack_nvidia] CUBIN {sm} {len(payload)}B")
+        print(f"[pack_nvidia] CUBIN {sm} op={op} {len(payload)}B")
     else:
-        payload = b"CPU_VECTOR_ADD_STUB\0" + sm.encode()
+        payload = stub_tag + sm.encode()
         compiler, ir = COMPILER_HOST, IR_CPU
-        print(f"[pack_nvidia] stub payload for {sm} ({len(payload)}B)")
-    hdr = build_header(isa, compiler, ir, 256, 0, len(payload))
+        print(f"[pack_nvidia] stub payload op={op} for {sm} ({len(payload)}B)")
+    hdr = build_header(isa, op_id, golden, compiler, ir, 256, 0, len(payload))
     canonical = hdr + payload
     h = fnv1a64(canonical)
     sig = try_sign(canonical, seed_hex)
     signed = any(b != 0 for b in sig)
     out.write_bytes(canonical + struct.pack("<Q", h) + sig)
-    # Mirror short name for FAT 8.3 / VFS loaders.
     print(
-        f"[pack_nvidia] wrote {out} payload={len(payload)}B isa={sm} "
+        f"[pack_nvidia] wrote {out} op={op} source={source} payload={len(payload)}B isa={sm} "
         f"hash={h:#x} signed={signed}"
     )
 
@@ -141,11 +200,18 @@ def pack(sm: str, out: Path, seed_hex: str | None, force_stub: bool) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Build NVIDIA NKP1 KernelPack")
     ap.add_argument("--sm", choices=sorted(ISA), default="sm_61")
+    ap.add_argument("--op", choices=["vector_add", "w2a8"], default="vector_add")
+    ap.add_argument(
+        "--source",
+        choices=["cu", "rust"],
+        default="cu",
+        help="cu=nvcc CUBIN (CTK 12.9 for ≤sm_70); rust=Rust-CUDA/nvptx host track",
+    )
     ap.add_argument(
         "-o",
         "--output",
         type=Path,
-        default=Path("target/NKP_SM61.BIN"),
+        default=None,
     )
     ap.add_argument(
         "--seed-hex",
@@ -163,9 +229,14 @@ def main() -> None:
         help="Force CPU stub even if nvcc is available",
     )
     args = ap.parse_args()
+    if args.output is None:
+        if args.op == "w2a8":
+            args.output = Path(f"target/NKP_W2A8_{args.sm.upper()}.BIN")
+        else:
+            args.output = Path(f"target/NKP_{args.sm.upper().replace('SM_', 'SM')}.BIN")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     seed = None if args.unsigned else args.seed_hex
-    pack(args.sm, args.output, seed, args.stub)
+    pack(args.sm, args.output, seed, args.stub, args.op, args.source)
 
 
 if __name__ == "__main__":

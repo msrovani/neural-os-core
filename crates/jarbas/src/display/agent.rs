@@ -716,7 +716,9 @@ impl Agent for DisplayAgent {
                 ));
                 // Cursor HW: tick seguinte (não bloquear 1º frame).
                 k_nano::slog_jarbas!("Jarbas", "info", "Desktop iniciado @ {}x{} (cursor HW deferred)", fw, fh);
-                crate::audio::settings::enable_open_mic();
+                // NÃO abrir mic aqui: greeting ainda no PLAYBACK_RING → SPEAKING;
+                // open_mic+VAD dispara barge-in (SESSION_352) e congela o scheduler
+                // no jarvis_voice. Mic abre quando o ring esvaziar (tick abaixo).
                 k_nano::interrupts::mouse_log_status("desktop_ready");
                 self.gpu_inited = true;
                 self.hw_cursor_tried = false;
@@ -735,6 +737,9 @@ impl Agent for DisplayAgent {
                 k_nano::slog_jarbas!("Jarbas", "info", "cursor software (HW não gateado)");
             }
         }
+
+        // Mic só depois do greeting drenar — evita freeze jarvis_voice (s361).
+        crate::audio::voice::maybe_enable_open_mic_after_playback();
 
         // WHPX/smp alto: se o frame atrasou, pedimos aos APs para pausar Infer
         // e liberar CPU do host para este tick (paint + mouse).

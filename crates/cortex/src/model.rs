@@ -117,9 +117,25 @@ static mut LOADED_HEADER: ModelHeader = ModelHeader {
 };
 
 /// Store the header of the loaded model (called from set_model or load path).
+/// AIOS: dispara sync de SKU Falcon3 (1B/3B/7B/10B) no lado k_hal via hook.
 pub fn set_model_header(h: ModelHeader) {
     unsafe { LOADED_HEADER = h; }
     HEADER_LOADED.store(true, Ordering::Release);
+    let f = MODEL_HEADER_HOOK.load(Ordering::Acquire);
+    if f != 0 {
+        unsafe {
+            let cb: fn() = core::mem::transmute(f);
+            cb();
+        }
+    }
+}
+
+static MODEL_HEADER_HOOK: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+/// k_hal registra `aios_adapt::adapt_on_model_loaded` no boot (zero ciclo crate).
+pub fn register_model_header_hook(f: fn()) {
+    MODEL_HEADER_HOOK.store(f as usize, Ordering::Release);
 }
 
 /// Get the header of the currently loaded model, if any.

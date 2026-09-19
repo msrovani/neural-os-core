@@ -36,15 +36,19 @@ impl ModelSlot {
 
     pub fn from_name(s: &str) -> Option<Self> {
         match s {
-            "active" | "current" | "generator" | "falcon3" | "falcon3b" | "falcon3-3b" | "tiiuae" => Some(Self::Active),
+            "active" | "current" | "generator" | "falcon3" | "falcon3b" | "falcon3-3b" | "3b"
+            | "tiiuae" | "daily" | "lab" => Some(Self::Active),
             "vision" | "siglip" | "vit" | "encoder" => {
                 Some(Self::Vision)
             }
-            "generator_pro" | "pro" | "falcon7b" | "falcon3-7b" | "falcon3-10b" | "10b" => Some(Self::GeneratorPro),
+            "generator_pro" | "pro" | "falcon7b" | "falcon3-7b" | "7b" | "falcon3-10b" | "10b"
+            | "falcon10b" | "large" => Some(Self::GeneratorPro),
             "reranker" | "rerank" | "cross_encoder" | "bge_reranker" => Some(Self::Reranker),
             "rust_coder" | "rustcoder" => Some(Self::RustCoder),
             "hw_identify" | "hwexpert" => Some(Self::HwExpert),
-            "learner" | "qwen05" | "qwen0.5b" => Some(Self::Learner),
+            "learner" | "qwen05" | "qwen0.5b" | "falcon3-1b" | "falcon1b" | "1b" | "tiny" => {
+                Some(Self::Learner)
+            }
             "agent" | "qwen3b" | "agentic" | "orchestrator" => Some(Self::Agent),
             _ => None,
         }
@@ -395,15 +399,22 @@ pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
         ],
         ModelSlot::RustCoder => &["RUSTCDR3.v6", "RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"],
         ModelSlot::HwExpert => &["HWEXPRT.v6", "HWEXPRT.BIN", "HWEXPERT.BIN", "HWEXPRT4.BIN", "HWEXPRT4.bin"],
-        ModelSlot::Learner => &["LEARNER.v6", "LEARNER.BIN", "QWEEN05.BIN", "QWEN05B.BIN"],
+        ModelSlot::Learner => &[
+            "FALCON1B.v6",
+            "FALCON1B.BIN",
+            "F1B.v6",
+            "FALCN1B.GGUF",
+            "LEARNER.v6",
+            "LEARNER.BIN",
+            "QWEEN05.BIN",
+            "QWEN05B.BIN",
+        ],
         ModelSlot::Agent => &["FALCON3B.BIN", "FALCN3B.GGUF", "AGENT.v6", "AGENT.BIN", "QWEN3B.BIN", "QWEN.BIN"],
         ModelSlot::Active => &[
             "FALCON3.V6",
             "FALCON3B.v6",
             "FALCON3B.BIN",
             "FALCN3B.GGUF",
-            "FALCON1B.BIN",
-            "F1B.v6",
             "BITNET2B.v6",
             "BITNET2B.BIN",
             "BITNET13.BIN",

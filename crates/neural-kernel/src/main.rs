@@ -3060,6 +3060,20 @@ pub(crate) fn kernel_boot(
             let plan = crate::gpu::display_coex::plan_assignment(&gpus);
             crate::display::fb::boot_ckpt(43, "gpu plan");
 
+            // AIOS full-auto: SKU Falcon3 (1B/3B/7B/10B) + dual iGPU/dGPU
+            let ram_aios = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            let aios = k_hal::gpu::aios_adapt::adapt_boot(&gpus, ram_aios);
+            k_nano::slog_bin!(
+                "AIOS",
+                "ok",
+                "gpu+llm dual={} sku={} isa={} profile={:?} w2a8={}",
+                aios.dual as u8,
+                aios.sku.as_str(),
+                aios.compute_isa.as_str(),
+                aios.op_profile,
+                aios.w2a8_pack_present as u8
+            );
+
             k_nano::slog_bin!("Log", "msg", "{}", crate::gpu::display_coex::assignment_status(&plan, &gpus));
 
             crate::boot_logger::log(&alloc::format!("BOOT: GPU plan — {:?}", plan));
@@ -3517,12 +3531,12 @@ pub(crate) fn kernel_boot(
 
     crate::display::fb::boot_ckpt(45, "antes JarvisVoice");
     registry.register(Box::new(audio::voice::JarbasVoiceAgent::new()));
-    registry.set_urgency("jarvis_voice", 210);
+    registry.set_urgency("jarvis_voice", 200);
     let _ = registry.set_affinity_ring("jarvis_voice", 0);
     crate::display::fb::boot_ckpt(46, "JarvisVoice OK");
 
     registry.register(Box::new(audio::wakeword::WakeWordAgent::new()));
-    registry.set_urgency("wakeword", 200);
+    registry.set_urgency("wakeword", 195);
     let _ = registry.set_affinity_ring("wakeword", 0);
     crate::display::fb::boot_ckpt(47, "WakeWord OK");
 
@@ -3531,12 +3545,13 @@ pub(crate) fn kernel_boot(
     // (barge-in) passou para a sessão de voz — onde é possível invalidar a geração
     // de TTS em vez de só limpar o ring.
     registry.register(Box::new(audio::capture::AudioInputAgent::new()));
-    registry.set_urgency("audio_input", 190);
+    registry.set_urgency("audio_input", 205);
     let _ = registry.set_affinity_ring("audio_input", 0);
     crate::display::fb::boot_ckpt(48, "AudioInput OK");
 
     registry.register(Box::new(audio::mixer::AudioMixerAgent::new()));
-    registry.set_urgency("audio_mixer", 190);
+    // Mixer > voice: drena PLAYBACK_RING antes do próximo tick de voz (s361).
+    registry.set_urgency("audio_mixer", 215);
     let _ = registry.set_affinity_ring("audio_mixer", 0);
     crate::display::fb::boot_ckpt(49, "AudioMixer OK");
     k_nano::slog_bin!("Sched", "ok", "urgency+affinity UI/voz ring0 apos register");
@@ -3838,8 +3853,11 @@ pub(crate) fn kernel_boot(
                         };
                         let ram_now = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
                         let llm_plan = cortex_crate::model_fit::llm_boot_plan(ram_now);
-                        k_nano::slog_nano!("LLM", "AIOS", "plan={} ram={}MB max_res={}MB 7b_res={} 7b_air={}",
-                            llm_plan.as_str(), ram_now, llm_plan.max_resident_mb,
+                        // AIOS: preferred SKU = pick do fit (auto 1B/3B/7B/10B)
+                        k_hal::gpu::falcon3_w2a8::set_preferred_sku(llm_plan.pick);
+                        k_hal::gpu::aios_adapt::auto_downgrade_sku_if_tight(ram_now as u64);
+                        k_nano::slog_nano!("LLM", "AIOS", "plan={} pick={} ram={}MB max_res={}MB 7b_res={} 7b_air={}",
+                            llm_plan.as_str(), llm_plan.pick.as_str(), ram_now, llm_plan.max_resident_mb,
                             llm_plan.load_pro_7b_resident, llm_plan.try_7b_airllm);
                         const PIO_QEMU: usize = 8 * 1024 * 1024;
                         let pio_cap = if qemu_loader_2b
@@ -3981,6 +3999,8 @@ pub(crate) fn kernel_boot(
                 if let Some(ref mut msc) = *usb_guard {
                     let ram_now = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
                     let llm_plan = cortex_crate::model_fit::llm_boot_plan(ram_now);
+                    k_hal::gpu::falcon3_w2a8::set_preferred_sku(llm_plan.pick);
+                    k_hal::gpu::aios_adapt::auto_downgrade_sku_if_tight(ram_now as u64);
                     let pio_cap = (llm_plan.max_resident_mb as usize).saturating_mul(1024 * 1024);
                     let llm_names = cortex_crate::model_fit::falcon3_boot_names();
                     let mut pack_used_mb: u64 = 0;
@@ -4669,8 +4689,8 @@ pub(crate) fn kernel_boot(
 
     // K49 hang: generate_via_model no boot (CPU QEMU / header lixo) apos AudioMixer.
     // Template ja foi falado em emit_hw_greeting_at_register.
-    // Lab Falcon3-3B (ADR-0101): em QEMU com modelo loader, microbench tok/s
-    // Cheap (max_gen≤8) — saudação TTS continua skip; medimos decode só.
+    // Lab Falcon3-3B (ADR-0101): NÃO microbench sync no boot QEMU — bloqueava BSP
+    // ~4–9s/tok + tempestade IPI (SESSION hang 8c/8G). Tok/s = measure-falcon3-toks.ps1.
     if already_greeted || qemu {
         crate::display::fb::boot_ckpt(50, "saudacao LLM skip (template/QEMU)");
         k_nano::slog_bin!(
@@ -4680,25 +4700,10 @@ pub(crate) fn kernel_boot(
             qemu
         );
         if qemu && model_ok {
-            crate::display::fb::boot_ckpt(51, "Falcon3 tok/s microbench...");
             k_nano::slog_bin!(
                 "BENCH",
                 "ok",
-                "Falcon3-3B decode microbench start (max_gen=2)"
-            );
-            // 2 tokens: TCG do 3B é lento; WHPX ainda útil. Prefill conta separado.
-            cortex_crate::difficulty_gate::set_force_max_gen(2);
-            let _ = crate::cortex::generate_via_model("ola");
-            cortex_crate::difficulty_gate::set_force_max_gen(0);
-            let tps = cortex_crate::infer_queue::last_decode_tok_s();
-            let (toks, us) = cortex_crate::infer_queue::last_decode_timing();
-            k_nano::slog_bin!(
-                "BENCH",
-                "ok",
-                "Falcon3 decode_tok/s={} toks={} us={}",
-                tps,
-                toks,
-                us
+                "Falcon3 tok/s skip boot (sync hang) — lab: tools/measure-falcon3-toks.ps1"
             );
         }
     } else if model_ok && bpe_ok {
@@ -4898,6 +4903,33 @@ pub(crate) fn kernel_boot(
                 crate::trinity::publish_cortex_posture(false);
             }
             let _ = router_loaded;
+            // s362 canario: exercita matmul do router UMA vez. Em QEMU/sandbox o
+            // path no boot (hold TRINITY + SSE2 soft-float) travava o BSP — log
+            // parava em "Router MoE loaded (trained)" sem "canario classify".
+            // Sandbox: skip. Metal: classifica FORA do lock.
+            if trinity.moe_router_loaded() {
+                let qemu = k_nano::platform_probe::hypervisor().is_sandbox();
+                if qemu {
+                    k_nano::slog_bin!(
+                        "TRINITY",
+                        "ok",
+                        "canario classify skip (sandbox) — segue Runtime"
+                    );
+                } else {
+                    drop(trinity);
+                    let e_name = {
+                        let t = TRINITY.lock();
+                        t.classify_intent("aumenta o volume").name
+                    };
+                    k_nano::slog_bin!(
+                        "TRINITY",
+                        "ok",
+                        "canario classify: expert={} | {}",
+                        e_name,
+                        cortex_crate::matmul_diag::status_line()
+                    );
+                }
+            }
         }
     }
 

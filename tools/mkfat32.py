@@ -2,8 +2,9 @@
 """Cria imagem FAT32 com MBR, formata, copia modelos .bitnet e CONFIG.TXT.
 Uso: python tools/mkfat32.py [--size 3072] [--label NEURAL-OS] [--output target/disk_qemu.raw]
 
-PACK_LLM=850|13|2b|3b|falcon3|all  — progressivo (default: 850). Ex: PACK_LLM=850,13
-  850 → BITNET850; 13 → BITNET13 (~1.3B xl); 2b → BITNET2B; 3b → BITNET3B; falcon3 → FALCON3.V6/.BIN (Q6_K 771MB, addr 0x100000000); all → tudo
+PACK_LLM=850|13|2b|3b|falcon3|1b|7b|10b|all  — Falcon3 1.58bit opções (default: falcon3=3B lab)
+  falcon3 / 3b-lab → FALCON3.V6 (22L/3072); 1b → FALCON1B; 7b/pro → PRO.V6; 10b → FALCON10.v6
+  legado: 850→BITNET850; 13→BITNET13; 2b→BITNET2B; 3b→BITNET3B; all→todos Falcon3+legado
 FIT_GATE=1 — filtra PACK_LLM via tools/llmfit_pack_filter.py (nunca sobe degrau).
 FAT32: partição pode ser 3GB+; limite ~4GB-1 é por *arquivo*. Modelos grandes (>PIO):
   preferir AirLLM (/model GGUF ATA) em vez de PIO full-RAM.
@@ -114,26 +115,34 @@ def _apply_fit_gate_if_enabled() -> None:
 
 
 def pack_llm_set() -> set[str]:
-    """Tokens normalizados: 850, 13, 2b, 3b, falcon3. Default falcon3 (preset principal)."""
+    """Tokens: Falcon3 1.58bit opções 1b|3b|7b|10b (+ legado 850/13/2b).
+    Default falcon3 (=3b lab ADR-0101). Ex: PACK_LLM=1b,3b,7b"""
     _apply_fit_gate_if_enabled()
     raw = os.environ.get("PACK_LLM", "falcon3").strip().lower()
     if not raw or raw in ("none", "0", "off"):
         return set()
     if raw in ("all", "*"):
-        return {"850", "13", "2b", "3b", "falcon3"}
+        return {"850", "13", "2b", "falcon3-1b", "falcon3", "falcon3-7b", "falcon3-10b"}
     out: set[str] = set()
     for tok in raw.replace(";", ",").split(","):
         t = tok.strip().lower().replace(" ", "")
-        if t in ("850", "850m", "fast", "large"):
+        if t in ("850", "850m", "fast"):
             out.add("850")
         elif t in ("13", "1.3", "1p3", "1.5", "xl", "1.58", "158"):
+            # legado BitNet 1.3B — NÃO confundir com Falcon3 1.58bit
             out.add("13")
         elif t in ("2b", "2", "2.0"):
             out.add("2b")
-        elif t in ("3b", "3", "pro"):
-            out.add("3b")
-        elif t in ("falcon3", "falcon", "f3", "falcon-3b", "falcon3b"):
+        elif t in ("3b", "bitnet3b"):
+            out.add("3b")  # legado BitNet 3B
+        elif t in ("1b", "falcon3-1b", "falcon1b", "tiny"):
+            out.add("falcon3-1b")
+        elif t in ("falcon3", "falcon", "f3", "falcon-3b", "falcon3b", "falcon3-3b", "lab", "daily"):
             out.add("falcon3")
+        elif t in ("7b", "falcon3-7b", "falcon7b", "pro"):
+            out.add("falcon3-7b")
+        elif t in ("10b", "falcon3-10b", "falcon10b", "large"):
+            out.add("falcon3-10b")
     return out
 
 def find_file(name):
@@ -212,6 +221,48 @@ def find_falcon3():
         print(f"[PACK_LLM] skip {p} (L={layers} h={hidden} — nao e 3B lab)")
     # Fallback: BASE explícito mesmo sem parse
     return find_large("FALCON3_BASE.V6") or find_large("FALCON3.V6")
+
+
+def _find_falcon3_by_layers(want_layers, want_hidden, names, label):
+    """Procura v6 Falcon3 1.58bit pelo (layers, hidden) HF."""
+    for name in names:
+        p = find_large(name)
+        if not p:
+            continue
+        meta = _v6_layers_hidden(p)
+        if meta is None:
+            print(f"[PACK_LLM] {label}: {p} (sem header — aceito)")
+            return p
+        layers, hidden = meta
+        if layers == want_layers and hidden == want_hidden:
+            print(f"[PACK_LLM] {label}: {p} (L={layers} h={hidden})")
+            return p
+        print(f"[PACK_LLM] skip {p} (L={layers} h={hidden} — nao e {label})")
+    return None
+
+
+def find_falcon3_1b():
+    return _find_falcon3_by_layers(
+        18, 2048,
+        ("FALCON1B.v6", "FALCON1B.BIN", "F1B.v6", "falcon3_1b.v6"),
+        "falcon3-1b 1.58",
+    )
+
+
+def find_falcon3_7b():
+    return _find_falcon3_by_layers(
+        28, 3072,
+        ("PRO.v6", "PRO.V6", "FALCON7B.v6", "FALCON7B.BIN", "falcon3_7b.v6"),
+        "falcon3-7b 1.58",
+    )
+
+
+def find_falcon3_10b():
+    return _find_falcon3_by_layers(
+        40, 3072,
+        ("FALCON10.v6", "FALCON10.BIN", "F10B.v6", "falcon3_10b.v6"),
+        "falcon3-10b 1.58",
+    )
 
 def align_up(v, a): return (v + a - 1) // a * a
 
@@ -349,16 +400,23 @@ def populate(path):
          if "2b" in llm else None),
         ("BITNET.BIN", None),  # alias legado; não empacota stub
         ("BITNET3B.BIN", find_bitnet_3b() if "3b" in llm else None),
+        # Falcon3 Instruct 1.58bit — opções 1B / 3B / 7B / 10B
         ("FALCON3.V6", find_falcon3() if "falcon3" in llm else None),
         ("FALCON3.BIN", find_falcon3() if "falcon3" in llm else None),
-        ("PRO.V6", (find_falcon3() if "falcon3" in llm else None) or find_file("PRO.v6") or find_file("PRO.V6")),
+        ("FALCON1B.v6", find_falcon3_1b() if "falcon3-1b" in llm else None),
+        ("FALCON1B.BIN", find_falcon3_1b() if "falcon3-1b" in llm else None),
+        ("PRO.V6", find_falcon3_7b() if "falcon3-7b" in llm else None),
+        ("FALCON7B.v6", find_falcon3_7b() if "falcon3-7b" in llm else None),
+        ("FALCON10.v6", find_falcon3_10b() if "falcon3-10b" in llm else None),
+        ("FALCON10.BIN", find_falcon3_10b() if "falcon3-10b" in llm else None),
         ("MICRO.BITNET", None if ("850" in llm or "13" in llm) else find_file("MICRO.BITNET")),
         # ADR-0078/0079: todos os slots ModelHub (fat_names_for em cortex::model_hub)
         ("VISION.BIN", find_file("VISION.v6") or find_file("VISION.BIN")),
-        ("LLAMA8B.BIN", (find_falcon3() if "falcon3" in llm else None) or find_file("PRO.v6") or find_file("LLAMA8B.BIN") or find_file("LLAMA8B.BITNET")),
+        ("LLAMA8B.BIN", find_file("LLAMA8B.BIN") or find_file("LLAMA8B.BITNET")),
         ("RUSTCDR3.BIN", find_file("RUSTCDR3.v6") or find_file("RUSTCDR3.BIN") or find_file("RUSTCDR3.BITNET")),
         ("RERANKER.BIN", find_file("RERANKER.v6") or find_file("RERANKER.BIN") or find_file("RERANKER.BITNET")),
-        ("LEARNER.BIN", find_file("LEARNER.v6") or find_file("LEARNER.BIN") or find_file("LEARNER.BITNET")),
+        ("LEARNER.BIN", (find_falcon3_1b() if "falcon3-1b" in llm else None)
+         or find_file("LEARNER.v6") or find_file("LEARNER.BIN") or find_file("LEARNER.BITNET")),
         ("AGENT.BIN", find_file("AGENT.v6") or find_file("AGENT.BIN") or find_file("AGENT.BITNET")),
         # GOAL3: MicroPython WASM (tools/build_micropython_wasm.py → models/MICROPY.WASM)
         ("MICROPY.WASM", find_file("MICROPY.WASM") or find_file("micropython.wasm")),
@@ -456,7 +514,7 @@ def populate(path):
     if chip_allow is None or (chip_allow & {"tu102", "ad102", "ga102", "tu106"}):
         collect_fw_from(os.path.join(ROOT, "target", "firmware"), gsp_only=True)
 
-    # KernelPack NVIDIA/Intel (host packers → target/)
+    # KernelPack NVIDIA/Intel/AMD (host packers → target/) — vector_add + W2A8
     for nkp_name, fat_name in (
         ("NKP_SM61.BIN", "NKP_SM61.BIN"),
         ("NKP_VECTOR_ADD.BIN", "NKP_VADD.BIN"),
@@ -465,8 +523,20 @@ def populate(path):
         ("NKP_GFX1030.BIN", "NKP_GFX1030.BIN"),
         ("NKP_GFX1103.BIN", "NKP_GFX1103.BIN"),
         ("NKP_GFX90C.BIN", "NKP_GFX90C.BIN"),
+        ("NKP_W2A8_SM61.BIN", "NKPW2A861.BIN"),
+        ("NKP_W2A8_SM_61.BIN", "NKPW2A861.BIN"),
+        ("NKP_W2A8_SM80.BIN", "NKPW2A880.BIN"),
+        ("NKP_W2A8_SM86.BIN", "NKPW2A886.BIN"),
+        ("NKP_W2A8_SM89.BIN", "NKPW2A889.BIN"),
+        ("NKP_SM80.BIN", "NKP_SM80.BIN"),
+        ("NKP_SM86.BIN", "NKP_SM86.BIN"),
+        ("NKP_W2A8_GEN9.BIN", "NKPW2A8G9.BIN"),
+        ("NKP_W2A8_GFX1030.BIN", "NKP_W2A8_GFX1030.BIN"),
+        ("NKP_W2A8_DG2.BIN", "NKP_W2A8_DG2.BIN"),
     ):
         nkp_path = os.path.join(ROOT, "target", nkp_name)
+        if not os.path.isfile(nkp_path):
+            nkp_path = os.path.join(ROOT, "target", "nkp-lab", nkp_name)
         if os.path.isfile(nkp_path) and not any(e[0] == fat_name for e in files):
             files.append((fat_name, nkp_path))
 

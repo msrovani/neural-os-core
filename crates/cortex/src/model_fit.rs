@@ -176,17 +176,25 @@ pub fn slot_footprint_mb(slot_name: &str) -> Option<u64> {
             dyn_mb.or(Some(220))
         }
         "active" | "current" | "generator" => {
-            dyn_mb.or(Some(989)) // Falcon3-3B daily ~989MB
+            dyn_mb.or(Some(Falcon3Kind::Daily3B.file_mb_hint()))
         }
-        "generator_pro" | "pro" | "7b" | "falcon7b" => dyn_mb.or(Some(1780)), // Falcon3-7B PRO.v6
-        "3b" | "bitnet3b" => dyn_mb.or(Some(989)),
-        "falcon3" | "falcon" | "f3" | "falcon3b" | "falcon-3b" => {
-            dyn_mb.or(Some(989))
+        "generator_pro" | "pro" | "7b" | "falcon7b" | "falcon3-7b" => {
+            dyn_mb.or(Some(Falcon3Kind::Goal7B.file_mb_hint()))
+        }
+        "10b" | "falcon10b" | "falcon3-10b" | "large" => {
+            dyn_mb.or(Some(Falcon3Kind::Large10B.file_mb_hint()))
+        }
+        "3b" | "bitnet3b" | "falcon3" | "falcon" | "f3" | "falcon3b" | "falcon-3b"
+        | "falcon3-3b" | "daily" | "lab" => dyn_mb.or(Some(Falcon3Kind::Daily3B.file_mb_hint())),
+        "1b" | "falcon1b" | "falcon3-1b" | "tiny1b" => {
+            dyn_mb.or(Some(Falcon3Kind::Tiny1B.file_mb_hint()))
         }
         "tinystories" | "tiny" | "smoke" => Some(4),
         "rust_coder" | "rustcoder" => Some(260),
         "hw_identify" | "hwexpert" => Some(1),
-        "learner" | "qwen05" | "qwen0.5b" => Some(125),
+        "learner" | "qwen05" | "qwen0.5b" => {
+            dyn_mb.or(Some(Falcon3Kind::Tiny1B.file_mb_hint()))
+        }
         "13" | "1.3b" | "xl" => Some(320),
         "2b" => Some(590),
         _ => None,
@@ -229,9 +237,9 @@ pub fn slot_too_tight(slot_name: &str) -> bool {
     }
 }
 
-/// Família Falcon3 Instruct 1.58bit (tiiuae): **3B = lab** (ADR-0101);
-/// 1B comparativo; 7B GeneratorPro opcional; 10B se couber.
-/// Carga: residente se couber; senão AirLLM/GGUF (ADR-0046). Sem SKU 8/16GB.
+/// Família Falcon3 Instruct **1.58bit** (tiiuae) — opções 1B / 3B / 7B / 10B.
+/// Lab default = 3B (ADR-0101). Shapes HF (config.json); NÃO copiar BitNet-2B 2560.
+/// Carga: residente se couber; senão AirLLM/GGUF (ADR-0046).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Falcon3Kind {
     Tiny1B,
@@ -241,6 +249,13 @@ pub enum Falcon3Kind {
 }
 
 impl Falcon3Kind {
+    pub const ALL: [Falcon3Kind; 4] = [
+        Falcon3Kind::Tiny1B,
+        Falcon3Kind::Daily3B,
+        Falcon3Kind::Goal7B,
+        Falcon3Kind::Large10B,
+    ];
+
     pub fn params(self) -> u64 {
         match self {
             Self::Tiny1B => 1_000_000_000,
@@ -259,8 +274,78 @@ impl Falcon3Kind {
         }
     }
 
+    /// Parse aliases: `1b`/`3b`/`7b`/`10b` / `falcon3-Nb` / `tiny`/`daily`/`pro`/`large`.
+    pub fn from_str(s: &str) -> Option<Self> {
+        let u = s.trim().to_ascii_lowercase();
+        match u.as_str() {
+            "1b" | "falcon3-1b" | "falcon1b" | "tiny" | "tiny1b" => Some(Self::Tiny1B),
+            "3b" | "falcon3" | "falcon3-3b" | "falcon3b" | "daily" | "daily3b" | "lab" => {
+                Some(Self::Daily3B)
+            }
+            "7b" | "falcon3-7b" | "falcon7b" | "pro" | "goal7b" => Some(Self::Goal7B),
+            "10b" | "falcon3-10b" | "falcon10b" | "large" | "large10b" => Some(Self::Large10B),
+            _ => None,
+        }
+    }
+
+    /// Dims HF 1.58bit (SESSION_298 / ADR-0101 + config 10B).
+    /// 7B e 10B compartilham hidden/FFN; diferem em layers (28 vs 40).
+    pub fn hidden(self) -> usize {
+        match self {
+            Self::Tiny1B => 2048,
+            Self::Daily3B | Self::Goal7B | Self::Large10B => 3072,
+        }
+    }
+
+    pub fn intermediate(self) -> usize {
+        match self {
+            Self::Tiny1B => 8192,
+            Self::Daily3B => 9216,
+            Self::Goal7B | Self::Large10B => 23040,
+        }
+    }
+
+    pub fn layers(self) -> usize {
+        match self {
+            Self::Tiny1B => 18,
+            Self::Daily3B => 22,
+            Self::Goal7B => 28,
+            Self::Large10B => 40,
+        }
+    }
+
+    pub fn num_heads(self) -> usize {
+        match self {
+            Self::Tiny1B => 8,
+            Self::Daily3B | Self::Goal7B | Self::Large10B => 12,
+        }
+    }
+
+    pub fn kv_heads(self) -> usize {
+        4
+    }
+
+    pub fn head_dim(self) -> usize {
+        256
+    }
+
     pub fn file_mb_hint(self) -> u64 {
-        estimate_bitnet_mb(self.params()).max(1)
+        match self {
+            Self::Tiny1B => 350,
+            Self::Daily3B => 989,
+            Self::Goal7B => 1780,
+            Self::Large10B => 2500,
+        }
+    }
+
+    /// HF repo 1.58bit Instruct.
+    pub fn hf_repo(self) -> &'static str {
+        match self {
+            Self::Tiny1B => "tiiuae/Falcon3-1B-Instruct-1.58bit",
+            Self::Daily3B => "tiiuae/Falcon3-3B-Instruct-1.58bit",
+            Self::Goal7B => "tiiuae/Falcon3-7B-Instruct-1.58bit",
+            Self::Large10B => "tiiuae/Falcon3-10B-Instruct-1.58bit",
+        }
     }
 }
 
@@ -303,7 +388,7 @@ pub fn falcon3_boot_names() -> &'static [&'static str] {
         "PRO.v6", "PRO.BIN", "FALCON7B.v6", "FALCON7B.BIN",
         "PRO.GGUF", "FALCN7B.GGUF",
         "FALCON10.v6", "FALCON10.BIN", "F10B.v6", "FALCN10.GGUF",
-        "FALCON1B.BIN", "F1B.v6", "FALCN1B.GGUF",
+        "FALCON1B.v6", "FALCON1B.BIN", "F1B.v6", "FALCN1B.GGUF",
         "BITNET2B.v6", "BITNET2B.BIN", "BITNET13.BIN", "BITNET850.BIN",
         "MICRO.BITNET", "LLAMA8B.BIN",
     ]
@@ -428,6 +513,22 @@ mod ram_policy_tests {
     fn pack_ok_on_32g_two_models() {
         assert!(pack_resident_ok(32768, 2000, 989));
         assert!(!pack_resident_ok(2048, 1500, 1750));
+    }
+
+    fn falcon3_kind_shapes_1_58bit_family() {
+        assert_eq!(Falcon3Kind::Tiny1B.hidden(), 2048);
+        assert_eq!(Falcon3Kind::Tiny1B.intermediate(), 8192);
+        assert_eq!(Falcon3Kind::Tiny1B.layers(), 18);
+        assert_eq!(Falcon3Kind::Daily3B.hidden(), 3072);
+        assert_eq!(Falcon3Kind::Daily3B.intermediate(), 9216);
+        assert_eq!(Falcon3Kind::Daily3B.layers(), 22);
+        assert_eq!(Falcon3Kind::Goal7B.intermediate(), 23040);
+        assert_eq!(Falcon3Kind::Goal7B.layers(), 28);
+        assert_eq!(Falcon3Kind::Large10B.layers(), 40);
+        assert_eq!(Falcon3Kind::Large10B.intermediate(), 23040);
+        assert_eq!(Falcon3Kind::from_str("1b"), Some(Falcon3Kind::Tiny1B));
+        assert_eq!(Falcon3Kind::from_str("10b"), Some(Falcon3Kind::Large10B));
+        assert_eq!(Falcon3Kind::from_str("lab"), Some(Falcon3Kind::Daily3B));
     }
 
     #[test]

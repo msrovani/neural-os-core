@@ -5,12 +5,14 @@
 //! Golden vector ainda exige EU kernel/zebin — sem isso FailDispatch honesto.
 //! Em iGPU real: fence MI pode hit mesmo sem EU (RingAlive); golden separado.
 
-use crate::gpu::compute_abi::vector_add_check;
+use crate::gpu::compute_abi::{vector_add_check, IsaTag};
 use crate::gpu::detect::GpuInfo;
 use crate::gpu::intel::{
     IntelRing, MI_BATCH_BUFFER_END, MI_NOOP, PIPELINE_SELECT,
 };
 use crate::gpu::intel_gtt::GgttPin;
+use crate::gpu::kernel_image;
+use crate::gpu::kernel_pack::IrOrigin;
 use k_nano::dma::dma_alloc_coalesced;
 
 const GPGPU_WALKER_OP: u32 = 0x7105;
@@ -62,6 +64,7 @@ pub unsafe fn probe_ring_alive(ring: &mut IntelRing, gtt: &mut GgttPin) -> bool 
 }
 
 /// Emite walker Gen8+ (15 dwords) + store fence.
+/// Wave 1: VFE/thread count derivados de `KernelImage` (zebin), não magic 16.
 pub unsafe fn dispatch_vector_add_gen9(
     ring: &mut IntelRing,
     gtt: &mut GgttPin,
@@ -77,8 +80,10 @@ pub unsafe fn dispatch_vector_add_gen9(
     if a.len() != b.len() || a.len() != expect.len() || a.is_empty() {
         return false;
     }
-    let stub = zebin.starts_with(b"CPU_VECTOR_ADD_STUB");
+    let img = kernel_image::from_blob(IsaTag::Gen9, IrOrigin::Zebin, zebin);
+    let stub = img.is_stub;
     let n = a.len();
+    let eu_threads = img.regs.max(16).min(64);
 
     let _ring_alive = probe_ring_alive(ring, gtt);
 
@@ -113,11 +118,12 @@ pub unsafe fn dispatch_vector_add_gen9(
         return false;
     };
 
+    // MEDIA_VFE: max threads from KernelImage.regs (EU occupancy proxy).
     let vfe = [
         media_cmd(MEDIA_VFE_STATE, 9),
         0,
         0,
-        (1 << 16) | 16,
+        (1 << 16) | eu_threads,
         0,
         0,
         0,
@@ -165,10 +171,15 @@ pub unsafe fn dispatch_vector_add_gen9(
     ring.write(&[MI_NOOP, MI_BATCH_BUFFER_END]);
     ring.submit();
 
-    k_nano::slog_hal!("INTEL", "GEN9", "walker+store pack={}B fence_gtt={:#x} stub={}",
-        zebin.len(),
-        fence_gtt,
-        stub);
+    k_nano::slog_hal!(
+        "INTEL",
+        "GEN9",
+        "walker+store img_code={}B regs={} stub={} fence_gtt={:#x}",
+        img.code.len(),
+        img.regs,
+        stub,
+        fence_gtt
+    );
 
     let mut hit = false;
     let mut ring_idle = false;

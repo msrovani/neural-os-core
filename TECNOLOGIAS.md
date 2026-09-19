@@ -98,7 +98,8 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
 |---|-----------|------------|------------|---------------|---------|--------|
-| 3.1 | **GPU Backend Universal (NVIDIA→Intel→AMD→CPU)** | 🏆 Plano `display_coex` dirige init; canário `vector_add` promove Ready; gate ADR-0047 só após golden (não PFIFO NOP). | nouveau, i915, amdgpu; rust-gpu (host) | GPLv2 (kernel) | `gpu/backend.rs`, `canary.rs`, `compute_abi.rs` | 🟡 fundação |
+| 3.1 | **GPU Backend Universal (NVIDIA→Intel→AMD→CPU)** | 🏆 Plano `display_coex` + **ADR-0105** KernelImage; canário promove Ready; AIOS dual iGPU/dGPU; Falcon3 W2A8 shapes. | nouveau, i915, amdgpu | GPLv2 | `gpu/backend.rs`, `aios_adapt.rs`, `kernel_image.rs` | 🟡 fundação s361 |
+| 3.1b | **KernelPack Multi-ISA W2A8** | 🔄 CUBIN/HSACO/zebin loaders; packers `--op w2a8`; Ready=pack+golden; device Layer S. | NKP1, CTK12.9 | MIT | `blob_*.rs`, `pack_*_kernels.py` | 🟡 s361 |
 | 3.2 | **NVIDIA PFIFO PUSH_BUFFER** | 🔬 Engenharia reversa do canal de comandos GPFIFO da NVIDIA Pascal (GTX 1050). `pushbuffer_submit()` com doorbell + timeout. Sem NDA. | nouveau driver (eng. reversa) | GPLv2 | `gpu/nvidia.rs` | ✅ 0 err |
 | 3.3 | **GPU Secure Boot WPR (FECS+GPCCS)** | 🔬 PoC GP108: aloca WPR 2MB, faz upload parcial FECS+GPCCS e poll. **Não é ACR completo:** faltam ACR HS/LSB, assinaturas na WPR, GR `sw_*`, MMU/runlist/canal e evidência HW. | nouveau ACR driver | GPLv2 (MIT blobs) | `gpu/firmware.rs` | 🟡 PoC / ADR-0048 |
 | 3.4 | **VRAM Buddy Allocator** | 🏆 Alocador de VRAM power-of-2 com split/merge. `vram_alloc()`/`vram_free()` integrado ao BAR2 UC. | Linux buddy allocator | GPLv2 | `gpu/vram.rs` | ✅ 0 err |

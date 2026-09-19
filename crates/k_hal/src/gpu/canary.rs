@@ -52,7 +52,7 @@ pub unsafe fn run_vector_add_canary_nv(gpu: &GpuInfo, nv: &mut NvidiaGpu) -> Can
         k_nano::slog_hal!(
             "GPU",
             "canary",
-            "{}: ACR≠HsBooted — D4 estrutural; sem GpuCompute",
+            "{}: ACR≠HsBooted — AWAITING_HW; D4 estrutural; sem GpuCompute (fallback=CPU)",
             gpu.name
         );
         // Ainda tenta D4 estrutural abaixo se quiser diagnóstico; mas Pass blocked.

@@ -3,6 +3,12 @@
 pub mod detect;
 pub mod pcie_bypass;
 pub mod compute_abi;
+pub mod falcon3_w2a8;
+pub mod aios_adapt;
+pub mod kernel_image;
+pub mod blob_cubin;
+pub mod blob_hsaco;
+pub mod blob_zebin;
 pub mod kernel_pack;
 pub mod canary;
 pub mod vram;
@@ -41,6 +47,7 @@ pub mod bench;
 pub mod work_queue;
 pub mod sasos;
 pub mod pipeline_g5;
+pub mod w2a8_device;
 
 // Seam ADR-0087 Fase 4b — Copy Engine (MHI tier1→tier0). mhi.rs (Fase 5) chama.
 pub use nvidia_pascal_ce::{ce_ready, mhi_tier0_copy};

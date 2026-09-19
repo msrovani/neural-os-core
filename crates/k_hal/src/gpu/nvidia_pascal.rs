@@ -18,9 +18,11 @@
 //! - CHANNEL_CTRL   = 0x800004 + chid*8  (bit 0x400 = ENABLE)
 //! - KICK           = 0x002634  (write chid; poll bit 0x00100000)
 
-use crate::gpu::compute_abi::{vector_add_check, VectorAddParams};
+use crate::gpu::compute_abi::{vector_add_check, IsaTag, VectorAddParams};
 use crate::gpu::detect::GpuInfo;
 use crate::gpu::firmware;
+use crate::gpu::kernel_image;
+use crate::gpu::kernel_pack::IrOrigin;
 use crate::gpu::nvidia_pascal_qmd::{self, QmdLaunch, QMD_SIZE};
 use crate::gpu::nvidia_pascal_sw::SwStatus;
 use k_nano::dma::{dma_alloc_coalesced, DmaBuf};
@@ -445,13 +447,14 @@ const FENCE_PAYLOAD: u32 = 1;
 const FENCE_SPINS: u32 = 100_000; // bounded — timeout honesto, não congela boot
 
 fn is_cpu_stub_payload(cubin: &[u8]) -> bool {
-    cubin.starts_with(b"CPU_VECTOR_ADD_STUB")
+    cubin.starts_with(b"CPU_VECTOR_ADD_STUB") || cubin.starts_with(b"CPU_W2A8_STUB")
 }
 
 /// Degrau 4 — monta QMD v01_07, despacha via GPFIFO, poll fence, confere golden.
 ///
 /// Retorna `true` **somente** se fence + `vector_add_check`. Sem ACR/GR/CUBIN
 /// real o fence estoura → `false` (FailDispatch no canário). Não-fatal.
+/// Wave 1: QMD regs/shared/param vêm de `KernelImage` (não magic numbers).
 pub unsafe fn dispatch_vector_add(
     d2: &mut PascalD2,
     mmio: u64,
@@ -469,12 +472,33 @@ pub unsafe fn dispatch_vector_add(
         d2.d4 = PascalD4Status::Failed;
         return false;
     }
-    if is_cpu_stub_payload(cubin) {
-        k_nano::slog_hal!("NVIDIA", "D4", "payload=CPU stub (sem SASS sm_61) — dispatch estrutural; golden exige CUBIN real");
+    let img = kernel_image::from_blob(IsaTag::Sm61, IrOrigin::Cubin, cubin);
+    if img.is_stub {
+        k_nano::slog_hal!(
+            "NVIDIA",
+            "D4",
+            "payload=CPU stub — dispatch estrutural; golden exige CUBIN real (regs={})",
+            img.regs
+        );
+    } else {
+        k_nano::slog_hal!(
+            "NVIDIA",
+            "D4",
+            "KernelImage regs={} shared={} param={} code={}B",
+            img.regs,
+            img.shared,
+            img.param_size,
+            img.code.len()
+        );
     }
 
     let n = a.len();
-    let code_pages = ((cubin.len() + 4095) / 4096).max(1);
+    let code_bytes = if img.is_stub {
+        cubin
+    } else {
+        img.code.as_slice()
+    };
+    let code_pages = ((code_bytes.len() + 4095) / 4096).max(1);
     let code = match dma_alloc_coalesced(code_pages * 4096) {
         Some(b) => b,
         None => {
@@ -482,7 +506,7 @@ pub unsafe fn dispatch_vector_add(
             return false;
         }
     };
-    core::ptr::copy_nonoverlapping(cubin.as_ptr(), code.virt as *mut u8, cubin.len());
+    core::ptr::copy_nonoverlapping(code_bytes.as_ptr(), code.virt as *mut u8, code_bytes.len());
 
     let cb = match dma_alloc_coalesced(4096) {
         Some(b) => b,
@@ -570,7 +594,7 @@ pub unsafe fn dispatch_vector_add(
     };
     core::ptr::write_volatile(cb.virt as *mut VectorAddParams, params);
 
-    let launch = QmdLaunch::vector_add_canary(cb_iova, fence_iova);
+    let launch = QmdLaunch::from_kernel_image(&img, cb_iova, fence_iova, 0x61);
     let qmd_bytes = nvidia_pascal_qmd::build_qmd_v01_07(&launch);
     core::ptr::copy_nonoverlapping(qmd_bytes.as_ptr(), qmd_buf.virt as *mut u8, QMD_SIZE);
 

@@ -186,6 +186,24 @@ Plano completo + evidência: `docs/implementation/2026-09-16-voice-pipeline-audi
 
 ---
 
+### 12. ADR-0106 — Decisões calibradas (D0–D4 + migração M0–M4)
+**Goal:** juízo onde o significado importa deixa de ser cadeia de `contains()`; toda decisão carrega distribuição, confiança e abstenção explícita; θ vem da reliableza medida.
+ADR + evidência: `docs/architecture/0106-decisoes-calibradas-confianca-abstencao-hitl.md` (IDEA #588).
+
+- [ ] **D0** Contrato `Decision<T>` (`Confidence` Q8, `margin`, `AbstainReason`, `DecisionSource`, `Q8Dist`) + `note_outcome` + acumulador de reliableza — `TODO-0106-1`
+- [ ] **D0** Persistência `ai/decisions/reliability` (padrão `/hw/timer`) + contadores + `slog` ok/warn + postura no HUD + `/decisions` — `TODO-0106-2`
+- [ ] **D1** `Intent::Unknown` + `decide()` canônico (score por braço, sem first-match-wins) + `think()` como wrapper; caller `agents.rs:1706` publica abstenção — `TODO-0106-3`
+- [ ] **D2** Política de θ por classe de sítio; unificar `ApprovalLevel`/`RiskLevel`/`PackageHub::classify`; religar ou remover `ApprovalGate::classify`; `Deny` imune a confiança — `TODO-0106-4`
+- [ ] **D3** `Noul` de destrutividade + `Score` de 3 níveis para `ComputeTier` (critérios por situação) + escape hatch — `TODO-0106-5`
+- [ ] **D4** Labels de HITL + resultado verificado → `r3::update_with_replay`; `train_router.py` sem labels de keyword + proveniência; `decision_contract_check.py`; auditoria amostral — `TODO-0106-6`
+- [ ] **M0** Triagem canônica dos sítios (IN=significado / OUT=sintaxe × anel) — corrige a contagem de ~497 — `TODO-0106-7`
+- [ ] **M1** Migrar roteamento conversacional (cortex `think`; hermes tópico/keyword/skill-creation) com paridade por sítio — `TODO-0106-8`
+- [ ] **M2** Migrar risco/ação (`approval`, `permission_gate`, `marketplace`, `plugin_hub`, `package_hub`) — `TODO-0106-9`
+- [ ] **M3** Migrar significado em observabilidade/HUD/labels (jarbas, subs de `slog`, net diag) — `TODO-0106-10`
+- [ ] **M4** Cauda + lista dos excluídos com justificativa (parsing fica como código) — `TODO-0106-11`
+
+---
+
 ## 🔗 DEPENDÊNCIAS (ordem obrigatória)
 
 ```
