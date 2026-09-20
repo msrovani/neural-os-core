@@ -375,6 +375,9 @@ mod tests {
     /// (RamFlash = backend de teste interop, padrão SESSION_267).
     #[test]
     fn ingest_bootlog_cross_boot_order_and_cap() {
+        // Statics TICKV/SGDB partilhados — workspace paralelo = flake (SESSION_346/368).
+        static INGEST_TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+        let _g = INGEST_TEST_LOCK.lock();
         // Storage limpo com RamFlash
         *k_nano::storage::TICKV.lock() = None;
         *k_nano::storage::FLASH.lock() = None;

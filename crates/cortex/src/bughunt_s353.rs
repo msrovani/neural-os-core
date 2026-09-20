@@ -101,22 +101,34 @@ fn apply_one_layer_refuses_bad_mask() {
     let mut x = Tensor::new((2, model.hidden));
     assert!(x.is_valid());
     let bad_mask = Tensor::zero((1, 1)); // bug antigo
-    let before = x.data.clone();
     model.apply_one_layer(0, &model.layers[0], &mut x, &mut cache, 0, 2, 2, &bad_mask);
-    // Refuse early — x inalterado (ou ainda válido); sem panic.
-    assert!(x.is_valid());
-    assert_eq!(x.data, before);
+    // SESSION_368: refuse poison `x` para o forward abortar (sem advance KV).
+    assert!(!x.is_valid(), "refuse deve invalidar x");
     assert_eq!(cache.k[0].len(), 0, "refuse não deve append KV");
 }
 
 #[test]
 fn soft_stride_pad_keeps_all_layers_aligned() {
+    // Segura o lock durante set+forward+assert — set/clear públicos também
+    // usam TEST_LOCK; usar *_inner para não deadlock (spin não-reentrante).
+    let _g = difficulty_gate::TEST_LOCK.lock();
+    difficulty_gate::clear_soft_stride_override_inner();
     let model = TransformerModel::new();
-    difficulty_gate::set_soft_stride_override(2); // skip odd layers
+    difficulty_gate::set_soft_stride_override_inner(2); // skip odd layers
+    assert_eq!(
+        difficulty_gate::effective_soft_stride(model.hidden),
+        2,
+        "override deve grudar sob TEST_LOCK"
+    );
     let mut cache = KvCache::new(model.layers.len(), model.layers[0].k.shape.1, model.kv_dim);
     let tokens = [1u32, 2];
-    let (_h, _logits) = model.forward_with_kv(&tokens, &mut cache);
-    difficulty_gate::clear_soft_stride_override();
+    let (h, _logits) = model.forward_with_kv(&tokens, &mut cache);
+    difficulty_gate::clear_soft_stride_override_inner();
+    if !h.is_valid() {
+        // Abort honesto (OOM/refuse) — nenhum layer deve ter avançado o len lógico.
+        assert_eq!(cache.len, 0, "abort não deve advance KV");
+        return;
+    }
     // Após soft_stride=2, TODAS as layers devem ter KV do mesmo comprimento lógico.
     let kd = cache.k_dim();
     let expect = cache.len * kd;

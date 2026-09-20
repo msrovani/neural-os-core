@@ -271,6 +271,12 @@ fn migration_rate_ok(tick: u64, size: usize) -> bool {
     true
 }
 
+#[cfg(test)]
+fn migration_rate_reset_for_test() {
+    MIGRATION_WINDOW_START.store(0, Ordering::Relaxed);
+    MIGRATION_WINDOW_BYTES.store(0, Ordering::Relaxed);
+}
+
 /// ZFS-ARC-style tier suggestion (ADR-0087 §3: VRAM na escada + histerese).
 /// Promoção (sugerir tier mais quente que o atual) só quando o padrão de acesso
 /// está ESTÁVEL (hot_hits >= 2 na janela quente) — evita thrash (LWN 898766).
@@ -761,6 +767,10 @@ pub fn migration_stats() -> (u64, u64, u64, u64, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spin::Mutex;
+
+    /// Statics da janela de migração — rate_* não podem correr em paralelo.
+    static RATE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn profile() -> AllocProfile {
         AllocProfile::new(PhysAddr::new(0x1000), 4096, AllocTier::Hdd, "test")
@@ -838,6 +848,8 @@ mod tests {
 
     #[test]
     fn rate_limit_blocks_over_budget() {
+        let _g = RATE_TEST_LOCK.lock();
+        migration_rate_reset_for_test();
         // Budget 64MB/janela: 2x 40MB na mesma janela → 2ª bloqueada.
         let tick = 1000u64;
         assert!(migration_rate_ok(tick, 40 * 1024 * 1024));
@@ -848,6 +860,8 @@ mod tests {
 
     #[test]
     fn rate_limit_small_accumulates() {
+        let _g = RATE_TEST_LOCK.lock();
+        migration_rate_reset_for_test();
         let tick = 2000u64;
         assert!(migration_rate_ok(tick, 10 * 1024 * 1024));
         assert!(migration_rate_ok(tick, 10 * 1024 * 1024));

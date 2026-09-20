@@ -44,9 +44,9 @@
 ## ⚠️ SAÚDE DE TESTES / CI
 
 - [x] **s367** — `cargo test -p cortex --lib llm_response_gate` **7/7** + `infer_queue::tests` **5/5** (`--test-threads=1`); lab `tools/lab-llm-response.ps1` (QEMU decode AWAITING)
-- [ ] Corrigir 6 testes host falhando: `hermes::wasm_build::{compile_and_run_real_skill,dsl_print_cmp}`, `hermes::cognitive_bridge::session_load_respects_cap`, `jarbas::jarvis::soul_{describe,default_jarbas,fluid_update_joy}`
-- [ ] Fixture do teste `cortex`: `python tools/gen_test_gguf.py` → `target/test_tq2_0.gguf` (sem ela `cargo test --workspace` não compila o teste)
-- [ ] CI verde: nesta revisão `cargo test … --no-fail-fast` = **784 pass / 6 fail** (sem `--no-fail-fast` o cargo para na 1ª suíte que falha)
+- [x] **s368** — workspace host **0 fail** (`--exclude neural-kernel,boot --no-fail-fast`); fixture GGUF; soft_stride/MHI/boot_observe locks; `apply_one_layer` poison on refuse
+- [x] Fixture do teste `cortex`: `python tools/gen_test_gguf.py` → `target/test_tq2_0.gguf`
+- [ ] CI job nightly = mesmo comando workspace (wire)
 
 ## 📌 PÓS-s328 (ordem do STATE)
 
@@ -179,6 +179,7 @@
 Plano completo + evidência: `docs/implementation/2026-09-16-voice-pipeline-audit-s352.md` (IDEA_BANK #558–#566).
 
 - [ ] **V1** Pacing do playback pelo clock (`PLAY_SAMPLES_DROPPED == 0` em `/tick 30/60/120`) + resample fora do laço de escrita — #558, #1.2
+  - [x] **s368** código: `compute_mixer_want` free+TSC + host tests; aceite QEMU drops=0 residual
 - [ ] **V2** Duplexidade explícita (fim do auto-barge-in) + `STT_UNCERTAIN` falado — #559, #560
 - [ ] **V3** Teto de utterance + CTC incremental + ring SPSC para `AUDIO_FRAME` — #561, #562
 - [ ] **V4** Wake-word: janela deslizante, log-mel + `tools/train_wakeword.py`, FPPH em holdout disjunto — #563

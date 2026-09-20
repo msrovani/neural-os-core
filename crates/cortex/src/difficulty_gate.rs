@@ -10,6 +10,11 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::decision::{Decision, DecisionSource, Q8Dist};
 
+/// Serializa testes host que tocam `SOFT_STRIDE_OVERRIDE` / `FORCE_MAX_GEN`
+/// (workspace paralelo corrompe soft_stride pad — SESSION_368).
+#[cfg(test)]
+pub static TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
 /// 0 = auto (legado hidden≥2048 → stride 3); senão força stride.
 static SOFT_STRIDE_OVERRIDE: AtomicUsize = AtomicUsize::new(0);
 /// 0 = auto; senão força max_gen (microbench QEMU tok/s).
@@ -142,10 +147,24 @@ pub fn set_force_max_gen(n: usize) {
 }
 
 pub fn set_soft_stride_override(stride: usize) {
-    SOFT_STRIDE_OVERRIDE.store(stride, Ordering::Release);
+    #[cfg(test)]
+    let _g = TEST_LOCK.lock();
+    set_soft_stride_override_inner(stride);
 }
 
 pub fn clear_soft_stride_override() {
+    #[cfg(test)]
+    let _g = TEST_LOCK.lock();
+    clear_soft_stride_override_inner();
+}
+
+#[inline]
+pub(crate) fn set_soft_stride_override_inner(stride: usize) {
+    SOFT_STRIDE_OVERRIDE.store(stride, Ordering::Release);
+}
+
+#[inline]
+pub(crate) fn clear_soft_stride_override_inner() {
     SOFT_STRIDE_OVERRIDE.store(0, Ordering::Release);
 }
 

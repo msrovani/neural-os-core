@@ -1279,6 +1279,9 @@ impl TransformerModel {
         mask: &Tensor,
     ) {
         // SESSION_351: refuse OOB — mask (1,1) / Tensor vazio = abort honesto.
+        // SESSION_368: poison `x` no refuse — senão forward_with_kv continua
+        // (x ainda "válido"), faz pad nas layers skip e `advance` → KV
+        // desalinhado (layer 0 len=0, expect=seq*k_dim).
         let mask_need = new_len.saturating_mul(total_seq);
         if new_len == 0
             || !x.is_valid()
@@ -1296,6 +1299,7 @@ impl TransformerModel {
                 mask.shape,
                 mask_need
             );
+            *x = Tensor::zero((0, 0));
             return;
         }
 
@@ -1304,31 +1308,38 @@ impl TransformerModel {
         // SESSION_359: matmul fail → abort layer (não zero-fill fingindo OK)
         let Some(mut q) = layer.q.matmul_hybrid(&norm) else {
             k_nano::slog_cortex!("FWD", "fail", "L{} q matmul refuse", layer_idx);
+            *x = Tensor::zero((0, 0));
             return;
         };
         if !q.is_valid() {
+            *x = Tensor::zero((0, 0));
             return;
         }
         q.mul_scalar(layer.q_scale);
         let Some(mut k) = layer.k.matmul_hybrid(&norm) else {
             k_nano::slog_cortex!("FWD", "fail", "L{} k matmul refuse", layer_idx);
+            *x = Tensor::zero((0, 0));
             return;
         };
         if !k.is_valid() {
+            *x = Tensor::zero((0, 0));
             return;
         }
         k.mul_scalar(layer.k_scale);
         let Some(mut v) = layer.v.matmul_hybrid(&norm) else {
             k_nano::slog_cortex!("FWD", "fail", "L{} v matmul refuse", layer_idx);
+            *x = Tensor::zero((0, 0));
             return;
         };
         if !v.is_valid() {
+            *x = Tensor::zero((0, 0));
             return;
         }
         v.mul_scalar(layer.v_scale);
 
         let qk_head_dim = self.kv_dim / self.num_heads.max(1);
         if qk_head_dim == 0 {
+            *x = Tensor::zero((0, 0));
             return;
         }
         rope_apply_heads(&mut q.data, new_len, self.num_heads, qk_head_dim,
@@ -1341,6 +1352,7 @@ impl TransformerModel {
         let total_k = cache.k_all(layer_idx, total_seq);
         let total_v = cache.v_all(layer_idx, total_seq);
         if !total_k.is_valid() || !total_v.is_valid() {
+            *x = Tensor::zero((0, 0));
             return;
         }
 
