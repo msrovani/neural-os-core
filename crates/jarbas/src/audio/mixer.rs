@@ -1,4 +1,7 @@
 //! AudioMixerAgent — volume + drain PLAYBACK_RING → HDA/UAC speaker.
+//!
+//! SESSION_352: pop fixo 1024/tick @60–120 Hz >> 16 kHz do device → drop.
+//! Agora: `min(ring, free_hda, ~20 ms @16 kHz)`.
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use event_bus::Receiver;
@@ -14,6 +17,9 @@ const MIXER_MANIFEST: AgentManifest = AgentManifest {
     auto_start: true,
     persist: true,
 };
+
+/// ~20 ms @16 kHz — cap por tick para não matar o scheduler.
+const MAX_POP_PER_TICK: usize = 320;
 
 pub struct AudioMixerAgent {
     tts_receiver: Receiver,
@@ -47,7 +53,6 @@ impl Agent for AudioMixerAgent {
                     ev.payload.len() / 2,
                 )
             };
-            // Escala só um chunk (push descarta o resto se ring cheio).
             let take = pcm.len().min(4096);
             if take == 0 {
                 continue;
@@ -60,15 +65,23 @@ impl Agent for AudioMixerAgent {
             let written = self.out_ring.push(&scaled[..take]);
             k_nano::slog_bin!(
                 "MIXER",
-                "info",
+                "trace",
                 "{} samples -> playback ring (vol={}%)",
                 written,
                 (vol * 100.0) as u8
             );
         }
 
-        let mut buf = [0i16; 1024];
-        let n = self.out_ring.pop(&mut buf);
+        let hda_free = k_hal::audio::hda::playback_free_mono_samples();
+        let ring_avail = self.out_ring.available();
+        let want = hda_free
+            .min(ring_avail)
+            .min(MAX_POP_PER_TICK);
+        if want == 0 {
+            return AgentTickResult::Pending;
+        }
+        let mut buf = [0i16; MAX_POP_PER_TICK];
+        let n = self.out_ring.pop(&mut buf[..want]);
         if n > 0 {
             crate::display::avatar::process_audio_fft(&buf[..n]);
             k_hal::audio::hda::write_hda_playback(&buf[..n]);

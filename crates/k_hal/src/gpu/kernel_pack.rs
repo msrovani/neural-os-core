@@ -225,8 +225,18 @@ pub fn load_named(name: &str) -> Option<KernelPack> {
         "NKP_GEN9.BIN" | "NKP_GEN9_BIN" => &["NKP_GEN9.BIN", "NKPGEN9.BIN", "NKP_GEN9_BIN"],
         "NKP_DG2.BIN" | "NKP_DG2_BIN" => &["NKP_DG2.BIN", "NKP_DG2_BIN"],
         "NKP_SM61.BIN" | "NKP_SM61_BIN" => &["NKP_SM61.BIN", "NKPSM61.BIN", "NKP_SM61_BIN"],
+        "NKP_SM75.BIN" => &["NKP_SM75.BIN", "NKPSM75.BIN"],
+        "NKP_SM80.BIN" => &["NKP_SM80.BIN", "NKPSM80.BIN"],
+        "NKP_SM86.BIN" => &["NKP_SM86.BIN", "NKPSM86.BIN"],
+        "NKP_SM89.BIN" => &["NKP_SM89.BIN", "NKPSM89.BIN"],
         "NKP_W2A8_SM61.BIN" => &["NKP_W2A8_SM61.BIN", "NKPW2A861.BIN"],
+        "NKP_W2A8_SM75.BIN" => &["NKP_W2A8_SM75.BIN", "NKPW2A875.BIN"],
+        "NKP_W2A8_SM80.BIN" => &["NKP_W2A8_SM80.BIN", "NKPW2A880.BIN"],
+        "NKP_W2A8_SM86.BIN" => &["NKP_W2A8_SM86.BIN", "NKPW2A886.BIN"],
+        "NKP_W2A8_SM89.BIN" => &["NKP_W2A8_SM89.BIN", "NKPW2A889.BIN"],
         "NKP_W2A8_GEN9.BIN" => &["NKP_W2A8_GEN9.BIN", "NKPW2A8G9.BIN"],
+        "NKP_W2A8_DG2.BIN" => &["NKP_W2A8_DG2.BIN", "NKPW2A8DG.BIN"],
+        "NKP_W2A8_GFX1030.BIN" => &["NKP_W2A8_GFX1030.BIN", "NKPW2A8G0.BIN"],
         "NKP_VECTOR_ADD.BIN" | "NKP_VECTOR_ADD_BIN" => {
             &["NKP_VADD.BIN", "NKPVADD.BIN", "NKP_VECTOR_ADD_BIN"]
         }
@@ -245,6 +255,16 @@ pub fn load_named(name: &str) -> Option<KernelPack> {
         }
     }
     None
+}
+
+/// ADR-0105 B0: presença no FAT (mesmo unsigned/stub) — ≠ Ready.
+pub fn pack_present_on_fat(isa: IsaTag, op: PackOp) -> bool {
+    for n in pack_name_candidates(isa, op) {
+        if load_named(n).is_some() {
+            return true;
+        }
+    }
+    false
 }
 
 fn read_fat32_root(name: &str) -> Option<alloc::vec::Vec<u8>> {
@@ -280,9 +300,17 @@ fn pack_name_candidates(isa: IsaTag, op: PackOp) -> &'static [&'static str] {
         (IsaTag::Sm52, _) => &["NKP_SM52.BIN", "NKPSM52.BIN"],
         (IsaTag::Sm70, PackOp::BitLinearW2A8) => &["NKP_W2A8_SM70.BIN", "NKP_SM70.BIN"],
         (IsaTag::Sm70, _) => &["NKP_SM70.BIN", "NKPSM70.BIN"],
-        (IsaTag::Sm75, PackOp::BitLinearW2A8) => &["NKP_W2A8_SM75.BIN", "NKP_SM75.BIN"],
+        (IsaTag::Sm75, PackOp::BitLinearW2A8) => &[
+            "NKP_W2A8_SM75.BIN",
+            "NKPW2A875.BIN",
+            "NKP_SM75.BIN",
+        ],
         (IsaTag::Sm75, _) => &["NKP_SM75.BIN", "NKPSM75.BIN"],
-        (IsaTag::Sm80, PackOp::BitLinearW2A8) => &["NKP_W2A8_SM80.BIN", "NKP_SM80.BIN"],
+        (IsaTag::Sm80, PackOp::BitLinearW2A8) => &[
+            "NKP_W2A8_SM80.BIN",
+            "NKPW2A880.BIN",
+            "NKP_SM80.BIN",
+        ],
         (IsaTag::Sm80, _) => &["NKP_SM80.BIN", "NKPSM80.BIN"],
         (IsaTag::Sm86, PackOp::BitLinearW2A8) => &[
             "NKP_W2A8_SM86.BIN",
@@ -291,7 +319,11 @@ fn pack_name_candidates(isa: IsaTag, op: PackOp) -> &'static [&'static str] {
             "NKP_SM86.BIN",
         ],
         (IsaTag::Sm86, _) => &["NKP_SM86.BIN", "NKPSM86.BIN", "NKP_SM80.BIN"],
-        (IsaTag::Sm89, PackOp::BitLinearW2A8) => &["NKP_W2A8_SM89.BIN", "NKP_SM89.BIN"],
+        (IsaTag::Sm89, PackOp::BitLinearW2A8) => &[
+            "NKP_W2A8_SM89.BIN",
+            "NKPW2A889.BIN",
+            "NKP_SM89.BIN",
+        ],
         (IsaTag::Sm89, _) => &["NKP_SM89.BIN", "NKPSM89.BIN"],
         (IsaTag::Gen9, PackOp::BitLinearW2A8) => &[
             "NKP_W2A8_GEN9.BIN",

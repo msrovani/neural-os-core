@@ -901,7 +901,14 @@ pub unsafe fn poll_keyboard() -> Option<u8> {
         return Some(0x53);
     }
 
-    if usage == 0 || usage == state.hid_last_usage {
+    if usage == 0 {
+        // Release: limpar last_usage senao a mesma tecla (ex: 's' em "passo")
+        // nunca volta a emitir (usage==last → drop silencioso).
+        state.hid_last_usage = 0;
+        queue_hid_interrupt_read(state);
+        return None;
+    }
+    if usage == state.hid_last_usage {
         // Re-armar transfer interrupt (Normal TRB 8 bytes) se idle
         queue_hid_interrupt_read(state);
         return None;

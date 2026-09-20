@@ -305,11 +305,17 @@ impl PeerHealth {
     /// Serializa PeerHealth + role do MESH_ENGINE (UI grafo dinâmico).
     /// Formato: {"node_id":N,"role":R,"reachable":bool,"avg_rtt":N,...}
     pub fn to_json(&self, node_id: u8, role: u8) -> alloc::string::String {
+        self.to_json_ext(node_id, role, 0)
+    }
+
+    /// Com ram_gb do peer (HB RAM\0) p/ UI distinguir frugal vs capable.
+    pub fn to_json_ext(&self, node_id: u8, role: u8, ram_gb: u32) -> alloc::string::String {
         let p99 = peer_p99_rtt(node_id);
         alloc::format!(
-            "{{\"node_id\":{},\"role\":{},\"reachable\":{},\"avg_rtt\":{},\"p99_rtt\":{},\"tx\":{},\"ack\":{},\"fail\":{},\"probe_to\":{}}}",
+            "{{\"node_id\":{},\"role\":{},\"ram_gb\":{},\"reachable\":{},\"avg_rtt\":{},\"p99_rtt\":{},\"tx\":{},\"ack\":{},\"fail\":{},\"probe_to\":{}}}",
             node_id,
             role,
+            ram_gb,
             self.reachable,
             self.avg_rtt_ticks / 100,
             p99 / 100,
@@ -613,24 +619,37 @@ impl BrainMeshEngine {
         }
         LAST_ASSIGN.store(now, Ordering::Relaxed);
 
+        // Memory = peer online com maior ram_gb (empate: menor node_id).
+        // CAP_MEMORY é candidatura/bitmask — NÃO sobrescreve ranking de RAM
+        // (s365: HB sem RAM\0 forçava ram_gb=1 → 1º peer virava Memory).
         let mut memory_node: Option<usize> = None;
         let mut compute_nodes: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
 
         for (i, node) in self.nodes.iter().enumerate() {
             if let Some(n) = node {
                 if n.online {
-                    let caps = peer_caps(n.capabilities.node_id[0]).unwrap_or(0);
-                    if (caps & CAP_MEMORY) != 0
-                        || memory_node.is_none()
-                        || n.capabilities.ram_gb
-                            > self.nodes[memory_node.unwrap()].as_ref().unwrap().capabilities.ram_gb
-                    {
+                    let nid = n.capabilities.node_id[0];
+                    let ram = n.capabilities.ram_gb;
+                    let take_mem = match memory_node {
+                        None => true,
+                        Some(j) => {
+                            let cur = self.nodes[j].as_ref().unwrap();
+                            ram > cur.capabilities.ram_gb
+                                || (ram == cur.capabilities.ram_gb
+                                    && nid < cur.capabilities.node_id[0])
+                        }
+                    };
+                    if take_mem {
                         memory_node = Some(i);
                     }
-                    if (caps & CAP_COMPUTE) != 0
-                        || n.capabilities.simd == SimdWeight::Avx512
-                        || n.capabilities.simd == SimdWeight::Avx2
-                    {
+                    // Compute: só peers com ≥2GB (ou SIMD forte). CAP_COMPUTE
+                    // sozinho em 1G virava Compute e puxava matmul → DROP/timeout.
+                    let caps = peer_caps(nid).unwrap_or(0);
+                    let compute_ok = ram >= 2
+                        && ((caps & CAP_COMPUTE) != 0
+                            || n.capabilities.simd == SimdWeight::Avx512
+                            || n.capabilities.simd == SimdWeight::Avx2);
+                    if compute_ok {
                         compute_nodes.push(i);
                     }
                 }
@@ -1145,6 +1164,12 @@ pub fn peer_public_key(node_id: u8) -> Option<[u8; PUBLIC_KEY_LEN]> {
 static SEC_DROPPED_UNSIGNED: AtomicU64 = AtomicU64::new(0);
 static SEC_DROPPED_BADSIG: AtomicU64 = AtomicU64::new(0);
 static SEC_DROPPED_REPLAY: AtomicU64 = AtomicU64::new(0);
+/// Último node_id que gerou badsig (diagnóstico — não afrouxa verify).
+static SEC_LAST_BADSIG_SID: AtomicU8 = AtomicU8::new(0);
+/// Contagem de FRAG drop por pressão (DEGRADED esperado em frugal).
+static FRAG_DROP_PRESSURE: AtomicU64 = AtomicU64::new(0);
+/// Contagem de FRAG drop por outros motivos (alloc etc.).
+static FRAG_DROP_OTHER: AtomicU64 = AtomicU64::new(0);
 
 /// (unsigned, badsig, replay) — drops de segurança do mesh para diagnóstico.
 pub fn sec_stats() -> (u64, u64, u64) {
@@ -1153,6 +1178,34 @@ pub fn sec_stats() -> (u64, u64, u64) {
         SEC_DROPPED_BADSIG.load(Ordering::Relaxed),
         SEC_DROPPED_REPLAY.load(Ordering::Relaxed),
     )
+}
+
+/// Último sid com badsig (0 = nenhum).
+pub fn sec_last_badsig_sid() -> u8 {
+    SEC_LAST_BADSIG_SID.load(Ordering::Relaxed)
+}
+
+/// (frag_drop_pressure, frag_drop_other) — saúde FRAG (s366).
+pub fn frag_drop_stats() -> (u64, u64) {
+    (
+        FRAG_DROP_PRESSURE.load(Ordering::Relaxed),
+        FRAG_DROP_OTHER.load(Ordering::Relaxed),
+    )
+}
+
+/// Incrementa FRAG drop por pressão (chamado do udp_broadcast).
+pub fn note_frag_drop_pressure() {
+    FRAG_DROP_PRESSURE.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Incrementa FRAG drop não-pressure.
+pub fn note_frag_drop_other() {
+    FRAG_DROP_OTHER.fetch_add(1, Ordering::Relaxed);
+}
+
+fn note_badsig(sid: u8) {
+    SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
+    SEC_LAST_BADSIG_SID.store(sid, Ordering::Relaxed);
 }
 
 // ─── Health do peer (ADR-0081 Phase 2): probe, circuit breaker ──────────────
@@ -1781,7 +1834,7 @@ pub fn mark_mesh_health_dirty() {
 /// Publica snapshot online → EventBus MESH_HEALTH.
 /// Array vazio `[]` limpa satélites na UI imediatamente.
 pub fn publish_mesh_health() {
-    let mut snapshot: alloc::vec::Vec<(u8, PeerHealth, u8)> = alloc::vec::Vec::new();
+    let mut snapshot: alloc::vec::Vec<(u8, PeerHealth, u8, u32)> = alloc::vec::Vec::new();
     if let Some(eng) = MESH_ENGINE.lock().as_ref() {
         for n in eng.online_nodes() {
             let nid = n.capabilities.node_id[0];
@@ -1807,29 +1860,20 @@ pub fn publish_mesh_health() {
                 rtt_sample_idx: 0,
                 rtt_sample_count: 0,
             });
-            // Engine diz online → UI mostra (PEER_HEALTH.reachable=false só via circuit breaker).
             if h.reachable || n.online {
                 let mut hh = h;
                 hh.reachable = true;
-                snapshot.push((nid, hh, n.role as u8));
+                snapshot.push((nid, hh, n.role as u8, n.capabilities.ram_gb));
             }
         }
     }
-    if snapshot.is_empty() {
-        let _ = crate::EVENT_BUS.publish(event_bus::Event {
-            id: 0,
-            topic: alloc::string::String::from(TOPIC_MESH_HEALTH),
-            payload: alloc::vec![b'[', b']'],
-            token: event_bus::CapabilityToken::Legacy(1),
-        });
-        return;
-    }
+    // Array de peers (compat UI jarbas mesh_health_json). Postura local no slog.
     let mut json = alloc::string::String::from("[");
-    for (i, (nid, h, role)) in snapshot.iter().enumerate() {
+    for (i, (nid, h, role, ram_gb)) in snapshot.iter().enumerate() {
         if i > 0 {
             json.push(',');
         }
-        json.push_str(&h.to_json(*nid, *role));
+        json.push_str(&h.to_json_ext(*nid, *role, *ram_gb));
     }
     json.push(']');
     let npeers = snapshot.len();
@@ -1840,13 +1884,27 @@ pub fn publish_mesh_health() {
         payload,
         token: event_bus::CapabilityToken::Legacy(1),
     });
-    // Throttle slog: 1x / ~200 ticks — prova que o path UI está vivo.
     static LAST_LOG: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
     let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
     let last = LAST_LOG.load(Ordering::Relaxed);
     if last == 0 || now.wrapping_sub(last) >= 200 {
         LAST_LOG.store(now, Ordering::Relaxed);
-        crate::slog_nano!("P2P", "ok", "MESH_HEALTH peers={} (UI sync)", npeers);
+        let (fp, fo) = frag_drop_stats();
+        let (u, b, r) = sec_stats();
+        let frugal = crate::memory::mesh_frag_pressure();
+        crate::slog_nano!(
+            "P2P",
+            "ok",
+            "MESH_HEALTH peers={} frugal={} frag_p={} frag_o={} unsigned={} badsig={} replay={} last_bsid={} (UI sync)",
+            npeers,
+            frugal,
+            fp,
+            fo,
+            u,
+            b,
+            r,
+            sec_last_badsig_sid()
+        );
     }
 }
 
@@ -1928,6 +1986,11 @@ pub fn p2p_tick(_tick: u64) {
                     buf.extend_from_slice(b"CAP\0");
                     buf.push(caps);
                 }
+                // s365: RAM real p/ eleição Memory (antes RX hardcodava ram_gb=1).
+                let ram_mb = crate::memory::TOTAL_RAM_MB.load(Ordering::Relaxed);
+                let ram_gb = ((ram_mb + 1023) / 1024).max(1).min(255) as u8;
+                buf.extend_from_slice(b"RAM\0");
+                buf.push(ram_gb);
             }
             match crate::net::udp_broadcast::sign_packet_authentic(&buf) {
                 Some(signed) => {
@@ -1952,7 +2015,14 @@ None => {
     if now.wrapping_sub(last_sec) >= 200 || last_sec == 0 {
         LAST_SEC_LOG.store(now, Ordering::Relaxed);
         let (u, b, r) = sec_stats();
-        crate::slog_nano!("P2P", "info", "sec: unsigned={} badsig={} replay={}", u, b, r);
+        let (fp, fo) = frag_drop_stats();
+        let last_bs = sec_last_badsig_sid();
+        crate::slog_nano!(
+            "P2P",
+            "ok",
+            "sec: unsigned={} badsig={} replay={} last_badsig_sid={} frag_drop_p={} frag_drop_o={} (badsig≠clock; replay=anti-replay)",
+            u, b, r, last_bs, fp, fo
+        );
     }
 
     // Recebe descobertas e alimenta o mesh engine
@@ -2009,7 +2079,7 @@ None => {
             Some(_pk) => {},
             None => {
                 if tt != 5 {
-                    SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
+                    note_badsig(sid);
                     crate::slog_nano!("P2P", "warn", "drop: peer desconhecido (sem vinculo) node={} type={}", sid, tt);
                     continue;
                 }
@@ -2020,7 +2090,7 @@ None => {
                         k
                     }
                     _ => {
-                        SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
+                        note_badsig(sid);
                         crate::slog_nano!("P2P", "warn", "drop: heartbeat sem PK embutida node={}", sid);
                         continue;
                     }
@@ -2031,7 +2101,7 @@ None => {
                         tofu_data = Some(valid.to_vec());
                     }
                     None => {
-                        SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
+                        note_badsig(sid);
                         crate::slog_nano!("P2P", "warn", "drop: assinatura TOFU invalida node={}", sid);
                         continue;
                     }
@@ -2075,8 +2145,16 @@ None => {
                 match verified {
                     Some(valid) => valid,
                     None => {
-                        SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
-                        crate::slog_nano!("P2P", "warn", "drop: autenticacao invalida node={}", sid);
+                        note_badsig(sid);
+                        crate::slog_nano!(
+                            "P2P",
+                            "warn",
+                            "drop: autenticacao invalida node={} tt={} len={} tofu={}",
+                            sid,
+                            tt,
+                            rx.len(),
+                            peer_pk(sid).is_some()
+                        );
                         continue;
                     }
                 }
@@ -2085,16 +2163,27 @@ None => {
         // Só atualiza o clock APÓS a verificação/decrypt passar (seguro).
         peer_update_clock(sid, clk);
 
-        // (e) Capacidades anunciadas no heartbeat ("CAP\0" após a pk). Só após
-        //     o anti-replay passar (heartbeat stale não atualiza caps).
+        // (e) CAP\0 + RAM\0 após a pk no heartbeat. Só após anti-replay.
+        //     Layout: PK\0 + pk[32] + [CAP\0 u8]? + [RAM\0 u8]?
+        let mut peer_ram_gb: u32 = 1;
         if tt == 5 {
             if let Some(rest) = raw_payload.strip_prefix(b"PK\0") {
-                if rest.len() >= PUBLIC_KEY_LEN + 5
-                    && &rest[PUBLIC_KEY_LEN..PUBLIC_KEY_LEN + 4] == b"CAP\0"
-                {
-                    let caps = rest[PUBLIC_KEY_LEN + 4];
-                    peer_set_caps(sid, caps);
-                    crate::slog_nano!("P2P", "info", "caps node={} bits=0x{:02X}", sid, caps);
+                if rest.len() >= PUBLIC_KEY_LEN {
+                    let mut off = PUBLIC_KEY_LEN;
+                    if rest.len() >= off + 5 && &rest[off..off + 4] == b"CAP\0" {
+                        let caps = rest[off + 4];
+                        peer_set_caps(sid, caps);
+                        crate::slog_nano!("P2P", "info", "caps node={} bits=0x{:02X}", sid, caps);
+                        off += 5;
+                    }
+                    if rest.len() >= off + 5 && &rest[off..off + 4] == b"RAM\0" {
+                        peer_ram_gb = rest[off + 4].max(1) as u32;
+                        crate::slog_nano!(
+                            "P2P", "ok",
+                            "ram node={} gb={}",
+                            sid, peer_ram_gb
+                        );
+                    }
                 }
             }
         }
@@ -2183,8 +2272,9 @@ None => {
         // Só heartbeats alimentam o mesh engine (eleição/descoberta)
         if tt == 5 {
             let sender_mac = [pkt.source_id, 0, 0, 0, 0, 0];
+            // s365: ram_gb do peer vem de RAM\0 no HB (default 1 se ausente).
             let caps = NodeCapabilities::new(
-                sender_mac, 1, 1000, 1, 0,
+                sender_mac, 1, 1000, peer_ram_gb, 0,
                 SimdWeight::None, false, false,
             );
             {

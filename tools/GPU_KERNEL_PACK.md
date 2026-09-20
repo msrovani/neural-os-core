@@ -27,18 +27,18 @@ Sem toolkit → payload `CPU_*_STUB` (OS = `CpuOnly`, nunca Ready falso).
 ## Comandos
 
 ```powershell
+# Lab Ampere/Ada — vector_add + W2A8 → target/nkp-lab/ (ADR-0105 B0)
+.\tools\pack_nkp_lab.ps1
+# opcional: -IncludeSm61 -IntelStub -AmdStub
+
 # PATH: CUDA bin + vcvars64.bat (MSVC host compiler)
 $env:Path = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4\bin;" + $env:Path
 
-# Lab Ampere/Ada — vector_add + W2A8 → target/nkp-lab/
+# Manual por SM
 foreach ($sm in 'sm_75','sm_80','sm_86','sm_89') {
   python tools/pack_nvidia_kernels.py --sm $sm --op vector_add --unsigned -o "target/nkp-lab/NKP_$($sm.Replace('sm_','SM')).BIN"
   python tools/pack_nvidia_kernels.py --sm $sm --op w2a8 --unsigned -o "target/nkp-lab/NKP_W2A8_$($sm.Replace('sm_','SM')).BIN"
 }
-
-# Intel / AMD (só se ocloc / clang-amdgcn no PATH)
-python tools/pack_intel_kernels.py --isa gen9 --op w2a8 -o target/nkp-lab/NKP_W2A8_GEN9.BIN
-python tools/pack_amd_kernels.py --gfx gfx1030 --op w2a8 -o target/nkp-lab/NKP_W2A8_GFX1030.BIN
 ```
 
 Assinatura opcional: `NKP_SIGNING_SEED_HEX` (64 hex) ou `--unsigned` + `promote_with_session` no boot.

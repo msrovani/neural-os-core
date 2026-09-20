@@ -85,7 +85,11 @@ pub fn adapt_boot(gpus: &[GpuInfo], ram_mb: u64) -> AiosGpuLlmPlan {
     };
 
     // ── Plan ─────────────────────────────────────────────────
+    // Presence ≠ Ready: unsigned/stub conta como present; Ready só canário+verified.
     let pack_ok = vendor_for_isa(compute_isa)
+        .map(|_| kernel_pack::pack_present_on_fat(compute_isa, PackOp::BitLinearW2A8))
+        .unwrap_or(false);
+    let pack_verified = vendor_for_isa(compute_isa)
         .and_then(|v| kernel_pack::find_active_pack(v, compute_isa, PackOp::BitLinearW2A8))
         .map(|p| p.verified)
         .unwrap_or(false);
@@ -112,11 +116,12 @@ pub fn adapt_boot(gpus: &[GpuInfo], ram_mb: u64) -> AiosGpuLlmPlan {
         slog_hal!(
             "AIOS",
             "ok",
-            "adapt DUAL sku={} compute_isa={} profile={:?} w2a8_pack={} ram={}MB llm={}",
+            "adapt DUAL sku={} compute_isa={} profile={:?} w2a8_pack={} verified={} ram={}MB llm={}",
             sku.as_str(),
             compute_isa.as_str(),
             op_profile,
-            pack_ok,
+            pack_ok as u8,
+            pack_verified as u8,
             ram_mb,
             llm.as_str()
         );
@@ -124,11 +129,12 @@ pub fn adapt_boot(gpus: &[GpuInfo], ram_mb: u64) -> AiosGpuLlmPlan {
         slog_hal!(
             "AIOS",
             "ok",
-            "adapt sku={} compute_isa={} profile={:?} w2a8_pack={} dual=0 ram={}MB llm={}",
+            "adapt sku={} compute_isa={} profile={:?} w2a8_pack={} verified={} dual=0 ram={}MB llm={}",
             sku.as_str(),
             compute_isa.as_str(),
             op_profile,
-            pack_ok,
+            pack_ok as u8,
+            pack_verified as u8,
             ram_mb,
             llm.as_str()
         );
@@ -139,6 +145,12 @@ pub fn adapt_boot(gpus: &[GpuInfo], ram_mb: u64) -> AiosGpuLlmPlan {
             "warn",
             "W2A8 pack ausente p/ {} — fallback CPU/SMP até KernelPack (não inventa ISA)",
             compute_isa.as_str()
+        );
+    } else if pack_ok && !pack_verified {
+        slog_hal!(
+            "AIOS",
+            "ok",
+            "W2A8 pack on FAT but unsigned/session — present≠Ready (ADR-0105 B0.3)"
         );
     }
 

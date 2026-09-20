@@ -167,6 +167,9 @@ pub fn effective_soft_stride(hidden: usize) -> usize {
 pub fn apply_tier(tier: ComputeTier, hidden: usize) {
     let s = soft_stride_for(tier, hidden);
     set_soft_stride_override(s);
+    let max_gen = max_gen_for(tier, hidden, true, false);
+    let ctx = ctx_cap_for(tier, hidden);
+    crate::cortex::refresh_generation_gaps(s, max_gen, ctx);
     k_nano::slog_cortex!(
         "DiffGate",
         "ok",

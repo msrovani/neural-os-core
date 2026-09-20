@@ -525,14 +525,18 @@ def populate(path):
         ("NKP_GFX90C.BIN", "NKP_GFX90C.BIN"),
         ("NKP_W2A8_SM61.BIN", "NKPW2A861.BIN"),
         ("NKP_W2A8_SM_61.BIN", "NKPW2A861.BIN"),
+        ("NKP_W2A8_SM75.BIN", "NKPW2A875.BIN"),
         ("NKP_W2A8_SM80.BIN", "NKPW2A880.BIN"),
         ("NKP_W2A8_SM86.BIN", "NKPW2A886.BIN"),
         ("NKP_W2A8_SM89.BIN", "NKPW2A889.BIN"),
+        ("NKP_SM75.BIN", "NKP_SM75.BIN"),
         ("NKP_SM80.BIN", "NKP_SM80.BIN"),
         ("NKP_SM86.BIN", "NKP_SM86.BIN"),
+        ("NKP_SM89.BIN", "NKP_SM89.BIN"),
         ("NKP_W2A8_GEN9.BIN", "NKPW2A8G9.BIN"),
         ("NKP_W2A8_GFX1030.BIN", "NKP_W2A8_GFX1030.BIN"),
         ("NKP_W2A8_DG2.BIN", "NKP_W2A8_DG2.BIN"),
+        ("NKP_W2A8_GFX1103.BIN", "NKP_W2A8_GFX1103.BIN"),
     ):
         nkp_path = os.path.join(ROOT, "target", nkp_name)
         if not os.path.isfile(nkp_path):

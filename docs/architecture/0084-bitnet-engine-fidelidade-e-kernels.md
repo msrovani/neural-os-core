@@ -105,6 +105,9 @@ nesta área — verificação via `bitnet_fwd_parity.py`).
 
 ### Fase 4 — Kernel I2_S/maddubs oficial (W2A8) — GATED, depois
 
+> **Execução unificada:** residual F4 = **ADR-0105 §B3** (CPU ladder até GPU Ready). Este ADR
+> permanece a fonte de *fidelidade/gate*; 0105 é o checklist operacional W2A8 (CPU≠GPU).
+
 O kernel oficial (ggml-bitnet-mad.cpp): unpack shift+mask (sem branch), `_mm256_maddubs_epi16`
 (u8×i8→i16, 32 MACs/instrução), acumulação i32, scale f32/linha + si per-token no epílogo com
 desconto do viés {0,1,2,3}→{-1,0,1}. Ganho ~2-4× sobre nosso path f32-FMA; é o que dá os 29ms

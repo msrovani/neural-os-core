@@ -1,6 +1,9 @@
 //! Wake word detection — MLP classifier + energia temporal.
 //! MLP ternario (16→8→1) treinado para reconhecer "JARBAS" vs nao-jarvis.
 //! Schedule Continuous (Sprint Sound) — evita dormência EventDriven após 20 ticks.
+//!
+//! SESSION_352 fix: MLP lê os 16 frames **mais recentes** (janela deslizante),
+//! não `energy_history[..16]` (os mais velhos de 64 ≈ 1,28 s atrás).
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use event_bus::{CapabilityToken, Event, Receiver};
@@ -11,7 +14,7 @@ use crate::audio::TOPIC_WAKEWORD;
 use core::sync::atomic::Ordering;
 
 /// MLP ternario 16→8→1 para classificacao wake word.
-/// Treinado offline com 98.4% de acuracia (2000 jarvis + 8000 nao-jarvis).
+/// Pesos embutidos — acurácia "98,4%" do comentário legado **não tem artefato** no repo.
 pub struct WakeWordML {
     w1: [[i8; 16]; 8],
     b1: [f32; 8],
@@ -82,10 +85,17 @@ fn rms(pcm: &[i16]) -> f32 {
     libm::sqrtf(sum / pcm.len() as f32)
 }
 
+const HIST: usize = 64;
+const MLP_WIN: usize = 16;
+
 pub struct WakeWordAgent {
     receiver: Receiver,
-    energy_history: [f32; 64],
-    history_idx: usize,
+    /// Ring circular de RMS por frame (16 kHz / 320 = 50 Hz).
+    energy_history: [f32; HIST],
+    /// Próximo slot de escrita (mod HIST).
+    write_idx: usize,
+    /// Frames válidos no ring (cap HIST).
+    filled: usize,
     cooldown: u32,
     ml: WakeWordML,
     last_score_log: u32,
@@ -93,33 +103,45 @@ pub struct WakeWordAgent {
 
 impl WakeWordAgent {
     pub fn new() -> Self {
-        // Sem VAD próprio: o VAD é único e vive no `AudioInputAgent` (antes havia
-        // DUAS instâncias independentes processando o mesmo stream, com estados que
-        // podiam discordar). Aqui só classificamos frames já normalizados.
         WakeWordAgent {
             receiver: k_nano::EVENT_BUS.subscribe(TOPIC_AUDIO_FRAME),
-            energy_history: [0.0; 64],
-            history_idx: 0,
+            energy_history: [0.0; HIST],
+            write_idx: 0,
+            filled: 0,
             cooldown: 0,
             ml: WakeWordML::new(),
             last_score_log: 0,
         }
     }
 
-    /// Detecta padrao "jar-vis" na energia: 2 picos separados por ~200-400ms.
+    /// Copia os `MLP_WIN` frames mais recentes (ordem temporal antiga→nova).
+    fn recent_energy16(&self) -> [f32; MLP_WIN] {
+        let mut out = [0.0f32; MLP_WIN];
+        for i in 0..MLP_WIN {
+            // write_idx aponta para o próximo slot vazio = um após o mais recente.
+            let idx = (self.write_idx + HIST - MLP_WIN + i) % HIST;
+            out[i] = self.energy_history[idx];
+        }
+        out
+    }
+
+    /// Detecta padrao "jar-vis" na energia recente: 2 picos separados por ~200-400ms.
     fn detect_wakeword_pattern(&self) -> bool {
-        if self.history_idx < 20 {
+        if self.filled < 20 {
             return false;
         }
         let mut peaks = 0u32;
         let mut last_peak = 0usize;
         let sens = WAKEWORD_SENSITIVITY.load(Ordering::Relaxed).max(1) as f32;
         let peak_thr = 500.0 * (6.0 / (sens + 1.0));
-        for i in 1..self.history_idx.saturating_sub(1) {
-            if self.energy_history[i] > peak_thr
-                && self.energy_history[i] > self.energy_history[i - 1] * 1.3
-                && self.energy_history[i] > self.energy_history[i + 1] * 1.3
-            {
+        let n = self.filled.min(HIST);
+        for i in 1..n.saturating_sub(1) {
+            // Índice temporal: do mais antigo ao mais novo na janela filled.
+            let idx = (self.write_idx + HIST - n + i) % HIST;
+            let prev = self.energy_history[(idx + HIST - 1) % HIST];
+            let cur = self.energy_history[idx];
+            let next = self.energy_history[(idx + 1) % HIST];
+            if cur > peak_thr && cur > prev * 1.3 && cur > next * 1.3 {
                 if last_peak == 0 || i - last_peak > 3 {
                     peaks += 1;
                     last_peak = i;
@@ -131,7 +153,7 @@ impl WakeWordAgent {
 
     fn publish_wake(&mut self, score: f32, via: &str) {
         self.cooldown = settings::wake_cooldown_ticks();
-        k_nano::slog_bin!("WAKEWORD", "info", "HIT \"jarvis\" via={} score={:.2}", via, score);
+        k_nano::slog_bin!("WAKEWORD", "ok", "HIT \"jarvis\" via={} score={:.2}", via, score);
         let _ = k_nano::EVENT_BUS.publish(Event {
             id: 0,
             topic: alloc::string::String::from(TOPIC_WAKEWORD),
@@ -151,9 +173,6 @@ impl Agent for WakeWordAgent {
             self.cooldown -= 1;
         }
 
-        // Frames já chegam normalizados em 320 amostras @16 kHz mono (antes este
-        // agente fatiava eventos de 512 e DESCARTAVA as 192 amostras restantes,
-        // 37,5% do áudio, sempre nas mesmas fronteiras).
         let mut drained = 0u32;
         while let Some(ev) = self.receiver.try_receive() {
             if drained >= 16 {
@@ -167,30 +186,32 @@ impl Agent for WakeWordAgent {
                 core::slice::from_raw_parts(ev.payload.as_ptr() as *const i16, FRAME_SAMPLES)
             };
             let energy = rms(pcm);
-            self.energy_history[self.history_idx] = energy;
-            self.history_idx += 1;
+            self.energy_history[self.write_idx] = energy;
+            self.write_idx = (self.write_idx + 1) % HIST;
+            if self.filled < HIST {
+                self.filled += 1;
+            }
 
-            if self.history_idx >= 64 {
-                let mut energy_16 = [0.0f32; 16];
-                energy_16.copy_from_slice(&self.energy_history[..16]);
-                let ml_score = self.ml.predict(&energy_16);
-                if tick.wrapping_sub(self.last_score_log as u64) > 50 {
-                    self.last_score_log = tick as u32;
-                }
-                let thr = settings::wake_ml_threshold();
-                let pattern = self.detect_wakeword_pattern();
-                if self.cooldown == 0 && (pattern || ml_score > thr) {
-                    let via = if pattern && ml_score > thr {
-                        "pattern+ml"
-                    } else if pattern {
-                        "pattern"
-                    } else {
-                        "ml"
-                    };
-                    self.publish_wake(ml_score, via);
-                }
-                // Janelas não sobrepostas de 64 frames (~1,28 s).
-                self.history_idx = 0;
+            // Avalia a cada frame após encher a janela MLP (não espera 64).
+            if self.filled < MLP_WIN {
+                continue;
+            }
+            let energy_16 = self.recent_energy16();
+            let ml_score = self.ml.predict(&energy_16);
+            if tick.wrapping_sub(self.last_score_log as u64) > 50 {
+                self.last_score_log = tick as u32;
+            }
+            let thr = settings::wake_ml_threshold();
+            let pattern = self.detect_wakeword_pattern();
+            if self.cooldown == 0 && (pattern || ml_score > thr) {
+                let via = if pattern && ml_score > thr {
+                    "pattern+ml"
+                } else if pattern {
+                    "pattern"
+                } else {
+                    "ml"
+                };
+                self.publish_wake(ml_score, via);
             }
         }
         AgentTickResult::Pending

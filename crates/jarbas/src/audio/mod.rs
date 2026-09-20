@@ -1,10 +1,11 @@
 //! Audio subsystem — JARVIS voice pipeline (Sprint Sound / ADR-0045)
 //!
-//! Mic (HDA|UAC) → AUDIO_IN → WakeWord → WAKEWORD
-//! JarbasVoiceAgent (wake-gated): VAD → STT → USER_INTENT
-//! JarbasAgent: USER_INTENT → LLM_REQUEST → LLM_RESPONSE → HERMES_RESPONSE
-//! JarbasVoiceAgent: HERMES_RESPONSE → Piper/formant → AUDIO_OUT → Mixer → speaker
-//! AudioPipelineAgent: barge-in via MIC_CAPTURE_RING
+//! Mic (HDA|UAC) → AUDIO_IN → AudioInputAgent → AUDIO_FRAME + VAD_TRANSITION
+//! WakeWordAgent: AUDIO_FRAME → WAKEWORD
+//! JarbasVoiceAgent: VAD → STT → STT_TEXT + USER_INTENT
+//! HermesAgent: USER_INTENT → LLM → HERMES_RESPONSE
+//! JarbasAgent: HERMES_RESPONSE / INFER_TTS_PARTIAL → Piper|formant → PLAYBACK_RING
+//! AudioMixerAgent: PLAYBACK_RING → HDA/UAC (pacing por free frames)
 //! Skills: TtsSkill, SttSkill, AudioGetSettingsSkill, AudioSetVolumeSkill
 
 pub mod frame;
@@ -35,6 +36,8 @@ pub const TOPIC_AUDIO_IN: &str = "AUDIO_IN";
 pub const TOPIC_AUDIO_OUT: &str = "AUDIO_OUT";
 pub const TOPIC_WAKEWORD: &str = "WAKEWORD";
 pub const TOPIC_STT_TEXT: &str = "STT_TEXT";
+/// Transcrição de baixa confiança (honesta) — Display/chat consomem.
+pub const TOPIC_STT_UNCERTAIN: &str = "STT_UNCERTAIN";
 pub const TOPIC_TTS_CMD: &str = "TTS_CMD";
 /// Frames de 320 amostras @16 kHz mono — contrato de entrada do consumidor de voz
 /// (produzido exclusivamente por `capture::AudioInputAgent`).

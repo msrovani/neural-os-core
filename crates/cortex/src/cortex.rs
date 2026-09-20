@@ -2438,6 +2438,62 @@ fn tern_eq(a: &PackedTernaryTensor, b: &PackedTernaryTensor) -> bool {
 // ── Loader .bitnet v6 (ADR-0085) ─────────────────────────────────────
 // load_model_v6: parse estrito, dispatch por model_type. Legacy (3..=5): fallback WARN.
 
+/// Reserva de runtime que o loader NÃO pode consumir do bump heap (MiB).
+/// Cobre KV/logits/prefill do InferQ (gate 48MB), FRAG mesh, EventBus e o
+/// churn de slog/format! — o bump não libera, então isto é vida útil do nó.
+pub const RESIDENT_RUNTIME_RESERVE_MB: usize = 256;
+
+/// Estimativa de bytes residentes que `load_llm_v6` vai copiar para o heap a
+/// partir do offset atual: corpo restante do arquivo (packed + scales + rms,
+/// copiados 1:1) + zeros do unembed tied (`vec![0; …]`) + tabelas RoPE.
+/// Autodescritivo (header/tamanho) — zero shape hardcoded.
+pub fn estimate_resident_bytes(
+    file_len: usize,
+    body_off: usize,
+    hidden: usize,
+    vocab: usize,
+    tie_embeddings: bool,
+    max_seq: usize,
+    kv_head_dim: usize,
+) -> usize {
+    let body = file_len.saturating_sub(body_off);
+    let tied_zeros = if tie_embeddings { tern_packed_len(hidden, vocab) } else { 0 };
+    let rope_seq = max_seq.min(2048).max(64);
+    let rope = rope_seq.saturating_mul(kv_head_dim).saturating_mul(4).saturating_mul(2);
+    body.saturating_add(tied_zeros).saturating_add(rope)
+}
+
+/// Gate de fit do residente contra o headroom REAL do bump heap (window − used),
+/// com `RESIDENT_RUNTIME_RESERVE_MB` de margem. false ⇒ slog `fail` + o caller
+/// devolve None (recusa honesta; nunca copia até 99% e morre depois).
+fn resident_fits_bump_heap(
+    data: &[u8],
+    body_off: usize,
+    hidden: usize,
+    vocab: usize,
+    tie_embeddings: bool,
+    max_seq: usize,
+    kv_head_dim: usize,
+) -> bool {
+    let need = estimate_resident_bytes(
+        data.len(), body_off, hidden, vocab, tie_embeddings, max_seq, kv_head_dim,
+    );
+    if k_nano::allocator::can_alloc_bytes(need, RESIDENT_RUNTIME_RESERVE_MB) {
+        return true;
+    }
+    let headroom_mb = k_nano::allocator::heap_headroom_bytes() / (1024 * 1024);
+    k_nano::slog_cortex!(
+        "LLM",
+        "fail",
+        "v6 refuse: residente~{}MB + reserva {}MB > headroom {}MB (window~{}MB) — SKU menor (3B) ou AirLLM; sem LLM residente",
+        need / (1024 * 1024),
+        RESIDENT_RUNTIME_RESERVE_MB,
+        headroom_mb,
+        k_nano::allocator::heap_window_bytes() / (1024 * 1024)
+    );
+    false
+}
+
 /// Carrega modelo .bitnet v6. Retorna None em erro de parse.
 pub fn load_model_v6(data: &[u8]) -> Option<TransformerModel> {
     let mut off = 0;
@@ -2516,6 +2572,17 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
     // alocação atinge HEAP_LIMIT (k_nano::allocator). Estimativas hardcoded
     // (file*2, etc.) eram o bug: estendiam o TALC (que não é o global
     // allocator) e o extend falhando chamava o handler OOM → hlt no 2B v6.
+    //
+    // Fit gate (mesh A, SESSION_366): "in-place" é só o parse — cada tensor
+    // vira `to_vec` no bump heap, que NUNCA libera (dealloc no-op). O 7B
+    // (FALCON3.BIN = FALCON3_7B.V6, 2045MB) copiava ~2000MiB numa janela
+    // wrap 2^64 de ~2033MiB → 12MiB de vida útil para TODO o runtime → OOM/#PF
+    // tardio (InferQ/BEI/mesh). Decisão honesta ANTES de copiar: se o
+    // residente + reserva de runtime não cabe no headroom real, recusa
+    // (log fail + None) — o bin cai no path "sem LLM"/AirLLM, UI viva.
+    if !resident_fits_bump_heap(data, *off, hidden, vocab_size as usize, tie_embeddings, max_seq, kv_head_dim) {
+        return None;
+    }
 
     // Embed (always has scale — ADR-0085 D1). embed_type: 0=ternary, 1=Q6_K, 2=BF16
     let (embed, embed_scale, embed_q6k) = match embed_type {
@@ -3206,6 +3273,28 @@ fn v6_roundtrip_load() {
 
 /// HW Expert v6 (ADR-0085 §3.2): o arquivo convertido tools/target/hw_expert_v6.bitnet
 /// (mt=1) deve carregar e produzir predições IDÊNTICAS ao v5 legado
+/// Fit gate (mesh A): a estimativa residente segue o corpo do arquivo (cópia
+/// 1:1) + zeros tied + RoPE — shapes canônicos do FALCON3_7B.V6 (2045MB) dão
+/// ~2000MiB, acima da janela bump ~2033MiB menos a reserva de runtime.
+#[cfg(test)]
+#[test]
+fn resident_estimate_tracks_file_body() {
+    // 7B: hidden 3072, vocab 131080, não-tied, max_seq clamp 4096, head_dim 256.
+    let file_len = 2_094_209_552usize;
+    let body_off = 52usize;
+    let est = estimate_resident_bytes(file_len, body_off, 3072, 131080, false, 4096, 256);
+    let mib = 1024 * 1024;
+    assert!(est >= file_len - body_off, "residente nunca menor que o corpo");
+    assert!(est / mib >= 1995 && est / mib <= 2005, "7B ~2001MiB (corpo 1997 + rope 4), got {}MiB", est / mib);
+    // Reserva + residente estouram a janela wrap (~2033MiB) → refuse esperado.
+    assert!(est / mib + RESIDENT_RUNTIME_RESERVE_MB > 2033);
+    // Tied acrescenta exatamente os zeros do unembed (hidden*vocab/4).
+    let tied = estimate_resident_bytes(file_len, body_off, 3072, 131080, true, 4096, 256);
+    assert_eq!(tied - est, (3072 * 131080 + 3) / 4);
+    // Host: janela é gigante (HEAP_BUFFER em VA baixa) → gate deixa passar.
+    assert!(k_nano::allocator::can_alloc_bytes(est, RESIDENT_RUNTIME_RESERVE_MB));
+}
+
 /// (models/hw_expert/hw_expert_v4.bitnet) nos devices canônicos — prova de que
 /// a conversão é fiel e o loader v6 lê o mesmo modelo (F1b).
 #[cfg(test)]
@@ -3930,10 +4019,30 @@ pub fn set_streaming_model(model: Box<dyn Model>) {
     k_nano::slog_bin!("GGUF", "ok", "AirLLM streaming model registered");
 }
 pub static RUSTCODER_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
-/// Gate do W2A8 (ADR-0084 §3 F4): true só quando soft_stride=1, MAX_SEQ
-/// adequado e geração ≥ algo útil. Hoje false — gaps pendentes.
+/// Gate do W2A8 (ADR-0084 §3 F4 / ADR-0105 B3): true quando soft_stride=1,
+/// ctx e max_gen deixam de ser o budget Cheap (ver `refresh_generation_gaps`).
 pub static GENERATION_GAPS_RESOLVED: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);pub static HWEXPERT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Atualiza o gate a partir da política de decode (ADR-0105 B3.1).
+pub fn refresh_generation_gaps(soft_stride: usize, max_gen: usize, ctx_cap: usize) {
+    // Critério: stride pleno + geração útil + ctx ≥64 (SKU pequeno) ou ≥256 heavy.
+    let ok = soft_stride <= 1 && max_gen >= 8 && ctx_cap >= 64;
+    let prev = GENERATION_GAPS_RESOLVED.swap(ok, core::sync::atomic::Ordering::Release);
+    if prev != ok {
+        k_nano::slog_cortex!(
+            "W2A8",
+            if ok { "ok" } else { "warn" },
+            "GENERATION_GAPS_RESOLVED={} soft_stride={} max_gen={} ctx={}",
+            ok as u8,
+            soft_stride,
+            max_gen,
+            ctx_cap
+        );
+    }
+}
+
+pub static HWEXPERT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
 /// Dimensão do CURRENT_MODEL (p/ skip LLM-TEST em 2B).
 pub static CURRENT_MODEL_EMBED_DIM: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);

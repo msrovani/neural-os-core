@@ -94,7 +94,7 @@ pub fn dispatch_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
                 .map_or(0, |eng| eng.node_count());
             if peers >= 1 {
                 // s364: frugal não tenta FRAG nem marca peer failure (skip ≠ timeout).
-                if k_nano::memory::mesh_frag_pressure() {
+                if k_nano::memory::refuse_heavy_frag() {
                     // Fall through — ternary_matmul recusa local big sob pressure.
                 } else {
                     N_MESH.fetch_add(1, Ordering::Relaxed);
@@ -223,7 +223,7 @@ fn deserialize_mesh_response(data: &[u8]) -> Option<Tensor> {
 #[cfg(feature = "p2p")]
 fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     // AIOS: nó frugal não inicia FRAG — fallback local (Observe→Act, sem OOM).
-    if k_nano::memory::mesh_frag_pressure() {
+    if k_nano::memory::refuse_heavy_frag() {
         k_nano::slog_cortex!(
             "MESH", "warn",
             "matmul mesh skip DEGRADED RAM={}MB",
@@ -326,7 +326,7 @@ pub fn handle_mesh_request(payload: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     // AIOS: nó frugal não serve FRAG — Observe→Act, skip honesto (sem #GP).
-    if k_nano::memory::mesh_frag_pressure() {
+    if k_nano::memory::refuse_heavy_frag() {
         return None;
     }
     // Resposta MR + FRAG reassembly ≥ payload; margem p/ header/sign.

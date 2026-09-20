@@ -9,7 +9,7 @@
 //! - Scalar/SSE: ADD/SUB/SKIP de ativações f32 sobre packed 2-bit — nativo algébrico.
 //! - AVX2 host (`not(target_os="none")`): unpack i8 → f32 FMA — NÃO skip-native SIMD.
 //! - Bare-metal (`target_os="none"`): `avx2_ternary_matmul_impl` delega ao SSE2 ADD/SUB/SKIP.
-//! - W2A8 maddubs existe mas `w2a8_enabled()` é false (`GENERATION_GAPS_RESOLVED`).
+//! - W2A8: gate ADR-0105 B3 (`w2a8_enabled`); host=maddubs, no_std=scalar quantizado.
 
 use crate::tensor::{PackedTernaryTensor, Tensor};
 use alloc::vec;
@@ -67,14 +67,12 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
         return None;
     }
 
-    // ADR-0084 F4 (GATED): W2A8 maddubs — só WHPX/HW real + gaps resolvidos.
-    // w2a8_enabled() hoje = false; kernel verificado por self-test de paridade.
+    // ADR-0105 B3 / ADR-0084 F4: W2A8 CPU ladder (WHPX/HW + gaps).
     if crate::bitnet_w2a8::w2a8_enabled() && (m == 1 || m >= 8) {
-        #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
         unsafe {
             if let Some(r) = crate::bitnet_w2a8::w2a8_ternary_matmul(weight, input) {
                 if r.is_valid() {
-                    crate::matmul_diag::note_dispatch_ok();
+                    crate::matmul_diag::note_w2a8_ok();
                     return Some(r);
                 }
                 crate::matmul_diag::note_w2a8_invalid();

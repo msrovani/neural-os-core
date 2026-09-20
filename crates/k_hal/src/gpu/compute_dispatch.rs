@@ -66,6 +66,7 @@ fn try_device_w2a8(
     }
     // Sample host golden (verify path); device readback = metal residual.
     let _host = w2a8_device::host_gemv_signed(&buf)?;
+    cortex::matmul_diag::note_gpu_disp_awaiting();
     slog_hal!(
         "COMPUTE",
         "warn",
@@ -136,7 +137,7 @@ pub fn register_compute_if_ready() {
         slog_hal!(
             "COMPUTE",
             "ok",
-            "GPU Ready ({}) isa={} profile={} falcon3={} — ternary on; W2A8 device=AWAITING_HW",
+            "GPU Ready ({}) isa={} profile={} falcon3={} — ternary on; W2A8 device=AWAITING_HW until fence+golden",
             dual,
             isa,
             profile,
@@ -144,10 +145,11 @@ pub fn register_compute_if_ready() {
         );
         aios_adapt::remember_caps();
     } else {
+        // ADR-0105 B1.3: QEMU/VirtIO/sem pack → CpuOnly honesto (nunca Ready falso).
         slog_hal!(
             "COMPUTE",
-            "info",
-            "GPU nao-Ready ({:?}) — fallback=CPU/SMP/AVX2",
+            "ok",
+            "GPU CpuOnly/Quarantine ({:?}) — CPU W2A8 ladder se gaps; device=off",
             compute_state()
         );
     }

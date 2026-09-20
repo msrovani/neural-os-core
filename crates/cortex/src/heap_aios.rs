@@ -226,7 +226,11 @@ fn remember_host(ok: bool, toks: u64, us: u64) {
     }
 }
 
-/// Mensagem HITL quando Escalate.
+/// Mensagem estática HITL — **zero alloc** (finish sob headroom crítico).
+pub const ESCALATE_STATIC_MSG: &str =
+    "[heap escalate] headroom critico - ctx insuficiente; /approve ou feche apps. HITL.";
+
+/// Mensagem HITL quando Escalate (pode alocar — só use com headroom ok).
 pub fn escalate_message(plan: &HeapPlan) -> alloc::string::String {
     alloc::format!(
         "[heap escalate] headroom={}MB pressure={} — ctx≤{} insuficient; /approve ou feche apps. HITL.",

@@ -177,7 +177,8 @@ impl Agent for MemoryAgent {
 
         k_nano::slog_bin!("MEM", "info", "Orcamento adaptativo de memoria");
         k_nano::slog_bin!("MEM", "info", "RAM: {} MB | VRAM: {} MB | Modelo: {} params", budget.total_ram_mb, budget.total_vram_mb, model_params);
-        k_nano::slog_bin!("MEM", "info", "Heap(atual):{}MB Model:{}MB KV:{}MB ARC:{}MB Vram:{}MB",
+        // Honesty: sem modelo ativo, arc_cache_mb = heap_used (não cache ARC real).
+        k_nano::slog_bin!("MEM", "info", "Heap(atual):{}MB Model:{}MB KV:{}MB heap_used:{}MB Vram:{}MB",
             budget.heap_target_mb, budget.model_ram_mb,
             budget.kv_cache_mb, budget.arc_cache_mb, budget.vram_model_mb);
         k_nano::slog_bin!("MEM", "info", "Livre apos: {} MB", budget.free_after_mb);

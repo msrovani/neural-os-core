@@ -195,20 +195,17 @@ impl BeiState {
         let current_tick = *tick;
         drop(tick);
         
-        // 1. Advance CellNetwork scheduler
+        // 1. Advance CellNetwork scheduler (skip sob heap critico — MPMC #PF)
         {
-            let mut net = self.cell_network.lock();
-            net.tick_advance();
-            
-            // Round-robin schedule cells
-            while let Some((cell_id, _messages)) = net.round_robin() {
-                // Process messages for this cell
-                // In a real implementation, this would invoke the cell's compute
-                net.mark_processed(cell_id);
+            let obs = k_nano::allocator::heap_observe();
+            if obs.headroom_mb >= 48 {
+                let mut net = self.cell_network.lock();
+                net.tick_advance();
+                while let Some((cell_id, _messages)) = net.round_robin() {
+                    net.mark_processed(cell_id);
+                }
+                net.reap_dead();
             }
-            
-            // Reap dead cells
-            net.reap_dead();
         }
         
         // 2. Advance PlasticityController
@@ -263,7 +260,26 @@ impl BeiState {
             match verdict {
                 SupervisorVerdict::Proceed => {}
                 SupervisorVerdict::ProceedWithBudget(budget) => {
-                    k_nano::slog_bin!("BEI", "ok", "ProceedWithBudget: {}", budget);
+                    let obs = k_nano::allocator::heap_observe();
+                    if obs.headroom_mb < 48 {
+                        // Rate-limit: slog sob headroom=0 também aloca.
+                        static LAST_LOG: core::sync::atomic::AtomicU64 =
+                            core::sync::atomic::AtomicU64::new(0);
+                        let now = current_tick;
+                        let prev = LAST_LOG.load(core::sync::atomic::Ordering::Relaxed);
+                        if now.saturating_sub(prev) >= 64 {
+                            LAST_LOG.store(now, core::sync::atomic::Ordering::Relaxed);
+                            k_nano::slog_bin!(
+                                "BEI",
+                                "warn",
+                                "heap headroom={}MB - suppress ProceedWithBudget({})",
+                                obs.headroom_mb,
+                                budget
+                            );
+                        }
+                    } else {
+                        k_nano::slog_bin!("BEI", "ok", "ProceedWithBudget: {}", budget);
+                    }
                 }
                 SupervisorVerdict::Ponder(steps) => {
                     k_nano::slog_bin!("BEI", "ok", "Ponder: {} steps", steps);
@@ -511,7 +527,7 @@ pub fn bei_tick(_tick: u64) {
         && non_master
         && k_nano::net::mesh::MESH_ENGINE.lock().as_ref().map_or(false, |e| e.node_count() >= 1)
     {
-        if k_nano::memory::mesh_frag_pressure() {
+        if k_nano::memory::refuse_heavy_frag() {
             // Uma vez: registra a decisão (Observe→Act→Remember via slog).
             if MESH_SELFTEST_TRIES.fetch_add(1, core::sync::atomic::Ordering::Relaxed) == 0 {
                 let ram = k_nano::memory::TOTAL_RAM_MB

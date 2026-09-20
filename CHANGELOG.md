@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s367] - 2026-09-19 — LLM response evidence gate + labs
+
+- Host: `cortex::llm_response_gate` (submit≠resposta; 7 testes) + InferQueue tests com `TEST_LOCK` (5)
+- Lab: `tools/lab-llm-response.ps1` (PASS só decode/done/stream); mesh2 clima/app + LINJ `hermes::lab_inject`
+- WIP: audio/STT/wakeword honesty; mesh FRAG; GPU KernelPack notes; heap allocator
+- SESSION_367; IDEA #590
+
 ## [1.9.99-s360] - 2026-09-19 — mesh WHPX lab + fail/warn honesty
 
 - Mesh lab: 6-node WHPX + `tools/qemu_l2_hub.py`; orb/SoulMirror por MESH_HEALTH+role; HubHealth default open; HDA QEMU

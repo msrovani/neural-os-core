@@ -1,8 +1,8 @@
 # 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s360 TEST
+**Versão:** v1.9.99-s367 TEST
 **Data:** 2026-09-19
-**Fonte:** ADRs 0081/0089–0103 + SESSION_360 (mesh 6-node + UI)
+**Fonte:** SESSION_367 (LLM response gate) + ADRs 0081/0089–0106 + SESSION_360/366
 **Legenda:** ✅ feito | 🟡 em andamento | `[~]` parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | `[ ]` pendente
 
 ---
@@ -43,6 +43,7 @@
 
 ## ⚠️ SAÚDE DE TESTES / CI
 
+- [x] **s367** — `cargo test -p cortex --lib llm_response_gate` **7/7** + `infer_queue::tests` **5/5** (`--test-threads=1`); lab `tools/lab-llm-response.ps1` (QEMU decode AWAITING)
 - [ ] Corrigir 6 testes host falhando: `hermes::wasm_build::{compile_and_run_real_skill,dsl_print_cmp}`, `hermes::cognitive_bridge::session_load_respects_cap`, `jarbas::jarvis::soul_{describe,default_jarbas,fluid_update_joy}`
 - [ ] Fixture do teste `cortex`: `python tools/gen_test_gguf.py` → `target/test_tq2_0.gguf` (sem ela `cargo test --workspace` não compila o teste)
 - [ ] CI verde: nesta revisão `cargo test … --no-fail-fast` = **784 pass / 6 fail** (sem `--no-fail-fast` o cargo para na 1ª suíte que falha)
@@ -54,7 +55,7 @@
 - [ ] Aceite metal: orb+mouse+mic vivos durante o generate; 1ª frase TTS antes de `LLM_RESPONSE`
 - [ ] Prefill AirLLM: layer-yield (evitar hiccup no prompt)
 - [ ] Métricas/budget por TSC
-- [ ] Layer S: GPU/NPU W2A8 (WS-D/E) — só após o aceite (dispatcher já existe; falta Ready/KernelPack/FW). Não confundir CPU `bitnet_w2a8` (ADR-0084) com GPU BitLinearW2A8 (WS-D)
+- [x] **ADR-0105 B0–B3** código (FAT/aliases, CpuOnly, CPU W2A8+gaps, telemetria). **Aberto:** B1.2/B2.4/B4 device golden AWAITING_HW.
 
 ---
 

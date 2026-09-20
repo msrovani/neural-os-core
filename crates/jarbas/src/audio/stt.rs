@@ -766,7 +766,7 @@ impl SttJob {
         if text.confidence < 0.55 || text.blank_ratio > 0.92 {
             let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
                 id: 0,
-                topic: alloc::string::String::from("STT_UNCERTAIN"),
+                topic: alloc::string::String::from(crate::audio::TOPIC_STT_UNCERTAIN),
                 payload: alloc::format!(
                     "conf={:.2} blank={:.2} len={}",
                     text.confidence,
@@ -903,59 +903,128 @@ fn tmp_lstm(
 // Carregamento (QEMU loader + FAT)
 // ============================================================================
 
-/// QEMU `-device loader,file=STT.BIN,addr=0x163000000`.
+/// Header STT (≠ Piper v3 / ≠ LLM denso): magic BE11 + feat≤2 + n_tensors pequeno
+/// + índice com nome `out.bias` ou `lstm`.
+pub fn is_stt_header(data: &[u8]) -> bool {
+    if data.len() < 56 {
+        return false;
+    }
+    let r4 = |o: usize| u32::from_le_bytes(data[o..o + 4].try_into().unwrap_or([0; 4]));
+    if r4(0) != 0xBE11BE11 {
+        return false;
+    }
+    // Piper v3: version=3 e n∈[50,512] — não confundir.
+    if crate::audio::piper::is_piper_header(data) {
+        return false;
+    }
+    let feat = r4(4);
+    let n = r4(8) as usize;
+    if feat > 2 || !(2..=48).contains(&n) {
+        return false;
+    }
+    let mut saw_stt = false;
+    for i in 0..n.min(48) {
+        let b = 16 + i * 40;
+        if b + 32 > data.len() {
+            break;
+        }
+        let nb = &data[b..b + 32];
+        let end = nb.iter().position(|&x| x == 0).unwrap_or(32);
+        let nm = core::str::from_utf8(&nb[..end]).unwrap_or("");
+        if nm.contains("lstm") || nm.contains("out.bias") || nm.starts_with("out.") {
+            saw_stt = true;
+            break;
+        }
+    }
+    saw_stt
+}
+
+/// QEMU `-device loader` — scan [4G..6G) como Piper (addr sequencial do mesh ≠ 0x163).
 pub fn try_load_from_qemu_loader() -> bool {
-    const LOAD_ADDR: u64 = 0x163000000;
+    // Caminho canônico legado (scripts antigos).
+    if try_load_stt_at(0x1630_0000_0) {
+        return true;
+    }
+    let pm = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    if pm == 0 {
+        return false;
+    }
+    let mut addr = 0x1000_0000_0u64;
+    while addr < 0x1800_0000_0 {
+        let va = addr.saturating_add(pm);
+        if !k_nano::memory::is_page_present(va) {
+            addr = addr.saturating_add(0x100_000);
+            continue;
+        }
+        let ptr = va as *const u8;
+        let hdr = unsafe { core::slice::from_raw_parts(ptr, 2048) };
+        if !is_stt_header(hdr) {
+            addr = addr.saturating_add(0x100_000);
+            continue;
+        }
+        // Blob STT típico < 1 MB — fault-in 1 MB e parse.
+        let want = 1024 * 1024usize;
+        let mut mapped = 0usize;
+        while mapped < want {
+            let page = va.saturating_add(mapped as u64);
+            if !k_nano::memory::is_page_present(page) {
+                break;
+            }
+            unsafe {
+                let _ = core::ptr::read_volatile(page as *const u8);
+            }
+            mapped += 4096;
+        }
+        if mapped < 64 * 1024 {
+            addr = addr.saturating_add(0x100_000);
+            continue;
+        }
+        let data = unsafe { core::slice::from_raw_parts(ptr, mapped) };
+        let mut eng = SttEngine::new();
+        if eng.load(data) {
+            k_nano::slog_bin!(
+                "Audio",
+                "stt",
+                "CTC LOADED (QEMU-loader @0x{:x}) size={}KB",
+                addr,
+                mapped / 1024
+            );
+            *STT_ENGINE.lock() = Some(eng);
+            return true;
+        }
+        addr = addr.saturating_add(0x100_000);
+    }
+    k_nano::slog_bin!("Audio", "stt", "QEMU-loader STT ausente (scan 4G..6G)");
+    false
+}
+
+fn try_load_stt_at(load_addr: u64) -> bool {
     let phys_off = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
     if phys_off == 0 {
         return false;
     }
-    let mut size_hint = 512 * 1024usize;
-    unsafe {
-        let ata_guard = k_nano::ATA_DRIVER.lock();
-        if let Some(ref ata) = *ata_guard {
-            let parts = k_nano::fat32::read_mbr(ata);
-            for p in &parts {
-                if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
-                    continue;
-                }
-                if let Some(fs) = k_nano::fat32::Fat32Reader::new(ata, p) {
-                    if let Some(sz) = fs.lookup_file_size("STT.BIN") {
-                        size_hint = sz.max(256 * 1024).min(1024 * 1024);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    if !k_nano::memory::is_page_present(LOAD_ADDR + phys_off) {
-        k_nano::slog_bin!("Audio", "stt", "QEMU-loader @0x163000000 page absent (skip)");
+    if !k_nano::memory::is_page_present(load_addr + phys_off) {
         return false;
     }
-    let va = (LOAD_ADDR + phys_off) as *const u8;
-    let magic = unsafe { core::ptr::read_volatile(va as *const u32) };
-    if magic != 0xBE11BE11 {
-        k_nano::slog_bin!(
-            "Audio",
-            "stt",
-            "QEMU-loader @0x163000000 magic=0x{:08X} (ausente)",
-            magic
-        );
+    let va = (load_addr + phys_off) as *const u8;
+    let hdr = unsafe { core::slice::from_raw_parts(va, 2048) };
+    if !is_stt_header(hdr) {
         return false;
     }
+    let size_hint = 512 * 1024usize;
     let data = unsafe { core::slice::from_raw_parts(va, size_hint) };
     let mut eng = SttEngine::new();
     if eng.load(data) {
         k_nano::slog_bin!(
             "Audio",
             "stt",
-            "CTC LOADED (QEMU-loader @0x163000000) size={}KB",
+            "CTC LOADED (QEMU-loader @0x{:x}) size={}KB",
+            load_addr,
             size_hint / 1024
         );
         *STT_ENGINE.lock() = Some(eng);
         true
     } else {
-        k_nano::slog_bin!("Audio", "stt", "QEMU-loader parse FAILED");
         false
     }
 }

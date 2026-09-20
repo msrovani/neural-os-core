@@ -281,9 +281,10 @@ pub fn detect_qemu_net_mode() -> QemuNetMode {
             .load(core::sync::atomic::Ordering::Relaxed)
             .saturating_mul(1024 * 1024)
             .min(0x200000000);
-        // Endereços canônicos do run-qemu-p2p-mesh.ps1 (acima de 4GiB) +
-        // 0x0200_0000 p/ lab 3-node com -m≤2G (host sem 3×4G).
+        // 0x0200_0000 primeiro (run-mesh6 / run-mesh2-artifacts) — addrs 0x110..0x160
+        // colidem com QEMU-loader de modelos e geram falso BRIDGE/STATIC.
         const CANDIDATES: &[u64] = &[
+            0x0200_0000,
             0x13E0_00000,
             NETMODE_LOADER_PHYS,
             0x1100_00000,
@@ -292,7 +293,6 @@ pub fn detect_qemu_net_mode() -> QemuNetMode {
             0x1400_00000,
             0x1500_00000,
             0x1600_00000,
-            0x0200_0000,
         ];
         let try_flag = |addr: u64| -> Option<QemuNetMode> {
             let ram_end_u = if ram_end == 0 {

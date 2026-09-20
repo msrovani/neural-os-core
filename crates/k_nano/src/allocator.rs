@@ -37,7 +37,7 @@ unsafe impl GlobalAlloc for LazyBumpAllocator {
         // e o OOM/hlt vinha no meio do parse (agente=? boot).
         let window = bump_max_offset();
         if size > window {
-            let agent = agent_core::tick_in_progress().map(|(n, _)| n).unwrap_or("?");
+            let agent = agent_core::oom_agent_label();
             note_alloc_refused(size, window, agent);
             {
                 let mut buf = [0u8; 72];
@@ -59,6 +59,11 @@ unsafe impl GlobalAlloc for LazyBumpAllocator {
             return core::ptr::null_mut();
         }
 
+        // SESSION_366: reserva 8MB só no teto da janela wrap. Grow livre até lá.
+        const CRITICAL_RESERVE: usize = 8 * 1024 * 1024;
+        const CONTROL_PLANE_MAX: usize = 8192;
+        let window_soft = window.saturating_sub(CRITICAL_RESERVE);
+
         let mut current_offset = self.offset.load(Ordering::Relaxed);
         loop {
             let real_offset = if current_offset < 0 { 0 } else { current_offset as usize };
@@ -68,15 +73,25 @@ unsafe impl GlobalAlloc for LazyBumpAllocator {
             };
             let aligned_ptr = (current_ptr + align - 1) & !(align - 1);
             let next_offset = aligned_ptr.wrapping_sub(heap_start).saturating_add(size);
+            let hard_limit = HEAP_LIMIT.load(Ordering::Relaxed).min(window);
 
-            if next_offset > HEAP_LIMIT.load(Ordering::Relaxed) {
-                // AIOS na veia (premissa 2): heap se auto-adapta à necessidade.
-                // Em vez de retornar null (→ OOM → hlt), mapeia mais frames e
-                // retry. Fallback real de OOM só se o frame allocator esgotar.
+            let allow_upto = if size <= CONTROL_PLANE_MAX {
+                window
+            } else {
+                window_soft
+            };
+            if next_offset > allow_upto {
+                let agent = agent_core::oom_agent_label();
+                note_alloc_refused(next_offset, allow_upto, agent);
+                return core::ptr::null_mut();
+            }
+            if next_offset > hard_limit {
                 if grow_bump_auto(next_offset) {
                     current_offset = self.offset.load(Ordering::Relaxed);
                     continue;
                 }
+                let agent = agent_core::oom_agent_label();
+                note_alloc_refused(next_offset, window, agent);
                 return core::ptr::null_mut();
             }
 
@@ -148,7 +163,7 @@ fn grow_bump_auto(need: usize) -> bool {
     let window = bump_max_offset();
     if need > window {
         // Fix C: nomeia o agente requestor via seam FB (SESSION_316).
-        let agent = agent_core::tick_in_progress().map(|(n, _)| n).unwrap_or("?");
+        let agent = agent_core::oom_agent_label();
         crate::slog_nano!("HEAP", "fail", "refuse need={}MB window=~{}MB (agente={})",
             need / (1024 * 1024), window / (1024 * 1024), agent);
         // AIOS Observe (SESSION_350): só atomics — NÃO alocar (EventBus) aqui.
@@ -720,7 +735,7 @@ fn oom(layout: core::alloc::Layout) -> ! {
     }
     // SESSION_339: carimba o agente que pediu o alloc (allocs grandes bypassam o
     // grow — TALC direto). tick_in_progress() é lock-free (seguro no OOM handler).
-    let agent = agent_core::tick_in_progress().map(|(n, _)| n).unwrap_or("?");
+    let agent = agent_core::oom_agent_label();
     {
         let mut w = crate::vga_buffer::WRITER.lock();
         if let Some(ref mut w) = *w {

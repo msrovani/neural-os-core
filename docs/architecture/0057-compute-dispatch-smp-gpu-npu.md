@@ -77,7 +77,8 @@ Mapeamento de anéis (ADR-0014/0015) → dispatcher:
 - `k_hal::gpu::compute_dispatch::register_compute_if_ready()`: registra o backend GPU
   **só** quando `BackendState::Ready` (canário `vector_add` em silício).
 - **LAYER-S/HW:** kernel ternário no device (BitLinearW2A8, IDEA #330) + KernelPack
-  assinado (CUBIN/HSACO/zebin). Enquanto ausente, `gpu_ternary` → `None` (fallback honesto).
+  assinado (CUBIN/HSACO/zebin). **Checklist canônico = ADR-0105 B0–B2.** Enquanto ausente,
+  `gpu_ternary` → `None` (fallback honesto).
 
 ### WS-E — NPU XDNA / Intel (✅ detecção + veredito; driver = Layer S/firmware)
 - `k_hal::npu`: `detect_npu()` por PCI (AMD XDNA `1022:1502/17F0`; Intel NPU

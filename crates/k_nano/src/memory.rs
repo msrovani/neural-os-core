@@ -515,6 +515,13 @@ pub fn mesh_frag_pressure() -> bool {
     ram > 0 && ram < 1536
 }
 
+/// Belt único: nó frugal **nunca** inicia TX/RX de FRAG pesado (s366).
+/// Alias semântico de `mesh_frag_pressure` p/ callers de matmul/self-test.
+#[inline]
+pub fn refuse_heavy_frag() -> bool {
+    mesh_frag_pressure()
+}
+
 pub fn with_pmm<F, R>(f: F) -> R
 where
     F: FnOnce(&mut BitmapFrameAllocator) -> R,

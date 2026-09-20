@@ -65,6 +65,7 @@ pub mod decision;
 pub mod intent_decide;
 pub mod cognitive_runtime;
 pub mod heap_aios;
+pub mod llm_response_gate;
 #[cfg(test)]
 mod bughunt_s353;
 

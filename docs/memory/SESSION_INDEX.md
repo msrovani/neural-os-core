@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s365 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s367 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 367 | LLM evidence gate | host+lab | submit≠resposta; InferQ TEST_LOCK | `llm_response_gate` 7/7; InferQ 5/5; `lab-llm-response.ps1`; LINJ `lab_inject`; flake statics paralelo |
 | 366 | ADR-0106 D4+M3+M4 | labels→train + HUD | JSONL example merge HITL×3; Hub row decide; OUT list | `note_labeled_utterance`; `load_decision_labels`; gauges HUB_ROWS=16; `0106-m4-excluded-sites.md`; residual r3 replay |
 | 365 | ADR-0106 M1–M3 | typed_sites | emotion/skill/plugin/market + export labels | `hermes::typed_sites`; plugin Score; market risk merge; `/decisions export`; train_router detecta JSONL; HubHealth posture 30s |
 | 364 | ADR-0106 Decide | K³CHJ wire | Decisões calibradas D0–D3+M0 | `cortex::decision`+`intent_decide`; `hermes::site_policy`; `/decisions`; ApprovalGate religado; ComputeTier Score; contract_check.py; residual D4/M1–M4 |

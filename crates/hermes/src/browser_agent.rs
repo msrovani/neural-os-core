@@ -114,11 +114,13 @@ impl Agent for BrowserAgent {
     fn manifest(&self) -> &AgentManifest { &BROWSER_MANIFEST }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        // s365: ≤1 fetch sync/tick; UI overdue → re-enqueue e sai (sem stamp freeze).
+        let ui_overdue = agent_core::ui_overdue_now();
+        let mut did_fetch = false;
         while let Some(event) = self.fetch_receiver.try_receive() {
             let url = core::str::from_utf8(&event.payload).unwrap_or("");
             k_nano::slog_hermes!("BROWSER", "info", "Fetch: {}", url);
 
-            // Check cache
             if let Some(cached) = self.cache.get(url) {
                 let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
                     id: 0, topic: String::from(TOPIC_FETCH_RESPONSE),
@@ -128,8 +130,21 @@ impl Agent for BrowserAgent {
                 continue;
             }
 
+            if ui_overdue || did_fetch {
+                let _ = k_nano::EVENT_BUS.publish(event);
+                k_nano::slog_hermes!(
+                    "BROWSER",
+                    "warn",
+                    "Fetch defer overdue={} already={}",
+                    ui_overdue,
+                    did_fetch
+                );
+                break;
+            }
+
             match Self::fetch_page(url) {
                 Ok((_url, html)) => {
+                    did_fetch = true;
                     let title = Self::title_from_html(&html);
                     let text = Self::extract_text(&html);
                     let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
@@ -146,6 +161,7 @@ impl Agent for BrowserAgent {
                     });
                 }
                 Err(e) => {
+                    did_fetch = true;
                     k_nano::slog_hermes!("BROWSER", "info", "Error: {}", e);
                 }
             }

@@ -1,33 +1,31 @@
 #![allow(dead_code)]
-//! bitnet_w2a8 — Kernel W2A8 oficial (ADR-0084 §3 Fase 4, GATED).
+//! bitnet_w2a8 — Kernel W2A8 (ADR-0084 §3 F4 / ADR-0105 B3).
 //!
 //! Espelha ggml-bitnet-mad.cpp: ativações int8 (si per-token via absmax) ×
-//! pesos ternários i8 {-1,0,1} via `_mm256_maddubs_epi16` (u8×i8→i16, 32
-//! MACs/instrução), acumulação i32, epílogo com escala f32/linha + desconto
-//! do viés (ativação u8 = xq + 128 ⇒ subtrair 128·Σw por par).
+//! pesos ternários i8 {-1,0,1}. Host: `_mm256_maddubs_epi16`. Bare-metal
+//! soft-float: path **escalar quantizado** (mesma matemática; sem claim AVX2).
 //!
-//! Layout: pesos precisam de coluna-major (n,k) i8 contíguo p/ maddubs —
-//! repack feito aqui (uma vez por chamada). Ativação u8: xq = round(x/si)+128.
-//!
-//! ⚠️ GATE (ADR-0084 §3 F4): ganho nulo sob TCG; ativar só em WHPX/HW real
-//! com gaps de geração resolvidos. `w2a8_enabled()` hoje retorna false —
-//! o dispatch não muda comportamento; o kernel é verificado por self-test.
+//! Gate: WHPX/KVM/bare-metal (não TCG) + `GENERATION_GAPS_RESOLVED`.
 
 use crate::tensor::{PackedTernaryTensor, Tensor};
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// Gate de ativação do W2A8 (ADR-0084 §3 F4): WHPX/HW real (não TCG) +
-/// AVX2 + gaps de geração resolvidos (soft_stride/MAX_SEQ — pendente).
+/// Gate de ativação do W2A8 (ADR-0105 B3.2): não-TCG + gaps resolvidos.
+/// AVX2 maddubs só no host; no_std usa path escalar quando o gate abre.
 pub fn w2a8_enabled() -> bool {
-    if !k_nano::platform_probe::allow_avx2() {
+    if !crate::cortex::GENERATION_GAPS_RESOLVED.load(core::sync::atomic::Ordering::Relaxed) {
         return false;
     }
-    let hv = k_nano::platform_probe::hypervisor();
-    let real_hw = hv == k_nano::platform_probe::HypervisorKind::None
-        || hv == k_nano::platform_probe::HypervisorKind::Kvm;
-    // ponytail: gaps (soft_stride=3, MAX_SEQ=64, 4-8 tokens) ainda pendentes
-    real_hw && crate::cortex::GENERATION_GAPS_RESOLVED.load(core::sync::atomic::Ordering::Relaxed)
+    use k_nano::platform_probe::HypervisorKind;
+    match k_nano::platform_probe::hypervisor() {
+        HypervisorKind::Tcg => false,
+        HypervisorKind::None
+        | HypervisorKind::Kvm
+        | HypervisorKind::MicrosoftHv => true,
+        // VBox/VMware: AVX filtrado — não vender W2A8 como ganho.
+        _ => false,
+    }
 }
 
 /// Unpack 2-bit ternário {-1,0,1} de um byte (branchless, ADR-0084 F1).
@@ -45,7 +43,6 @@ fn unpack_byte(b: u8, out: &mut [i8; 4]) {
 /// Repack pesos (k,n) packed 2-bit → coluna-major i8 (n,k) contíguo p/ maddubs.
 fn repack_col_major(w: &PackedTernaryTensor) -> Vec<i8> {
     let (k, n) = w.shape;
-    // peso (t,j): byte (t*n+j)/4, bits ((t*n+j)%4)*2
     let mut out = vec![0i8; n * k];
     for j in 0..n {
         for t in 0..k {
@@ -59,18 +56,28 @@ fn repack_col_major(w: &PackedTernaryTensor) -> Vec<i8> {
     out
 }
 
-/// W2A8: out[m,n] = quantized(x) @ w_ternary. Returns None se shapes não batem.
-/// Escala: cada linha i de x é normalizada por si_i; resultado × w_scale.
-/// unsafe: usa intrins — chamar só com `w2a8_enabled()` (runtime check).
-///
-/// ⚠️ Só compila onde o target suporta: `_mm256_maddubs_epi16` (pmaddubsw
-/// 256-bit) exige split LLVM p/ 128-bit (SSSE3), e o target no_std
-/// (`x86_64-unknown-none`) desabilita -ssse3 no nível do target — o
-/// `#[target_feature]` por função não re-legaliza. Host/test têm AVX2+
-/// SSSE3 nativos (SESSION_247: gate por target, não cfg(test)).
+/// Path escalar quantizado — funciona em soft-float bare-metal (ADR-0105 B3).
+/// Mesma matemática do epílogo W2A8 (si · Σ q·w); sem intrins XMM/YMM.
+pub fn w2a8_ternary_matmul_scalar(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
+    w2a8_reference_quantized(w, x)
+}
+
+/// W2A8: out[m,n] = quantized(x) @ w_ternary.
+/// Host: AVX2 maddubs. Bare-metal: scalar quantizado.
+pub unsafe fn w2a8_ternary_matmul(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
+    #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
+    {
+        if k_nano::platform_probe::allow_avx2() {
+            return w2a8_ternary_matmul_avx2(w, x);
+        }
+    }
+    w2a8_ternary_matmul_scalar(w, x)
+}
+
+/// Host AVX2+SSSE3 (não compila no target soft-float — SESSION_249b).
 #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
 #[target_feature(enable = "avx2,ssse3")]
-pub unsafe fn w2a8_ternary_matmul(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
+unsafe fn w2a8_ternary_matmul_avx2(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     use core::arch::x86_64::*;
     let (k, n) = w.shape;
     let (m, k2) = x.shape;
@@ -78,9 +85,7 @@ pub unsafe fn w2a8_ternary_matmul(w: &PackedTernaryTensor, x: &Tensor) -> Option
         return None;
     }
 
-    // Repack coluna-major (n,k) i8
     let w8 = repack_col_major(w);
-
     let mut result = Tensor::new((m, n));
     if !result.is_valid() {
         return None;
@@ -88,7 +93,6 @@ pub unsafe fn w2a8_ternary_matmul(w: &PackedTernaryTensor, x: &Tensor) -> Option
 
     for i in 0..m {
         let row = &x.data[i * k..(i + 1) * k];
-        // si per-token (absmax / 127)
         let mut max_abs = 0.0f32;
         for &v in row {
             let a = v.abs();
@@ -98,7 +102,6 @@ pub unsafe fn w2a8_ternary_matmul(w: &PackedTernaryTensor, x: &Tensor) -> Option
         }
         let si = if max_abs > 1e-9 { max_abs / 127.0 } else { 1.0 };
         let inv_si = 1.0 / si;
-        // ativações u8 = clamp(round(x/si) + 128, 0, 255) — no_std: libm::roundf
         let mut xq = alloc::vec::Vec::new();
         if xq.try_reserve_exact(k).is_err() {
             return None;
@@ -113,52 +116,33 @@ pub unsafe fn w2a8_ternary_matmul(w: &PackedTernaryTensor, x: &Tensor) -> Option
             let wj = &w8[j * k..(j + 1) * k];
             let mut acc: i64 = 0;
             let mut t = 0usize;
-            // 32 t's por iteração (maddubs 256: 32 u8×32 i8 → 16 i16)
             while t + 32 <= k {
                 let a32 = _mm256_loadu_si256(xq.as_ptr().add(t) as *const __m256i);
                 let b32 = _mm256_loadu_si256(wj.as_ptr().add(t) as *const __m256i);
-                // r[0..16] = (a[2l]*b[2l] + a[2l+1]*b[2l+1]) como i16 — u8×i8
                 let r = _mm256_maddubs_epi16(a32, b32);
-                // desconto do viés: 128·(b[2l]+b[2l+1]) por par
-                let ones = _mm256_set1_epi8(1); // u8 = 1
-                let wsum = _mm256_maddubs_epi16(ones, b32); // (1*b[2l]+1*b[2l+1])
+                let ones = _mm256_set1_epi8(1);
+                let wsum = _mm256_maddubs_epi16(ones, b32);
                 let bias = _mm256_mullo_epi16(wsum, _mm256_set1_epi16(128));
                 let corr = _mm256_sub_epi16(r, bias);
-                // somar os 16 i16 → 8 i32 (via madd com 1)
                 let acc32 = _mm256_madd_epi16(corr, _mm256_set1_epi16(1));
-                // reduzir 8 i32 → soma — só intrins 256-bit (alvo no_std sem SSE2)
                 let mut buf = [0i32; 8];
                 _mm256_storeu_si256(buf.as_mut_ptr() as *mut __m256i, acc32);
                 acc += (buf[0] + buf[1] + buf[2] + buf[3]
                     + buf[4] + buf[5] + buf[6] + buf[7]) as i64;
                 t += 32;
             }
-            // tail k%32 — escalar. ⚠️ xq = q+128: subtrair o viés 128*w (mesmo
-            // desconto que o caminho SIMD faz via corr = r - bias).
             while t < k {
                 let q = xq[t] as i32 - 128;
                 acc += (q * wj[t] as i32) as i64;
                 t += 1;
             }
-            // epílogo: out = acc · si (xq já inclui o +128 desconto aplicado)
             result.data[i * n + j] = acc as f32 * si;
         }
     }
     Some(result)
 }
 
-/// Stub no_std (x86_64-unknown-none): o target desabilita -ssse3 no nível do
-/// target, então o kernel maddubs real não compila lá (LLVM split error).
-/// NUNCA é chamado no boot — `w2a8_enabled()` retorna false (gaps de geração
-/// pendentes + WHPX/HW real não é o ambiente dev). Só mantém o call site do
-/// dispatch compilável. O kernel real (host/test) é verificado por self-test.
-#[cfg(all(target_arch = "x86_64", target_os = "none"))]
-pub unsafe fn w2a8_ternary_matmul(_w: &PackedTernaryTensor, _x: &Tensor) -> Option<Tensor> {
-    None
-}
-
 /// Referência escalar exata (sem quantização) p/ documentar o erro esperado.
-/// out[i][j] = Σ_t x[i][t] · w(t,j) — usando unpack direto do packing 2-bit.
 pub fn w2a8_reference_scalar(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     let (k, n) = w.shape;
     let (m, k2) = x.shape;
@@ -166,6 +150,9 @@ pub fn w2a8_reference_scalar(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tens
         return None;
     }
     let mut out = Tensor::new((m, n));
+    if !out.is_valid() {
+        return None;
+    }
     for i in 0..m {
         for j in 0..n {
             let mut acc = 0.0f32;
@@ -182,16 +169,17 @@ pub fn w2a8_reference_scalar(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tens
     Some(out)
 }
 
-/// Referência com a MESMA quantização do kernel (si per-token + round + bias):
-/// out[i][j] = si_i · Σ_t round(x[i][t]/si_i) · w(t,j). Deve bater ~exato com
-/// o kernel (só diferença de arredondamento i32 vs f32).
+/// Referência com a MESMA quantização do kernel (si per-token + round + bias).
 pub fn w2a8_reference_quantized(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     let (k, n) = w.shape;
     let (m, k2) = x.shape;
-    if k != k2 {
+    if k != k2 || k == 0 || n == 0 || m == 0 {
         return None;
     }
     let mut out = Tensor::new((m, n));
+    if !out.is_valid() {
+        return None;
+    }
     for i in 0..m {
         let mut max_abs = 0.0f32;
         for &v in &x.data[i * k..(i + 1) * k] {
@@ -242,10 +230,9 @@ mod tests {
         }
     }
 
-    /// Paridade W2A8 vs referência escalar (tolerância de quantização).
     #[test]
     fn w2a8_parity_scalar() {
-        let k = 48usize; // 3×16 + tail
+        let k = 48usize;
         let n = 8usize;
         let m = 4usize;
         let w = tern(k, n, 99);
@@ -258,7 +245,6 @@ mod tests {
         let x = Tensor::from_row_major((m, k), xdata).unwrap();
 
         let got = unsafe { w2a8_ternary_matmul(&w, &x) }.expect("w2a8 None");
-        // ref com a MESMA quantização (si + round) — deve bater ~exato com o kernel
         let want = w2a8_reference_quantized(&w, &x).expect("ref None");
 
         let mut max_rel = 0.0f32;
@@ -276,10 +262,8 @@ mod tests {
         if let Some((idx, g, wv)) = first_bad {
             panic!("w2a8 diverge idx={} got={} want={}", idx, g, wv);
         }
-        // kernel i32 vs ref f32 — só arredondamento de acumulação; folga 1%
         assert!(max_rel < 0.01, "w2a8 divergiu: max_rel={:.4}", max_rel);
 
-        // documental: erro do f32 puro deve ser ≤ ~5% (quantização int8)
         let pure = w2a8_reference_scalar(&w, &x).expect("pure None");
         let mut qerr = 0.0f32;
         for idx in 0..m * n {
@@ -292,9 +276,23 @@ mod tests {
         assert!(qerr < 0.05, "w2a8 quant err inesperado: {:.4}", qerr);
     }
 
-    /// Gate off por padrão (ADR-0084 §3 F4 — não regride TCG).
     #[test]
     fn w2a8_gate_off_by_default() {
+        assert!(
+            !crate::cortex::GENERATION_GAPS_RESOLVED.load(core::sync::atomic::Ordering::Relaxed),
+            "gaps default false"
+        );
         assert!(!w2a8_enabled(), "W2A8 não deve estar ativo por padrão");
+    }
+
+    #[test]
+    fn w2a8_scalar_path_matches_ref() {
+        let w = tern(32, 4, 7);
+        let x = Tensor::from_row_major((2, 32), vec![0.5f32; 64]).unwrap();
+        let a = w2a8_ternary_matmul_scalar(&w, &x).unwrap();
+        let b = w2a8_reference_quantized(&w, &x).unwrap();
+        for i in 0..a.data.len() {
+            assert!((a.data[i] - b.data[i]).abs() < 1e-5);
+        }
     }
 }

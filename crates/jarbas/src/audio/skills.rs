@@ -28,6 +28,15 @@ pub fn init_neural_tts() {
 
 /// Sintetiza texto: Piper se carregado, senão formant. Logs `[TTS] Piper` / `[TTS] Formant`.
 pub fn synthesize_tts(text: &str) -> Vec<i16> {
+    if crate::audio::jarvis::text_is_tts_telemetry(text) {
+        k_nano::slog_jarbas!(
+            "Jarbas",
+            "ok",
+            "TTS skip telemetria: {}",
+            text.chars().take(48).collect::<String>()
+        );
+        return Vec::new();
+    }
     let guard = TTS_ENGINE.lock();
     match guard.as_ref() {
         Some(engine) if engine.is_loaded() => {

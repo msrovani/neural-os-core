@@ -60,6 +60,11 @@ pub fn write_hda_playback(samples: &[i16]) {
     k_nano::audio::hda::write_hda_playback(samples);
 }
 
+/// Capacidade livre do anel de playback em amostras mono @16 kHz.
+pub fn playback_free_mono_samples() -> usize {
+    k_nano::audio::hda::playback_free_mono_samples()
+}
+
 /// Pronto para I/O (BAR + streams armados).
 pub fn is_ready() -> bool {
     k_nano::audio::hda::is_ready()

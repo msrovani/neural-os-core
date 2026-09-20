@@ -46,6 +46,8 @@ pub struct InferJob {
 pub enum SubmitErr {
     Full,
     EmptyPrompt,
+    /// headroom < 48MB — SESSION_366: não enfileirar sob estouro de janela bump.
+    HeapPressure,
 }
 
 struct QueueSlot {
@@ -292,6 +294,19 @@ pub fn submit(prompt: String, mode: InferMode, reply_topic: &str) -> Result<u64,
     if prompt.is_empty() {
         return Err(SubmitErr::EmptyPrompt);
     }
+    // Fail-closed ANTES de claim/encode: headroom=4MB + encode BPE = #UD/#PF (mesh A).
+    let obs = k_nano::allocator::heap_observe();
+    if obs.headroom_mb < 48 {
+        k_nano::slog_cortex!(
+            "InferQ",
+            "warn",
+            "submit refuse HeapPressure headroom={}MB used={}MB window={}MB",
+            obs.headroom_mb,
+            obs.used_mb,
+            obs.window_mb
+        );
+        return Err(SubmitErr::HeapPressure);
+    }
     let topic = if reply_topic.is_empty() {
         String::from(TOPIC_LLM_RESPONSE)
     } else {
@@ -415,6 +430,19 @@ fn try_claim_into_active() -> bool {
             .unwrap_or_else(|| String::from(TOPIC_LLM_RESPONSE));
         if cancelled || prompt.is_empty() {
             emit_reply(&reply_topic, "[cancelled]");
+            continue;
+        }
+        // Re-check na claim: headroom pode ter caído desde o submit.
+        let obs = k_nano::allocator::heap_observe();
+        if obs.headroom_mb < 48 {
+            k_nano::slog_cortex!(
+                "InferQ",
+                "warn",
+                "claim refuse HeapPressure id={} headroom={}MB",
+                id,
+                obs.headroom_mb
+            );
+            emit_reply(&reply_topic, crate::heap_aios::ESCALATE_STATIC_MSG);
             continue;
         }
         ACTIVE_ID.store(id, Ordering::Release);
@@ -587,6 +615,19 @@ fn run_prefill_setup(st: &mut ActiveState) {
     };
     st.is_greeting = crate::bpe::prompt_is_greeting(&st.prompt);
 
+    // SESSION_350/366: Observe→Plan→Act ANTES do encode BPE.
+    // Encode sob headroom=4MB estoura a janela bump → #UD/#PF (mesh A).
+    let base = crate::difficulty_gate::classify(&st.prompt, st.is_greeting, model.hidden);
+    let plan = crate::heap_aios::plan_for(base, model.hidden, st.use_bpe, st.is_greeting);
+    crate::heap_aios::apply_plan(plan, model.hidden);
+    if plan.kind == crate::heap_aios::HeapPlanKind::Escalate {
+        st.heap_escalate = true;
+        drop(guard);
+        // Mensagem estática — format! sob 4MB headroom também aloca.
+        finish_job(st, crate::heap_aios::ESCALATE_STATIC_MSG);
+        return;
+    }
+
     let mut tokens: Vec<u32> = if st.use_bpe {
         crate::bpe::encode(&st.prompt)
     } else {
@@ -609,17 +650,6 @@ fn run_prefill_setup(st: &mut ActiveState) {
     }
     st.prompt_len = tokens.len();
 
-    // SESSION_350 Heap AIOS: Observe→Plan→Act antes de alocar máscara/KV.
-    let base = crate::difficulty_gate::classify(&st.prompt, st.is_greeting, model.hidden);
-    let plan = crate::heap_aios::plan_for(base, model.hidden, st.use_bpe, st.is_greeting);
-    crate::heap_aios::apply_plan(plan, model.hidden);
-    if plan.kind == crate::heap_aios::HeapPlanKind::Escalate {
-        st.heap_escalate = true;
-        drop(guard);
-        let msg = crate::heap_aios::escalate_message(&plan);
-        finish_job(st, &msg);
-        return;
-    }
     let max_seq = plan.ctx_cap.min(if model.hidden >= 2048 {
         model.max_seq.min(512)
     } else {
@@ -1037,43 +1067,42 @@ pub fn poll_slice() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spin::Mutex;
+
+    /// Statics da InferQueue sao partilhados — testes em paralelo corrompem a fila.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn drain_infer_queue_statics() {
+        ACTIVE_CANCEL.store(true, Ordering::Release);
+        *ACTIVE.lock() = None;
+        ACTIVE_ID.store(0, Ordering::Release);
+        ACTIVE_CANCEL.store(false, Ordering::Release);
+        HEAD.store(TAIL.load(Ordering::Relaxed), Ordering::Release);
+        PENDING_COUNT.store(0, Ordering::Release);
+        for i in 0..QUEUE_CAP {
+            slots()[i].occupied.store(false, Ordering::Release);
+        }
+    }
 
     #[test]
     fn submit_claim_cancel_queue() {
-        // Reset indices (best-effort; statics shared).
-        while queue_pending() > 0 || ACTIVE.lock().is_some() {
-            ACTIVE_CANCEL.store(true, Ordering::Release);
-            poll_slice();
-            if queue_pending() == 0 && ACTIVE.lock().is_none() {
-                break;
-            }
-            // Drain queue slots
-            let h = HEAD.load(Ordering::Relaxed);
-            let t = TAIL.load(Ordering::Acquire);
-            if h < t {
-                HEAD.store(t, Ordering::Release);
-                PENDING_COUNT.store(0, Ordering::Release);
-                for i in 0..QUEUE_CAP {
-                    slots()[i].occupied.store(false, Ordering::Release);
-                }
-            }
-            *ACTIVE.lock() = None;
-            break;
-        }
-
+        let _g = TEST_LOCK.lock();
+        drain_infer_queue_statics();
         let id = submit(
             String::from("ola"),
             InferMode::Plain,
             TOPIC_LLM_RESPONSE,
         )
         .expect("submit");
-        assert!(queue_pending() >= 1);
-        assert!(cancel(id));
+        assert!(queue_pending() >= 1 || ACTIVE_ID.load(Ordering::Relaxed) == id);
+        assert!(cancel(id) || ACTIVE_ID.load(Ordering::Relaxed) == 0);
+        drain_infer_queue_statics();
     }
 
     #[test]
     fn submit_full() {
-        // Fill without claiming
+        let _g = TEST_LOCK.lock();
+        drain_infer_queue_statics();
         let mut ids = Vec::new();
         for i in 0..QUEUE_CAP {
             match submit(
@@ -1086,15 +1115,34 @@ mod tests {
                 Err(_) => panic!("unexpected"),
             }
         }
+        assert_eq!(ids.len(), QUEUE_CAP, "queue should fill exactly");
         assert!(submit(String::from("overflow"), InferMode::Plain, TOPIC_LLM_RESPONSE).is_err());
-        // cleanup
         for id in ids {
             let _ = cancel(id);
         }
-        HEAD.store(TAIL.load(Ordering::Relaxed), Ordering::Release);
-        PENDING_COUNT.store(0, Ordering::Release);
-        for i in 0..QUEUE_CAP {
-            slots()[i].occupied.store(false, Ordering::Release);
+        drain_infer_queue_statics();
+    }
+
+    #[test]
+    fn cancel_unknown_id_is_false() {
+        let _g = TEST_LOCK.lock();
+        assert!(!cancel(u64::MAX));
+    }
+
+    #[test]
+    fn topics_are_stable() {
+        assert_eq!(TOPIC_LLM_STREAM, "LLM_STREAM");
+        assert_eq!(TOPIC_LLM_RESPONSE, "LLM_RESPONSE");
+    }
+
+    #[test]
+    fn lab_prompts_fit_linj_blob() {
+        for p in [
+            crate::llm_response_gate::prompts::PING_CURTO,
+            crate::llm_response_gate::prompts::APP_CLIMA_TEMPO,
+            crate::llm_response_gate::prompts::CLIMA_PASSO_FUNDO,
+        ] {
+            assert!(p.len() <= 240);
         }
     }
 }

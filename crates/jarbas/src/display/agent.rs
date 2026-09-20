@@ -177,6 +177,7 @@ pub struct DisplayAgent {
     echo_receiver: event_bus::Receiver,
     user_intent_receiver: event_bus::Receiver,
     stt_text_receiver: event_bus::Receiver,
+    stt_uncertain_receiver: event_bus::Receiver,
     render_receiver: event_bus::Receiver,
     render_window_receiver: event_bus::Receiver,
     mouse_receiver: event_bus::Receiver,
@@ -248,6 +249,7 @@ impl DisplayAgent {
             key_event_receiver: EVENT_BUS.subscribe(TOPIC_KEY_EVENT),
             llm_stream_receiver: EVENT_BUS.subscribe(hermes::stream_packet::TOPIC_LLM_STREAM),
             stt_text_receiver: EVENT_BUS.subscribe(crate::audio::TOPIC_STT_TEXT),
+            stt_uncertain_receiver: EVENT_BUS.subscribe(crate::audio::TOPIC_STT_UNCERTAIN),
             render_receiver: EVENT_BUS.subscribe(crate::display::render_registry::TOPIC_RENDER_REGISTER),
             render_window_receiver: EVENT_BUS.subscribe(crate::display::render_registry::TOPIC_RENDER_WINDOW),
             latent_receiver: None,
@@ -729,13 +731,28 @@ impl Agent for DisplayAgent {
         }
 
         // Cursor HW uma vez, fora do caminho crítico do 1º frame.
+        // s366: frugal OU hypervisor — nunca probe Intel CUR_*/detect_all no
+        // QEMU/WHPX (hang DSP_TICK 1 / stamp mouse na instância A 6c).
         if !self.hw_cursor_tried {
             self.hw_cursor_tried = true;
-            if unsafe { k_hal::gpu::intel_display::try_enable_hw_cursor() } {
-                k_nano::slog_jarbas!("Jarbas", "info", "cursor HW ativo (plano CUR_*)");
+            k_nano::slog_jarbas!("Jarbas", "ok", "cursor probe begin");
+            let hv = k_nano::platform_probe::hypervisor();
+            let skip_hw = k_nano::memory::mesh_frag_pressure()
+                || hv != k_nano::platform_probe::HypervisorKind::None;
+            if skip_hw {
+                k_nano::slog_jarbas!(
+                    "Jarbas",
+                    "ok",
+                    "cursor software (skip HW probe hv={} frugal={})",
+                    hv.name(),
+                    k_nano::memory::mesh_frag_pressure() as u8
+                );
+            } else if unsafe { k_hal::gpu::intel_display::try_enable_hw_cursor() } {
+                k_nano::slog_jarbas!("Jarbas", "ok", "cursor HW ativo (plano CUR_*)");
             } else {
-                k_nano::slog_jarbas!("Jarbas", "info", "cursor software (HW não gateado)");
+                k_nano::slog_jarbas!("Jarbas", "ok", "cursor software (HW não gateado)");
             }
+            k_nano::slog_jarbas!("Jarbas", "ok", "cursor probe end");
         }
 
         // Mic só depois do greeting drenar — evita freeze jarvis_voice (s361).
@@ -747,8 +764,11 @@ impl Agent for DisplayAgent {
 
         // Poll mouse todo frame (IRQ pode ter atualizado MOUSE_ABS_* durante Hermes)
         k_nano::interrupts::mouse_poll_bytes();
-        unsafe {
-            let _ = k_nano::xhci::poll_mouse();
+        // Frugal: xHCI poll no hot path do compositor pode engasgar 1c/1G.
+        if !k_nano::memory::mesh_frag_pressure() {
+            unsafe {
+                let _ = k_nano::xhci::poll_mouse();
+            }
         }
         crate::display::fb::diag_mark(1);
         // Expira arm do OFF
@@ -875,6 +895,24 @@ impl Agent for DisplayAgent {
                     chat.input_buffer = alloc::string::String::from(text);
                     chat.input_cursor = text.len();
                     chat.dirty = true;
+                }
+            }
+        }
+
+        // ── STT_UNCERTAIN: baixa confiança → toast + Error no chat (SESSION_352) ──
+        while let Some(ev) = self.stt_uncertain_receiver.try_receive() {
+            let detail = core::str::from_utf8(&ev.payload).unwrap_or("?");
+            let msg = alloc::format!("Não entendi a fala ({})", detail);
+            crate::clipboard_notify::toast_push(&msg);
+            if crate::display::chat_window::chat_ui_enabled() {
+                let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
+                if cw.is_none() {
+                    *cw = Some(crate::display::chat_window::ChatWindow::new(0));
+                }
+                if let Some(ref mut chat) = *cw {
+                    chat.process_packet(hermes::stream_packet::StreamPacket::Error {
+                        message: msg,
+                    });
                 }
             }
         }

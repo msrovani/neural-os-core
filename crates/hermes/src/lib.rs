@@ -20,6 +20,7 @@ pub mod provision; // T-024: NET_READY + first_boot gate
 pub mod cross_os;
 pub mod hermes;
 pub mod hub;
+pub mod lab_inject;
 pub mod mcp;
 pub mod mcp_server;
 pub mod net;

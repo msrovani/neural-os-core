@@ -314,9 +314,25 @@ unsafe fn fill_cursor_arrow(buf: *mut u32, w: usize, h: usize) {
 /// readback inválido → false (compositor mantém cursor software, sem regressão).
 pub unsafe fn try_enable_hw_cursor() -> bool {
     use crate::gpu::detect::detect_all;
+    use k_nano::platform_probe::{hypervisor, HypervisorKind};
 
     if HW_CURSOR_ACTIVE.load(Ordering::Acquire) {
         return true;
+    }
+    // SESSION_335 / s366: cursor HW = metal-only. Em WHPX/TCG `detect_all`
+    // no tick do DisplayAgent pode hangar (stamp mouse / DSP_TICK 1) — A
+    // mesh-2 6c congelou aqui; B às vezes escapava por timing.
+    match hypervisor() {
+        HypervisorKind::None => {}
+        hv => {
+            slog_hal!(
+                "INTEL_DISP",
+                "ok",
+                "cursor SKIP hv={} — software (metal-only)",
+                hv.name()
+            );
+            return false;
+        }
     }
     let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     if pmoff == 0 {

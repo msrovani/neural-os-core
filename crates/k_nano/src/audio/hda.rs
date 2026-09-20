@@ -1525,3 +1525,26 @@ pub fn write_hda_playback(samples: &[i16]) {
         HDA_SD1_WPI.store(pos as u32, Ordering::Release);
     }
 }
+
+/// Frames mono @16 kHz que cabem no anel SD1 sem drop (SESSION_352 pacing).
+/// Mixer deve `pop` no máximo este valor por tick.
+pub fn playback_free_mono_samples() -> usize {
+    if !is_ready() {
+        return 0;
+    }
+    let bar = HDA_BAR.load(Ordering::Acquire);
+    let audio_phys = HDA_SD1_BUF.load(Ordering::Acquire);
+    if bar == 0 || audio_phys == 0 {
+        return 0;
+    }
+    unsafe {
+        const FRAMES_PER_ENTRY: usize = ENTRY_BYTES / 4;
+        const TOTAL_FRAMES: usize = FRAMES_PER_ENTRY * BDL_ENTRIES;
+        let lpib = r32(bar, SD1_BASE + SDX_LPIB) as usize;
+        let rd = (lpib / 4) % TOTAL_FRAMES;
+        let pos = HDA_SD1_WPI.load(Ordering::Acquire) as usize % TOTAL_FRAMES;
+        let used = (pos + TOTAL_FRAMES - rd) % TOTAL_FRAMES;
+        let free_frames = TOTAL_FRAMES.saturating_sub(1).saturating_sub(used);
+        free_frames / VOICE_DECIM.max(1)
+    }
+}

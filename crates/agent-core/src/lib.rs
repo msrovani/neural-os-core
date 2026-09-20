@@ -577,7 +577,8 @@ impl AgentRegistry {
                         || agent_name == "cortex_llm"
                         || agent_name == "sleep_cycle"
                         || agent_name == "auto_learn"
-                        || agent_name == "self_evolve")
+                        || agent_name == "self_evolve"
+                        || agent_name == "browser")
                 {
                     continue;
                 }
@@ -635,15 +636,19 @@ impl AgentRegistry {
                 let wdt_clock = unsafe { TICK_CLOCK_HOOK };
                 let wdt_slow = unsafe { SLOW_TICK_HOOK };
                 let wdt_t0 = wdt_clock.map(|c| c()).unwrap_or(0);
-                // Stamp p/ HUD ao vivo: tick em curso + agente (freeze s317).
-                if wdt_clock.is_some() {
-                    TICK_ENTERED_MS.store(wdt_t0, core::sync::atomic::Ordering::Relaxed);
-                    CUR_AGENT_PTR.store(
-                        agent_name.as_ptr() as u64,
-                        core::sync::atomic::Ordering::Relaxed,
-                    );
-                    CUR_AGENT_LEN.store(agent_name.len(), core::sync::atomic::Ordering::Relaxed);
-                }
+                // Stamp p/ HUD + OOM: sempre (mesmo sem clock) — agente=? no OOM
+                // vinha de CUR_AGENT só setado quando wdt_clock.is_some().
+                TICK_ENTERED_MS.store(wdt_t0.max(1), core::sync::atomic::Ordering::Relaxed);
+                CUR_AGENT_PTR.store(
+                    agent_name.as_ptr() as u64,
+                    core::sync::atomic::Ordering::Relaxed,
+                );
+                CUR_AGENT_LEN.store(agent_name.len(), core::sync::atomic::Ordering::Relaxed);
+                LAST_AGENT_PTR.store(
+                    agent_name.as_ptr() as u64,
+                    core::sync::atomic::Ordering::Relaxed,
+                );
+                LAST_AGENT_LEN.store(agent_name.len(), core::sync::atomic::Ordering::Relaxed);
                 // Stamp FB direto na troca de agente (freeze s319): o frame
                 // congelado mostra o AGENTE TRAVADO, não o último paint do
                 // display. Throttle: só na troca (mesmo &str = mesmo ptr).
@@ -790,6 +795,11 @@ static CUR_AGENT_PTR: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(0);
 static CUR_AGENT_LEN: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);
+/// Último agente que rodou tick (sobrevive clear de TICK_ENTERED) — OOM stamp.
+static LAST_AGENT_PTR: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+static LAST_AGENT_LEN: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
 
 /// Stamp FB do agente em curso (freeze s319): fn registrada pela crate de
 /// display; o scheduler chama a cada TROCA de agente. Bridge fn-pointer
@@ -862,6 +872,19 @@ pub fn tick_in_progress() -> Option<(&'static str, u64)> {
     })
 }
 
+/// Label p/ OOM/refuse: tick corrente → último tick → "?".
+pub fn oom_agent_label() -> &'static str {
+    if let Some((n, _)) = tick_in_progress() {
+        return n;
+    }
+    let ptr = LAST_AGENT_PTR.load(core::sync::atomic::Ordering::Relaxed) as *const u8;
+    let len = LAST_AGENT_LEN.load(core::sync::atomic::Ordering::Relaxed);
+    if ptr.is_null() || len == 0 || len > 64 {
+        return "?";
+    }
+    unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len)) }
+}
+
 /// SESSION_351: stamp OOM p/ trabalho fora de AGENT_TICK_BUSY (InferWorker AP idle).
 /// `name` deve ser `&'static str` de manifesto/.rodata.
 pub fn note_background_agent(name: &'static str) {
@@ -870,6 +893,11 @@ pub fn note_background_agent(name: &'static str) {
         core::sync::atomic::Ordering::Relaxed,
     );
     CUR_AGENT_LEN.store(name.len(), core::sync::atomic::Ordering::Relaxed);
+    LAST_AGENT_PTR.store(
+        name.as_ptr() as u64,
+        core::sync::atomic::Ordering::Relaxed,
+    );
+    LAST_AGENT_LEN.store(name.len(), core::sync::atomic::Ordering::Relaxed);
     // Sentinela ≠0 p/ tick_in_progress; não sobrescreve ms real se tick ativo.
     let _ = TICK_ENTERED_MS.compare_exchange(
         0,
@@ -980,6 +1008,12 @@ pub fn set_ui_overdue_hook(hook: Option<fn() -> bool>) {
     unsafe {
         UI_OVERDUE_HOOK = hook;
     }
+}
+
+/// Leitura do hook UI overdue (agentes Continuous pesados — s365 browser).
+#[inline]
+pub fn ui_overdue_now() -> bool {
+    unsafe { UI_OVERDUE_HOOK.map(|p| p()).unwrap_or(false) }
 }
 
 /// Predicado "desktop gráfico vivo" — agenda UI-critical (pula Continuous pesado).

@@ -561,15 +561,24 @@ pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
         }
         // AIOS: RAM baixa → DEGRADED (drop FRAG grande), nunca OOM/halt no reassembly.
         if !crate::memory::can_afford_frag(total_len) {
-            crate::slog_nano!(
-                "P2P", "warn",
-                "frag DROP pressure len={} budget={} RAM={}MB (DEGRADED)",
-                total_len,
-                crate::memory::frag_reassembly_budget_bytes(
+            crate::net::mesh::note_frag_drop_pressure();
+            // Throttle: 1 slog / ~200 ticks (evita flood serial nos 1G).
+            static LAST_DROP_LOG: core::sync::atomic::AtomicU64 =
+                core::sync::atomic::AtomicU64::new(0);
+            let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+            let last = LAST_DROP_LOG.load(Ordering::Relaxed);
+            if last == 0 || now.wrapping_sub(last) >= 200 {
+                LAST_DROP_LOG.store(now, Ordering::Relaxed);
+                crate::slog_nano!(
+                    "P2P", "warn",
+                    "frag DROP pressure len={} budget={} RAM={}MB (DEGRADED)",
+                    total_len,
+                    crate::memory::frag_reassembly_budget_bytes(
+                        crate::memory::TOTAL_RAM_MB.load(Ordering::Relaxed)
+                    ),
                     crate::memory::TOTAL_RAM_MB.load(Ordering::Relaxed)
-                ),
-                crate::memory::TOTAL_RAM_MB.load(Ordering::Relaxed)
-            );
+                );
+            }
             continue;
         }
         let chunk = &pkt[FRAG_HEADER_SIZE..];
@@ -628,6 +637,7 @@ pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
         {
             let dest = &mut rs.chunks[idx as usize];
             if dest.try_reserve(chunk.len()).is_err() {
+                crate::net::mesh::note_frag_drop_other();
                 crate::slog_nano!(
                     "P2P", "warn",
                     "frag DROP alloc pressure idx={} len={} (DEGRADED)",
@@ -795,6 +805,7 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
             continue; // cabeçalho inválido — descarta
         }
         if !crate::memory::can_afford_frag(total_len) {
+            crate::net::mesh::note_frag_drop_pressure();
             crate::slog_nano!(
                 "P2P", "warn",
                 "frag DROP pressure (ucast) len={} RAM={}MB (DEGRADED)",
@@ -862,6 +873,7 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
         {
             let dest = &mut rs.chunks[idx as usize];
             if dest.try_reserve(chunk.len()).is_err() {
+                crate::net::mesh::note_frag_drop_other();
                 crate::slog_nano!(
                     "P2P", "warn",
                     "frag DROP alloc pressure idx={} len={} (DEGRADED)",

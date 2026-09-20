@@ -55,6 +55,11 @@ impl AudioRingBuffer {
         w.wrapping_sub(r) % RING_BUF_SAMPLES
     }
 
+    /// Espaço livre para push (cap RING-1).
+    pub fn free(&self) -> usize {
+        RING_BUF_SAMPLES.saturating_sub(1).saturating_sub(self.available())
+    }
+
     pub fn clear(&self) {
         self.write.store(0, Ordering::Release);
         self.read.store(0, Ordering::Release);

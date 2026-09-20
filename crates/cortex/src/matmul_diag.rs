@@ -31,6 +31,8 @@ pub static DISPATCH_OK: AtomicU64 = AtomicU64::new(0);
 pub static DISPATCH_INVALID: AtomicU64 = AtomicU64::new(0); // tensor inválido do dispatcher
 pub static DISPATCH_NONE: AtomicU64 = AtomicU64::new(0); // dispatcher sinalizou CPU
 pub static W2A8_INVALID: AtomicU64 = AtomicU64::new(0);
+pub static W2A8_OK: AtomicU64 = AtomicU64::new(0);
+pub static GPU_DISP_AWAITING: AtomicU64 = AtomicU64::new(0);
 pub static BITWISE_OK: AtomicU64 = AtomicU64::new(0);
 pub static BITWISE_INVALID: AtomicU64 = AtomicU64::new(0);
 pub static AVX512_INVALID: AtomicU64 = AtomicU64::new(0);
@@ -178,6 +180,16 @@ pub fn note_w2a8_invalid() {
     inc(&W2A8_INVALID);
 }
 
+pub fn note_w2a8_ok() {
+    inc(&W2A8_OK);
+    inc(&OK_TOTAL);
+}
+
+/// Device W2A8 staged but AWAITING_HW (≠ CPU W2A8).
+pub fn note_gpu_disp_awaiting() {
+    inc(&GPU_DISP_AWAITING);
+}
+
 pub fn note_bitwise_ok() {
     inc(&BITWISE_OK);
     inc(&OK_TOTAL);
@@ -288,13 +300,16 @@ pub fn note_router_fail(s: &FailSnapshot) {
 /// Linha de status para HUD/shell (uma só string, formato estável).
 pub fn status_line() -> alloc::string::String {
     calls_into(alloc::format!(
-        "MatmulDiag ok={} fail={} | guard={} disp[ok={} inv={} none={}] bitwise_ok={} avx512[inv={} none={}] sse2_ok={} sse2_zero={} sse[ok={} inv={} none={}]",
+        "MatmulDiag ok={} fail={} | guard={} disp[ok={} inv={} none={}] w2a8[ok={} inv={}] gpu_await={} bitwise_ok={} avx512[inv={} none={}] sse2_ok={} sse2_zero={} sse[ok={} inv={} none={}]",
         ld(&OK_TOTAL),
         ld(&FAIL_TOTAL),
         ld(&GUARD_FAIL),
         ld(&DISPATCH_OK),
         ld(&DISPATCH_INVALID),
         ld(&DISPATCH_NONE),
+        ld(&W2A8_OK),
+        ld(&W2A8_INVALID),
+        ld(&GPU_DISP_AWAITING),
         ld(&BITWISE_OK),
         ld(&AVX512_INVALID),
         ld(&AVX512_NONE),

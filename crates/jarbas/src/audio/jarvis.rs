@@ -15,6 +15,9 @@ use crate::audio::voice::PLAYBACK_RING;
 
 /// Saudacao HW emitida no register (K44) — evita depender do scheduler (hang pos-K44).
 static HW_GREET_EMITTED: AtomicBool = AtomicBool::new(false);
+/// Resto do PCM da saudação de boot (register só empurra 2560 samples no ring).
+static BOOT_GREET_REMAINING: spin::Mutex<alloc::vec::Vec<i16>> =
+    spin::Mutex::new(alloc::vec::Vec::new());
 /// Ledger do texto JÁ falado via `INFER_TTS_PARTIAL`.
 ///
 /// Antes existia um `bool` único (`SKIP_NEXT_FULL_TTS`): ele pulava o
@@ -94,21 +97,43 @@ fn is_fluent_boot_text(text: &str) -> bool {
 /// Template suit-boot (fallback honesto quando LLM mash / soft-float).
 /// Tom: upload confirmado + HUD + fleet + serviço — original Neural OS.
 
-/// Telemetria/HW/PnP — não falar (congela scheduler se Piper sintetizar em massa).
-fn text_is_tts_telemetry(text: &str) -> bool {
+/// Telemetria/HW/PnP/erros de fila — não falar (congela scheduler se Piper sintetizar).
+pub fn text_is_tts_telemetry(text: &str) -> bool {
     let t = text.trim_start();
-    t.starts_with("[Hermes-PnP]")
-        || t.starts_with("[MEMORY NUDGE]")
-        || t.starts_with("[SECURITY]")
-        || t.starts_with("[Sec]")
-        || t.contains("observe_only family=")
-        || t.contains("bind_storage family=")
-        || t.contains("family=pci_bridge")
-        || t.contains("family=storage_ata")
-        || t.contains("family=qemu_vga")
-        || t.contains("Thoughtful. Precise. Alive")
-        || t.contains(hermes::hermes::HERMES_MOTTO)
-        || (t.contains("Hermes") && t.contains("Alive"))
+    let bare = t
+        .trim_start_matches("[JARBAS] ")
+        .trim_start_matches("JARVIS: ")
+        .trim_start_matches("[Hermes] ")
+        .trim_start();
+    // Prefixo opcional "JARBAS: " / "Nome: "
+    let body = if let Some(i) = bare.find(": ") {
+        if i < 32 && bare[..i].bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+            bare[i + 2..].trim_start()
+        } else {
+            bare
+        }
+    } else {
+        bare
+    };
+    body.starts_with("[Hermes-PnP]")
+        || body.starts_with("[MEMORY NUDGE]")
+        || body.starts_with("[SECURITY]")
+        || body.starts_with("[Sec]")
+        || body.starts_with("[S108")
+        || body.starts_with("[S108-REFLECT]")
+        || body.starts_with("[infer queue")
+        || body.starts_with("[heap escalate]")
+        || body.starts_with("[infer submit")
+        || body.starts_with("[stt-offline]")
+        || body.starts_with("[vazio]")
+        || body.contains("observe_only family=")
+        || body.contains("bind_storage family=")
+        || body.contains("family=pci_bridge")
+        || body.contains("family=storage_ata")
+        || body.contains("family=qemu_vga")
+        || body.contains("Thoughtful. Precise. Alive")
+        || body.contains(hermes::hermes::HERMES_MOTTO)
+        || (body.contains("Hermes") && body.contains("Alive"))
 }
 
 /// Divide texto em frases para TTS streaming.
@@ -317,14 +342,21 @@ pub fn emit_hw_greeting_at_register() {
         crate::audio::skills::synthesize_tts(&body)
     };
     if !pcm.is_empty() {
-        let n = pcm.len().min(2560);
+        const CHUNK: usize = 2560;
+        let n = pcm.len().min(CHUNK);
         let _ = PLAYBACK_RING.push(&pcm[..n]);
+        if pcm.len() > n {
+            let mut rem = BOOT_GREET_REMAINING.lock();
+            rem.clear();
+            rem.extend_from_slice(&pcm[n..]);
+        }
         k_nano::slog_jarbas!(
             "Jarbas",
             "ok",
-            "TTS boot greeting {} frames (sandbox={} drain no mixer)",
+            "TTS boot greeting {} frames (sandbox={} remain={})",
             pcm.len(),
-            sandbox
+            sandbox,
+            pcm.len().saturating_sub(n)
         );
     }
     // NÃO republicar em HERMES_RESPONSE — já sintetizou; VoiceAgent/JARBAS
@@ -341,6 +373,20 @@ impl Agent for JarbasAgent {
         if HW_GREET_EMITTED.load(Ordering::Relaxed) {
             self.greeted = true;
             self.greeting_prompt_sent = true;
+        }
+        // Drena resto da saudação de boot (register só enfiou 1 chunk no ring).
+        {
+            let mut rem = BOOT_GREET_REMAINING.lock();
+            if !rem.is_empty() {
+                let room = PLAYBACK_RING.free().min(2560);
+                if room > 0 {
+                    let n = rem.len().min(room);
+                    let pushed = PLAYBACK_RING.push(&rem[..n]);
+                    if pushed > 0 {
+                        rem.drain(..pushed);
+                    }
+                }
+            }
         }
         // tick>2: BareMetal/sem FAT → template (LLM soft-float nao completa sem modelo).
         if !self.greeted && !self.greeting_prompt_sent && tick > 2 {
@@ -466,6 +512,15 @@ impl Agent for JarbasAgent {
         while let Some(ev) = self.llm_response.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             if text.is_empty() {
+                continue;
+            }
+            if text_is_tts_telemetry(text) {
+                k_nano::slog_jarbas!(
+                    "Jarbas",
+                    "ok",
+                    "LLM_RESPONSE telemetria — sem TTS: {}",
+                    text.chars().take(48).collect::<String>()
+                );
                 continue;
             }
 

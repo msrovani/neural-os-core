@@ -180,11 +180,9 @@ impl Agent for InputAgent {
         if let Some(event) = self.receiver.try_receive() {
             self.process_scancode(event.payload.first().copied().unwrap_or(0));
         }
-        // USB keyboard poll (fallback quando PS/2 nao disponivel)
-        if tick % 5 == 0 {
-            if let Some(scancode) = unsafe { self.poll_usb_keyboard() } {
-                self.process_scancode(scancode);
-            }
+        // USB keyboard poll (cada tick — sendkey/HID perde teclas se %5)
+        if let Some(scancode) = unsafe { self.poll_usb_keyboard() } {
+            self.process_scancode(scancode);
         }
         AgentTickResult::Pending
     }
@@ -247,7 +245,8 @@ impl InputAgent {
             0x1C => {
                 let text = core::mem::take(&mut self.buffer);
                 if !text.is_empty() {
-                    k_nano::slog_hermes!("Input", "info", "ENTER — USER_INTENT: \"{}\"", text);
+                    // sev ok (nao "info"=TRACE mudo) — lab/serial precisam ver o intent
+                    k_nano::slog_hermes!("Input", "ok", "ENTER — USER_INTENT: \"{}\"", text);
                     println!("[INPUT] ENTER — USER_INTENT: \"{}\"", text);
                     let _ = EVENT_BUS.publish(Event {
                         id: 0, topic: String::from("USER_INTENT"),
@@ -256,10 +255,13 @@ impl InputAgent {
                 }
             }
             0x0E => { self.buffer.pop(); }
+            0x53 => { /* Delete: WM only */ }
             _ => {
-                // Skip keyboard shortcuts that shouldn't type
-                if scancode == 0x53 || scancode == 0x39 { }  // Delete and Space handled by WM
-                else if let Some(ch) = k_nano::scancode_to_ascii(scancode, self.shift, self.caps) { self.buffer.push(ch); }
+                // Espaco (0x39) DEVE ir ao buffer — WM tambem ve KEY_EVENT, mas
+                // USER_INTENT precisa do texto completo (lab clima / chat).
+                if let Some(ch) = k_nano::scancode_to_ascii(scancode, self.shift, self.caps) {
+                    self.buffer.push(ch);
+                }
             }
         }
         // Echo tecla para o display em tempo real
@@ -493,11 +495,19 @@ impl Agent for CortexAgent {
                 let last = LAST_ABSENT_TTS.load(core::sync::atomic::Ordering::Relaxed);
                 if last == 0 || now.wrapping_sub(last) >= 1000 {
                     LAST_ABSENT_TTS.store(now, core::sync::atomic::Ordering::Relaxed);
-                    k_nano::slog_cortex!(
-                        "LLM",
-                        "warn",
-                        "skip InferQueue — model ABSENT (QEMU-loader/HW FAT)"
-                    );
+                    if k_nano::memory::mesh_frag_pressure() {
+                        k_nano::slog_cortex!(
+                            "LLM",
+                            "ok",
+                            "Model ABSENT expected (frugal/DEGRADED) — sem InferQueue"
+                        );
+                    } else {
+                        k_nano::slog_cortex!(
+                            "LLM",
+                            "warn",
+                            "skip InferQueue — model ABSENT (QEMU-loader/HW FAT)"
+                        );
+                    }
                     let _ = EVENT_BUS.publish(Event {
                         id: 0,
                         topic: alloc::string::String::from(cortex::cortex::TOPIC_LLM_RESPONSE),
@@ -523,20 +533,26 @@ impl Agent for CortexAgent {
                     );
                 }
                 Err(cortex::infer_queue::SubmitErr::Full) => {
+                    // slog + toast — NÃO LLM_RESPONSE (vira TTS Piper e satura o alto-falante).
+                    k_nano::slog_hermes!("LLM", "warn", "infer queue full — tente de novo");
                     let _ = EVENT_BUS.publish(Event {
                         id: 0,
-                        topic: alloc::string::String::from(cortex::cortex::TOPIC_LLM_RESPONSE),
-                        payload: b"[infer queue full - tente de novo]".to_vec(),
+                        topic: alloc::string::String::from("TOAST"),
+                        payload: b"Infer fila cheia".to_vec(),
+                        token: CapabilityToken::Legacy(1),
+                    });
+                }
+                Err(cortex::infer_queue::SubmitErr::HeapPressure) => {
+                    k_nano::slog_hermes!("LLM", "warn", "heap escalate — headroom critico HITL");
+                    let _ = EVENT_BUS.publish(Event {
+                        id: 0,
+                        topic: alloc::string::String::from("TOAST"),
+                        payload: b"Heap critico - HITL".to_vec(),
                         token: CapabilityToken::Legacy(1),
                     });
                 }
                 Err(_) => {
-                    let _ = EVENT_BUS.publish(Event {
-                        id: 0,
-                        topic: alloc::string::String::from(cortex::cortex::TOPIC_LLM_RESPONSE),
-                        payload: b"[infer submit failed]".to_vec(),
-                        token: CapabilityToken::Legacy(1),
-                    });
+                    k_nano::slog_hermes!("LLM", "warn", "infer submit failed");
                 }
             }
             agent_core::tick_stage(8);
@@ -796,6 +812,9 @@ impl Agent for HermesAgent {
             self.boot_greeted = true;
         }
 
+        // Lab: QEMU-loader LINJ @ 0x02100000 → USER_INTENT (clima / inject deterministico)
+        let _ = crate::lab_inject::poll_and_publish();
+
         // ADR-0047: drain LatentBus → cognitive_bridge (prompt Cortex)
         while let Some(pkt) = self.latent_receiver.try_receive() {
             self.latent_recv_total = self.latent_recv_total.saturating_add(1);
@@ -836,12 +855,45 @@ impl Agent for HermesAgent {
             self.boot_greeted,
         );
 
-        // Métricas críticas: no máximo 1×/64 ticks (antes: slog+write_log
-        // TODO tick com lista sempre não-vazia → flood serial/FAT e engasga UI).
-        if !self.consciousness.critical_metrics().is_empty() && _tick % 64 == 0 {
-            k_nano::slog_hermes!("Hermes", "ok", "Metricas criticas: {:?}", self.consciousness.critical_metrics());
-            let _ = log_analyst_agent::write_log("hermes",
-                &alloc::format!("Metricas criticas: {:?}", self.consciousness.critical_metrics()));
+        // Métricas críticas: histerese — só slog se mudou OU a cada 500 ticks
+        // (antes: %64 com lista estável → flood serial/FAT).
+        let crit = self.consciousness.critical_metrics();
+        if !crit.is_empty() {
+            use core::sync::atomic::{AtomicU64, Ordering};
+            static LAST_CRIT_HASH: AtomicU64 = AtomicU64::new(0);
+            static LAST_CRIT_TICK: AtomicU64 = AtomicU64::new(0);
+            static SUPPRESSED: AtomicU64 = AtomicU64::new(0);
+            let mut h: u64 = 0xcbf29ce484222325;
+            for &m in &crit {
+                h ^= m as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            let last_h = LAST_CRIT_HASH.load(Ordering::Relaxed);
+            let last_t = LAST_CRIT_TICK.load(Ordering::Relaxed);
+            let changed = h != last_h;
+            let due = last_t == 0 || _tick.wrapping_sub(last_t) >= 500;
+            if changed || due {
+                let supp = SUPPRESSED.swap(0, Ordering::Relaxed);
+                LAST_CRIT_HASH.store(h, Ordering::Relaxed);
+                LAST_CRIT_TICK.store(_tick, Ordering::Relaxed);
+                if supp > 0 {
+                    k_nano::slog_hermes!(
+                        "Hermes",
+                        "ok",
+                        "Metricas criticas: {:?} (suppressed={})",
+                        crit,
+                        supp
+                    );
+                } else {
+                    k_nano::slog_hermes!("Hermes", "ok", "Metricas criticas: {:?}", crit);
+                }
+                let _ = log_analyst_agent::write_log(
+                    "hermes",
+                    &alloc::format!("Metricas criticas: {:?}", crit),
+                );
+            } else {
+                SUPPRESSED.fetch_add(1, Ordering::Relaxed);
+            }
         }
 
         // Self-Improvement Loop: periódico
@@ -996,7 +1048,7 @@ impl Agent for HermesAgent {
         if let Some(event) = self.user_receiver.try_receive() {
             had_work = true;
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
-            k_nano::slog_hermes!("CORTEX", "info", "Texto: \"{}\"", text);
+            k_nano::slog_hermes!("CORTEX", "ok", "Texto: \"{}\"", text);
             println!("[CORTEX] Texto: \"{}\"", text);
 
             // HalOffer: qualquer pedido de HW (câmera, gpu, wifi, audio, disco, …)
@@ -2784,36 +2836,15 @@ impl AutoLearnAgent {
     }
 
     fn download_knowledge(&self, topic: &str) -> Option<Vec<u8>> {
-        let url_gw = alloc::format!("http://10.0.2.2:8080/{}.BIN", topic);
-        let url_dns = alloc::format!("http://repository.neuralos.local/{}.BIN", topic);
-        k_nano::slog_hermes!("TRINITY", "Learn", "Tentando download: {}", url_gw);
-        let _ = k_nano::EVENT_BUS.publish(Event {
-            id: 0,
-            topic: alloc::string::String::from(crate::browser_agent::TOPIC_FETCH_REQUEST),
-            payload: url_gw.as_bytes().to_vec(),
-            token: CapabilityToken::Legacy(1),
-        });
-        match crate::tls::fetch_url(&url_gw) {
-            Ok(data) if !data.is_empty() => {
-                k_nano::slog_hermes!("TRINITY", "Learn", "download OK {} bytes", data.len());
-                return Some(data);
-            }
-            _ => {}
-        }
-        match crate::tls::fetch_url(&url_dns) {
-            Ok(data) if !data.is_empty() => Some(data),
-            Err(e) => {
-                k_nano::slog_hermes!(
-                    "TRINITY",
-                    "Learn",
-                    "download fail ({}) — coloque {}.BIN na FAT32",
-                    e,
-                    topic
-                );
-                None
-            }
-            Ok(_) => None,
-        }
+        // s365: sem fetch síncrono nem enqueue no tick do learn —
+        // sync HTTP congelava UI (stamp auto_learn→browser). Só FAT.
+        k_nano::slog_hermes!(
+            "TRINITY",
+            "warn",
+            "Learn: {}.BIN ausente na FAT — skip rede no tick (HITL/FAT)",
+            topic.to_uppercase()
+        );
+        None
     }
 }
 
@@ -3577,12 +3608,8 @@ impl Agent for SelfEvolveAgent {
         if tick.saturating_sub(self.last_reflect) >= 2000 {
             self.last_reflect = tick;
             let detail = crate::self_evolve::reflect(tick);
-            let _ = EVENT_BUS.publish(Event {
-                id: 0,
-                topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
-                payload: alloc::format!("[S108-REFLECT] {}", detail).into_bytes(),
-                token: CapabilityToken::Legacy(1),
-            });
+            // slog only — NÃO HERMES_RESPONSE (vira TTS Piper e congela UI).
+            k_nano::slog_hermes!("S108", "ok", "REFLECT {}", detail);
         }
         if tick > 0 && tick % 5000 == 0 {
             k_nano::slog_hermes!("Log", "msg", "{}", crate::self_evolve::status_line());

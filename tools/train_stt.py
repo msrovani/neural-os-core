@@ -419,13 +419,24 @@ def validate(model: TinyLSTM, wav_pairs: list) -> float:
     return hit / max(total_chars, 1)
 
 
-def train_model(epochs=80, batch_size=16, wav_dir: Path | None = None):
+def train_model(epochs=80, batch_size=16, wav_dir: Path | None = None, allow_synthetic: bool = False):
     wav_pairs = load_wav_corpus(wav_dir) if wav_dir else []
+    if not wav_pairs and not allow_synthetic:
+        print(
+            "[FATAL] Sem --wav-dir (PCM real) e sem --allow-synthetic.\n"
+            "  Treino só com senoides (synthesize_pcm) gera CTC que não reconhece fala.\n"
+            "  Use: python tools/train_stt.py --wav-dir data/stt_wavs\n"
+            "  Ou:  python tools/train_stt.py --allow-synthetic  # lab only, honesty=false"
+        )
+        sys.exit(2)
+    if not wav_pairs and allow_synthetic:
+        print("[STT] AVISO: --allow-synthetic — corpus senoidal (NÃO é fala). Artefato lab-only.")
     model = TinyLSTM().to(DEVICE)
     opt = optim.Adam(model.parameters(), lr=2e-3)
     sched = optim.lr_scheduler.StepLR(opt, step_size=max(epochs // 3, 1), gamma=0.5)
     print(f"[STT] Params: {sum(p.numel() for p in model.parameters()):,}")
-    print(f"[STT] Treino PCM->MFCC (kernel-aligned), corpus={len(CORPUS)} frases")
+    src = f"wav={len(wav_pairs)}" if wav_pairs else f"synthetic={len(CORPUS)}"
+    print(f"[STT] Treino PCM->MFCC (kernel-aligned), {src}")
 
     for epoch in range(epochs):
         opt.zero_grad()
@@ -481,5 +492,10 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--wav-dir", type=Path, default=None)
+    parser.add_argument(
+        "--allow-synthetic",
+        action="store_true",
+        help="Permite treino com senoides (lab only; não reconhece fala real)",
+    )
     args = parser.parse_args()
-    train_model(args.epochs, args.batch, args.wav_dir)
+    train_model(args.epochs, args.batch, args.wav_dir, args.allow_synthetic)

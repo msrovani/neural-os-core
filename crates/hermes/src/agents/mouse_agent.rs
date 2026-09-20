@@ -91,6 +91,12 @@ fn ps2_drain() {
 /// Soft enable: boot já fez reset+IRQ12 (`main` PS/2 init). Aqui só F4 stream —
 /// reset/E9 no tick engasgava mesh 1c (B hang).
 fn enable_ps2_mouse() {
+    if k_nano::memory::mesh_frag_pressure() {
+        // Frugal: PS/2 já init no boot — skip F4 no tick (evita IRQ storm 1G).
+        k_nano::slog_hermes!("MOUSE", "ok", "soft enable skip (frugal — boot already inited)");
+        k_nano::interrupts::mouse_log_status("after_soft_enable");
+        return;
+    }
     unsafe {
         ps2_drain();
         ps2_wait_write();
@@ -171,8 +177,10 @@ impl Agent for MouseAgent {
         // Poll aux — DisplayAgent é o consumidor primário com MOUSE_PORT_LOCK;
         // MouseAgent só publica EventBus a partir de LAST_MOUSE_PACKET.
         // ADR-0062 P24b: USB HID boot mouse -> mesmo path ABS/packet
-        unsafe {
-            let _ = k_nano::xhci::poll_mouse();
+        if !k_nano::memory::mesh_frag_pressure() {
+            unsafe {
+                let _ = k_nano::xhci::poll_mouse();
+            }
         }
 
         let packet = LAST_MOUSE_PACKET.swap(0, core::sync::atomic::Ordering::Acquire);
