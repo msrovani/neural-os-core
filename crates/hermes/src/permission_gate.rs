@@ -29,15 +29,13 @@ impl RiskLevel {
     pub fn classify(namespace: &str, name: &str) -> Self {
         let full = alloc::format!("{}::{}", namespace, name);
         match full.as_str() {
-            // Auto: operações seguras
+            // Auto: operações seguras / observabilidade
             "aios::log" | "aios::debug" | "aios::get_tick" => RiskLevel::Auto,
-            // Confirm: operações com efeito
-            "aios_fs::fs_read" => RiskLevel::Confirm,
-            // Escalate: perigosas
-            "aios_fs::fs_write" | "aios_net::http_get" => RiskLevel::Escalate,
-            // Deny: críticas
+            // SESSION_379: host ABI net/fs/gpu ainda não wired → Deny (não HITL-spin
+            // nem Ok fantasma). Ao ligar net_bridge/VFS/KernelPack, reclassificar.
+            "aios_fs::fs_read" | "aios_fs::fs_write" | "aios_net::http_get"
+            | "aios_gpu::submit" => RiskLevel::Deny,
             _ if name.contains("dma") || name.contains("mmio") => RiskLevel::Deny,
-            // Default: Confirm (seguro)
             _ => RiskLevel::Confirm,
         }
     }
@@ -111,16 +109,22 @@ impl PermissionGate {
                     &full_name, "wasm", &reason, hitl_level,
                 );
 
-                k_nano::slog_hermes!("PERM", "info",
-                    "Gate #{}: {} risk={:?} — waiting HITL", id, full_name, risk);
+                k_nano::slog_hermes!(
+                    "PERM",
+                    "ok",
+                    "Gate #{}: {} risk={:?} — waiting HITL",
+                    id,
+                    full_name,
+                    risk
+                );
 
                 // Spin-loop aguardando aprovação (fail-closed I3)
-                let full_name_clone = full_name.clone();
-                let result = Self::wait_for_approval(id, &full_name_clone);
+                let result = Self::wait_for_approval(id);
 
                 k_nano::telemetry::TELEMETRY.push(
-                    if result { 5 } else { 4 }, // CAP_ALLOW ou CAP_DENY
-                    0, &id.to_ne_bytes(),
+                    if result { 5 } else { 4 },
+                    0,
+                    &id.to_ne_bytes(),
                 );
 
                 if result {
@@ -133,42 +137,41 @@ impl PermissionGate {
     }
 
     /// Spin-loop blocking wait por aprovação HITL.
-    /// Timeout ~10000 iterações (~1s) — fail-closed I3: timeout → Deny.
-    fn wait_for_approval(id: u64, skill: &str) -> bool {
+    /// Timeout ~10000 iterações — fail-closed I3: timeout → Deny.
+    fn wait_for_approval(id: u64) -> bool {
         let max_retries: u64 = 10_000;
         for i in 0..max_retries {
-            // Verifica se foi resolvido
             let gate = crate::globals::APPROVAL_GATE.lock();
-            let can = gate.can_execute(skill);
+            match gate.resolution(id) {
+                Some(true) => return true,
+                Some(false) => {
+                    k_nano::slog_hermes!("PERM", "warn", "Gate #{}: denied by user", id);
+                    return false;
+                }
+                None => {}
+            }
             drop(gate);
 
-            if can {
-                return true;
-            }
-
-            // Verifica se foi explicitamente negado
-            let gate = crate::globals::APPROVAL_GATE.lock();
-            let denied = gate.pending().iter().any(|r| r.id == id && r.resolved && !r.approved);
-            drop(gate);
-
-            if denied {
-                k_nano::slog_hermes!("PERM", "warn", "Gate #{}: denied by user", id);
-                return false;
-            }
-
-            // Spin-loop hint (evita que o compilador otimize o loop)
             core::hint::spin_loop();
 
-            // A cada 1000 iterações, loga que está esperando
             if i % 1000 == 999 {
-                k_nano::slog_hermes!("PERM", "info",
-                    "Gate #{}: waiting... ({}/{})", id, i + 1, max_retries);
+                k_nano::slog_hermes!(
+                    "PERM",
+                    "trace",
+                    "Gate #{}: waiting... ({}/{})",
+                    id,
+                    i + 1,
+                    max_retries
+                );
             }
         }
 
-        // Timeout — fail-closed I3
-        k_nano::slog_hermes!("PERM", "error",
-            "Gate #{}: TIMEOUT — denied by I3 fail-closed", id);
+        k_nano::slog_hermes!(
+            "PERM",
+            "fail",
+            "Gate #{}: TIMEOUT — denied by I3 fail-closed",
+            id
+        );
         false
     }
 }
@@ -181,9 +184,11 @@ mod tests {
     fn test_risk_level_classify() {
         assert_eq!(RiskLevel::classify("aios", "log"), RiskLevel::Auto);
         assert_eq!(RiskLevel::classify("aios", "get_tick"), RiskLevel::Auto);
-        assert_eq!(RiskLevel::classify("aios_fs", "fs_read"), RiskLevel::Confirm);
-        assert_eq!(RiskLevel::classify("aios_fs", "fs_write"), RiskLevel::Escalate);
-        assert_eq!(RiskLevel::classify("aios_net", "http_get"), RiskLevel::Escalate);
+        // SESSION_379: unwired host ABI = Deny até bridge/KernelPack
+        assert_eq!(RiskLevel::classify("aios_fs", "fs_read"), RiskLevel::Deny);
+        assert_eq!(RiskLevel::classify("aios_fs", "fs_write"), RiskLevel::Deny);
+        assert_eq!(RiskLevel::classify("aios_net", "http_get"), RiskLevel::Deny);
+        assert_eq!(RiskLevel::classify("aios_gpu", "submit"), RiskLevel::Deny);
     }
 
     #[test]

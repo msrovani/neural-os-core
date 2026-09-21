@@ -62,9 +62,22 @@ impl ApprovalGate {
     }
 
     /// Verifica se pode executar sem bloquear.
+    /// Honesty SESSION_379: deny resolvido permanece deny; pending Confirm≠Auto.
     pub fn can_execute(&self, skill: &str) -> bool {
-        self.requests.iter().rev().find(|r| r.skill == skill && !r.resolved)
-            .map_or(true, |r| r.required_level == ApprovalLevel::Auto)
+        match self.requests.iter().rev().find(|r| r.skill == skill) {
+            Some(r) if !r.resolved => r.required_level == ApprovalLevel::Auto,
+            Some(r) => r.approved,
+            // Sem pedido = Auto path (skills sem HITL).
+            None => true,
+        }
+    }
+
+    /// Resolução por id: `Some(true)` aprovado, `Some(false)` negado, `None` pendente/ausente.
+    pub fn resolution(&self, id: u64) -> Option<bool> {
+        self.requests
+            .iter()
+            .find(|r| r.id == id && r.resolved)
+            .map(|r| r.approved)
     }
 
     /// Lista requisicoes pendentes.

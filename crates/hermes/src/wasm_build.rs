@@ -1289,82 +1289,49 @@ mod tests {
 
     // ─── GPU Host-Call: op-IR → WASM → sandbox → fila lock-free ──────────
 
-    /// GpuMatmul op-IR → WASM module com import aios_gpu::submit →
-    /// wasmi sandbox com CAP_GPU → fila lock-free MpmcQueue → job id.
-    /// Fluxo end-to-end completo: compile → build → link → run → verify queue.
+    /// GpuMatmul op-IR → WASM com import aios_gpu::submit.
+    /// Honesty SESSION_379: sem KernelPack o host **trapa** (não Ok(0) fake).
     #[test]
     fn gpu_matmul_e2e_op_ir_to_queue() {
         use crate::wasmi_rt;
 
-        // 1. GpuMatmul op-IR → build_run_module → WASM com import aios_gpu::submit
         let ops = vec![Op::GpuMatmul];
         let wasm = build_run_module(0, &ops).expect("build GpuMatmul WASM");
-
-        // 2. Valida módulo WASM: import section deve conter aios_gpu::submit
         assert!(wasm.len() > 20, "WASM module deve ter conteúdo");
-        // Magic + version + sections
         assert_eq!(&wasm[..4], &[0x00, 0x61, 0x73, 0x6d], "WASM magic");
-
-        // 3. Snapshot da fila antes
-        let (s_before, _, _) = k_hal::gpu::work_queue::stats();
-
-        // 4. Executa no wasmi sandbox com CAP_GPU
-        let result = wasmi_rt::run_wasm(&wasm, "run", &[], wasmi_rt::CAP_GPU)
-            .expect("GpuMatmul deve executar com CAP_GPU");
-
-        // 5. Resultado é job id: >= 1 = GPU aceitou, 0 = CPU fallback (sem GPU)
-        assert!(result >= 0, "job id invalido: {}", result);
-        if result == 0 {
-            // CPU fallback: sem GPU registrada — testa só que não panicou
-            return;
-        }
-
-        // 6. Verifica fila lock-free: submitted incrementou (só se GPU real)
-        let (s_after, _, _) = k_hal::gpu::work_queue::stats();
-        assert!(s_after > s_before,
-            "submitted deveria ter incrementado: antes={} depois={}", s_before, s_after);
-
-        // 7. Drain (pode ter sido drenado por outro teste paralelo -- só valida que ops)
-        let _ = k_hal::gpu::work_queue::drain(false);
+        assert!(
+            wasmi_rt::run_wasm(&wasm, "run", &[], wasmi_rt::CAP_GPU).is_err(),
+            "sem KernelPack aios_gpu::submit deve trap"
+        );
     }
 
-    /// GpuMatmul via expression parser (gpu_matmul keyword).
+    /// GpuMatmul via expression parser — build OK; run trap até KernelPack.
     #[test]
     fn gpu_matmul_expression_parser() {
         use crate::wasmi_rt;
 
-        // compile_expression("gpu_matmul") → Op::GpuMatmul
         let (n, ops) = compile_expression("gpu_matmul").expect("parse gpu_matmul");
         assert_eq!(n, 0, "gpu_matmul não precisa de params");
         assert_eq!(ops, vec![Op::GpuMatmul]);
 
         let wasm = build_run_module(n, &ops).expect("build");
-        let (s_before, _, _) = k_hal::gpu::work_queue::stats();
-
-        let result = wasmi_rt::run_wasm(&wasm, "run", &[], wasmi_rt::CAP_GPU).expect("run com CAP_GPU");
-        assert!(result >= 0, "job id >= 0");
-        if result == 0 { return; } // CPU fallback
-
-        let (s_after, _, _) = k_hal::gpu::work_queue::stats();
-        assert!(s_after > s_before, "fila recebeu o job");
-        let _ = k_hal::gpu::work_queue::drain(false);
+        assert!(
+            wasmi_rt::run_wasm(&wasm, "run", &[], wasmi_rt::CAP_GPU).is_err(),
+            "gpu_matmul host unwired → trap"
+        );
     }
 
-    /// GpuSubmit com op code custom (VectorAdd = 1) via op-IR.
+    /// GpuSubmit custom — trap sem backend.
     #[test]
     fn gpu_submit_custom_op_e2e() {
         use crate::wasmi_rt;
 
-        let ops = vec![Op::GpuSubmit(1)]; // VectorAdd
+        let ops = vec![Op::GpuSubmit(1)];
         let wasm = build_run_module(0, &ops).expect("build GpuSubmit(1)");
-
-        let (s_before, _, _) = k_hal::gpu::work_queue::stats();
-        let result = wasmi_rt::run_wasm(&wasm, "run", &[], wasmi_rt::CAP_GPU).expect("run com CAP_GPU");
-        assert!(result >= 0);
-        if result == 0 { return; } // CPU fallback
-        let (s_after, _, _) = k_hal::gpu::work_queue::stats();
-        assert!(s_after > s_before, "VectorAdd submetido na fila");
-        let _ = k_hal::gpu::work_queue::drain(false);
+        assert!(
+            wasmi_rt::run_wasm(&wasm, "run", &[], wasmi_rt::CAP_GPU).is_err(),
+            "GpuSubmit unwired → trap"
+        );
     }
 
     /// Sem CAP_GPU → trap (capability denied). Valida CapGate no host-import.
@@ -1378,21 +1345,17 @@ mod tests {
         );
     }
 
-    /// DSL: gpu_matmul como expressão pura retorna job id.
+    /// DSL: gpu_matmul — build OK; run trap até KernelPack.
     #[test]
     fn dsl_gpu_matmul_as_expression() {
         use crate::wasmi_rt;
 
         let (n, ops) = compile_python_dsl("gpu_matmul").expect("dsl gpu_matmul");
         let wasm = build_run_module(n, &ops).expect("build");
-
-        let (s_before, _, _) = k_hal::gpu::work_queue::stats();
-        let result = wasmi_rt::run_wasm(&wasm, "run", &[], wasmi_rt::CAP_GPU).expect("dsl gpu_matmul com CAP_GPU");
-        assert!(result >= 0, "job id >= 0");
-        if result == 0 { return; } // CPU fallback
-        let (s_after, _, _) = k_hal::gpu::work_queue::stats();
-        assert!(s_after > s_before, "fila recebeu o job via DSL");
-        let _ = k_hal::gpu::work_queue::drain(false);
+        assert!(
+            wasmi_rt::run_wasm(&wasm, "run", &[], wasmi_rt::CAP_GPU).is_err(),
+            "dsl gpu_matmul unwired → trap"
+        );
     }
 
     // ─── I32Select + ternário branchless ─────────────────────────────────

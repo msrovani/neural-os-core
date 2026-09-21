@@ -1,5 +1,6 @@
-//! Cross-OS Loaders — #306a-d: PE32+ (Windows), ELF (Linux), Mach-O (macOS), APK (Android).
-//! Syscall-to-Skill Translation Layer (#307).
+//! ORPHAN — not in hermes/src/lib.rs (SESSION_379). Detect+entry smoke only.
+//! Do NOT treat as a production loader. WASM path = ADR-0059 wasmi (preferred).
+//! Cross-OS Loaders sketch — #306a-d: PE32+/ELF detect; Mach-O/APK Unsupported.
 
 use alloc::string::String;
 
@@ -10,12 +11,20 @@ pub struct BinaryLoader;
 impl BinaryLoader {
     pub fn detect(data: &[u8]) -> BinaryFormat {
         if data.len() < 16 { return BinaryFormat::Unknown; }
-        if data[0] == 0x7f && data[1] == b'E' && data[2] == b'L' && data[3] == b'F' { BinaryFormat::Elf }
-        else if data[0] == b'M' && data[1] == b'Z' { BinaryFormat::Pe }
-        else if data[0] == 0xCF && data[1] == 0xFA && data[2] == 0xED && data[3] == 0xFE { BinaryFormat::MachO }
-        else if data[0] == 0x50 && data[1] == 0x4B && data[3] == 0x03 && data[3] == 0x04 { BinaryFormat::Apk }
-        else { BinaryFormat::Unknown }
+        if data[0] == 0x7f && data[1] == b'E' && data[2] == b'L' && data[3] == b'F' {
+            BinaryFormat::Elf
+        } else if data[0] == b'M' && data[1] == b'Z' {
+            BinaryFormat::Pe
+        } else if data[0] == 0xCF && data[1] == 0xFA && data[2] == 0xED && data[3] == 0xFE {
+            BinaryFormat::MachO
+        } else if data[0] == 0x50 && data[1] == 0x4B && data[2] == 0x03 && data[3] == 0x04 {
+            // ZIP local file header (APK is a ZIP) — was data[3]==0x03 && data[3]==0x04 (impossible)
+            BinaryFormat::Apk
+        } else {
+            BinaryFormat::Unknown
+        }
     }
+    /// Reads e_entry only — does **not** map/load segments.
     pub fn load_elf(data: &[u8]) -> LoadResult {
         if data.len() < 64 { return LoadResult::Corrupted; }
         let entry = u64::from_le_bytes(data[24..32].try_into().unwrap_or([0u8; 8])) as usize;
@@ -30,37 +39,31 @@ impl BinaryLoader {
     }
     pub fn load_macho(_data: &[u8]) -> LoadResult { LoadResult::Unsupported }
     pub fn load_apk(_data: &[u8]) -> LoadResult { LoadResult::Unsupported }
-    pub fn status(&self) -> String { String::from("[BINARY] ELF+PE loader pronto, Mach-O+APK stub") }
+    pub fn status(&self) -> String {
+        String::from("[BINARY] ORPHAN detect-only (ELF/PE entry); Mach-O/APK Unsupported; WASM preferred")
+    }
 }
 
-/// Labor 60: ELF thin smoke — WASM preferido; detect+entry only.
+/// Labor 60: ELF thin smoke — detect+entry only (not executable).
 pub fn elf_thin_boot_smoke() -> bool {
-    // Minimal ELF64 header stub (not executable)
     let mut elf = [0u8; 64];
     elf[0] = 0x7f;
     elf[1] = b'E';
     elf[2] = b'L';
     elf[3] = b'F';
-    elf[4] = 2; // 64-bit
-    elf[5] = 1; // LE
-    elf[16] = 2; // ET_EXEC
-    // e_entry at 24
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[16] = 2;
     elf[24..32].copy_from_slice(&0x401000u64.to_le_bytes());
     let fmt = BinaryLoader::detect(&elf);
     let ok = matches!(fmt, BinaryFormat::Elf)
         && matches!(BinaryLoader::load_elf(&elf), LoadResult::Ok(_));
     k_nano::slog_bin!(
         "ELF",
-        "info",
-        "step=thin status={} VERDICT={} reason=detect_entry (WASM preferred ADR-0059)",
+        if ok { "ok" } else { "fail" },
+        "step=thin status={} VERDICT={} reason=detect_entry_orphan (WASM preferred ADR-0059)",
         if ok { "OK" } else { "FAIL" },
         if ok { "PARTIAL" } else { "FAIL" }
     );
     ok
 }
-
-
-
-
-
-

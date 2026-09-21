@@ -37,8 +37,8 @@ impl OnDemandLearning {
 
     /// Handle a learning request end-to-end.
     ///
-    /// Pipeline: parse intent → identify knowledge domain →
-    /// generate skill template → register skill.
+    /// Honesty SESSION_379: gera **template draft** (não aprendizado real) e
+    /// registra só se assinatura+verify OK; mensagem não mente "Aprendi".
     pub fn handle_learning_request(&mut self, text: &str) -> Result<String, &'static str> {
         if !self.active {
             return Err("pipeline inativo");
@@ -47,17 +47,25 @@ impl OnDemandLearning {
         let skill_code = self.generate_skill_from_domain(&domain)?;
         let skill_name = alloc::format!("learned_{}", domain);
         self.register_learned_skill(&skill_name, &skill_code)?;
+        let id = crate::globals::APPROVAL_GATE.lock().request(
+            &skill_name,
+            "matrix_learn",
+            "template draft — não é aprendizado/pesos/WASM real",
+            crate::approval::ApprovalLevel::Escalate,
+        );
         k_nano::slog_hermes!(
             "MATRIX",
-            "LEARN",
-            "domain={} skill={} — pipeline OK",
+            "ok",
+            "domain={} skill={} template_draft HITL=#{}",
             domain,
-            skill_name
+            skill_name,
+            id
         );
         Ok(alloc::format!(
-            "Aprendi {}! Skill '{}' registrada.",
+            "[Matrix] Draft template '{}' staged (skill '{}', HITL #{}). Não é aprendizado real — sem pesos/WASM.",
             domain,
-            skill_name
+            skill_name,
+            id
         ))
     }
 
@@ -347,12 +355,11 @@ impl OnDemandLearning {
 
     /// Register the generated skill via the shared SkillLoader.
     /// Sign FIRST → verificação estrita (ADR-0052) → register. Fail-closed.
+    /// Unsigned (sign fail) → Reject — never register raw body as sealed.
     fn register_learned_skill(&self, name: &str, content: &str) -> Result<(), &'static str> {
         let mut storage = SKILL_STORAGE.lock();
-        // Remove previous version if re-learning
         storage.remove_skill(name);
-        let sealed = crate::package_hub::sign_artifact_md(content)
-            .unwrap_or_else(|_| String::from(content));
+        let sealed = crate::package_hub::sign_artifact_md(content).map_err(|_| "sign_failed")?;
         match crate::self_evolve::verify_skill_md(&sealed) {
             crate::self_evolve::VerifyVerdict::Ok => storage.register_skill(&sealed),
             crate::self_evolve::VerifyVerdict::Reject(reason) => Err(reason),

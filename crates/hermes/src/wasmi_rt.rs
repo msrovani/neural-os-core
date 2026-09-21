@@ -1,11 +1,10 @@
 //! ADR-0059 Caminho A — Runtime WASM real (`wasmi`, no_std, fuel).
 //!
 //! Executa **módulos WebAssembly padrão** em sandbox (SFI + fuel + limite de
-//! memória), com host-imports `aios::*` **gated por CapGate** e
-//! `wasi_snapshot_preview1` stubs. É o backend **seguro por default** para
-//! apps/skills geradas por IA (código não-confiável): nada de MMIO/DMA, tudo
-//! mediado por capabilities, execução determinística com fuel (evita loop
-//! infinito) — padrão MCP-SandboxScan / SelfEvolve.
+//! memória), com host-imports `aios::*` **gated por CapGate + PermissionGate**.
+//! Host net/fs/gpu **não wired** → trap (honesty SESSION_379). WASI Preview1
+//! não está ligado neste path (`wasi_host` orphan). Backend **seguro por
+//! default** para apps/skills geradas por IA.
 //!
 //! Substitui a VM `Op` custom (`wasm_exec.rs`) e o interpretador parcial
 //! (`wasm.rs`) — aposentados pela ADR-0059.
@@ -53,6 +52,7 @@ pub const DEFAULT_FUEL: u64 = 5_000_000;
 
 /// Verifica cap bitmask e roteia Escalate para PermissionGate.
 /// Returns `Err(wasmi::Error)` (trap) on denial.
+/// Honesty SESSION_379: nunca forçar `Verdict::Allow` — RiskLevel classifica.
 fn check_cap(caller: &wasmi::Caller<'_, HostState>, required: u32, namespace: &str, name: &str) -> Result<(), wasmi::Error> {
     let held = caller.data().caps;
     // 1. Bitmask check
@@ -60,9 +60,15 @@ fn check_cap(caller: &wasmi::Caller<'_, HostState>, required: u32, namespace: &s
         k_nano::telemetry::TELEMETRY.push(4, 0, &required.to_ne_bytes());
         return Err(wasmi::Error::new("capability denied (bitmask)"));
     }
-    // 2. PermissionGate escalate check
-    // Membrane::check é chamado pelo PermissionGate internamente
-    let verdict = crate::permission_gate::PermissionGate::check(namespace, name, crate::membrane::Verdict::Allow);
+    // 2. Membrane-like verdict from RiskLevel (não hardcode Allow).
+    let risk = crate::permission_gate::RiskLevel::classify(namespace, name);
+    let membrane = match risk {
+        crate::permission_gate::RiskLevel::Auto => crate::membrane::Verdict::Allow,
+        crate::permission_gate::RiskLevel::Deny => crate::membrane::Verdict::Deny,
+        crate::permission_gate::RiskLevel::Confirm
+        | crate::permission_gate::RiskLevel::Escalate => crate::membrane::Verdict::Escalate,
+    };
+    let verdict = crate::permission_gate::PermissionGate::check(namespace, name, membrane);
     match verdict {
         crate::permission_gate::PermissionVerdict::Allow => Ok(()),
         crate::permission_gate::PermissionVerdict::Deny => {
@@ -70,8 +76,7 @@ fn check_cap(caller: &wasmi::Caller<'_, HostState>, required: u32, namespace: &s
             Err(wasmi::Error::new("permission denied (gate)"))
         }
         crate::permission_gate::PermissionVerdict::Pending { id } => {
-            // O PermissionGate já fez spin-wait; se chegou aqui é Allow ou Deny
-            k_nano::slog_hermes!("WASMI", "warn", "Pending HITL #{} — should not reach here", id);
+            k_nano::slog_hermes!("WASMI", "warn", "Pending HITL #{} — trap", id);
             Err(wasmi::Error::new("HITL pending"))
         }
     }
@@ -116,10 +121,11 @@ fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> 
     ).map_err(|_| "linker aios::get_tick")?;
 
     // ── aios_net::http_get(ptr,len) -> i32 ──────────────────────────────────
+    // Cap granted ≠ wired: trap (não Ok(-1)).
     linker.func_wrap("aios_net", "http_get",
         |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32| -> Result<i32, wasmi::Error> {
             check_cap(&caller, CAP_NET, "aios_net", "http_get")?;
-            Ok(-1) // ponytail: stub — sem HTTP real
+            Err(wasmi::Error::new("aios_net::http_get not wired (honesty)"))
         },
     ).map_err(|_| "linker aios_net::http_get")?;
 
@@ -127,7 +133,7 @@ fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> 
     linker.func_wrap("aios_fs", "fs_read",
         |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32, _max: i32| -> Result<i32, wasmi::Error> {
             check_cap(&caller, CAP_FS, "aios_fs", "fs_read")?;
-            Ok(0) // ponytail: stub
+            Err(wasmi::Error::new("aios_fs::fs_read not wired (honesty)"))
         },
     ).map_err(|_| "linker aios_fs::fs_read")?;
 
@@ -135,27 +141,26 @@ fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> 
     linker.func_wrap("aios_fs", "fs_write",
         |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32| -> Result<i32, wasmi::Error> {
             check_cap(&caller, CAP_FS, "aios_fs", "fs_write")?;
-            Ok(0) // ponytail: stub
+            Err(wasmi::Error::new("aios_fs::fs_write not wired (honesty)"))
         },
     ).map_err(|_| "linker aios_fs::fs_write")?;
 
     // ── aios_gpu::submit(op,flags) -> i32 ────────────────────────────────
-    // GPU capability gated: sem CAP_GPU retorna 0 (CPU fallback, não panic).
+    // Sem KernelPack → trap (Ok(0) fingia job id / CPU fallback).
     linker.func_wrap("aios_gpu", "submit",
         |caller: wasmi::Caller<'_, HostState>, op: i32, _flags: i32| -> Result<i32, wasmi::Error> {
             check_cap(&caller, CAP_GPU, "aios_gpu", "submit")?;
-            // Sem GPU backend → fallback CPU
-            k_nano::slog_bin!("WASM", "warn",
-                "aios_gpu::submit: no GPU backend, fallback CPU (op={})", op);
-            Ok(0)
+            k_nano::slog_hermes!(
+                "WASM",
+                "warn",
+                "aios_gpu::submit not wired (no KernelPack) op={}",
+                op
+            );
+            Err(wasmi::Error::new("aios_gpu::submit no KernelPack/backend"))
         },
     ).map_err(|_| "linker aios_gpu::submit")?;
 
-    // ── wasi_snapshot_preview1 ──────────────────────────────────────────────
-    // DEAD CODE: wasi_host excluded from compilation (HERMES_AUDIT.md)
-    // super::wasi_host::register_wasi_host_functions(linker)
-    //     .map_err(|_| "linker wasi_snapshot_preview1")?;
-
+    // wasi_snapshot_preview1: orphan wasi_host.rs — não wire stub.
     Ok(())
 }
 
@@ -264,17 +269,12 @@ const ADD_WASM: &[u8] = &[
     0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b, // code: get0 get1 i32.add end
 ];
 
-/// Gera um módulo WASM mínimo com uma função exportada que retorna i32(42).
-/// Usado pelo bridge ADR-0059 F3/F5 para criar bytecode dummy para evolução/hot-swap.
+/// Gera um módulo WASM mínimo com `_start` → i32(42) (sem imports).
+/// Usado por evolve/SkillOpt até Cortex emitir op-IR real (#412).
 ///
-/// **Imports disponíveis no runtime:**
-/// - `aios::log`, `aios::debug`, `aios::get_tick` (CAP_LOG)
-/// - `aios_net::http_get` (CAP_NET)
-/// - `aios_fs::fs_read`, `aios_fs::fs_write` (CAP_FS)
-/// - `wasi_snapshot_preview1` (15 stubs: fd_write, clock_time_get, random_get,
-///   path_open, proc_exit, fd_read, fd_fdstat_get, environ/args, etc.)
-///
-/// ponytail: módulo minimalista — só `_start` exportado, sem imports.
+/// Host ABI no runtime (CapGate): `aios::{log,debug,get_tick}` wired;
+/// `aios_net`/`aios_fs`/`aios_gpu` → **trap** até bridge (SESSION_379).
+/// WASI Preview1 **não** ligado (`wasi_host` orphan).
 pub fn generate_wasm_module() -> Vec<u8> {
     let mut wasm = Vec::with_capacity(64);
     // magic + version

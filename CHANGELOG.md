@@ -1,5 +1,15 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s379] - 2026-09-21 — hermes honesty (CapGate/WASM/TLS/evolve)
+
+- `evolve::hot_swap`: sandbox first; live/prev; registry only on OK
+- wasmi host: RiskLevel CapGate; net/fs/gpu unwired → trap (no Ok stubs)
+- TLS: ready ⇔ https bridge; deny https without bridge (lesson 241)
+- ApprovalGate: `resolution` + deny-aware `can_execute`; PERM slog ADR-0092
+- matrix_learn draft HITL; package_hub `signed=` real; session_load clear
+- wasmi pin **0.47.2** (0.47.0 yanked); GPU tests expect trap
+- 203 hermes host tests; IDEA #604 residual orphans/wire
+
 ## [1.9.99-s378] - 2026-09-21 — ticket-lock honesty (Sync + try_lock + IrqSafe)
 
 - `TicketLockGuard: Sync` only if `T: Sync` (soundness)

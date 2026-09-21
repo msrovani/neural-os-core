@@ -79,9 +79,13 @@ cranelift-codegen behind feature `jit-cranelift`).
   today; B/C stay gated. `generate_and_run` is the end-to-end
   generate(op-IR)→build(wasm)→run path.
 - **WASM sandboxing** — `wasmi_rt` installs host imports `aios::*`,
-  `aios_net::*`, `aios_fs::*`, `wasi_snapshot_preview1` gated by CapGate
-  (capability bitmask `CAP_LOG..CAP_SYS`) plus `permission_gate::PermissionGate`
-  (which consults `membrane::Verdict`); fuel (`DEFAULT_FUEL`) bounds execution.
+  `aios_net::*`, `aios_fs::*`, `aios_gpu::*` gated by CapGate bitmask +
+  `RiskLevel`/`PermissionGate`. **SESSION_379:** net/fs/gpu unwired → **trap**
+  (never Ok(-1)/Ok(0)). WASI Preview1 not linked (`wasi_host` orphan).
+  Fuel (`DEFAULT_FUEL`) bounds execution. wasmi pin **0.47.2**.
+- **evolve hot_swap** — sandbox CAP_NONE first; `live`/`prev` for real rollback;
+  registry mutated only after OK (SESSION_379).
+- **TLS** — ready ⇔ `register_https_get` bridge; https without bridge = `tls_not_ready`.
 - **Skill registry integration** — hermes consumes the singleton
   `k_nano::SKILL_REGISTRY` (re-exported via `globals.rs`; no shadow copy —
   SESSION_217 lesson). `skill_sync::SkillSync` diffs and broadcasts registry

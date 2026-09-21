@@ -31,7 +31,7 @@ static TLS_READY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBoo
 pub fn register_https_get(f: HttpsGetBodyFn) {
     *HTTPS_GET_BODY.lock() = Some(f);
     TLS_READY.store(true, core::sync::atomic::Ordering::Relaxed);
-    k_nano::slog_hermes!("TLS", "info", "bridge=registered https_get=OK");
+    k_nano::slog_hermes!("TLS", "ok", "bridge=registered https_get=OK");
 }
 
 // Compat alias — lesson 241 wiring `register_tls` existe em docs.
@@ -39,15 +39,19 @@ pub fn register_tls(f: HttpsGetBodyFn) {
     register_https_get(f);
 }
 
-/// Inicializa o subsistema TLS.
+/// Carrega crate TLS — **não** marca ready (só `register_https_get` o faz).
 pub fn init_tls() {
-    TLS_READY.store(true, core::sync::atomic::Ordering::Relaxed);
-    k_nano::slog_hermes!("TLS", "info", "init_tls() — hermes embedded-tls 0.19 soft-float");
+    k_nano::slog_hermes!(
+        "TLS",
+        "ok",
+        "init_tls crate loaded (embedded-tls 0.19); waiting bridge"
+    );
 }
 
-/// Verifica se TLS está pronto.
+/// TLS pronto ⇔ bridge HTTPS registrada (lesson 241 / SESSION_379).
 pub fn tls_ready() -> bool {
-    TLS_READY.load(core::sync::atomic::Ordering::Relaxed)
+    HTTPS_GET_BODY.lock().is_some()
+        && TLS_READY.load(core::sync::atomic::Ordering::Relaxed)
 }
 
 /// Dispatcher único para qualquer URL.
@@ -75,26 +79,27 @@ fn fetch_https(url: &str) -> Result<Vec<u8>, &'static str> {
         None => {
             k_nano::slog_hermes!(
                 "TLS",
-                "warn",
-                "fetch_https: bridge not registered, delegating to net_bridge"
+                "fail",
+                "fetch_https: bridge absent — deny (nunca HTTP na :443)"
             );
-            crate::net_bridge::resolve_and_http_get_safe(url)
+            Err("tls_not_ready")
         }
     }
 }
 
-/// TLS smoke test (verifica init e bridge).
+/// TLS smoke: PASS só com bridge.
 pub fn tls_smoke() -> bool {
     init_tls();
-    let ready = tls_ready();
     let bridge = HTTPS_GET_BODY.lock().is_some();
+    let ready = tls_ready();
+    let pass = ready && bridge;
     k_nano::slog_hermes!(
         "TLS",
-        "info",
-        "smoke=OK ready={} bridge={} VERDICT={}",
+        if pass { "ok" } else { "warn" },
+        "smoke ready={} bridge={} VERDICT={}",
         ready as u8,
         bridge as u8,
-        if ready { "PASS" } else { "FAIL" }
+        if pass { "PASS" } else { "FAIL" }
     );
-    ready
+    pass
 }

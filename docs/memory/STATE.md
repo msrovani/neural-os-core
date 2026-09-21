@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s378 — ticket-lock honesty
+# STATE — neural-os-core v1.9.99-s379 — hermes honesty
 
-#   PISTA ATIVA: s378 — ticket-lock (Sync/try_lock/IrqSafe wrap/docs)
-#   PISTA ANTERIOR: s377 skill-registry; s376 neural-kernel; s375 event-bus
+#   PISTA ATIVA: s379 — hermes (CapGate/WASM/TLS/evolve + wasmi 0.47.2)
+#   PISTA ANTERIOR: s378 ticket-lock; s377 skill-registry; s376 neural-kernel
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
@@ -28,11 +28,12 @@
 |----|------|--------|
 | B1.2 | workspace host 0 fail | ✅ s368 |
 | B3.1 | Playback pacing free+TSC | ✅ s368 |
-| s374–s377 | k_ai / event-bus / neural-kernel / skill-registry | ✅ |
-| s378 | ticket-lock honesty | ✅ |
+| s374–s378 | k_ai … ticket-lock | ✅ |
+| s379 | hermes honesty | ✅ |
 | B2 | Mesh peer B / relaunch | AWAITING operador |
 | Track C | Ring3/B/C/GPU/WiFi… | defer |
 | IDEA #562 | AUDIO_FRAME → ring SPSC | residual |
 | IDEA #597 | bump smoltcp/spin/x86_64 | residual |
-| IDEA #599–#600 | wasmi / CapGate DynSkill | residual |
+| IDEA #599–#600 | wasmi 2.x / CapGate DynSkill | residual |
 | IDEA #602 | spin vs ticket-lock policy | residual |
+| IDEA #604 | hermes aios_net/fs wire + orphans | residual |

@@ -249,6 +249,7 @@ pub fn session_load() {
     };
     let text = String::from_utf8_lossy(&data);
     let mut log = SESSION.lock();
+    log.entries.clear();
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || !line.starts_with('[') {
@@ -275,15 +276,7 @@ pub fn session_load() {
         let drain = log.entries.len() - SESSION_CAP;
         log.entries.drain(0..drain);
     }
-    // FASE 2.5: Add to HNSW index
-    {
-        let mut hnsw_guard = SESSION_HNSW.lock();
-        if let Some(ref mut hnsw) = *hnsw_guard {
-            let vec = session_project(&text);
-            hnsw.insert(log.entries.len() as u32, vec);
-        }
-    }
-    // FASE 7: Populate HNSW index at boot
+    // FASE 7: Populate HNSW só a partir das entries (não do arquivo inteiro).
     {
         let mut hnsw_guard = SESSION_HNSW.lock();
         if let Some(ref mut hnsw) = *hnsw_guard {
@@ -291,10 +284,20 @@ pub fn session_load() {
                 let vec = session_project(&entry.text);
                 hnsw.insert(i as u32, vec);
             }
-            k_nano::slog_hermes!("session", "hnsw", "populated {} entries", log.entries.len());
+            k_nano::slog_hermes!(
+                "session",
+                "ok",
+                "hnsw populated {} entries",
+                log.entries.len()
+            );
         }
     }
-    k_nano::slog_hermes!("session", "load", "{} entries from SESSION.log", log.entries.len());
+    k_nano::slog_hermes!(
+        "session",
+        "ok",
+        "{} entries from SESSION.log",
+        log.entries.len()
+    );
 }
 
 // ─── Memory nudge (HANR closed-loop, superior: HITL Jarbas) ───────────────

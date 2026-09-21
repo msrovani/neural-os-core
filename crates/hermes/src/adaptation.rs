@@ -1,5 +1,8 @@
-//! Cognitive Adaptation Engine
-//! 
+//! ORPHAN — not in hermes/src/lib.rs (SESSION_379). Do not treat as wired.
+//! Cognitive Adaptation Engine (LEGACY restore) — policy generation only;
+//! `set_adaptation_policy` / `get_adaptation_policy` are honesty stubs until
+//! a global policy store exists.
+//!
 //! Hermes (Meta-Cognitive Supervisor) receives hardware topology reports from k-nano
 //! and automatically decides execution policies for the operating system.
 //! 
@@ -438,24 +441,26 @@ pub fn adapt_to_hardware(report: &XeonTopologyReport) -> AdaptationPolicy {
     }
 }
 
-/// Set the global adaptation policy (call once during boot)
+/// Set the global adaptation policy (call once during boot).
+/// Honesty: discards policy until a real store exists — does **not** claim adapted.
 pub fn set_adaptation_policy(policy: AdaptationPolicy) {
     let _ = policy;
-    ADAPTED.store(true, Ordering::Release);
+    // Do not set ADAPTED=true without storing the policy (SESSION_379).
+    k_nano::slog_hermes!(
+        "ADAPT",
+        "warn",
+        "set_adaptation_policy ignored (orphan/unwired store)"
+    );
 }
 
-/// Get the current adaptation policy
+/// Get the current adaptation policy — always None until store wired.
 pub fn get_adaptation_policy() -> Option<AdaptationPolicy> {
-    if ADAPTED.load(Ordering::Acquire) {
-        None // Stub — real impl would return stored policy
-    } else {
-        None
-    }
+    None
 }
 
 /// Check if adaptation has been performed
 pub fn is_adapted() -> bool {
-    ADAPTED.load(Ordering::Acquire)
+    false
 }
 
 /// Get the current execution strategy

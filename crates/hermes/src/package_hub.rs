@@ -883,19 +883,24 @@ impl PackageHub {
     }
 
     fn seed_embedded_skill(&mut self, name: &str, body: &str, purpose: &str) {
-        let sealed = sign_artifact_md(body).unwrap_or_else(|_| String::from(body));
+        let (sealed, signed) = match sign_artifact_md(body) {
+            Ok(s) => {
+                let ok = check_signature_content(&s);
+                (s, ok)
+            }
+            Err(_) => (String::from(body), false),
+        };
         let hash_fm = extract_fm_field(&sealed, "content_hash")
             .map(unquote)
             .unwrap_or_else(|| format!("{:016x}", fnv1a64(body_for_sign(&sealed).as_bytes())));
-        // Seed skills são compilados no kernel — trusted-by-provenance, não por assinatura.
-        // O signing runtime serve skills importados (provenance != native_compiled).
+        // Seeds nativos: trusted-by-compilation; `signed` só se Ed25519 confere.
         let rec = PackageRecord {
             kind: PackageKind::Skill,
             name: String::from(name),
             purpose: String::from(purpose),
             path: Self::package_path(PackageKind::Skill, name),
             body: sealed,
-            signed: true,
+            signed,
             content_hash: hash_fm,
             caps_hint: String::from("required_tokens:[1]"),
             persisted: false,
@@ -903,7 +908,13 @@ impl PackageHub {
         };
         self.packages
             .insert(pkg_key(PackageKind::Skill, name), rec);
-        k_nano::slog_hermes!("PKG", "info", "seed skill '{}' signed=true (trusted-by-compilation)", name);
+        k_nano::slog_hermes!(
+            "PKG",
+            if signed { "ok" } else { "warn" },
+            "seed skill='{}' signed={} provenance=trusted-by-compilation",
+            name,
+            signed
+        );
     }
 
     fn check_signature(content: &str) -> bool {

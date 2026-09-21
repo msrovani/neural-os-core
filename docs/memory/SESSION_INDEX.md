@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s378 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s379 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 379 | hermes | bughunt AIOS | CapGate/WASM/TLS/evolve honesty | hot_swap prev bug; stubs Ok→trap; TLS ready⇔bridge; ApprovalGate deny; matrix draft; signed honesty; wasmi 0.47.2; 203 tests |
 | 378 | ticket-lock | bughunt AIOS | Guard Sync + try_lock + IrqSafe wrap | MutexGuard Sync bound; CAS try_lock; IrqSafe=TicketLock+cli; codemap ≠ MCS; 7 tests |
 | 377 | skill-registry | bughunt AIOS | WASM teatro + Trust bypass + cache all | fail-closed wasm; check_or_cache; idempotent cache; SkillListEntry; unregister; trim index/task/fanout; 10 tests |
 | 376 | neural-kernel | bughunt AIOS | dual shutdown/BootLog + slog + Cargo trim | soft→k_ai; Agent BootLog→k_ai; delete link_watcher/email/rss; CapGate DENY→ok; TLS deps bin removidas |

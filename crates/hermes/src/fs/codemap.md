@@ -5,8 +5,10 @@
 Agent-backed filesystem layer. Defines the `FilesystemAgent` trait (read/
 write/list/mount_point) and concrete agents that the VFS delegates to after
 path resolution. Also provides the generic `RingBufStore` (bounded in-memory
-store with oldest-eviction) and the `MhiScheduler` (MHI tier promotion/demotion
-by access patterns).
+store with oldest-eviction).
+
+**`mhi_scheduler`:** stub — `mhi_scheduler_tick` is a no-op. Unique MHI brain
+is `k_nano::mhi::mhi_tick` (SESSION_379 honesty).
 
 ## Key symbols
 
@@ -16,7 +18,7 @@ to the owning agent), `RingBufStore`, `init_fs_agents`. Agents: `ata_agent`
 (/mnt/hdd), `dev_fs_agent` (/dev), `proc_fs_agent` (/proc), `inference_fs_agent`
 (/inference), `hermes_fs_agent` (/chat — conversation as FS), `ram_fs_agent`
 (/mnt/ram), `log_fs_agent` (/logs), `neural_fs_agent` (from `crate::neural_fs`,
-/mnt/neural), `mhi_scheduler`.
+/mnt/neural).
 
 ## Integration
 
