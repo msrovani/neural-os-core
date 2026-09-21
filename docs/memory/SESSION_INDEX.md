@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s383 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s384 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 384 | deps | #597/#599 | LazyLock + smoltcp 0.14 + wasmi 2.0 | x86_64 0.15 abort (nightly 1.98 Step); wasmi instantiate_and_start; 205 hermes |
 | 383 | IDEA plano | CapGate+voz+deps | #600/#562/#602 + spin 0.12 | DynSkill 0xD1; MicFrameRing SPSC; TicketLock policy; spin bump; wasmi/#597 residual |
 | 382 | mouse | residual #542 | USB tablet deferred HID | sandbox skip removido; DisplayAgent 1× pós-UI; InputAgent 90/180/360 retry |
 | 381 | jarbas | bughunt AIOS | avatar/slog/barge-in honesty | energy fake→0; interrupt≠cancel infer; pcm cap; VGPU GOP; heapless trim; 100 tests |

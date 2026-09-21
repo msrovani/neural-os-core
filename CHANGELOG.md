@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s384] - 2026-09-21 — LazyLock + smoltcp 0.14 + wasmi 2.0
+
+- spin::Lazy → LazyLock (fim deprecation 0.12)
+- smoltcp 0.13 → 0.14 (k_nano/hermes/neural-kernel)
+- wasmi 0.47 → 2.0 (`validate`+btree+libm; `instantiate_and_start`)
+- x86_64 0.15 **abort**: nightly-2026-07-05 sem Step overflowing (fica 0.14.11)
+- Gates: hermes 205, jarbas 102, k_ai 47, neural-kernel check 0 erros
+
 ## [1.9.99-s383] - 2026-09-21 — CapGate DynSkill + MicFrameRing + spin 0.12
 
 - #600: DynamicSkill `required_tokens=[0xD1]`; `register_dynskill` + trust_allow; Legacy(1) deny

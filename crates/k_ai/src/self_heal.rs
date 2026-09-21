@@ -773,8 +773,8 @@ pub fn push_respawn(daemon_name: &str) -> bool {
 
 /// Canonical SelfHeal singleton — IrqSafeLock for exception-context safety.
 /// All 3 former instances (bin, hermes, k_ai) converge here.
-/// Uses spin::Lazy because SelfHeal::new() is not const (Vec::new()).
-pub static GLOBAL_SELF_HEAL: spin::Lazy<k_nano::sync::IrqSafeLock<SelfHeal>> =
-    spin::Lazy::new(|| k_nano::sync::IrqSafeLock::new(SelfHeal::new()));
+/// Uses spin::LazyLock because SelfHeal::new() is not const (Vec::new()).
+pub static GLOBAL_SELF_HEAL: spin::LazyLock<k_nano::sync::IrqSafeLock<SelfHeal>> =
+    spin::LazyLock::new(|| k_nano::sync::IrqSafeLock::new(SelfHeal::new()));
 
 

@@ -114,7 +114,7 @@ impl ContextWindow {
 }
 
 /// Global singleton - acessivel por CortexAgent, HermesAgent, e qualquer modulo.
-static CONTEXT_WINDOW: spin::Lazy<spin::Mutex<ContextWindow>> = spin::Lazy::new(|| {
+static CONTEXT_WINDOW: spin::LazyLock<spin::Mutex<ContextWindow>> = spin::LazyLock::new(|| {
     spin::Mutex::new(ContextWindow::new())
 });
 

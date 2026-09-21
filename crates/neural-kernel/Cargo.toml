@@ -12,7 +12,7 @@ libm = "0.2"
 event-bus = { path = "../event-bus" }
 skill-registry = { path = "../skill-registry" }
 ticket-lock = { path = "../ticket-lock" }
-smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
+smoltcp = { version = "0.14", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
 agent-core = { path = "../agent-core" }
 ed25519-compact = { version = "2", default-features = false }
 # TLS 1.3 canônico em hermes (embedded-tls 0.19) — bin só bridge (SESSION_376 trim).

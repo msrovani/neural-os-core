@@ -123,7 +123,7 @@ lazy_static! {
 
 
 /// HNSW index for semantic session search (FASE 2.5).
-static SESSION_HNSW: spin::Lazy<spin::Mutex<Option<cortex::hnsw::HnswIndex>>> = spin::Lazy::new(|| {
+static SESSION_HNSW: spin::LazyLock<spin::Mutex<Option<cortex::hnsw::HnswIndex>>> = spin::LazyLock::new(|| {
     spin::Mutex::new(Some(cortex::hnsw::HnswIndex::new(64))) // 64D projection
 });
 

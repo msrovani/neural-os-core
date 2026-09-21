@@ -19,7 +19,7 @@ agent-core = { path = "../agent-core" }
 ed25519-compact = { version = "2", default-features = false, features = ["x25519"] }
 # ADR-0081 Tier F: AEAD X25519+ChaCha20-Poly1305 (sem getrandom — bare-metal).
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
-smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
+smoltcp = { version = "0.14", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
 # VirtIO guest drivers (rcore-os) — no_std, Block/Net/GPU/Input/Console/Sound
 virtio-drivers = { version = "0.13", default-features = false, features = ["alloc"] }
 

@@ -242,10 +242,8 @@ pub fn run_i32_2(
     install_host_abi(&mut linker)?;
 
     let instance = linker
-        .instantiate(&mut store, &module)
-        .map_err(|_| "wasm: instantiate (import negado/ausente?)")?
-        .start(&mut store)
-        .map_err(|_| "wasm: start")?;
+        .instantiate_and_start(&mut store, &module)
+        .map_err(|_| "wasm: instantiate (import negado/ausente?)")?;
 
     let func = instance
         .get_typed_func::<(i32, i32), i32>(&store, func_name)
@@ -272,10 +270,8 @@ pub fn run_i32_0(
     let mut linker = <Linker<HostState>>::new(&engine);
     install_host_abi(&mut linker)?;
     let instance = linker
-        .instantiate(&mut store, &module)
-        .map_err(|_| "wasm: instantiate")?
-        .start(&mut store)
-        .map_err(|_| "wasm: start")?;
+        .instantiate_and_start(&mut store, &module)
+        .map_err(|_| "wasm: instantiate")?;
     let func = instance
         .get_typed_func::<(), i32>(&store, func_name)
         .map_err(|_| "wasm: export nao encontrado")?;
@@ -303,10 +299,8 @@ pub fn run_i32_3(
     let mut linker = <Linker<HostState>>::new(&engine);
     install_host_abi(&mut linker)?;
     let instance = linker
-        .instantiate(&mut store, &module)
-        .map_err(|_| "wasm: instantiate")?
-        .start(&mut store)
-        .map_err(|_| "wasm: start")?;
+        .instantiate_and_start(&mut store, &module)
+        .map_err(|_| "wasm: instantiate")?;
     let func = instance
         .get_typed_func::<(i32, i32, i32), i32>(&store, func_name)
         .map_err(|_| "wasm: export nao encontrado")?;
@@ -373,10 +367,8 @@ pub fn run_wasm(
     let mut linker = <Linker<HostState>>::new(&engine);
     install_host_abi(&mut linker)?;
     let instance = linker
-        .instantiate(&mut store, &module)
-        .map_err(|_| "wasm: instantiate")?
-        .start(&mut store)
-        .map_err(|_| "wasm: start")?;
+        .instantiate_and_start(&mut store, &module)
+        .map_err(|_| "wasm: instantiate")?;
     if args.len() > 4 {
         return Err("wasm: muitos argumentos (max 4)");
     }

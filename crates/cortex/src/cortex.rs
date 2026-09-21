@@ -28,7 +28,7 @@ pub static GLOBAL_MODEL_PARAMS: core::sync::atomic::AtomicU64 = core::sync::atom
 
 /// Global KvCache reutilizado entre chamadas de generate.
 /// Evita re-criar cache a cada prompt.
-static GLOBAL_KV_CACHE: spin::Lazy<spin::Mutex<Option<KvCache>>> = spin::Lazy::new(|| {
+static GLOBAL_KV_CACHE: spin::LazyLock<spin::Mutex<Option<KvCache>>> = spin::LazyLock::new(|| {
     spin::Mutex::new(None)
 });
 

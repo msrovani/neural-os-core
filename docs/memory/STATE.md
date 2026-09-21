@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s383 — CapGate DynSkill + MicFrameRing
+# STATE — neural-os-core v1.9.99-s384 — smoltcp 0.14 + wasmi 2.0
 
-#   PISTA ATIVA: s383 — plano IDEA #600/#562/#602 + spin 0.12
-#   PISTA ANTERIOR: s382 mouse USB tablet #542
+#   PISTA ATIVA: s384 — ordem residual LazyLock + smoltcp + wasmi
+#   PISTA ANTERIOR: s383 CapGate DynSkill + MicFrameRing
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
@@ -26,14 +26,10 @@
 
 | ID | Item | Estado |
 |----|------|--------|
-| B1.2 | workspace host 0 fail | ✅ s368 |
-| B3.1 | Playback pacing free+TSC | ✅ s368 |
-| s374–s382 | honesty + #542 | ✅ |
-| s383 | #600 DynSkill CapGate + #562 MicFrameRing + #602 policy + spin 0.12 | ✅ |
-| B2 | Mesh peer B / relaunch | AWAITING operador |
+| s383 | #600/#562/#602 + spin 0.12 | ✅ |
+| s384 | LazyLock + smoltcp 0.14 + wasmi 2.0 | ✅ |
+| IDEA #597 | spin+smoltcp ✅; x86_64 0.15 ⛔ nightly 1.98 | parcial fechado |
+| IDEA #599 | wasmi 2.0 | ✅ |
+| #558b/#559b/#561b | aceite voz metal | residual paralelo |
+| B2 | Mesh peer B | AWAITING operador |
 | Track C | Ring3/B/C/GPU/WiFi… | defer |
-| IDEA #597 | x86_64 0.15 + smoltcp 0.14 (spin ✅) | residual parcial |
-| IDEA #599 | wasmi 2.x | residual |
-| IDEA #600 | CapGate DynSkill 0xD1 | ✅ s383 |
-| IDEA #562 | AUDIO_FRAME → MicFrameRing | ✅ s383 |
-| IDEA #602 | spin vs TicketLock policy | ✅ s383 |

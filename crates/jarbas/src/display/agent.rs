@@ -168,7 +168,7 @@ const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
 };
 
 /// Current cognitive phase for adaptive rendering (FASE 5).
-static COGNITIVE_PHASE: spin::Lazy<spin::Mutex<alloc::string::String>> = spin::Lazy::new(|| {
+static COGNITIVE_PHASE: spin::LazyLock<spin::Mutex<alloc::string::String>> = spin::LazyLock::new(|| {
     spin::Mutex::new(alloc::string::String::from("observe"))
 });
 

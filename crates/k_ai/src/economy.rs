@@ -183,7 +183,7 @@ impl BudgetManager {
 
 
 /// Global budget manager singleton.
-static GLOBAL_BUDGET: spin::Lazy<spin::Mutex<BudgetManager>> = spin::Lazy::new(|| {
+static GLOBAL_BUDGET: spin::LazyLock<spin::Mutex<BudgetManager>> = spin::LazyLock::new(|| {
     spin::Mutex::new(BudgetManager::new(512 * 1024 * 1024)) // 512MB heap budget
 });
 

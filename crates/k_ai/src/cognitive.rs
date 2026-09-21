@@ -1678,7 +1678,7 @@ mod tests {
 // Global singletons for FASE 2 wiring
 // ═══════════════════════════════════════════════════════════════════════════════
 
-static GLOBAL_PLANNER: spin::Lazy<spin::Mutex<IntentPlanner>> = spin::Lazy::new(|| {
+static GLOBAL_PLANNER: spin::LazyLock<spin::Mutex<IntentPlanner>> = spin::LazyLock::new(|| {
     spin::Mutex::new(IntentPlanner::new())
 });
 
@@ -1692,7 +1692,7 @@ pub fn plan_global(goal: &str) -> Vec<SkillStep> {
     GLOBAL_PLANNER.lock().plan(goal)
 }
 
-static GLOBAL_REACT: spin::Lazy<spin::Mutex<ReActLoop>> = spin::Lazy::new(|| {
+static GLOBAL_REACT: spin::LazyLock<spin::Mutex<ReActLoop>> = spin::LazyLock::new(|| {
     spin::Mutex::new(ReActLoop::new(3))
 });
 
@@ -1708,7 +1708,7 @@ pub fn react_run(goal: &str) -> alloc::string::String {
 
 
 
-static GLOBAL_MCP: spin::Lazy<spin::Mutex<McpServer>> = spin::Lazy::new(|| {
+static GLOBAL_MCP: spin::LazyLock<spin::Mutex<McpServer>> = spin::LazyLock::new(|| {
     spin::Mutex::new(McpServer::new())
 });
 
@@ -1723,7 +1723,7 @@ pub fn mcp_handle(method: &str, params: &str) -> String {
 }
 
 /// Global NeuralCache for inference caching.
-static GLOBAL_NCACHE: spin::Lazy<spin::Mutex<NeuralCache>> = spin::Lazy::new(|| {
+static GLOBAL_NCACHE: spin::LazyLock<spin::Mutex<NeuralCache>> = spin::LazyLock::new(|| {
     spin::Mutex::new(NeuralCache::new())
 });
 
@@ -1733,7 +1733,7 @@ pub fn ncache() -> &'static spin::Mutex<NeuralCache> {
 }
 
 /// Global SuccessEngine (the one in cognitive.rs, tracking win/loss streaks).
-static GLOBAL_SUCCESS: spin::Lazy<spin::Mutex<SuccessEngine>> = spin::Lazy::new(|| {
+static GLOBAL_SUCCESS: spin::LazyLock<spin::Mutex<SuccessEngine>> = spin::LazyLock::new(|| {
     spin::Mutex::new(SuccessEngine::new())
 });
 
@@ -1743,7 +1743,7 @@ pub fn success_engine() -> &'static spin::Mutex<SuccessEngine> {
 }
 
 /// Global CodebookVQ for KV tensor compression.
-static GLOBAL_CODEBOOK: spin::Lazy<spin::Mutex<CodebookVQ>> = spin::Lazy::new(|| {
+static GLOBAL_CODEBOOK: spin::LazyLock<spin::Mutex<CodebookVQ>> = spin::LazyLock::new(|| {
     spin::Mutex::new(CodebookVQ::new(64, 256))
 });
 
