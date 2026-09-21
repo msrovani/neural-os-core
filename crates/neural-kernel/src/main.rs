@@ -2021,7 +2021,7 @@ pub(crate) fn kernel_boot(
                 Some(t.expert_resident_bytes())
             } else { None }
         });
-        k_nano::slog_bin!("TRINITY", "info", "Trinity bridge + hermes router populado ({} experts)", expert_count);
+        k_nano::slog_bin!("TRINITY", "ok", "Trinity bridge + hermes router populado ({} experts)", expert_count);
     }
     // TLS N4 bridge → hermes tls::fetch_url dispatcher (embedded-tls 0.19, HybridProvider)
     hermes_crate::tls::register_https_get(crate::net::https_get);
