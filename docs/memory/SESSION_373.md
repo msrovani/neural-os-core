@@ -41,8 +41,17 @@ Intel RCS 0x2000 / BCS 0x22000 / CTL 0x3001 (s355); iwlwifi sem SSID fabricado; 
 - `cargo test -p k-nano --lib slog::` → **4 pass**
 - GPU compute sem KernelPack = `None`, nunca CPU contado como GPU
 
-## Residual
+## Residual pós-auditoria ([Deep k_hal honesty](f943dacc-3a20-48a9-af58-5bd95f526f03))
 
-- ath10k BMI/HTT ainda AWAITING (Layer S)
-- Intel EU / NVIDIA QMD golden = KernelPack + HW
-- `GpuJobRing` Intel = fila software (não RCS)
+HIGH 1–9 já estavam no commit s373. Ainda abertos e fechados agora:
+
+| Sev | Achado | Fix |
+|-----|--------|-----|
+| HIGH | `SYS_MAP_FB` devolvia VA de heap `0x4000_0000_0000` | devolve o phys; caller mapeia |
+| HIGH | Gen9 copia 3×n f32 em 4 KiB sem teto | `n*12>4096` → false |
+| MED | `ucode_loaded=true` sem alive | só se `0x5A5A`; senão Err |
+| MED | AMD doorbell escrevia `0x1B0` genérico | noop + warn |
+| MED | Ethernet `send` `Ok(())` descartava pacote | `Err("ethernet_unwired")` |
+| MED | `init_gtt` sempre true | refuse pages 0 ou >512 |
+
+Ainda não tocado (MED, não quebra o boot path): FORCEWAKE probe, offer backoff, `is_integrated` por vendor, hub_msc budget TSC, tautologia do canário já ausente.

@@ -48,13 +48,10 @@ unsafe fn nvidia_doorbell(bar0_virt: u64, tail: u32) {
 
 /// Doorbell: AMD — noop até bring-up C3 (offset/doorbell por geração).
 /// Não escrever 0x1B0 genérico cross-gen.
-unsafe fn amd_doorbell(bar0_virt: u64, tail: u32) {
-    // ADR-0049: doorbell por GC — sem offset genérico único.
-    // Path KIQ Degrau usa 0x1B0 (GFX10); MES usa outro módulo.
-    // Aqui: write conservador só se backend KiQ já probeado via AmdGpu.
-    let off = 0x1B0u64;
-    core::ptr::write_volatile((bar0_virt + off) as *mut u32, tail);
-    k_nano::slog_hal!("AMD", "DB", "kick tail={} @+{:#x} (estrutural)", tail, off);
+unsafe fn amd_doorbell(_bar0_virt: u64, tail: u32) {
+    // ADR-0049: doorbell por GC. 0x1B0 genérico clobberava GFX errado.
+    // KiQ/MES escrevem o offset da geração; esta fila software não.
+    k_nano::slog_hal!("AMD", "warn", "doorbell skip tail={} — sem offset por GC", tail);
 }
 
 /// Doorbell: VirtIO — notifica via queue notify (não é doorbell real, mas similar)

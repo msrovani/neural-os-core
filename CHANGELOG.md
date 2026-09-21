@@ -9,6 +9,7 @@
 - generic_wifi: deny mapa desconhecido; DMA `virt_to_phys`
 - `k_hal::wait::until` TSC 2s; slog aliases BAR/GEN9/D4/BCS; trim libm/lazy_static/ticket-lock
 - SESSION_373; k-hal tests 54 pass
+- Residual auditoria: MAP_FB sem VA de heap; Gen9 n≤341; ucode só se alive; AMD doorbell noop; Ethernet unwired
 
 ## [1.9.99-s372] - 2026-09-21 — k_nano honesty + dep trim
 

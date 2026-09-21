@@ -189,13 +189,15 @@ impl IwlWifi {
         if alive.len() >= 2 && alive[0] == UCODE_ALIVE_1 && alive[1] == UCODE_ALIVE_2 {
             k_nano::slog_hal!("IWL", "ok", "ucode alive!");
             self.alive = true;
+            self.ucode_loaded = true;
+            k_nano::slog_hal!("IWL", "ok", "ucode carregado: {} secoes, {} bytes", count, total);
+            Ok(())
         } else {
-            k_nano::slog_hal!("IWL", "warn", "ucode alive check: {:?}", alive);
+            self.alive = false;
+            self.ucode_loaded = false;
+            k_nano::slog_hal!("IWL", "warn", "ucode alive check: {:?} — não loaded", alive);
+            Err("ucode_not_alive")
         }
-
-        self.ucode_loaded = true;
-        k_nano::slog_hal!("IWL", "ok", "ucode carregado: {} secoes, {} bytes", count, total);
-        Ok(())
     }
 
     /// Envia comando via HBUS (simplificado: escreve SRAM + doorbell)

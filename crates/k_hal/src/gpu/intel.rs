@@ -207,6 +207,10 @@ const GTT_ENTRY_COUNT: usize = 512; // 512 entradas × 8 bytes = 4KB
 /// Inicializa GTT para que a GPU enxergue paginas de RAM do sistema.
 /// Escreve entradas GTT para o ring buffer e batch buffers.
 pub unsafe fn init_gtt(mmio: u64, ring_pa: u64, ring_size_pages: u32) -> bool {
+    if ring_size_pages == 0 || ring_size_pages as usize > GTT_ENTRY_COUNT {
+        k_nano::slog_hal!("GPU", "warn", "init_gtt refuse pages={}", ring_size_pages);
+        return false;
+    }
     // GTT entries ficam no inicio da GMADR (primeiros 4KB = 512 entradas × 8 bytes)
     let gtt_base = mmio + GMADR_BASE;
 

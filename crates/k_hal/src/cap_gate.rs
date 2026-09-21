@@ -210,9 +210,10 @@ pub fn dispatch(nr: u64, arg: u64, cap: Cap) -> Result<u64, &'static str> {
             if !cap.contains(Cap::MAP_FB) { return Err("EPERM: Cap::MAP_FB"); }
             let fb_phys = arg;
             if fb_phys == 0 { return Err("ENODEV: FB phys address is 0"); }
-            // Full mapping is done via k_nano paging helper when wire is present.
-            // For now, validate Cap and return VA stub (bin's jarbas_fb will do real map via paging).
-            Ok(0x0000_4000_0000_0000)
+            // Cap aceita; o mapa USER é do caller (`map_fb_pages`). Não devolver
+            // VA de heap (0x4000_0000_0000) como se o FB já estivesse mapeado.
+            k_nano::slog_hal!("Cap", "warn", "MAP_FB cap ok phys={:#x} — sem VA (caller mapeia)", fb_phys);
+            Ok(fb_phys)
         }
         SYS_PRESENT_FB => {
             if !cap.contains(Cap::WRITE_FB) { return Err("EPERM: Cap::WRITE_FB"); }

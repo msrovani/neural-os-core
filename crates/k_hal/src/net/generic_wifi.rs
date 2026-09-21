@@ -155,6 +155,9 @@ impl AgnosticWifiEngine {
 
 impl WifiChipset for AgnosticWifiEngine {
     fn init(&mut self) -> Result<(), &'static str> {
+        if self.io.base == 0 {
+            return Err("wifi_bar_invalid");
+        }
         let sz = self.ring_sz;
         // Prepara ring de RX
         for i in 0..sz {
@@ -179,7 +182,7 @@ impl WifiChipset for AgnosticWifiEngine {
     }
 
     fn send_packet(&mut self, packet: &[u8]) -> Result<(), &'static str> {
-        if self.io.map.ring_size == 0 { return Ok(()); } // Ethernet fallback
+        if self.io.map.ring_size == 0 { return Err("ethernet_unwired"); }
         let idx = self.tx_head % self.ring_sz;
         let desc = &mut self.tx_ring[idx];
         let flags = unsafe { read_volatile(&desc.len_flags) };
@@ -195,7 +198,7 @@ impl WifiChipset for AgnosticWifiEngine {
     }
 
     fn receive_packet(&mut self, buffer: &mut [u8]) -> Result<usize, &'static str> {
-        if self.io.map.ring_size == 0 { return Ok(0); } // Ethernet fallback
+        if self.io.map.ring_size == 0 { return Err("ethernet_unwired"); }
         let idx = self.rx_tail % self.ring_sz;
         let desc = &mut self.rx_ring[idx];
         let flags = unsafe { read_volatile(&desc.len_flags) };
@@ -292,8 +295,12 @@ impl WifiChipset for FallbackEthernet {
             }
         }
     }
-    fn send_packet(&mut self, _p: &[u8]) -> Result<(), &'static str> { Ok(()) }
-    fn receive_packet(&mut self, _b: &mut [u8]) -> Result<usize, &'static str> { Ok(0) }
+    fn send_packet(&mut self, _p: &[u8]) -> Result<(), &'static str> {
+        Err("ethernet_unwired")
+    }
+    fn receive_packet(&mut self, _b: &mut [u8]) -> Result<usize, &'static str> {
+        Err("ethernet_unwired")
+    }
 }
 
 // ── 7. UNION DE ARMAZENAMENTO ESTATICO ─────────────────────────

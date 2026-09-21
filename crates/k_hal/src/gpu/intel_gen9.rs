@@ -79,6 +79,11 @@ pub unsafe fn dispatch_vector_add_gen9(
     let img = kernel_image::from_blob(IsaTag::Gen9, IrOrigin::Zebin, zebin);
     let stub = img.is_stub;
     let n = a.len();
+    // a|b|out em 4 KiB: 3×n×4. n>341 estoura o DMA (auditoria s373).
+    if n.saturating_mul(12) > 4096 {
+        k_nano::slog_hal!("INTEL", "warn", "GEN9 refuse n={} — buffer 4KiB", n);
+        return false;
+    }
     let eu_threads = img.regs.max(16).min(64);
 
     let _ring_alive = probe_ring_alive(ring, gtt);
