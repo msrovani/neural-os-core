@@ -167,7 +167,7 @@ pub fn demo() -> bool {
 /// between memory tiers (SGDB) and routing replay (R3 MoE).
 pub fn update_with_replay() {
     if !ready() {
-        k_nano::slog_kai!("SGDB", "update_with_replay", "SGDB not ready — skip");
+        k_nano::slog_kai!("SGDB", "warn", "update_with_replay: SGDB not ready — skip");
         return;
     }
     // Flush ephemeral L0/L1 docs so R3 replay can pull from persisted
@@ -175,8 +175,8 @@ pub fn update_with_replay() {
     let flushed = prune_working_ram();
     k_nano::slog_kai!(
         "SGDB",
-        "update_with_replay",
-        "flushed {} RAM docs → R3 replay ready",
+        "ok",
+        "update_with_replay: flushed {} RAM docs → R3 replay ready",
         flushed
     );
 }

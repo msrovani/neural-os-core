@@ -828,7 +828,6 @@ dependencies = [
  "lazy_static",
  "libm",
  "neural-sgdb",
- "skill-registry",
  "spin",
  "ticket-lock",
  "x86_64",

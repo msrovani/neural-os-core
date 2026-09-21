@@ -50,24 +50,22 @@ impl BqFlatIndex {
         }
     }
 
-    pub fn insert(&mut self, id: u64, bits: Vec<u64>) {
+    pub fn insert(&mut self, id: u64, bits: Vec<u64>) -> bool {
         if self.words_per_vec == 0 {
             self.words_per_vec = bits.len().max(1);
         }
         let w = self.words_per_vec;
-        self.ids.push(id);
-        if bits.len() >= w {
-            self.flat.extend_from_slice(&bits[..w]);
-        } else {
-            self.flat.extend_from_slice(&bits);
-            for _ in bits.len()..w {
-                self.flat.push(0);
-            }
+        // Honesty: refuse dim mismatch (pad/trunc silent corrompe Hamming).
+        if bits.len() != w {
+            return false;
         }
+        self.ids.push(id);
+        self.flat.extend_from_slice(&bits);
+        true
     }
 
-    pub fn insert_f32(&mut self, id: u64, v: &[f32]) {
-        self.insert(id, quantize_f32(v));
+    pub fn insert_f32(&mut self, id: u64, v: &[f32]) -> bool {
+        self.insert(id, quantize_f32(v))
     }
 
     pub fn insert_1024(&mut self, id: u64, bits: &[u64; 16]) {
@@ -125,11 +123,11 @@ pub fn smoke() -> bool {
     let hits = idx.top_k_f32(&[1.0, -1.0, 1.0, -1.0], 1);
     let hits_ok = hits.len() == 1 && hits[0].0 == 1 && hits[0].1 == 0;
     if !hits_ok {
-        k_nano::slog_kai!("SGDB", "BQ", "top_k FAIL kernel={} len={} id={} dist={}", kernel, hits.len(), hits.first().map(|h| h.0).unwrap_or(99), hits.first().map(|h| h.1).unwrap_or(99));
+        k_nano::slog_kai!("SGDB", "fail", "BQ top_k FAIL kernel={} len={} id={} dist={}", kernel, hits.len(), hits.first().map(|h| h.0).unwrap_or(99), hits.first().map(|h| h.1).unwrap_or(99));
     }
     let s1024 = hamming_dispatch::smoke_1024();
     if !s1024 {
-        k_nano::slog_kai!("SGDB", "BQ", "smoke_1024 FAIL kernel={}", kernel);
+        k_nano::slog_kai!("SGDB", "fail", "BQ smoke_1024 FAIL kernel={}", kernel);
     }
     hits_ok && s1024
 }

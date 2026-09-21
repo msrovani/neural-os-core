@@ -469,7 +469,6 @@ impl Agent for CortexAgent {
                 agent_core::tick_stage(8);
                 return AgentTickResult::Pending;
             }
-            k_ai::economy::record_inference();
             // Full Infer D+B+C: enfileira — generate NUNCA no tick (AGENT_TICK_BUSY).
             let pattern = recognize(&user_text);
             let submit_prompt = match pattern {
@@ -525,6 +524,9 @@ impl Agent for CortexAgent {
                 cortex::cortex::TOPIC_LLM_RESPONSE,
             ) {
                 Ok(id) => {
+                    // Honesty: só conta budget quando o job entrou na fila.
+                    k_ai::economy::record_tokens(estimated_tokens);
+                    k_ai::economy::record_inference();
                     k_nano::slog_cortex!(
                         "LLM",
                         "ok",

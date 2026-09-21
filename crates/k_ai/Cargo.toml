@@ -9,7 +9,6 @@ lazy_static = { version = "1.4", features = ["spin_no_std"] }
 x86_64 = "0.14.11"
 libm = "0.2"
 event-bus = { path = "../event-bus" }
-skill-registry = { path = "../skill-registry" }
 ticket-lock = { path = "../ticket-lock" }
 agent-core = { path = "../agent-core" }
 cortex = { path = "../cortex" }

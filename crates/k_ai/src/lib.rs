@@ -5,9 +5,9 @@
 
 extern crate alloc;
 
-// ─── k_ai: Cognitive & AI Infrastructure (Ring 1) ───
+// ─── k_ai: Cognitive & AI Infrastructure (Ring 2) ───
 // Self-healing, trust, audit, agency, training, memory, inventory
-// Depends on k_nano (foundation) and cortex (BitNet). Sem dep Ring 2 (jarbas/hermes).
+// Depends on k_nano (R0), k_hal (R1), cortex (BitNet). Sem dep Ring 3 (jarbas/hermes).
 
 pub mod boot_metrics;
 pub mod agency;
@@ -40,6 +40,8 @@ pub mod profile;
 pub mod native_agent_seed;
 pub mod self_heal;
 pub mod self_heal_agent;
+/// Disk migrate honesty (ADR-0079 M4) — TargetFoundNotMigrated, never fake Ok.
+pub mod self_heal_disk;
 pub mod training_agent;
 /// ADR-0081 C5: Federated Gradient Sharing (#312f).
 pub mod fl_trainer;

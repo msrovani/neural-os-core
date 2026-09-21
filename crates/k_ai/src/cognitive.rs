@@ -431,13 +431,17 @@ impl ReActLoop {
     pub fn observe(&mut self, result: &str) { self.history.push(ReActStep::Observation(String::from(result))); }
 
     pub fn run(&mut self, goal: &str) -> String {
-        self.think(&alloc::format!("Goal: {}. I need to analyze and execute.", goal));
-        self.act("analyze", vec![String::from(goal)]);
-        self.observe("Analysis complete.");
-        self.think("Now executing the plan.");
-        self.act("execute_step", vec![String::from(goal)]);
-        self.observe("Execution finished.");
-        alloc::format!("ReAct completed for '{}' in {} steps", goal, self.history.len())
+        // Honesty: sem bridge Hermes/LLM — não fabricar Thought/Action/Observation de sucesso.
+        self.think(&alloc::format!(
+            "Goal: {}. ReActLoop not_wired (no LLM bridge).",
+            goal
+        ));
+        alloc::format!(
+            "ReAct DEGRADED not_wired for '{}' (history={} steps, max={})",
+            goal,
+            self.history.len(),
+            self.max_iter
+        )
     }
 
     pub fn status(&self) -> String { alloc::format!("[REACT] {} steps, max={}", self.history.len(), self.max_iter) }
@@ -471,7 +475,10 @@ impl McpServer {
                 let list: Vec<String> = self.tools.iter().map(|(k,v)| alloc::format!("{}:{}", k, v)).collect();
                 list.join(";")
             }
-            "tools/call" => alloc::format!("Executed '{}' with params: {}", params.split(',').next().unwrap_or("?"), params),
+            "tools/call" => alloc::format!(
+                "MCP DEGRADED not_wired — refused tools/call params={}",
+                params
+            ),
             _ => alloc::format!("Unknown method: {}", method),
         }
     }
@@ -1137,8 +1144,9 @@ impl TransformerTrainer {
             let num_groups = (intermediate / ffn_group).max(1);
 
             // --- FFN ---
-            // x_ffn = x_attn + down → ddown = dx (consumido aqui)
-            let mut ddown = dx.clone();
+            // x_ffn = x_attn + down → ∂L/∂down = ∂L/∂x_ffn; ∂L/∂x_attn += ∂L/∂x_ffn (residual)
+            let dx_ffn_residual = dx.clone();
+            let mut ddown = dx;
             // down: down = W_d @ gated_norm * down_scale → (seq, intermediate) @ (intermediate, hidden)
             let mut wdown = alloc::vec![0.0f32; intermediate * hidden];
             for i in 0..(intermediate * hidden) { wdown[i] = layer.down.get_weight(i) as f32; }
@@ -1206,13 +1214,18 @@ impl TransformerTrainer {
             grads.layer_grads[li].gate_grad = Some(gate_grad);
             grads.layer_grads[li].up_grad = Some(up_grad);
 
-            // rms_ffn backward (norm2 sobre x_attn)
+            // rms_ffn backward (norm2 sobre x_attn) + residual FFN
             let dy_n2 = Tensor::from_row_major((seq, hidden), d_norm2).unwrap();
-            let (d_x_attn, rms_ffn_grad) = rms_backward(&act.norm2, &layer.rms_ffn, &dy_n2);
+            let (mut d_x_attn, rms_ffn_grad) = rms_backward(&act.norm2, &layer.rms_ffn, &dy_n2);
             grads.layer_grads[li].rms_ffn_grad = Some(rms_ffn_grad);
+            let n_ffn = d_x_attn.data.len().min(dx_ffn_residual.data.len());
+            for i in 0..n_ffn {
+                d_x_attn.data[i] += dx_ffn_residual.data[i];
+            }
 
             // --- Attention ---
-            // x_attn = x_in + proj → dproj = d_x_attn (residual soma)
+            // x_attn = x_in + proj → ∂L/∂proj = ∂L/∂x_attn; ∂L/∂x_in += ∂L/∂x_attn (residual)
+            let d_x_attn_residual = d_x_attn.clone();
             let mut dproj = d_x_attn;
             // proj = W_o @ attn_out_norm * o_scale
             let mut wo = alloc::vec![0.0f32; qw * hidden];
@@ -1270,10 +1283,14 @@ impl TransformerTrainer {
             grads.layer_grads[li].k_grad = Some(k_grad);
             grads.layer_grads[li].v_grad = Some(v_grad);
 
-            // rms_attn backward (norm1 sobre x_in) → dx para a camada anterior
+            // rms_attn backward (norm1 sobre x_in) → dx + residual attention
             let dy_n1 = Tensor::from_row_major((seq, hidden), d_norm1).unwrap();
-            let (d_x_in, rms_attn_grad) = rms_backward(&act.norm1, &layer.rms_attn, &dy_n1);
+            let (mut d_x_in, rms_attn_grad) = rms_backward(&act.norm1, &layer.rms_attn, &dy_n1);
             grads.layer_grads[li].rms_attn_grad = Some(rms_attn_grad);
+            let n = d_x_in.data.len().min(d_x_attn_residual.data.len());
+            for i in 0..n {
+                d_x_in.data[i] += d_x_attn_residual.data[i];
+            }
             dx = d_x_in;
         }
 
@@ -1577,8 +1594,20 @@ pub struct CandleSidecar {
 }
 impl CandleSidecar {
     pub fn new() -> Self { CandleSidecar { connected: false, last_loss: 0.0 } }
-    pub fn connect(&mut self) { self.connected = true; }
-    pub fn train(&mut self, data: &[f32]) -> f32 { self.last_loss = data.iter().map(|&x| x * x).sum::<f32>() / data.len().max(1) as f32; self.last_loss }
+    /// Honesty: sem bridge GPU/Candle — connect não promove connected=true.
+    pub fn connect(&mut self) -> bool {
+        k_nano::slog_kai!("COGNITIVE", "warn", "CandleSidecar connect refused — not_wired");
+        self.connected = false;
+        false
+    }
+    pub fn train(&mut self, data: &[f32]) -> f32 {
+        if !self.connected {
+            self.last_loss = f32::NAN;
+            return self.last_loss;
+        }
+        self.last_loss = data.iter().map(|&x| x * x).sum::<f32>() / data.len().max(1) as f32;
+        self.last_loss
+    }
     pub fn status(&self) -> String { alloc::format!("[CANDLE] connected={}, last_loss={:.4}", self.connected, self.last_loss) }
 }
 
@@ -1596,10 +1625,10 @@ pub struct TaskSpawner {
 }
 impl TaskSpawner {
     pub fn new() -> Self { TaskSpawner { spawned: 0, max_children: 16 } }
-    pub fn spawn(&mut self, _name: &str, _entry: u64, _stack: u64) -> u64 {
-        self.spawned += 1;
-        // No bare-metal, spawn = registra agente filho
-        self.spawned
+    /// Honesty: Ring3/ELF spawner not_wired — não incrementa spawned.
+    pub fn spawn(&mut self, _name: &str, _entry: u64, _stack: u64) -> Option<u64> {
+        k_nano::slog_kai!("COGNITIVE", "warn", "TaskSpawner::spawn refused — Ring3 not_wired");
+        None
     }
     pub fn status(&self) -> String { alloc::format!("[SPAWNER] {} tasks spawned, max={}", self.spawned, self.max_children) }
 }

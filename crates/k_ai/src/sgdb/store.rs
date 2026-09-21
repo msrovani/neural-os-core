@@ -189,7 +189,7 @@ fn populate_hw_namespace() {
     let hw = k_nano::platform_probe::hw_info();
     let write = |key: &str, value: &str| {
         if let Err(e) = put_kv(key, value.as_bytes()) {
-            k_nano::slog_kai!("SGDB", "hw", "warn put_kv {}: {}", key, e);
+            k_nano::slog_kai!("SGDB", "warn", "put_kv {}: {}", key, e);
         }
     };
     let flag = |b: bool| if b { "true" } else { "false" };
@@ -208,7 +208,7 @@ fn populate_hw_namespace() {
     );
     k_nano::slog_kai!(
         "SGDB",
-        "hw",
+        "ok",
         "Onda CPU: /hw/* populado (isa={}, hv={}, ram_mb={})",
         hw.isa_name(),
         hw.hv.name(),
@@ -220,7 +220,7 @@ fn populate_hw_namespace() {
 fn populate_hw_rest() {
     let write = |key: &str, value: &str| {
         if let Err(e) = put_kv(key, value.as_bytes()) {
-            k_nano::slog_kai!("SGDB", "hw", "warn put_kv {}: {}", key, e);
+            k_nano::slog_kai!("SGDB", "warn", "put_kv {}: {}", key, e);
         }
     };
     {
@@ -271,7 +271,7 @@ fn populate_hw_rest() {
 /// erradas não devem entrar no SGDB. Re-habilitar junto com o flip em `build_card`, após
 /// provar o gate no protocolo honesto (split 90/10 por device + sweep QEMU).
 pub fn predict_all_pci() {
-    k_nano::slog_kai!("SGDB", "hw_predict", "HW Expert v4 NN gated off (veredito 2026-08-04) — skip");
+    k_nano::slog_kai!("SGDB", "ok", "HW Expert v4 NN gated off (veredito 2026-08-04) — skip");
 }
 
 /// ADR-0082 Onda CPU — LEITURA (fecha o loop: consumidores leem /hw/* de
@@ -308,9 +308,25 @@ pub fn put_kv(key: &str, data: &[u8]) -> Result<(), &'static str> {
     }
     let result = k_nano::storage::put_blob(key, data);
     if result.is_ok() {
-        super::nsgdb_bridge::sync_write_to_nsgdb(key, data, 3); // default L3
+        let layer = layer_from_key(key);
+        super::nsgdb_bridge::sync_write_to_nsgdb(key, data, layer);
     }
     result
+}
+
+/// Infer NSGDB MemoryLayer u8 from key prefix (`md/L4/...`, `hanr/`, …).
+fn layer_from_key(key: &str) -> u8 {
+    if let Some(rest) = key.strip_prefix("md/L") {
+        if let Some(c) = rest.chars().next() {
+            if let Some(d) = c.to_digit(10) {
+                return d.min(7) as u8;
+            }
+        }
+    }
+    if key.starts_with("hanr/") {
+        return 7;
+    }
+    3 // default L3 episodic long
 }
 
 pub fn get_kv(key: &str) -> Result<Option<Vec<u8>>, &'static str> {
@@ -360,7 +376,7 @@ pub fn put_hanr(name: &str, text: &str) -> Result<(), &'static str> {
     let kv_key = format!("{}{}", ns::HANR, name);
     put_kv(&kv_key, text.as_bytes())?;
     let doc = MemoryDoc::new(MemoryLayer::L7Identity, name, text.as_bytes().to_vec());
-    let _ = put_doc(doc);
+    put_doc(doc)?;
     Ok(())
 }
 

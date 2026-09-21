@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s373 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s374 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 374 | k_ai R2 | bughunt AIOS | recovery false-executed + I3 Warning + budget + residual | ingest status honesto; Trust path Contain deny; record_tokens no submit; Trainer FFN/Attn residual; trim skill-registry |
 | 373 | k_hal R1 | bughunt AIOS | ring 0x120038 + iwl-csr + BB_END + gpu_matmul None | Intel doorbell noop; iwl RESET 0x020 HBUS 0x400; MI_BB_END 0x05000000 fora do ring; DEADBEEF poke skip; CPU≠GPU; wait::until; trim deps |
 | 371 | cortex R2 | bughunt AIOS | TQ2_0 ggml 66B/256 + Unknown nbytes=0 | PrismML≠ggml; type ID comment 25→35; weather dead branch; brightness DEGRADED; burn_flex facade; poll_slice did |
 | 370 | agent-core | bughunt AIOS | budget wall-clock + Agency PackageHub | lifetime_paused crash; AP=BSP tick result; Agency empty→agency_specs; Specialist EventDriven; novelty boost |

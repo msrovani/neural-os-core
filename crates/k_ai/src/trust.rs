@@ -264,8 +264,40 @@ impl TrustCache {
                 }
                 return allowed;
             }
+            // Entry trusted but no PathRule: allow only under Observe/Warn.
+            match self.global_policy {
+                PolicyState::Observe | PolicyState::Warn => true,
+                PolicyState::Contain | PolicyState::Enforce => {
+                    k_nano::slog_kai!(
+                        "Trust",
+                        "warn",
+                        "Path deny (no PathRule under {:?}): {} token={} skill={}",
+                        self.global_policy,
+                        path,
+                        token,
+                        skill
+                    );
+                    false
+                }
+            }
+        } else {
+            // Sem entry: Contain/Enforce fail-closed; Observe/Warn transitório.
+            match self.global_policy {
+                PolicyState::Observe | PolicyState::Warn => true,
+                PolicyState::Contain | PolicyState::Enforce => {
+                    k_nano::slog_kai!(
+                        "Trust",
+                        "warn",
+                        "Path deny (uncached under {:?}): {} token={} skill={}",
+                        self.global_policy,
+                        path,
+                        token,
+                        skill
+                    );
+                    false
+                }
+            }
         }
-        true // sem regra de path = permitido
     }
 
     /// #198: carrega política de segurança de boot (patterns de regex)
@@ -323,11 +355,9 @@ impl SyscallClass {
 }
 
 /// Global trust entry count for safety invariant I3.
-/// Returns 0 if TRUST_CACHE is not yet initialized (pre-boot).
+/// Honesty: TRUST_CACHE lives in hermes — k_ai cannot read it.
+/// Callers in hermes must use `TRUST_CACHE.lock().entry_count()` directly.
+/// This stub returns 0 (= unchecked from Ring 2).
 pub fn global_trust_entry_count() -> usize {
-    // TRUST_CACHE lives in hermes::globals — k_ai cannot depend on hermes.
-    // This is a stub that returns 0; the real check is done by SafetyInvariants
-    // which runs in the SecurityAgent (hermes ring) and can access TRUST_CACHE.
-    // For now, return 0 to indicate "not checked" (pre-boot).
     0
 }

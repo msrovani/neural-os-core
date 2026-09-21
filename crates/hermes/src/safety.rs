@@ -22,6 +22,7 @@ use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use k_nano::{println};
 use k_nano::EVENT_BUS;
+use crate::globals::TRUST_CACHE;
 
 const SAFETY_MANIFEST: AgentManifest = AgentManifest {
     name: "safety",
@@ -208,17 +209,25 @@ impl Agent for SafetyAgent {
             }
         }
         // k_ai runtime invariants (heap / agents / trust-proxy / scheduler lag)
-        let status = self.runtime_inv.check_all(tick);
-        if !status.all_pass() {
+        let mut status = self.runtime_inv.check_all(tick);
+        // I3 real: TrustCache entry_count (hermes owns TRUST_CACHE).
+        let trust_n = TRUST_CACHE.lock().entry_count();
+        status.i3_trust = if trust_n > 0 {
+            k_ai::safety_invariants::InvariantResult::Pass
+        } else {
+            k_ai::safety_invariants::InvariantResult::Warning
+        };
+        if !status.all_green() {
             k_nano::slog_hermes!(
                 "SAFETY",
-                "warn",
-                "runtime_inv I1={:?} I2={:?} I3={:?} I4={:?} violations={}",
+                if status.all_pass() { "ok" } else { "warn" },
+                "runtime_inv I1={:?} I2={:?} I3={:?} I4={:?} violations={} trust_entries={}",
                 status.i1_heap,
                 status.i2_agents,
                 status.i3_trust,
                 status.i4_scheduler,
-                status.violations
+                status.violations,
+                trust_n
             );
         }
         // Audit Merkle verify — every 100 ticks

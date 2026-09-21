@@ -96,7 +96,7 @@ impl CrdtMemorySync {
             if self.active {
                 // Transição ativo → inativo
                 self.active = false;
-                k_nano::slog_kai!("CRDT", "sync", "P2P mesh offline → fallback local (v={})", self.local_version);
+                k_nano::slog_kai!("CRDT", "warn", "P2P mesh offline → fallback local (v={})", self.local_version);
             }
             return;
         }

@@ -53,17 +53,18 @@ impl SelfHealAgent {
         ) {
             slog_kai!("SELF", "warn", "NSGDB ingest failed: {}", e);
         } else {
-            slog_kai!("SELF", "warn", "NSGDB ingest OK: {}", key);
+            slog_kai!("SELF", "ok", "NSGDB ingest OK: {}", key);
         }
     }
 
     /// Ingest a recovery action result into NSGDB.
     /// Key format: `selfheal_result/{tick:07}` at L3.
-    fn ingest_recovery_to_nsgdb(action: &str, daemon: &str, tick: u64) {
+    /// Honesty: `status` must reflect real outcome (`executed` only if Act succeeded).
+    fn ingest_recovery_to_nsgdb(action: &str, daemon: &str, tick: u64, status: &str) {
         let key = format!("selfheal_result/{:07}", tick);
         let content = format!(
-            "action={} daemon={} tick={} status=executed",
-            action, daemon, tick
+            "action={} daemon={} tick={} status={}",
+            action, daemon, tick, status
         );
         if let Err(e) = crate::sgdb::store::put_kv(
             &format!("md/L3/{}", key),
@@ -134,7 +135,7 @@ impl SelfHealAgent {
             payload: detail.into_bytes(),
             token: CapabilityToken::Legacy(1),
         });
-        slog_kai!("SELF", "warn", "User notified: {}", msg);
+        slog_kai!("SELF", "ok", "User notified: {}", msg);
     }
 
     // ── AI Diagnosis (Phase 3 + NSGDB enrichment) ────────────────────────────
@@ -186,40 +187,60 @@ impl SelfHealAgent {
 
         k_nano::slog_kai!(
             "SELF",
-            "warn",
+            "ok",
             "AI diagnosis: action='{}' reason='{}'",
             action_str,
             reason
         );
 
-        SelfHealAgent::ingest_recovery_to_nsgdb(&action_str, daemon, tick);
-
         match action_str.as_str() {
             "restart_daemon" => {
                 let pushed = push_respawn(daemon);
-                slog_kai!("SELF", "warn", "AI->RestartDaemon '{}' pushed={}", daemon, pushed);
+                let status = if pushed { "executed" } else { "bridge_missing" };
+                slog_kai!(
+                    "SELF",
+                    if pushed { "ok" } else { "warn" },
+                    "AI->RestartDaemon '{}' pushed={}",
+                    daemon,
+                    pushed
+                );
+                SelfHealAgent::ingest_recovery_to_nsgdb(&action_str, daemon, tick, status);
                 let mut heal = GLOBAL_SELF_HEAL.lock();
                 heal.record_failure(daemon.into(), "ai_restart".into(), tick);
-                SelfHealAgent::notify_user("restart", daemon, reason, tick);
+                if pushed {
+                    SelfHealAgent::notify_user("restart", daemon, reason, tick);
+                } else {
+                    slog_kai!("SELF", "warn", "AI restart skipped notify — bridge missing");
+                }
             }
             "checkpoint_restore" => {
-                slog_kai!("SELF", "warn", "AI->CheckpointRestore");
-                let mut heal = GLOBAL_SELF_HEAL.lock();
-                heal.restore_checkpoint();
-                SelfHealAgent::notify_user("checkpoint", daemon, reason, tick);
+                slog_kai!("SELF", "ok", "AI->CheckpointRestore");
+                let ok = {
+                    let mut heal = GLOBAL_SELF_HEAL.lock();
+                    heal.restore_checkpoint()
+                };
+                let status = if ok { "executed" } else { "restore_failed" };
+                SelfHealAgent::ingest_recovery_to_nsgdb(&action_str, daemon, tick, status);
+                if ok {
+                    SelfHealAgent::notify_user("checkpoint", daemon, reason, tick);
+                } else {
+                    slog_kai!("SELF", "warn", "AI checkpoint restore failed — no notify");
+                }
             }
             "create_skill" => {
-                slog_kai!("SELF", "warn", "AI->CreateSkill (reason: {})", reason);
+                slog_kai!("SELF", "ok", "AI->CreateSkill (reason: {})", reason);
                 let _ = EVENT_BUS.publish(Event {
                     id: 0,
                     topic: "SKILL_CREATE".into(),
                     payload: reason.as_bytes().to_vec(),
                     token: CapabilityToken::Legacy(1),
                 });
+                SelfHealAgent::ingest_recovery_to_nsgdb(&action_str, daemon, tick, "attempted");
                 SelfHealAgent::notify_user("create_skill", daemon, reason, tick);
             }
             "log_continue" => {
-                slog_kai!("SELF", "warn", "AI->LogContinue (reason: {})", reason);
+                slog_kai!("SELF", "ok", "AI->LogContinue (reason: {})", reason);
+                SelfHealAgent::ingest_recovery_to_nsgdb(&action_str, daemon, tick, "logged");
             }
             _ => {
                 slog_kai!(
@@ -228,6 +249,7 @@ impl SelfHealAgent {
                     "AI->unknown action '{}', logging only",
                     action_str
                 );
+                SelfHealAgent::ingest_recovery_to_nsgdb(&action_str, daemon, tick, "unknown");
             }
         }
     }
@@ -236,13 +258,16 @@ impl SelfHealAgent {
         let tick = TIMER_TICKS.load(Ordering::Relaxed) as u64;
         match action {
             RecoveryAction::RestartDaemon(name, verify) => {
-                slog_kai!("SELF", "warn", "RestartDaemon: {} (via RESPAWN_QUEUE bridge)", name);
+                slog_kai!("SELF", "ok", "RestartDaemon: {} (via RESPAWN_QUEUE bridge)", name);
                 let pushed = push_respawn(&name);
+                let status = if pushed { "executed" } else { "bridge_missing" };
                 if !pushed {
                     slog_kai!("SELF", "warn", "RestartDaemon: bridge not registered -- fallback log only");
                 }
-                SelfHealAgent::ingest_recovery_to_nsgdb("restart", &name, tick);
-                SelfHealAgent::notify_user("restart", &name, "auto-heal restart", tick);
+                SelfHealAgent::ingest_recovery_to_nsgdb("restart", &name, tick, status);
+                if pushed {
+                    SelfHealAgent::notify_user("restart", &name, "auto-heal restart", tick);
+                }
                 if let Some(check) = verify {
                     if !check() {
                         let mut heal = GLOBAL_SELF_HEAL.lock();
@@ -251,7 +276,7 @@ impl SelfHealAgent {
                 }
             }
             RecoveryAction::CreateSkill(daemon, fix, verify) => {
-                slog_kai!("SELF", "warn", "CreateSkill: {} - {}", daemon, fix);
+                slog_kai!("SELF", "ok", "CreateSkill: {} - {}", daemon, fix);
                 {
                     let mut heal = GLOBAL_SELF_HEAL.lock();
                     heal.pending_fixes.push((daemon.clone(), fix.clone()));
@@ -262,7 +287,7 @@ impl SelfHealAgent {
                     payload: fix.into_bytes(),
                     token: CapabilityToken::Legacy(1),
                 });
-                SelfHealAgent::ingest_recovery_to_nsgdb("create_skill", &daemon, tick);
+                SelfHealAgent::ingest_recovery_to_nsgdb("create_skill", &daemon, tick, "attempted");
                 SelfHealAgent::notify_user("create_skill", &daemon, "generating fix", tick);
                 if let Some(check) = verify {
                     if !check() {
@@ -281,11 +306,18 @@ impl SelfHealAgent {
                 });
             }
             RecoveryAction::CheckpointRestore => {
-                slog_kai!("SELF", "warn", "CheckpointRestore requested");
-                let mut heal = GLOBAL_SELF_HEAL.lock();
-                heal.restore_checkpoint();
-                SelfHealAgent::ingest_recovery_to_nsgdb("checkpoint_restore", "system", tick);
-                SelfHealAgent::notify_user("checkpoint", "system", "restoring checkpoint", tick);
+                slog_kai!("SELF", "ok", "CheckpointRestore requested");
+                let ok = {
+                    let mut heal = GLOBAL_SELF_HEAL.lock();
+                    heal.restore_checkpoint()
+                };
+                let status = if ok { "executed" } else { "restore_failed" };
+                SelfHealAgent::ingest_recovery_to_nsgdb("checkpoint_restore", "system", tick, status);
+                if ok {
+                    SelfHealAgent::notify_user("checkpoint", "system", "restoring checkpoint", tick);
+                } else {
+                    slog_kai!("SELF", "warn", "CheckpointRestore failed — no notify");
+                }
             }
             RecoveryAction::LogAndContinue => {
                 // Nothing to execute.

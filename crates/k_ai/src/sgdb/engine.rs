@@ -96,7 +96,9 @@ impl AiosDatabaseEngine {
             }
             MemoryLayer::L4Semantic | MemoryLayer::L5Procedural => {
                 if let Some(ref bv) = doc.bitvec {
-                    self.bq.insert(id, bv.clone());
+                    if !self.bq.insert(id, bv.clone()) {
+                        k_nano::slog_kai!("SGDB", "warn", "BQ insert refuse dim mismatch id={}", id);
+                    }
                 } else if !doc.payload.is_empty() && doc.payload.len() % 4 == 0 {
                     // Só trata como embedding f32 se o payload for tipado (len%4==0)
                     // E parecer vetor denso (≥8 dims). Texto L4 ("semantic:…") → ART-only.
@@ -113,7 +115,9 @@ impl AiosDatabaseEngine {
                             ]);
                             f.push(w);
                         }
-                        self.bq.insert_f32(id, &f);
+                        if !self.bq.insert_f32(id, &f) {
+                            k_nano::slog_kai!("SGDB", "warn", "BQ insert_f32 refuse dim mismatch id={}", id);
+                        }
                     }
                 }
                 self.art.insert(sk, id);

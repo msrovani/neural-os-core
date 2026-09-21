@@ -5,7 +5,7 @@
 //! I1: Heap integrity — allocator não corrompido (smoke alloc; não é full heap audit)
 //! I2: Agents alive — agents esperados estão rodando
 //! I3: Trust intact — **proxy observe-only em k_ai** (TRUST_CACHE vive em hermes;
-//!     Pass aqui ≠ "íntegro verificado"; SecurityAgent/hermes faz o check real)
+//!     Warning aqui ≠ "íntegro"; hermes SafetyAgent sobrescreve com entry_count)
 //! I4: Scheduler tick — detecta salto grande entre checks (não "tick parado":
 //!     se o tick congela, este checker também para de rodar)
 
@@ -32,6 +32,16 @@ pub struct SafetyStatus {
 
 impl SafetyStatus {
     pub fn all_pass(&self) -> bool {
+        // Warning = degraded observe (AIOS honesty), não fail-closed.
+        // Só Violation dispara fail-closed / contador.
+        self.i1_heap != InvariantResult::Violation
+            && self.i2_agents != InvariantResult::Violation
+            && self.i3_trust != InvariantResult::Violation
+            && self.i4_scheduler != InvariantResult::Violation
+    }
+
+    /// True se todos os invariantes estão Pass (sem Warning).
+    pub fn all_green(&self) -> bool {
         self.i1_heap == InvariantResult::Pass
             && self.i2_agents == InvariantResult::Pass
             && self.i3_trust == InvariantResult::Pass
@@ -119,18 +129,18 @@ impl SafetyInvariants {
 
     /// I3: Trust intact check.
     /// Honesty: k_ai não pode ler hermes::TRUST_CACHE (dep direction).
-    /// Pass = "não verificado neste anel", NÃO "trust íntegro".
-    /// O check real fica no SecurityAgent (hermes). Log warn uma vez.
+    /// Warning = "não verificado neste anel", NÃO Pass (= íntegro).
+    /// Hermes SafetyAgent faz o check real (entry_count).
     fn check_trust_intact(&self) -> InvariantResult {
         static WARNED: AtomicBool = AtomicBool::new(false);
         if !WARNED.swap(true, Ordering::Relaxed) {
             k_nano::slog_kai!(
                 "Safety",
                 "warn",
-                "I3 proxy: TrustCache check delegated to hermes SecurityAgent (k_ai cannot read TRUST_CACHE)"
+                "I3 proxy: TrustCache delegated to hermes — returning Warning (not Pass)"
             );
         }
-        InvariantResult::Pass
+        InvariantResult::Warning
     }
 
     /// I4: Scheduler tick check.

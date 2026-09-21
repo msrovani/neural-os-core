@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s373 — k_hal honesty + offsets
+# STATE — neural-os-core v1.9.99-s374 — k_ai honesty residual
 
-#   PISTA ATIVA: s373 — k_hal R1 (ring/iwl/BB_END/matmul/wait)
-#   PISTA ANTERIOR: s372 k_nano; s371 cortex TQ2_0; s370 agent-core; s369 Boot Trilha A
+#   PISTA ATIVA: s374 — k_ai R2 (SelfHeal recovery / Trust path / I3 / budget / Trainer residual)
+#   PISTA ANTERIOR: s373 k_hal; s372 k_nano; s371 cortex TQ2_0; s370 agent-core
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
@@ -29,5 +29,6 @@
 | B1.2 | workspace host 0 fail | ✅ s368 |
 | B3.1 | Playback pacing free+TSC | ✅ s368 |
 | s369 | Trilha A BOOT.LOG UEFI writer + consume | ✅ código; aceite stick AWAITING |
+| s374 | k_ai honesty residual pós-s356 | ✅ recovery/I3/Trust/budget/Trainer |
 | B2 | Mesh peer B / relaunch | AWAITING operador |
 | Track C | Ring3/B/C/GPU/WiFi… | defer (ADR-0100 §5) |

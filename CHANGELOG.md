@@ -1,5 +1,15 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s374] - 2026-09-21 — k_ai honesty residual (pós-s356)
+
+- SelfHeal: `status=executed` só se respawn/restore OK; notify gated; slog sucesso→ok
+- Trust: Contain/Enforce path deny sem PathRule; I3 k_ai→Warning + hermes `TRUST_CACHE.entry_count`
+- Cognitive stubs fail-closed (ReAct/MCP/Candle/Spawn); Trainer residual FFN+Attn
+- Economy: `record_tokens` no InferQueue submit; BQ refuse dim mismatch; `layer_from_key` dual-write
+- slog ADR-0092: hw/FS/BQ/update_with_replay; InferenceFS synthetic; wire `self_heal_disk`
+- trim `skill-registry` dep; codemap orphans honesty
+- SESSION_374; k_ai 46 pass (+1 flaky isolado OK); hermes check 0 erros
+
 ## [1.9.99-s373] - 2026-09-21 — k_hal honesty + offsets + trim
 
 - Intel: delete `execute_gen_shader`/`gpu_blit` 0x41; `MI_BATCH_BUFFER_END`=0x05000000 não vai ao ring; `dispatch_compute`→false

@@ -436,7 +436,16 @@ impl SelfHeal {
     }
 
     fn get_mhi_dram_bytes() -> u64 {
-        // MHI vive em hermes/neural-kernel — Ring 1 lê via k_nano se disponível
+        // MHI vive em hermes — k_ai não lê. Sempre 0 (campo informativo no checkpoint).
+        static WARNED: core::sync::atomic::AtomicBool =
+            core::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+            k_nano::slog_kai!(
+                "CHECKPOINT",
+                "warn",
+                "mhi_dram_bytes=0 (MHI state not bridged into k_ai)"
+            );
+        }
         0
     }
 
