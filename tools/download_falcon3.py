@@ -36,9 +36,9 @@ LICENSE_NOTE = """\
 
 def main():
     ap = argparse.ArgumentParser(description="Baixa Falcon3 3B via huggingface_hub")
-    ap.add_argument("--variant", default="7b",
+    ap.add_argument("--variant", default="3b",
                     choices=["1b", "3b", "7b", "10b", "base", "1.58bit", "instruct", "1_58bit", "158"],
-                    help="Falcon3 size (default 7b = alvo Neural OS)")
+                    help="Falcon3 size (default 3b = lab ADR-0101; 7b/10b=Pro se couber)")
     ap.add_argument("--output", type=Path, default=DEFAULT_OUT, help="dir destino (target/falcon3)")
     ap.add_argument("--revision", default="main", help="branch/revision HF")
     ap.add_argument("--token", default=None, help="HF token se repo gated (ou env HF_TOKEN)")

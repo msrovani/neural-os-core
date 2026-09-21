@@ -1377,6 +1377,8 @@ struct GgufConfig {
     rope_theta: f32,
     rms_epsilon: f32,
     tie_embeddings: bool,
+    /// llama.context_length (Falcon3 1.58bit lab = 4096).
+    context_length: usize,
 }
 
 impl GgufConfig {
@@ -1408,6 +1410,7 @@ impl GgufConfig {
         let rope_theta = get_f32("llama.rope.freq_base");
         let rms_epsilon = get_f32("llama.attention.layer_norm_rms_epsilon");
         let tie_embeddings = get_bool("llama.attention.tie_qkv");
+        let ctx = get_u64("llama.context_length");
         // Derive head_dim: hidden / num_heads
         let head_dim = if num_heads > 0 { hidden / num_heads } else { 64 };
         GgufConfig {
@@ -1418,9 +1421,11 @@ impl GgufConfig {
             head_dim: head_dim.max(8),
             intermediate: intermediate.max(hidden * 2),
             vocab: vocab.max(256),
-            rope_theta: if rope_theta > 0.0 { rope_theta } else { 10000.0 },
+            // Falcon3-*-1.58bit HF = 1000042; 10000 só se metadata ausente e não-Falcon.
+            rope_theta: if rope_theta > 1.0 { rope_theta } else { 1_000_042.0 },
             rms_epsilon: if rms_epsilon > 0.0 { rms_epsilon } else { 1e-5 },
             tie_embeddings,
+            context_length: if ctx > 0 { ctx } else { 4096 },
         }
     }
 }
@@ -1542,6 +1547,13 @@ impl GgufBackedModel {
             .map(|(d, cols, _)| d[..cols.min(h)].to_vec())
             .unwrap_or_else(|| alloc::vec![1.0f32; h]);
 
+        // Honesty s387: RoPE real (antes rope_cos/sin vazios = attn sem posição).
+        let max_seq = c.context_length.min(4096).max(64);
+        let rope_seq = max_seq.min(2048).max(64);
+        let theta = if c.rope_theta > 1.0 { c.rope_theta } else { 1_000_042.0 };
+        let (rope_cos, rope_sin) =
+            crate::cortex::rope_precompute(rope_seq, c.head_dim, theta);
+
         Some(crate::cortex::TransformerModel {
             embed,
             embed_scale: 1.0,
@@ -1553,7 +1565,7 @@ impl GgufBackedModel {
             vocab_size: c.vocab as u32,
             hidden: h,
             num_layers: c.num_layers,
-            max_seq: 4096, // Falcon3 1.58bit default ctx
+            max_seq,
             num_heads: c.num_heads,
             num_kv_heads: c.num_kv_heads,
             head_dim: c.head_dim,
@@ -1564,9 +1576,9 @@ impl GgufBackedModel {
             act_type: 0, // silu (Falcon3 default)
             embed_type: 0,
             embed_q6k: None,
-            rope_theta: c.rope_theta,
-            rope_cos: alloc::vec![],
-            rope_sin: alloc::vec![],
+            rope_theta: theta,
+            rope_cos,
+            rope_sin,
         })
     }
 }
@@ -1609,16 +1621,40 @@ impl Model for GgufBackedModel {
     }
 
     fn max_seq(&self) -> usize {
-        4096 // Falcon3 default ctx
+        // Honesty s387: metadata ctx, clamp 4096 (mesmo contrato load_llm_v6).
+        self.config.context_length.min(4096).max(64)
     }
     fn num_layers(&self) -> usize { self.config.num_layers }
     fn hidden(&self) -> usize { self.config.hidden }
+}
+
+/// Observe header a partir do GGUF auto-config (ADR-0101 / s387).
+pub fn note_gguf_header(m: &GgufBackedModel) {
+    let c = &m.config;
+    let q_dim = c.num_heads.saturating_mul(c.head_dim);
+    let h = crate::model::header_with_runtime_clamp(crate::model::ModelHeader {
+        hidden: c.hidden,
+        num_layers: c.num_layers,
+        num_heads: c.num_heads,
+        vocab: c.vocab,
+        max_seq: c.context_length.max(64),
+        intermediate: c.intermediate,
+        kv_heads: c.num_kv_heads,
+        q_dim,
+        num_medusa: 0,
+        tie: c.tie_embeddings,
+        feat: 0,
+        embed_type: 0,
+        file_size: m.file.data.len(),
+    });
+    crate::model::set_model_header(h);
 }
 
 /// Carrega modelo GGUF e registra como modelo ativo via set_model()
 pub fn load_gguf_model(data: &[u8]) -> Result<(), &'static str> {
     let file = load_gguf(data)?;
     let model = GgufBackedModel::new(file);
+    note_gguf_header(&model);
     crate::cortex::set_model(Box::new(model));
     Ok(())
 }

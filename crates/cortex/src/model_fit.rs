@@ -329,6 +329,21 @@ impl Falcon3Kind {
         256
     }
 
+    /// max_position_embeddings HF 1.58bit Instruct (ADR-0101).
+    /// Runtime ainda pode clamp≤4096 (OOM mask) — este é o contrato do checkpoint.
+    pub fn ctx_len(self) -> usize {
+        match self {
+            Self::Tiny1B => 8192,
+            Self::Daily3B => 4096,
+            Self::Goal7B | Self::Large10B => 32768,
+        }
+    }
+
+    /// rope_theta HF (todos Falcon3-*-1.58bit = 1000042).
+    pub fn rope_theta(self) -> f32 {
+        1_000_042.0
+    }
+
     pub fn file_mb_hint(self) -> u64 {
         match self {
             Self::Tiny1B => 350,
@@ -515,6 +530,7 @@ mod ram_policy_tests {
         assert!(!pack_resident_ok(2048, 1500, 1750));
     }
 
+    #[test]
     fn falcon3_kind_shapes_1_58bit_family() {
         assert_eq!(Falcon3Kind::Tiny1B.hidden(), 2048);
         assert_eq!(Falcon3Kind::Tiny1B.intermediate(), 8192);
@@ -526,6 +542,10 @@ mod ram_policy_tests {
         assert_eq!(Falcon3Kind::Goal7B.layers(), 28);
         assert_eq!(Falcon3Kind::Large10B.layers(), 40);
         assert_eq!(Falcon3Kind::Large10B.intermediate(), 23040);
+        assert_eq!(Falcon3Kind::Daily3B.ctx_len(), 4096);
+        assert_eq!(Falcon3Kind::Tiny1B.ctx_len(), 8192);
+        assert_eq!(Falcon3Kind::Goal7B.ctx_len(), 32768);
+        assert!((Falcon3Kind::Daily3B.rope_theta() - 1_000_042.0).abs() < 1.0);
         assert_eq!(Falcon3Kind::from_str("1b"), Some(Falcon3Kind::Tiny1B));
         assert_eq!(Falcon3Kind::from_str("10b"), Some(Falcon3Kind::Large10B));
         assert_eq!(Falcon3Kind::from_str("lab"), Some(Falcon3Kind::Daily3B));
@@ -535,6 +555,8 @@ mod ram_policy_tests {
     fn kind_from_fat_name() {
         assert_eq!(falcon3_kind_of_name("PRO.v6"), Some(Falcon3Kind::Goal7B));
         assert_eq!(falcon3_kind_of_name("FALCON3B.BIN"), Some(Falcon3Kind::Daily3B));
+        assert_eq!(falcon3_kind_of_name("FALCON3.V6"), Some(Falcon3Kind::Daily3B));
+        assert_eq!(falcon3_kind_of_name("FALCON3_1B.V6"), Some(Falcon3Kind::Tiny1B));
         assert_eq!(falcon3_kind_of_name("FALCON10.v6"), Some(Falcon3Kind::Large10B));
         assert_eq!(hub_slot_for_kind(Falcon3Kind::Daily3B), crate::model_hub::ModelSlot::Active);
         assert_eq!(falcon3_boot_names()[0], "FALCON3.V6");

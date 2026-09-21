@@ -812,9 +812,20 @@ def convert_model(model_name: str, output_path: str,
     if isinstance(tie_embeddings, str):
         tie_embeddings = tie_embeddings.lower() in ("true", "1", "yes")
 
-    # rope_theta
+    # rope_theta — Falcon3-*-1.58bit HF = 1000042 (não 10000 genérico)
+    falconish = (
+        (hidden, num_layers, intermediate_size) in (
+            (2048, 18, 8192),
+            (3072, 22, 9216),
+            (3072, 28, 23040),
+            (3072, 40, 23040),
+        )
+    )
+    default_theta = 1000042.0 if falconish else 10000.0
     rope_theta = float(metadata.get(f"{arch}.rope.freq_base",
-                                    metadata.get("rope.freq_base", 10000.0)))
+                                    metadata.get("rope.freq_base", default_theta)))
+    if rope_theta <= 1.0:
+        rope_theta = default_theta
 
     # ── v6 (ADR-0085) ──────────────────────────────────────────────────────
     # num_params: soma de elementos de todos os tensores (informacional)

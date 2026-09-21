@@ -1,13 +1,14 @@
 # ADR-0101: Falcon3-3B como laboratório arquitetural — Falcon3-BitNet Cognitive
 
 **Data:** 2026-08-31  
-**Status:** Proposed  
-**Lifecycle (INDEX):** `pesquisa` → Onda 0 `por_fazer`  
+**Atualizado:** 2026-09-21 (SESSION_387)  
+**Status:** Accepted (Onda 0–2 parciais)  
+**Lifecycle (INDEX):** `fazendo`  
 **IDEA:** **#544** (substitui o *alvo de lab* de #540 / SESSION_291: 7B-first)  
-**Sprint:** v1.9.99-s298  
-**Evidência:** SESSION_298  
+**Sprint:** v1.9.99-s387  
+**Evidência:** SESSION_298 + SESSION_387 (header Observe wired)  
 **Não substitui:** ADR-0084 (kernels/fidelidade 2B4T), ADR-0085 (formato v6), ADR-0060 (BEI), ADR-0061 (CPU-first dispatch), ADR-0046 (AirLLM/GGUF), ADR-0019 (Cortex LLM). Complementa todas.  
-**Não implementa nesta sessão:** early-exit, vocab shortlist, GQA adaptativo, thinking budget, treino de esparsidade.
+**Não implementa nesta sessão:** early-exit, vocab shortlist treinado, GQA adaptativo, thinking budget, treino de esparsidade.
 
 ---
 

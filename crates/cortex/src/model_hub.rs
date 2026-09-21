@@ -102,6 +102,8 @@ pub fn register_model(slot: ModelSlot, model: Box<dyn Model>) {
 /// Ponto único de carga por bytes (ADR-0085 §7): load_model_v6 → ModelView
 /// → armazenamento por kind. Active/RustCoder/HwExpert usam os Mutex legados.
 pub fn register_bytes(slot: ModelSlot, data: &[u8]) -> bool {
+    // Honesty s387: Observe header ANTES do load — ADR-0101/AIOS (SKU sync k_hal).
+    crate::model::note_header_from_bytes(data);
     // 1. Tenta v6 .bitnet
     let view = match crate::model::load_model_v6(data) {
         Some(v) => Some(v),
@@ -110,15 +112,17 @@ pub fn register_bytes(slot: ModelSlot, data: &[u8]) -> bool {
             if let Ok(file) = crate::gguf::load_gguf(data) {
                 k_nano::slog_bin!("MODEL", "ok", "register_bytes slot={} GGUF auto-config", slot.name());
                 let gguf_model = crate::gguf::GgufBackedModel::new(file);
+                crate::gguf::note_gguf_header(&gguf_model);
                 let boxed: Box<dyn Model> = Box::new(gguf_model);
-                if matches!(slot, ModelSlot::Active | ModelSlot::GeneratorPro) {
-                    *crate::cortex::CURRENT_MODEL.lock() = Some(boxed);
-                    k_nano::slog_bin!("MODEL", "ok", "GGUF -> CURRENT_MODEL set (active=true)");
+                // Honesty s387: Active → set_model (MODEL_LOADED + dim); Pro ≠ CURRENT.
+                if matches!(slot, ModelSlot::Active) {
+                    crate::cortex::set_model(boxed);
                 } else {
                     let i = idx(slot);
                     HUB.lock().slots[i] = Some(boxed);
+                    mark(slot, true);
                 }
-                mark(slot, true);
+                k_nano::slog_bin!("MODEL", "ok", "GGUF slot={} registered", slot.name());
                 return true;
             }
             None
@@ -139,7 +143,8 @@ pub fn register_bytes(slot: ModelSlot, data: &[u8]) -> bool {
                 ModelSlot::Active | ModelSlot::RustCoder | ModelSlot::HwExpert
             ) {
                 match slot {
-                    ModelSlot::Active => *crate::cortex::CURRENT_MODEL.lock() = Some(boxed),
+                    // Honesty s387: set_model = MODEL_LOADED + EMBED_DIM + slog AI_READY
+                    ModelSlot::Active => crate::cortex::set_model(boxed),
                     ModelSlot::RustCoder => *crate::cortex::RUSTCODER_MODEL.lock() = Some(boxed),
                     _ => {}
                 }
@@ -353,9 +358,9 @@ pub fn slot_from_bitnet_bytes(data: &[u8]) -> ModelSlot {
             "slot_from_header: params={} MB={} hidden={}",
             params, h.file_size_mb(), h.hidden);
         return match params {
-            0..=100_000_000 => ModelSlot::Reranker,
-            100_000_000..=600_000_000 => ModelSlot::Learner,
-            600_000_000..=4_000_000_000 => ModelSlot::Active,
+            0..=99_999_999 => ModelSlot::Reranker,
+            100_000_000..=599_999_999 => ModelSlot::Learner,
+            600_000_000..=3_999_999_999 => ModelSlot::Active,
             4_000_000_000..=12_000_000_000 => ModelSlot::GeneratorPro,
             _ => ModelSlot::GeneratorPro,
         };

@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s387] - 2026-09-21 — Falcon3 LLM 1.58bit honesty bughunt
+
+- **H1–H6:** `set_model_header` Observe wired; rope_theta Falcon3=1000042; GGUF rope_precompute; Active→`set_model` (não Pro→CURRENT); n3 gate sev ok/warn
+- **M1–M6:** `Falcon3Kind::ctx_len`/`rope_theta`; download default 3b; testes SKU; clamp slog
+- **L1–L5:** ADR-0101 fazendo; convert_gguf falconish θ; slot ranges exclusivos
+- Canvas: `falcon3-llm-bughunt-s387.canvas.tsx`
+- Residuals: metal tok/s; IDEA #549; BitNet upstream idea-only (#532)
+
 ## [1.9.99-s386] - 2026-09-21 — W2A8 / KernelPack honesty bughunt
 
 - **H1–H5:** READY_NO_DISPATCH; probe_done gate; gfx90c→MadInt8; SCORE ready|probe|none; CE_OK/CE_FAIL

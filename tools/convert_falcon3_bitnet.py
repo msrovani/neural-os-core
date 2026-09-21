@@ -114,11 +114,11 @@ def convert(hf_repo: str, output_path: str, cache_dir: str | None = None):
     num_heads = cfg["num_attention_heads"]
     num_kv_heads = cfg.get("num_key_value_heads", num_heads)
     vocab_size = cfg["vocab_size"]
-    max_seq = cfg.get("max_position_embeddings", 32768)
+    max_seq = cfg.get("max_position_embeddings", 4096)  # 3B 1.58bit lab; 7B/10B lê do cfg (32K)
     intermediate_size = cfg["intermediate_size"]
     head_dim = cfg.get("head_dim", hidden // num_heads)
     tie_embeddings = cfg.get("tie_word_embeddings", False)
-    rope_theta = cfg.get("rope_theta", 10000.0)  # Falcon3 default
+    rope_theta = cfg.get("rope_theta", 1000042.0)  # Falcon3-*-1.58bit HF (não 10000)
 
     q_dim = head_dim * num_heads       # 12 * 256 = 3072
     k_dim = head_dim * num_kv_heads    # 4 * 256 = 1024

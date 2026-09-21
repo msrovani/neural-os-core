@@ -2056,10 +2056,14 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             }
         }
 
-        // BitNet attn precisa RoPE. feat bit2 = theta no EOF; senão default 10000.
-        // Nunca confiar em theta<=1 (lixo pós-pesos / soft-float print edge).
+        // BitNet attn precisa RoPE. feat bit2 = theta no EOF.
+        // Falcon3-*-1.58bit HF = 1000042 quando sem feat (não 10000 genérico).
         let rope_seq = (max_seq as usize).min(2048).max(64);
-        let mut theta = 10000.0f32;
+        let falconish = matches!(
+            (hidden, num_layers, intermediate_size),
+            (2048, 18, 8192) | (3072, 22, 9216) | (3072, 28, 23040) | (3072, 40, 23040)
+        );
+        let mut theta = if falconish { 1_000_042.0f32 } else { 10000.0f32 };
         if has_rope && off + 4 <= data.len() {
             if let Some(t) = read_f32(data, &mut off) {
                 if t > 1.0 {
@@ -2082,7 +2086,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             act_type: 0,
             embed_type: 0,
             embed_q6k: None,
-            rope_theta: 10000.0,
+            rope_theta: theta,
             rope_cos, rope_sin,
         };
         GLOBAL_MODEL_PARAMS.store(_num_params as u64, core::sync::atomic::Ordering::Relaxed);
@@ -2273,6 +2277,14 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         PackedTernaryTensor { shape: (hidden, vocab), packed_data: packed }
     };
 
+    let rope_seq = (max_seq as usize).min(2048).max(64);
+    let falconish = matches!(
+        (hidden, num_layers, intermediate_size),
+        (2048, 18, 8192) | (3072, 22, 9216) | (3072, 28, 23040) | (3072, 40, 23040)
+    );
+    let theta = if falconish { 1_000_042.0f32 } else { 10000.0f32 };
+    let (rope_cos, rope_sin) = rope_precompute(rope_seq, head_dim, theta);
+
     let model = TransformerModel {
         embed, embed_scale: 1.0, layers, rms_final, unembed, unembed_scale: 1.0, medusa_heads,
         vocab_size, hidden, num_layers, max_seq: max_seq as usize,
@@ -2283,9 +2295,9 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         act_type: 0,
         embed_type: 0,
         embed_q6k: None,
-        rope_theta: 10000.0,
-        rope_cos: vec![],
-        rope_sin: vec![],
+        rope_theta: theta,
+        rope_cos,
+        rope_sin,
     };
     GLOBAL_MODEL_PARAMS.store(_num_params as u64, core::sync::atomic::Ordering::Relaxed);
     Some(model)
@@ -2566,10 +2578,12 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
     let down_out = q_dim;
 
     if hidden >= 2048 && max_seq > 4096 {
+        // Falcon3 Instruct denso declara 32K; 1.58bit lab 3B = 4096 (ADR-0101).
+        // Clamp runtime evita mask attn OOM — não inventar ctx 32K no lab.
         k_nano::slog_cortex!(
             "LLM",
             "warn",
-            "max_seq={} >4096 (heavy) — clamp 4096 (evita mask 32K² OOM)",
+            "max_seq={} >4096 (Instruct denso / 7B-10B header) — clamp 4096 (Falcon3 1.58bit lab safe)",
             max_seq
         );
         max_seq = 4096;
@@ -2673,8 +2687,12 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
         medusa_heads.push(MedusaHead { w, w_scale });
     }
 
-    // Theta (only if feat bit2 — ADR-0085 D3)
-    let mut theta = 10000.0f32;
+    // Theta (only if feat bit2 — ADR-0085 D3). Sem bit: Falcon3 family → 1000042.
+    let falconish = matches!(
+        (hidden, num_layers, intermediate_size),
+        (2048, 18, 8192) | (3072, 22, 9216) | (3072, 28, 23040) | (3072, 40, 23040)
+    );
+    let mut theta = if falconish { 1_000_042.0f32 } else { 10000.0f32 };
     if has_theta {
         if let Some(t) = read_f32(data, off) {
             if t > 1.0 { theta = t; }
@@ -2692,6 +2710,10 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
         act_type, embed_type,
         rope_theta: theta, rope_cos, rope_sin,
     };
+    // Honesty s387: se register_bytes não passou (load direto), ainda Observe.
+    if crate::model::loaded_model_header().is_none() {
+        crate::model::note_header_from_bytes(data);
+    }
     k_nano::slog_cortex!("LLM", "ok", "v6 model OK L={} {}KB", num_layers, data.len()/1024);
     Some(model)
 }
@@ -4146,6 +4168,7 @@ pub fn clear_model() {
     *CURRENT_MODEL.lock() = None;
     MODEL_LOADED.store(false, core::sync::atomic::Ordering::Release);
     CURRENT_MODEL_EMBED_DIM.store(0, core::sync::atomic::Ordering::Relaxed);
+    crate::model::clear_model_header();
     crate::model_hub::mark_active(false);
 }
 

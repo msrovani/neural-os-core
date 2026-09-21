@@ -130,6 +130,26 @@ pub fn set_model_header(h: ModelHeader) {
     }
 }
 
+/// Honesty s387: clear quando CURRENT_MODEL cai — senão header órfão mente.
+pub fn clear_model_header() {
+    HEADER_LOADED.store(false, Ordering::Release);
+}
+
+/// Aplica o mesmo clamp de `load_llm_v6` (SESSION_349 OOM) ao header Observe.
+pub fn header_with_runtime_clamp(mut h: ModelHeader) -> ModelHeader {
+    if h.hidden >= 2048 && h.max_seq > 4096 {
+        h.max_seq = 4096;
+    }
+    h
+}
+
+/// Parse + store a partir dos bytes do artefato (v6). No-op se não for LLM v6.
+pub fn note_header_from_bytes(data: &[u8]) {
+    if let Some(h) = parse_model_header(data) {
+        set_model_header(header_with_runtime_clamp(h));
+    }
+}
+
 static MODEL_HEADER_HOOK: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);
 

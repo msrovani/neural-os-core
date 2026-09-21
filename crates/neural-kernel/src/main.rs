@@ -1113,24 +1113,24 @@ fn n3_cortex_gate(gen: Option<bool>) {
     let rustc = crate::cortex::rustcoder_is_loaded();
     let bpe = crate::bpe::is_loaded();
     let dim = crate::cortex::CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
-    // F1: header dinâmico (zero hardcoded) — Falcon3-7B/3B hidden=3072 layers=28
+    // F1: header dinâmico (zero hardcoded) — shapes vêm do v6 (3B=22L / 7B=28L / 10B=40L)
     if let Some(h) = cortex_crate::model::loaded_model_header() {
-        k_nano::slog_cortex!("Gate", "n3", "model=Falcon3 hidden={} layers={} heads={} kv={} intermediate={} vocab={} max_seq={} file={}MB",
+        k_nano::slog_cortex!("Gate", "ok", "model=Falcon3 hidden={} layers={} heads={} kv={} intermediate={} vocab={} max_seq={} file={}MB",
             h.hidden, h.num_layers, h.num_heads, h.kv_heads, h.intermediate, h.vocab, h.max_seq, h.file_size_mb());
     } else {
-        k_nano::slog_cortex!("Gate", "n3", "model=none (header not loaded) dim={} bpe={}",
+        k_nano::slog_cortex!("Gate", "warn", "model=none (header not loaded) dim={} bpe={}",
             dim, if bpe { "LOADED" } else { "ABSENT" });
     }
-    k_nano::slog_cortex!("Gate", "n3", "llm={} dim={} bpe={}",
+    k_nano::slog_cortex!("Gate", "ok", "llm={} dim={} bpe={}",
         llm.as_str(),
         dim,
         if bpe { "LOADED" } else { "ABSENT" }
     );
-    k_nano::slog_cortex!("Gate", "n3", "MAP_WEIGHTS pages={} (P5 Cap {})",
+    k_nano::slog_cortex!("Gate", "ok", "MAP_WEIGHTS pages={} (P5 Cap {})",
         mmap_n,
         if mmap_n > 0 { "OK" } else { "WARN" }
     );
-    k_nano::slog_cortex!("Gate", "n3", "Trinity experts={} generator={} moe_router={} hwexpert={} rustcoder={} route=keyword+R3",
+    k_nano::slog_cortex!("Gate", "ok", "Trinity experts={} generator={} moe_router={} hwexpert={} rustcoder={} route=keyword+R3",
         experts,
         if has_gen { "OK" } else { "MISSING" },
         if moe_router { "LOADED" } else { "ABSENT(keyword)" },
@@ -1138,11 +1138,11 @@ fn n3_cortex_gate(gen: Option<bool>) {
         if rustc { "LOADED" } else { "ABSENT" }
     );
     match gen {
-        Some(true) => k_nano::slog_cortex!("Gate", "n3", "generate=OK prompt→texto (weather-e2e)"),
-        Some(false) => k_nano::slog_cortex!("Gate", "n3", "generate=FAILED empty/absent"),
+        Some(true) => k_nano::slog_cortex!("Gate", "ok", "generate=OK prompt→texto (weather-e2e)"),
+        Some(false) => k_nano::slog_cortex!("Gate", "fail", "generate=FAILED empty/absent"),
         None => k_nano::slog_cortex!(
             "Gate",
-            "n3",
+            "ok",
             "generate=GATED soft-float (boot skip; feature=weather-e2e p/ HIT; prior N3.4 evidence OK)"
         ),
     }
@@ -1158,7 +1158,7 @@ fn n3_cortex_gate(gen: Option<bool>) {
         None => n31, // path existe; HIT = weather-e2e / log canônico
     };
     let met = n31 && n32 && n33 && n34;
-    k_nano::slog_cortex!("Gate", "n3", "gate complete n3.1={} n3.2={} n3.3={} n3.4={} criteria={} (N3.5 crate cortex link deferred)",
+    k_nano::slog_cortex!("Gate", "ok", "gate complete n3.1={} n3.2={} n3.3={} n3.4={} criteria={} (N3.5 crate cortex link deferred)",
         if n31 { "OK" } else { "FAIL" },
         if n32 { "OK" } else { "FAIL" },
         if n33 { "OK" } else { "FAIL" },
