@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s371 — cortex TQ2_0 ggml + bughunt
+# STATE — neural-os-core v1.9.99-s373 — k_hal honesty + offsets
 
-#   PISTA ATIVA: s371 — cortex GGUF TQ2_0 oficial + Unknown deny size
-#   PISTA ANTERIOR: s370 agent-core; s369 Boot Trilha A
+#   PISTA ATIVA: s373 — k_hal R1 (ring/iwl/BB_END/matmul/wait)
+#   PISTA ANTERIOR: s372 k_nano; s371 cortex TQ2_0; s370 agent-core; s369 Boot Trilha A
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo

@@ -360,6 +360,20 @@ impl AtaDriver {
         true
     }
 
+    /// ATA FLUSH CACHE (0xE7) — sync_cache BlockDevice.
+    pub unsafe fn flush_cache(&self) -> bool {
+        if !self.wait_bsy() {
+            return false;
+        }
+        let head = if self.slave { 0xF0u8 } else { 0xE0u8 };
+        write_io(self.io_base + 6, head);
+        for _ in 0..100 {
+            core::hint::spin_loop();
+        }
+        write_io(self.io_base + 7, 0xE7);
+        self.wait_bsy()
+    }
+
     /// Try master then slave. Returns true on first successful read.
     pub unsafe fn read_any(&self, lba: u32, buf: &mut [u8], count: u8) -> bool {
         let m = AtaDriver {

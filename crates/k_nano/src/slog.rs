@@ -63,10 +63,24 @@ impl Sev {
     pub fn from_sub(sub: &str) -> Self {
         match sub {
             // Canónicos + aliases pós-s321 (evita TRACE mudo por "info"/subsistema no slot sev).
+            // SESSION_372: callers históricos põem o *nome do driver* no slot sev
+            // (`slog_nano!("Net","e1000",...)`) — desconhecido = TRACE = dmesg cego (ADR-0092).
             "ok" | "OK" | "pass" | "PASS" | "ready" | "bound" | "grant" | "refresh"
-            | "info" | "INFO" => Sev::Ok,
+            | "info" | "INFO"
+            | "e1000" | "i225" | "ahci" | "ata" | "nvme" | "NVMe" | "virtio" | "VIRTIO"
+            | "MBR" | "GPT" | "FAT32" | "ACPI" | "HEAP" | "MEM" | "P2P" | "PCI"
+            | "IDT" | "GDT" | "PIC" | "INSTALL" | "SYS-INST" | "SLIP" | "USB"
+            | "SMP" | "Net" | "Disk"
+            // SESSION_373 k_hal: probe/init/intel no slot sev (BCS Ring OK era TRACE).
+            | "init" | "intel" | "INTEL" | "NVIDIA" | "AMD" | "BLIT" | "NKP"
+            | "ATH10K" | "IWL" | "FE" | "cursor" | "bind" | "probe" | "kvdma"
+            | "MATMUL" | "GPU" | "AUD" | "NPU" | "canary"
+            | "BAR" | "bar" | "BACKEND" | "GEN9" | "GUC" | "D2" | "D3" | "D4"
+            | "CE" | "KIQ" | "MES" | "GGTT" | "gtt" | "BCS" | "bench" | "XQUEUE"
+            | "VRAM" | "SASOS" | "ACR" | "WIFI" | "Wifi" | "DB" | "vga" | "XPU"
+            | "SZ" | "RING" | "ring" | "nvidia" | "COMPUTE" | "Cap" => Sev::Ok,
             "warn" | "WARN" | "warning" | "degraded" | "skip" | "absent" | "msc" => Sev::Warn,
-            "fail" | "FAIL" | "error" | "panic" => Sev::Fail,
+            "fail" | "FAIL" | "error" | "panic" | "err" => Sev::Fail,
             "trace" | "TRACE" | "debug" | "ckpt" | "mmIO" | "mmio" => Sev::Trace,
             _ => Sev::Trace,
         }
@@ -227,7 +241,8 @@ mod tests {
         assert!(!console_allows(Sev::Trace));
         // "info" é alias de ok (s321: k_hal usava info → TRACE mudo).
         assert!(console_allows(Sev::from_sub("info")));
-        assert!(!console_allows(Sev::from_sub("e1000")));
+        // SESSION_372: driver name no slot sev → Ok (antes TRACE escondia Reset OK).
+        assert!(console_allows(Sev::from_sub("e1000")));
         assert_eq!(Sev::from_sub("ok"), Sev::Ok);
     }
 
@@ -242,6 +257,15 @@ mod tests {
     fn migration_aliases_visible() {
         assert_eq!(Sev::from_sub("info"), Sev::Ok);
         assert_eq!(Sev::from_sub("bound"), Sev::Ok);
+        assert_eq!(Sev::from_sub("e1000"), Sev::Ok);
+        assert_eq!(Sev::from_sub("ahci"), Sev::Ok);
+        assert_eq!(Sev::from_sub("intel"), Sev::Ok);
+        assert_eq!(Sev::from_sub("init"), Sev::Ok);
+        assert_eq!(Sev::from_sub("canary"), Sev::Ok);
+        assert_eq!(Sev::from_sub("BAR"), Sev::Ok);
+        assert_eq!(Sev::from_sub("GEN9"), Sev::Ok);
+        assert_eq!(Sev::from_sub("D4"), Sev::Ok);
+        assert_eq!(Sev::from_sub("err"), Sev::Fail);
         assert_eq!(Sev::from_sub("msc"), Sev::Warn);
         assert_eq!(Sev::from_sub("skip"), Sev::Warn);
     }

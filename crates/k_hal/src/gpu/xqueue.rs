@@ -79,7 +79,7 @@ impl XQueue {
                     true
                 } else if now_tick.wrapping_sub(r.submitted_tick) > 500 {
                     self.failed += 1;
-                    k_nano::slog_hal!("XQUEUE", "info", "Job {} timeout", r.id);
+                    k_nano::slog_hal!("XQUEUE", "warn", "Job {} timeout", r.id);
                     true
                 } else {
                     self.running = Some(r); // put back
@@ -96,7 +96,7 @@ impl XQueue {
                     self.running = Some(XqJob { submitted_tick: now_tick, ..job });
                 } else {
                     self.failed += 1;
-                    k_nano::slog_hal!("XQUEUE", "info", "Job {} submit failed", job.id);
+                    k_nano::slog_hal!("XQUEUE", "warn", "Job {} submit failed", job.id);
                 }
             }
         }

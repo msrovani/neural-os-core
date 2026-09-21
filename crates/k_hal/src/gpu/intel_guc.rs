@@ -169,15 +169,10 @@ pub unsafe fn bring_up_guc(gpu: &GpuInfo, mmio: u64) -> GucReport {
     k_nano::slog_hal!("INTEL", "GUC", "{}: Uploaded {}B dma={:#x} gtt_off={:#x} WOPCM_reg={:#x} (estrutural)", gpu.name, len, dma.phys, gtt_off, wopcm_reg);
 
     let before = core::ptr::read_volatile((mmio + GUC_STATUS) as *const u32);
-    let mut booted = false;
-    for _ in 0..100_000 {
+    let booted = crate::wait::until(2_000_000, || {
         let st = core::ptr::read_volatile((mmio + GUC_STATUS) as *const u32);
-        if st != 0 && st != 0xffff_ffff && st != before {
-            booted = true;
-            break;
-        }
-        core::hint::spin_loop();
-    }
+        st != 0 && st != 0xffff_ffff && st != before
+    });
     let _keep = dma;
 
     let stage = if booted {

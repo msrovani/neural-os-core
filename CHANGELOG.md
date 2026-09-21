@@ -1,5 +1,24 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s373] - 2026-09-21 — k_hal honesty + offsets + trim
+
+- Intel: delete `execute_gen_shader`/`gpu_blit` 0x41; `MI_BATCH_BUFFER_END`=0x05000000 não vai ao ring; `dispatch_compute`→false
+- `gpu/ring.rs`: doorbell 0x120038 removido; write `cmd`; Intel = fila software
+- iwlwifi offsets = Linux `iwl-csr.h` (RESET 0x020, GP 0x024, HBUS 0x400)
+- NVIDIA: skip VRAM DEADBEEF poke (SESSION_260); `gpu_matmul` sem CPU silencioso
+- generic_wifi: deny mapa desconhecido; DMA `virt_to_phys`
+- `k_hal::wait::until` TSC 2s; slog aliases BAR/GEN9/D4/BCS; trim libm/lazy_static/ticket-lock
+- SESSION_373; k-hal tests 54 pass
+
+## [1.9.99-s372] - 2026-09-21 — k_nano honesty + dep trim
+
+- i225: CTRL_RST timeout → false (paridade e1000)
+- `storage::nvme` init deny (sem ASQ hardcoded); slog driver-name→Ok; cache DATA LOSS→warn
+- delete orphan `disk_power`; trim ruvix/linked_list_allocator/spinning_top
+- SESSION_372; k-nano tests 193 pass
+- Residual auditoria: sync_cache default false + ATA/AHCI/NVMe/virtio flush; FAT bps!=512 deny; NVMe disable fail-closed; AHCI CR skip; DiskIntelligence cache morto removido; spin 0.9.9
+- Bumps major adiados (x86_64 0.15, uart 0.6, talc 5, smoltcp 0.14)
+
 ## [1.9.99-s371] - 2026-09-21 — cortex GGUF TQ2_0 ggml + bughunt
 
 - TQ2_0: layout ggml 66B/256 (type 35); Unknown nbytes=0; weather dead branch removed

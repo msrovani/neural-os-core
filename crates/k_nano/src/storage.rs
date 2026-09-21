@@ -1,4 +1,4 @@
-//! Storage — ADR-0063 Flash + TickvLite; stub nvme legacy retained.
+//! Storage — ADR-0063 Flash + TickvLite; legacy `nvme` init denied (SESSION_372).
 //!
 //! NVMe de produção: `disk_agent::nvme` (SESSION_171).
 

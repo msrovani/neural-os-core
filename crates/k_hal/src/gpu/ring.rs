@@ -35,10 +35,10 @@ pub struct GpuJobRing {
 
 unsafe impl Send for GpuJobRing {}
 
-/// Doorbell: Intel — escreve RENDER_RING_TAIL (offset 0x120038)
-unsafe fn intel_doorbell(bar0_virt: u64, tail: u32) {
-    core::ptr::write_volatile((bar0_virt + 0x120038) as *mut u32, tail);
-}
+/// Doorbell Intel: **não** escrever RCS TAIL.
+/// Este SPSC guarda descritores de software; o RCS real é `IntelRing` (TAIL 0x2030).
+/// Offset antigo 0x120038 era START (hex a mais) — clobberava MMIO (SESSION_355/373).
+unsafe fn intel_doorbell(_bar0_virt: u64, _tail: u32) {}
 
 /// Doorbell: NVIDIA — escreve PFIFO doorbell (offset 0x002000, PUSH_BUFFER)
 unsafe fn nvidia_doorbell(bar0_virt: u64, tail: u32) {
@@ -113,6 +113,7 @@ impl GpuJobRing {
         }
         let idx = self.tail as usize;
         unsafe {
+            self.ring_va.add(idx).write_volatile(job.cmd);
             self.ring_va.add(idx + 1).write_volatile(job.arg0);
             self.ring_va.add(idx + 2).write_volatile(job.arg1);
             self.ring_va.add(idx + 3).write_volatile(job.arg2);
@@ -133,8 +134,10 @@ impl GpuJobRing {
         unsafe {
             fence(Ordering::Acquire);
             match self.gpu_vendor {
-                crate::gpu::detect::GpuVendor::Intel =>
-                    core::ptr::read_volatile((self.bar0_virt + 0x120034) as *const u32),
+                crate::gpu::detect::GpuVendor::Intel => {
+                    // Software queue: RCS não consome (IntelRing). Nunca fingir complete.
+                    0
+                }
                 crate::gpu::detect::GpuVendor::Nvidia =>
                     core::ptr::read_volatile((self.bar0_virt + 0x002004) as *const u32),
                 crate::gpu::detect::GpuVendor::Amd => 0, // sem poll MMIO até C3
@@ -144,14 +147,9 @@ impl GpuJobRing {
     }
 
     /// Polla head avancar (GPU consumiu jobs)
-    pub fn poll_head(&self, timeout: u32) -> bool {
+    pub fn poll_head(&self, _timeout: u32) -> bool {
         let target = self.tail;
-        for _ in 0..timeout {
-            let h = self.head_reg();
-            if h == target { return true; }
-            core::hint::spin_loop();
-        }
-        false
+        crate::wait::until(2_000_000, || self.head_reg() == target)
     }
 
     /// Enfileira job + doorbell + poll completion

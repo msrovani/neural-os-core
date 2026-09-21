@@ -3,7 +3,6 @@
 //! Usado para matmul + blit + display.
 
 use crate::gpu::detect::{GpuInfo, GpuVendor, GpuArch};
-use k_nano::kjson;
 use core::sync::atomic::{fence, Ordering};
 
 // MMIO offsets — Gen9 RCS0 @ 0x2000 (i915_reg.h). Era 0x120000 (hex a mais,
@@ -19,10 +18,21 @@ const RENDER_RING_CTL_16K: u32 = 0x3001;
 const RING_PTR_MASK: u32 = 0x001F_FFFC;
 const FORCE_WAKEUP: u64 = 0x0A278;
 
+/// Poll HEAD==TAIL. TSC 2s (SESSION_373).
+fn wait_ring_idle(mmio: u64, head_off: u64, want: u32, _spin_fallback: u32) -> bool {
+    crate::wait::until(2_000_000, || {
+        let head = unsafe {
+            core::ptr::read_volatile((mmio + head_off) as *const u32)
+        } & RING_PTR_MASK;
+        head == want
+    })
+}
+
 // GPU commands (dwords)
-// MI_BATCH_BUFFER_END e MI_FLUSH compartilham opcode 0x00500000 em Gen9+ (MI_FLUSH removido Gen11+)
+// MI_BATCH_BUFFER_END = MI_INSTR(0xA, 0) = 0x0A<<23 = 0x05000000 (i915).
+// NÃO emitir no *ring* — o engine para e HEAD nunca alcança TAIL (ADR-0087).
 pub const MI_BATCH_BUFFER_START: u32 = 0x31A00000;
-pub const MI_BATCH_BUFFER_END: u32 = 0x00500000;
+pub const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 pub const MI_NOOP: u32 = 0x00000000;
 /// MI_FLUSH_DW (não o MI_FLUSH antigo 0x02000000!) — `MI_INSTR(0x26, 1)` = 3 dwords.
 /// Fase 3 ADR-0087: flush de caches pós-blit (coerência CPU↔GPU no BCS).
@@ -50,8 +60,6 @@ pub struct IntelRing {
     pub tail: u32,
     pub has_render: bool,
     pub gen: u32,
-    pub shader_pa: u64,      // Physical address of loaded shader
-    pub shader_loaded: bool,
 }
 
 // IntelRing so contem um raw pointer + integers. Seguro para enviar entre cores.
@@ -67,7 +75,7 @@ impl IntelRing {
 
         let test_val = unsafe { core::ptr::read_volatile((mmio + FORCE_WAKEUP) as *const u32) };
         if test_val == 0xFFFFFFFF || test_val == 0 {
-            k_nano::slog_hal!("INTEL", "info", "GPU nao respondeu. test_val={:#x}", test_val);
+            k_nano::slog_hal!("INTEL", "warn", "GPU nao respondeu. test_val={:#x}", test_val);
             return None;
         }
 
@@ -118,8 +126,6 @@ impl IntelRing {
             tail: 0,
             has_render: true,
             gen,
-            shader_pa: 0,
-            shader_loaded: false,
         })
     }
 
@@ -163,18 +169,9 @@ impl IntelRing {
     }
 
     /// Espera GPU completar (HEAD addr == TAIL addr, mask de wrap).
+    /// SESSION_373: budget TSC 2s — spin count mente em TCG/WHPX.
     pub fn wait_idle(&self, timeout: u32) -> bool {
-        let want = self.tail & RING_PTR_MASK;
-        for _ in 0..timeout {
-            let head = unsafe {
-                core::ptr::read_volatile((self.mmio + RENDER_RING_HEAD) as *const u32)
-            } & RING_PTR_MASK;
-            if head == want {
-                return true;
-            }
-            core::hint::spin_loop();
-        }
-        false
+        wait_ring_idle(self.mmio, RENDER_RING_HEAD, self.tail & RING_PTR_MASK, timeout)
     }
 
     /// Executa MI_BATCH_BUFFER_START (submete batch buffer em separado)
@@ -188,85 +185,16 @@ impl IntelRing {
         self.wait_idle(1000000)
     }
 
-    /// Matmul via GPU (SESSION_274, honesto): sem MEDIA_OBJECT/GPGPU_WALKER
-    /// real (zebin KernelPack — Layer S), NÃO há conta no device. Retorna
-    /// `None` — o caller (`backend::gpu_matmul`) faz o CPU fallback explícito
-    /// e a telemetria não conta como GPU. A versão anterior computava
-    /// `a.matmul(b)` na CPU aqui dentro e o work_queue registrava como GPU.
+    /// Matmul via GPU (SESSION_274/373): sem MEDIA_OBJECT/GPGPU_WALKER
+    /// (zebin KernelPack — Layer S). Não aloca NOOP shader. `None` = CPU
+    /// fallback explícito em `backend::gpu_matmul` (não conta como GPU).
     pub fn gpu_matmul(&mut self, _a: &cortex::tensor::Tensor, _b: &cortex::tensor::Tensor) -> Option<cortex::tensor::Tensor> {
-        if !self.shader_loaded {
-            if let Some(shader_pa) = self.load_gen_matmul_shader() {
-                self.shader_pa = shader_pa;
-                self.shader_loaded = true;
-                k_nano::slog_hal!("INTEL", "MATMUL", "GEN shader staging @ {:#x} (dispatch MEDIA_OBJECT = Layer S)", shader_pa);
-            }
-        }
+        k_nano::slog_hal!(
+            "INTEL",
+            "warn",
+            "gpu_matmul None — MEDIA_OBJECT/GPGPU_WALKER Layer S (não fingir GPU)"
+        );
         None
-    }
-
-    /// Carrega shader GEN para matmul na VRAM (stub preparado para shader real)
-    /// Retorna physical address do shader ou None em caso de erro
-    fn load_gen_matmul_shader(&mut self) -> Option<u64> {
-        // Aloca 1 página para o shader (4KB suficiente para matmul simples)
-        let (shader_pa, shader_va) = unsafe { alloc_ring_buffer(1)? };
-
-        // Kernel Pack zebin offline (ocloc/IGC) — ver tools/pack_intel_kernels.py.
-        // Estrutura esperada do shader GEN:
-        // - MEDIA_INTERFACE_DESCRIPTOR_LOAD
-        // - MEDIA_VFE_STATE
-        // - MEDIA_CURBE_LOAD
-        // - MEDIA_OBJECT com instruções de compute (load, mul, add, store)
-        //
-        // Por enquanto, escreve um stub de NOOPs para testar alocação
-        unsafe {
-            let shader_dwords = shader_va as *mut u32;
-            for i in 0..1024 {
-                shader_dwords.add(i).write_volatile(MI_NOOP);
-            }
-        }
-
-        // Adiciona shader ao GTT para que a GPU enxergue
-        unsafe { init_gtt(self.mmio, shader_pa, 1); }
-
-        Some(shader_pa)
-    }
-
-    /// Executa shader GEN via MEDIA_OBJECT (infraestrutura preparada)
-    fn execute_gen_shader(&mut self, a_pa: u64, b_pa: u64, c_pa: u64, m: u32, n: u32, k: u32) -> bool {
-        if !self.shader_loaded {
-            k_nano::slog_hal!("INTEL", "info", "Shader nao carregado — execute_gen_shader falhou");
-            return false;
-        }
-
-        // TODO: Implementar MEDIA_OBJECT para submeter shader aos EU
-        // Estrutura do batch buffer:
-        // 1. PIPELINE_SELECT (media)
-        // 2. STATE_BASE_ADDRESS (shader, surface, dynamic)
-        // 3. MEDIA_OBJECT (dispatch shader)
-        //
-        // Por enquanto, stub retorna true para não quebrar compilação
-        k_nano::slog_hal!("GPU", "intel", "execute_gen_shader stub: a={:#x} b={:#x} c={:#x} {}x{}x{}", a_pa, b_pa, c_pa, m, n, k);
-        true
-    }
-
-    /// Blitter: copia de VRAM para framebuffer (usado pelo Desktop Cube)
-    /// Nota: idealmente usa BCS ring (blitter engine), nao RCS.
-    /// Sem GTT set up, batch buffers em RAM do sistema nao sao visiveis pela GPU.
-    pub fn gpu_blit(&mut self, src: u64, dst: u64, w: u32, h: u32, bpp: u32) -> bool {
-        let pitch = w * bpp;
-        let cmd = [
-            0x41000000 | (3 << 24) | (pitch << 0),
-            (0xCC << 16) | (h << 0),
-            (0 << 16) | (w << 0),
-            (dst & 0xFFFFFFFF) as u32,
-            ((dst >> 32) & 0xFFFFFFFF) as u32,
-            (src & 0xFFFFFFFF) as u32,
-            ((src >> 32) & 0xFFFFFFFF) as u32,
-            MI_BATCH_BUFFER_END,
-        ];
-        self.write(&cmd);
-        self.submit();
-        self.wait_idle(1000000)
     }
 }
 
@@ -340,7 +268,7 @@ impl BcsRing {
             core::ptr::write_volatile((mmio + BCS_RING_HEAD) as *mut u32, 0);
             core::ptr::write_volatile((mmio + BCS_RING_TAIL) as *mut u32, 0);
         }
-        k_nano::slog_hal!("BCS", "info", "Blitter ring at {:#x} size 4096 dw (GTT pinned)", ring_pa);
+        k_nano::slog_hal!("BCS", "ok", "Blitter ring at {:#x} size 4096 dw (GTT pinned)", ring_pa);
         Some(BcsRing { mmio, ring_pa, ring_va, ring_size: 4096, tail: 0 })
     }
 
@@ -383,17 +311,7 @@ impl BcsRing {
     }
 
     pub fn wait_idle(&self, timeout: u32) -> bool {
-        let want = self.tail & RING_PTR_MASK;
-        for _ in 0..timeout {
-            let head = unsafe {
-                core::ptr::read_volatile((self.mmio + BCS_RING_HEAD) as *const u32)
-            } & RING_PTR_MASK;
-            if head == want {
-                return true;
-            }
-            core::hint::spin_loop();
-        }
-        false
+        wait_ring_idle(self.mmio, BCS_RING_HEAD, self.tail & RING_PTR_MASK, timeout)
     }
 
     /// Executa blit no BCS ring (XY_SRC_COPY_BLT, Gen9 64-bit, 32bpp, untiled).
@@ -427,27 +345,27 @@ impl BcsRing {
 
 // ─── Compute kernel dispatch via ring buffer ──────────────────────────────
 
-/// Submete um kernel de computacao (matmul) para a GPU Intel via ring buffer.
-/// Preenche o ring com MI_MATH + pipe_control + batch buffer end.
-/// Retorna true se a GPU consumiu o comando.
-pub unsafe fn dispatch_compute(ring: &mut IntelRing, _a_addr: u64, _b_addr: u64, _out_addr: u64, m: u32, k: u32, n: u32) -> bool {
-    // Pipe control: flushes caches antes do compute
-    let flush = [0x7A00_0005u32, 0x0010_0000, 0x0000_0000, 0x0000_0000];
-    ring.write(&flush);
-
-    // MEDIA_OBJECT (ou GPGPU_WALKER) — placeholder para quando GEN assembly
-    // estiver disponivel. Atualmente: NOOP + MI_BATCH_BUFFER_END.
-    let compute = [
-        0x0000_0000u32, // NOOP
-        0x0500_0001u32, // MI_BATCH_BUFFER_END
-    ];
-    ring.write(&compute);
-    fence(Ordering::Release);
-
-    ring.submit();
-    let done = ring.wait_idle(100000);
-    kjson!("INTEL", "COMPUTE", "dispatch", "m", m, "k", k, "n", n, "done", done as u32);
-    done
+/// Submete compute no RCS. Sem MEDIA_OBJECT/GPGPU_WALKER (Layer S) — não
+/// emitir MI_BATCH_BUFFER_END no ring (HEAD nunca alcança TAIL) nem fingir
+/// dispatch com NOOP. Caller faz CPU fallback.
+pub unsafe fn dispatch_compute(
+    _ring: &mut IntelRing,
+    _a_addr: u64,
+    _b_addr: u64,
+    _out_addr: u64,
+    m: u32,
+    k: u32,
+    n: u32,
+) -> bool {
+    k_nano::slog_hal!(
+        "INTEL",
+        "warn",
+        "dispatch_compute None — MEDIA_OBJECT/GPGPU_WALKER Layer S m={} k={} n={}",
+        m,
+        k,
+        n
+    );
+    false
 }
 
 unsafe impl Send for BcsRing {}
@@ -459,7 +377,7 @@ unsafe fn alloc_ring_buffer(pages: usize) -> Option<(u64, *mut u32)> {
     let f = a.allocate_contiguous(pages)?;
     let pa = f.start_address().as_u64();
     if pa & 0xFFF != 0 {
-        k_nano::slog_hal!("INTEL", "info", "WARNING: ring buffer not page-aligned! {:#x}", pa);
+        k_nano::slog_hal!("INTEL", "warn", "WARNING: ring buffer not page-aligned! {:#x}", pa);
     }
     let off = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
     let va = (pa + off) as *mut u32;

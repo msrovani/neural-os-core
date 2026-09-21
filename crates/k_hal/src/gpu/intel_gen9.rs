@@ -8,7 +8,7 @@
 use crate::gpu::compute_abi::{vector_add_check, IsaTag};
 use crate::gpu::detect::GpuInfo;
 use crate::gpu::intel::{
-    IntelRing, MI_BATCH_BUFFER_END, MI_NOOP, PIPELINE_SELECT,
+    IntelRing, MI_NOOP, PIPELINE_SELECT,
 };
 use crate::gpu::intel_gtt::GgttPin;
 use crate::gpu::kernel_image;
@@ -21,7 +21,6 @@ const MEDIA_INTERFACE_DESCRIPTOR_LOAD: u32 = 0x7002;
 /// i915: MI_STORE_DWORD_IMM_GEN4 = MI_INSTR(0x20, 2) → (0x20<<23)|2
 const MI_STORE_DWORD_IMM: u32 = (0x20 << 23) | 2;
 const PIPELINE_MEDIA: u32 = 0x1;
-const FENCE_SPINS: u32 = 200_000;
 const FENCE_PAYLOAD: u32 = 0xA11E_u32;
 
 fn gpgpu_walker_header(dwords: u32) -> u32 {
@@ -45,18 +44,15 @@ pub unsafe fn probe_ring_alive(ring: &mut IntelRing, gtt: &mut GgttPin) -> bool 
         (fence.phys >> 32) as u32,
         FENCE_PAYLOAD ^ 0x1111,
     ]);
-    ring.write(&[MI_BATCH_BUFFER_END]);
+    // Sem MI_BATCH_BUFFER_END no ring (engine pararia). Ring vazio ⟺ HEAD==TAIL.
     ring.submit();
     let mut hit = false;
-    for _ in 0..FENCE_SPINS {
-        if core::ptr::read_volatile(fence.virt as *const u32) == (FENCE_PAYLOAD ^ 0x1111) {
-            hit = true;
-            break;
-        }
-        if ring.wait_idle(10) {
-            // HEAD moveu; fence pode ainda falhar se GGTT/phys errado
-        }
-        core::hint::spin_loop();
+    if crate::wait::until(2_000_000, || {
+        core::ptr::read_volatile(fence.virt as *const u32) == (FENCE_PAYLOAD ^ 0x1111)
+    }) {
+        hit = true;
+    } else {
+        let _ = ring.wait_idle(1);
     }
     k_nano::slog_hal!("INTEL", "GEN9", "RingAlive={}", hit);
     let _keep = fence;
@@ -168,7 +164,7 @@ pub unsafe fn dispatch_vector_add_gen9(
         (fence.phys >> 32) as u32,
         FENCE_PAYLOAD,
     ]);
-    ring.write(&[MI_NOOP, MI_BATCH_BUFFER_END]);
+    ring.write(&[MI_NOOP]);
     ring.submit();
 
     k_nano::slog_hal!(
@@ -181,18 +177,10 @@ pub unsafe fn dispatch_vector_add_gen9(
         fence_gtt
     );
 
-    let mut hit = false;
-    let mut ring_idle = false;
-    for _ in 0..FENCE_SPINS {
-        if core::ptr::read_volatile(fence.virt as *const u32) == FENCE_PAYLOAD {
-            hit = true;
-            break;
-        }
-        if ring.wait_idle(10) {
-            ring_idle = true;
-        }
-        core::hint::spin_loop();
-    }
+    let hit = crate::wait::until(2_000_000, || {
+        core::ptr::read_volatile(fence.virt as *const u32) == FENCE_PAYLOAD
+    });
+    let ring_idle = ring.wait_idle(1);
 
     k_nano::slog_hal!("INTEL", "GEN9", "fence_hit={} ring_idle={} (golden exige EU/zebin)", hit, ring_idle);
 

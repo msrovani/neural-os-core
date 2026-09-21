@@ -220,11 +220,32 @@ impl I225Driver {
 
         self.write32(REG_IMC, !0);
         self.write32(REG_CTRL, CTRL_RST);
-        for _ in 0..200_000 {
-            if self.read32(REG_CTRL) & CTRL_RST == 0 {
-                break;
+        // SESSION_372: e1000 honesty — CTRL_RST stuck ≠ continuar com NIC morto.
+        let mut rst_ok = false;
+        if crate::tsc::tsc_hz() != 0 {
+            let t0 = crate::tsc::now_us();
+            loop {
+                if self.read32(REG_CTRL) & CTRL_RST == 0 {
+                    rst_ok = true;
+                    break;
+                }
+                if crate::tsc::now_us().saturating_sub(t0) > 2_000_000 {
+                    break;
+                }
+                core::hint::spin_loop();
             }
-            core::hint::spin_loop();
+        } else {
+            for _ in 0..200_000 {
+                if self.read32(REG_CTRL) & CTRL_RST == 0 {
+                    rst_ok = true;
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+        }
+        if !rst_ok {
+            crate::slog_nano!("Net", "warn", "i225 Reset TIMEOUT — CTRL_RST stuck");
+            return false;
         }
         // Re-check Bus Master after reset (some HW clears it)
         crate::pci::enable_pci_bus_master_unsafe(self.pci_bus, self.pci_device, self.pci_func);

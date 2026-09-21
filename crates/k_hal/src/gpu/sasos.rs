@@ -25,13 +25,13 @@ pub unsafe fn init_sasos_vram(vram_phys: u64, vram_size: u64, pmoff: u64) -> boo
     let size = vram_size.min(SASOS_VRAM_LIMIT);
     let pages = k_nano::apic::map_region_uc_2mb_at(SASOS_VRAM_BASE, vram_phys, size, pmoff);
     if pages == 0 {
-        k_nano::slog_hal!("SASOS", "info", "init falhou: 0 pages mapeadas @ {:#x}", vram_phys);
+        k_nano::slog_hal!("SASOS", "fail", "init falhou: 0 pages mapeadas @ {:#x}", vram_phys);
         return false;
     }
     SASOS_VRAM_PHYS.store(vram_phys, Ordering::Release);
     SASOS_VRAM_SIZE.store(size, Ordering::Release);
     SASOS_VRAM_READY.store(true, Ordering::Release);
-    k_nano::slog_hal!("SASOS", "info", "VRAM {:#x} ({:.1}MB) mapeada em {:#x}+ ({} x 2MB UC)",
+    k_nano::slog_hal!("SASOS", "ok", "VRAM {:#x} ({:.1}MB) mapeada em {:#x}+ ({} x 2MB UC)",
         vram_phys, size as f64 / (1024.0 * 1024.0), SASOS_VRAM_BASE, pages);
     true
 }

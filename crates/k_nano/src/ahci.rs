@@ -140,13 +140,26 @@ impl AhciDriver {
             let fb_va = fb_pa + pmoff;
             core::ptr::write_bytes(fb_va as *mut u8, 0, 256);
 
-            // Stop port DMA before config
+            // Stop port DMA before config — CR stuck ⇒ skip porta (não reprogramar).
             let cmd = core::ptr::read_volatile((port_base + PXCMD) as *const u32);
             core::ptr::write_volatile((port_base + PXCMD) as *mut u32, cmd & !CMD_ST);
+            let mut cr_clear = false;
             for _ in 0..1000 {
                 let c = core::ptr::read_volatile((port_base + PXCMD) as *const u32);
-                if c & CMD_CR == 0 { break; }
+                if c & CMD_CR == 0 {
+                    cr_clear = true;
+                    break;
+                }
                 core::hint::spin_loop();
+            }
+            if !cr_clear {
+                crate::slog_nano!(
+                    "Disk",
+                    "warn",
+                    "AHCI port {} CMD.CR stuck — skip (não reprograma CLB)",
+                    i
+                );
+                continue;
             }
 
             core::ptr::write_volatile((port_base + PXCLB) as *mut u32, clb_pa as u32);
@@ -326,6 +339,44 @@ impl AhciDriver {
         core::ptr::write_volatile((port_base + PXCI) as *mut u32, 1);
         if !wait_ci_clear(port_base) {
             crate::slog_nano!("Disk", "warn", "AHCI write CI TIMEOUT port={}", port_idx);
+            return false;
+        }
+        let is = core::ptr::read_volatile((port_base + PXIS) as *const u32);
+        if is & (1 << 30) != 0 {
+            core::ptr::write_volatile((port_base + PXIS) as *mut u32, is);
+            return false;
+        }
+        true
+    }
+
+    /// ATA FLUSH CACHE EXT (0xEA) — sem PRDT. sync_cache do BlockDevice.
+    pub unsafe fn flush_cache(&mut self) -> bool {
+        if self.ports.is_empty() || !self.ports[0].present {
+            return false;
+        }
+        let port = &self.ports[0];
+        let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+        let port_base = port.mmio_virt;
+        let ct_pa = alloc_ahci_page();
+        if ct_pa == 0 {
+            return false;
+        }
+        let ct_va = ct_pa + pmoff;
+        core::ptr::write_bytes(ct_va as *mut u8, 0, 128);
+        let ch_va = (port.clb_pa + pmoff) as *mut u8;
+        // CFL=5 DWORDs, PRDTL=0, sem bit Write.
+        core::ptr::write_volatile(ch_va as *mut u16, 5u16);
+        core::ptr::write_volatile(ch_va.add(0x02) as *mut u16, 0);
+        core::ptr::write_volatile(ch_va.add(0x04) as *mut u16, 0);
+        core::ptr::write_volatile(ch_va.add(0x08) as *mut u32, ct_pa as u32);
+        core::ptr::write_volatile(ch_va.add(0x0C) as *mut u32, (ct_pa >> 32) as u32);
+        core::ptr::write_volatile((ct_va + 0x00) as *mut u8, 0x27);
+        core::ptr::write_volatile((ct_va + 0x01) as *mut u8, 0x80);
+        core::ptr::write_volatile((ct_va + 0x02) as *mut u8, 0xEA); // FLUSH CACHE EXT
+        core::arch::asm!("sfence", options(nostack, preserves_flags));
+        core::ptr::write_volatile((port_base + PXCI) as *mut u32, 1);
+        if !wait_ci_clear(port_base) {
+            crate::slog_nano!("Disk", "warn", "AHCI flush CI TIMEOUT");
             return false;
         }
         let is = core::ptr::read_volatile((port_base + PXIS) as *const u32);

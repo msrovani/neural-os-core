@@ -444,7 +444,6 @@ const METHOD_SEND_SIGNALING_PCAS_B: u32 = 0x02BC;
 /// Invalidate + schedule (tinygrad / RESEARCH Pascal).
 const PCAS_SIGNAL_SCHEDULE: u32 = 9;
 const FENCE_PAYLOAD: u32 = 1;
-const FENCE_SPINS: u32 = 100_000; // bounded — timeout honesto, não congela boot
 
 fn is_cpu_stub_payload(cubin: &[u8]) -> bool {
     cubin.starts_with(b"CPU_VECTOR_ADD_STUB") || cubin.starts_with(b"CPU_W2A8_STUB")
@@ -657,15 +656,9 @@ pub unsafe fn dispatch_vector_add(
     );
 
     // Poll fence (buffers ainda vivos).
-    let mut hit = false;
-    for _ in 0..FENCE_SPINS {
-        let v = core::ptr::read_volatile(fence.virt as *const u32);
-        if v == FENCE_PAYLOAD {
-            hit = true;
-            break;
-        }
-        core::hint::spin_loop();
-    }
+    let hit = crate::wait::until(2_000_000, || {
+        core::ptr::read_volatile(fence.virt as *const u32) == FENCE_PAYLOAD
+    });
 
     if !hit {
         d2.d4 = PascalD4Status::FenceTimeout;

@@ -36,19 +36,28 @@ impl NvidiaGpu {
         if version == 0xFFFFFFFF || version == 0 { return None; }
 
         if gpu.vram_size > 0 {
-            let vram_aligned = gpu.vram_size.next_power_of_two().min(256 * 1024 * 1024);
-            let mapped = unsafe { k_nano::apic::map_region_uc_2mb(gpu.bar2, vram_aligned, pmoff) };
-            k_nano::slog_hal!("NVIDIA", "info", "{} VRAM {} MB mapeado ({} x 2MB pages)", gpu.name, gpu.vram_mb(), mapped);
+            if gpu.pci_dstate != 0 {
+                k_nano::slog_hal!(
+                    "NVIDIA",
+                    "warn",
+                    "{}: D-state={} — skip VRAM map/poke (SESSION_260 hang)",
+                    gpu.name,
+                    gpu.pci_dstate
+                );
+            } else {
+                let vram_aligned = gpu.vram_size.next_power_of_two().min(256 * 1024 * 1024);
+                let mapped = unsafe { k_nano::apic::map_region_uc_2mb(gpu.bar2, vram_aligned, pmoff) };
+                k_nano::slog_hal!("NVIDIA", "ok", "{} VRAM {} MB mapeado ({} x 2MB pages)", gpu.name, gpu.vram_mb(), mapped);
+            }
         }
 
-        let vram_ptr = gpu.bar2 + pmoff;
-        unsafe { core::ptr::write_volatile(vram_ptr as *mut u32, 0xDEADBEEF); }
-        let test = unsafe { core::ptr::read_volatile(vram_ptr as *const u32) };
-        let vram_ok = test == 0xDEADBEEF;
-
-        k_nano::slog_hal!("GPU", "nvidia", "VRAM {} MB {}",
-            gpu.vram_mb(),
-            if vram_ok { "OK" } else { "SEM FIRMWARE (P8 mode)" });
+        // NÃO poke DEADBEEF na VRAM (SESSION_260: D3/P8 hang no metal).
+        k_nano::slog_hal!(
+            "GPU",
+            "nvidia",
+            "VRAM {} MB — skip poke (firmware/P8; canário CE no Degrau)",
+            gpu.vram_mb()
+        );
 
         let pfifo_ready = Self::probe_pfifo(mmio);
         // Família genérica: respeitar backend_kind do detect (DID|PMC); não hardcode SKU.
@@ -177,10 +186,11 @@ impl NvidiaGpu {
         core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
         let put = core::ptr::read_volatile((self.mmio + Self::PFIFO_PUT) as *const u32);
         core::ptr::write_volatile((self.mmio + Self::PFIFO_PUT) as *mut u32, put + 1);
-        for _ in 0..1000000 {
-            core::hint::spin_loop();
+        if crate::wait::until(2_000_000, || {
             let get = core::ptr::read_volatile((self.mmio + Self::PFIFO_GET) as *const u32);
-            if get >= put + 1 { return true; }
+            get >= put + 1
+        }) {
+            return true;
         }
         k_nano::slog_hal!("GPU", "nvidia", "PUSH_BUFFER timeout: PUT={} GET={}",
             put + 1,

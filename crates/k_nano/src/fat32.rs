@@ -799,6 +799,17 @@ impl<'a> Fat32Reader<'a> {
             crate::slog_nano!("FAT32", "info", "new: bps={} spc={} invalido (spec)", bytes_per_sector, sectors_per_cluster);
             return None;
         }
+        // Writer path ainda assume setor 512 (stack [u8;512] / append *512).
+        // 4Kn/1024+ → OOB — refuse até path bps-aware (SESSION_372).
+        if bytes_per_sector != 512 {
+            crate::slog_nano!(
+                "FAT32",
+                "warn",
+                "new: bps={} != 512 — mount recusado (writer não é bps-aware)",
+                bytes_per_sector
+            );
+            return None;
+        }
 
         let fat_lba = part.lba_start as u64 + reserved_sectors as u64;
         let data_lba = fat_lba + fat_count as u64 * sectors_per_fat32 as u64;

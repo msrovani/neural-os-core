@@ -1,30 +1,27 @@
 //! Intel Wireless (iwlwifi) driver — ucode loading + command/response + scan/associate.
-//! Baseado em drivers/net/wireless/intel/iwlwifi/pcie/ + iwl-trans.c
+//! Offsets: Linux `drivers/net/wireless/intel/iwlwifi/iwl-csr.h` (SESSION_373).
 //!
-//! Registradores iwlwifi (CSR + HBUS):
-//!   CSR: 0x000-0x3FC (device-level control)
-//!   HBUS: 0x200-0x29C (host bus interface, DMA, doorbell)
-//!   SRAM: 0x400+ (ucode loading via HBUS_TARG_MEM_*)
+//! CSR @ 0x000; HBUS @ 0x400 (não 0x200 — inventado). SRAM via HBUS_TARG_MEM_*.
 
 use core::sync::atomic::Ordering;
 
-// ─── CSR (Control and Status Registers) ─────────────────────────────
-const CSR_HW_IF_CONFIG: u32 = 0x000;        // HW interface config
-const CSR_INT_COALESCING: u32 = 0x004;       // interrupt coalescing
-const CSR_INT: u32 = 0x008;                  // interrupt status
-const CSR_INT_MASK: u32 = 0x00C;             // interrupt mask
-const CSR_GPIO_1: u32 = 0x020;               // GPIO
-const CSR_RESET: u32 = 0x028;                // reset controller
-const CSR_GP_CNTRL: u32 = 0x02C;             // general purpose control
-const CSR_EEPROM_GP: u32 = 0x048;            // EEPROM GPIO
-const CSR_LED: u32 = 0x094;                  // LED control
-const CSR_DRAM_INT_TBL: u32 = 0x0A0;         // DRAM interrupt table
-const CSR_MAC_SHADOW: u32 = 0x0A8;           // MAC shadow
-const CSR_GIO_CHICKEN: u32 = 0x0C0;          // GIO chicken bits
-const CSR_UCODE_DRV_GP1: u32 = 0x0D0;        // ucode driver GP
-const CSR_UCODE_DRV_GP2: u32 = 0x0D4;
-const CSR_LMAC_CRL_1: u32 = 0x1A0;           // LMAC control
-const CSR_DBG_LINK_PWR_MGMT: u32 = 0x250;
+// ─── CSR (iwl-csr.h) ───────────────────────────────────────────────
+const CSR_HW_IF_CONFIG: u32 = 0x000;
+const CSR_INT_COALESCING: u32 = 0x004;
+const CSR_INT: u32 = 0x008;
+const CSR_INT_MASK: u32 = 0x00C;
+const CSR_GPIO_IN: u32 = 0x018;
+const CSR_RESET: u32 = 0x020;
+const CSR_GP_CNTRL: u32 = 0x024;
+const CSR_HW_REV: u32 = 0x028;
+const CSR_EEPROM_GP: u32 = 0x030;
+const CSR_LED: u32 = 0x094;
+const CSR_DRAM_INT_TBL: u32 = 0x0A0;
+const CSR_MAC_SHADOW: u32 = 0x0A8;
+const CSR_GIO_CHICKEN: u32 = 0x0C0;
+const CSR_UCODE_DRV_GP1: u32 = 0x054;
+const CSR_UCODE_DRV_GP2: u32 = 0x058;
+const CSR_DBG_LINK_PWR_MGMT: u32 = 0x0C8;
 
 // CSR_INT values
 const CSR_INT_BIT_RX: u32 = 1 << 0;
@@ -34,24 +31,21 @@ const CSR_INT_BIT_WAKEUP: u32 = 1 << 7;
 const CSR_INT_BIT_SW_ERR: u32 = 1 << 25;
 const CSR_INT_BIT_HW_ERR: u32 = 1 << 29;
 
-// CSR_GP_CNTRL bits
-const CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ: u32 = 1 << 0;
-const CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_RDY: u32 = 1 << 1;
-const CSR_GP_CNTRL_REG_VAL_MAC_ACCESS_EN: u32 = 1 << 2;
+// CSR_GP_CNTRL (iwl-csr.h)
+const CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ: u32 = 0x0000_0008;
+const CSR_GP_CNTRL_REG_VAL_MAC_ACCESS_EN: u32 = 0x0000_0001;
 
-// CSR_RESET bits
-const CSR_RESET_REG_FLAG_NEVO_RESET: u32 = 1 << 0;
-const CSR_RESET_REG_FLAG_FORCE_NMI: u32 = 1 << 7;
-const CSR_RESET_REG_FLAG_SW_RESET: u32 = 1 << 30;
-const CSR_RESET_REG_FLAG_MASTER_DISABLED: u32 = 1 << 31;
+// CSR_RESET bits (iwl-csr.h)
+const CSR_RESET_REG_FLAG_NEVO_RESET: u32 = 0x0000_0001;
+const CSR_RESET_REG_FLAG_FORCE_NMI: u32 = 0x0000_0002;
+const CSR_RESET_REG_FLAG_SW_RESET: u32 = 0x0000_0080;
+const CSR_RESET_REG_FLAG_MASTER_DISABLED: u32 = 0x0000_0100;
 
-// ─── HBUS (Host Bus Interface) ─────────────────────────────────────
-const HBUS_TARG_MEM_READ: u32 = 0x200;       // target memory read
-const HBUS_TARG_MEM_WRITE: u32 = 0x204;      // target memory write
-const HBUS_TARG_MEM_WADDR: u32 = 0x208;      // target memory address
-const HBUS_TARG_MEM_RDAT: u32 = 0x20C;       // target memory read data
-const HBUS_TARG_MEM_WDAT: u32 = 0x210;       // target memory write data
-const HBUS_TARG_MEM_RVALID: u32 = 0x214;     // target memory read valid
+// ─── HBUS @ 0x400 (iwl-csr.h) ───────────────────────────────────────
+const HBUS_TARG_MEM_RADDR: u32 = 0x40C;
+const HBUS_TARG_MEM_WADDR: u32 = 0x410;
+const HBUS_TARG_MEM_WDAT: u32 = 0x418;
+const HBUS_TARG_MEM_RDAT: u32 = 0x41C;
 
 // SRAM base addresses
 const SRAM_UCODE_SECTION: u32 = 0x400;        // ucode section in SRAM
@@ -122,16 +116,11 @@ impl IwlWifi {
     /// Wake ucode: set MAC_ACCESS_REQ, poll for MAC_ACCESS_RDY
     fn wake_ucode(&self) -> bool {
         self.w32(CSR_GP_CNTRL, CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
-        for _ in 0..10000 {
-            if self.r32(CSR_GP_CNTRL) & CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_RDY != 0 {
-                return true;
-            }
-            core::hint::spin_loop();
-        }
-        false
+        crate::wait::until(2_000_000, || {
+            self.r32(CSR_GP_CNTRL) & CSR_GP_CNTRL_REG_VAL_MAC_ACCESS_EN != 0
+        })
     }
 
-    /// Write to SRAM via HBUS
     fn sram_write(&self, addr: u32, data: &[u32]) {
         for (i, &word) in data.iter().enumerate() {
             self.w32(HBUS_TARG_MEM_WADDR, addr + i as u32 * 4);
@@ -139,12 +128,10 @@ impl IwlWifi {
         }
     }
 
-    /// Read from SRAM via HBUS
     fn sram_read(&self, addr: u32, count: usize) -> alloc::vec::Vec<u32> {
         let mut out = alloc::vec::Vec::with_capacity(count);
         for i in 0..count {
-            self.w32(HBUS_TARG_MEM_WADDR, addr + i as u32 * 4);
-            for _ in 0..100 { core::hint::spin_loop(); if self.r32(HBUS_TARG_MEM_RVALID) != 0 { break; } }
+            self.w32(HBUS_TARG_MEM_RADDR, addr + i as u32 * 4);
             out.push(self.r32(HBUS_TARG_MEM_RDAT));
         }
         out
@@ -155,7 +142,7 @@ impl IwlWifi {
     /// header: { u32 count, u32 total_len, u32 flags }
     /// section: { u32 addr, u32 len, u8 data[len] }
     pub fn load_ucode(&mut self, blob: &[u8]) -> Result<(), &'static str> {
-        k_nano::slog_hal!("IWL", "info", "Carregando ucode: {} bytes", blob.len());
+        k_nano::slog_hal!("IWL", "ok", "Carregando ucode: {} bytes", blob.len());
 
         if blob.len() < 12 { return Err("ucode blob muito pequeno"); }
 
@@ -200,14 +187,14 @@ impl IwlWifi {
         // Verifica alive indication
         let alive = self.sram_read(UCODE_ALIVE_ADDR, 2);
         if alive.len() >= 2 && alive[0] == UCODE_ALIVE_1 && alive[1] == UCODE_ALIVE_2 {
-            k_nano::slog_hal!("IWL", "info", "ucode alive!");
+            k_nano::slog_hal!("IWL", "ok", "ucode alive!");
             self.alive = true;
         } else {
-            k_nano::slog_hal!("IWL", "info", "ucode alive check: {:?}", alive);
+            k_nano::slog_hal!("IWL", "warn", "ucode alive check: {:?}", alive);
         }
 
         self.ucode_loaded = true;
-        k_nano::slog_hal!("IWL", "info", "ucode carregado: {} secoes, {} bytes", count, total);
+        k_nano::slog_hal!("IWL", "ok", "ucode carregado: {} secoes, {} bytes", count, total);
         Ok(())
     }
 

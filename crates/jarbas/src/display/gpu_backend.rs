@@ -31,9 +31,8 @@ pub fn init_gpu_backend() -> Result<(), &'static str> {
     }
 }
 
-/// Safe wrapper for gpu_matmul. NOTA (SESSION_274): enquanto o kernel W2A8
-/// no device é Layer S, o resultado vem do CPU fallback interno do backend —
-/// a telemetria (work_queue) já registra isso honestamente.
+/// Safe wrapper for gpu_matmul. SESSION_373: sem KernelPack o backend
+/// devolve None — CPU fallback é do caller, nunca silencioso.
 pub fn try_gpu_matmul(a: &cortex::tensor::Tensor, b: &cortex::tensor::Tensor) -> Option<cortex::tensor::Tensor> {
     // Check compute state before attempting GPU path
     if compute_state() != BackendState::Ready {

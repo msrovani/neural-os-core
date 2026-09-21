@@ -6,11 +6,8 @@ description = "ADR-0041 R1 — device HAL / VirtIO-bound backends (L1 sensório-
 
 [dependencies]
 spin = "0.9"
-lazy_static = { version = "1.4", features = ["spin_no_std"] }
 x86_64 = "0.14.11"
-libm = "0.2"
 event-bus = { path = "../event-bus" }
-ticket-lock = { path = "../ticket-lock" }
 k-nano = { path = "../k_nano" }
 cortex = { path = "../cortex" }
 agent-core = { path = "../agent-core" }

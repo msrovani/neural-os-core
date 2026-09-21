@@ -17,9 +17,11 @@ pub trait BlockDevice {
     fn name(&self) -> &str {
         "blk"
     }
-    /// Flush write cache (ex: SCSI SYNCHRONIZE_CACHE). No-op default.
+    /// Flush write cache (ex: SCSI SYNCHRONIZE_CACHE / ATA 0xE7).
+    /// Default **false** (SESSION_372): no-op que retorna true mentia flush
+    /// (NeuralFS/BOOT.LOG). Só `true` quando o backend implementa flush real.
     fn sync_cache(&mut self) -> bool {
-        true
+        false
     }
 }
 
@@ -49,6 +51,9 @@ impl BlockDevice for AtaDriver {
     fn name(&self) -> &str {
         "ata0"
     }
+    fn sync_cache(&mut self) -> bool {
+        unsafe { self.flush_cache() }
+    }
 }
 
 impl BlockDevice for AhciDriver {
@@ -64,6 +69,9 @@ impl BlockDevice for AhciDriver {
     }
     fn name(&self) -> &str {
         "ahci0"
+    }
+    fn sync_cache(&mut self) -> bool {
+        unsafe { self.flush_cache() }
     }
 }
 
@@ -83,6 +91,9 @@ impl BlockDevice for NvmeDriver {
     }
     fn name(&self) -> &str {
         "nvme0"
+    }
+    fn sync_cache(&mut self) -> bool {
+        unsafe { self.flush_cache() }
     }
 }
 

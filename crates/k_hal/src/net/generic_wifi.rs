@@ -115,6 +115,11 @@ pub struct DmaDescriptor {
 const OWNED_BY_HW: u32 = 1 << 31;
 const BUF_SIZE: usize = 2048;
 
+fn virt_to_phys(va: u64) -> u64 {
+    let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+    va.saturating_sub(pmoff)
+}
+
 // ── 5. MOTOR AGNOSTIC WIFI ENGINE ──────────────────────────────
 
 #[repr(C, align(16))]
@@ -153,7 +158,7 @@ impl WifiChipset for AgnosticWifiEngine {
         let sz = self.ring_sz;
         // Prepara ring de RX
         for i in 0..sz {
-            let buf_pa = &self.rx_buf[i] as *const _ as u64;
+            let buf_pa = virt_to_phys(&self.rx_buf[i] as *const _ as u64);
             self.rx_ring[i] = DmaDescriptor {
                 buf_addr: buf_pa,
                 len_flags: (self.io.map.rx_buf_len as u32) | OWNED_BY_HW,
@@ -163,8 +168,8 @@ impl WifiChipset for AgnosticWifiEngine {
                 buf_addr: 0, len_flags: 0, status: 0,
             };
         }
-        let tx_pa = self.tx_ring.as_ptr() as u64;
-        let rx_pa = self.rx_ring.as_ptr() as u64;
+        let tx_pa = virt_to_phys(self.tx_ring.as_ptr() as u64);
+        let rx_pa = virt_to_phys(self.rx_ring.as_ptr() as u64);
         unsafe {
             self.io.set_dma_rings(tx_pa, rx_pa);
             self.io.start_rx();
@@ -181,7 +186,7 @@ impl WifiChipset for AgnosticWifiEngine {
         if (flags & OWNED_BY_HW) != 0 {
             return Err("TX ring full");
         }
-        desc.buf_addr = packet.as_ptr() as u64;
+        desc.buf_addr = virt_to_phys(packet.as_ptr() as u64);
         desc.len_flags = (packet.len() as u32) | OWNED_BY_HW | (1 << 30) | (1 << 29);
         compiler_fence(Ordering::Release);
         self.tx_head = (idx + 1) % self.ring_sz;
@@ -201,7 +206,7 @@ impl WifiChipset for AgnosticWifiEngine {
         let len = (flags & 0xFFF) as usize;
         let n = len.min(buffer.len());
         buffer[..n].copy_from_slice(&self.rx_buf[idx][..n]);
-        let buf_pa = &self.rx_buf[idx] as *const _ as u64;
+        let buf_pa = virt_to_phys(&self.rx_buf[idx] as *const _ as u64);
         self.rx_ring[idx] = DmaDescriptor {
             buf_addr: buf_pa,
             len_flags: (self.io.map.rx_buf_len as u32) | OWNED_BY_HW,
@@ -349,13 +354,15 @@ pub unsafe fn runtime_probe_and_bind(vid: u16, did: u16, bar: usize)
             // Ethernet fallback
             (_, _) if is_ethernet(vid, did) => (ETH_FALLBACK_MAP, "Ethernet"),
             _ => {
-                // Tenta sintese via IA se mapa fixo nao existe
-                let hw_map = cortex::cortex::generate_register_map(vid, did);
-                if let Some(ai_map) = hw_map {
-                    (ai_map, "Sintetizado-IA")
-                } else {
-                    return Err("nao suportado")
-                }
+                // Sem mapa curado: NÃO fingir Ethernet (SESSION_373).
+                k_nano::slog_hal!(
+                    "WIFI",
+                    "warn",
+                    "sem HardwareRegisterMap {:04x}:{:04x} — deny (não Sintetizado-IA→ETH)",
+                    vid,
+                    did
+                );
+                return Err("wifi_map_unknown");
             }
         };
         let engine = AgnosticWifiEngine::new(bar, map);
@@ -380,9 +387,6 @@ pub unsafe fn runtime_probe_and_bind(vid: u16, did: u16, bar: usize)
             "Broadcom WiFi" => { (*ptr).broadcom = ManuallyDrop::new(BroadcomBcm4360(engine));
                 *active = Some(&mut *(*ptr).broadcom as &mut dyn WifiChipset); }
             "Ethernet" => { (*ptr).ethernet = ManuallyDrop::new(FallbackEthernet(engine));
-                *active = Some(&mut *(*ptr).ethernet as &mut dyn WifiChipset); }
-            "Sintetizado-IA" => {
-                (*ptr).ethernet = ManuallyDrop::new(FallbackEthernet(engine));
                 *active = Some(&mut *(*ptr).ethernet as &mut dyn WifiChipset); }
             _ => return Err("nome desconhecido"),
         };

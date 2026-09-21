@@ -62,21 +62,21 @@ pub fn accelerator() -> Accelerator {
 pub fn init_npu() {
     match detect_npu() {
         NpuVendor::AmdXdna => {
-            slog_hal!("NPU", "info", "AMD XDNA detectado (PCI)");
+            slog_hal!("NPU", "ok", "AMD XDNA detectado (PCI)");
             // LAYER-S: try_init_xdna() exige firmware Ryzen AI + overlay Vitis
             // (blobs fechados) + fila/doorbell/MSI-X. Sem eles → software.
             slog_hal!(
                 "NPU-HW",
-                "info",
+                "warn",
                 "VERDICT=AWAITING_REAL_HW reason=xdna_firmware_overlay_layer_s"
             );
         }
         NpuVendor::IntelNpu => {
-            slog_hal!("NPU", "info", "Intel NPU detectado (PCI)");
+            slog_hal!("NPU", "ok", "Intel NPU detectado (PCI)");
             // LAYER-S: firmware NCE + fila de comando. Sem eles → software.
             slog_hal!(
                 "NPU-HW",
-                "info",
+                "warn",
                 "VERDICT=AWAITING_REAL_HW reason=intel_npu_firmware_layer_s"
             );
         }
@@ -84,7 +84,7 @@ pub fn init_npu() {
             // Sem NPU: Ring 0 MLP roda na CPU (premissa IDEA #51). Honesto.
             slog_hal!(
                 "NPU-HW",
-                "info",
+                "ok",
                 "VERDICT=SOFTWARE reason=no_npu ring0=cpu_mlp"
             );
         }

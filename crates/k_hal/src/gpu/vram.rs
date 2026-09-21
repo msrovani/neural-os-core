@@ -165,11 +165,11 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
     // visíveis mas a VRAM não responde; mapear/tocar gera hang de barramento
     // PCIe = freeze real. Mede o D-state (PCI PMCSR) e só prossegue em D0.
     if gpu.pci_dstate != 0 {
-        k_nano::slog_hal!("VRAM", "info", "{}: D-state={} (D3) — VRAM dormindo, skip compute/map (power-on antes)", gpu.name, gpu.pci_dstate);
+        k_nano::slog_hal!("VRAM", "warn", "{}: D-state={} (D3) — VRAM dormindo, skip compute/map (power-on antes)", gpu.name, gpu.pci_dstate);
         return false;
     }
     if gpu.bar2 == 0 || gpu.vram_size == 0 {
-        k_nano::slog_hal!("VRAM", "info", "{}: sem BAR2 mapeavel (usando DRAM compartilhada)", gpu.name);
+        k_nano::slog_hal!("VRAM", "warn", "{}: sem BAR2 mapeavel (usando DRAM compartilhada)", gpu.name);
         return false;
     }
 
@@ -188,10 +188,10 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
 
     let pages = k_nano::apic::map_region_uc_2mb(vram_phys, vram_size, pmoff);
     if pages == 0 {
-        k_nano::slog_hal!("VRAM", "info", "{}: falha ao mapear VRAM @ {:#x}!", gpu.name, vram_phys);
+        k_nano::slog_hal!("VRAM", "fail", "{}: falha ao mapear VRAM @ {:#x}!", gpu.name, vram_phys);
         return false;
     }
-    k_nano::slog_hal!("VRAM", "info", "Mapeados {} x 2MB pages para VRAM @ {:#x}", pages, vram_phys);
+    k_nano::slog_hal!("VRAM", "ok", "Mapeados {} x 2MB pages para VRAM @ {:#x}", pages, vram_phys);
 
     // SESSÃO_260 (HW real, notebook dual-GPU): NÃO fazer write/read de teste na
     // VRAM aqui. A dGPU (GTX 1050) está em D3 (desligada) durante o boot — o

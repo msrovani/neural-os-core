@@ -23,6 +23,7 @@ const ADMIN_CREATE_CQ: u8 = 0x05;
 const ADMIN_IDENTIFY: u8 = 0x06;
 const IO_WRITE: u8 = 0x01;
 const IO_READ: u8 = 0x02;
+const IO_FLUSH: u8 = 0x00;
 
 const Q_ENTRIES: u32 = 64;
 
@@ -142,13 +143,33 @@ impl NvmeDriver {
             None => return None,
         };
 
-        // Disable controller
+        // Disable controller — fail-closed se CSTS.RDY stuck (SESSION_372).
         mmio.add((NVME_CC / 4) as usize).write_volatile(0);
-        for _ in 0..500_000 {
-            if mmio.add((NVME_CSTS / 4) as usize).read_volatile() & CSTS_RDY == 0 {
-                break;
+        let mut disabled = false;
+        if crate::tsc::tsc_hz() != 0 {
+            let t0 = crate::tsc::now_us();
+            loop {
+                if mmio.add((NVME_CSTS / 4) as usize).read_volatile() & CSTS_RDY == 0 {
+                    disabled = true;
+                    break;
+                }
+                if crate::tsc::now_us().saturating_sub(t0) > 2_000_000 {
+                    break;
+                }
+                core::hint::spin_loop();
             }
-            core::hint::spin_loop();
+        } else {
+            for _ in 0..500_000 {
+                if mmio.add((NVME_CSTS / 4) as usize).read_volatile() & CSTS_RDY == 0 {
+                    disabled = true;
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+        }
+        if !disabled {
+            crate::slog_nano!("NVMe", "fail", "controller disable timeout (CSTS.RDY stuck)");
+            return None;
         }
 
         let aqa = ((Q_ENTRIES - 1) << 16) | (Q_ENTRIES - 1);
@@ -374,6 +395,15 @@ impl NvmeDriver {
         let dma_phys = (buf as u64).wrapping_sub(self.pmoff);
         let len = blocks as usize * self.lba_size as usize;
         self.io_nvm_prp(IO_WRITE, lba, dma_phys, len, blocks)
+    }
+
+    /// NVM Flush (opcode 0x00). NLB ignorado pelo spec — passa 1 para não
+    /// virar `saturating_sub(1)` = u32::MAX no helper.
+    pub unsafe fn flush_cache(&mut self) -> bool {
+        if self.io_sq.virt.is_null() {
+            return false;
+        }
+        self.io_nvm(IO_FLUSH, 0, 0, 0, 1)
     }
 
     /// Zero-copy: o caller passa o endereço FÍSICO de uma região DMA contígua;

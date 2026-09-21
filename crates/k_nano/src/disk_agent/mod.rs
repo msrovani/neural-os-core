@@ -11,7 +11,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use cache::ArcCache;
 use controller::StorageController;
 use disk_info::*;
 use fs_probe::FsProbeRegistry;
@@ -41,7 +40,6 @@ pub struct DiskIntelligenceAgent {
     tick_run: bool,
     tick_count: u64,
     io_queue: Vec<(u8, u8, u64, Vec<u8>)>,
-    cache: ArcCache,
     last_migration_tick: u64,
     smart_history: Vec<SmartHistoryEntry>,
 }
@@ -63,7 +61,6 @@ impl DiskIntelligenceAgent {
             tick_run: false,
             tick_count: 0,
             io_queue: Vec::new(),
-            cache: ArcCache::new(1024, "hdd"),
             last_migration_tick: 0,
             smart_history: Vec::new(),
         }
@@ -364,17 +361,6 @@ impl Agent for DiskIntelligenceAgent {
             // I/O scheduler flush (a cada 10 ticks)
             if self.tick_count % 10 == 0 {
                 self.io_scheduler_flush();
-            }
-
-            // Cache write-back flush (a cada 100 ticks)
-            if self.tick_count % 100 == 0 {
-                let ctrl_idx = 0;
-                let mut flush_fn = |lba: u64, data: &[u8]| {
-                    if ctrl_idx < self.controllers.len() {
-                        self.controllers[ctrl_idx].write_blocks(0, lba, data, (data.len() + 511) / 512);
-                    }
-                };
-                self.cache.tick(&mut flush_fn);
             }
 
             // MHI tier migration + hotplug (a cada 1000 ticks)

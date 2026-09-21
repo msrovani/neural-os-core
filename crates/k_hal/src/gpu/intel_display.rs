@@ -82,12 +82,12 @@ pub struct CursorState {
 /// Retorna true se display engine detectado e inicializado.
 pub unsafe fn init_intel_display(gpu: &GpuInfo) -> bool {
     if gpu.vendor != GpuVendor::Intel || !gpu.has_display_engine || gpu.bar0 == 0 {
-        slog_hal!("INTEL_DISP", "init", "GPU não tem display engine ou BAR0 inválido");
+        slog_hal!("INTEL_DISP", "warn", "GPU não tem display engine ou BAR0 inválido");
         return false;
     }
 
     if check_map_bar(1, true) == CapResult::Deny {
-        slog_hal!("INTEL_DISP", "init", "DENY map_bar (Cap)");
+        slog_hal!("INTEL_DISP", "warn", "DENY map_bar (Cap)");
         return false;
     }
 
@@ -97,11 +97,11 @@ pub unsafe fn init_intel_display(gpu: &GpuInfo) -> bool {
     // Verifica se display engine está presente lendo DSPCNTR
     let dspcntr_val = core::ptr::read_volatile(bar0_virt.add((DSPCNTR / 4) as usize));
     if dspcntr_val == 0xFFFFFFFF || dspcntr_val == 0 {
-        slog_hal!("INTEL_DISP", "init", "Display engine não responde (DSPCNTR={:#x})", dspcntr_val);
+        slog_hal!("INTEL_DISP", "fail", "Display engine não responde (DSPCNTR={:#x})", dspcntr_val);
         return false;
     }
 
-    slog_hal!("INTEL_DISP", "init", "Display engine detectado: DSPCNTR={:#x}", dspcntr_val);
+    slog_hal!("INTEL_DISP", "ok", "Display engine detectado: DSPCNTR={:#x}", dspcntr_val);
     true
 }
 
@@ -415,7 +415,7 @@ pub unsafe fn run_page_flip_canary(gpu: &GpuInfo) -> bool {
     use k_nano::memory::GLOBAL_ALLOCATOR;
 
     if gpu.vendor != GpuVendor::Intel || !gpu.has_display_engine {
-        slog_hal!("INTEL_DISP", "canary", "SKIP — GPU não tem display engine");
+        slog_hal!("INTEL_DISP", "warn", "canary SKIP — GPU não tem display engine");
         return false;
     }
 
@@ -427,21 +427,21 @@ pub unsafe fn run_page_flip_canary(gpu: &GpuInfo) -> bool {
 
     let mut alloc = GLOBAL_ALLOCATOR.lock();
     let Some(a) = alloc.as_mut() else {
-        slog_hal!("INTEL_DISP", "canary", "FAIL — allocator não disponível");
+        slog_hal!("INTEL_DISP", "fail", "canary FAIL — allocator não disponível");
         return false;
     };
 
     let buf1 = match a.allocate_contiguous((BUF_SIZE + 4095) / 4096) {
         Some(f) => f,
         None => {
-            slog_hal!("INTEL_DISP", "canary", "FAIL — buf1 alloc");
+            slog_hal!("INTEL_DISP", "fail", "canary FAIL — buf1 alloc");
             return false;
         }
     };
     let buf2 = match a.allocate_contiguous((BUF_SIZE + 4095) / 4096) {
         Some(f) => f,
         None => {
-            slog_hal!("INTEL_DISP", "canary", "FAIL — buf2 alloc");
+            slog_hal!("INTEL_DISP", "fail", "canary FAIL — buf2 alloc");
             return false;
         }
     };
@@ -467,23 +467,23 @@ pub unsafe fn run_page_flip_canary(gpu: &GpuInfo) -> bool {
 
     // Flip 1: buf1
     if !page_flip_hw(gpu, buf1_pa, stride, TEST_W, TEST_H) {
-        slog_hal!("INTEL_DISP", "canary", "FAIL — flip 1");
+        slog_hal!("INTEL_DISP", "fail", "canary FAIL — flip 1");
         return false;
     }
 
     // Flip 2: buf2
     if !page_flip_hw(gpu, buf2_pa, stride, TEST_W, TEST_H) {
-        slog_hal!("INTEL_DISP", "canary", "FAIL — flip 2");
+        slog_hal!("INTEL_DISP", "fail", "canary FAIL — flip 2");
         return false;
     }
 
     // Flip 3: buf1 novamente
     if !page_flip_hw(gpu, buf1_pa, stride, TEST_W, TEST_H) {
-        slog_hal!("INTEL_DISP", "canary", "FAIL — flip 3");
+        slog_hal!("INTEL_DISP", "fail", "canary FAIL — flip 3");
         return false;
     }
 
-    slog_hal!("INTEL_DISP", "canary", "PASS — page-flip HW funcional");
+    slog_hal!("INTEL_DISP", "ok", "canary PASS — page-flip HW funcional");
     true
 }
 
@@ -492,7 +492,7 @@ pub unsafe fn run_cursor_canary(gpu: &GpuInfo) -> bool {
     use k_nano::memory::GLOBAL_ALLOCATOR;
 
     if gpu.vendor != GpuVendor::Intel || !gpu.has_display_engine {
-        slog_hal!("INTEL_DISP", "cursor_canary", "SKIP — GPU não tem display engine");
+        slog_hal!("INTEL_DISP", "warn", "cursor_canary SKIP — GPU não tem display engine");
         return false;
     }
 
@@ -503,14 +503,14 @@ pub unsafe fn run_cursor_canary(gpu: &GpuInfo) -> bool {
 
     let mut alloc = GLOBAL_ALLOCATOR.lock();
     let Some(a) = alloc.as_mut() else {
-        slog_hal!("INTEL_DISP", "cursor_canary", "FAIL — allocator não disponível");
+        slog_hal!("INTEL_DISP", "fail", "cursor_canary FAIL — allocator não disponível");
         return false;
     };
 
     let cursor_frame = match a.allocate_contiguous((CUR_SIZE + 4095) / 4096) {
         Some(f) => f,
         None => {
-            slog_hal!("INTEL_DISP", "cursor_canary", "FAIL — cursor alloc");
+            slog_hal!("INTEL_DISP", "fail", "cursor_canary FAIL — cursor alloc");
             return false;
         }
     };
@@ -540,31 +540,31 @@ pub unsafe fn run_cursor_canary(gpu: &GpuInfo) -> bool {
         match gtt.pin_sys(cursor_pa, (CUR_SIZE / 4096).max(1) as u32) {
             Some(o) => o,
             None => {
-                slog_hal!("INTEL_DISP", "cursor_canary", "FAIL — GGTT pin");
+                slog_hal!("INTEL_DISP", "fail", "cursor_canary FAIL — GGTT pin");
                 return false;
             }
         }
     };
     if !cursor_set_hw(gpu, gtt_off, 100, 100, CUR_W, CUR_H) {
-        slog_hal!("INTEL_DISP", "cursor_canary", "FAIL — cursor_set_hw");
+        slog_hal!("INTEL_DISP", "fail", "cursor_canary FAIL — cursor_set_hw");
         return false;
     }
 
     // Move para (200, 200)
     if !cursor_move_hw(gpu, 200, 200) {
-        slog_hal!("INTEL_DISP", "cursor_canary", "FAIL — cursor_move_hw");
+        slog_hal!("INTEL_DISP", "fail", "cursor_canary FAIL — cursor_move_hw");
         return false;
     }
 
     // Move para (300, 300)
     if !cursor_move_hw(gpu, 300, 300) {
-        slog_hal!("INTEL_DISP", "cursor_canary", "FAIL — cursor_move_hw 2");
+        slog_hal!("INTEL_DISP", "fail", "cursor_canary FAIL — cursor_move_hw 2");
         return false;
     }
 
     // Desabilita
     cursor_disable_hw(gpu);
 
-    slog_hal!("INTEL_DISP", "cursor_canary", "PASS — cursor HW funcional");
+    slog_hal!("INTEL_DISP", "ok", "cursor_canary PASS — cursor HW funcional");
     true
 }

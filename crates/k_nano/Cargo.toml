@@ -8,9 +8,9 @@ spin = "0.9"
 lazy_static = { version = "1.4", features = ["spin_no_std"] }
 uart_16550 = "0.2"
 x86_64 = "0.14.11"
-linked_list_allocator = "0.9"
+# SESSION_372: linked_list_allocator + spinning_top + ruvix-* removidos (0 callers;
+# heap = talc; ruvix patches ficam no workspace p/ uso futuro explícito).
 talc = "4.4.3"
-spinning_top = "0.3"
 libm = "0.2"
 event-bus = { path = "../event-bus" }
 skill-registry = { path = "../skill-registry" }
@@ -20,10 +20,6 @@ ed25519-compact = { version = "2", default-features = false, features = ["x25519
 # ADR-0081 Tier F: AEAD X25519+ChaCha20-Poly1305 (sem getrandom — bare-metal).
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
-ruvix-proof = { version = "0.1", default-features = false, features = ["alloc"] }
-ruvix-vecgraph = { version = "0.1", default-features = false, features = ["alloc"] }
-ruvix-types = { version = "0.1", default-features = false, features = ["alloc"] }
-ruvix-region = { version = "0.1", default-features = false, features = ["alloc"] }
 # VirtIO guest drivers (rcore-os) — no_std, Block/Net/GPU/Input/Console/Sound
 virtio-drivers = { version = "0.13", default-features = false, features = ["alloc"] }
 

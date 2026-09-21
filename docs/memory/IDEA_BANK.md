@@ -1,6 +1,6 @@
 ﻿# 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-09-21 — s371 cortex TQ2_0 ggml; s370 agent-core; s369 Boot Trilha A.
+**Última atualização:** 2026-09-21 — s373 k_hal honesty; s372 k_nano; s371 cortex TQ2_0.
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -1898,6 +1898,8 @@ elabel_*.py |
 | 2026-09-19 | **#587** | **Tick lento mesh 1c** - boot_log Continuous FAT; MouseAgent reset+E9 100k. ✅ PollEvery+1×; soft F4+8k timeout. | ✅ | — (fix) | SESSION_360 | `boot_log_agent`, `mouse_agent` |
 | 2026-09-19 | **#589** | **Router baseline medido** - ROUTER.BITNET carrega mas NUNCA roteia (MoE router R3=0 em 12 boots). Encode desalinhado: b+2/truncate64/VOCAB256 → 17.1% ECE 39.7pp vs 82.9% ECE 5.4pp do encode trainer. SSE2 sret corrupt: shape.0=usize::MAX no ABI boundary. 3/6 sondas OOD erradas. ✅ encode alinhado (s362) + is_valid (s362+) + fixture parity + is_valid reject (0,0). | 🟡 D0 | ADR-0106 | SESSION_362 | `trinity.rs`, `tensor.rs`, `matmul_diag.rs`, `bitnet_sse.rs`, `bughunt_s353.rs`, `gen_router_parity_fixture.py`, `router_parity_fixture.txt`, `router_reference.BITNET` |
 | 2026-09-19 | **#590** | **Gate de evidência LLM (submit ≠ resposta)** - labs mesh/clima marcavam PASS com `InferQueue submit`/`prefill_done` sem `decode_tok/s=`/`done id=`/`MSG_DELTA`. ✅ `cortex::llm_response_gate` (7 host) + InferQ tests com `TEST_LOCK` (5) + `tools/lab-llm-response.ps1` + LINJ `hermes::lab_inject`. Residual: QEMU decode real no lab; dual mesh app-clima ainda engasga pós-prefill. | ✅ host; 🟡 QEMU | ADR-0057 WS-H | SESSION_367 | `llm_response_gate.rs`, `infer_queue.rs`, `lab_inject.rs`, `lab-llm-response.ps1` |
+| 2026-09-21 | **#594** | **k_hal R1 honesty/offsets** - ring doorbell 0x120038 (hex a mais); iwl CSR/HBUS inventados; BB_END no ring; gpu_matmul CPU-as-GPU; DEADBEEF VRAM poke; Sintetizado-IA→ETH. ✅ iwl-csr.h; wait::until; None matmul; deny wifi unknown; trim deps. | ✅ | ADR-0041/0087/0092 | SESSION_373 | `k_hal` gpu/net/wait.rs |
+| 2026-09-21 | **#593** | **k_nano slog/driver honesty** - sev=driver TRACE mudo; i225 reset falso OK; nvme ASQ placeholder; deps mortas. ✅ aliases; deny init; trim Cargo. | ✅ | ADR-0092 | SESSION_372 | `slog.rs`, `i225.rs`, `storage/nvme.rs` |
 | 2026-09-21 | **#592** | **TQ2_0 ggml layout** - PrismML 24B/32 ≠ ggml 66B/256 type 35; Unknown nbytes=ne*4 OOB. ✅ dequant oficial; nbytes=0 p/ Unknown; weather dead branch; brightness DEGRADED. | ✅ | ggml | SESSION_371 | `gguf.rs`, `cortex.rs` |
 | 2026-09-18 | **#576** | **Bin boot honesty** - PS/2 spin eterno; skip USB/StorageBus=`ok`; slog TRACE/FAIL=`info`; urgency pré-register/`audio_pipeline`; spsc espelho; link MMIO fantasma. ✅ TSC budget; warn; sev; pós-register+`audio_input`; pub use spsc; Down honesto. | ✅ | — (fix) | SESSION_357 | `main.rs`, `smp/spsc.rs`, `link_watcher.rs`, `netfs.rs` |
 | 2026-09-18 | **#577** | **RESPAWN + SelfHeal fleet** - `hermes_console`→DisplayAgent; arms faltando voz/infer/boot_log. ✅ ConsoleAgent; arms Continuous; unknown warn. | ✅ | — (fix) | SESSION_357 | `main.rs` RESPAWN match |

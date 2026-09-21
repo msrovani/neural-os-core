@@ -144,27 +144,18 @@ unsafe fn userd_set_gpput(userd: &DmaBuf, v: u32) {
 }
 
 /// Poll USERD GET (0x44) >= target — fence <Volta (ADR-0087 §2).
-unsafe fn userd_poll_get(userd: &DmaBuf, target: u32, spins: u32) -> bool {
+unsafe fn userd_poll_get(userd: &DmaBuf, target: u32, _spins: u32) -> bool {
     let p = userd.virt as *const u32;
-    for _ in 0..spins {
-        if core::ptr::read_volatile(p.add(USERD_GET / 4)) >= target {
-            return true;
-        }
-        core::hint::spin_loop();
-    }
-    false
+    crate::wait::until(2_000_000, || {
+        core::ptr::read_volatile(p.add(USERD_GET / 4)) >= target
+    })
 }
 
-/// Poll bounded de registrador MMIO até `(val & mask)==0`.
-unsafe fn poll_clear(mmio: u64, reg: u64, mask: u32, spins: u32) -> bool {
-    for _ in 0..spins {
+unsafe fn poll_clear(mmio: u64, reg: u64, mask: u32, _spins: u32) -> bool {
+    crate::wait::until(2_000_000, || {
         let v = core::ptr::read_volatile((mmio + reg) as *const u32);
-        if v & mask == 0 {
-            return true;
-        }
-        core::hint::spin_loop();
-    }
-    false
+        v & mask == 0
+    })
 }
 
 // ─── Builders puros (testáveis no host) ────────────────────────────────────

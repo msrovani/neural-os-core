@@ -84,7 +84,7 @@ impl ArcCache {
         if let Some(lba) = victim {
             let dirty = self.entries.get(&lba).map_or(false, |e| e.dirty);
             if dirty {
-                crate::slog_nano!("CACHE", "info", "evict dirty {:#x} without flush_fn — DATA LOSS RISK", lba);
+                crate::slog_nano!("CACHE", "warn", "evict dirty {:#x} without flush_fn — DATA LOSS RISK", lba);
             }
             self.entries.remove(&lba);
         }
@@ -236,6 +236,9 @@ mod tests {
         }
         fn name(&self) -> &str {
             "fake0"
+        }
+        fn sync_cache(&mut self) -> bool {
+            true // host test: sem write-cache de dispositivo
         }
     }
 

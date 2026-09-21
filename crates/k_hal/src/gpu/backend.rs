@@ -472,7 +472,7 @@ pub fn gpu_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     };
     // Telemetria honesta: só conta GPU quando o device fez a conta.
     let _ = crate::gpu::work_queue::drain(result.is_some());
-    result.or_else(|| cpu_matmul(a, b))
+    result
 }
 
 /// ADR-0047 gate: HW só após canário Ready — nunca por PFIFO NOP sozinho.

@@ -11,7 +11,7 @@ pub fn run_benchmark() {
     BENCH_DONE.store(1, Ordering::Relaxed);
 
     let sizes = [32usize, 64, 128];
-    k_nano::slog_hal!("BENCH", "info", "GPU Benchmark (TFLOPS) — matmul ternário");
+    k_nano::slog_hal!("BENCH", "ok", "GPU Benchmark (TFLOPS) — matmul ternário");
 
     for &n in &sizes {
         let a_data: Vec<f32> = (0..n*n).map(|i| (i as f32 / n as f32) - 0.5).collect();
@@ -26,7 +26,10 @@ pub fn run_benchmark() {
         let ops = 2.0 * (n as f64) * (n as f64) * (n as f64);
 
         let warm = gpu_matmul(&a, &b);
-        if warm.is_none() { k_nano::slog_hal!("GPU", "bench", "{}x{}: matmul failed", n, n); continue; }
+        if warm.is_none() {
+            k_nano::slog_hal!("BENCH", "warn", "{}x{}: GPU None — skip TFLOPS (não contar CPU como GPU)", n, n);
+            continue;
+        }
 
         let mid = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
         let runs = 3;
@@ -38,5 +41,5 @@ pub fn run_benchmark() {
         let tflops = (ops * runs as f64 / secs) / 1e12;
         k_nano::slog_hal!("GPU", "bench", "{}x{}: {:.3} TFLOPS ({:.1}s CPU, {} runs)", n, n, tflops, secs, runs);
     }
-    k_nano::slog_hal!("BENCH", "info", "GPU backends: CPU fallback (v1.1.1 pipeline OK)");
+    k_nano::slog_hal!("BENCH", "ok", "GPU backends: CPU fallback explícito no caller (v1.1.1)");
 }

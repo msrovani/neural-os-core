@@ -133,12 +133,12 @@ pub fn parse_and_verify(buf: &[u8]) -> Option<KernelPack> {
         return None;
     }
     if &buf[0..4] != NKP_MAGIC {
-        k_nano::slog_hal!("NKP", "info", "magic mismatch");
+        k_nano::slog_hal!("NKP", "fail", "magic mismatch");
         return None;
     }
     let abi = read_u32(buf, 4)?;
     if abi != NKP_ABI {
-        k_nano::slog_hal!("NKP", "info", "abi {} != {}", abi, NKP_ABI);
+        k_nano::slog_hal!("NKP", "fail", "abi {} != {}", abi, NKP_ABI);
         return None;
     }
     let vendor = PackVendor::from_u32(read_u32(buf, 8)?)?;
@@ -189,13 +189,13 @@ pub fn parse_and_verify(buf: &[u8]) -> Option<KernelPack> {
     let expect = fnv1a64(canonical);
     let got = u64::from_le_bytes(content_hash);
     if expect != got {
-        k_nano::slog_hal!("NKP", "info", "content_hash mismatch expect={:#x} got={:#x}", expect, got);
+        k_nano::slog_hal!("NKP", "fail", "content_hash mismatch expect={:#x} got={:#x}", expect, got);
         return None;
     }
 
     let verified = k_nano::identity::verify_trusted(canonical, &signature);
     if !verified {
-        k_nano::slog_hal!("NKP", "info", "signature NOT trusted — pack em Escalate/deny ativo");
+        k_nano::slog_hal!("NKP", "warn", "signature NOT trusted — pack em Escalate/deny ativo");
     }
 
     Some(KernelPack {
@@ -380,7 +380,7 @@ pub fn find_active_pack(vendor: GpuVendor, isa: IsaTag, op: PackOp) -> Option<Ke
                 } else {
                     k_nano::slog_hal!(
                         "NKP",
-                        "ok",
+                        "warn",
                         "{} hash ok but unsigned/session unavailable — skip Ready",
                         n
                     );

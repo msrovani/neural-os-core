@@ -16,7 +16,6 @@ const PACKET3_NOP: u32 = 0x10;
 const PACKET3_DISPATCH_DIRECT: u32 = 0x15;
 const PACKET3_EVENT_WRITE_EOP: u32 = 0x47;
 const FENCE_PAYLOAD: u32 = 0xA11D_u32;
-const FENCE_SPINS: u32 = 150_000;
 
 /// Doorbell index/offset por GC major — tabela Degrau (≠ BAR+0x1B0 genérico).
 pub fn doorbell_offset(ip: &AmdIpId) -> u32 {
@@ -123,12 +122,10 @@ pub unsafe fn dispatch_vector_add_kiq(
     );
 
     let mut hit = false;
-    for _ in 0..FENCE_SPINS {
-        if core::ptr::read_volatile(fence.virt as *const u32) == FENCE_PAYLOAD {
-            hit = true;
-            break;
-        }
-        core::hint::spin_loop();
+    if crate::wait::until(2_000_000, || {
+        core::ptr::read_volatile(fence.virt as *const u32) == FENCE_PAYLOAD
+    }) {
+        hit = true;
     }
 
     if !hit {

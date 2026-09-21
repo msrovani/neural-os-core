@@ -277,83 +277,14 @@ impl NvmeController {
         &*(self.base as *const NvmeRegisters)
     }
 
-    /// Initialize the NVMe controller
+    /// Initialize the NVMe controller.
+    ///
+    /// SESSION_372 / AIOS honesty: este módulo legacy usava ASQ/ACQ em PA
+    /// hardcoded `0x10000000` (placeholder) — brick latent se alguém chamar.
+    /// Path de produção = `disk_agent::nvme` (PRP + DMA real). Refuse.
     pub unsafe fn init(&mut self) -> NvmeResult<()> {
-        // ponytail: use raw pointer to avoid borrow conflict with self.admin_queue assignment
-        let regs = self.base as *mut NvmeRegisters;
-
-        // Check if controller is ready
-        let csts = read_volatile(&(*regs).csts);
-        if csts & 0x1 == 0 {
-            // Controller not ready, wait for it
-            let mut timeout = 1000000;
-            while timeout > 0 {
-                let csts = read_volatile(&(*regs).csts);
-                if csts & 0x1 != 0 {
-                    break;
-                }
-                timeout -= 1;
-            }
-            if timeout == 0 {
-                return Err("Controller not ready");
-            }
-        }
-
-        // Disable controller before configuration
-        let mut cc = read_volatile(&(*regs).cc);
-        cc &= !0x1; // Clear enable bit
-        write_volatile(addr_of_mut!((*regs).cc), cc);
-
-        // Wait for controller to disable
-        let mut timeout = 1000000;
-        while timeout > 0 {
-            let csts = read_volatile(&(*regs).csts);
-            if csts & 0x1 == 0 {
-                break;
-            }
-            timeout -= 1;
-        }
-
-        // Configure admin queues (size = 64 entries)
-        const SQ_SIZE: u32 = 64;
-        const CQ_SIZE: u32 = 64;
-
-        // Allocate memory for admin queues (simplified - in real implementation, use proper allocator)
-        // For now, we'll use static memory regions
-        let sq_base = 0x10000000u64; // Placeholder - should be allocated
-        let cq_base = 0x10010000u64; // Placeholder - should be allocated
-
-        // Configure queue attributes
-        let aqa = ((CQ_SIZE - 1) << 16) | (SQ_SIZE - 1);
-        write_volatile(addr_of_mut!((*regs).aqa), aqa);
-        write_volatile(addr_of_mut!((*regs).asq), sq_base);
-        write_volatile(addr_of_mut!((*regs).acq), cq_base);
-
-        // Create admin queue
-        *self.admin_queue.get() = Some(NvmeQueue::new(sq_base, cq_base, SQ_SIZE, 0));
-
-        // Configure controller
-        // Enable controller, set IO queue entry size = 0, IO completion queue entry size = 0
-        // Admin queue entry size = 0 (16 bytes), Admin completion queue entry size = 0 (16 bytes)
-        cc = 0x46000001; // Enable, AMS = Round Robin, MPS = 0 (4K pages), CSS = NVM command set
-        write_volatile(addr_of_mut!((*regs).cc), cc);
-
-        // Wait for controller to become ready
-        let mut timeout = 1000000;
-        while timeout > 0 {
-            let csts = read_volatile(&(*regs).csts);
-            if csts & 0x1 != 0 {
-                break;
-            }
-            timeout -= 1;
-        }
-        if timeout == 0 {
-            return Err("Controller failed to enable");
-        }
-
-        self.ready.store(true, Ordering::Release);
-
-        Ok(())
+        let _ = self.base;
+        Err("legacy storage::nvme refused — use disk_agent::nvme (no hardcoded ASQ)")
     }
 
     /// Read a block from the NVMe device

@@ -88,6 +88,11 @@ pub fn kv_transfer_layer(
         return None;
     }
     let layer_bytes = seq_len.checked_mul(hidden)?.checked_mul(4)?;
+    let elems = seq_len.checked_mul(hidden)?;
+    if layer_k_cpu.len() < elems || layer_v_cpu.len() < elems {
+        k_nano::slog_hal!("GPU", "warn", "kvdma refuse — slice menor que seq*hidden");
+        return None;
+    }
     let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
 
     let k_gpu = vram_alloc(layer_bytes)?;

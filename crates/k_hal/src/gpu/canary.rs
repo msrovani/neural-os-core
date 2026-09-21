@@ -44,7 +44,7 @@ pub unsafe fn run_vector_add_canary_nv(gpu: &GpuInfo, nv: &mut NvidiaGpu) -> Can
     if legacy && !acr_ok {
         k_nano::slog_bin!(
             "GPU-HW",
-            "info",
+            "fail",
             "step=golden status=FAIL reason=acr_not_hs_booted family={} isa={}",
             family,
             gpu.isa_tag.as_str()
@@ -108,7 +108,7 @@ pub unsafe fn run_vector_add_canary_nv(gpu: &GpuInfo, nv: &mut NvidiaGpu) -> Can
     if no_pack {
         k_nano::slog_bin!(
             "GPU-HW",
-            "info",
+            "fail",
             "step=golden status=FAIL reason=kernel_pack_missing isa={}",
             gpu.isa_tag.as_str()
         );
@@ -117,7 +117,7 @@ pub unsafe fn run_vector_add_canary_nv(gpu: &GpuInfo, nv: &mut NvidiaGpu) -> Can
     if !verified {
         k_nano::slog_bin!(
             "GPU-HW",
-            "info",
+            "fail",
             "step=golden status=FAIL reason=kernel_pack_unsigned isa={}",
             gpu.isa_tag.as_str()
         );
@@ -127,7 +127,7 @@ pub unsafe fn run_vector_add_canary_nv(gpu: &GpuInfo, nv: &mut NvidiaGpu) -> Can
         k_nano::slog_hal!("GPU", "canary", "{}: D4 dispatch sem golden (fence/CUBIN/ACR) — CPU_FALLBACK", gpu.name);
         k_nano::slog_bin!(
             "GPU-HW",
-            "info",
+            "fail",
             "step=golden status=FAIL reason=canary_dispatch_fail family={} isa={}",
             family,
             gpu.isa_tag.as_str()

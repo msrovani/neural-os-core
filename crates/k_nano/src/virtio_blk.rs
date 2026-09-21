@@ -230,7 +230,7 @@ impl VirtIoBlk {
 
         // Dados: bounce
         let data_va = scratch_va.add(4096);
-        if is_write {
+        if is_write && len > 0 {
             core::ptr::copy_nonoverlapping(data as *const u8, data_va, len);
         }
 
@@ -248,8 +248,13 @@ impl VirtIoBlk {
         // (virtqueue_split_read_next_desc). Sem ele, QEMU lê só o header → in_num=0
         // → "virtio-blk missing headers". virtio_net nunca acertou porque não encadeia.
         set_desc(0, self.scratch_pa, 16, DESC_F_NEXT, 1); // header: device-read → next=1
-        set_desc(1, self.scratch_pa + 4096, len as u32,
-                 if is_write { DESC_F_NEXT } else { DESC_F_NEXT | DESC_F_WRITE }, 2); // dados → next=2
+        if len == 0 {
+            // FLUSH (type 4): sem buffer de dados — hdr → status.
+            set_desc(0, self.scratch_pa, 16, DESC_F_NEXT, 2);
+        } else {
+            set_desc(1, self.scratch_pa + 4096, len as u32,
+                     if is_write { DESC_F_NEXT } else { DESC_F_NEXT | DESC_F_WRITE }, 2);
+        }
         set_desc(2, self.scratch_pa + 16, 1, DESC_F_WRITE, 0); // status: device-write, fim
 
         // Publica no avail ring (head = desc 0)
@@ -409,6 +414,10 @@ impl BlockDevice for VirtIoBlk {
     }
     fn name(&self) -> &str {
         "vblk0"
+    }
+    fn sync_cache(&mut self) -> bool {
+        // VIRTIO_BLK_T_FLUSH = 4 — sem payload.
+        unsafe { self.transfer(4, 0, core::ptr::null_mut(), 0, false) }
     }
 }
 

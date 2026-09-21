@@ -56,21 +56,13 @@ impl XpuEngine {
         if prompt.is_empty() { return; }
         let use_gpu = self.config.use_gpu_decode && gpu_ready();
         if use_gpu {
-            // AWAITING_HW: enqueue Prefill op na fila GPU (Layer S/HW pendente).
-            // Quando pushbuffer NVIDIA / Intel ring estiver pronto, drain() despacha.
             let _ = crate::gpu::work_queue::submit(crate::gpu::work_queue::GpuOp::Prefill);
-            self.gpu_dispatches += 1;
-            k_nano::slog_hal!("XPU", "prefill-gpu", "{} tokens → GPU queue", prompt.len());
+            k_nano::slog_hal!("XPU", "warn", "prefill: fila GPU é intenção Layer S — compute na CPU");
         }
-        // Prefill sempre roda em CPU (prompt processing é paralelizável em layers)
         let (_logits, _hidden) = model.forward_with_kv(prompt, cache);
         self.prefill_ticks += now_ticks().wrapping_sub(tick_start);
-        if use_gpu {
-            k_nano::slog_hal!("XPU", "prefill-gpu-done", "{} tokens", prompt.len());
-        } else {
-            self.cpu_fallbacks += 1;
-            k_nano::slog_hal!("XPU", "prefill-cpu", "{} tokens (GPU AWAITING_HW)", prompt.len());
-        }
+        self.cpu_fallbacks += 1;
+        k_nano::slog_hal!("XPU", "ok", "prefill-cpu {} tokens", prompt.len());
     }
 
     /// Decode: gera 1 token. Se GPU pronta e config.use_gpu_decode, despacha decode.
@@ -78,15 +70,11 @@ impl XpuEngine {
         let use_gpu = self.config.use_gpu_decode && gpu_ready();
         if use_gpu {
             let _ = crate::gpu::work_queue::submit(crate::gpu::work_queue::GpuOp::Decode);
-            self.gpu_dispatches += 1;
         }
-        // Decode sempre roda em CPU (1 token por vez, KV cache lookup serial)
         let token = model.generate_next(ctx);
         self.total_tokens = self.total_tokens.wrapping_add(1);
         self.decode_ticks += now_ticks().wrapping_sub(tick_start);
-        if !use_gpu {
-            self.cpu_fallbacks += 1;
-        }
+        self.cpu_fallbacks += 1;
         token
     }
 
@@ -106,7 +94,7 @@ impl XpuEngine {
             if ctx.len() > 512 { ctx.drain(0..ctx.len() - 256); }
         }
         let elapsed = now_ticks().wrapping_sub(t0);
-        k_nano::slog_hal!("XPU", "info", "{} tokens em {} ticks | GPU={} CPU={}",
+        k_nano::slog_hal!("XPU", "ok", "{} tokens em {} ticks | GPU_intent={} CPU={}",
             output.len() - prompt.len(), elapsed, self.gpu_dispatches, self.cpu_fallbacks);
         output
     }

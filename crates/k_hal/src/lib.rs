@@ -36,6 +36,7 @@ pub mod audio;
 pub mod gpu;
 pub mod npu;
 pub mod usb;
+pub mod wait;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
