@@ -145,14 +145,15 @@ pub fn unique_family_gemv_shapes() -> alloc::vec::Vec<GemvShape> {
 }
 
 pub fn w2a8_profile_for_isa(isa: IsaTag) -> &'static str {
+    // Espelha compute_abi::features_for_isa — gfx90c = MadInt8 (SEM WMMA).
     match isa {
         IsaTag::Sm61 | IsaTag::Sm70 | IsaTag::Sm75 | IsaTag::Sm80 | IsaTag::Sm86 | IsaTag::Sm89 => {
             "dp4a_w2a8"
         }
-        IsaTag::Gen9 | IsaTag::Sm52 => "mad_int8",
+        IsaTag::Gen9 | IsaTag::Sm52 | IsaTag::Gfx90c => "mad_int8",
         IsaTag::Dg2 => "dp4a_w2a8",
         IsaTag::Gfx1030 | IsaTag::Gfx1036 => "dot_int8",
-        IsaTag::Gfx1103 | IsaTag::Gfx90c => "wmma_i8",
+        IsaTag::Gfx1103 => "wmma_i8",
         IsaTag::None => "cpu_fallback",
     }
 }
@@ -221,5 +222,12 @@ mod tests {
         assert!(u.contains(&GemvShape::new(3072, 3072)));
         assert!(u.contains(&GemvShape::new(23040, 3072)));
         assert!(!u.iter().any(|s| s.k == 2560));
+    }
+
+    #[test]
+    fn gfx90c_profile_is_mad_not_wmma() {
+        assert_eq!(w2a8_profile_for_isa(IsaTag::Gfx90c), "mad_int8");
+        assert_eq!(w2a8_profile_for_isa(IsaTag::Gfx1103), "wmma_i8");
+        assert_eq!(w2a8_profile_for_isa(IsaTag::Gen9), "mad_int8");
     }
 }

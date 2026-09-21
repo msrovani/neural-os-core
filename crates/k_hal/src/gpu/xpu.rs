@@ -1,10 +1,10 @@
 //! Agent.xpu — prefill/decode split entre CPU e GPU.
 //! CPU: prefill (forward do prompt), GPU: decode (1 token/vez via KV cache).
-//! Referência: arXiv 2506.24045.
+//! Referência: arXiv 2506.24045 (idea-only até Layer S device fence).
 //!
-//! Quando GPU está pronta (BackendState::Ready), o XPU despacha prefill/decode
-//! para a fila lock-free do work_queue. Caso contrário, CPU fallback com
-//! telemetria honesta via xpu_stats().
+//! Honesty s386: até existir `dispatch_gpu_op` real, **nunca** submit na work_queue
+//! (drain só completa CPU → telemetria `gpu_*` mentiria). Prefill/decode = CPU;
+//! `use_gpu_decode` só marca intenção + slog warn.
 
 use cortex::cortex::{TransformerModel, KvCache};
 use alloc::vec::Vec;
@@ -32,10 +32,10 @@ fn now_ticks() -> u64 {
     k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64
 }
 
-/// Check if GPU backend is ready for compute dispatch.
-/// Honesto: retorna false em QEMU sem GPU real.
-fn gpu_ready() -> bool {
-    crate::gpu::backend::compute_state() == crate::gpu::compute_abi::BackendState::Ready
+/// Device XPU só quando Ready **e** Layer S tiver fence real.
+/// Hoje: sempre false (AWAITING_HW) — evita submit teatro.
+fn device_xpu_live() -> bool {
+    false
 }
 
 impl XpuEngine {
@@ -50,14 +50,15 @@ impl XpuEngine {
         }
     }
 
-    /// Prefill: forward do prompt completo com KV cache.
-    /// Se GPU pronta e config.use_gpu_decode, despacha para work_queue.
+    /// Prefill: sempre CPU até Layer S. Intent-only se use_gpu_decode.
     pub fn prefill(&mut self, model: &TransformerModel, prompt: &[u32], cache: &mut KvCache, tick_start: u64) {
         if prompt.is_empty() { return; }
-        let use_gpu = self.config.use_gpu_decode && gpu_ready();
-        if use_gpu {
-            let _ = crate::gpu::work_queue::submit(crate::gpu::work_queue::GpuOp::Prefill);
-            k_nano::slog_hal!("XPU", "warn", "prefill: fila GPU é intenção Layer S — compute na CPU");
+        if self.config.use_gpu_decode && !device_xpu_live() {
+            k_nano::slog_hal!(
+                "XPU",
+                "warn",
+                "prefill intent=gpu — device AWAITING_HW; compute=CPU (no queue submit)"
+            );
         }
         let (_logits, _hidden) = model.forward_with_kv(prompt, cache);
         self.prefill_ticks += now_ticks().wrapping_sub(tick_start);
@@ -65,11 +66,10 @@ impl XpuEngine {
         k_nano::slog_hal!("XPU", "ok", "prefill-cpu {} tokens", prompt.len());
     }
 
-    /// Decode: gera 1 token. Se GPU pronta e config.use_gpu_decode, despacha decode.
+    /// Decode: sempre CPU até Layer S.
     pub fn decode(&mut self, model: &TransformerModel, ctx: &[u32], _cache: &mut KvCache, tick_start: u64) -> u32 {
-        let use_gpu = self.config.use_gpu_decode && gpu_ready();
-        if use_gpu {
-            let _ = crate::gpu::work_queue::submit(crate::gpu::work_queue::GpuOp::Decode);
+        if self.config.use_gpu_decode && !device_xpu_live() {
+            // Intent only — sem submit (work_queue drain = CPU; gpu_decodes ficaria 0 honesto).
         }
         let token = model.generate_next(ctx);
         self.total_tokens = self.total_tokens.wrapping_add(1);
@@ -78,7 +78,7 @@ impl XpuEngine {
         token
     }
 
-    /// Geração completa: prefill + N steps decode (CPU sempre; GPU dispatch é marca de intenção).
+    /// Geração completa: prefill + N steps decode (CPU; GPU = residual Layer S).
     pub fn generate(&mut self, model: &TransformerModel, prompt: &[u32], max_tokens: usize,
                     cache: &mut KvCache) -> Vec<u32> {
         let t0 = now_ticks();

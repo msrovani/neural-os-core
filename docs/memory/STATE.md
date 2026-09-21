@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s385 — SGDB/Tickv/NSGDB honesty
+# STATE — neural-os-core v1.9.99-s386 — W2A8/KernelPack honesty
 
-#   PISTA ATIVA: s385 — bughunt Tickv+ART+BQ+NSGDB (H1–H7 + Med/Low)
-#   PISTA ANTERIOR: s384 LazyLock + smoltcp 0.14 + wasmi 2.0
+#   PISTA ATIVA: s386 — bughunt W2A8 + KernelPack (H1–H5 + M1–M6 + L1–L4)
+#   PISTA ANTERIOR: s385 SGDB/Tickv/NSGDB honesty
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
@@ -26,9 +26,13 @@
 
 | ID | Item | Estado |
 |----|------|--------|
+| s386 | W2A8/KernelPack honesty High→Low | ✅ |
 | s385 | SGDB/Tickv/NSGDB bughunt High→Low | ✅ |
 | s384 | LazyLock + smoltcp 0.14 + wasmi 2.0 | ✅ |
 | s383 | #600/#562/#602 + spin 0.12 | ✅ |
+| IDEA #485 | F4 CPU W2A8 ladder | ✅ s386 (device = ADR-0105 AWAITING) |
+| IDEA #550 | NKP B0–B3 | 🟡 B1.2/B4 AWAITING_HW |
+| IDEA #536 | KernelPack host producers | ⏳ Layer S |
 | IDEA #597 | spin+smoltcp ✅; x86_64 0.15 ⛔ nightly 1.98 | parcial fechado |
 | IDEA #599 | wasmi 2.0 | ✅ |
 | IDEA #537 | put_doc sync OK; cutover 75 callers | 🟡 residual Fase 3 |

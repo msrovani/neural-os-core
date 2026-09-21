@@ -113,8 +113,13 @@ impl ComputeCaps {
             IsaTag::Gfx1030 | IsaTag::Gfx1036 => {
                 (true, true, false, false, OpProfile::DotInt8)
             }
-            IsaTag::Gfx1103 | IsaTag::Gfx90c => {
-                (true, true, true, false, OpProfile::WmmaI8)
+            IsaTag::Gfx1103 => {
+                // RDNA3+ — WMMA i8 quando medido; até golden = DotInt8 honest
+                (true, true, true, false, OpProfile::DotInt8)
+            }
+            IsaTag::Gfx90c => {
+                // Renoir APU: SEM WMMA — Mad/Dot only (não inventar WmmaI8)
+                (false, true, false, false, OpProfile::MadInt8)
             }
             IsaTag::None => (false, false, false, false, OpProfile::ScalarInt8),
         }

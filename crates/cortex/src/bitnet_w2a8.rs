@@ -13,8 +13,13 @@ use alloc::vec::Vec;
 
 /// Gate de ativação do W2A8 (ADR-0105 B3.2): não-TCG + gaps resolvidos.
 /// AVX2 maddubs só no host; no_std usa path escalar quando o gate abre.
+/// Honesty s386: `probe_done()` — pré-detect hypervisor()==None ≡ bare-metal
+/// e abriria W2A8 em TCG por engano (SESSION_243).
 pub fn w2a8_enabled() -> bool {
     if !crate::cortex::GENERATION_GAPS_RESOLVED.load(core::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+    if !k_nano::platform_probe::probe_done() {
         return false;
     }
     use k_nano::platform_probe::HypervisorKind;
@@ -28,7 +33,8 @@ pub fn w2a8_enabled() -> bool {
     }
 }
 
-/// Unpack 2-bit ternário {-1,0,1} de um byte (branchless, ADR-0084 F1).
+/// Unpack 2-bit ternário — mantido para testes/paridade; hot path usa inline.
+#[cfg(test)]
 fn unpack_byte(b: u8, out: &mut [i8; 4]) {
     let p0 = (b & 3) as i8;
     let p1 = ((b >> 2) & 3) as i8;
@@ -65,11 +71,19 @@ pub fn w2a8_ternary_matmul_scalar(w: &PackedTernaryTensor, x: &Tensor) -> Option
 /// W2A8: out[m,n] = quantized(x) @ w_ternary.
 /// Host: AVX2 maddubs. Bare-metal: scalar quantizado.
 pub unsafe fn w2a8_ternary_matmul(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
+    static PATH_LOGGED: core::sync::atomic::AtomicBool =
+        core::sync::atomic::AtomicBool::new(false);
     #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
     {
         if k_nano::platform_probe::allow_avx2() {
+            if !PATH_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                k_nano::slog_cortex!("W2A8", "ok", "path=maddubs (host AVX2)");
+            }
             return w2a8_ternary_matmul_avx2(w, x);
         }
+    }
+    if !PATH_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        k_nano::slog_cortex!("W2A8", "ok", "path=scalar_quant (soft-float / no AVX2)");
     }
     w2a8_ternary_matmul_scalar(w, x)
 }

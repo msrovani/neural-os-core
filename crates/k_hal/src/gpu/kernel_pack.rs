@@ -404,8 +404,24 @@ pub fn find_active_pack(vendor: GpuVendor, isa: IsaTag, op: PackOp) -> Option<Ke
     None
 }
 
+/// True se o pack é CpuStub (layout/golden only — não promove a device Ready).
+pub fn is_cpu_stub_pack(pack: &KernelPack) -> bool {
+    pack.header.ir == IrOrigin::CpuStub
+}
+
 /// Reassina pack com session Ed25519 (boot). Hash deve já bater.
+/// Honesty s386: CpuStub NUNCA vira verified — stub ≠ KernelPack device.
 pub fn promote_with_session(pack: &KernelPack) -> Option<KernelPack> {
+    if is_cpu_stub_pack(pack) {
+        k_nano::slog_hal!(
+            "NKP",
+            "warn",
+            "promote refuse CpuStub isa={} op={:?} — gere CUBIN/zebin/HSACO",
+            pack.header.isa.as_str(),
+            pack.header.op
+        );
+        return None;
+    }
     if pack.verified {
         return Some(pack.clone());
     }
@@ -471,4 +487,34 @@ pub fn build_canonical(
     }
     out.extend_from_slice(payload);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gpu::compute_abi::IsaTag;
+
+    #[test]
+    fn cpu_stub_pack_refuses_promote() {
+        let pack = KernelPack {
+            header: KernelPackHeader {
+                abi: NKP_ABI,
+                vendor: PackVendor::Nvidia,
+                isa: IsaTag::Sm61,
+                op: PackOp::BitLinearW2A8,
+                golden: GoldenId::VectorAdd,
+                compiler: CompilerId::HostCpuLogic,
+                ir: IrOrigin::CpuStub,
+                workgroup_x: 1,
+                shared_mem: 0,
+                payload_len: 0,
+            },
+            payload: Vec::new(),
+            content_hash: [0u8; NKP_HASH_LEN],
+            signature: [0u8; NKP_SIG_LEN],
+            verified: false,
+        };
+        assert!(is_cpu_stub_pack(&pack));
+        assert!(promote_with_session(&pack).is_none());
+    }
 }

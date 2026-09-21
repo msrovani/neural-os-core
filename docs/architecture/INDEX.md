@@ -95,7 +95,7 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0080-legado-tecnologico-e-inovacao.md` | Proposed | `pesquisa` | síntese archive | Rodamap/FS/SESSION_080/082 históricos; não abre sprint sozinha |
 | `0082-hardware-info-registry.md` | Accepted (MVP) | `fazendo` | #520–#525 | **Canônico 0082.** MVP `platform_probe` + Onda CPU SESSION_251. Snapshot WASM / ondas GPU-storage abertas. |
 | `0083-ai-layer-gap-auditoria.md` | Accepted | `fazendo` | Auditoria 7.x | Infra + ROUTER.BITNET v6 load ✅ s252; residual: métrica “decisões IA” no boot, W2A8 |
-| `0084-bitnet-engine-fidelidade-e-kernels.md` | Proposed | `fazendo` | #126–156, #375–377, #479–490 | F1–F3/F5 ✅ (SESSION_249). **Aberto:** F4 W2A8 → execução **ADR-0105 B3** (gate fidelidade permanece aqui) |
+| `0084-bitnet-engine-fidelidade-e-kernels.md` | Accepted | `fazendo` | #126–156, #375–377, #479–490 | F1–F3/F5 ✅ (SESSION_249). **F4 CPU ladder ✅ s386** (`bitnet_w2a8` + probe_done). Device W2A8 → **ADR-0105** B1.2/B4 AWAITING_HW |
 | `0085-bitnet-v6-formato-canonico.md` | Proposed | `completa` | #491 | F0–F4 ✅ + hwexpert v6 SESSION_255. Residual: boot metal 2B/Falcon3 (não reabre formato) |
 | `0086-instalacao-e-update-ota.md` | Accepted | `fazendo` | #308, #421 | Processo unificado. SESSION_252: U1/U2/U4/U6 + I3–I12 ✅. **Abertos:** A1=U3 Ed25519/TPM defer; A2–A9 (smoke QEMU ciclo, menu live/install, UI disco, hot-swap fw, telemetria cron, tries>1, mini default) |
 | `0087-mhi-real-dma-multi-tier.md` | Accepted | `fazendo` | #420, #423 | F1–F5 código ✅ SESSION_252 (`record_access` wired). **Aberto:** F6 AMD SDMA AWAITING_HW; golden CE GTX 1050 |

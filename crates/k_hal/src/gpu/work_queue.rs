@@ -110,44 +110,26 @@ pub fn submit_tensor(op: TensorOp) -> Option<u64> {
     submit(GpuOp::from(op))
 }
 
-/// Drain queue: if `hw_ready` try HW path marker, else CPU complete.
-/// Telemetria XPU: contabiliza prefill/decode separadamente.
-pub fn drain(hw_ready: bool) -> u32 {
+/// Drain queue: até Layer S, **sempre** completa na CPU (hw_ready ignorado).
+/// Telemetria XPU: contabiliza prefill/decode como cpu_*.
+pub fn drain(_hw_ready: bool) -> u32 {
     let mut n = 0u32;
     let mut q = QUEUE.lock();
     while let Some(job) = q.dequeue() {
         n += 1;
-        let hw_dispatched = if hw_ready {
-            // Dispatch real via backend quando state=Ready.
-            // TODO(Layer S/HW): chamar dispatch_gpu_op do backend.rs
-            // quando pushbuffer NVIDIA / Intel ring estiver pronto.
-            false
-        } else {
-            false
-        };
-        if hw_dispatched {
-            q.completed_hw.fetch_add(1, Ordering::Relaxed);
-        } else {
-            q.completed_cpu.fetch_add(1, Ordering::Relaxed);
-        }
-        // Telemetria XPU separada
+        // Honesty s386: sem dispatch_gpu_op real — nunca completed_hw teatro.
+        let hw_dispatched = false;
+        q.completed_cpu.fetch_add(1, Ordering::Relaxed);
         match job.op {
             GpuOp::Prefill => {
-                if hw_dispatched {
-                    q.gpu_prefills.fetch_add(1, Ordering::Relaxed);
-                } else {
-                    q.cpu_prefills.fetch_add(1, Ordering::Relaxed);
-                }
+                q.cpu_prefills.fetch_add(1, Ordering::Relaxed);
             }
             GpuOp::Decode => {
-                if hw_dispatched {
-                    q.gpu_decodes.fetch_add(1, Ordering::Relaxed);
-                } else {
-                    q.cpu_decodes.fetch_add(1, Ordering::Relaxed);
-                }
+                q.cpu_decodes.fetch_add(1, Ordering::Relaxed);
             }
             _ => {}
         }
+        let _ = hw_dispatched;
     }
     n
 }
@@ -172,13 +154,17 @@ pub fn xpu_stats() -> (u64, u64, u64, u64) {
     )
 }
 
-/// Boot gate helper: submit Nop+Matmul, drain, report HW|CPU_FALLBACK.
+/// Boot gate helper: submit Nop+Matmul, drain.
+/// Honesty s386: `hw_ready` sem dispatch real → READY_NO_DISPATCH (não "HW").
 pub fn gate_status(hw_ready: bool) -> &'static str {
     let _ = submit(GpuOp::Nop);
     let _ = submit(GpuOp::MatmulTernary);
     let _ = drain(hw_ready);
-    if hw_ready {
+    let (_s, hw, _cpu) = stats();
+    if hw > 0 {
         "HW"
+    } else if hw_ready {
+        "READY_NO_DISPATCH"
     } else {
         "CPU_FALLBACK"
     }
@@ -254,6 +240,7 @@ mod tests {
     fn gate_status_reports_cpu_fallback_without_hw() {
         let _g = TEST_LOCK.lock();
         assert_eq!(gate_status(false), "CPU_FALLBACK");
-        assert_eq!(gate_status(true), "HW");
+        // Ready canário sem dispatch Layer S = READY_NO_DISPATCH (não "HW")
+        assert_eq!(gate_status(true), "READY_NO_DISPATCH");
     }
 }

@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s385 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s386 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 386 | W2A8 | bughunt AIOS | KernelPack + CPU W2A8 honesty | READY_NO_DISPATCH; probe_done; gfx90c Mad; SCORE tri-state; ternary só pack; CpuStub refuse; XPU no submit; ADR-0084 F4 |
 | 385 | SGDB | bughunt AIOS | Tickv+NoProto+ART+BQ+NSGDB | sync md/ strip; put_doc sync; RAG lexical; degraded; CRDT wire; force_heavy SleepCycle; 18 tests |
 | 384 | deps | #597/#599 | LazyLock + smoltcp 0.14 + wasmi 2.0 | x86_64 0.15 abort (nightly 1.98 Step); wasmi instantiate_and_start; 205 hermes |
 | 383 | IDEA plano | CapGate+voz+deps | #600/#562/#602 + spin 0.12 | DynSkill 0xD1; MicFrameRing SPSC; TicketLock policy; spin bump; wasmi/#597 residual |

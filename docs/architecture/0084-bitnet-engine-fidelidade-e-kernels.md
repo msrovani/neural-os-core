@@ -1,11 +1,12 @@
 # ADR-0084: Engine BitNet — Fidelidade Arquitetural, Kernels CPU e Receita de Treino 1-bit
 
-**Data:** 2026-08-04
-**Status:** Proposed
-**Lifecycle:** `por_fazer`
-**Fonte:** Estudo externo (microsoft/BitNet + bitnet.cpp, arXiv 2504.12285 2B4T, arXiv 2511.21910 Platinum, Deveraux-Parker/nanoGPT_1GPU_SPEEDRUN, hestia2026/Hestia) cruzado com auditoria interna do stack `cortex`
-**Ideias:** relaciona #126–156 (cortex), #375–377 (GGUF), #479–490 (CPU-first); novas a registrar no IDEA_BANK
-**Substitui:** — (complementa ADR-0011, ADR-0012, ADR-0019, ADR-0061)
+**Data:** 2026-08-04  
+**Atualizado:** 2026-09-21 (SESSION_386)  
+**Status:** Accepted (F1–F3/F5 + F4 CPU ladder)  
+**Lifecycle:** `fazendo`  
+**Fonte:** Estudo externo (microsoft/BitNet + bitnet.cpp, arXiv 2504.12285 2B4T, arXiv 2511.21910 Platinum, Deveraux-Parker/nanoGPT_1GPU_SPEEDRUN, hestia2026/Hestia) cruzado com auditoria interna do stack `cortex`  
+**Ideias:** relaciona #126–156 (cortex), #375–377 (GGUF), #479–490 (CPU-first); F4 ↔ ADR-0105 B3  
+**Substitui:** — (complementa ADR-0011, ADR-0012, ADR-0019, ADR-0061; operação device = ADR-0105)
 
 ---
 
@@ -103,27 +104,29 @@ nesta área — verificação via `bitnet_fwd_parity.py`).
 **Verificação:** `tools/bitnet_fwd_parity.py` (paridade host vs kernel) + `cargo check --release`
 + boot QEMU com 2B.
 
-### Fase 4 — Kernel I2_S/maddubs oficial (W2A8) — GATED, depois
+### Fase 4 — Kernel I2_S/maddubs oficial (W2A8) — GATED → **B3 wired (SESSION_386)**
 
 > **Execução unificada:** residual F4 = **ADR-0105 §B3** (CPU ladder até GPU Ready). Este ADR
 > permanece a fonte de *fidelidade/gate*; 0105 é o checklist operacional W2A8 (CPU≠GPU).
+>
+> **s386 honesty:** `cortex::bitnet_w2a8` = path CPU (scalar soft-float + AVX2 host);
+> `w2a8_enabled` exige `probe_done()` + gaps; device BitLinearW2A8 = AWAITING_HW (None).
+> Upstream microsoft/BitNet PR#580 (scalar fallback sem AVX2) = ideia já espelhada no path
+> `w2a8_ternary_matmul_scalar` — **não** puxar crates.io `bitnet-*` (stack distinta).
 
 O kernel oficial (ggml-bitnet-mad.cpp): unpack shift+mask (sem branch), `_mm256_maddubs_epi16`
 (u8×i8→i16, 32 MACs/instrução), acumulação i32, scale f32/linha + si per-token no epílogo com
 desconto do viés {0,1,2,3}→{-1,0,1}. Ganho ~2-4× sobre nosso path f32-FMA; é o que dá os 29ms
 TPOT/0.028J do 2B4T.
 
-**Não fazer agora**, porque:
-1. Exige pipeline de ativação int8 (redução absmax por matmul) — mudança numérica e estrutural.
-2. 2B4T é nativa a8 (sem degradação), mas Falcon3/LLaMA-8B RTN-convertidos degradam — possível
-   fine-tune para recuperar.
-3. **Ganho nulo sob TCG** (dev default sem AVX2) — só rende em WHPX/HW real.
-4. Os limitadores reais de qualidade estão fora do matmul: `soft_stride=3`, `MAX_SEQ=64`,
-   geração 4-8 tokens.
+**Estado 2026-09-21:**
+1. CPU ladder + gate probe/TCG + path slog ✅ (`bitnet_w2a8.rs`).
+2. Device fence/golden/SASS = residual Layer S (ADR-0105 B1.2/B2.4/B4).
+3. **Ganho nulo sob TCG** — só rende em WHPX/HW real (premissa mantida).
+4. Limitadores de qualidade fora do matmul: gaps de geração (gate `GENERATION_GAPS_RESOLVED`).
 
-**Gate de abertura:** (a) Fases 1–3 completas e verificadas; (b) gaps de geração/contexto
-endereçados; (c) execução primária em WHPX/HW real. ~150-300 LOC + plumbagem de scales.
-
+**Gate de abertura device:** pack BitLinearW2A8 verified (não CpuStub) + golden fence +
+ISA profile honesto (gfx90c=MadInt8, não WmmaI8).
 ### Fase 5 — Tiling configurável (a qualquer momento)
 
 `ROW_BLOCK_SIZE=4`, `COL_BLOCK_SIZE=128`, `PARALLEL_SIZE=4` como consts de tuning por HW

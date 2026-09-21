@@ -62,6 +62,16 @@ pub fn compute_isa_tag() -> Option<crate::gpu::compute_abi::IsaTag> {
     }
 }
 
+/// Vendor do alvo de compute (Observe). None se CPU-only / não probeado.
+pub fn compute_vendor() -> Option<GpuVendor> {
+    match COMPUTE_VENDOR.load(core::sync::atomic::Ordering::Acquire) {
+        1 => Some(GpuVendor::Nvidia),
+        2 => Some(GpuVendor::Amd),
+        3 => Some(GpuVendor::Intel),
+        _ => None,
+    }
+}
+
 fn remember_compute_target(gpu: &GpuInfo) {
     COMPUTE_ISA.store(gpu.isa_tag as u32, core::sync::atomic::Ordering::Release);
     let v = match gpu.vendor {
@@ -191,7 +201,7 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
         *CURRENT_BACKEND.lock() = Some(GpuAccel::CpuOnly);
         *COMPUTE_STATE.lock() = BackendState::CpuOnly;
         log_gpu_hw_verdict("no_compute_gpu");
-        k_nano::boot_report::note_gpu("nenhuma", false);
+        k_nano::boot_report::note_gpu("nenhuma", false, false);
         let _ = crate::gpu::direct_storage::probe_gds();
         return;
     }
@@ -213,8 +223,8 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
         // Display-only (ex.: VirtIO/iGPU sem compute) = GPU presente e ok.
         let disp_ok = plan.display_index().and_then(|i| gpus.get(i));
         match disp_ok {
-            Some(dg) => k_nano::boot_report::note_gpu(dg.name, true),
-            None => k_nano::boot_report::note_gpu("nenhuma", false),
+            Some(dg) => k_nano::boot_report::note_gpu(dg.name, true, false),
+            None => k_nano::boot_report::note_gpu("nenhuma", false, false),
         }
         let _ = crate::gpu::direct_storage::probe_gds();
         return;
@@ -248,7 +258,7 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
         *CURRENT_BACKEND.lock() = Some(GpuAccel::CpuOnly);
         *COMPUTE_STATE.lock() = BackendState::Quarantine;
         log_gpu_hw_verdict("bar0_validate_failed");
-        k_nano::boot_report::note_gpu(gpu.name, false);
+        k_nano::boot_report::note_gpu(gpu.name, false, false);
         return;
     }
 
@@ -333,7 +343,7 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
             *CURRENT_BACKEND.lock() = Some(GpuAccel::CpuOnly);
             *COMPUTE_STATE.lock() = BackendState::CpuOnly;
             log_gpu_verdict_unified(gpu, "CPU_FALLBACK", "virtio_display_only");
-            k_nano::boot_report::note_gpu(gpu.name, true);
+            k_nano::boot_report::note_gpu(gpu.name, true, false);
             return;
         }
         _ => {
@@ -398,12 +408,13 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
             log_gpu_verdict_unified(gpu, verdict, reason);
         }
     }
-    // BootReport (SESSION_274): backend real probed = ok (CpuOnly/None = false).
-    let backend_ok = !matches!(
+    // BootReport s386: probed ≠ Ready. SCORE gpu=ready|probe|none.
+    let probed = !matches!(
         CURRENT_BACKEND.lock().as_ref(),
         Some(GpuAccel::CpuOnly) | None
     );
-    k_nano::boot_report::note_gpu(gpu.name, backend_ok);
+    let compute_ready = *COMPUTE_STATE.lock() == BackendState::Ready;
+    k_nano::boot_report::note_gpu(gpu.name, probed, compute_ready);
     let _ = crate::gpu::direct_storage::probe_gds();
     crate::compute_port::sync_from_backend();
 }
@@ -415,9 +426,14 @@ fn log_gpu_verdict_unified(gpu: &GpuInfo, verdict: &str, reason: &str) {
     } else {
         "n/a"
     };
+    let sev = match verdict {
+        "PASS" | "CPU_FALLBACK" => "ok",
+        "PARTIAL" => "warn",
+        _ => "warn",
+    };
     k_nano::slog_bin!(
         "GPU-HW",
-        "info",
+        sev,
         "step=compute status={} detail={} family={} isa={} backend={:?} name={}",
         verdict,
         reason,
@@ -428,7 +444,7 @@ fn log_gpu_verdict_unified(gpu: &GpuInfo, verdict: &str, reason: &str) {
     );
     k_nano::slog_bin!(
         "GPU-HW",
-        "info",
+        sev,
         "VERDICT={} reason={} family={} isa={} backend={:?}",
         verdict,
         reason,
@@ -441,13 +457,13 @@ fn log_gpu_verdict_unified(gpu: &GpuInfo, verdict: &str, reason: &str) {
 fn log_gpu_hw_verdict(reason: &str) {
     k_nano::slog_bin!(
         "GPU-HW",
-        "info",
+        "warn",
         "step=compute_ready status=UNSUPPORTED detail={}",
         reason
     );
     k_nano::slog_bin!(
         "GPU-HW",
-        "info",
+        "warn",
         "VERDICT=AWAITING_REAL_HW reason={}",
         reason
     );
@@ -489,10 +505,6 @@ pub fn adr0047_compute_gate() -> &'static str {
 /// pelo canário CE/vector_add.
 fn nvidia_matmul(_nv: &NvidiaGpu, _a: &Tensor, _b: &Tensor) -> Option<Tensor> {
     None
-}
-
-fn cpu_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
-    a.matmul(b)
 }
 
 pub fn job_ring_info() -> alloc::string::String {

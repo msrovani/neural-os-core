@@ -93,7 +93,7 @@ impl BootReport {
 }
 
 static BOOT_REPORT: Mutex<Option<BootReport>> = Mutex::new(None);
-static GPU_NOTE: Mutex<Option<(String, bool)>> = Mutex::new(None);
+static GPU_NOTE: Mutex<Option<(String, bool, bool)>> = Mutex::new(None);
 /// ADR-0104 — cadência escolhida (linha textual + ok) para o BOOT SCORE.
 static TIMER_NOTE: Mutex<Option<(String, bool)>> = Mutex::new(None);
 // ADR-0100 Onda 0 T-001: lock-free atomic counters (observe/plan/act/verify/escalate)
@@ -137,8 +137,10 @@ pub fn inc_verify(n: u32) {
     AI_VERIFY.fetch_add(n, Ordering::Relaxed);
 }
 
-pub fn note_gpu(name: &str, ok: bool) {
-    *GPU_NOTE.lock() = Some((String::from(name), ok));
+/// Honesty s386: `probed` = silício/display visto; `compute_ready` = BackendState::Ready.
+/// SCORE: ready | probe | none — `gpu_ok` só true se compute_ready.
+pub fn note_gpu(name: &str, probed: bool, compute_ready: bool) {
+    *GPU_NOTE.lock() = Some((String::from(name), probed, compute_ready));
 }
 
 /// ADR-0104 — nota da cadência do timer (mirror de `note_gpu`): HUD/BOOT SCORE
@@ -285,7 +287,11 @@ pub fn build_score_text() -> String {
         || crate::disk_agent::nvme::NVME_DRIVER.lock().is_some();
     let bus = storage_bus(usb);
     let gpu_note = GPU_NOTE.lock().clone();
-    let gpu_ok = gpu_note.as_ref().map(|(_, ok)| *ok).unwrap_or(false);
+    let (gpu_probed, gpu_ready) = gpu_note
+        .as_ref()
+        .map(|(_, p, r)| (*p, *r))
+        .unwrap_or((false, false));
+    let gpu_ok = gpu_ready;
     let timer_note = TIMER_NOTE.lock().clone();
     let timer_line = timer_note
         .as_ref()
@@ -311,10 +317,12 @@ pub fn build_score_text() -> String {
     } else {
         "fail"
     };
-    let gpu = if gpu_ok {
-        "ok"
+    let gpu = if gpu_ready {
+        "ready"
+    } else if gpu_probed {
+        "probe"
     } else {
-        "await"
+        "none"
     };
 
     let mut att = alloc::string::String::new();
@@ -396,9 +404,15 @@ pub fn finalize_and_publish() -> BootReport {
         || crate::disk_agent::nvme::NVME_DRIVER.lock().is_some();
 
     let gpu_note = GPU_NOTE.lock().clone();
-    r.gpu_ok = gpu_note.as_ref().map(|(_, ok)| *ok).unwrap_or(false);
-    if let Some((name, ok)) = gpu_note {
-        r.push(BootEvent::Gpu { name, ok });
+    r.gpu_ok = gpu_note
+        .as_ref()
+        .map(|(_, _, ready)| *ready)
+        .unwrap_or(false);
+    if let Some((name, _probed, ready)) = gpu_note {
+        r.push(BootEvent::Gpu {
+            name,
+            ok: ready,
+        });
     }
 
     r.push(BootEvent::Storage {

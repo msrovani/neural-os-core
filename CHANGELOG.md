@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s386] - 2026-09-21 — W2A8 / KernelPack honesty bughunt
+
+- **H1–H5:** READY_NO_DISPATCH; probe_done gate; gfx90c→MadInt8; SCORE ready|probe|none; CE_OK/CE_FAIL
+- **M1–M6:** VERDICT sev; ternary só pack verified; Falcon3 shapes only; CpuStub refuse promote; XPU no queue submit; path slog
+- **L1–L4:** remove cpu_matmul; ADR-0084 Accepted/F4 B3; upstream idea-only; drain always CPU
+- Canvas: `w2a8-kernelpack-bughunt-s386.canvas.tsx`
+- Residuals: device fence/golden ADR-0105 B1.2/B4; IDEA #536/#550
+
 ## [1.9.99-s385] - 2026-09-21 — SGDB/Tickv/NSGDB honesty bughunt
 
 - H1–H7: sync_write strip `md/Lx/`; put_doc→NSGDB+CRDT; RAG lexical+engine; engine refuse L2+ sem Tickv; TickvLite.degraded; force_heavy SleepCycle

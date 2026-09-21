@@ -104,13 +104,12 @@ fn gpu_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
         return None;
     }
     let shapes = falcon3_w2a8::falcon3_decode_gemv_shapes();
-    let ok_shape = shapes.iter().any(|s| s.n as usize == n && s.k as usize == k)
-        || (k >= 512 && n >= 512);
+    let ok_shape = shapes.iter().any(|s| s.n as usize == n && s.k as usize == k);
     if !ok_shape {
         slog_hal!(
             "COMPUTE",
             "warn",
-            "W2A8 shape ({},{}) fora Falcon3 — fallback CPU",
+            "W2A8 shape ({},{}) fora Falcon3 GEMV — fallback CPU",
             n,
             k
         );
@@ -122,11 +121,32 @@ fn gpu_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
 
 pub fn register_compute_if_ready() {
     if compute_state() == BackendState::Ready {
-        cortex::compute::register_gpu_ternary(gpu_ternary);
+        // Honesty s386: só registar ternary se pack BitLinearW2A8 verified existe.
+        // Canary vector_add Ready ≠ device W2A8 — senão slog "ternary on" mente.
+        let isa = backend::compute_isa_tag().unwrap_or(IsaTag::None);
+        let has_w2a8 = backend::compute_vendor()
+            .and_then(|v| {
+                kernel_pack::find_active_pack(v, isa, kernel_pack::PackOp::BitLinearW2A8)
+            })
+            .map(|p| p.verified && !kernel_pack::is_cpu_stub_pack(&p))
+            .unwrap_or(false);
+        if has_w2a8 {
+            cortex::compute::register_gpu_ternary(gpu_ternary);
+            slog_hal!(
+                "COMPUTE",
+                "ok",
+                "GPU Ready + W2A8 pack verified isa={} — ternary registered; device fence=AWAITING_HW",
+                isa.as_str()
+            );
+        } else {
+            slog_hal!(
+                "COMPUTE",
+                "ok",
+                "GPU Ready (canary) isa={} — sem pack BitLinearW2A8 verified; ternary NOT registered (CPU ladder)",
+                isa.as_str()
+            );
+        }
         let dual = if backend::is_dual_gpu() { "dual" } else { "single" };
-        let isa = backend::compute_isa_tag()
-            .map(|i| i.as_str())
-            .unwrap_or("none");
         let sku = aios_adapt::last_plan()
             .map(|p| p.sku.as_str())
             .unwrap_or_else(|| falcon3_w2a8::active_sku().as_str());
@@ -137,11 +157,11 @@ pub fn register_compute_if_ready() {
         slog_hal!(
             "COMPUTE",
             "ok",
-            "GPU Ready ({}) isa={} profile={} falcon3={} — ternary on; W2A8 device=AWAITING_HW until fence+golden",
+            "GPU state Ready ({}) profile={} falcon3={} w2a8_pack={}",
             dual,
-            isa,
             profile,
-            sku
+            sku,
+            has_w2a8 as u8
         );
         aios_adapt::remember_caps();
     } else {

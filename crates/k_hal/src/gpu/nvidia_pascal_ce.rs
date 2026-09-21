@@ -516,9 +516,9 @@ pub unsafe fn probe_global(gpu: &GpuInfo) {
     ce.ready = canary_ok;
     k_nano::slog_bin!(
         "GPU-HW",
-        "info",
+        if canary_ok { "ok" } else { "warn" },
         "step=ce status={} detail=canary_64k {}",
-        if canary_ok { "READY" } else { "FAIL" },
+        if canary_ok { "CE_OK" } else { "CE_FAIL" },
         gpu.name
     );
     *CE.lock() = Some(ce);
