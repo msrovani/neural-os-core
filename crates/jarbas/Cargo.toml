@@ -5,11 +5,8 @@ edition = "2021"
 
 [dependencies]
 spin = "0.9"
-lazy_static = { version = "1.4", features = ["spin_no_std"] }
-x86_64 = "0.14.11"
 libm = "0.2"
-# ADR-0058: fundação 2D no_std (MIT/Apache) — DrawTarget sobre DoubleBuffer.
-# Pin patch: 0.8.2 (crates.io max_stable 0.8.x; sem bump major).
+# ADR-0058: fundação 2D no_std — DrawTarget sobre DoubleBuffer (0.8.2 max_stable).
 embedded-graphics = "0.8.2"
 event-bus = { path = "../event-bus" }
 ticket-lock = { path = "../ticket-lock" }
@@ -19,11 +16,11 @@ k-nano = { path = "../k_nano" }
 k-hal = { path = "../k_hal" }
 cortex = { path = "../cortex" }
 hermes = { path = "../hermes" }
-# heapless removido SESSION_381 — zero callers no crate (redução).
+# Removidos SESSION_381: heapless / lazy_static / x86_64 — zero callers no crate.
+# spin 0.12 / x86_64 0.15 = IDEA #597/#602 (workspace, não só jarbas).
 
 [features]
 default = []
-# ADR-0089: HUD de cpu_stats na gauge bar.
 smp-runqueue = ["k-nano/smp-runqueue"]
 
 [lints.rust]

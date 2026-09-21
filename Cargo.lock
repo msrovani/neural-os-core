@@ -764,12 +764,10 @@ dependencies = [
  "hermes",
  "k-hal",
  "k-nano",
- "lazy_static",
  "libm",
  "skill-registry",
  "spin",
  "ticket-lock",
- "x86_64",
 ]
 
 [[package]]
