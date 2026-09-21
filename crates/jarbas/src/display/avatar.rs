@@ -52,24 +52,12 @@ fn tables() -> &'static FftTables {
     })
 }
 
-/// Le a energia FFT atual (usado pelo compositor para animar o orb).
-/// QEMU stub: se bins = zeros (sem hardware audio), gera energia sintetica
-/// baseada no tick do timer para o orb pulsar visualmente.
+/// Lê a energia FFT atual (orb / Soul Mirror).
+/// Honesty: silêncio = 0.0 — **não** inventar pulso sintético (SESSION_381).
+/// Ambient do orb vem do AffectVector/tick no `soul_mirror`, não de áudio fake.
 pub fn read_audio_energy() -> f32 {
-    let real_energy = {
-        let bins = FFT_BINS.lock();
-        bins.iter().sum::<f32>() / bins.len() as f32
-    };
-    if real_energy > 0.01 {
-        return real_energy;
-    }
-    // Pulso sintético via SIN_LUT (sem libm no caminho do compositor):
-    // ~sin(tick*0.020) e ~sin(tick*0.007) quantizados na LUT de 256 entradas.
-    let tick =
-        k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-    let a = crate::display::fb::sin_lut(tick.wrapping_mul(815) >> 10);
-    let b = crate::display::fb::sin_lut(tick.wrapping_mul(292) >> 10);
-    (0.15 + a * 0.12 + b * 0.08).clamp(0.0, 1.0)
+    let bins = FFT_BINS.lock();
+    bins.iter().sum::<f32>() / bins.len() as f32
 }
 
 /// Le um bin individual (usado pelo waveform 32 barras)
@@ -158,5 +146,9 @@ mod tests {
 
         // Limpa para não poluir outros testes do crate.
         process_audio_fft(&silence);
+        assert!(
+            read_audio_energy() < 0.01,
+            "silêncio deve reportar energia ~0 (sem pulso sintético)"
+        );
     }
 }

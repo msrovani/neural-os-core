@@ -143,7 +143,7 @@ pub fn switch(n: u8) -> bool {
         return false;
     }
     ACTIVE.store(n, Ordering::Relaxed);
-    k_nano::slog_jarbas!("VCON", "info", "switch=F{} VERDICT=PARTIAL", n + 1);
+    k_nano::slog_jarbas!("VCON", "ok", "switch=F{} VERDICT=PARTIAL", n + 1);
     true
 }
 
@@ -175,7 +175,7 @@ pub fn boot_smoke() -> bool {
     let ok = switch(0) && switch(1) && switch(0);
     k_nano::slog_jarbas!(
         "VCON",
-        "info",
+        "ok",
         "step=vconsole status=OK n={} VERDICT=PARTIAL reason=switch_mvp",
         N
     );

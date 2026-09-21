@@ -13,15 +13,25 @@ pub const VIRTIO_GPU_MODERN: u16 = 0x1050;
 /// Init FE: HalOffer Display + kick QUEUE_NOTIFY no BE k-hal (sem PCI scan MMIO aqui).
 pub unsafe fn init_driver_virtio_gpu() -> bool {
     let st = offer::query(DeviceClass::Gpu);
-    k_nano::slog_jarbas!("VGPU", "offer", "gpu status={:?}", st);
+    k_nano::slog_jarbas!("VGPU", "ok", "gpu offer status={:?}", st);
 
     // Bind FE display/gpu via HalOffer (Hermes path preferível; aqui bind direto R1 API)
     match offer::request(DeviceClass::Gpu, "display") {
         Ok(h) => {
-            k_nano::slog_jarbas!("VGPU", "bind", "HalOffer OK topic={}", h.topic);
+                    k_nano::slog_jarbas!(
+                        "VGPU",
+                        "ok",
+                        "HalOffer OK topic={}",
+                        h.topic
+                    );
         }
         Err(e) => {
-            k_nano::slog_jarbas!("VGPU", "bind", "HalOffer {:?} — GOP FE intacto", e);
+                    k_nano::slog_jarbas!(
+                        "VGPU",
+                        "warn",
+                        "HalOffer {:?} — GOP FE intacto",
+                        e
+                    );
         }
     }
 
@@ -44,7 +54,7 @@ pub unsafe fn init_driver_virtio_gpu() -> bool {
         }
     }
 
-    // Sucesso FE = GOP / GPU lock já populado no boot UEFI
+    // Sucesso FE = GOP populado ou kick VirtIO real — Offer Available ≠ display.
     let gop_ok = crate::display::fb::GPU
         .lock()
         .as_ref()
@@ -52,10 +62,11 @@ pub unsafe fn init_driver_virtio_gpu() -> bool {
         .unwrap_or(false);
     k_nano::slog_jarbas!(
         "VGPU",
-        "fe",
-        "GOP={} notify_kick={} (sem MMIO R3)",
+        if gop_ok || kicked { "ok" } else { "warn" },
+        "GOP={} notify_kick={} offer={:?} (sem MMIO R3)",
         gop_ok,
-        kicked
+        kicked,
+        st
     );
-    gop_ok || kicked || matches!(st, offer::OfferStatus::Available | offer::OfferStatus::Bound)
+    gop_ok || kicked
 }

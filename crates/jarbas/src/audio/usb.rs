@@ -191,12 +191,12 @@ impl Agent for UsbAudioAgent {
                     k_nano::usb_trust::UsbPolicy::Deny => {
                         k_nano::usb_trust::enforce_deny_ports();
                         UAC_READY.store(false, Ordering::Relaxed);
-                        k_nano::slog_bin!("UAC", "info", "device blocked by USB-TRUST");
+                        k_nano::slog_bin!("UAC", "warn", "device blocked by USB-TRUST");
                     }
                     _ => {
                         // Trust OK: arma o ring isócrono IN (captura contínua).
                         let armed = unsafe { k_nano::xhci::schedule_isoc_in() };
-                        k_nano::slog_bin!("UAC", "info", "Audio device vid={:#06x} did={:#06x} cap_ep={:#04x} play_ep={:#04x} rate={} isoc_armed={}",
+                        k_nano::slog_bin!("UAC", "ok", "Audio device vid={:#06x} did={:#06x} cap_ep={:#04x} play_ep={:#04x} rate={} isoc_armed={}",
                             vendor_id,
                             device_id,
                             capture_ep,
@@ -205,30 +205,30 @@ impl Agent for UsbAudioAgent {
                             armed);
                         k_nano::slog_bin!(
                             "UAC-HW",
-                            "info",
+                            "ok",
                             "VERDICT=OK reason=isoc_trb_scheduled"
                         );
                     }
                 }
             }
             UacProbeResult::NoAudioInterface { controllers } => {
-                k_nano::slog_bin!("UAC", "info", "{} USB ctrl — config lida, sem interface Audio (HDA primario)", controllers);
+                k_nano::slog_bin!("UAC", "warn", "{} USB ctrl — config lida, sem interface Audio (HDA primario)", controllers);
                 k_nano::slog_bin!(
                     "UAC-HW",
-                    "info",
+                    "warn",
                     "VERDICT=AWAITING_REAL_HW reason=no_uac_interface"
                 );
             }
             UacProbeResult::ScanIncomplete { controllers } => {
-                k_nano::slog_bin!("UAC", "info", "{} USB ctrl — GET_DESCRIPTOR incompleto (sem device UAC no bus)", controllers);
+                k_nano::slog_bin!("UAC", "warn", "{} USB ctrl — GET_DESCRIPTOR incompleto (sem device UAC no bus)", controllers);
                 k_nano::slog_bin!(
                     "UAC-HW",
-                    "info",
+                    "warn",
                     "VERDICT=AWAITING_REAL_HW reason=ep0_get_descriptor_incomplete"
                 );
             }
             UacProbeResult::NoUsbController => {
-                k_nano::slog_bin!("UAC", "info", "Nenhum controlador USB (PCI 0x0C)");
+                k_nano::slog_bin!("UAC", "warn", "Nenhum controlador USB (PCI 0x0C)");
             }
         }
         AgentTickResult::Done
@@ -262,7 +262,7 @@ pub fn poll_uac_audio() {
     let _ = unsafe { k_nano::xhci::poll_isoc_out() };
     static LOGGED: AtomicBool = AtomicBool::new(false);
     if !LOGGED.swap(true, Ordering::Relaxed) {
-        k_nano::slog_bin!("UAC-HW", "info", "step=isoc_in status=OK ring=poll_isoc_in");
+        k_nano::slog_bin!("UAC-HW", "ok", "step=isoc_in status=OK ring=poll_isoc_in");
     }
 }
 
@@ -279,7 +279,7 @@ pub fn write_uac_playback(pcm: &[i16]) {
     if !LOGGED.swap(true, Ordering::Relaxed) {
         k_nano::slog_bin!(
             "UAC-HW",
-            "info",
+            "ok",
             "step=isoc_out status=OK queued={}",
             queued
         );

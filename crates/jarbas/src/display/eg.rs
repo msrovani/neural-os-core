@@ -88,7 +88,7 @@ pub fn self_test(fb: &mut DoubleBuffer) -> bool {
         .is_ok();
     let ok = ok_rect && ok_text;
     if ok {
-        k_nano::slog_jarbas!("UI", "info", "embedded-graphics DrawTarget self-test PASS (ADR-0058 S1)");
+        k_nano::slog_jarbas!("UI", "ok", "embedded-graphics DrawTarget self-test PASS (ADR-0058 S1)");
     } else {
         k_nano::slog_jarbas!("UI", "warn", "embedded-graphics self-test FAIL");
     }

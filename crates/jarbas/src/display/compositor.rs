@@ -770,11 +770,11 @@ impl JarbasDesktop {
             }
             self.hub_underlay_valid = false;
             self.hub_painted_checksum = 0;
-            k_nano::slog_jarbas!("HUB", "info", "painel aberto (agente)");
+            k_nano::slog_jarbas!("HUB", "ok", "painel aberto (agente)");
         } else {
             self.hub_anim_start_us = 0;
             self.hub_painted_checksum = 0;
-            k_nano::slog_jarbas!("HUB", "info", "painel fechado (agente)");
+            k_nano::slog_jarbas!("HUB", "ok", "painel fechado (agente)");
         }
         self.hub_full = true;
         self.dirty_panel = true;

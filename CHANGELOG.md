@@ -1,5 +1,11 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s381] - 2026-09-21 — jarbas honesty (avatar/slog/barge-in)
+
+- `read_audio_energy` sem pulso fake; barge-in não cancela InferQueue; pcm_buffer cap 30s
+- VirtIO-GPU FE só OK com GOP/kick; screensaver smoke honesto; slog ADR-0092
+- Trim `heapless`; pin embedded-graphics 0.8.2; 100/100 testes
+
 ## [1.9.99-s380] - 2026-09-21 — hermes residuals (#604 wire + orphans)
 
 - `aios_net`/`aios_fs` host ABI → net_bridge + VFS (Cap+ready); GPU trap até KernelPack

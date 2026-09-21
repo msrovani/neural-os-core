@@ -42,13 +42,13 @@ pub fn boot_smoke() -> bool {
         Ok((2, 2, p)) if p.len() == 4 => {
             k_nano::slog_jarbas!(
                 "IMG",
-                "info",
+                "ok",
                 "step=pbm status=OK VERDICT=PARTIAL reason=parse_p1_mvp"
             );
             true
         }
         _ => {
-            k_nano::slog_jarbas!("IMG", "info", "step=pbm status=FAIL VERDICT=FAIL");
+            k_nano::slog_jarbas!("IMG", "fail", "step=pbm status=FAIL VERDICT=FAIL");
             false
         }
     }

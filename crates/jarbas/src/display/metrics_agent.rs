@@ -43,7 +43,7 @@ impl Agent for MetricsAgent {
         crate::display::gauges::refresh_snapshot(true);
         self.last_timer = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
         self.samples = 1;
-        k_nano::slog_jarbas!("Metrics", "info", "MetricsAgent ativo — refresh a cada ~0.5s");
+        k_nano::slog_jarbas!("Metrics", "ok", "MetricsAgent ativo — refresh a cada ~0.5s");
     }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {

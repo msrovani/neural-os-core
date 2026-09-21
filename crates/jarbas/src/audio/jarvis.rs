@@ -423,7 +423,7 @@ impl Agent for JarbasAgent {
                     compose_boot_greeting(self.greet_mem_mb, self.greet_cpu, self.greet_agents);
                 k_nano::slog_jarbas!(
                     "Jarbas",
-                    "info",
+                    "ok",
                     "saudacao template HW (skip LLM; bare={} no_fat={})",
                     bare,
                     no_fat
@@ -443,7 +443,7 @@ impl Agent for JarbasAgent {
                 self.greet_agents,
             );
 
-            k_nano::slog_jarbas!("Jarbas", "info", "Solicitando saudacao suit-boot a LLM...");
+            k_nano::slog_jarbas!("Jarbas", "ok", "Solicitando saudacao suit-boot a LLM...");
             crate::display::console::set_llm_busy(true);
             crate::display::compositor::announce_welcome(
                 "Engaging HUD — calibrating virtual environment...",
@@ -528,15 +528,15 @@ impl Agent for JarbasAgent {
                 self.greeted = true;
                 // Decode constrito greeting (logits a quente). Template so se vazio/total mash.
                 let body = if cortex::bpe::text_is_greetingish(text) || is_fluent_boot_text(text) {
-                    k_nano::slog_jarbas!("Jarbas", "info", "saudacao LLM a quente");
+                    k_nano::slog_jarbas!("Jarbas", "ok", "saudacao LLM a quente");
                     String::from(text.trim())
                 } else if text.trim().is_empty() {
-                    k_nano::slog_jarbas!("Jarbas", "info", "saudacao vazia — template specs");
+                    k_nano::slog_jarbas!("Jarbas", "ok", "saudacao vazia — template specs");
                     compose_boot_greeting(self.greet_mem_mb, self.greet_cpu, self.greet_agents)
                 } else {
                     k_nano::slog_jarbas!(
                         "Jarbas",
-                        "info",
+                        "ok",
                         "saudacao mash ('{}') — template specs",
                         text.chars().take(48).collect::<String>()
                     );
@@ -711,7 +711,7 @@ impl Agent for JarbasAgent {
 
         while let Some(ev) = self.user_receiver.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
-            k_nano::slog_jarbas!("Jarbas", "info", "\"{}\"", text);
+            k_nano::slog_jarbas!("Jarbas", "ok", "\"{}\"", text);
 
             let text_emotion = hermes::emotion::EmotionAnalyzer::analyze(text);
             self.last_text_emotion = Some(text_emotion.primary);
@@ -719,7 +719,7 @@ impl Agent for JarbasAgent {
 
             let emotional_ctx = build_emotional_context(self.last_text_emotion);
             let enhanced_prompt = alloc::format!("{}\nUser: {}", emotional_ctx, text);
-            k_nano::slog_jarbas!("Jarbas", "info", "Contexto emocional: {}", emotional_ctx);
+            k_nano::slog_jarbas!("Jarbas", "ok", "Contexto emocional: {}", emotional_ctx);
 
             if !self.greeted {
                 self.greeted = true;

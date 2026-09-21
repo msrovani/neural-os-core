@@ -30,7 +30,7 @@ pub fn idle_tick(threshold: u8) {
     let t = TICKS.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     if mode() == Mode::Off && t >= threshold {
         set_mode(Mode::Blank);
-        k_nano::slog_jarbas!("SCREEN", "info", "mode=Blank idle={}", t);
+        k_nano::slog_jarbas!("SCREEN", "ok", "mode=Blank idle={}", t);
     }
 }
 
@@ -45,8 +45,10 @@ pub fn boot_smoke() -> bool {
     wake();
     k_nano::slog_jarbas!(
         "SCREEN",
-        "info",
-        "step=screensaver status=OK modes=Blank,Stars VERDICT=PASS"
+        if ok { "ok" } else { "fail" },
+        "step=screensaver status={} modes=Blank,Stars VERDICT={}",
+        if ok { "OK" } else { "FAIL" },
+        if ok { "PASS" } else { "FAIL" }
     );
     ok
 }

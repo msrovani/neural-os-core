@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s380 — hermes residuals
+# STATE — neural-os-core v1.9.99-s381 — jarbas honesty
 
-#   PISTA ATIVA: s380 — hermes residuals (#604 aios_net/fs + orphans)
-#   PISTA ANTERIOR: s379 hermes honesty; s378 ticket-lock
+#   PISTA ATIVA: s381 — jarbas (avatar/slog/barge-in + trim)
+#   PISTA ANTERIOR: s380 hermes residuals; s379 hermes honesty
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
@@ -28,8 +28,8 @@
 |----|------|--------|
 | B1.2 | workspace host 0 fail | ✅ s368 |
 | B3.1 | Playback pacing free+TSC | ✅ s368 |
-| s374–s379 | k_ai … hermes honesty | ✅ |
-| s380 | hermes residuals #604 | ✅ |
+| s374–s380 | honesty crates + hermes residuals | ✅ |
+| s381 | jarbas honesty | ✅ |
 | B2 | Mesh peer B / relaunch | AWAITING operador |
 | Track C | Ring3/B/C/GPU/WiFi… | defer |
 | IDEA #562 | AUDIO_FRAME → ring SPSC | residual |
@@ -37,3 +37,4 @@
 | IDEA #599–#600 | wasmi 2.x / CapGate DynSkill | residual |
 | IDEA #602 | spin vs ticket-lock policy | residual |
 | IDEA #604 | hermes aios_net/fs + orphans | ✅ s380 |
+| IDEA #606 | jarbas honesty s381 | ✅ |

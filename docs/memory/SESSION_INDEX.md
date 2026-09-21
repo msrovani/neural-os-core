@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s380 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s381 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 381 | jarbas | bughunt AIOS | avatar/slog/barge-in honesty | energy fake→0; interrupt≠cancel infer; pcm cap; VGPU GOP; heapless trim; 100 tests |
 | 380 | hermes | residual | #604 aios_net/fs + orphans | Cap+bridge/VFS wire; DEAD delete; AGENTS ORPHAN; WPA2/Ata/Decode; 205 tests |
 | 379 | hermes | bughunt AIOS | CapGate/WASM/TLS/evolve honesty | hot_swap prev bug; stubs Ok→trap; TLS ready⇔bridge; ApprovalGate deny; matrix draft; signed honesty; wasmi 0.47.2; 203 tests |
 | 378 | ticket-lock | bughunt AIOS | Guard Sync + try_lock + IrqSafe wrap | MutexGuard Sync bound; CAS try_lock; IrqSafe=TicketLock+cli; codemap ≠ MCS; 7 tests |

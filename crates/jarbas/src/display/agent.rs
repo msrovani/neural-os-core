@@ -292,7 +292,7 @@ impl DisplayAgent {
                 // Disk selection card: btn_idx → disco não-boot → DISK_SELECTION
                 if let Some(disk_idx) = crate::cards::disk_selection_card::button_index_to_disk_index(btn_idx) {
                     k_nano::installer_agent::DISK_SELECTION.store(disk_idx as i8, core::sync::atomic::Ordering::Relaxed);
-                    k_nano::slog_jarbas!("INSTALL", "info", "disco #{} selecionado via UI", disk_idx);
+                    k_nano::slog_jarbas!("INSTALL", "ok", "disco #{} selecionado via UI", disk_idx);
                     // Dispara instalação com o disco escolhido
                     let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
                         id: 0,
@@ -359,7 +359,7 @@ impl DisplayAgent {
             }
             match mode {
                 OverlayMode::HitlConfirm => k_nano::slog_jarbas!("JARBAS", "HITL", "request received"),
-                OverlayMode::MemoryNudge => k_nano::slog_jarbas!("JARBAS", "info", "MEMORY_NUDGE"),
+                OverlayMode::MemoryNudge => k_nano::slog_jarbas!("JARBAS", "ok", "MEMORY_NUDGE"),
                 OverlayMode::HitlTerminal => {}
             }
         }
@@ -487,7 +487,7 @@ impl DisplayAgent {
             if let Some(ref mut d) = *comp {
                 if d.orb_hit(cx as i32, cy as i32) {
                     d.toggle_hub_health(k_nano::tsc::now_us());
-                    k_nano::slog_jarbas!("HUB", "info", "clique no orb → toggle painel");
+                    k_nano::slog_jarbas!("HUB", "ok", "clique no orb → toggle painel");
                     return "orb:hub";
                 }
             }
@@ -507,7 +507,7 @@ impl DisplayAgent {
                     let title = decl.title.clone();
                     desktop.spawn_card(decl);
                     ui_spec::mark_ui_ok();
-                    k_nano::slog_jarbas!("UI", "info", "card spawn title={} (ADR-0058)", title);
+                    k_nano::slog_jarbas!("UI", "ok", "card spawn title={} (ADR-0058)", title);
                 }
                 return;
             }
@@ -657,7 +657,7 @@ impl Agent for DisplayAgent {
             let applied = k_hal::timer_cap::request_tick_hz(want, "display");
             k_nano::slog_jarbas!(
                 "TIMER",
-                "info",
+                "ok",
                 "policy cost_us={} throttled={} want={} applied={}",
                 cost,
                 throttled,
@@ -690,7 +690,7 @@ impl Agent for DisplayAgent {
                 if crate::display::chat_window::chat_ui_enabled() {
                     desktop.register_app(AppId::HermesChat, "Jarbas Chat", Layer::AppWindows);
                 }
-                k_nano::slog_jarbas!("UI", "info", "Desktop limpo — orb + HUD");
+                k_nano::slog_jarbas!("UI", "ok", "Desktop limpo — orb + HUD");
                 *COMPOSITOR.lock() = Some(desktop);
                 // Limites + centro para IRQ mouse
                 k_nano::interrupts::MOUSE_MAX_X.store(fw.saturating_sub(1), core::sync::atomic::Ordering::Release);
@@ -720,7 +720,7 @@ impl Agent for DisplayAgent {
                     crate::display::fb::heartbeat_stamp,
                 ));
                 // Cursor HW: tick seguinte (não bloquear 1º frame).
-                k_nano::slog_jarbas!("Jarbas", "info", "Desktop iniciado @ {}x{} (cursor HW deferred)", fw, fh);
+                k_nano::slog_jarbas!("Jarbas", "ok", "Desktop iniciado @ {}x{} (cursor HW deferred)", fw, fh);
                 // NÃO abrir mic aqui: greeting ainda no PLAYBACK_RING → SPEAKING;
                 // open_mic+VAD dispara barge-in (SESSION_352) e congela o scheduler
                 // no jarvis_voice. Mic abre quando o ring esvaziar (tick abaixo).
@@ -815,7 +815,7 @@ impl Agent for DisplayAgent {
                 let hit = self.handle_pointer_click(pressed, mx, my);
                 k_nano::slog_jarbas!(
                     "MOUSE",
-                    "info",
+                    "ok",
                     "CLICK btn={:#x} @{}x{} hit={}",
                     pressed,
                     mx,
@@ -944,7 +944,7 @@ impl Agent for DisplayAgent {
                     height: h.saturating_sub(120) as u32,
                 };
                 crate::display::overlay::set_render_overlay(name, data.as_bytes(), rect);
-                k_nano::slog_jarbas!("RENDER", "info", "overlay '{}' ({} bytes)", name, data.len());
+                k_nano::slog_jarbas!("RENDER", "ok", "overlay '{}' ({} bytes)", name, data.len());
             }
         }
 
@@ -1127,7 +1127,7 @@ impl Agent for DisplayAgent {
                     }
                     // Qualquer WmAction mexe em foco/layout/dock: agenda repaint.
                     desktop.invalidate_windows();
-                    k_nano::slog_jarbas!("WM", "info", "action={:?}", action);
+                    k_nano::slog_jarbas!("WM", "ok", "action={:?}", action);
                 }
             }
         }
@@ -1216,7 +1216,7 @@ impl Agent for DisplayAgent {
                 if let Some(ref mut desktop) = *COMPOSITOR.lock() {
                     let decl = crate::cards::disk_selection_card::disk_selection_card();
                     desktop.spawn_card(decl);
-                    k_nano::slog_jarbas!("INSTALL", "info", "card de selecao de disco spawnado");
+                    k_nano::slog_jarbas!("INSTALL", "ok", "card de selecao de disco spawnado");
                 }
             }
         }

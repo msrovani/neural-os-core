@@ -149,15 +149,15 @@ impl GpuDevice {
         match reported {
             3 | 4 => reported,
             0 => {
-                k_nano::slog_jarbas!("Display", "info", "bytes_per_pixel=0 do GOP — fallback dinamico bpp=4");
+                k_nano::slog_jarbas!("Display", "warn", "bytes_per_pixel=0 do GOP — fallback dinamico bpp=4");
                 4
             }
             other if (1..=8).contains(&other) => {
-                k_nano::slog_jarbas!("Display", "info", "bytes_per_pixel={} incomum — aceitando valor do GOP", other);
+                k_nano::slog_jarbas!("Display", "ok", "bytes_per_pixel={} incomum — aceitando valor do GOP", other);
                 other
             }
             other => {
-                k_nano::slog_jarbas!("Display", "info", "bytes_per_pixel={} invalido — fallback dinamico bpp=4", other);
+                k_nano::slog_jarbas!("Display", "warn", "bytes_per_pixel={} invalido — fallback dinamico bpp=4", other);
                 4
             }
         }

@@ -85,7 +85,7 @@ impl UvcDriverAgent {
             Ok(h) => {
                 k_nano::slog_jarbas!(
                     "UVC",
-                    "bind",
+                    "ok",
                     "HalOffer OK topic={} slot={}",
                     h.topic,
                     h.slot
@@ -96,7 +96,7 @@ impl UvcDriverAgent {
             Err(e) => {
                 if !self.bind_failed_logged {
                     self.bind_failed_logged = true;
-                    k_nano::slog_jarbas!("UVC", "bind", "HalOffer DENY {:?}", e);
+                    k_nano::slog_jarbas!("UVC", "warn", "HalOffer DENY {:?}", e);
                 }
                 false
             }
@@ -254,7 +254,7 @@ impl Agent for UvcDriverAgent {
                     let armed = unsafe { k_nano::xhci::schedule_isoc_in_frame() };
                     k_nano::slog_jarbas!(
                         "UVC",
-                        "info",
+                        "ok",
                         "device OK: {}x{}@{} format={} ep={:#04x} isoc_armed={}",
                         dev.width,
                         dev.height,
@@ -268,7 +268,7 @@ impl Agent for UvcDriverAgent {
                 None => {
                     k_nano::slog_jarbas!(
                         "UVC",
-                        "info",
+                        "warn",
                         "sem device UVC no bus (stub cinza desativado)"
                     );
                     return AgentTickResult::Done;

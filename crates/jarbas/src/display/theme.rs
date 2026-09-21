@@ -193,7 +193,7 @@ pub fn apply(name: &str) -> Result<(), &'static str> {
     for (i, t) in THEMES.iter().enumerate() {
         if t.name == name {
             ACTIVE_THEME.store(i, Ordering::Relaxed);
-            k_nano::slog_jarbas!("THEME", "info", "Aplicado: {}", name);
+            k_nano::slog_jarbas!("THEME", "ok", "Aplicado: {}", name);
             return Ok(());
         }
     }

@@ -29,7 +29,7 @@ pub mod stt;
 
 pub fn init_audio() {
     crate::audio::settings::init_audio_settings();
-    k_nano::slog_bin!("Audio", "info", "Configuracoes de audio inicializadas");
+    k_nano::slog_bin!("Audio", "ok", "Configuracoes de audio inicializadas");
 }
 
 pub const TOPIC_AUDIO_IN: &str = "AUDIO_IN";

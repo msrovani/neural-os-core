@@ -104,7 +104,12 @@ impl MultiMonitorState {
     }
 
     pub fn detect(&mut self) {
-        k_nano::slog_jarbas!("EDID", "detect", "outputs: {} (AWAITING_HW DDC)", self.outputs.len());
+        k_nano::slog_jarbas!(
+            "EDID",
+            "warn",
+            "outputs: {} (AWAITING_HW DDC — QEMU sem I2C)",
+            self.outputs.len()
+        );
     }
 
     pub fn primary_output(&self) -> &MonitorOutput {

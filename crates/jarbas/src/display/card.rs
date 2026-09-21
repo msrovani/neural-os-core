@@ -464,7 +464,7 @@ pub fn self_test() -> bool {
         None => false,
     };
     if ok {
-        k_nano::slog_jarbas!("UI", "info", "UiDeclaration parser self-test PASS (ADR-0058 S2)");
+        k_nano::slog_jarbas!("UI", "ok", "UiDeclaration parser self-test PASS (ADR-0058 S2)");
     } else {
         k_nano::slog_jarbas!("UI", "warn", "UiDeclaration parser self-test FAIL");
     }

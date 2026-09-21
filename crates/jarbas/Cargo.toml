@@ -8,9 +8,9 @@ spin = "0.9"
 lazy_static = { version = "1.4", features = ["spin_no_std"] }
 x86_64 = "0.14.11"
 libm = "0.2"
-heapless = "0.8"
 # ADR-0058: fundação 2D no_std (MIT/Apache) — DrawTarget sobre DoubleBuffer.
-embedded-graphics = "0.8"
+# Pin patch: 0.8.2 (crates.io max_stable 0.8.x; sem bump major).
+embedded-graphics = "0.8.2"
 event-bus = { path = "../event-bus" }
 ticket-lock = { path = "../ticket-lock" }
 agent-core = { path = "../agent-core" }
@@ -19,6 +19,7 @@ k-nano = { path = "../k_nano" }
 k-hal = { path = "../k_hal" }
 cortex = { path = "../cortex" }
 hermes = { path = "../hermes" }
+# heapless removido SESSION_381 — zero callers no crate (redução).
 
 [features]
 default = []

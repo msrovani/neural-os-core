@@ -168,12 +168,12 @@ pub fn process_event(topic: &str, payload: &[u8]) {
     let text = core::str::from_utf8(payload).unwrap_or("");
     if text.is_empty() { return; }
     if topic == TOPIC_RENDER_REGISTER {
-        k_nano::slog_jarbas!("RENDER", "info", "registered skill: {}", text);
+        k_nano::slog_jarbas!("RENDER", "ok", "registered skill: {}", text);
     } else if topic == TOPIC_RENDER_WINDOW {
         if let Some((name, data)) = text.split_once('|') {
             let registry = RENDER_REGISTRY.lock();
             if registry.skills.iter().any(|s| s.name == name) {
-                k_nano::slog_jarbas!("RENDER", "info", "render '{}' ({} bytes)", name, data.len());
+                k_nano::slog_jarbas!("RENDER", "ok", "render '{}' ({} bytes)", name, data.len());
             } else {
                 k_nano::slog_jarbas!("RENDER", "warn", "skill '{}' not found — register first", name);
             }

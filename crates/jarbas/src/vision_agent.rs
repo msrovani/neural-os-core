@@ -42,7 +42,7 @@ impl VisionAgent {
         let r = hermes::hal_offer::request_video("vision");
         self.offer_ok = r.ok;
         if r.ok {
-            k_nano::slog_jarbas!("VISION", "offer", "{}", r.ack);
+            k_nano::slog_jarbas!("VISION", "ok", "{}", r.ack);
         }
     }
 
@@ -126,7 +126,7 @@ impl Agent for VisionAgent {
         while let Some(ev) = self.frame_receiver.try_receive() {
             let desc = self.process_frame(&ev.payload);
             self.last_frame = ev.payload.clone();
-            k_nano::slog_jarbas!("VISION", "info", "{}", desc);
+            k_nano::slog_jarbas!("VISION", "ok", "{}", desc);
             let _ = k_nano::EVENT_BUS.publish(Event {
                 id: 0,
                 topic: alloc::string::String::from("HERMES_RESPONSE"),

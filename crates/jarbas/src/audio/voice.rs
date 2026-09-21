@@ -108,16 +108,16 @@ fn publish_state(next: VoiceState) {
 }
 
 /// Invalida a fala em curso: limpa o ring E a geração de TTS.
-/// Retorna true se havia algo para interromper.
+/// Honesty SESSION_352/381: **não** cancela InferQueue — interromper fala ≠
+/// abortar raciocínio (sem AEC o eco do assistente não deve matar o job).
 pub fn request_interrupt() -> bool {
     let had = PLAYBACK_RING.available() > 0;
     PLAYBACK_RING.clear();
     TTS_GENERATION.fetch_add(1, Ordering::AcqRel);
-    cortex::infer_queue::cancel_active();
     k_nano::slog_jarbas!(
         "Jarbas",
         "ok",
-        "barge-in: geração de TTS invalidada (havia playback={})",
+        "barge-in: TTS invalidada (havia playback={}; infer intacta)",
         had
     );
     BARGE_IN_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -204,7 +204,7 @@ impl JarbasVoiceAgent {
         }
         k_nano::slog_jarbas!(
             "Jarbas",
-            "info",
+            "ok",
             "Fala detectada: {} amostras ({} s)",
             self.pcm_buffer.len(),
             self.pcm_buffer.len() / crate::audio::capture::VOICE_RATE as usize
@@ -262,7 +262,7 @@ impl JarbasVoiceAgent {
                 });
                 k_nano::slog_jarbas!(
                     "Jarbas",
-                    "info",
+                    "ok",
                     "Emocao: {:?} (pitch={:.0}Hz, energy={:.0}, conf={:.2})",
                     emotion,
                     features.pitch_hz,
@@ -296,7 +296,7 @@ impl JarbasVoiceAgent {
 
     fn deliver_transcript(&mut self, text: String) {
         if text.is_empty() {
-            k_nano::slog_jarbas!("Jarbas", "info", "STT vazio — sem USER_INTENT");
+            k_nano::slog_jarbas!("Jarbas", "ok", "STT vazio — sem USER_INTENT");
             let _ = k_nano::EVENT_BUS.publish(Event {
                 id: 0,
                 topic: String::from(crate::audio::TOPIC_STT_TEXT),
@@ -305,7 +305,7 @@ impl JarbasVoiceAgent {
             });
             return;
         }
-        k_nano::slog_jarbas!("Jarbas", "info", "STT: \"{}\"", text);
+        k_nano::slog_jarbas!("Jarbas", "ok", "STT: \"{}\"", text);
         let original = text.clone();
         self.pending_user_text = Some(original.clone());
 
@@ -364,7 +364,7 @@ impl Agent for JarbasVoiceAgent {
         if self.wake_window > 0 && self.pending_user_text.is_none() && !crate::display::chat_window::MIC_ACTIVE.load(Ordering::Relaxed) {
             self.wake_window -= 1;
             if self.wake_window == 0 {
-                k_nano::slog_jarbas!("Jarbas", "info", "wake window expirada — dormindo");
+                k_nano::slog_jarbas!("Jarbas", "ok", "wake window expirada — dormindo");
                 self.listening = false;
                 self.pcm_buffer.clear();
             }
@@ -376,7 +376,7 @@ impl Agent for JarbasVoiceAgent {
                 self.wake_window = settings::wake_listen_ticks();
                 k_nano::slog_jarbas!(
                     "Jarbas",
-                    "info",
+                    "ok",
                     "wake word \"{}\" — janela {} ticks",
                     kw,
                     self.wake_window
@@ -445,6 +445,12 @@ impl Agent for JarbasVoiceAgent {
                 core::slice::from_raw_parts(ev.payload.as_ptr() as *const i16, FRAME_SAMPLES)
             };
             self.pcm_buffer.extend_from_slice(pcm);
+            // Cap ~30 s @16 kHz — evita runaway até VAD end (SESSION_352/381).
+            const PCM_CAP: usize = 16_000 * 30;
+            if self.pcm_buffer.len() > PCM_CAP {
+                let drop_n = self.pcm_buffer.len() - PCM_CAP;
+                self.pcm_buffer.drain(..drop_n);
+            }
             if self.emotion_samples.len() < 16000 {
                 self.emotion_samples.extend_from_slice(pcm);
             }
@@ -478,7 +484,7 @@ impl Agent for JarbasVoiceAgent {
                 }
                 k_nano::slog_jarbas!(
                     "Jarbas",
-                    "info",
+                    "ok",
                     "Conversa turno {}",
                     self.conversation.len()
                 );

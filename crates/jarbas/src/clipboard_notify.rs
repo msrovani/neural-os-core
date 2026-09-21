@@ -34,7 +34,7 @@ pub fn toast_push(msg: &str) {
         t.remove(0);
     }
     t.push((String::from(msg), now + TOAST_TTL_TICKS));
-    k_nano::slog_bin!("NOTIFY", "info", "toast={}", msg);
+    k_nano::slog_bin!("NOTIFY", "ok", "toast={}", msg);
 }
 
 /// Returns toasts that haven't expired yet
@@ -63,7 +63,7 @@ pub fn boot_smoke() -> bool {
     let ok = g == "neural-os";
     k_nano::slog_bin!(
         "NOTIFY",
-        "info",
+        "ok",
         "step=clip_notify status={} VERDICT={}",
         if ok { "OK" } else { "FAIL" },
         if ok { "PASS" } else { "FAIL" }

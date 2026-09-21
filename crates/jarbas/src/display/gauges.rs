@@ -201,7 +201,7 @@ pub fn refresh_snapshot(log_serial: bool) {
     if log_serial {
         k_nano::slog_jarbas!(
             "Metrics",
-            "info",
+            "ok",
             "snapshot cpu={}% mem={}% gpu={} hd={} tri={}KB",
             (cpu_pct * 100.0) as u32,
             (mem_pct * 100.0) as u32,
