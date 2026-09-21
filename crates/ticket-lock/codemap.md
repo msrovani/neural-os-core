@@ -2,22 +2,33 @@
 
 ## Responsibility
 
-Minimal no_std ticket spinlock — the workspace's core synchronization primitive. 1 file: `src/lib.rs`; zero dependencies.
+Minimal no_std **FIFO ticket spinlock** — sync primitivo do workspace. 1 arquivo:
+`src/lib.rs`; zero dependencies.
 
-## Design
+## Design (SESSION_378 honesty)
 
-`TicketLock<T>` holds two `AtomicUsize` counters (`ticket`, `serving`) around an `UnsafeCell<T>`:
-- `const fn new(value)` — usable in statics.
-- `lock() -> TicketLockGuard` — `fetch_add(1, Relaxed)` takes a ticket, then spins on `spin_loop()` until `serving.load(Acquire) == my_ticket`.
-- `TicketLockGuard` derefs to `&T`/`&mut T`; `Drop` does `serving.fetch_add(1, Release)` to hand off to the next waiter.
-- `unsafe impl Send/Sync for TicketLock<T> where T: Send` — safe because all access goes through the guard.
+`TicketLock<T>` — `#[repr(C)]` com `AtomicUsize ticket` @0, `serving` @8 (x86_64),
+`UnsafeCell<T>`:
 
-FIFO ticket ordering guarantees fairness (no starvation) and each waiter spins on its own cache line via the monotonically increasing `serving` counter.
+- `const fn new` — statics
+- `lock()` — `fetch_add` ticket + spin `serving.load(Acquire)` + `spin_loop`
+- `try_lock()` — CAS (sem ticket órfão)
+- `get_mut` / `into_inner` / `ticket()` / `serving()` / `is_locked()`
+- Guard: `Deref`/`DerefMut`; `Drop` → `serving.fetch_add(1, Release)`
+- `Send`/`Sync` do lock: `T: Send`
+- `Sync` do **guard**: `T: Sync` (como `MutexGuard`)
 
-## Flow
+FIFO entre tickets emitidos. **Não** é MCS: todos os waiters fazem load no
+**mesmo** `AtomicUsize serving` (false sharing clássico sob contenda alta).
+“Sem starvation” só vale se o holder soltar o lock (não-reentrante; hold infinito
+= fila parada). Wrap `usize` residual em x86_64.
 
-`lock()` → acquire ticket → spin until served → guard exposes `&mut T` → `drop` releases the next waiter. Contention is handled entirely by atomics + `spin_loop`; no OS support needed (bare-metal friendly).
+## Contrato IRQ
+
+Não usar em IRQ se a thread pode segurar o mesmo lock. Em IRQ: `IrqSafeLock`
+(`k_nano::sync`, wrapper cli + este TicketLock) ou `try_lock`.
 
 ## Integration
 
-Used by `event-bus` (EventBus subscriber map, `Receiver` queues, `BoundedChannel`, `MessageBus`, LatentBus) and other no_std crates in the workspace. `ponytail:` nothing else needed — upgrade to a sleeping lock only if a core ever blocks on a long-held lock.
+`event-bus`, `k_nano` (PMM/`IrqSafeLock`), hermes globals, neural-kernel statics.
+Upstream: **não** substituir por `spin` 0.12 (unfair) sem evidência — IDEA residual.

@@ -1,28 +1,30 @@
 //! IrqSafeLock — TicketLock FIFO com desabilitação temporária de IRQ.
 //! Previne deadlock quando um handler de interrupção tenta adquirir
-//! um lock já segurando pelo código interrompido.
+//! um lock já segurado pelo código interrompido.
 //!
+//! SESSION_378: algoritmo = `ticket_lock::TicketLock` (fonte única + `#[repr(C)]`).
 //! Uso: `let guard = LOCK.lock();` — desabilita IRQs na aquisição,
 //! restaura o estado anterior no drop do guard.
 
-use core::cell::UnsafeCell;
+use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicUsize, Ordering};
+use ticket_lock::{TicketLock, TicketLockGuard};
 
 /// Lê a flag IF (Interrupt Flag) das RFLAGS. Retorna true se interrupções
 /// estão habilitadas no momento da chamada.
 fn are_irqs_enabled() -> bool {
     let rflags: u64;
-    unsafe { core::arch::asm!("pushfq; pop {}", out(reg) rflags, options(nostack, preserves_flags)); }
+    unsafe {
+        core::arch::asm!("pushfq; pop {}", out(reg) rflags, options(nostack, preserves_flags));
+    }
     (rflags & 0x200) != 0
 }
 
-/// Lock FIFO (TicketLock) com IRQ-safe: desabilita interrupções enquanto
-/// o lock é segurando, restaura o estado anterior ao liberar.
+/// Lock FIFO com IRQ-safe: desabilita interrupções enquanto o lock é segurado.
+/// Layout: `TicketLock` interno já é `#[repr(C)]` (ticket@0 / serving@8).
+#[repr(C)]
 pub struct IrqSafeLock<T> {
-    ticket: AtomicUsize,
-    serving: AtomicUsize,
-    data: UnsafeCell<T>,
+    inner: TicketLock<T>,
 }
 
 unsafe impl<T: Send> Send for IrqSafeLock<T> {}
@@ -31,9 +33,7 @@ unsafe impl<T: Send> Sync for IrqSafeLock<T> {}
 impl<T> IrqSafeLock<T> {
     pub const fn new(value: T) -> Self {
         IrqSafeLock {
-            ticket: AtomicUsize::new(0),
-            serving: AtomicUsize::new(0),
-            data: UnsafeCell::new(value),
+            inner: TicketLock::new(value),
         }
     }
 
@@ -47,38 +47,30 @@ impl<T> IrqSafeLock<T> {
         #[cfg(target_os = "none")]
         x86_64::instructions::interrupts::disable();
 
-        let my_ticket = self.ticket.fetch_add(1, Ordering::Relaxed);
-        while self.serving.load(Ordering::Acquire) != my_ticket {
-            core::hint::spin_loop();
+        let guard = self.inner.lock();
+        IrqSafeGuard {
+            guard: ManuallyDrop::new(guard),
+            irq_was_enabled,
         }
-
-        IrqSafeGuard { lock: self, irq_was_enabled }
     }
 
     /// Tenta adquirir sem esperar. Retorna None se lockado por outro core.
-    ///
-    /// Usa CAS (compare_exchange) em vez de fetch_add incondicional: se o
-    /// ticket estivesse sempre incrementando mesmo quando o lock já está
-    /// ocupado, o ticket "roubado" nunca seria liberado (nenhum guard seria
-    /// criado para chamar `serving.fetch_add` no Drop), causando starvation
-    /// permanente de `lock()`/`try_lock()` (deadlock: `serving` nunca alcança
-    /// o ticket perdido).
     pub fn try_lock(&self) -> Option<IrqSafeGuard<'_, T>> {
         let irq_was_enabled = are_irqs_enabled();
         #[cfg(target_os = "none")]
         x86_64::instructions::interrupts::disable();
 
-        let now_serving = self.serving.load(Ordering::Acquire);
-        // So reivindica o ticket se ninguem estiver na fila (ticket == serving).
-        // CAS garante que nao incrementamos o contador se a condicao deixou de
-        // valer entre o load e a tentativa (outro core pode ter adquirido).
-        match self.ticket.compare_exchange(now_serving, now_serving + 1, Ordering::AcqRel, Ordering::Relaxed) {
-            Ok(_) => Some(IrqSafeGuard { lock: self, irq_was_enabled }),
-            Err(_) => {
-                // Lock ocupado — restaura IRQ e retorna None (nenhum ticket foi consumido)
+        match self.inner.try_lock() {
+            Some(guard) => Some(IrqSafeGuard {
+                guard: ManuallyDrop::new(guard),
+                irq_was_enabled,
+            }),
+            None => {
                 if irq_was_enabled {
                     #[cfg(target_os = "none")]
-                    unsafe { x86_64::instructions::interrupts::enable(); }
+                    unsafe {
+                        x86_64::instructions::interrupts::enable();
+                    }
                 }
                 None
             }
@@ -87,32 +79,37 @@ impl<T> IrqSafeLock<T> {
 }
 
 pub struct IrqSafeGuard<'a, T> {
-    lock: &'a IrqSafeLock<T>,
+    /// Drop manual: libera ticket **antes** de re-enable IRQ.
+    guard: ManuallyDrop<TicketLockGuard<'a, T>>,
     irq_was_enabled: bool,
 }
+
+unsafe impl<T: Sync> Sync for IrqSafeGuard<'_, T> {}
 
 impl<T> Deref for IrqSafeGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
-        unsafe { &*self.lock.data.get() }
+        &self.guard
     }
 }
 
 impl<T> DerefMut for IrqSafeGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.lock.data.get() }
+        &mut self.guard
     }
 }
 
 impl<T> Drop for IrqSafeGuard<'_, T> {
     fn drop(&mut self) {
-        // Libera o ticket (próximo na fila pode prosseguir)
-        self.lock.serving.fetch_add(1, Ordering::Release);
-        // Restaura IRQ ao estado anterior (se estava enabled, re-enable)
+        // Libera o ticket (próximo na fila pode prosseguir) antes de sti.
+        unsafe {
+            ManuallyDrop::drop(&mut self.guard);
+        }
         if self.irq_was_enabled {
             #[cfg(target_os = "none")]
-            unsafe { x86_64::instructions::interrupts::enable(); }
+            unsafe {
+                x86_64::instructions::interrupts::enable();
+            }
         }
     }
 }
-

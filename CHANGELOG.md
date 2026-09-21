@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s378] - 2026-09-21 — ticket-lock honesty (Sync + try_lock + IrqSafe)
+
+- `TicketLockGuard: Sync` only if `T: Sync` (soundness)
+- `try_lock` CAS, `get_mut`/`into_inner`, diagnostic getters
+- `IrqSafeLock` wraps `TicketLock` (single algorithm + repr(C))
+- Codemap: FIFO ≠ MCS own-cache-line; 7 host tests
+- IDEA #602: spin vs ticket policy residual
+
 ## [1.9.99-s377] - 2026-09-21 — skill-registry honesty (Trust + WASM + trim)
 
 - DynamicSkill wasm execute fail-closed (`wasm_runtime_unwired`)
