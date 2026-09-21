@@ -1,5 +1,14 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s377] - 2026-09-21 — skill-registry honesty (Trust + WASM + trim)
+
+- DynamicSkill wasm execute fail-closed (`wasm_runtime_unwired`)
+- Hermes: honor Trust `check_or_cache`; `execute_skill` + idempotent-only cache
+- `SkillListEntry`; `unregister`; deny default policy; empty tokens deny
+- jarbas audio skills `required_tokens: [1]`
+- Delete dead `index`/`task`/`fanout` + bin `FANOUT_POOL`
+- 10 host tests; IDEA #599/#600 residuals
+
 ## [1.9.99-s376] - 2026-09-21 — neural-kernel honesty (wire + emagreçer)
 
 - Shutdown soft state → `k_ai::shutdown`; bin HW-only `begin_orderly_*` + drain

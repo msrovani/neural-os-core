@@ -109,8 +109,13 @@ impl AutoInstallerAgent {
         let reg = crate::SKILL_REGISTRY.lock();
         let skill_list = reg.list_skills();
         let mut catalog = alloc::string::String::from("# Builtin Skills Catalog\n\n");
-        for (name, policy) in &skill_list {
-            catalog.push_str(&alloc::format!("- {} (enabled={})\n", name, policy.enabled));
+        for entry in &skill_list {
+            catalog.push_str(&alloc::format!(
+                "- {} — {} (enabled={})\n",
+                entry.name,
+                entry.description,
+                entry.policy.enabled
+            ));
         }
         let catalog_bytes = catalog.as_bytes();
         let sk_ino = vol.create_file(target, skills_ino, "CATALOG.MD")

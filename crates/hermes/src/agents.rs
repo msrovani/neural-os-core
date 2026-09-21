@@ -787,11 +787,18 @@ impl HermesAgent {
         {
             k_hal::cap_gate::check(k_hal::cap_gate::HOST_FN_SEND_TCP, held)?;
         }
-        // Sprint 78: OutputCache — skills idempotentes usam cache
-        if let Some(cached) = self.output_cache.get(name, payload, now) {
-            return Ok(cached.to_vec());
+        self.output_cache.evict_expired(now);
+        // Cache só se manifesto idempotent (SESSION_377)
+        let idempotent = {
+            let reg = SKILL_REGISTRY.lock();
+            reg.is_idempotent(name).unwrap_or(false)
+        };
+        if idempotent {
+            if let Some(cached) = self.output_cache.get(name, payload, now) {
+                return Ok(cached);
+            }
         }
-        // Lock order: SKILL_REGISTRY → TRUST_CACHE (consistente em todo codigo)
+        // Lock order: SKILL_REGISTRY → TRUST_CACHE
         let reg = SKILL_REGISTRY.lock();
         {
             let mut tc = TRUST_CACHE.lock();
@@ -799,12 +806,17 @@ impl HermesAgent {
                 if !reg.validate_token(name, token) {
                     return Err("token nao autorizado");
                 }
-                tc.check_or_cache(token_val, name, now, 360);
+                // Contain/Enforce: check_or_cache false ⇒ deny (não ignorar).
+                if !tc.check_or_cache(token_val, name, now, 360) {
+                    return Err("trust deny (Contain/Enforce)");
+                }
             }
         }
-        let result = reg.execute_skill_unchecked(name, payload);
-        if let Ok(ref output) = result {
-            self.output_cache.set(name, payload, output.clone(), now, None);
+        let result = reg.execute_skill(name, payload, token);
+        if idempotent {
+            if let Ok(ref output) = result {
+                self.output_cache.set(name, payload, output.clone(), now, None);
+            }
         }
         result
     }
@@ -1758,8 +1770,10 @@ impl Agent for HermesAgent {
                     }
                 }
                 hermes::Command::RmSkill(ref name) => {
-                    if SKILL_STORAGE.lock().remove_skill(name) {
-                        alloc::format!("Skill '{}' removida.", name)
+                    let storage_ok = SKILL_STORAGE.lock().remove_skill(name);
+                    let reg_ok = SKILL_REGISTRY.lock().unregister(name);
+                    if storage_ok || reg_ok {
+                        alloc::format!("Skill '{}' removida (storage={} registry={}).", name, storage_ok, reg_ok)
                     } else {
                         alloc::format!("Skill '{}' nao encontrada.", name)
                     }

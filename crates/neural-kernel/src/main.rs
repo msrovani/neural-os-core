@@ -634,8 +634,6 @@ lazy_static! {
 
     static ref PENDING_SKILL: crate::sync::irq_lock::IrqSafeLock<Option<(alloc::string::String, alloc::string::String)>> = crate::sync::irq_lock::IrqSafeLock::new(None);
 
-    static ref FANOUT_POOL: ticket_lock::TicketLock<skill_registry::FanOutPool> = ticket_lock::TicketLock::new(skill_registry::FanOutPool::new());
-
     // Sprint 95-96: Cognitive + Memory globals
     // TRINITY: fonte única em cortex::trinity (SESSION_273)
 

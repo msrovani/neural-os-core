@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s376 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s377 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 377 | skill-registry | bughunt AIOS | WASM teatro + Trust bypass + cache all | fail-closed wasm; check_or_cache; idempotent cache; SkillListEntry; unregister; trim index/task/fanout; 10 tests |
 | 376 | neural-kernel | bughunt AIOS | dual shutdown/BootLog + slog + Cargo trim | soft→k_ai; Agent BootLog→k_ai; delete link_watcher/email/rss; CapGate DENY→ok; TLS deps bin removidas |
 | 375 | event-bus | bughunt AIOS | fila ilimitada + Ok fantasma + recv mentiroso | depth 64/8 drop_oldest; publish Ok(n); Latent recv=try_receive; as_legacy Ed25519→0; trim libm/dedup |
 | 374 | k_ai R2 | bughunt AIOS | recovery false-executed + I3 Warning + budget + residual | ingest status honesto; Trust path Contain deny; record_tokens no submit; Trainer FFN/Attn residual; trim skill-registry |

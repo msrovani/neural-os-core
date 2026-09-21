@@ -204,7 +204,7 @@ pub fn on_packet_received(packet: &AiosTaskPacket, data: &[u8]) {
 /// Atalho: lazy-init do marketplace + ativa + popula skills locais reais.
 /// Chamado pelo kernel quando há peer. SESSION_235: `register_local_skill`
 /// nunca era chamado → `local_skills` vazio → broadcast_offer não enviava nada.
-/// Agora popula a partir do SkillRegistry canônico (name: desc), dedupe por nome.
+/// Agora popula a partir do SkillRegistry canônico (SkillListEntry), dedupe por nome.
 pub fn activate_global() {
     let mut guard = MARKETPLACE.lock();
     if guard.is_none() {
@@ -215,11 +215,8 @@ pub fn activate_global() {
         let mut names: Vec<String> = Vec::new();
         {
             let reg = k_nano::SKILL_REGISTRY.lock();
-            for (entry, _pol) in reg.list_skills() {
-                let name = match entry.split_once(": ") {
-                    Some((n, _d)) => String::from(n),
-                    None => entry.clone(),
-                };
+            for entry in reg.list_skills() {
+                let name = entry.name.clone();
                 if !names.iter().any(|s| s == &name) {
                     names.push(name);
                 }

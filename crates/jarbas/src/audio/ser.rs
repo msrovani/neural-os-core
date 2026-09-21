@@ -158,7 +158,7 @@ impl Skill for VoiceEmotionSkill {
         McpManifest {
             name: String::from("voice_emotion"),
             description: String::from("Retorna emocao detectada na voz do usuario via SER"),
-            required_tokens: Vec::new(),
+            required_tokens: alloc::vec![1],
             preconditions: Vec::new(),
             context_links: Vec::new(),
             output_schema: OutputSchema::String,

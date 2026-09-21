@@ -131,14 +131,14 @@ pub fn consolidate_tiers(tick: u64) -> TierStats {
     let skills = k_nano::SKILL_REGISTRY.lock().list_skills();
     stats.procedural_skills = skills.len();
     let mut payload = String::new();
-    for (name, _pol) in &skills {
-        if payload.len() + name.len() + 1 > 512 {
+    for entry in &skills {
+        if payload.len() + entry.name.len() + 1 > 512 {
             break;
         }
         if !payload.is_empty() {
             payload.push('\n');
         }
-        payload.push_str(name);
+        payload.push_str(&entry.name);
     }
     let _ = sgdb::put_doc(MemoryDoc::new(
         MemoryLayer::L5Procedural,

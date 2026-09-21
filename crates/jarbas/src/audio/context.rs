@@ -88,7 +88,7 @@ impl Skill for EmotionalContextSkill {
         McpManifest {
             name: String::from("emotional_context"),
             description: String::from("Retorna o contexto emocional atual do usuario para a LLM"),
-            required_tokens: Vec::new(), preconditions: Vec::new(), context_links: Vec::new(),
+            required_tokens: alloc::vec![1], preconditions: Vec::new(), context_links: Vec::new(),
             output_schema: OutputSchema::String, idempotent: true, contracts: Vec::new(),
         }
     }

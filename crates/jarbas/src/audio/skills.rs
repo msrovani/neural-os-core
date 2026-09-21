@@ -432,7 +432,7 @@ impl Skill for TtsSkill {
         McpManifest {
             name: String::from("tts_speak"),
             description: String::from("Sintetiza texto em audio PCM (neural GPU ou formant CPU)"),
-            required_tokens: Vec::new(),
+            required_tokens: alloc::vec![1],
             preconditions: Vec::new(),
             context_links: Vec::new(),
             output_schema: OutputSchema::Any,
@@ -455,7 +455,7 @@ impl Skill for SttSkill {
         McpManifest {
             name: String::from("stt_transcribe"),
             description: String::from("Transcreve PCM i16 LE via CTC global (mesmo path do runtime)"),
-            required_tokens: Vec::new(),
+            required_tokens: alloc::vec![1],
             preconditions: Vec::new(),
             context_links: Vec::new(),
             output_schema: OutputSchema::String,

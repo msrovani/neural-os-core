@@ -103,20 +103,11 @@ impl SkillSync {
                 let mut to_broadcast: Vec<(String, String)> = Vec::new();
                 {
                     let reg = k_nano::SKILL_REGISTRY.lock();
-                    for (entry, _pol) in reg.list_skills() {
-                        // list_skills() devolve "name: desc"
-                        let name = match entry.split_once(": ") {
-                            Some((n, _d)) => n,
-                            None => &entry[..],
-                        };
-                        if self.synced.iter().any(|s| s == name) {
+                    for entry in reg.list_skills() {
+                        if self.synced.iter().any(|s| s == &entry.name) {
                             continue;
                         }
-                        let desc = match entry.split_once(": ") {
-                            Some((_n, d)) => d,
-                            None => "",
-                        };
-                        to_broadcast.push((String::from(name), String::from(desc)));
+                        to_broadcast.push((entry.name.clone(), entry.description.clone()));
                     }
                 }
                 for (name, desc) in to_broadcast {
@@ -134,12 +125,10 @@ impl SkillSync {
                     let desc = {
                         let reg = k_nano::SKILL_REGISTRY.lock();
                         let mut d = String::new();
-                        for (entry, _pol) in reg.list_skills() {
-                            if let Some((n, desc)) = entry.split_once(": ") {
-                                if n == name {
-                                    d = String::from(desc);
-                                    break;
-                                }
+                        for entry in reg.list_skills() {
+                            if entry.name == name {
+                                d = entry.description.clone();
+                                break;
                             }
                         }
                         d

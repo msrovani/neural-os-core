@@ -78,7 +78,7 @@ impl Skill for AudioGetSettingsSkill {
         McpManifest {
             name: String::from("audio_get_settings"),
             description: String::from("Retorna configuracoes de audio atuais"),
-            required_tokens: Vec::new(),
+            required_tokens: alloc::vec![1],
             preconditions: Vec::new(),
             context_links: Vec::new(),
             output_schema: OutputSchema::String,
@@ -113,7 +113,7 @@ impl Skill for AudioSetVolumeSkill {
         McpManifest {
             name: String::from("audio_set_volume"),
             description: String::from("Define volume do audio (0-100)"),
-            required_tokens: Vec::new(),
+            required_tokens: alloc::vec![1],
             preconditions: Vec::new(),
             context_links: Vec::new(),
             output_schema: OutputSchema::String,
@@ -167,7 +167,7 @@ impl Skill for AudioToggleVoiceCloneSkill {
         McpManifest {
             name: String::from("audio_toggle_voice_clone"),
             description: String::from("Ativa/desativa clonagem de voz"),
-            required_tokens: Vec::new(),
+            required_tokens: alloc::vec![1],
             preconditions: Vec::new(),
             context_links: Vec::new(),
             output_schema: OutputSchema::String,

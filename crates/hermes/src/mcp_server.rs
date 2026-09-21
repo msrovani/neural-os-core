@@ -78,10 +78,10 @@ fn handle_list_tools() -> String {
     let reg = crate::globals::SKILL_REGISTRY.lock();
     let mut tools = alloc::string::String::from(r#"{"tools":["#);
     let skills: alloc::vec::Vec<_> = reg.list_skills().into_iter().collect();
-    for (i, (name, _desc)) in skills.iter().enumerate() {
+    for (i, entry) in skills.iter().enumerate() {
         if i > 0 { tools.push(','); }
         tools.push('"');
-        tools.push_str(name);
+        tools.push_str(&entry.name);
         tools.push('"');
     }
     tools.push_str("]}");

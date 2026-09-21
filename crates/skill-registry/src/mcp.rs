@@ -14,7 +14,11 @@ impl OutputSchema {
             OutputSchema::Any => true,
             OutputSchema::String => core::str::from_utf8(output).is_ok(),
             OutputSchema::Json(keys) => {
-                let s = match core::str::from_utf8(output) { Ok(s) => s, _ => return false };
+                // Honesty: substring contains — NÃO é parse JSON real (SESSION_377).
+                let s = match core::str::from_utf8(output) {
+                    Ok(s) => s,
+                    _ => return false,
+                };
                 keys.iter().all(|k| s.contains(k.as_str()))
             }
         }
@@ -25,7 +29,7 @@ pub struct McpManifest {
     pub name: String,
     pub description: String,
     pub required_tokens: Vec<u64>,
-    /// Caminhos VFS para carregar antes de executar (JobPreconditions)
+    /// Caminhos VFS para carregar antes de executar (declarativo; enforce no caller)
     pub preconditions: Vec<String>,
     /// Skills relacionadas para composicao
     pub context_links: Vec<String>,

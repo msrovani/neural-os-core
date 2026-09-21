@@ -45,11 +45,15 @@ impl McpAgent {
         // Add registered skills as tools
         {
             let reg = k_nano::SKILL_REGISTRY.lock();
-            for (name, _policy) in reg.list_skills().into_iter().take(32) {
-                let short = if name.len() > 40 { &name[..40] } else { &name };
+            for entry in reg.list_skills().into_iter().take(32) {
+                let short = if entry.name.len() > 40 {
+                    &entry.name[..40]
+                } else {
+                    &entry.name
+                };
                 tools.push(alloc::format!(
                     "{{\"name\":\"skill:{}\",\"description\":\"{}\"}}",
-                    short, short
+                    short, entry.description
                 ));
             }
         }
