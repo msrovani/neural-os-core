@@ -123,12 +123,12 @@ pub fn maybe_on_net_ready() {
     match k_nano::boot_mode::boot_mode() {
         k_nano::boot_mode::BootMode::Installed => {}
         other => {
-            k_nano::slog_bin!("PROV", "info", "NET_READY skip (boot_mode={:?}, nao residente)", other);
+            k_nano::slog_bin!("PROV", "ok", "NET_READY skip (boot_mode={:?}, nao residente)", other);
             return;
         }
     }
     if !k_ai::self_state::is_first_boot() {
-        k_nano::slog_bin!("PROV", "info", "NET_READY skip (nao first_boot)");
+        k_nano::slog_bin!("PROV", "ok", "NET_READY skip (nao first_boot)");
         return;
     }
     let n = provision_slots(AUTO_ORDER, false);
@@ -142,7 +142,7 @@ pub fn maybe_on_net_ready() {
 
 fn provision_slots(slots: &[ModelSlot], include_active: bool) -> usize {
     let Some(base) = crate::self_update::read_update_cfg() else {
-        k_nano::slog_bin!("PROV", "info", "sem UPDATE.CFG — skip provision (net down ou sem config)");
+        k_nano::slog_bin!("PROV", "ok", "sem UPDATE.CFG — skip provision (net down ou sem config)");
         return 0;
     };
     let mut n = 0;

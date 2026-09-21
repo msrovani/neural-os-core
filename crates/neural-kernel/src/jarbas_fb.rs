@@ -119,7 +119,7 @@ pub unsafe fn map_fb_pages(
     held: Cap,
 ) -> Result<u64, &'static str> {
     if !held.contains(Cap::MAP_FB) {
-        k_nano::slog_bin!("CapGate", "info", "DENY MAP_FB held=0x{:x}", held.bits());
+        k_nano::slog_bin!("CapGate", "ok", "DENY MAP_FB held=0x{:x}", held.bits());
         return Err("EPERM: Cap::MAP_FB");
     }
     let _ = syscall::dispatch(SYS_MAP_FB, contract.phys_base, held)?;

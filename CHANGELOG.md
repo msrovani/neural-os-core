@@ -1,5 +1,14 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s376] - 2026-09-21 — neural-kernel honesty (wire + emagreçer)
+
+- Shutdown soft state → `k_ai::shutdown`; bin HW-only `begin_orderly_*` + drain
+- BootLog Agent → `k_ai` (BOOT_PHASE + SelfHeal); bin FAT reader + bridges
+- Delete orphans: `link_watcher`, `email_agent`, `rss_agent`
+- slog CapGate DENY / WARN / FAILED honesty (ADR-0092)
+- Cargo trim: UART/allocator/TLS stack duplicados (canônico hermes/k_nano)
+- Codemap honesty; IDEA #597 upstream bumps adiados
+
 ## [1.9.99-s375] - 2026-09-21 — event-bus honesty (bounded + API)
 
 - EventBus: depth 64 / AUDIO_*=8 drop_oldest; publish→`Result<usize>`; zombie prune + unsubscribe

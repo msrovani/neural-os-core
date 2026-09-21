@@ -1,11 +1,13 @@
+//! BootLogAgent — truth em k_ai (SESSION_376). Bin só registra reader FAT/USB via bridge.
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use core::sync::atomic::{AtomicPtr, Ordering};
+use event_bus::Receiver;
 
 const MANIFEST: AgentManifest = AgentManifest {
     name: "boot_log",
     kind: AgentKind::Skill,
-    // PollEvery: evita FAT walk Continuous engasgar scheduler em nós 1G.
-    schedule: ScheduleKind::PollEvery(500),
+    // PollEvery(32): drena BOOT_PHASE; FAT analyze uma vez (não Continuous).
+    schedule: ScheduleKind::PollEvery(32),
     auto_start: true,
     persist: true,
 };
@@ -17,16 +19,30 @@ const MAX_BOOT_LOG_BYTES: usize = 64 * 1024;
 type ReadBootLogFn = fn() -> Option<alloc::string::String>;
 static READ_BOOT_LOG_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
+type PushPeriodicFn = fn(u64);
+static PUSH_PERIODIC_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+
 pub fn register_read_boot_log(f: ReadBootLogFn) {
     READ_BOOT_LOG_FN.store(f as *mut (), Ordering::Release);
 }
 
+/// Bin: `log_agent::maybe_push_periodic` — push BOOT.LOG periódico sem acoplar VFS no k_ai.
+pub fn register_push_periodic(f: PushPeriodicFn) {
+    PUSH_PERIODIC_FN.store(f as *mut (), Ordering::Release);
+}
+
 pub struct BootLogAgent {
+    boot_phase_rx: Receiver,
     analyzed: bool,
 }
 
 impl BootLogAgent {
-    pub fn new() -> Self { BootLogAgent { analyzed: false } }
+    pub fn new() -> Self {
+        BootLogAgent {
+            boot_phase_rx: k_nano::EVENT_BUS.subscribe("BOOT_PHASE"),
+            analyzed: false,
+        }
+    }
 
     /// Le o ultimo log de boot e retorna como string para o Cortex
     /// Suporta FAT32 (B<TICK>.LOG) e LogFsAgent (memoria)
@@ -115,7 +131,7 @@ impl BootLogAgent {
         let path = alloc::format!("/logs/boot_{:07X}.log", tick);
         k_nano::fs::write_vfs(&path, content.as_bytes())
             .or_else(|_| {
-                k_nano::slog_kai!("BOOTLOG", "info", "VFS write falhou para {}", path);
+                k_nano::slog_kai!("BOOTLOG", "warn", "VFS write falhou para {}", path);
                 Err("boot log persist failed")
             })
     }
@@ -152,29 +168,49 @@ impl BootLogAgent {
 }
 
 impl Agent for BootLogAgent {
-    fn manifest(&self) -> &AgentManifest { &MANIFEST }
+    fn manifest(&self) -> &AgentManifest {
+        &MANIFEST
+    }
 
-    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        // Uma análise FAT — re-walk Continuous/Poll era o tick lento em mesh 1G.
-        if self.analyzed {
-            return AgentTickResult::Pending;
+    fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
+        while let Some(ev) = self.boot_phase_rx.try_receive() {
+            let msg = core::str::from_utf8(&ev.payload).unwrap_or("?");
+            k_nano::slog_kai!("BOOT", "ok", "fase={}", msg);
         }
-        self.analyzed = true;
-        if let Some(log) = Self::read_last_boot_log() {
-            let diagnostics = Self::analyze_log(&log);
-            for (kind, msg) in &diagnostics {
-                k_nano::slog_kai!("BOOT", "ok", "{}: {}", kind, msg);
-
-                // Panic detectado → publica HEALTH_ISSUE (Ring 1 não segura SELF_HEAL global hermes)
-                if *kind == "PANIC" || *kind == "GPU_HUNG" {
-                    let msg_out = alloc::format!("BOOT_{}: {}", kind, msg);
-                    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
-                        id: 0,
-                        topic: alloc::string::String::from("HEALTH_ISSUE"),
-                        payload: msg_out.into_bytes(),
-                        token: event_bus::CapabilityToken::Legacy(1),
-                    });
-                    k_nano::slog_kai!("BOOTLOG", "ok", "Health issue publicado: {}", kind);
+        let push = PUSH_PERIODIC_FN.load(Ordering::Acquire);
+        if !push.is_null() {
+            let f: PushPeriodicFn = unsafe { core::mem::transmute(push) };
+            f(tick);
+        }
+        // Uma análise FAT — re-walk Continuous/Poll engasgava mesh 1G.
+        if !self.analyzed {
+            self.analyzed = true;
+            if let Some(log) = Self::read_last_boot_log() {
+                let diagnostics = Self::analyze_log(&log);
+                for (kind, msg) in &diagnostics {
+                    k_nano::slog_kai!("BOOT", "ok", "{}: {}", kind, msg);
+                    if *kind == "PANIC" || *kind == "GPU_HUNG" {
+                        let msg_out = alloc::format!("BOOT_{}: {}", kind, msg);
+                        let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+                            id: 0,
+                            topic: alloc::string::String::from("HEALTH_ISSUE"),
+                            payload: msg_out.into_bytes(),
+                            token: event_bus::CapabilityToken::Legacy(1),
+                        });
+                        let ctx = crate::self_heal::ErrorContext {
+                            kind,
+                            message: msg.clone(),
+                            file: alloc::string::String::from("boot_log"),
+                            line: 0,
+                            ring: 0,
+                            daemon: alloc::string::String::from("boot_log_agent"),
+                            tick,
+                        };
+                        let mut heal = crate::self_heal::GLOBAL_SELF_HEAL.lock();
+                        heal.analyze(&ctx, true);
+                        drop(heal);
+                        k_nano::slog_kai!("BOOTLOG", "ok", "Health issue publicado: {}", kind);
+                    }
                 }
             }
         }

@@ -158,7 +158,7 @@ pub fn power_disarm() {
 pub fn hibernate_stub() -> &'static str {
     POWER_UI_STATE.store(5, Ordering::Release);
     const MSG: &str = "Hibernacao ainda nao disponivel neste build (sem S4/imagem)";
-    k_nano::slog_kai!("SHUTDOWN", "info", "{}", MSG);
+    k_nano::slog_kai!("SHUTDOWN", "warn", "{}", MSG);
     let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
         id: 0,
         topic: alloc::string::String::from(TOPIC_SYSTEM_HIBERNATE),

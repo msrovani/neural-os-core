@@ -1,36 +1,16 @@
-//! BootLogAgent — consome BOOT_PHASE e lê B*.LOG na FAT com orçamento.
+//! Boot log FAT reader (bin residual) — Agent tick em `k_ai::boot_log_agent` (SESSION_376).
+//! Bridge: `register_read_boot_log(BootLogAgent::read_last_boot_log)` no boot.
 //! Critico: walk FAT sem limite bloqueava init_phase (SelfHeal) e NetAgent nunca tickava.
 
-use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use event_bus::Receiver;
 /// Max clusters ao varrer root em busca de B*.LOG (evita hang em chain ciclica/corrupta).
 const MAX_ROOT_CLUSTERS: u32 = 8;
 /// Cap de bytes ao carregar um boot log do disco (nao engolir o scheduler).
 const MAX_BOOT_LOG_BYTES: usize = 64 * 1024;
 
-const MANIFEST: AgentManifest = AgentManifest {
-    name: "boot_log",
-    kind: AgentKind::Skill,
-    // BOOT_PHASE + push periódico — não precisa Continuous a cada tick.
-    schedule: ScheduleKind::PollEvery(32),
-    auto_start: true,
-    persist: true,
-};
-
-pub struct BootLogAgent {
-    boot_phase_rx: Receiver,
-    /// Analise FAT so uma vez — Continuous nao pode re-montar FAT a cada tick.
-    analyzed: bool,
-}
+/// Reader orçado (USB-MSC / ATA / LogFs) — sem Agent (k_ai registra o tick).
+pub struct BootLogAgent;
 
 impl BootLogAgent {
-    pub fn new() -> Self {
-        BootLogAgent {
-            boot_phase_rx: crate::EVENT_BUS.subscribe(crate::TOPIC_BOOT_PHASE),
-            analyzed: false,
-        }
-    }
-
     /// Converte entrada 8.3 (11 bytes) para nome com ponto (`B0000001.LOG`).
     fn fat83_to_dotted(name11: &[u8]) -> alloc::string::String {
         if name11.len() < 11 {
@@ -248,46 +228,5 @@ impl BootLogAgent {
             issues.push(("OK", alloc::string::String::from("Nenhum problema detectado no log")));
         }
         issues
-    }
-}
-
-impl Agent for BootLogAgent {
-    fn manifest(&self) -> &AgentManifest {
-        &MANIFEST
-    }
-
-    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        // Consumer mínimo de BOOT_PHASE (EventBus → serial)
-        while let Some(ev) = self.boot_phase_rx.try_receive() {
-            let msg = core::str::from_utf8(&ev.payload).unwrap_or("?");
-            k_nano::slog_bin!("BOOT", "ok", "fase={}", msg);
-        }
-        crate::log_agent::maybe_push_periodic(_tick);
-        // FAT so uma vez — senao Continuous remonta BPB e engasga o scheduler
-        if !self.analyzed {
-            self.analyzed = true;
-            if let Some(log) = Self::read_last_boot_log() {
-                let diagnostics = Self::analyze_log(&log);
-                for (kind, msg) in &diagnostics {
-                    k_nano::slog_bin!("BOOT", "ok", "{}: {}", kind, msg);
-
-                    if *kind == "PANIC" || *kind == "GPU_HUNG" {
-                        let ctx = crate::self_heal::ErrorContext {
-                            kind,
-                            message: msg.clone(),
-                            file: alloc::string::String::from("boot_log"),
-                            line: 0,
-                            ring: 0,
-                            daemon: alloc::string::String::from("boot_log_agent"),
-                            tick: _tick,
-                        };
-                        let mut heal = k_ai::self_heal::GLOBAL_SELF_HEAL.lock();
-                        heal.analyze(&ctx, true);
-                        drop(heal);
-                    }
-                }
-            }
-        }
-        AgentTickResult::Pending
     }
 }

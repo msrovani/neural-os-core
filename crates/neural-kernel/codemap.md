@@ -6,22 +6,25 @@ Boot **binary** of neural-os-core (`no_std` + `no_main`, x86_64, higher-half via
 Single entry chain: `limine_boot::_start` → `limine_entry` (collect `LimineHandoff`) →
 `kernel_boot(handoff)` → 8-phase boot → `agent_core::AgentRegistry` scheduler loop.
 
-- **Stays here**: everything that must exist exactly once in the final image — the
-  boot sequence, the native agent fleet (`agents.rs`), bin-only residuals (net stack
-  `net.rs`/`netstack.rs`, cortex model loading, TLS, GGUF, audio truth, ring3/IPC demos,
-  cognitive singletons, storage drivers ATA/AHCI/FAT/exFAT), and all **wiring** between
-  the K³CHJ crates.
+- **Stays here**: boot sequence wire, bridges (`net_bridge`, VFS, TLS→hermes,
+  SelfHeal respawn), Cap demos PoC (ADR-0041), residual netstack/netfs smoke,
+  orderly shutdown **HW** (`begin_orderly_*`), BootLog **FAT reader** bridge,
+  memory_budget agent, GGUF/cortex mmap demos. Emagreçer: lógica nova nas crates.
 - **Lives in crates (NOT here)**: R0 HAL (k_nano), R1 device caps/MMIO (k_hal), R2
-  trust/self-heal (k_ai) + LLM/MoE/tensors (cortex), R3 orchestration/WASM/network
-  (hermes), R3 display/persona (jarbas). This crate links them via `pub use` re-exports
-  and bridge registrations; new logic must go in a crate, not here.
+  trust/self-heal/BootLog tick (k_ai) + LLM/MoE/tensors (cortex), R3 orchestration/
+  WASM/network/TLS (hermes), R3 display/persona/audio truth (jarbas). Soft power
+  state = `k_ai::shutdown`; bin only drains EventBus → ACPI/PS2.
+- **SESSION_376 honesty**: removed orphan `link_watcher`/`email`/`rss`; trimmed
+  unused TLS/UART/allocator deps from Cargo (canônico hermes/k_nano); CapGate
+  DENY→sev `ok`; dual BootLog Agent collapsed to k_ai.
 
 ## Design Patterns
 
 1. **8-phase event-driven boot** — `BootPhase` enum (SafeHarbor → MemoryCore →
    SystemBringup → Diagnostics → HardwareDiscovery → DriverInit → AgentFleet → Runtime)
-   published as events on topic `BOOT_PHASE`; `BootLogAgent` + a static consumer drain
-   them. Each phase also logs a framebuffer checkpoint (`display::fb::boot_ckpt`).
+   published as events on topic `BOOT_PHASE`; `k_ai::boot_log_agent::BootLogAgent`
+   drains them (bin registers FAT reader via `register_read_boot_log`). Each phase
+   also logs a framebuffer checkpoint (`display::fb::boot_ckpt`).
 2. **Agent/Skill-first** — every entity is an `agent_core::Agent`; native agents live in
    `agents.rs` (`MonitorAgent`, `HwBridgeAgent`, `NetAgent`, `CortexAgent`, `HermesAgent`,
    `PlatformAgent`, `NetDriverAgent`, …); skills are registered in the **canonical**

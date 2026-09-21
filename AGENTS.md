@@ -191,7 +191,8 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: **v1.9.99-s375 TEST** — event-bus honesty (bounded/Ok(n)/Latent recv);
+# Current Sprint: **v1.9.99-s376 TEST** — neural-kernel honesty (shutdown/BootLog/slog/Cargo);
+# s375 event-bus honesty (bounded/Ok(n)/Latent recv);
 # s374 k_ai honesty (recovery/I3/Trust/budget/Trainer);
 # s373 k_hal ring/iwl/BB_END/matmul; s372 k_nano i225/nvme/slog; s371 cortex TQ2_0 ggml;
 # s370 agent-core; s369 Boot Trilha A; s368 Fechamento 1.x B1/B3.1; s367 LLM response gate;

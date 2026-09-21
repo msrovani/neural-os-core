@@ -169,8 +169,6 @@ mod demo_flags;
 
 mod hw_rng;
 
-mod link_watcher;
-
 mod boot_logger;
 
 mod boot_log_agent;
@@ -994,7 +992,7 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
                 "security" => Some(Box::new(security::SecurityAgent::new())),
                 "mouse" => Some(Box::new(agents::mouse_agent::MouseAgent::new())),
                 "self_heal" => Some(Box::new(k_ai::self_heal_agent::SelfHealAgent::new())),
-                "boot_log" => Some(Box::new(boot_log_agent::BootLogAgent::new())),
+                "boot_log" => Some(Box::new(k_ai::boot_log_agent::BootLogAgent::new())),
                 "auto_learn" => Some(Box::new(agents::AutoLearnAgent::new())),
                 "sleep_cycle" => Some(Box::new(agents::SleepCycleAgent::new())),
                 "JARBAS" => Some(Box::new(audio::jarvis::JarbasAgent::new())),
@@ -1563,7 +1561,7 @@ pub(crate) fn kernel_boot(
                 k_nano::slog_bin!("Boot", "dbg", "cortex arena init OK (Tier 2 bump)");
             }
             Err(e) => {
-                k_nano::slog_bin!("Warn", "info", "cortex arena init failed: {}", e);
+                k_nano::slog_bin!("Warn", "warn", "cortex arena init failed: {}", e);
             }
         }
 
@@ -2079,7 +2077,7 @@ pub(crate) fn kernel_boot(
         }
         publish_boot_phase(BootPhase::DriverInit, "HDA audio init");
     } else {
-        k_nano::slog_bin!("HDA", "info", "skip — DeviceTree sem classe Snd");
+        k_nano::slog_bin!("HDA", "ok", "skip — DeviceTree sem classe Snd");
     }
 
     // AHCI/NVMe/ATA ja probed em storage_probe::probe_storage_drivers (plano k_ai).
@@ -2265,9 +2263,9 @@ pub(crate) fn kernel_boot(
                 verify_kernel_from_disk(ata, &parts);
             }
         } else if skip_ata_verify {
-            k_nano::slog_bin!("Sec", "info", "skip ATA KERNEL~1 verify (TCG — use virtio-blk gate)");
+            k_nano::slog_bin!("Sec", "ok", "skip ATA KERNEL~1 verify (TCG — use virtio-blk gate)");
         } else if live_usb_no_msc {
-            k_nano::slog_bin!("Sec", "info", "skip ATA KERNEL~1 verify (live USB sem MSC)");
+            k_nano::slog_bin!("Sec", "ok", "skip ATA KERNEL~1 verify (live USB sem MSC)");
             crate::display::fb::console_print("SEC: skip ATA verify (USB live)");
             k_nano::boot_logger::skip_disk_persist_except_usb();
         }
@@ -3152,7 +3150,7 @@ pub(crate) fn kernel_boot(
                 }
                 k_nano::slog_bin!("FW", "info", "GP108 preload: {}/{} blobs (ATA/USB)", n, GP108.len());
             } else {
-                k_nano::slog_bin!("FW", "info", "GP108 preload SKIP (no NVIDIA or no storage)");
+                k_nano::slog_bin!("FW", "ok", "GP108 preload SKIP (no NVIDIA or no storage)");
             }
 
             crate::display::fb::boot_ckpt(45, "GP108 done");
@@ -3198,11 +3196,11 @@ pub(crate) fn kernel_boot(
     // MVP C (ADR-0041): CR3 switch + ring shared + Cap — non-fatal
     match crate::ipc::demo_two_spaces() {
         Ok(()) => {
-            k_nano::slog_bin!("MVP-C", "info", "demo OK — capability rings PoC");
+            k_nano::slog_bin!("MVP-C", "ok", "demo OK — capability rings PoC");
             crate::boot_logger::log("BOOT: MVP-C CR3+ring+cap OK");
         }
         Err(e) => {
-            k_nano::slog_bin!("MVP-C", "info", "WARN: {} — boot continua", e);
+            k_nano::slog_bin!("MVP-C", "warn", "{} — boot continua", e);
             crate::boot_logger::log("BOOT: MVP-C WARN (non-fatal)");
         }
     }
@@ -3214,7 +3212,7 @@ pub(crate) fn kernel_boot(
             crate::boot_logger::log("BOOT: P3 CapGate OK");
         }
         Err(e) => {
-            k_nano::slog_bin!("P3", "info", "WARN: {} — boot continua", e);
+            k_nano::slog_bin!("P3", "warn", "{} — boot continua", e);
             crate::boot_logger::log("BOOT: P3 CapGate WARN (non-fatal)");
         }
     }
@@ -3226,7 +3224,7 @@ pub(crate) fn kernel_boot(
             crate::boot_logger::log("BOOT: P4 JARBAS FB OK");
         }
         Err(e) => {
-            k_nano::slog_bin!("P4", "info", "WARN: {} — boot continua", e);
+            k_nano::slog_bin!("P4", "warn", "{} — boot continua", e);
             crate::boot_logger::log("BOOT: P4 JARBAS FB WARN (non-fatal)");
         }
     }
@@ -3238,7 +3236,7 @@ pub(crate) fn kernel_boot(
             crate::boot_logger::log("BOOT: P5 K-IA DMA OK");
         }
         Err(e) => {
-            k_nano::slog_bin!("P5", "info", "WARN DMA: {} — boot continua", e);
+            k_nano::slog_bin!("P5", "warn", "DMA: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P5 DMA WARN (non-fatal)");
         }
     }
@@ -3248,7 +3246,7 @@ pub(crate) fn kernel_boot(
             crate::boot_logger::log("BOOT: P5 Cortex mmap OK");
         }
         Err(e) => {
-            k_nano::slog_bin!("P5", "info", "WARN mmap: {} — boot continua", e);
+            k_nano::slog_bin!("P5", "warn", "mmap: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P5 mmap WARN (non-fatal)");
         }
     }
@@ -3263,7 +3261,7 @@ pub(crate) fn kernel_boot(
             crate::boot_logger::log("BOOT: P6 Ring3 T-056 OK");
         }
         Err(e) => {
-            k_nano::slog_bin!("P6", "info", "WARN T-056: {} — boot continua", e);
+            k_nano::slog_bin!("P6", "warn", "T-056: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P6 Ring3 T-056 WARN (non-fatal)");
         }
     }
@@ -3277,7 +3275,7 @@ pub(crate) fn kernel_boot(
                     crate::boot_logger::log("BOOT: P6 Ring3 fault-containment OK");
                 }
                 Err(e) => {
-                    k_nano::slog_bin!("P6", "info", "WARN: {} — boot continua", e);
+                    k_nano::slog_bin!("P6", "warn", "{} — boot continua", e);
                     crate::boot_logger::log("BOOT: P6 Ring3 fault-containment WARN (non-fatal)");
                 }
             }
@@ -3287,7 +3285,7 @@ pub(crate) fn kernel_boot(
                     crate::boot_logger::log("BOOT: P6 Ring3 CapGate DMA/MMIO OK");
                 }
                 Err(e) => {
-                    k_nano::slog_bin!("P6", "info", "WARN: {} — boot continua", e);
+                    k_nano::slog_bin!("P6", "warn", "{} — boot continua", e);
                     crate::boot_logger::log("BOOT: P6 Ring3 CapGate DMA/MMIO WARN (non-fatal)");
                 }
             }
@@ -3297,7 +3295,7 @@ pub(crate) fn kernel_boot(
                     crate::boot_logger::log("BOOT: P6 Ring3 soft-float OK");
                 }
                 Err(e) => {
-                    k_nano::slog_bin!("P6", "info", "WARN: {} — boot continua", e);
+                    k_nano::slog_bin!("P6", "warn", "{} — boot continua", e);
                     crate::boot_logger::log("BOOT: P6 Ring3 soft-float WARN (non-fatal)");
                 }
             }
@@ -3342,7 +3340,7 @@ pub(crate) fn kernel_boot(
             crate::boot_logger::log("BOOT: P7 demand-page OK");
         }
         Err(e) => {
-            k_nano::slog_bin!("P7", "info", "WARN: {} — boot continua", e);
+            k_nano::slog_bin!("P7", "warn", "{} — boot continua", e);
             crate::boot_logger::log("BOOT: P7 demand-page WARN (non-fatal)");
         }
     }
@@ -3355,7 +3353,7 @@ pub(crate) fn kernel_boot(
             crate::boot_logger::log("BOOT: P8 vring OK");
         }
         Err(e) => {
-            k_nano::slog_bin!("P8", "info", "WARN: {} — boot continua", e);
+            k_nano::slog_bin!("P8", "warn", "{} — boot continua", e);
             crate::boot_logger::log("BOOT: P8 vring WARN (non-fatal)");
         }
     }
@@ -3368,13 +3366,13 @@ pub(crate) fn kernel_boot(
             crate::boot_logger::log("BOOT: P9 gguf-mmap OK");
         }
         Err(e) => {
-            k_nano::slog_bin!("P9", "info", "WARN: {} — boot continua", e);
+            k_nano::slog_bin!("P9", "warn", "{} — boot continua", e);
             crate::boot_logger::log("BOOT: P9 gguf-mmap WARN (non-fatal)");
         }
     }
     crate::display::fb::boot_ckpt(45, "P6 gguf");
     } else {
-        k_nano::slog_bin!("Cap", "info", "P4-P9 cap-demos SKIP (feature cap-demos off)");
+        k_nano::slog_bin!("Cap", "ok", "P4-P9 cap-demos SKIP (feature cap-demos off)");
         crate::boot_logger::log("BOOT: cap-demos SKIP (N7 ADR-0102)");
     }
 
@@ -3388,10 +3386,10 @@ pub(crate) fn kernel_boot(
 
     let mut registry = agent_core::AgentRegistry::new();
 
-    // BootLogAgent cedo: consome BOOT_PHASE via EventBus
-    // Bridge: Hermes/k_ai SelfHeal usam a mesma read (sandbox/USB-MSC orçada).
+    // BootLogAgent (k_ai): BOOT_PHASE + analyze; reader FAT/USB orçado no bin (bridge).
     k_ai::boot_log_agent::register_read_boot_log(boot_log_agent::BootLogAgent::read_last_boot_log);
-    registry.register(Box::new(boot_log_agent::BootLogAgent::new()));
+    k_ai::boot_log_agent::register_push_periodic(crate::log_agent::maybe_push_periodic);
+    registry.register(Box::new(k_ai::boot_log_agent::BootLogAgent::new()));
 
     // PlatformAgent: idempotente se init_platform_sync ja rodou
     registry.register(Box::new(agents::PlatformAgent::new()));
@@ -3747,7 +3745,7 @@ pub(crate) fn kernel_boot(
                         audio::skills::init_neural_tts();
                         crate::load_status::print_status_banner();
                     } else {
-                        k_nano::slog_bin!("RAMDISK", "info", "QEMU loader: load_model FAILED");
+                        k_nano::slog_bin!("RAMDISK", "fail", "QEMU loader: load_model FAILED");
                         crate::load_status::set(
                             crate::load_status::AssetKind::Llm,
                             crate::load_status::LoadStatus::Failed,
@@ -4247,7 +4245,7 @@ pub(crate) fn kernel_boot(
                             ] {
                                 let Some(sz) = fs.lookup_file_size(rname) else { continue };
                                 if sz > EXPERT_PIO_CAP {
-                                    k_nano::slog_bin!("FAT", "info", "{} {}KB > expert cap — skip PIO", rname, sz / 1024);
+                                    k_nano::slog_bin!("FAT", "ok", "{} {}KB > expert cap — skip PIO", rname, sz / 1024);
                                     continue;
                                 }
                                 if let Some(rust_data) = fs.read_file(rname) {
@@ -4833,7 +4831,7 @@ pub(crate) fn kernel_boot(
                 "intent_e2e STT→USER_INTENT→cortex generate_via_model (generator)");
             let raw = crate::cortex::generate_via_model_with_route(stt, "generator");
             if raw.is_empty() {
-                k_nano::slog_bin!("JARBAS-TTS", "info", "FAILED empty generate");
+                k_nano::slog_bin!("JARBAS-TTS", "warn", "FAILED empty generate");
                 if n3_gen.is_none() { n3_gen = Some(false); }
                 if n4_intent.is_none() { n4_intent = Some(false); }
                 if n5_voice.is_none() { n5_voice = Some(false); }
@@ -4849,7 +4847,7 @@ pub(crate) fn kernel_boot(
                 n5_voice = Some(!_pcm.is_empty() || piper_on);
             }
         } else {
-            k_nano::slog_bin!("JARBAS-TTS", "info", "SKIP llm=ABSENT");
+            k_nano::slog_bin!("JARBAS-TTS", "ok", "SKIP llm=ABSENT");
             if n3_gen.is_none() { n3_gen = Some(false); }
             if n4_intent.is_none() { n4_intent = Some(false); }
             if n5_voice.is_none() { n5_voice = Some(false); }

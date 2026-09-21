@@ -45,7 +45,7 @@ pub struct PinnedDmaBuf {
 /// Aloca e registra `n` frames como não-reclaimáveis. Exige Cap::PIN_DMA.
 pub fn pin_frames(n: usize, held: Cap) -> Result<PinnedDmaBuf, &'static str> {
     if !held.contains(Cap::PIN_DMA) {
-        k_nano::slog_bin!("CapGate", "info", "DENY PIN_DMA held=0x{:x}", held.bits());
+        k_nano::slog_bin!("CapGate", "ok", "DENY PIN_DMA held=0x{:x}", held.bits());
         return Err("EPERM: Cap::PIN_DMA");
     }
     let _ = syscall::dispatch(SYS_PIN_DMA, n as u64, held)?;
@@ -88,7 +88,7 @@ pub unsafe fn map_pinned(
     held: Cap,
 ) -> Result<u64, &'static str> {
     if !held.contains(Cap::MAP_DMA) {
-        k_nano::slog_bin!("CapGate", "info", "DENY MAP_DMA held=0x{:x}", held.bits());
+        k_nano::slog_bin!("CapGate", "ok", "DENY MAP_DMA held=0x{:x}", held.bits());
         return Err("EPERM: Cap::MAP_DMA");
     }
     let _ = syscall::dispatch(SYS_MAP_DMA, buf.phys, held)?;

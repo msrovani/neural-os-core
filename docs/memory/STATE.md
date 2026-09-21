@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s375 — event-bus honesty
+# STATE — neural-os-core v1.9.99-s376 — neural-kernel honesty
 
-#   PISTA ATIVA: s375 — event-bus (bounded queue / publish Ok(n) / Latent recv / token)
-#   PISTA ANTERIOR: s374 k_ai; s373 k_hal; s372 k_nano; s371 cortex
+#   PISTA ATIVA: s376 — neural-kernel (shutdown/BootLog/slog/Cargo trim)
+#   PISTA ANTERIOR: s375 event-bus; s374 k_ai; s373 k_hal; s372 k_nano; s371 cortex
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
@@ -30,6 +30,8 @@
 | B3.1 | Playback pacing free+TSC | ✅ s368 |
 | s374 | k_ai honesty residual | ✅ |
 | s375 | event-bus bounded + honesty | ✅ |
+| s376 | neural-kernel wire honesty | ✅ |
 | B2 | Mesh peer B / relaunch | AWAITING operador |
 | Track C | Ring3/B/C/GPU/WiFi… | defer |
 | IDEA #562 | AUDIO_FRAME → ring SPSC | residual (cap 8 mitiga) |
+| IDEA #597 | bump smoltcp 0.14 / spin 0.12 / x86_64 0.15 | residual soft-float |

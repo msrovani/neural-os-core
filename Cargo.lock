@@ -854,15 +854,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
-name = "linked_list_allocator"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "549ce1740e46b291953c4340adcd74c59bcf4308f4cac050fd33ba91b7168f4a"
-dependencies = [
- "spinning_top 0.2.5",
-]
-
-[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -924,10 +915,7 @@ version = "1.9.9"
 dependencies = [
  "agent-core",
  "cortex",
- "digest",
  "ed25519-compact",
- "embedded-io",
- "embedded-tls",
  "event-bus",
  "hermes",
  "jarbas",
@@ -936,18 +924,11 @@ dependencies = [
  "k_ai",
  "lazy_static",
  "libm",
- "linked_list_allocator",
- "p256",
- "rand_core",
- "rsa",
- "sha2",
  "skill-registry",
  "smoltcp",
  "spin",
- "spinning_top 0.3.0",
  "talc",
  "ticket-lock",
- "uart_16550",
  "x86_64",
 ]
 
@@ -1354,24 +1335,6 @@ name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
-dependencies = [
- "lock_api",
-]
-
-[[package]]
-name = "spinning_top"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b9eb1a2f4c41445a3a0ff9abc5221c5fcd28e1f13cd7c0397706f9ac938ddb0"
-dependencies = [
- "lock_api",
-]
-
-[[package]]
-name = "spinning_top"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d96d2d1d716fb500937168cc09353ffdc7a012be8475ac7308e1bdf0e3923300"
 dependencies = [
  "lock_api",
 ]

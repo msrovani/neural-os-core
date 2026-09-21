@@ -87,7 +87,7 @@ pub unsafe fn mmap_weights(
     held: Cap,
 ) -> Result<WeightMap, &'static str> {
     if !held.contains(Cap::MAP_WEIGHTS) {
-        k_nano::slog_bin!("CapGate", "info", "DENY MAP_WEIGHTS held=0x{:x}", held.bits());
+        k_nano::slog_bin!("CapGate", "ok", "DENY MAP_WEIGHTS held=0x{:x}", held.bits());
         return Err("EPERM: Cap::MAP_WEIGHTS");
     }
     let _ = syscall::dispatch(SYS_MAP_WEIGHTS, n as u64, held)?;
@@ -116,7 +116,7 @@ pub unsafe fn mmap_weights_lazy(
     held: Cap,
 ) -> Result<WeightMap, &'static str> {
     if !held.contains(Cap::MAP_WEIGHTS) || !held.contains(Cap::DEMAND_PAGE) {
-        k_nano::slog_bin!("CapGate", "info", "DENY MAP_WEIGHTS|DEMAND_PAGE held=0x{:x}", held.bits());
+        k_nano::slog_bin!("CapGate", "ok", "DENY MAP_WEIGHTS|DEMAND_PAGE held=0x{:x}", held.bits());
         return Err("EPERM: Cap::MAP_WEIGHTS|DEMAND_PAGE");
     }
     let _ = syscall::dispatch(SYS_MAP_WEIGHTS, n as u64, held)?;

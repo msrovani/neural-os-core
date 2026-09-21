@@ -153,7 +153,7 @@ pub unsafe fn mmap_file_weights(
         .union(Cap::DEMAND_PAGE)
         .union(Cap::MAP_FILE);
     if !held.contains(need) {
-        k_nano::slog_bin!("CapGate", "info", "DENY MAP_WEIGHTS|DEMAND_PAGE|MAP_FILE held=0x{:x}", held.bits());
+        k_nano::slog_bin!("CapGate", "ok", "DENY MAP_WEIGHTS|DEMAND_PAGE|MAP_FILE held=0x{:x}", held.bits());
         return Err("EPERM: Cap::MAP_WEIGHTS|DEMAND_PAGE|MAP_FILE");
     }
     let _ = syscall::dispatch(SYS_MAP_WEIGHTS, n as u64, held)?;
@@ -169,7 +169,7 @@ pub unsafe fn mmap_file_weights(
         }
         None => {
             FALLBACK_HIT.fetch_add(1, Ordering::Relaxed);
-            k_nano::slog_bin!("P9", "info", "WARN no model file on FAT — fallback stub frames");
+            k_nano::slog_bin!("P9", "warn", "no model file on FAT — fallback stub frames");
             let (fr, first, k, m) = alloc_and_fill(n, None)?;
             (k, m, fr, first)
         }

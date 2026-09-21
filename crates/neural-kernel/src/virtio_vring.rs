@@ -70,7 +70,7 @@ fn phys_va(pa: u64) -> *mut u8 {
 /// Zero-copy: `Desc.addr` aponta para página pinnada de payload (não heap scratch).
 pub fn setup_vring(buf: &PinnedDmaBuf, held: Cap) -> Result<VringHandle, &'static str> {
     if !held.contains(Cap::RING_OP) {
-        k_nano::slog_bin!("CapGate", "info", "DENY RING_OP held=0x{:x}", held.bits());
+        k_nano::slog_bin!("CapGate", "ok", "DENY RING_OP held=0x{:x}", held.bits());
         return Err("EPERM: Cap::RING_OP");
     }
     let _ = syscall::dispatch(SYS_RING_OP, buf.phys, held)?;
