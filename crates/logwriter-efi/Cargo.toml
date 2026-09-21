@@ -1,0 +1,19 @@
+# neural-logwriter — BOOTX64.EFI: ramlog → BOOT.LOG via firmware SFS, depois chainload Limine.
+# Target: x86_64-unknown-uefi. Artefato puxado por crates/boot (bindeps).
+# Excluído do workspace host — `[workspace]` vazio = pacote autónomo sob o exclude.
+
+[workspace]
+
+[package]
+name = "logwriter-efi"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+uefi = { version = "0.35", default-features = false, features = ["alloc", "global_allocator", "panic_handler", "logger"] }
+log = { version = "0.4", default-features = false }
+
+[[bin]]
+name = "logwriter-efi"
+path = "src/main.rs"

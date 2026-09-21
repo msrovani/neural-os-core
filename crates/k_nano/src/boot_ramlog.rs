@@ -4,8 +4,7 @@
 //! zerada no warm-reset de notebooks (ex.: Note 1050). CRC32 valida sobrevivência.
 //!
 //! Magic `NEURLOG!` = flush pendente (legado soft-reboot); `NEURDONE` = consumido.
-//! Soft-reboot 0xCF9 é **opt-in** (`feature = "soft-reboot-bootlog"`) — default OFF
-//! porque nenhum UEFI writer gravava `NEURDONE` → loop infinito em HW real.
+//! Soft-reboot 0xCF9 foi **removido** (bughunt M4) — produto = seal + logwriter-efi.
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -95,8 +94,8 @@ pub unsafe fn init_from_phys() {
         core::ptr::write_volatile(&mut (*hdr_mut()).len, 0);
         crate::slog_nano!(
             "RAMLOG",
-            "info",
-            "BOOT.LOG consumido (ckpt K{}) — skip soft-reboot",
+            "ok",
+            "BOOT.LOG do boot anterior gravado pelo logwriter (K{})",
             k
         );
     } else if h.magic == MAGIC_NEED_FLUSH {
@@ -110,7 +109,7 @@ pub unsafe fn init_from_phys() {
         core::ptr::write_volatile(&mut (*hdr_mut()).magic, MAGIC_FLUSHED);
         crate::slog_nano!(
             "RAMLOG",
-            "info",
+            "warn",
             "NEURLOG! pendente (ckpt K{}) — skip soft-reboot; Runtime segue",
             k
         );
@@ -135,7 +134,10 @@ pub fn append(msg: &str) {
     }
     unsafe {
         let h = &mut *hdr_mut();
-        if h.magic != MAGIC_NEED_FLUSH && h.magic != 0 && h.magic != MAGIC_FLUSHED {
+        // Defesa: NEURDONE / magic estranho sem init_from_phys → zera (evita misturar sessões).
+        if h.magic == MAGIC_FLUSHED
+            || (h.magic != MAGIC_NEED_FLUSH && h.magic != 0)
+        {
             core::ptr::write_bytes(va() as *mut u8, 0, BOOT_RAMLOG_CAP);
         }
         let mut len = h.len as usize;
@@ -194,52 +196,36 @@ pub fn append(msg: &str) {
     }
 }
 
-/// Finaliza CRC + magic e warm-reset — **somente** com `soft-reboot-bootlog`.
-/// Builds de produto não ligam essa feature (evita loop HW).
-#[cfg(feature = "soft-reboot-bootlog")]
-pub unsafe fn request_flush_and_reboot(reason: &str) -> ! {
-    append(reason);
-    append("=== RAMLOG flush via soft-reboot UEFI ===");
-    let h = &mut *hdr_mut();
-    let len = h.len as usize;
-    let slice = core::slice::from_raw_parts(data_ptr(), len.min(data_cap()));
-    let crc = crc32_24(slice);
-    let ckpt = LAST_CKPT.load(Ordering::Relaxed);
-    core::ptr::write_volatile(&mut h.crc_and_ckpt, pack_crc_ckpt(crc, ckpt));
-    core::ptr::write_volatile(&mut h.magic, MAGIC_NEED_FLUSH);
-    core::arch::asm!("sfence", options(nostack, preserves_flags));
-    crate::slog_nano!(
-        "RAMLOG",
-        "info",
-        "soft-reboot flush BOOT.LOG ckpt=K{} len={} crc={:#x}",
-        ckpt,
-        len,
-        crc
-    );
-    for _ in 0..2_000_000 {
-        core::hint::spin_loop();
+/// Finaliza CRC + magic `NEURLOG!` para o logwriter UEFI no próximo boot.
+/// Não reinicia — o caller faz reboot ordenado (`shutdown` / panic).
+///
+/// Sem isto o stage-0 (`logwriter-efi`) vê magic 0 e não grava BOOT.LOG.
+pub fn seal_for_next_boot() {
+    if crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed) == 0 {
+        return;
     }
-    soft_reboot()
-}
-
-/// Stub produto: nunca reinicia; marca skip e gira (nao deve ser chamado).
-#[cfg(not(feature = "soft-reboot-bootlog"))]
-pub unsafe fn request_flush_and_reboot(reason: &str) -> ! {
-    append(reason);
-    append("=== soft-reboot DISABLED (product) — nao reinicia ===");
-    mark_skip_flush_reboot();
-    crate::slog_nano!(
-        "RAMLOG",
-        "warn",
-        "request_flush_and_reboot chamado sem feature soft-reboot-bootlog — spin"
-    );
-    loop {
-        core::hint::spin_loop();
+    unsafe {
+        let h = &mut *hdr_mut();
+        let len = h.len as usize;
+        let slice = core::slice::from_raw_parts(data_ptr(), len.min(data_cap()));
+        let crc = crc32_24(slice);
+        let ckpt = LAST_CKPT.load(Ordering::Relaxed);
+        core::ptr::write_volatile(&mut h.crc_and_ckpt, pack_crc_ckpt(crc, ckpt));
+        core::ptr::write_volatile(&mut h.magic, MAGIC_NEED_FLUSH);
+        core::arch::asm!("sfence", options(nostack, preserves_flags));
+        crate::slog_nano!(
+            "RAMLOG",
+            "ok",
+            "seal_for_next_boot ckpt=K{} len={} crc={:#x} (logwriter)",
+            ckpt,
+            len,
+            crc
+        );
     }
 }
 
-#[cfg(feature = "soft-reboot-bootlog")]
-unsafe fn soft_reboot() -> ! {
+/// Warm-reset (0x64/FE → 0xCF9) — sempre disponível p/ reboot ordenado / panic.
+pub unsafe fn warm_reset() -> ! {
     for _ in 0..1000 {
         core::arch::asm!(
             "mov al, 0xFE",
@@ -257,6 +243,14 @@ unsafe fn soft_reboot() -> ! {
     loop {
         core::hint::spin_loop();
     }
+}
+
+/// Soft-reboot BOOT.LOG removido (bughunt M4): produto = seal_for_next_boot +
+/// orderly reboot + logwriter-efi. API antiga era stub `-> !` com spin infinito.
+pub fn maybe_flush_reboot(reason: &str) {
+    let _ = reason;
+    mark_skip_flush_reboot();
+    append("maybe_flush_reboot: soft-reboot removed — seal+logwriter path");
 }
 
 /// Ponytail: dump não-bloqueante do ramlog phys no FB/serial (K22/K137 hang).
@@ -332,22 +326,18 @@ pub fn snapshot() -> Option<alloc::string::String> {
     }
 }
 
-/// Soft-reboot opt-in. Sem feature: no-op (produto).
-pub fn maybe_flush_reboot(reason: &str) {
-    if SKIP_FLUSH_REBOOT.load(Ordering::Relaxed) {
-        return;
-    }
-    if crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed) == 0 {
-        return;
-    }
-    #[cfg(feature = "soft-reboot-bootlog")]
-    {
-        unsafe { request_flush_and_reboot(reason) }
-    }
-    #[cfg(not(feature = "soft-reboot-bootlog"))]
-    {
-        let _ = reason;
-        mark_skip_flush_reboot();
-        append("maybe_flush_reboot: soft-reboot OFF — continue");
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crc32_24_stable_contract_for_logwriter() {
+        // Contrato com crates/logwriter-efi — NÃO mudar sem atualizar o EFI.
+        assert_eq!(crc32_24(b""), 0);
+        assert_eq!(crc32_24(b"NEURLOG!"), 0x00c3_b463);
+        assert_eq!(MAGIC_NEED_FLUSH, u64::from_le_bytes(*b"NEURLOG!"));
+        assert_eq!(MAGIC_FLUSHED, u64::from_le_bytes(*b"NEURDONE"));
+        assert_eq!(BOOT_RAMLOG_PHYS, 0x1000_0000);
+        assert_eq!(BOOT_RAMLOG_CAP, 256 * 1024);
     }
 }

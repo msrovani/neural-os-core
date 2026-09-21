@@ -28,6 +28,7 @@ param(
     [switch]$NoSerialBridge,   # default behavior; kept for scripts
     [switch]$SerialBridge,     # opt-in: start tools\serial_bridge.py (FROZEN for Net gate)
     [switch]$VirtioNet,
+    [switch]$VirtioGpu,       # s367: virtio-gpu como vga primária (page flip real)
     [switch]$AudioBridge = $true, # default ON: dsound duplex (mic + speakers) via intel-hda
     [string]$TapName = "",     # TAP adapter name for -Bridge (auto-detect if empty)
     [int]$SerialBridgePort = 4444,
@@ -328,13 +329,27 @@ try {
             "-device", "hda-duplex,id=hda-codec,bus=hda0.0,cad=0,audiodev=snd0",
             "-device", "qemu-xhci,id=xhci",
             "-device", "usb-tablet,bus=xhci.0",
-            "-device", "usb-kbd,bus=xhci.0",
-            "-device", "virtio-gpu-pci,id=vgpu"
+            "-device", "usb-kbd,bus=xhci.0"
         )
-        if ($Window) {
-            $a += @("-vga", "std", "-display", "gtk")
+        # s367: VirtIO-GPU como vga primária (page flip real via GOP/virtio).
+        # -vga std criava DOIS devices de display: o GOP apontava pro VGA bochs
+        # (linear fb sem flip) e o virtio-gpu ficava D3 idle (Dstate=255).
+        # Com -device virtio-gpu-pci,vga=off -vga virtio, o GOP assenta no
+        # virtio e o display sai pelo mesmo device — sem segundo FB fantasma.
+        if ($VirtioGpu) {
+            $a += @("-device", "virtio-gpu-pci,id=vgpu")
+            if ($Window) {
+                $a += @("-vga", "virtio", "-display", "gtk")
+            } else {
+                $a += @("-vga", "virtio", "-display", "none")
+            }
         } else {
-            $a += @("-vga", "std", "-display", "none")
+            $a += @("-device", "virtio-gpu-pci,id=vgpu")
+            if ($Window) {
+                $a += @("-vga", "std", "-display", "gtk")
+            } else {
+                $a += @("-vga", "std", "-display", "none")
+            }
         }
         return $a
     }

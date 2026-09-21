@@ -6,3 +6,5 @@ publish = false
 
 [build-dependencies]
 neural-kernel = { path = "../neural-kernel", artifact = "bin", target = "x86_64-unknown-none", features = ["fat-boot-log"] }
+# Stage-0: ramlog → BOOT.LOG via firmware SFS, depois chainload Limine.
+logwriter-efi = { path = "../logwriter-efi", artifact = "bin", target = "x86_64-unknown-uefi" }

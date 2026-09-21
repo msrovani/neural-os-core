@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s369] - 2026-09-20 — Boot Trilha A + bughunt
+
+- Trilha A: `crates/logwriter-efi` (BOOTX64→BOOT.LOG via SFS→Limine); seal panic/reboot; **`init_from_phys` wired**
+- Honesty: PHASE após work; slog sev=status; `flush` warn se !ok; soft-reboot API removida; SESSION_BODY removido
+- Storage: `VirtioBlk` no plano boot_bind; RAID/SCSI ≠ Ata; mk_esp fail-hard + prune ESP
+- Upstream: Limine vendor 12.9.0; uefi-rs 0.35 (0.40 residual)
+- SESSION_369; IDEA #591; reports `docs/reports/2026-09-20-*`
+
 ## [1.9.99-s367] - 2026-09-19 — LLM response evidence gate + labs
 
 - Host: `cortex::llm_response_gate` (submit≠resposta; 7 testes) + InferQueue tests com `TEST_LOCK` (5)

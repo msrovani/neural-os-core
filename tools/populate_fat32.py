@@ -53,7 +53,7 @@ def fat32_write(disk_path):
             ("CONFIG.TXT", None),
         ]
         # Create CONFIG.TXT content
-        config_content = f"BOOT_MODE=hw\nPLATFORM=baremetal\nGPU=auto\nLOG_TO_FAT32=1\n".encode()
+        config_content = f"BOOT_MODE=hw\nPLATFORM=baremetal\nGPU=auto\n".encode()
         files[4] = ("CONFIG.TXT", config_content)
 
         for name, src in files:

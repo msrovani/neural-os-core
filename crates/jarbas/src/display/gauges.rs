@@ -681,17 +681,24 @@ pub fn refresh_hub_health() {
     };
     hub_set(&mut hh.rows[10], "model", st, pill, val);
 
-    // ── AGENTS ──
+    // ── AGENTS (s367: inclui tick em curso — antes era diagnostic no HUD bar) ──
     let agents = agent_core::LAST_SCHED_AGENTS.load(Ordering::Relaxed);
     let polled = agent_core::LAST_SCHED_POLLED.load(Ordering::Relaxed);
-    let (st, val, pill) = if agents == 0 {
-        (HubState::Na, alloc::string::String::from("n/a"), false)
-    } else if polled == 0 {
-        (HubState::Warn, alloc::format!("{} poll 0", agents), true)
-    } else {
-        (HubState::Ok, alloc::format!("{} poll {}", agents, polled), true)
+    let tick_info = match agent_core::tick_in_progress() {
+        Some((name, entered)) => {
+            let ms = k_nano::tsc::now_ms().saturating_sub(entered) / 1000;
+            alloc::format!("{}p {}p {} {}s", agents, polled, name, ms)
+        }
+        None => alloc::format!("{}p {}p", agents, polled),
     };
-    hub_set(&mut hh.rows[11], "agents", st, pill, val);
+    let (st, pill) = if agents == 0 {
+        (HubState::Na, false)
+    } else if polled == 0 {
+        (HubState::Warn, true)
+    } else {
+        (HubState::Ok, true)
+    };
+    hub_set(&mut hh.rows[11], "agents", st, pill, tick_info);
 
     let (peers, min_rtt) = {
         let g = crate::display::agent::MESH_GRAPH.lock();

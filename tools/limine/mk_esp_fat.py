@@ -315,6 +315,7 @@ def build_esp(esp_dir: str, out_path: str, size_mb: int = 128) -> None:
         "": [],
         "EFI": [],
         "EFI/BOOT": [],
+        "EFI/neural": [],
         "boot": [],
     }
     for rel, data in files:
@@ -323,6 +324,12 @@ def build_esp(esp_dir: str, out_path: str, size_mb: int = 128) -> None:
             buckets[""].append((parts[0], data))
         elif parts[0].upper() == "EFI" and len(parts) >= 3 and parts[1].upper() == "BOOT":
             buckets["EFI/BOOT"].append((parts[-1], data))
+        elif (
+            parts[0].upper() == "EFI"
+            and len(parts) >= 3
+            and parts[1].lower() == "neural"
+        ):
+            buckets["EFI/neural"].append((parts[-1], data))
         elif parts[0].lower() == "boot" and len(parts) == 2:
             buckets["boot"].append((parts[1], data))
         elif parts[0].upper() == "EFI" and len(parts) == 2:
@@ -355,6 +362,10 @@ def build_esp(esp_dir: str, out_path: str, size_mb: int = 128) -> None:
     next_cluster += 1
     struct.pack_into("<I", fat, efi_boot_cl * 4, 0x0FFFFFFF)
 
+    efi_neural_cl = next_cluster
+    next_cluster += 1
+    struct.pack_into("<I", fat, efi_neural_cl * 4, 0x0FFFFFFF)
+
     boot_cl = next_cluster
     next_cluster += 1
     struct.pack_into("<I", fat, boot_cl * 4, 0x0FFFFFFF)
@@ -385,6 +396,9 @@ def build_esp(esp_dir: str, out_path: str, size_mb: int = 128) -> None:
             cluster = nxt
 
     write_dir_at(efi_boot_cl, build_dir_bytes(buckets["EFI/BOOT"], True, efi_cl, efi_boot_cl))
+    write_dir_at(
+        efi_neural_cl, build_dir_bytes(buckets["EFI/neural"], True, efi_cl, efi_neural_cl)
+    )
     write_dir_at(boot_cl, build_dir_bytes(buckets["boot"], True, 2, boot_cl))
 
     efi_dir = bytearray()
@@ -394,6 +408,10 @@ def build_esp(esp_dir: str, out_path: str, size_mb: int = 128) -> None:
     for le in lfn_entries("BOOT", n83):
         efi_dir += le
     efi_dir += dir_entry_83(n83, 0x10, efi_boot_cl, 0)
+    n83 = short83("neural", used83)
+    for le in lfn_entries("neural", n83):
+        efi_dir += le
+    efi_dir += dir_entry_83(n83, 0x10, efi_neural_cl, 0)
     for long_name, data in buckets["EFI"]:
         cl = alloc_chain(data)
         n83 = short83(long_name, used83)

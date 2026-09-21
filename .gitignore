@@ -4,6 +4,7 @@ target/
 target-*/
 target1/
 target_*.txt
+crates/logwriter-efi/target/
 *-check*.log
 *-check*.txt
 

@@ -838,10 +838,11 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     // console_print desenha direto no FB (sem alocar, sem depender do VGA).
     crate::display::fb::console_print("[PANIC] ");
 
-    // HALT — não aloca (raw_vec capacity overflow em higher-half faz format!() estourar isize::MAX)
-    k_nano::boot_ramlog::append("[PANIC] halt");
+    // Sela ramlog + warm-reset → logwriter grava BOOT.LOG no próximo boot.
+    k_nano::boot_ramlog::append("[PANIC] seal+reboot");
+    k_nano::boot_ramlog::seal_for_next_boot();
     x86_64::instructions::interrupts::disable();
-    loop { x86_64::instructions::hlt(); }
+    unsafe { k_nano::boot_ramlog::warm_reset() }
 }
 
 
@@ -1382,6 +1383,9 @@ pub(crate) fn kernel_boot(
     // ponytail: set PHYS_MEM_OFFSET atomic EARLY so e1000/HDA can translate PA→VA.
     // init_memory() also sets it, but by then P4 demo/HDA probe have already read 0.
     crate::memory::PHYS_MEM_OFFSET.store(pm_offset, core::sync::atomic::Ordering::Release);
+    // Trilha A / bughunt 2026-09-20: consumir NEURDONE|NEURLOG! ANTES do 1º append
+    // (senão misturamos sessões no ramlog). Exige PHYS_MEM_OFFSET já setado.
+    unsafe { k_nano::boot_ramlog::init_from_phys() };
     // ADR-0055: RSDP via handoff (cada entry define o seu antes ou via trait)
     // Chamada idempotente — bootloader fez em kernel_main, Limine em limine_entry.
     crate::acpi::set_boot_rsdp(handoff.rsdp_addr());
@@ -1489,6 +1493,18 @@ pub(crate) fn kernel_boot(
         let stack_base = (rsp_phys & !(2 * 1024 * 1024 - 1)) - 4 * 1024 * 1024;
         frame_allocator.reserve_range(stack_base, 8 * 1024 * 1024);
         k_nano::slog_bin!("MEM", "info", "reserva stack via RSP {:#x} len=8MB (rsp_phys={:#x})", stack_base, rsp_phys);
+        // Ramlog físico (logwriter UEFI lê no próximo boot) — SESSION_330 clobberable.
+        frame_allocator.reserve_range(
+            k_nano::boot_ramlog::BOOT_RAMLOG_PHYS,
+            k_nano::boot_ramlog::BOOT_RAMLOG_CAP as u64,
+        );
+        k_nano::slog_bin!(
+            "MEM",
+            "ok",
+            "reserva ramlog @{:#x} len={}KB",
+            k_nano::boot_ramlog::BOOT_RAMLOG_PHYS,
+            k_nano::boot_ramlog::BOOT_RAMLOG_CAP / 1024
+        );
         kjson!("DBG", "MEM", "usable_regions", "n", n as u64, "boot", boot_tag);
     });
     // Pool DMA do HDA (freeze s322): buffers em phys fixos baixos (0x102000-
@@ -1730,14 +1746,7 @@ pub(crate) fn kernel_boot(
 
     crate::boot_logger::log("BOOT: TPM probe done");
 
-
-
-    publish_boot_phase(BootPhase::SystemBringup, "SIMD+heap+TPM — Cortex/System prontos");
-
-
-
     // Diagnosticos como skill (nao inline) — SystemAgent + chamada explicita depois
-
     // Box/Vec/Tensor/SiLU/RMSNorm/BitNet MLP agora sao DiagnosticSkill
 
     memory::init_global_allocator();
@@ -1769,25 +1778,18 @@ pub(crate) fn kernel_boot(
     // ADR-0060: Initialize BEI (BitNet Ecosystem Intelligence) — 8 waves
     bei_init::init_bei(); // slog ok|fail inside; OOM → DEGRADED sem panic
 
-    publish_boot_phase(BootPhase::Diagnostics, "Allocator global pronto (DiagnosticSkill depois)");
-
-    
-
     let slab_metrics = { let s = k_nano::slab::SLAB_ALLOCATOR.lock(); (s.metrics().0, s.metrics().1) };
 
     k_nano::slog_bin!("Boot", "ok", "slab metrics: {} {}", slab_metrics.0, slab_metrics.1);
 
-    
-
     // CortexAgent existe cedo (tick carrega pesos depois). Bind de HW no T+0
     // e tabela+DeviceRecipe — Cortex ainda sem pesos (honesto, SESSION_272).
     let cortex_agent = agents::CortexAgent::new();
+    // Banner APÓS heap+TPM+BEI+Cortex (bughunt H1 — não antes do trabalho).
+    publish_boot_phase(BootPhase::SystemBringup, "SIMD+heap+TPM+BEI+Cortex agent ready");
 
     // Cortex precisa de pelo menos 1 tick para carregar modelo
-
     // (o modelo carrega no primeiro tick, nao no construtor)
-
-    
 
     // Pacote B: plataforma (PCI+ACPI+APIC[+SMP]) ANTES dos drivers
     // ponytail: só WHPX real (CPUID hypervisor bit 31) pula o PIT — vendor
@@ -1798,7 +1800,6 @@ pub(crate) fn kernel_boot(
     ) {
         crate::apic::SKIP_PIT.store(true, core::sync::atomic::Ordering::Relaxed);
     }
-    publish_boot_phase(BootPhase::HardwareDiscovery, "PCI+ACPI+APIC+SMP sync");
     unsafe { agents::init_platform_sync(); }
     // ADR-0104: sanção da banda do timer (default 60 Hz; QEMU/TCG/WHPX medem e
     // caem no default). O bin dirige a política no scheduler.
@@ -1837,6 +1838,8 @@ pub(crate) fn kernel_boot(
         nic_n,
         trusted
     );
+    // Banner APÓS plataforma + DeviceTree + plano (H1).
+    publish_boot_phase(BootPhase::HardwareDiscovery, "PCI+ACPI+APIC+SMP + DeviceTree plan");
 
     // ── Early BOOT.LOG (live USB / HW sem COM) ──────────────────────────
     // boot_ckpt = ramlog só; phase_line = texto no FB (prova vivo pós-Limine).
@@ -1918,8 +1921,6 @@ pub(crate) fn kernel_boot(
     k_nano::slog_bin!("ADAPT", "info", "profile=StandardUma simd={}bit", simd_width);
     k_nano::slog_bin!("ADAPT", "info", "SIMD dispatch={}bit expert_size={}KB", simd_width, expert_size / 1024);
     k_nano::core_pinning::log_pinning_state();
-
-    publish_boot_phase(BootPhase::DriverInit, "Drivers de HW (NIC/ATA/USB/GPU)");
 
     // Detecta ambiente: QEMU sandbox vs HW real
     let is_sandbox = crate::net::detect_dev_env();
@@ -2041,16 +2042,8 @@ pub(crate) fn kernel_boot(
     unsafe { k_nano::storage_probe::probe_storage_drivers(); }
     let ata_found = crate::ATA_DRIVER.lock().is_some();
 
-    // VirtIO-blk (QEMU dev/test): -drive if=virtio apresenta disk_qemu.raw
-    // como block device — FileFlash resolve /NSGDB.BIN persistente (IDEA #539).
-    if unsafe { k_nano::virtio_blk::init_driver_virtio_blk() } {
-        let mut bus = k_nano::storage_bus::STORAGE_BUS.lock();
-        if let Some(dev) = k_nano::virtio_blk::VIRTIO_BLK_DEV.lock().as_mut() {
-            bus.register_probe(k_nano::storage_bus::BusKind::VirtioBlk, "virtio-blk", dev);
-        }
-        drop(bus);
-        publish_boot_phase(BootPhase::DriverInit, "VirtIO-blk found");
-        // Piper TTS cedo (virtio-blk FAT / loader) — antes da saudacao K44 (formant fallback).
+    // Piper TTS cedo se VirtIO-blk (plano) montou FAT — antes da saudacao K44.
+    if k_nano::virtio_blk::VIRTIO_BLK_DEV.lock().is_some() {
         audio::skills::init_neural_tts();
     }
 
@@ -3602,10 +3595,20 @@ pub(crate) fn kernel_boot(
         let trust_ok = crate::TRUST_CACHE.lock().check_or_cache(1, "diagnostic", now, 360);
         if !trust_ok {
             k_nano::slog_bin!("Trust", "fail", "boot diagnostic: trust deny");
+            publish_boot_phase(BootPhase::Diagnostics, "DiagnosticSkill trust FAIL");
         } else {
             match k_nano::SKILL_REGISTRY.lock().execute_skill("diagnostic", &[], &tok) {
-                Ok(out) => k_nano::slog_bin!("Boot", "ok", "DiagnosticSkill executada ({} bytes)", out.len()),
-                Err(e) => k_nano::slog_bin!("Boot", "warn", "DiagnosticSkill falhou: {}", e),
+                Ok(out) => {
+                    k_nano::slog_bin!("Boot", "ok", "DiagnosticSkill executada ({} bytes)", out.len());
+                    publish_boot_phase(
+                        BootPhase::Diagnostics,
+                        &alloc::format!("DiagnosticSkill OK ({} bytes)", out.len()),
+                    );
+                }
+                Err(e) => {
+                    k_nano::slog_bin!("Boot", "warn", "DiagnosticSkill falhou: {}", e);
+                    publish_boot_phase(BootPhase::Diagnostics, "DiagnosticSkill FAIL");
+                }
             }
         }
     }

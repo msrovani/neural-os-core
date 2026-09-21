@@ -131,7 +131,7 @@ pub fn observed_tree_len() -> usize {
     TREE_N.load(Ordering::Relaxed)
 }
 
-/// Storage: NVMe > AHCI > USB-MSC (live) > ATA PIO (último — hang TCG/SESSION_243).
+/// Storage: NVMe > AHCI > USB-MSC (live) > VirtIO-blk (QEMU) > ATA PIO (último).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum StorageKind {
@@ -139,7 +139,8 @@ pub enum StorageKind {
     Nvme = 1,
     Ahci = 2,
     UsbHost = 3,
-    Ata = 4,
+    VirtioBlk = 4,
+    Ata = 5,
 }
 
 impl StorageKind {
@@ -149,40 +150,61 @@ impl StorageKind {
             StorageKind::Nvme => "nvme",
             StorageKind::Ahci => "ahci",
             StorageKind::UsbHost => "usb-msc",
+            StorageKind::VirtioBlk => "virtio-blk",
             StorageKind::Ata => "ata-pio",
         }
     }
 }
 
-const STOR_PRIORITY: [StorageKind; 4] = [
+const STOR_PRIORITY: [StorageKind; 5] = [
     StorageKind::Nvme,
     StorageKind::Ahci,
     StorageKind::UsbHost,
+    StorageKind::VirtioBlk,
     StorageKind::Ata,
 ];
 
-const STOR_LEGACY: [StorageKind; 4] = STOR_PRIORITY;
+const STOR_LEGACY: [StorageKind; 5] = STOR_PRIORITY;
 
 static STOR_ON: AtomicBool = AtomicBool::new(false);
 static STOR0: AtomicUsize = AtomicUsize::new(0);
 static STOR1: AtomicUsize = AtomicUsize::new(0);
 static STOR2: AtomicUsize = AtomicUsize::new(0);
 static STOR3: AtomicUsize = AtomicUsize::new(0);
+static STOR4: AtomicUsize = AtomicUsize::new(0);
 static STOR_N: AtomicUsize = AtomicUsize::new(0);
 static HAS_SND: AtomicBool = AtomicBool::new(true);
 
+/// Classifica storage por PCI class/subclass. RAID/SAS/desconhecido → None
+/// (não forçar ATA PIO). VirtIO-blk: use `classify_storage_pci(vid,did,…)`.
 pub fn classify_storage(pci_class: u8, pci_subclass: u8) -> StorageKind {
     match (pci_class, pci_subclass) {
         (0x01, 0x08) => StorageKind::Nvme,
         (0x01, 0x06) => StorageKind::Ahci,
+        (0x01, 0x01) | (0x01, 0x05) => StorageKind::Ata, // IDE / ATA
         (0x0C, 0x03) => StorageKind::UsbHost,
-        (0x01, _) => StorageKind::Ata,
         _ => StorageKind::None,
     }
 }
 
-pub fn rank_storage(present: &[StorageKind]) -> ([StorageKind; 4], usize) {
-    let mut out = [StorageKind::None; 4];
+/// Inclui VirtIO-blk (1AF4:1001/1042) antes do class/subclass genérico.
+pub fn classify_storage_pci(
+    vendor_id: u16,
+    device_id: u16,
+    pci_class: u8,
+    pci_subclass: u8,
+) -> StorageKind {
+    if vendor_id == crate::virtio_blk::VIRTIO_VENDOR
+        && (device_id == crate::virtio_blk::VIRTIO_BLK_TRANSITIONAL
+            || device_id == crate::virtio_blk::VIRTIO_BLK_MODERN)
+    {
+        return StorageKind::VirtioBlk;
+    }
+    classify_storage(pci_class, pci_subclass)
+}
+
+pub fn rank_storage(present: &[StorageKind]) -> ([StorageKind; 5], usize) {
+    let mut out = [StorageKind::None; 5];
     let mut n = 0usize;
     for want in STOR_PRIORITY {
         if present.iter().any(|k| *k == want) {
@@ -195,7 +217,7 @@ pub fn rank_storage(present: &[StorageKind]) -> ([StorageKind; 4], usize) {
 
 pub fn install_storage_plan(present: &[StorageKind], tree_len: usize) {
     let (order, n) = if tree_len == 0 {
-        (STOR_LEGACY, 4usize)
+        (STOR_LEGACY, 5usize)
     } else {
         rank_storage(present)
     };
@@ -203,6 +225,7 @@ pub fn install_storage_plan(present: &[StorageKind], tree_len: usize) {
     STOR1.store(order[1] as usize, Ordering::Relaxed);
     STOR2.store(order[2] as usize, Ordering::Relaxed);
     STOR3.store(order[3] as usize, Ordering::Relaxed);
+    STOR4.store(order[4] as usize, Ordering::Relaxed);
     STOR_N.store(n, Ordering::Relaxed);
     STOR_ON.store(true, Ordering::Relaxed);
 }
@@ -216,7 +239,8 @@ fn stor_from_slot(v: usize) -> StorageKind {
         1 => StorageKind::Nvme,
         2 => StorageKind::Ahci,
         3 => StorageKind::UsbHost,
-        4 => StorageKind::Ata,
+        4 => StorageKind::VirtioBlk,
+        5 => StorageKind::Ata,
         _ => StorageKind::None,
     }
 }
@@ -225,9 +249,9 @@ pub fn storage_plan_active() -> bool {
     STOR_ON.load(Ordering::Relaxed)
 }
 
-pub fn storage_probe_order() -> ([StorageKind; 4], usize) {
+pub fn storage_probe_order() -> ([StorageKind; 5], usize) {
     if !STOR_ON.load(Ordering::Relaxed) {
-        return (STOR_LEGACY, 4);
+        return (STOR_LEGACY, 5);
     }
     (
         [
@@ -235,6 +259,7 @@ pub fn storage_probe_order() -> ([StorageKind; 4], usize) {
             stor_from_slot(STOR1.load(Ordering::Relaxed)),
             stor_from_slot(STOR2.load(Ordering::Relaxed)),
             stor_from_slot(STOR3.load(Ordering::Relaxed)),
+            stor_from_slot(STOR4.load(Ordering::Relaxed)),
         ],
         STOR_N.load(Ordering::Relaxed),
     )
@@ -292,8 +317,15 @@ mod tests {
         assert_eq!(classify_storage(0x01, 0x08), StorageKind::Nvme);
         assert_eq!(classify_storage(0x01, 0x06), StorageKind::Ahci);
         assert_eq!(classify_storage(0x01, 0x01), StorageKind::Ata);
+        assert_eq!(classify_storage(0x01, 0x05), StorageKind::Ata);
         assert_eq!(classify_storage(0x0C, 0x03), StorageKind::UsbHost);
+        assert_eq!(classify_storage(0x01, 0x04), StorageKind::None); // RAID — não Ata
+        assert_eq!(classify_storage(0x01, 0x00), StorageKind::None); // SCSI genérico
         assert_eq!(classify_storage(0x02, 0x00), StorageKind::None);
+        assert_eq!(
+            classify_storage_pci(0x1AF4, 0x1001, 0x01, 0x00),
+            StorageKind::VirtioBlk
+        );
     }
 
     #[test]

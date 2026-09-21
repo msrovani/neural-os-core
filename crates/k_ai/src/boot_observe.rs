@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use k_hal::device_cap::DeviceClass;
 use k_hal::device_recipe::RecipePromote;
 use k_nano::boot_bind::{
-    classify_nic, classify_storage, install_plan, install_storage_plan, set_has_snd, NicKind,
+    classify_nic, classify_storage_pci, install_plan, install_storage_plan, set_has_snd, NicKind,
     StorageKind,
 };
 use spin::Mutex;
@@ -52,7 +52,12 @@ pub fn observe_and_plan(trust_ok: bool) -> (usize, usize) {
         let st = if cap.id.class == DeviceClass::UsbHost {
             StorageKind::UsbHost
         } else {
-            classify_storage(cap.id.pci_class, cap.id.pci_subclass)
+            classify_storage_pci(
+                cap.id.vendor_id,
+                cap.id.device_id,
+                cap.id.pci_class,
+                cap.id.pci_subclass,
+            )
         };
         if st != StorageKind::None && allow_auto && !stores.iter().any(|k| *k == st) {
             // SESSION_293: ATA SEMPRE no plano (allow_probe).

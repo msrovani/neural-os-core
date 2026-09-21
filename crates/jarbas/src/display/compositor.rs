@@ -1145,30 +1145,7 @@ impl JarbasDesktop {
         }
 
         // Diagnóstico freeze (s317): ticks de render + tick de agent em curso.
-        // Se a tela congelar, o último frame pintado mostra o culpado ao vivo.
-        {
-            let rn = RENDER_N.load(core::sync::atomic::Ordering::Relaxed);
-            let s = match agent_core::tick_in_progress() {
-                Some((name, entered)) => alloc::format!(
-                    "T{} IN:{} {}s",
-                    rn,
-                    name,
-                    k_nano::tsc::now_ms().saturating_sub(entered) / 1000
-                ),
-                None => alloc::format!("T{}", rn),
-            };
-            let dx = 12 + 6 * 8 + 12 + 32 * (3 + 2) + 12;
-            draw_text(
-                &mut self.fb,
-                dx,
-                6,
-                &s,
-                self.w,
-                theme.fg_muted.0,
-                theme.fg_muted.1,
-                theme.fg_muted.2,
-            );
-        }
+        // Movido para hub health panel (s367) — antes sobrepunha o OFF button.
         crate::display::fb::diag_mark(6);
 
 // Botão OFF — canto SD

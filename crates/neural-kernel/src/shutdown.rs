@@ -237,6 +237,8 @@ pub fn begin_orderly_shutdown(cause: ShutdownCause) -> ! {
     dump_boot_log_sector();
     // Graceful: persiste o ramlog (BOOT.LOG) ANTES do S5/reboot.
     let _ = k_nano::boot_logger::try_flush_ramlog();
+    // Stage-0 logwriter: sela CRC+NEURLOG! para o próximo boot gravar no stick.
+    k_nano::boot_ramlog::seal_for_next_boot();
     halt_aps();
     power_off_cascade()
 }
@@ -256,6 +258,7 @@ pub fn begin_orderly_reboot(cause: ShutdownCause) -> ! {
     );
     dump_boot_log_sector();
     let _ = k_nano::boot_logger::try_flush_ramlog();
+    k_nano::boot_ramlog::seal_for_next_boot();
     halt_aps();
     ps2_reset();
     loop {

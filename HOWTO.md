@@ -214,7 +214,7 @@ Pendrive tipico: **32 GB livres** — use imagem generosa (1024 MB+) e **inclua 
 | **GPU NVIDIA / i915 / Realtek NIC / iwlwifi** | **Sim** | Blobs em `firmware/` copiados pelo `mkfat32.py` como `FW_*.BIN` no FAT. Sem eles, drivers em HW real falham no load de ucode/FECS/etc. |
 | **Piper / STT / BPE / RustCoder / BGE / BitNet 2B** | **Não** (firmware) | Modelos `.bin`/`.bitnet` no FAT (ou QEMU-loader só em VM). |
 
-`CONFIG.TXT` na imagem HW inclui `BOOT_MODE=hw`, `LOG_TO_FAT32=1`.
+`CONFIG.TXT` na imagem HW inclui `BOOT_MODE=hw` (persistência FAT = feature `fat-boot-log` + MSC/logwriter).
 
 ### Gerar imagem de dados (FAT + modelos + firmware)
 

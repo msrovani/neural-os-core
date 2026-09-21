@@ -550,7 +550,7 @@ def populate(path):
         boot_mode = "hw"
     platform = "virtio-qemu" if boot_mode == "qemu" else "baremetal"
     config_content = (
-        f"BOOT_MODE={boot_mode}\nPLATFORM={platform}\nGPU=auto\nLOG_TO_FAT32=1\n"
+        f"BOOT_MODE={boot_mode}\nPLATFORM={platform}\nGPU=auto\n"
         + (
             "MODELS_SOURCE=network\n"
             if os.environ.get("MODELS_SOURCE", "").strip().lower() == "network"
@@ -566,8 +566,8 @@ def populate(path):
     # Produto Installed usa /logs/boot_<tick>.log com timestamp (SESSION_270).
     boot_log = (
         b"[S] neural-os-core BOOT.LOG (DEV/TEST only)\n"
-        b"# Placeholder - apos soft-reboot HW deve ter linhas [T+] / Knn:\n"
-        b"# Se ainda so isto: UEFI nao achou SFS do volume de dados.\n"
+        b"# Placeholder - se so isto apos reboot: kernel sem USB-MSC;\n"
+        b"# logwriter-efi grava no boot seguinte (seal NEURLOG! + warm-reset).\n"
         + b"\x00" * (256 * 1024 - 180)
     )
     files.append(("BOOT.LOG", boot_log[: 256 * 1024]))

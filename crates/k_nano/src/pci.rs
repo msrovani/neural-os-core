@@ -223,6 +223,35 @@ pub unsafe fn pci_power_state(bus: u8, device: u8, function: u8) -> (u8, u8) {
     (0xFF, 0) // sem PM capability → assume D0 (device antigo)
 }
 
+/// Power-on D3→D0 via PMCSR (cap_id 0x01, offset+4, bits [1:0]).
+/// s367: VirtIO-GPU em QEMU reporta Dstate=255 na detecção mas precisa de D0
+/// antes de tocar BARs/queues. Não-op se já em D0 ou sem PM cap.
+/// Retorna o D-state após o attempt (0 = D0).
+pub unsafe fn pci_power_on_d0(bus: u8, device: u8, function: u8) -> u8 {
+    let caps = read_pci_capabilities(bus, device, function);
+    for (cap_id, ptr) in &caps {
+        if *cap_id == 0x01 {
+            let pmcsr_off = ptr + 4;
+            let mut pmcsr = read_config_dword(bus, device, function, pmcsr_off);
+            if pmcsr == 0xFFFF_FFFF {
+                return 0xFF; // device não responde
+            }
+            if pmcsr & 0x3 == 0 {
+                return 0; // já D0
+            }
+            // Limpa Power State + PME_Status (bits 15); preserva o resto.
+            pmcsr &= !0x3u32;
+            pmcsr &= !(1u32 << 15);
+            write_config_dword(bus, device, function, pmcsr_off, pmcsr);
+            // D3hot→D0 transit até 10ms (PCI PM spec §5.4); 1 read de dummy
+            // com delay de barramento basta em QEMU/TCG (não é HW real).
+            let _ = read_config_dword(bus, device, function, *ptr);
+            return read_config_dword(bus, device, function, pmcsr_off) as u8 & 0x3;
+        }
+    }
+    0xFF // sem PM cap
+}
+
 /// Varre capabilities PCI por tipo 0x09 (VirtIO vendor-specific)
 /// e extrai cfg_type, bar, offset, length para encontrar o MMIO base.
 pub unsafe fn read_virtio_cap(bus: u8, device: u8, function: u8, target_cfg_type: u8) -> Option<VirtioPciCap> {

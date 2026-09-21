@@ -16,7 +16,8 @@ members = [
 ]
 default-members = ["crates/boot"]
 # Host-only kernel logic / packers — never linked into boot/neural-kernel
-exclude = ["tools/gpu_kernels", "tools/check-tls"]
+# logwriter-efi: só via bindeps do boot (target x86_64-unknown-uefi)
+exclude = ["tools/gpu_kernels", "tools/check-tls", "crates/logwriter-efi"]
 
 # Bootstrap patches
 [patch.crates-io]

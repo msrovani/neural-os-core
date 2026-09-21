@@ -157,6 +157,17 @@ pub unsafe fn detect_all() -> Vec<GpuInfo> {
             _ => GpuVendor::Unknown,
         };
 
+        // s367: VirtIO-GPU pode acordar em D3 no QEMU (PMCSR) — power-on
+        // D0 ANTES de medir BARs/tocar MMIO (senão Dstate=255/leitura lixo).
+        // Idempotente: não-op se já D0. Outros vendors mantêm política
+        // SESSÃO_260 (dGPU D3 = hang de barramento, não tocar aqui).
+        if vendor == GpuVendor::VirtIo {
+            let st = k_nano::pci::pci_power_on_d0(dev.bus, dev.device, dev.function);
+            if st != 0 {
+                k_nano::slog_hal!("GPU", "warn", "VirtIO-GPU power-on D0 fail state={}" , st);
+            }
+        }
+
         let (arch, name, table_vram, is_igpu_hint) = identify_gpu(dev);
 
         let is_integrated = match vendor {

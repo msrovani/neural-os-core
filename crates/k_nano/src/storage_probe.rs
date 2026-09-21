@@ -4,18 +4,19 @@
 use crate::boot_bind::{storage_probe_order, StorageKind};
 use crate::globals::{AHCI_DRIVER, ATA_DRIVER, USB_MSC};
 
-/// Traz NVMe/AHCI/USB/ATA na ordem observada. Idempotente por backend.
+/// Traz NVMe/AHCI/USB/VirtIO/ATA na ordem observada. Idempotente por backend.
 pub unsafe fn probe_storage_drivers() {
     let (order, n) = storage_probe_order();
     crate::slog_nano!(
         "Disk",
         "bind",
-        "storage plan n={} [0]={} [1]={} [2]={} [3]={}",
+        "storage plan n={} [0]={} [1]={} [2]={} [3]={} [4]={}",
         n,
         order[0].as_str(),
         order[1].as_str(),
         order[2].as_str(),
-        order[3].as_str()
+        order[3].as_str(),
+        order[4].as_str()
     );
     for i in 0..n {
         match order[i] {
@@ -24,9 +25,26 @@ pub unsafe fn probe_storage_drivers() {
                 let _ = crate::ahci::AhciDriver::probe_first();
             }
             StorageKind::UsbHost => probe_usb_msc(),
+            StorageKind::VirtioBlk => probe_virtio_blk(),
             StorageKind::Ata => probe_ata(),
             StorageKind::None => {}
         }
+    }
+}
+
+unsafe fn probe_virtio_blk() {
+    if crate::virtio_blk::VIRTIO_BLK_DEV.lock().is_some() {
+        return;
+    }
+    if crate::virtio_blk::init_driver_virtio_blk() {
+        let mut bus = crate::storage_bus::STORAGE_BUS.lock();
+        if let Some(dev) = crate::virtio_blk::VIRTIO_BLK_DEV.lock().as_mut() {
+            bus.register_probe(crate::storage_bus::BusKind::VirtioBlk, "virtio-blk", dev);
+        }
+        drop(bus);
+        crate::slog_nano!("Disk", "bind", "virtio-blk ok=true");
+    } else {
+        crate::slog_nano!("Disk", "bind", "virtio-blk ok=false");
     }
 }
 
@@ -73,7 +91,11 @@ unsafe fn probe_usb_msc() {
     // Flush seguro aqui (fora do path persist) — MSC recém-vivo pode gravar cedo.
     crate::display::fb::boot_ckpt(
         190,
-        if ok { "USB-MSC plan probe OK" } else { "USB-MSC plan probe FAIL" },
+        if ok {
+            "USB-MSC plan probe OK"
+        } else {
+            "USB-MSC plan probe FAIL"
+        },
     );
 }
 

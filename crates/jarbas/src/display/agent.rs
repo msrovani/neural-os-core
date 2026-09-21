@@ -619,6 +619,9 @@ impl Agent for DisplayAgent {
             || self.infer_tts_receiver.has_pending()
             || self.health_receiver.has_pending()
             || self.sleep_receiver.has_pending()
+            // KEY_EVENT (InputAgent → atalhos WM, ex.: ShowHelp) — sem isto,
+            // o scheduler não vê teclas pendentes em caminhos gated por has_pending.
+            || self.key_event_receiver.has_pending()
     }
 
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {

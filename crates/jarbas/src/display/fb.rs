@@ -2130,6 +2130,19 @@ impl DoubleBuffer {
             if used_nt {
                 core::arch::asm!("sfence", options(nostack, preserves_flags));
             }
+            // s367: clflush pass — mesmo fix do swap() full-frame.
+            // QEMU VGA não vê streaming stores; clflush força write-back.
+            let fb_off = y0 * stride + x0 * bpp;
+            let fb_end = (y1 - 1) * stride + x1 * bpp;
+            let cl_start = (self.info.addr + fb_off as usize) & !63usize;
+            let cl_end = (self.info.addr + fb_end as usize + 63) & !63usize;
+            let mut cl = cl_start;
+            while cl < cl_end {
+                #[cfg(target_arch = "x86_64")]
+                core::arch::asm!("clflush [{}]", in(reg) cl, options(nostack));
+                cl += 64;
+            }
+            core::arch::asm!("sfence", options(nostack, preserves_flags));
         }
     }
 
@@ -2152,6 +2165,20 @@ impl DoubleBuffer {
                 // Visibilidade ao display engine antes de considerar apresentado.
                 core::arch::asm!("sfence", options(nostack, preserves_flags));
             }
+            // s367: clflush pass — QEMU VGA ignora WC streaming stores (movnti).
+            // Em metal, WC+sfence basta; em QEMU, o display engine só vê após
+            // clflush que força write-back para a memória visível ao scanout.
+            // Granularidade 64B (cache line); passa por toda a superfície do FB.
+            let cl_start = addr & !63usize;
+            let cl_end = (addr + len + 63) & !63usize;
+            let mut cl = cl_start;
+            while cl < cl_end {
+                #[cfg(target_arch = "x86_64")]
+                core::arch::asm!("clflush [{}]", in(reg) cl, options(nostack));
+                cl += 64;
+            }
+            // Segundo sfence: garante que clflush completou antes do próximo frame.
+            core::arch::asm!("sfence", options(nostack, preserves_flags));
         }
         self.dirty = false;
     }

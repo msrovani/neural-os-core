@@ -73,8 +73,7 @@ pub fn mark_heap_ready() {
 const PRE_FAT_CAPACITY: usize = 512;
 static PRE_FAT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PRE_FAT_BUF: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
-/// ConteÃºdo acumulado da sessÃ£o (cabe no BOOT.LOG prÃ©-alocado).
-static SESSION_BODY: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+// SESSION_BODY removido (bughunt M1): nunca era escrito; PRE_FAT_BUF é a verdade.
 static DISK_WRITES: AtomicUsize = AtomicUsize::new(0);
 /// Mensagens desde o último flush bem-sucedido (USB MSC é lento: não reescreve a cada linha).
 static SINCE_FLUSH: AtomicUsize = AtomicUsize::new(0);
@@ -480,8 +479,6 @@ pub fn build_session_bytes() -> Vec<u8> {
         content.extend_from_slice(line);
     }
     drop(buf);
-    let body = SESSION_BODY.lock();
-    content.extend_from_slice(&body);
     if content.len() > BOOT_LOG_CAP {
         content.truncate(BOOT_LOG_CAP);
     }
@@ -849,13 +846,20 @@ pub fn flush() -> bool {
     #[cfg(feature = "fat-boot-log")]
     {
         let ok = persist_now(None);
-        crate::slog_nano!("LOG", "ok", "flush BOOT.LOG ok={} bytes~{}",
+        let sev = if ok { "ok" } else { "warn" };
+        crate::slog_nano!(
+            "LOG",
+            sev,
+            "flush BOOT.LOG ok={} bytes~{}",
             ok,
-            build_session_bytes().len());
+            build_session_bytes().len()
+        );
         return ok;
     }
-#[cfg(not(feature = "fat-boot-log"))]
-    { false }
+    #[cfg(not(feature = "fat-boot-log"))]
+    {
+        false
+    }
 }
 
 /// Ponytail: flush oportunista não-bloqueante para pendrive em K22/K137.
@@ -964,9 +968,12 @@ pub fn ensure_persisted() -> bool {
         let now = now_tick();
         let last = LAST_MSC_PROBE_TICK.load(Ordering::Relaxed);
         // Pós-desktop: 1º ensure NÃO varre xHCI (tick do 1º frame — SESSION_312).
-        // Depois: deferred MSC no HC bound a cada MSC_PROBE_MIN_TICKS (F3 recovery).
+        // Sem backend: NÃO chama flush() (FAIL_STREAK crescia sem probe).
         if ui_is_live() && last == 0 {
             LAST_MSC_PROBE_TICK.store(now, Ordering::Relaxed);
+            if !storage_available() {
+                return false;
+            }
             return flush();
         }
         let due = has_msc

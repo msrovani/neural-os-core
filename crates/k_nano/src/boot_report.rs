@@ -206,9 +206,15 @@ pub fn first_phase(n: u8) -> bool {
 }
 
 pub fn emit_phase_banner(n: u8, name: &str, status: &str) {
+    // ADR-0092: 4º campo = ok|warn|fail|trace — espelha o status da fase.
+    let sev = match status {
+        "fail" => "fail",
+        "warn" | "degraded" => "warn",
+        _ => "ok",
+    };
     crate::slog_bin!(
         "BOOT",
-        "ok",
+        sev,
         "home=nk::boot ref=ADR-0039 | === PHASE n={} name={} status={} ===",
         n,
         name,
