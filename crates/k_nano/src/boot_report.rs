@@ -6,7 +6,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use spin::Mutex;
 
 #[derive(Debug, Clone)]
@@ -104,6 +104,79 @@ static AI_ESCALATE: AtomicU32 = AtomicU32::new(0);
 static AI_VERIFY: AtomicU32 = AtomicU32::new(0);
 static LAST_SCORE: Mutex<String> = Mutex::new(String::new());
 static PHASE_SEEN: AtomicU32 = AtomicU32::new(0);
+/// Pior status por fase 0..=8: 0=nenhum, 1=ok, 2=warn, 3=fail (s389b honesty).
+static PHASE_RANK: [AtomicU8; 9] = [
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+    AtomicU8::new(0),
+];
+
+fn status_rank(status: &str) -> u8 {
+    match status {
+        "fail" => 3,
+        "warn" | "degraded" => 2,
+        _ => 1,
+    }
+}
+
+fn rank_label(r: u8) -> &'static str {
+    match r {
+        3 => "fail",
+        2 => "warn",
+        1 => "ok",
+        _ => "absent",
+    }
+}
+
+/// Atualiza pior status da fase. Retorna true se deve re-emitir banner
+/// (1ª vez ou upgrade ok→warn→fail). ADR-0092 / s389b.
+pub fn note_phase_status(n: u8, status: &str) -> bool {
+    if n > 8 {
+        return false;
+    }
+    let rank = status_rank(status);
+    let prev = PHASE_RANK[n as usize].load(Ordering::Relaxed);
+    if rank > prev {
+        PHASE_RANK[n as usize].store(rank, Ordering::Relaxed);
+        let bit = 1u32 << n;
+        PHASE_SEEN.fetch_or(bit, Ordering::AcqRel);
+        return true;
+    }
+    false
+}
+
+/// Agrega fases 0..=7 para o placar (pior rank).
+pub fn phase_0_7_label() -> &'static str {
+    let mut worst = 0u8;
+    for i in 0..=7 {
+        let r = PHASE_RANK[i].load(Ordering::Relaxed);
+        if r > worst {
+            worst = r;
+        }
+    }
+    if worst == 0 {
+        "absent"
+    } else {
+        rank_label(worst)
+    }
+}
+
+/// Primeira emissão do banner desta fase (0..=8). Extra = step TRACE.
+/// Preferir `note_phase_status` (upgrade de sev).
+pub fn first_phase(n: u8) -> bool {
+    if n > 8 {
+        return false;
+    }
+    let bit = 1u32 << n;
+    let prev = PHASE_SEEN.fetch_or(bit, Ordering::AcqRel);
+    prev & bit == 0
+}
 
 pub fn snapshot_ai() -> BootAiCounts {
     BootAiCounts {
@@ -195,16 +268,6 @@ pub fn last_score() -> String {
 /// Compacto para HUD produto (sem jargão MoE/no-llm).
 pub fn hud_line(mem_mb: u64, net: &str) -> String {
     alloc::format!("{}MB  {}", mem_mb, net)
-}
-
-/// Primeira emissão do banner desta fase (0..=8). Extra = step TRACE.
-pub fn first_phase(n: u8) -> bool {
-    if n > 8 {
-        return false;
-    }
-    let bit = 1u32 << n;
-    let prev = PHASE_SEEN.fetch_or(bit, Ordering::AcqRel);
-    prev & bit == 0
 }
 
 pub fn emit_phase_banner(n: u8, name: &str, status: &str) {
@@ -345,9 +408,20 @@ pub fn build_score_text() -> String {
         att.push_str("none");
     }
 
+    let phase07 = phase_0_7_label();
+    if phase07 == "fail" || phase07 == "warn" {
+        if att == "none" {
+            att.clear();
+        }
+        if !att.is_empty() {
+            att.push(' ');
+        }
+        att.push_str("phase");
+    }
+
     alloc::format!(
         "=== BOOT SCORE qemu={} ram_mb={} smp_online={} ===\n\
-phase_0_7     ok\n\
+phase_0_7     {}\n\
 cpu           {}  online={}  pollable={}\n\
 net           {}  nic={}  rx={}\n\
 storage       {}  bus={}\n\
@@ -368,6 +442,7 @@ slog          home=k_nano::slog ref=ADR-0092\n\
         qemu,
         ram,
         smp,
+        phase07,
         cpu,
         smp,
         pollable,
@@ -439,6 +514,17 @@ pub fn finalize_and_publish() -> BootReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spin::Mutex;
+
+    /// Serializa testes que mutam atomics de AI/phase (SESSION_346 race).
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn reset_phases() {
+        for i in 0..9 {
+            PHASE_RANK[i].store(0, Ordering::Relaxed);
+        }
+        PHASE_SEEN.store(0, Ordering::Relaxed);
+    }
 
     #[test]
     fn parse_boot_ai_canonical() {
@@ -479,6 +565,7 @@ k3chj         k-nano=R0 k-hal=R1\n\
 
     #[test]
     fn atomic_boot_ai_roundtrip() {
+        let _g = TEST_LOCK.lock();
         reset_ai();
         inc_observe(3);
         inc_plan(2);
@@ -499,6 +586,7 @@ k3chj         k-nano=R0 k-hal=R1\n\
 
     #[test]
     fn note_ai_preserves_verify_max() {
+        let _g = TEST_LOCK.lock();
         reset_ai();
         note_ai(BootAiCounts {
             observe: 5,
@@ -517,5 +605,18 @@ k3chj         k-nano=R0 k-hal=R1\n\
         });
         assert_eq!(snapshot_ai().verify, 2);
         reset_ai();
+    }
+
+    #[test]
+    fn phase_status_upgrades_and_score_label() {
+        let _g = TEST_LOCK.lock();
+        reset_phases();
+        assert!(note_phase_status(5, "ok"));
+        assert!(!note_phase_status(5, "ok")); // no downgrade/same
+        assert!(note_phase_status(5, "warn")); // upgrade
+        assert!(!note_phase_status(5, "ok")); // no downgrade
+        assert!(note_phase_status(5, "fail"));
+        assert_eq!(phase_0_7_label(), "fail");
+        reset_phases();
     }
 }

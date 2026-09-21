@@ -359,7 +359,7 @@ pub unsafe fn enable_pci_bus_master_unsafe(bus: u8, device: u8, function: u8) {
     if new_cmd != cmd {
         write_config_dword(bus, device, function, 0x04, new_cmd as u32);
         let verify = read_config_word(bus, device, function, 0x04);
-        crate::slog_nano!("PCI", "info", "BusMaster enabled for {:02x}:{:02x}.{:02x}: cmd={:#06x}->{:#06x}", bus, device, function, cmd, verify);
+        crate::slog_nano!("PCI", "ok", "BusMaster enabled for {:02x}:{:02x}.{:02x}: cmd={:#06x}->{:#06x}", bus, device, function, cmd, verify);
     }
 }
 

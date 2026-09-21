@@ -29,7 +29,7 @@ hermes-crate = { path = "../hermes", package = "hermes" }
 jarbas-crate = { path = "../jarbas", package = "jarbas" }
 
 [features]
-default = ["ring3", "cap-demos", "smp-runqueue"]
+default = ["ring3", "cap-demos", "smp-runqueue", "fat-boot-log"]
 ring3 = ["k-nano/ring3"]
 # ADR-0089: per-CPU agent run-queues + roles dinâmicos (MAX_CORES=256).
 smp-runqueue = ["k-nano/smp-runqueue", "jarbas-crate/smp-runqueue"]

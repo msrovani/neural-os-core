@@ -465,12 +465,16 @@ pub fn build_session_bytes() -> Vec<u8> {
     } else {
         "timestamped"
     };
+    #[cfg(feature = "fat-boot-log")]
+    let fbl = "1";
+    #[cfg(not(feature = "fat-boot-log"))]
+    let fbl = "0";
     // BOM UTF-8: Notepad Windows (ANSI/GBK) sem BOM mostra mojibake/"chinês".
     let mut content: alloc::vec::Vec<u8> = alloc::vec![0xEF, 0xBB, 0xBF];
     content.extend_from_slice(
         alloc::format!(
-            "[S] neural-os-core {} session={} channel={} tick={} fat-boot-log=1\n",
-            ver, session, channel, tick
+            "[S] neural-os-core {} session={} channel={} tick={} fat-boot-log={}\n",
+            ver, session, channel, tick, fbl
         )
         .as_bytes(),
     );
@@ -959,13 +963,14 @@ pub fn try_ensure_usb_msc() -> bool {
 }
 
 /// Retry completo: re-probe MSC se preciso + flush. Respeita backoff (SESSION_269).
-/// Retorna true se FAT_READY.
+/// Retorna true só se flush gravou (ou já FAT_READY **e** flush ok neste call).
 pub fn ensure_persisted() -> bool {
     if FAT_READY.load(Ordering::Relaxed) {
-        if persist_allowed_now() {
-            let _ = flush();
+        if !persist_allowed_now() {
+            // Já gravou antes; backoff — não mentir fail se sticky FAT_READY.
+            return true;
         }
-        return true;
+        return flush();
     }
     if !persist_allowed_now() {
         return false;

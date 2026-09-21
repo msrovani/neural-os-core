@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s389b] - 2026-09-21 — Logging honesty follow-up (SCORE + fat-boot-log)
+
+- High: fat-boot-log default/`cargo nk`; PHASE_RANK SCORE; note_phase_status upgrade; ensure_persisted=flush
+- Med: BootLog [t=N] ticks; dump_into wrap-safe; shutdown sem LBA 2048; greeting flush honesto
+- Low: session fat-boot-log cfg; LOG_SECTOR deprecated; CapGate SUCCESS ok; HDA/TPM/MEM/PCI/SMART sev
+- Canvas: `logging-bughunt-s389b.canvas.tsx`
+
 ## [1.9.99-s389] - 2026-09-21 — Logging QEMU+HW honesty (ADR-0092)
 
 - High: slog→BOOT.LOG mesmo com COM1; log() sem duplicata; fetch FAIL sev fail

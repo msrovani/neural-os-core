@@ -17,7 +17,7 @@ fn now_tick() -> u64 {
 }
 
 fn dump_boot_log_sector() {
-    // Honesty s389: canal A = FAT BOOT.LOG via boot_logger; LBA ATA = legado.
+    // Honesty s389b: canal A = FAT BOOT.LOG. NÃO escrever LBA 2048 (ESP GPT).
     let flushed = k_nano::boot_logger::flush();
     if flushed {
         k_nano::slog_bin!("SHUTDOWN", "ok", "BOOT.LOG flush FAT ok");
@@ -25,29 +25,9 @@ fn dump_boot_log_sector() {
         k_nano::slog_bin!("SHUTDOWN", "warn", "BOOT.LOG flush FAT skipped/fail");
     }
     let log = crate::serial::BOOT_LOG.lock();
-    let dump = log.dump();
-    if dump.is_empty() {
-        return;
-    }
-    k_nano::slog_bin!("SHUTDOWN", "ok", "BOOT_LOG ring dump {} bytes", dump.len());
-    let ata = crate::ATA_DRIVER.lock();
-    if let Some(ref ata) = *ata {
-        if dump.len() <= 512 {
-            let mut sector = [0u8; 512];
-            sector[..dump.len()].copy_from_slice(dump);
-            if unsafe { ata.write_sectors(crate::LOG_SECTOR, &sector, 1) } {
-                k_nano::slog_bin!(
-                    "SHUTDOWN",
-                    "ok",
-                    "Log ring escrito LBA {} (legado)",
-                    crate::LOG_SECTOR
-                );
-            } else {
-                k_nano::slog_bin!("SHUTDOWN", "warn", "Log ring LBA write fail");
-            }
-        }
-    } else {
-        k_nano::slog_bin!("SHUTDOWN", "trace", "sem ATA — ring só serial/FAT");
+    let n = log.len_written();
+    if n > 0 {
+        k_nano::slog_bin!("SHUTDOWN", "ok", "BOOT_LOG ring ~{} bytes (FAT=fonte)", n);
     }
 }
 

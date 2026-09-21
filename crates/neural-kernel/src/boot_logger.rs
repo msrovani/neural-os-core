@@ -118,11 +118,18 @@ pub fn flush_bootlog_after_greeting(reason: &str) -> bool {
     #[cfg(feature = "fat-boot-log")]
     {
         if FAT_READY.load(core::sync::atomic::Ordering::Relaxed) {
-            flush();
-            crate::display::fb::console_print(">>> BOOT.LOG no FAT (MSC/ATA/AHCI) — continue");
-            crate::display::fb::boot_ckpt(51, "BOOT.LOG FAT ok");
+            let ok = flush();
+            if ok {
+                crate::display::fb::console_print(">>> BOOT.LOG no FAT (MSC/ATA/AHCI) — continue");
+                crate::display::fb::boot_ckpt(51, "BOOT.LOG FAT ok");
+                k_nano::boot_ramlog::mark_skip_flush_reboot();
+                return true;
+            }
+            crate::display::fb::console_print(">>> BOOT.LOG FAT_READY mas flush FAIL — continue");
+            crate::display::fb::boot_ckpt(51, "BOOT.LOG flush fail");
+            k_nano::slog_bin!("RAMLOG", "warn", "pos-JARVIS flush FAIL com FAT_READY");
             k_nano::boot_ramlog::mark_skip_flush_reboot();
-            return true;
+            return false;
         }
         snapshot_session_to_ramlog(SESSION_RAMLOG_LINES, reason);
         k_nano::boot_ramlog::append(reason);
@@ -135,7 +142,7 @@ pub fn flush_bootlog_after_greeting(reason: &str) -> bool {
         crate::display::fb::console_print(&msg);
         k_nano::boot_ramlog::mark_skip_flush_reboot();
         k_nano::slog_bin!(
-            "RAMLOG", "info",
+            "RAMLOG", "warn",
             "pos-JARVIS sem FAT — {} — Runtime segue (soft-reboot OFF)", reason
         );
         false

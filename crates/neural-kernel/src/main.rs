@@ -245,8 +245,9 @@ pub use trinity::TRINITY;
 
 
 
-/// Log buffer sector no SDHC (LBA 2048 = 1MB, depois da bootimage de 606KB)
-
+/// Legado: LBA 2048 era “log sector” — **perigoso** em GPT (ESP começa ~2048).
+/// Shutdown usa FAT BOOT.LOG (s389b). Const retida só p/ grep de callers mortos.
+#[deprecated(note = "do not write LBA 2048 — use boot_logger FAT BOOT.LOG")]
 pub const LOG_SECTOR: u32 = 2048;
 
 
@@ -2216,14 +2217,14 @@ pub(crate) fn kernel_boot(
         } else if want_usb {
             if unsafe { crate::xhci::bringup_hid_keyboard() } {
                 crate::boot_logger::log("BOOT: P24a HID keyboard ready");
-                k_nano::slog_nano!("USB", "warn", "P24a HID keyboard OK");
+                k_nano::slog_nano!("USB", "ok", "P24a HID keyboard OK");
             } else {
                 crate::boot_logger::log("BOOT: P24a HID keyboard SKIP");
                 k_nano::slog_nano!("USB", "warn", "P24a HID keyboard SKIP (nenhum device)");
             }
             if unsafe { crate::xhci::bringup_hid_mouse() } {
                 crate::boot_logger::log("BOOT: P24b HID mouse ready");
-                k_nano::slog_nano!("USB", "warn", "P24b HID mouse OK");
+                k_nano::slog_nano!("USB", "ok", "P24b HID mouse OK");
             } else {
                 crate::boot_logger::log("BOOT: P24b HID mouse SKIP");
                 k_nano::slog_nano!("USB", "warn", "P24b HID mouse SKIP (nenhum device)");
@@ -5248,11 +5249,16 @@ pub fn publish_boot_phase(phase: BootPhase, msg: &str) {
     } else {
         "ok"
     };
-    if n <= 8 && k_nano::boot_report::first_phase(n) {
-        k_nano::boot_report::emit_phase_banner(n, name, status);
-        crate::display::fb::phase_line(&alloc::format!("PHASE {} {}", n, name));
+    if n <= 8 {
+        // s389b: re-emite banner em upgrade ok→warn→fail (não só 1ª vez).
+        if k_nano::boot_report::note_phase_status(n, status) {
+            k_nano::boot_report::emit_phase_banner(n, name, status);
+            crate::display::fb::phase_line(&alloc::format!("PHASE {} {}", n, name));
+        } else {
+            k_nano::slog_bin!("BOOT", status, "phase={} step={}", name, msg);
+        }
     } else {
-        k_nano::slog_bin!("BOOT", "trace", "phase={} step={}", name, msg);
+        k_nano::slog_bin!("BOOT", status, "phase={} step={}", name, msg);
     }
     let payload = alloc::format!("[BOOT:{:?}] {}", phase, msg);
     // Disco/buffer só — sem segundo serial_println ([LOG] duplicava no FB).
@@ -5280,18 +5286,18 @@ fn verify_kernel_from_disk(ata: &crate::ata::AtaDriver, parts: &[crate::fat32::P
                     if !crate::identity::verify_kernel_signature(&data) {
                         // NÃO halt — notebooks USB-boot sem kernel assinado no ATA interno
                         // travavam aqui após K17 (loop spin eterno).
-                        k_nano::slog_bin!("Sec", "info", "KERNEL~1 assinatura INVALIDA — continue (HW USB boot)");
+                        k_nano::slog_bin!("Sec", "warn", "KERNEL~1 assinatura INVALIDA — continue (HW USB boot)");
                         crate::display::fb::console_print("SEC: kernel unsigned — continue");
                         return;
                     }
-                    k_nano::slog_bin!("Sec", "info", "Assinatura do kernel OK.");
+                    k_nano::slog_bin!("Sec", "ok", "Assinatura do kernel OK.");
                     crate::tpm::tpm_extend_pcr(crate::tpm::TPM_PCR_KERNEL, &data);
                     return;
                 }
             }
         }
     }
-    k_nano::slog_bin!("Sec", "info", "Kernel nao assinado (sem FAT ou KERNEL~1 nao encontrado).");
+    k_nano::slog_bin!("Sec", "warn", "Kernel nao assinado (sem FAT ou KERNEL~1 nao encontrado).");
 }
 
 

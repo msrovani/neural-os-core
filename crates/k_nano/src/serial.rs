@@ -8,29 +8,76 @@ pub struct BootLog {
 
 impl BootLog {
     pub fn write(&mut self, data: &[u8], tick: u64) {
-        let elapsed = if self.start_tick == 0 { 0 } else { tick.saturating_sub(self.start_tick) };
-        let secs = elapsed / 1000;
-        let millis = elapsed % 1000;
-        let ts: &[u8] = &[
-            b'[', b'T', b'+',
-            (b'0' + ((secs / 100000) % 10) as u8),
-            (b'0' + ((secs / 10000) % 10) as u8),
-            (b'0' + ((secs / 1000) % 10) as u8),
-            (b'0' + ((secs / 100) % 10) as u8),
-            (b'0' + ((secs / 10) % 10) as u8),
-            (b'0' + (secs % 10) as u8),
-            b'.',
-            (b'0' + ((millis / 100) % 10) as u8),
-            (b'0' + ((millis / 10) % 10) as u8),
-            (b'0' + (millis % 10) as u8),
-            b']', b' ',
-        ];
-        for &b in ts { self.buf[self.pos % self.buf.len()] = b; self.pos += 1; }
-        for &b in data { self.buf[self.pos % self.buf.len()] = b; self.pos += 1; }
+        // Honesty s389b: TIMER_TICKS ≈ 18.2 Hz — não inventar wall-clock ms.
+        // Prefixo [t=N] em ticks PIT (mesmo contrato do slog [T+N]).
+        let mut ts = [0u8; 24];
+        let mut pos = 0usize;
+        ts[pos] = b'['; pos += 1;
+        ts[pos] = b't'; pos += 1;
+        ts[pos] = b'='; pos += 1;
+        let mut n = tick;
+        let mut digits = [0u8; 20];
+        let mut nd = 0usize;
+        if n == 0 {
+            digits[0] = b'0';
+            nd = 1;
+        } else {
+            while n > 0 && nd < 20 {
+                digits[nd] = b'0' + (n % 10) as u8;
+                nd += 1;
+                n /= 10;
+            }
+        }
+        while nd > 0 {
+            nd -= 1;
+            ts[pos] = digits[nd];
+            pos += 1;
+        }
+        ts[pos] = b']'; pos += 1;
+        ts[pos] = b' '; pos += 1;
+        for &b in &ts[..pos] {
+            self.buf[self.pos % self.buf.len()] = b;
+            self.pos += 1;
+        }
+        for &b in data {
+            self.buf[self.pos % self.buf.len()] = b;
+            self.pos += 1;
+        }
     }
+
+    /// Conteúdo linearizado (wrap-safe). `dump()` legado quebrava ordem no wrap.
+    pub fn dump_into(&self, out: &mut [u8]) -> usize {
+        if out.is_empty() {
+            return 0;
+        }
+        if self.pos <= self.buf.len() {
+            let n = self.pos.min(out.len());
+            out[..n].copy_from_slice(&self.buf[..n]);
+            return n;
+        }
+        let start = self.pos % self.buf.len();
+        let mut w = 0usize;
+        for i in 0..self.buf.len() {
+            if w >= out.len() {
+                break;
+            }
+            out[w] = self.buf[(start + i) % self.buf.len()];
+            w += 1;
+        }
+        w
+    }
+
+    /// Prefer `dump_into`. Sem wrap: slice; com wrap: vazio (evita ordem errada).
     pub fn dump(&self) -> &[u8] {
-        if self.pos < self.buf.len() { &self.buf[..self.pos] }
-        else { &self.buf[self.pos % self.buf.len()..] }
+        if self.pos < self.buf.len() {
+            &self.buf[..self.pos]
+        } else {
+            &[]
+        }
+    }
+
+    pub fn len_written(&self) -> usize {
+        self.pos.min(self.buf.len())
     }
 }
 

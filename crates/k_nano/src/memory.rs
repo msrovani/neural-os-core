@@ -126,7 +126,7 @@ impl BitmapFrameAllocator {
             TOTAL_RAM_MB.store(ram_mb, core::sync::atomic::Ordering::Relaxed);
             // SESSÃO_260 (AIOS): loga a RAM real detectada — o dump do BOOT.LOG
             // mostra quanto o kernel viu, separado do que gerencia.
-            crate::slog_nano!("MEM", "info", "RAM detectada {} MB; frames gerenciados {} (bitmap {}B cap={}GiB)",
+            crate::slog_nano!("MEM", "ok", "RAM detectada {} MB; frames gerenciados {} (bitmap {}B cap={}GiB)",
                 ram_mb, self.total_frames, BITMAP_SIZE,
                 (BITMAP_SIZE as u64) * 8 * 4096 / (1024 * 1024 * 1024));
         }
@@ -160,7 +160,7 @@ impl BitmapFrameAllocator {
                 self.set_bit(i as usize);
             }
         }
-        crate::slog_nano!("MEM", "info", "frame allocator reserva {:#x}..{:#x} ({} KB)", base, end, len / 1024);
+        crate::slog_nano!("MEM", "ok", "frame allocator reserva {:#x}..{:#x} ({} KB)", base, end, len / 1024);
     }
 
     /// Marca `count` frames a partir de `start` como ENTREGUES (ownership).

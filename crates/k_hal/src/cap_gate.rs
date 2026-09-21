@@ -198,7 +198,7 @@ pub fn demo_hermes_caps() -> Result<(), &'static str> {
     host_send_tcp(Cap::RING_OP, "127.0.0.1", 80)?;
     if host_write_ring(Cap::EMPTY).is_ok() { return Err("p3: Cap vazia nao deveria write_ring"); }
     host_write_ring(Cap::RING_OP)?;
-    k_nano::slog_hal!("Cap", "p3", "SUCCESS CapGate allow={} deny={}", allow_count(), deny_count());
+    k_nano::slog_hal!("Cap", "ok", "SUCCESS CapGate allow={} deny={}", allow_count(), deny_count());
     Ok(())
 }
 

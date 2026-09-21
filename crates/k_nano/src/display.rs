@@ -1,5 +1,6 @@
 //! k_nano display shim — boot_ckpt observability without jarbas dependency.
-//! Mirrors `jarbas::display::fb::boot_ckpt` semantics (K*: FB console + ramlog)
+//! Mirrors `jarbas::display::fb::boot_ckpt` (ADR-0092): ramlog + slog TRACE —
+//! **nunca** pinta K* no FB produto.
 //! but in Ring0 the FB may not be probed yet, so we log to slog + ramlog.
 //! Keeps SMP observable on Core 7 240H hybrid when display crate not yet wired.
 

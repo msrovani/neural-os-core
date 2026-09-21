@@ -13,7 +13,7 @@ pub static BAD_BLOCKS: Mutex<BTreeSet<(String, u64)>> = Mutex::new(BTreeSet::new
 
 pub fn mark_bad(dev_name: &str, lba: u64) {
     BAD_BLOCKS.lock().insert((String::from(dev_name), lba));
-    crate::slog_nano!("SelfHeal", "info", "Bad block {}@{:#x}", dev_name, lba);
+    crate::slog_nano!("SelfHeal", "warn", "Bad block {}@{:#x}", dev_name, lba);
 }
 
 pub fn is_bad(dev_name: &str, lba: u64) -> bool {
@@ -30,13 +30,13 @@ pub fn read_with_retry(ctrl: &dyn StorageController, disk: u8, lba: u64, buf: &m
         if ctrl.read_blocks(disk, lba, buf, (buf.len() + 511) / 512) {
             if buf.len() == 4096 {
                 if crc32c(&buf[4..]) != u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) {
-                    crate::slog_nano!("SelfHeal", "info", "CRC mismatch {}@{:#x}, retrying", name, lba);
+                    crate::slog_nano!("SelfHeal", "warn", "CRC mismatch {}@{:#x}, retrying", name, lba);
                     continue;
                 }
             }
             return true;
         }
-        crate::slog_nano!("SelfHeal", "info", "Retry {} {:#x} (attempt {})", name, lba, attempt + 1);
+        crate::slog_nano!("SelfHeal", "warn", "Retry {} {:#x} (attempt {})", name, lba, attempt + 1);
     }
     mark_bad(name, lba);
     false
@@ -45,7 +45,7 @@ pub fn read_with_retry(ctrl: &dyn StorageController, disk: u8, lba: u64, buf: &m
 pub fn write_with_retry(ctrl: &dyn StorageController, disk: u8, lba: u64, buf: &[u8], name: &str) -> bool {
     for attempt in 0..3 {
         if ctrl.write_blocks(disk, lba, buf, (buf.len() + 511) / 512) { return true; }
-        crate::slog_nano!("SelfHeal", "info", "Write retry {} {:#x} (attempt {})", name, lba, attempt + 1);
+        crate::slog_nano!("SelfHeal", "warn", "Write retry {} {:#x} (attempt {})", name, lba, attempt + 1);
     }
     mark_bad(name, lba);
     false

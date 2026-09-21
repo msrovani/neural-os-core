@@ -91,19 +91,19 @@ impl DiskIntelligenceAgent {
             if self.smart_history.len() >= 2 {
                 let prev = &self.smart_history[self.smart_history.len() - 2];
                 if realloc > prev.realloc_sectors + 5 {
-                    crate::slog_nano!("SMART", "info", "⚠ ALERTA: {} realocou {} setores em {} ticks! Possivel degradacao.",
+                    crate::slog_nano!("SMART", "warn", "ALERTA: {} realocou {} setores em {} ticks! Possivel degradacao.",
                         disk_name, realloc - prev.realloc_sectors,
                         prev.tick);
                 }
                 if pending > 10 {
-                    crate::slog_nano!("SMART", "info", "⚠ ALERTA: {} tem {} setores pendentes — disco pode estar falhando!", disk_name, pending);
+                    crate::slog_nano!("SMART", "warn", "ALERTA: {} tem {} setores pendentes — disco pode estar falhando!", disk_name, pending);
                 }
             }
         }
     }
 
     fn probe_all(&mut self) {
-        crate::slog_nano!("DISK", "info", "DiskIntelligenceAgent: probing storage...");
+        crate::slog_nano!("DISK", "ok", "DiskIntelligenceAgent: probing storage...");
         let ctrl_count = self.controllers.len();
         for ctrl_idx in 0..ctrl_count {
             let ctrl_name: String;
@@ -112,21 +112,22 @@ impl DiskIntelligenceAgent {
                 let ctrl = &mut *self.controllers[ctrl_idx];
                 ctrl_name = ctrl.name().into();
                 ctrl_type = ctrl.controller_type();
-                crate::slog_nano!("DISK", "info", "Controller: {} ({:?})", ctrl_name, ctrl_type);
+                crate::slog_nano!("DISK", "ok", "Controller: {} ({:?})", ctrl_name, ctrl_type);
                 let disks = ctrl.probe_disks();
                 for mut disk in disks {
                     // S.M.A.R.T. probe
                     disk.smart = self.controllers[ctrl_idx].read_smart(0);
                     if let Some(ref smart) = disk.smart {
-                        let status = if smart.healthy { "healthy" } else { "⚠ UNHEALTHY" };
-                        crate::slog_nano!("SMART", "info", "{}: {}, {}°C, {}h on, realloc={}, pending={}",
+                        let status = if smart.healthy { "healthy" } else { "UNHEALTHY" };
+                        let sev = if smart.healthy { "ok" } else { "warn" };
+                        crate::slog_nano!("SMART", sev, "{}: {}, {}°C, {}h on, realloc={}, pending={}",
                             disk.name, status, smart.temp_c, smart.power_on_hours,
                             smart.realloc_sectors, smart.pending_sectors);
                         if !smart.healthy {
-                            crate::slog_nano!("SMART", "info", "*** {} HEALTH ALERT: atributos criticos! ***", disk.name);
+                            crate::slog_nano!("SMART", "fail", "*** {} HEALTH ALERT: atributos criticos! ***", disk.name);
                         }
                     } else {
-                        crate::slog_nano!("SMART", "info", "{}: S.M.A.R.T. nao disponivel", disk.name);
+                        crate::slog_nano!("SMART", "warn", "{}: S.M.A.R.T. nao disponivel", disk.name);
                     }
 
                     self.read_partitions(&mut disk, ctrl_idx);

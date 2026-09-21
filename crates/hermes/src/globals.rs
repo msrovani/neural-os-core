@@ -26,6 +26,8 @@ pub use k_ai::inventory;
 pub use k_ai::audit;
 pub use k_ai::cognitive::BitNetTrainer;
 
+/// Legado: LBA 2048 ≠ canal A. Não gravar — ESP GPT começa ~2048 (s389b).
+#[deprecated(note = "use k_nano::boot_logger FAT BOOT.LOG — never raw LBA 2048")]
 pub const LOG_SECTOR: u32 = 2048;
 
 #[derive(Clone, Copy)]

@@ -266,7 +266,7 @@ pub fn init_tpm(phys_mem_offset: u64) {
     // not have a device behind it → MMIO read stalls the bus silently.
     if !unsafe { crate::acpi::has_tpm2_table(phys_mem_offset) } {
         TPM_PRESENT.call_once(|| false);
-        crate::slog_nano!("TPM", "info", "ausente (sem tabela ACPI TPM2).");
+        crate::slog_nano!("TPM", "warn", "ausente (sem tabela ACPI TPM2).");
         return;
     }
     PHYS_MEM_OFFSET.store(phys_mem_offset, Ordering::Relaxed);
@@ -277,17 +277,17 @@ pub fn init_tpm(phys_mem_offset: u64) {
         let probe = regs.read32(TisRegs::ACCESS);
         if probe == 0xFFFFFFFF || probe == 0 {
             TPM_PRESENT.call_once(|| false);
-            crate::slog_nano!("TPM", "info", "ausente (0xFFFF FFFF ou 0x0000 0000).");
+            crate::slog_nano!("TPM", "warn", "ausente (0xFFFF FFFF ou 0x0000 0000).");
             return;
         }
         if !regs.request_locality0() {
             TPM_PRESENT.call_once(|| false);
-            crate::slog_nano!("TPM", "info", "presente mas sem resposta de locality.");
+            crate::slog_nano!("TPM", "warn", "presente mas sem resposta de locality.");
             return;
         }
         regs.release_locality0();
         TPM_PRESENT.call_once(|| true);
-        crate::slog_nano!("TPM", "info", "TPM 2.0 detectado em 0xFED4_0000.");
+        crate::slog_nano!("TPM", "ok", "TPM 2.0 detectado em 0xFED4_0000.");
     }
 }
 
@@ -318,15 +318,15 @@ pub fn tpm_extend_pcr(pcr_index: u32, data: &[u8]) -> bool {
         regs.release_locality0();
         match result {
             Some(0) => {
-                crate::slog_nano!("TPM", "info", "PCR[{}] extendido com sucesso.", pcr_index);
+                crate::slog_nano!("TPM", "ok", "PCR[{}] extendido com sucesso.", pcr_index);
                 true
             }
             Some(rc) => {
-                crate::slog_nano!("TPM", "info", "PCR extend falhou: rc=0x{:08X}", rc);
+                crate::slog_nano!("TPM", "fail", "PCR extend falhou: rc=0x{:08X}", rc);
                 false
             }
             None => {
-                crate::slog_nano!("TPM", "info", "PCR extend sem resposta.");
+                crate::slog_nano!("TPM", "warn", "PCR extend sem resposta.");
                 false
             }
         }

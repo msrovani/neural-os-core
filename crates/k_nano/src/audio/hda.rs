@@ -374,7 +374,7 @@ unsafe fn init_corb_rirb(bar: u64) -> bool {
     HDA_CORB_WP.store(r16(bar, HDA_CORBWP) as u32, Ordering::Release);
     HDA_RIRB_RP.store(0, Ordering::Release);
 
-    slog_nano!("HDA", "info", "CORB @ 0x{:x} RIRB @ 0x{:x} size={} entries", corb_phys, rirb_phys, RING_ENTRIES);
+    slog_nano!("HDA", "ok", "CORB @ 0x{:x} RIRB @ 0x{:x} size={} entries", corb_phys, rirb_phys, RING_ENTRIES);
     true
 }
 
@@ -573,7 +573,7 @@ unsafe fn enumerate_codecs(bar: u64) -> bool {
         let rev_resp = icw_send(bar, cad, 0x00, VERB_GET_PARAMETER, PARAM_REVISION_ID);
         let revision_id = rev_resp.unwrap_or(0);
         
-        slog_nano!("HDA", "info", "Codec {}: vendor={:#08x} rev={:#08x}", cad, vendor_id, revision_id);
+        slog_nano!("HDA", "ok", "Codec {}: vendor={:#08x} rev={:#08x}", cad, vendor_id, revision_id);
         
         // ── Enumeração em DOIS níveis (HDA §7.3.4.1 + §7.3.4.5) ───────────
         // NÍVEL 1: o root (NID 0) lista os Audio Function Groups.
@@ -1091,7 +1091,7 @@ unsafe fn init_sd0_capture(bar: u64) -> bool {
     // Reset read pointer index
     HDA_SD0_RPI.store(0, Ordering::Release);
     
-    slog_nano!("HDA", "info", "SD0 capture: BDL @ 0x{:x} buf @ 0x{:x} size={}KB", bdl_phys, audio_phys, audio_size / 1024);
+    slog_nano!("HDA", "ok", "SD0 capture: BDL @ 0x{:x} buf @ 0x{:x} size={}KB", bdl_phys, audio_phys, audio_size / 1024);
     true
 }
 
@@ -1151,7 +1151,7 @@ unsafe fn init_sd1_playback(bar: u64) -> bool {
         sd_ctl_strm(PLAYBACK_STREAM_TAG) | SD_CTL_RUN | SD_CTL_IOCE,
     );
 
-    slog_nano!("HDA", "info", "SD1 playback: BDL @ 0x{:x} buf @ 0x{:x}", bdl_phys, audio_phys);
+    slog_nano!("HDA", "ok", "SD1 playback: BDL @ 0x{:x} buf @ 0x{:x}", bdl_phys, audio_phys);
     true
 }
 
@@ -1290,7 +1290,7 @@ pub fn init_hda() -> bool {
         return true;
     }
     
-    slog_nano!("HDA", "info", "Initializing Intel HDA capture driver...");
+    slog_nano!("HDA", "ok", "Initializing Intel HDA capture driver...");
     
     // Scan PCI for HDA controller (class 0x04, subclass 0x03)
     let devices = unsafe { pci::scan_pci() };
@@ -1311,7 +1311,7 @@ pub fn init_hda() -> bool {
         }
     };
     
-    slog_nano!("HDA", "info", "Found HDA: {:04x}:{:04x} bus={} dev={} fn={} BAR0={:#x} IRQ={}",
+    slog_nano!("HDA", "ok", "Found HDA: {:04x}:{:04x} bus={} dev={} fn={} BAR0={:#x} IRQ={}",
         dev.vendor_id, dev.device_id, dev.bus, dev.device, dev.function, dev.bar0, dev.prog_if);
     
     // Enable PCI Bus Master + Memory Space
@@ -1383,7 +1383,7 @@ pub fn init_hda() -> bool {
         HDA_STATESTS_CACHE.store(statests as u32, Ordering::Release);
         // "instrumento invisível = instrumento inexistente": o estado do barramento de
         // codecs passa a ser registrado (é o que distingue "sem codec" de "driver mudo").
-        slog_nano!("HDA", "info", "CRST ok (fora de reset) STATESTS=0x{:04x}", statests);
+        slog_nano!("HDA", "ok", "CRST ok (fora de reset) STATESTS=0x{:04x}", statests);
 
         // Enable unsolicited responses
         let gctl = r32(bar, HDA_GCTL);
@@ -1450,7 +1450,7 @@ pub fn init_hda() -> bool {
     }
     
     HDA_INIT_DONE.store(true, Ordering::Release);
-    slog_nano!("HDA", "info", "Intel HDA capture driver initialized successfully");
+    slog_nano!("HDA", "ok", "Intel HDA capture driver initialized successfully");
     true
 }
 

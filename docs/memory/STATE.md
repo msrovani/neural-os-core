@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s389 — Logging QEMU+HW honesty
+# STATE — neural-os-core v1.9.99-s389b — Logging honesty follow-up
 
-#   PISTA ATIVA: s389 — Logging ADR-0092 (H1–H3 + M1–M4 + L1–L3)
-#   PISTA ANTERIOR: s388 ModelHub + Trinity honesty
+#   PISTA ATIVA: s389b — fat-boot-log default + SCORE phase + ensure_persisted
+#   PISTA ANTERIOR: s389 Logging ADR-0092 (H1–H3)
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
@@ -18,7 +18,7 @@
 
 | Item | Estado |
 |------|--------|
-| `E:\BOOT.LOG` real | ▶️ AWAITING_OPERATOR (s389: canal A COM1+disk wired) |
+| `E:\BOOT.LOG` real | ▶️ AWAITING_OPERATOR (s389b: fat-boot-log ON default) |
 | Freeze `@ network_agent` | ABERTO |
 | xHCI MSC PP pós-HCRST | 🟡 wired; validar metal |
 
@@ -26,6 +26,7 @@
 
 | ID | Item | Estado |
 |----|------|--------|
+| s389b | Logging follow-up SCORE/phase/fat-boot-log | ✅ |
 | s389 | Logging QEMU+HW ADR-0092 honesty | ✅ |
 | s388 | ModelHub + Trinity CapGate/mmap honesty | ✅ |
 | s387 | Falcon3 LLM header/RoPE/hub honesty | ✅ |
@@ -39,4 +40,4 @@
 | #558b/#559b/#561b | aceite voz metal | residual paralelo |
 | B2 | Mesh peer B | AWAITING operador |
 | #607 | Efeito Matrix mmap expert residual | ⏳ |
-| #608 | slog info restante → canónico | ⏳ residual s389 |
+| #608 | slog info restante → canónico | 🟡 parcial s389b (bring-up) |
