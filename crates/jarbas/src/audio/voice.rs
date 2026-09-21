@@ -393,7 +393,8 @@ impl Agent for JarbasVoiceAgent {
         }
 
         // --- VAD único (vindo do dono do mic) ---
-        // Budget: EventBus sem teto + AUDIO_FRAME @50Hz = tick infinito (SESSION_352).
+        // Budget: EventBus AUDIO_* capped at STREAM_QUEUE_DEPTH=8 drop_oldest (s375);
+        // still drain with a per-tick budget so the scheduler stays fair (SESSION_352).
         let mut vad_n = 0u32;
         while vad_n < 8 {
             let Some(ev) = self.vad_in.try_receive() else { break; };

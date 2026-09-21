@@ -1,5 +1,14 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s375] - 2026-09-21 — event-bus honesty (bounded + API)
+
+- EventBus: depth 64 / AUDIO_*=8 drop_oldest; publish→`Result<usize>`; zombie prune + unsubscribe
+- LatentBus: recv_count só em try_receive; queue depth 16
+- CapabilityToken: `as_legacy(Ed25519)`→0; BoundedChannel capacity 0→Err
+- trim libm + delete DedupWindow; codemap honesty
+- wire: projection/MonitorAgent/adr0047 unsubscribe
+- SESSION_375; event-bus tests 12/12
+
 ## [1.9.99-s374] - 2026-09-21 — k_ai honesty residual (pós-s356)
 
 - SelfHeal: `status=executed` só se respawn/restore OK; notify gated; slog sucesso→ok

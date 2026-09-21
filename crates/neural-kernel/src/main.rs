@@ -1042,8 +1042,11 @@ fn adr0047_mvp_gates() {
     }
     let got = rx.try_receive().is_some();
     let (p2, r2) = crate::LATENT_BUS.stats();
-    let l1 = if got || p2 > 0 { "OK" } else { "ABSENT" };
-    k_nano::slog_bin!("ADR", "ok", "0047-L1 latent publish/recv {} (pub={} recv_slots={})", l1, p2, r2);
+    // Honesty: recv_count = try_receive, not enqueue fan-out (s375).
+    let l1 = if got || r2 > 0 || p2 > 0 { "OK" } else { "ABSENT" };
+    k_nano::slog_bin!("ADR", "ok", "0047-L1 latent publish/recv {} (pub={} recv={})", l1, p2, r2);
+    // Avoid zombie subscriber on THOUGHT_LLM after smoke.
+    crate::LATENT_BUS.unsubscribe(&rx);
 
     // L2 Evolve WASM hot-swap + Genesis
     let l2 = crate::evolve::evolve_gate_status();

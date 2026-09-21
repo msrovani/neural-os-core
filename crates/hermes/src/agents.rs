@@ -51,8 +51,17 @@ impl Agent for MonitorAgent {
         if self.done { return AgentTickResult::Done; }
         let event = Event { id: 0, topic: String::from("SYSTEM_READY"), payload: vec![1, 2, 3], token: CapabilityToken::Legacy(1) };
         match EVENT_BUS.publish(event) {
-            Ok(()) => { k_nano::slog_hermes!("Agent", "monitor", "Evento SYSTEM_READY publicado."); }
-            Err(e) => { k_nano::slog_hermes!("Agent", "monitor", "Falha: {}", e); }
+            Ok(n) => {
+                k_nano::slog_hermes!(
+                    "Agent",
+                    "ok",
+                    "SYSTEM_READY publicado (delivered={})",
+                    n
+                );
+            }
+            Err(e) => {
+                k_nano::slog_hermes!("Agent", "warn", "SYSTEM_READY falha: {}", e);
+            }
         }
         self.done = true;
         AgentTickResult::Done

@@ -86,8 +86,8 @@ pub fn publish_thought(hidden: &[f32]) {
         norm_bits: norm.to_bits(),
     };
     match k_nano::globals::LATENT_BUS.publish(packet) {
-        Ok(()) => {
-            k_nano::slog_cortex!("LATENT", "fail", "published THOUGHT_LLM norm={:.3}", norm);
+        Ok(n) => {
+            k_nano::slog_cortex!("LATENT", "ok", "published THOUGHT_LLM norm={:.3} delivered={}", norm, n);
         }
         Err(e) => {
             k_nano::slog_cortex!("LATENT", "fail", "publish fail: {}", e);

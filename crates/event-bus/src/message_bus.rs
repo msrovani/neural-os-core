@@ -39,9 +39,10 @@ impl MessageBus {
     }
 
     pub fn with_capacity(default_cap: usize) -> Self {
+        // Honesty: 0-cap mailboxes refuse all send (BoundedChannel::capacity_zero).
         Self {
             mailboxes: TicketLock::new(BTreeMap::new()),
-            default_cap: default_cap.max(1),
+            default_cap,
         }
     }
 

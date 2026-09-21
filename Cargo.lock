@@ -579,7 +579,6 @@ dependencies = [
 name = "event-bus"
 version = "1.9.9"
 dependencies = [
- "libm",
  "ticket-lock",
 ]
 
