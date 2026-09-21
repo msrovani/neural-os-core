@@ -1,6 +1,7 @@
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
+use spin::Mutex;
 
 const MAX_EVENTS: usize = 256;
 /// Curated memory budget: quanto contexto é SEMPRE carregado (Anatomy gap)
@@ -27,6 +28,9 @@ pub struct EventLog {
     events: VecDeque<ConversationEvent>,
     next_id: u64,
 }
+
+/// Log canónico de KernelError (SelfHeal drain) — hermes pode espelhar se precisar UI.
+pub static KERNEL_EVENT_LOG: Mutex<EventLog> = Mutex::new(EventLog::new());
 
 impl EventLog {
     pub const fn new() -> Self {

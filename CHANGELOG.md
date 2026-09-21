@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s390b] - 2026-09-21 — SelfHeal residual wire (KERNEL_ERROR + Safety)
+
+- High: IRQ note→KERNEL_ERROR; save_checkpoint AgentFleet+shutdown; can_spawn/normalize; SafetyAgent fleet + Security I1–I4; boot analyze(false); SKILL_CREATE→Hermes
+- Med: self_heal name; partial_bitmap; KERNEL_EVENT_LOG; #GP/#UD observe-only
+- Low: semantic_snapshot residual; migrate/Optimizer OPEN
+- Gates: k_ai 55 pass; hermes+neural-kernel check release 0 erros
+- Canvas: `selfheal-bughunt-s390b.canvas.tsx`
+
 ## [1.9.99-s390] - 2026-09-21 — SelfHeal honesty (I3/budget/LLM/silent)
 
 - High: I3 FwGpu load_status; AI restart não envenena lessons; HEALING_LLM só AwaitLLM; budget canonical=10

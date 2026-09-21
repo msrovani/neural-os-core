@@ -115,6 +115,101 @@ pub static LAST_EXC_IP: AtomicU64 = AtomicU64::new(0);
 pub static LAST_EXC_COUNT: AtomicU32 = AtomicU32::new(0);
 pub static LAST_EXC_TSC: AtomicU64 = AtomicU64::new(0);
 
+// ── Deferred KERNEL_ERROR ring (s390b) — IRQ writes, SelfHealAgent drains.
+// Sem alloc / sem TicketLock (SESSION_316). Drop se cheio.
+const EXC_NOTE_CAP: usize = 8;
+const EXC_NOTE_LEN: usize = 96;
+
+struct ExcNoteCell(core::cell::UnsafeCell<[u8; EXC_NOTE_LEN]>);
+unsafe impl Sync for ExcNoteCell {}
+
+static EXC_NOTE_BUF: [ExcNoteCell; EXC_NOTE_CAP] = [
+    ExcNoteCell(core::cell::UnsafeCell::new([0; EXC_NOTE_LEN])),
+    ExcNoteCell(core::cell::UnsafeCell::new([0; EXC_NOTE_LEN])),
+    ExcNoteCell(core::cell::UnsafeCell::new([0; EXC_NOTE_LEN])),
+    ExcNoteCell(core::cell::UnsafeCell::new([0; EXC_NOTE_LEN])),
+    ExcNoteCell(core::cell::UnsafeCell::new([0; EXC_NOTE_LEN])),
+    ExcNoteCell(core::cell::UnsafeCell::new([0; EXC_NOTE_LEN])),
+    ExcNoteCell(core::cell::UnsafeCell::new([0; EXC_NOTE_LEN])),
+    ExcNoteCell(core::cell::UnsafeCell::new([0; EXC_NOTE_LEN])),
+];
+static EXC_NOTE_LENS: [AtomicUsize; EXC_NOTE_CAP] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+static EXC_NOTE_HEAD: AtomicUsize = AtomicUsize::new(0);
+static EXC_NOTE_TAIL: AtomicUsize = AtomicUsize::new(0);
+
+/// Grava nota de exceção sem alloc (IRQ-safe). Payload estilo `#PF ip=… err=…`.
+pub fn note_exception_irq(name: &str, ip: u64, err: Option<u64>) {
+    let head = EXC_NOTE_HEAD.load(Ordering::Relaxed);
+    let tail = EXC_NOTE_TAIL.load(Ordering::Relaxed);
+    if head.wrapping_sub(tail) >= EXC_NOTE_CAP {
+        return; // drop — SelfHeal atrasado
+    }
+    let slot = head % EXC_NOTE_CAP;
+    let mut tmp = [0u8; EXC_NOTE_LEN];
+    let mut n = 0usize;
+    for &b in name.as_bytes() {
+        if n < EXC_NOTE_LEN {
+            tmp[n] = b;
+            n += 1;
+        }
+    }
+    for &b in b" ip=" {
+        if n < EXC_NOTE_LEN {
+            tmp[n] = b;
+            n += 1;
+        }
+    }
+    push_hex_fb(&mut tmp, &mut n, ip);
+    if let Some(code) = err {
+        for &b in b" err=" {
+            if n < EXC_NOTE_LEN {
+                tmp[n] = b;
+                n += 1;
+            }
+        }
+        push_hex_fb(&mut tmp, &mut n, code);
+    }
+    unsafe {
+        let dst = &mut *EXC_NOTE_BUF[slot].0.get();
+        dst[..n].copy_from_slice(&tmp[..n]);
+    }
+    EXC_NOTE_LENS[slot].store(n, Ordering::Release);
+    EXC_NOTE_HEAD.store(head.wrapping_add(1), Ordering::Release);
+}
+
+/// Drena notas pendentes (BSP / SelfHeal tick). Callback recebe bytes UTF-8-ish.
+pub fn drain_exception_notes(mut f: impl FnMut(&[u8])) -> usize {
+    let mut n = 0usize;
+    loop {
+        let tail = EXC_NOTE_TAIL.load(Ordering::Relaxed);
+        let head = EXC_NOTE_HEAD.load(Ordering::Acquire);
+        if tail == head {
+            break;
+        }
+        let slot = tail % EXC_NOTE_CAP;
+        let len = EXC_NOTE_LENS[slot].load(Ordering::Acquire).min(EXC_NOTE_LEN);
+        let mut tmp = [0u8; EXC_NOTE_LEN];
+        unsafe {
+            let src = EXC_NOTE_BUF[slot].0.get();
+            core::ptr::copy_nonoverlapping(src as *const u8, tmp.as_mut_ptr(), len);
+        }
+        f(&tmp[..len]);
+        EXC_NOTE_LENS[slot].store(0, Ordering::Relaxed);
+        EXC_NOTE_TAIL.store(tail.wrapping_add(1), Ordering::Release);
+        n += 1;
+    }
+    n
+}
+
 fn exc_kind(name: &str) -> u8 {
     match name {
         "#DE" => 1, "#DB" => 2, "#NMI" => 3, "#OF" => 4, "#BR" => 5,
@@ -382,6 +477,10 @@ fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Opt
         push_hex_fb(&mut buf, &mut n, code);
     }
     exception_fb_stamp(&buf[..n]);
+    // s390b: deferred ring → SelfHealAgent publica KERNEL_ERROR (sem alloc aqui).
+    // Fatal handlers abaixo fazem halt — Act de SelfHeal só roda se o BSP continuar
+    // (ex.: #PF ≤3). Observe-only em Ring0 fatal = honesty AIOS (NØNOS fail-closed).
+    note_exception_irq(name, stack_frame.instruction_pointer.as_u64(), error_code);
 }
 
 /// Hex em buffer de stack (sem alloc — IRQ context).
@@ -411,14 +510,22 @@ extern "x86-interrupt" fn nmi_handler(f: InterruptStackFrame) { dump_exception("
 extern "x86-interrupt" fn breakpoint_handler(_f: InterruptStackFrame) { puts(b"[EXC] #BP Breakpoint\n"); }
 extern "x86-interrupt" fn overflow_handler(f: InterruptStackFrame) { dump_exception("#OF", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn bound_range_handler(f: InterruptStackFrame) { dump_exception("#BR", &f, None); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn invalid_opcode_handler(f: InterruptStackFrame) { dump_exception("#UD", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn invalid_opcode_handler(f: InterruptStackFrame) {
+    dump_exception("#UD", &f, None);
+    puts(b"[SELF-HEAL] observe-only (#UD) -- fatal halt (Act needs BSP)\n");
+    loop { x86_64::instructions::hlt(); }
+}
 extern "x86-interrupt" fn device_not_available_handler(f: InterruptStackFrame) { dump_exception("#NM", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn coprocessor_segment_overrun_handler(f: InterruptStackFrame) { dump_exception("#MF", &f, None); loop { x86_64::instructions::hlt(); } }
 
 extern "x86-interrupt" fn invalid_tss_handler(f: InterruptStackFrame, code: u64) { dump_exception("#TS", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn segment_not_present_handler(f: InterruptStackFrame, code: u64) { dump_exception("#NP", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn stack_segment_handler(f: InterruptStackFrame, code: u64) { dump_exception("#SS", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFrame, code: u64) { dump_exception("#GP", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFrame, code: u64) {
+    dump_exception("#GP", &f, Some(code));
+    puts(b"[SELF-HEAL] observe-only (#GP) -- fatal halt (Act needs BSP)\n");
+    loop { x86_64::instructions::hlt(); }
+}
 extern "x86-interrupt" fn alignment_check_handler(f: InterruptStackFrame, code: u64) { dump_exception("#AC", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn security_exception_handler(f: InterruptStackFrame, code: u64) { dump_exception("#CP", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
 

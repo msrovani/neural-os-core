@@ -170,6 +170,8 @@ pub struct SecurityAgent {
     timer_anomaly: k_ai::security_detectors::TimerAnomalyDetector,
     // Correlation buffer
     alerts: Vec<k_ai::security_detectors::SecurityAlert>,
+    /// s390b: I1–I4 também no Security (belt se SafetyAgent falhar / dual observe).
+    runtime_inv: k_ai::safety_invariants::SafetyInvariants,
 }
 
 impl SecurityAgent {
@@ -183,6 +185,7 @@ impl SecurityAgent {
             dhcp_starvation: k_ai::security_detectors::DhcpStarvationDetector::new(),
             timer_anomaly: k_ai::security_detectors::TimerAnomalyDetector::new(),
             alerts: Vec::new(),
+            runtime_inv: k_ai::safety_invariants::SafetyInvariants::new(),
         }
     }
 
@@ -343,6 +346,45 @@ impl Agent for SecurityAgent {
         // Correlate alerts every 100 ticks
         if tick % 100 == 0 {
             self.correlate(tick);
+        }
+
+        // s390b: I1–I4 fail-closed observe (parity SafetyAgent; I3 via TRUST_CACHE).
+        if tick % 64 == 0 {
+            let mut status = self.runtime_inv.check_all(tick);
+            let trust_n = crate::globals::TRUST_CACHE.lock().entry_count();
+            status.i3_trust = if trust_n > 0 {
+                k_ai::safety_invariants::InvariantResult::Pass
+            } else {
+                k_ai::safety_invariants::InvariantResult::Warning
+            };
+            if !status.all_green() {
+                k_nano::slog_hermes!(
+                    "SEC",
+                    if status.all_pass() { "ok" } else { "warn" },
+                    "I1={:?} I2={:?} I3={:?} I4={:?} viol={} trust={}",
+                    status.i1_heap,
+                    status.i2_agents,
+                    status.i3_trust,
+                    status.i4_scheduler,
+                    status.violations,
+                    trust_n
+                );
+                if !status.all_pass() {
+                    let msg = alloc::format!(
+                        "I1-I4 violation heap={:?} agents={:?} trust={:?} sched={:?}",
+                        status.i1_heap,
+                        status.i2_agents,
+                        status.i3_trust,
+                        status.i4_scheduler
+                    );
+                    let _ = EVENT_BUS.publish(Event {
+                        id: tick,
+                        topic: String::from("HEALTH_ISSUE"),
+                        payload: msg.into_bytes(),
+                        token: CapabilityToken::Legacy(1),
+                    });
+                }
+            }
         }
 
         AgentTickResult::Pending

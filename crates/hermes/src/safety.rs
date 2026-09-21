@@ -1,6 +1,6 @@
-//! ORPHAN module body until wired — SESSION_379 residual: not registered in fleet.
-//! A-019 catálogo; runtime I1–I4 = `k_ai::safety_invariants`.
-//! ADR-0060 A.4: SafetyAgent tick model + EVENT_BUS vivem aqui se `pub mod` + register.
+//! Safety Interceptor — Asimov layers + runtime I1–I4 (s390b: registered in fleet).
+//! A-019 catálogo; runtime I1–I4 = `k_ai::safety_invariants` (também folded em SecurityAgent).
+//! ADR-0060 A.4: SafetyAgent tick model + EVENT_BUS.
 //!
 //! Safety Interceptor — Asimov's Four Laws + Fail-Closed Safety Invariant (#315.18).
 //! Invariantes SMT-proof: process separation, pre-action, fail-closed, signed evidence.

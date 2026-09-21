@@ -31,6 +31,7 @@ pub mod netstack;
 pub mod network_agent;
 pub mod plugin_hub;
 pub mod security;
+pub mod safety; // s390b: I1–I4 + SAFETY_CHECK (não órfão)
 pub mod self_update;
 // pub mod shell; // DELETED SESSION_379 residual (0 callers; Command::Install)
 pub mod skill_gen;

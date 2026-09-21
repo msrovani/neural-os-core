@@ -5,7 +5,7 @@ use event_bus::{Event, CapabilityToken};
 use agent_core::{Agent, AgentManifest, AgentKind, ScheduleKind, AgentTickResult};
 use k_nano::{EVENT_BUS, interrupts::TIMER_TICKS, slog_kai};
 use crate::self_heal::{
-    ErrorContext, RecoveryAction, FailedStrategy,
+    ErrorContext, RecoveryAction,
     BudgetedRecovery, SilentFailureDetector,
     GLOBAL_SELF_HEAL, push_respawn,
     TOPIC_HEALING_LLM_RESPONSE,
@@ -221,10 +221,15 @@ impl SelfHealAgent {
                     let mut heal = GLOBAL_SELF_HEAL.lock();
                     heal.restore_checkpoint()
                 };
-                let status = if ok { "executed" } else { "restore_failed" };
+                let status = if ok { "partial_bitmap" } else { "restore_failed" };
                 SelfHealAgent::ingest_recovery_to_nsgdb(&action_str, &daemon, tick, status);
                 if ok {
-                    SelfHealAgent::notify_user("checkpoint", &daemon, reason, tick);
+                    SelfHealAgent::notify_user(
+                        "checkpoint",
+                        &daemon,
+                        "bitmap-only best-effort (P09)",
+                        tick,
+                    );
                 } else {
                     slog_kai!("SELF", "warn", "AI checkpoint restore failed — no notify");
                 }
@@ -277,9 +282,17 @@ impl SelfHealAgent {
             RecoveryAction::RestartDaemon(name, verify) => {
                 slog_kai!("SELF", "ok", "RestartDaemon: {} (via RESPAWN_QUEUE bridge)", name);
                 let pushed = push_respawn(&name);
-                let status = if pushed { "executed" } else { "bridge_missing" };
+                let status = if pushed {
+                    "executed"
+                } else {
+                    "respawn_refused"
+                };
                 if !pushed {
-                    slog_kai!("SELF", "warn", "RestartDaemon: bridge not registered -- fallback log only");
+                    slog_kai!(
+                        "SELF",
+                        "warn",
+                        "RestartDaemon: respawn refused (bridge/can_spawn/normalize)"
+                    );
                 }
                 SelfHealAgent::ingest_recovery_to_nsgdb("restart", &name, tick, status);
                 if pushed {
@@ -331,12 +344,6 @@ impl SelfHealAgent {
             }
             RecoveryAction::AwaitLLM(daemon) => {
                 slog_kai!("SELF", "warn", "AwaitLLM: {}", daemon);
-                let mut heal = GLOBAL_SELF_HEAL.lock();
-                heal.lessons.push(FailedStrategy {
-                    error_msg: daemon,
-                    attempted_action: "await_llm".into(),
-                    tick,
-                });
             }
             RecoveryAction::CheckpointRestore => {
                 slog_kai!("SELF", "ok", "CheckpointRestore requested");
@@ -344,10 +351,15 @@ impl SelfHealAgent {
                     let mut heal = GLOBAL_SELF_HEAL.lock();
                     heal.restore_checkpoint()
                 };
-                let status = if ok { "executed" } else { "restore_failed" };
+                let status = if ok { "partial_bitmap" } else { "restore_failed" };
                 SelfHealAgent::ingest_recovery_to_nsgdb("checkpoint_restore", "system", tick, status);
                 if ok {
-                    SelfHealAgent::notify_user("checkpoint", "system", "restoring checkpoint", tick);
+                    SelfHealAgent::notify_user(
+                        "checkpoint",
+                        "system",
+                        "bitmap-only best-effort (P09)",
+                        tick,
+                    );
                 } else {
                     slog_kai!("SELF", "warn", "CheckpointRestore failed — no notify");
                 }
@@ -361,8 +373,9 @@ impl SelfHealAgent {
 
 impl Agent for SelfHealAgent {
     fn manifest(&self) -> &AgentManifest {
+        // Nome = arm RESPAWN (`self_heal`) — unificado s390b.
         static MANIFEST: AgentManifest = AgentManifest {
-            name: "SelfHealAgent",
+            name: "self_heal",
             kind: AgentKind::System,
             schedule: ScheduleKind::PollEvery(1000),
             auto_start: true,
@@ -375,6 +388,28 @@ impl Agent for SelfHealAgent {
         self.budget.set_tick(tick);
         self.budget.maybe_reset();
         self.silent.set_tick(tick);
+
+        // s390b H1: drena anel IRQ → KERNEL_ERROR (antes RX EventBus estava morto).
+        k_nano::interrupts::drain_exception_notes(|bytes| {
+            let _ = EVENT_BUS.publish(Event {
+                id: 0,
+                topic: String::from(crate::self_heal::TOPIC_KERNEL_ERROR),
+                payload: bytes.to_vec(),
+                token: CapabilityToken::Legacy(1),
+            });
+            // ADR-0027 §6: EventLog KernelError no k_ai (hermes EVENT_LOG espelha via bridge se wired).
+            crate::conversation::KERNEL_EVENT_LOG.lock().push(
+                crate::conversation::EventKind::KernelError,
+                bytes.to_vec(),
+                tick,
+            );
+        });
+
+        // Checkpoint periódico (~cada 50k ticks PIT ≈ 45 min @18Hz) se ainda inválido/stale.
+        if tick > 0 && tick % 50_000 == 0 {
+            let mut heal = GLOBAL_SELF_HEAL.lock();
+            heal.save_checkpoint();
+        }
 
         // Phase 3: Process HEALING_LLM_RESPONSE (AI diagnosis from CortexAgent)
         while let Some(event) = self.healing_response_rx.try_receive() {
@@ -418,14 +453,14 @@ impl Agent for SelfHealAgent {
             }
         }
 
-        // Self-health heartbeat
-        self.silent.heartbeat("SelfHealAgent");
+        // Self-health heartbeat (nome canónico = manifest / arm RESPAWN)
+        self.silent.heartbeat("self_heal");
 
         // SilentFailureDetector: só publica I5 se há agentes observados além de si.
-        // Sem fleet heartbeats wired, publicar I5 = spam falso (só SelfHealAgent no mapa).
+        // Sem fleet heartbeats wired, publicar I5 = spam falso (só self_heal no mapa).
         if self.silent.watched_count() > 1 {
             for agent in self.silent.detect_silent() {
-                if agent == "SelfHealAgent" {
+                if agent == "self_heal" || agent == "SelfHealAgent" {
                     continue;
                 }
                 let msg = format!("I5:{}:silent", agent);

@@ -207,7 +207,8 @@ impl Agent for BootLogAgent {
                             tick,
                         };
                         let mut heal = crate::self_heal::GLOBAL_SELF_HEAL.lock();
-                        heal.analyze(&ctx, true);
+                        // Boot = observe/plan only — Act fica no SelfHealAgent runtime (s390b H5).
+                        let _ = heal.analyze(&ctx, false);
                         drop(heal);
                         k_nano::slog_kai!("BOOTLOG", "ok", "Health issue publicado: {}", kind);
                     }

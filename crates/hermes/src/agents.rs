@@ -695,6 +695,7 @@ pub struct HermesAgent {
     health_receiver: Receiver,
     pnp_receiver: Receiver,
     cap_receiver: Receiver,
+    skill_create_receiver: Receiver,
     latent_receiver: LatentReceiver,
     voice_emotion_receiver: Receiver,
     latent_recv_total: u64,
@@ -730,6 +731,7 @@ impl HermesAgent {
             health_receiver: EVENT_BUS.subscribe("HEALTH_ISSUE"),
             pnp_receiver: EVENT_BUS.subscribe(k_ai::hw_capability::TOPIC_HW_PNP_ACTION),
             cap_receiver: EVENT_BUS.subscribe(k_ai::hw_capability::TOPIC_HW_CAPABILITY),
+            skill_create_receiver: EVENT_BUS.subscribe("SKILL_CREATE"),
             latent_receiver: k_nano::globals::LATENT_BUS.subscribe(TOPIC_THOUGHT_LLM),
             voice_emotion_receiver: k_nano::EVENT_BUS.subscribe("VOICE_EMOTION"),
             latent_recv_total: 0,
@@ -950,6 +952,58 @@ impl Agent for HermesAgent {
 
         // ── Processamento de eventos (o trabalho real) ──
         let mut had_work = false;
+
+        // s390b H3: SKILL_CREATE → self_evolve / skill_gen (SelfHeal CreateSkill).
+        while let Some(ev) = self.skill_create_receiver.try_receive() {
+            had_work = true;
+            let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+            if text.is_empty() {
+                continue;
+            }
+            crate::skill_observer::watch_correction(
+                "self_heal",
+                "CreateSkill request",
+                text,
+                "SelfHeal ResourceFault → Hermes skill path",
+                _tick,
+            );
+            if text.contains("schema:") || text.contains("## Goal") {
+                let mut storage = SKILL_STORAGE.lock();
+                match crate::self_evolve::verify_and_register(&mut storage, text) {
+                    Ok(n) => {
+                        k_nano::slog_hermes!("Skill", "ok", "SKILL_CREATE registered '{}'", n);
+                        self.con_skills_ok = self.con_skills_ok.saturating_add(1);
+                    }
+                    Err(e) => {
+                        k_nano::slog_hermes!(
+                            "Skill",
+                            "warn",
+                            "SKILL_CREATE draft/reject: {} (len={})",
+                            e,
+                            text.len()
+                        );
+                        crate::skill_gen::record_task(
+                            "selfheal_fix",
+                            text,
+                            &["observe", "plan", "hitl_approve"],
+                        );
+                    }
+                }
+            } else {
+                crate::skill_gen::record_task(
+                    "selfheal_fix",
+                    text,
+                    &["diagnose", "generate_skill_md", "hitl_approve"],
+                );
+                k_nano::slog_hermes!(
+                    "Skill",
+                    "ok",
+                    "SKILL_CREATE observed ({}B) → skill_gen pattern",
+                    text.len()
+                );
+            }
+        }
+
         // FASE 1.6: BeiInit LoopPhase modulation
         let phase = crate::executive::current_phase();
         let latency_tolerance = match phase {
@@ -2371,7 +2425,8 @@ impl Agent for BootSelfHealAgent {
                                 tick: _tick,
                             };
                             let mut heal = k_ai::self_heal::GLOBAL_SELF_HEAL.lock();
-                            heal.analyze(&ctx, true);
+                            // Boot oneshot: observe/plan only (s390b) — não descartar Act.
+                            let _ = heal.analyze(&ctx, false);
                             // U4 ADR-0086: kernel novo falhou → volta o slot bom
                             if crate::self_update::SelfUpdate::rollback() {
                                 k_nano::slog_hermes!(

@@ -82,11 +82,11 @@ mod sync;
 
 pub use hermes_crate::{
     // DEAD CODE excluded: actor_registry, app_store, cron, sgdb_agent, gguf_wasm,
-    // ipc_bus, optimizer, safety, search_agent, voice_skill, wifi_agent (HERMES_AUDIT.md)
+    // ipc_bus, optimizer, search_agent, voice_skill, wifi_agent (HERMES_AUDIT.md)
     approval, apps, browser_agent, evolve, generic_wifi,
     globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, marketplace, mcp,
     memory_store, net_bridge, ntp, package_hub, plugin_hub,
-    security, self_evolve, self_update, skill_gen, skill_loader, skill_market,
+    safety, security, self_evolve, self_update, skill_gen, skill_loader, skill_market,
     skill_observer, skill_opt, structured_decode,
     wifi_compat, wifi_iwlwifi, wifi_msix, wifi_protocol,
     wifi_softmac,
@@ -859,10 +859,48 @@ fn push_respawn_bridge(name: &str) {
     q.push(alloc::string::String::from(name));
 }
 
+/// Arms que `raw_sched_run` sabe spawnar — honesty p/ push_respawn (s390b).
+fn can_spawn_respawn(name: &str) -> bool {
+    matches!(
+        name,
+        "monitor"
+            | "hw_bridge"
+            | "network_agent"
+            | "input"
+            | "cortex_llm"
+            | "infer_worker"
+            | "intent_router"
+            | "hermes_console"
+            | "display"
+            | "sys_metrics"
+            | "sysinfo"
+            | "mcp"
+            | "security"
+            | "safety"
+            | "mouse"
+            | "self_heal"
+            | "boot_log"
+            | "auto_learn"
+            | "sleep_cycle"
+            | "JARBAS"
+            | "jarvis_voice"
+            | "wakeword"
+            | "audio_input"
+            | "audio_mixer"
+            | "memory"
+            | "memory_budget"
+            | "hub_health_agent"
+            | "vision"
+            | "browser"
+            | "auto-installer"
+    )
+}
+
 fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     // Phase 1: register RESPAWN bridge so SelfHealAgent can restart daemons.
     k_ai::self_heal::register_respawn_bridge(push_respawn_bridge);
-    k_nano::slog_bin!("BOOT", "ok", "SelfHeal RESPAWN bridge registered");
+    k_ai::self_heal::register_can_spawn(can_spawn_respawn);
+    k_nano::slog_bin!("BOOT", "ok", "SelfHeal RESPAWN bridge+can_spawn registered");
 
     // init_phase AQUI (stack é 2MB): round-robin Oneshot + timeout — seguro com System/Monitor
     k_nano::slog_bin!("BOOT", "info", "init_phase (heap stack, round-robin)...");
@@ -973,7 +1011,7 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
             q
         },
         |name| {
-            k_nano::slog_bin!("Sched", "info", "Respawning agent '{}'...", name);
+            k_nano::slog_bin!("Sched", "ok", "Respawning agent '{}'...", name);
             let agent: Option<Box<dyn Agent>> = match name {
                 "monitor" => Some(Box::new(agents::MonitorAgent::new())),
                 "hw_bridge" => Some(Box::new(agents::HwBridgeAgent)),
@@ -3567,7 +3605,10 @@ pub(crate) fn kernel_boot(
     registry.register(Box::new(security::SecurityAgent::new()));
     registry.set_urgency("security", 140); // Continuous+Pending — evita starvation
     let _ = registry.set_affinity_ring("security", 0);
-    // DEAD CODE: registry.register(Box::new(safety::SafetyAgent::new())); // (HERMES_AUDIT.md)
+    // s390b H4: SafetyAgent reativado (I1–I4 + SAFETY_CHECK). Optimizer segue órfão.
+    registry.register(Box::new(safety::SafetyAgent::new()));
+    registry.set_urgency("safety", 130);
+    let _ = registry.set_affinity_ring("safety", 0);
     // DEAD CODE: registry.register(Box::new(optimizer::OptimizerAgent::new())); // (HERMES_AUDIT.md)
     registry.register(Box::new(browser_agent::BrowserAgent::new()));
     // DEAD CODE: registry.register(Box::new(sgdb_agent::SgdbAgent::new())); // (HERMES_AUDIT.md)
@@ -4998,6 +5039,13 @@ pub(crate) fn kernel_boot(
     k_nano::slog_bin!("COG", "info", "{}", crate::memory_systems::bge_status());
 
     publish_boot_phase(BootPhase::AgentFleet, &alloc::format!("{} agents + DiagnosticSkill registrados", registry.agents.len()));
+
+    // s390b H2: checkpoint pós-fleet — restore só é honesto se houve save válido.
+    {
+        let mut heal = k_ai::self_heal::GLOBAL_SELF_HEAL.lock();
+        heal.save_checkpoint();
+    }
+    k_nano::slog_bin!("CHECKPOINT", "ok", "AgentFleet save_checkpoint done");
 
     // ADR-0086 §2.8 (I10): autobiografia do OS — quem sou, onde estou (SELF.STATE na SGDB).
     // O boot é releitura, não redescoberta: grava a fase derivada do boot_media::mode().

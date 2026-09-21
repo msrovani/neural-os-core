@@ -74,6 +74,11 @@ pub fn begin_orderly_shutdown(cause: ShutdownCause) -> ! {
     overlay(">>> Shutting down...");
     set_cause(cause);
     write_persistent_shutdown_log(cause);
+    // s390b: checkpoint antes do halt (cross-boot SelfHeal).
+    {
+        let mut heal = k_ai::self_heal::GLOBAL_SELF_HEAL.lock();
+        heal.save_checkpoint();
+    }
     k_nano::slog_bin!(
         "SHUTDOWN",
         "ok",
@@ -95,6 +100,10 @@ pub fn begin_orderly_reboot(cause: ShutdownCause) -> ! {
     overlay(">>> Rebooting...");
     set_cause(cause);
     write_persistent_shutdown_log(cause);
+    {
+        let mut heal = k_ai::self_heal::GLOBAL_SELF_HEAL.lock();
+        heal.save_checkpoint();
+    }
     k_nano::slog_bin!(
         "SHUTDOWN",
         "ok",

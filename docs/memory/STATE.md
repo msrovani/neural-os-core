@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s390 — SelfHeal honesty
+# STATE — neural-os-core v1.9.99-s390b — SelfHeal residual wire
 
-#   PISTA ATIVA: s390 — SelfHeal I3/budget/double-act/silent (H1–L4)
-#   PISTA ANTERIOR: s389b Logging SCORE/phase/fat-boot-log
+#   PISTA ATIVA: s390b — KERNEL_ERROR + Safety + checkpoint + SKILL_CREATE
+#   PISTA ANTERIOR: s390 SelfHeal I3/budget/double-act/silent
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
@@ -26,6 +26,7 @@
 
 | ID | Item | Estado |
 |----|------|--------|
+| s390b | SelfHeal residual KERNEL_ERROR/Safety/checkpoint/SKILL_CREATE | ✅ |
 | s390 | SelfHeal honesty I3/budget/LLM/silent | ✅ |
 | s389b | Logging follow-up SCORE/phase/fat-boot-log | ✅ |
 | s389 | Logging QEMU+HW ADR-0092 honesty | ✅ |

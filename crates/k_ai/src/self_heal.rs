@@ -11,6 +11,7 @@ use event_bus::{Event, CapabilityToken};
 pub struct BudgetedRecovery {
     budget: u64,
     tick: u64,
+    window_start: u64,
 }
 
 impl BudgetedRecovery {
@@ -19,6 +20,7 @@ impl BudgetedRecovery {
         Self {
             budget: max_budget,
             tick: 0,
+            window_start: 0,
         }
     }
 
@@ -42,10 +44,11 @@ impl BudgetedRecovery {
         }
     }
 
-    /// Reset budget if window has elapsed.
+    /// Reset budget se a janela decorrida (não exige tick%WINDOW==0 — PollEvery pode saltar).
     pub fn maybe_reset(&mut self) {
-        if self.tick > 0 && self.tick % HEALING_BUDGET_WINDOW == 0 {
+        if self.tick > 0 && self.tick.saturating_sub(self.window_start) >= HEALING_BUDGET_WINDOW {
             self.budget = HEALING_BUDGET_MAX;
+            self.window_start = self.tick;
         }
     }
 }
@@ -555,9 +558,8 @@ impl SelfHeal {
         }
     }
 
-    /// Snapshot semântico: aplica CDC Rabin no bitmap para chunking.
-    /// Retorna (chunks_completos, chunks_delta_modificados).
-    /// `prev_bitmap` = bitmap anterior (vazio [] se primeiro snapshot).
+    /// Snapshot semântico CDC — residual (0 callers runtime). Mantido p/ P09 delta-CP.
+    #[allow(dead_code)]
     pub fn semantic_snapshot(&mut self, prev_bitmap: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
         use cortex::delta::xor_buffers;
         use k_nano::memory::BITMAP_SIZE;
@@ -726,7 +728,22 @@ impl SelfHeal {
         };
 
         let action = match class {
-            FailureClass::MemoryFault if !self.already_tried(&ctx.message, "restart") => {
+            // Sem arm RESPAWN (exception_handler/kernel): checkpoint, não RestartDaemon mentiroso.
+            FailureClass::MemoryFault
+                if normalize_respawn_name(&ctx.daemon).is_none()
+                    && !self.already_tried(&ctx.message, "checkpoint_restore") =>
+            {
+                self.lessons.push(FailedStrategy {
+                    error_msg: ctx.message.clone(),
+                    attempted_action: String::from("checkpoint_restore"),
+                    tick: ctx.tick,
+                });
+                RecoveryAction::CheckpointRestore
+            }
+            FailureClass::MemoryFault
+                if normalize_respawn_name(&ctx.daemon).is_some()
+                    && !self.already_tried(&ctx.message, "restart") =>
+            {
                 self.lessons.push(FailedStrategy {
                     error_msg: ctx.message.clone(),
                     attempted_action: String::from("restart"),
@@ -746,8 +763,7 @@ impl SelfHeal {
             }
             FailureClass::ResourceFault if !self.already_tried(&ctx.message, "create") => {
                 let fix = alloc::format!("AI-heal: {}", ctx.message);
-                self.pending_fixes
-                    .push((ctx.daemon.clone(), fix.clone()));
+                // pending_fixes só em execute_recovery (anti-duplicata s390b M3).
                 self.lessons.push(FailedStrategy {
                     error_msg: ctx.message.clone(),
                     attempted_action: String::from("create"),
@@ -791,15 +807,26 @@ impl SelfHeal {
 impl ErrorContext {
     pub fn from_event_bytes(payload: &[u8]) -> Result<Self, &'static str> {
         let s = core::str::from_utf8(payload).map_err(|_| "invalid utf8")?;
-        let kind = if s.starts_with("#PF") { "PageFault" } else if s.starts_with("#GP") { "GeneralProtection" } else { "Unknown" };
+        let kind = if s.starts_with("#PF") {
+            "PageFault"
+        } else if s.starts_with("#GP") {
+            "GeneralProtection"
+        } else if s.starts_with('#') {
+            "Exception"
+        } else {
+            "Unknown"
+        };
+        // Honesty s390b: daemon="kernel" não tem arm RESPAWN → não fingir RestartDaemon.
+        // MemoryFault → CheckpointRestore; ExecutionFault idem. Nome informativo.
         Ok(ErrorContext {
             kind,
             message: s.to_string(),
             file: "exception_handler".into(),
             line: 0,
             ring: 0,
-            daemon: "kernel".into(),
-            tick: k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64,
+            daemon: "exception_handler".into(),
+            tick: k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed)
+                as u64,
         })
     }
 }
@@ -830,29 +857,68 @@ pub fn classify_by_code(code: u32) -> FailureClass {
 
 use core::sync::atomic::AtomicPtr;
 
+/// Topic canónico (cortex também exporta; string literal nos subscribers).
+pub const TOPIC_KERNEL_ERROR: &str = "KERNEL_ERROR";
+
 /// Push a daemon name into the bin's RESPAWN_QUEUE.
 /// Registered at boot by neural-kernel; called by SelfHealAgent when
 /// RecoveryAction::RestartDaemon is selected.
 type PushRespawnFn = fn(&str);
+type CanSpawnFn = fn(&str) -> bool;
 /// Stores the function pointer bits (not a pointer-to-fn-pointer).
 static PUSH_RESPAWN_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static CAN_SPAWN_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
-/// Register the RESPAWN_QUEUE push bridge.
-/// Called once at boot by neural-kernel after RESPAWN_QUEUE is initialized.
+/// Register the RESPAWN_QUEUE push bridge + spawnability check.
 pub fn register_respawn_bridge(push_fn: PushRespawnFn) {
     PUSH_RESPAWN_FN.store(push_fn as *mut (), Ordering::Release);
 }
 
+/// Register which names the bin can actually spawn (match arms).
+pub fn register_can_spawn(can: CanSpawnFn) {
+    CAN_SPAWN_FN.store(can as *mut (), Ordering::Release);
+}
+
+/// Normaliza nomes de recovery → arm RESPAWN. None = não spawnável.
+pub fn normalize_respawn_name(name: &str) -> Option<&str> {
+    match name {
+        "kernel" | "exception_handler" | "boot_self_heal" | "boot_log_agent" => None,
+        "SelfHealAgent" | "self_heal" => Some("self_heal"),
+        other => Some(other),
+    }
+}
+
 /// Push a daemon name to RESPAWN_QUEUE via the bridge.
-/// Returns true if the bridge was registered and the push succeeded.
+/// Returns true só se bridge OK **e** nome spawnável (can_spawn).
 pub fn push_respawn(daemon_name: &str) -> bool {
+    let Some(name) = normalize_respawn_name(daemon_name) else {
+        k_nano::slog_kai!(
+            "SELF",
+            "warn",
+            "push_respawn refuse non-spawnable '{}'",
+            daemon_name
+        );
+        return false;
+    };
+    let can_ptr = CAN_SPAWN_FN.load(Ordering::Acquire);
+    if !can_ptr.is_null() {
+        let can: CanSpawnFn = unsafe { core::mem::transmute(can_ptr) };
+        if !can(name) {
+            k_nano::slog_kai!(
+                "SELF",
+                "warn",
+                "push_respawn UNKNOWN '{}' — not executed",
+                name
+            );
+            return false;
+        }
+    }
     let ptr = PUSH_RESPAWN_FN.load(Ordering::Acquire);
     if ptr.is_null() {
         return false;
     }
-    // transmute ptr bits → fn(&str); register stored the fn address, not &fn.
     let f: PushRespawnFn = unsafe { core::mem::transmute(ptr) };
-    f(daemon_name);
+    f(name);
     true
 }
 
@@ -917,8 +983,7 @@ mod tests {
     }
 
     #[test]
-    fn analyze_memory_fault_no_llm_publish_side_effect_lessons() {
-        // Unit: MemoryFault returns RestartDaemon without needing bus (publish may no-op).
+    fn analyze_memory_fault_spawnable_restarts() {
         let mut heal = SelfHeal::new();
         let ctx = ErrorContext {
             kind: "PageFault",
@@ -926,14 +991,36 @@ mod tests {
             file: "t".into(),
             line: 1,
             ring: 0,
-            daemon: "net".into(),
+            daemon: "network_agent".into(),
             tick: 1,
         };
         let a = heal.analyze(&ctx, true);
         assert!(matches!(a, RecoveryAction::RestartDaemon(_, _)));
-        // Second time already_tried → AwaitLLM
         let a2 = heal.analyze(&ctx, true);
         assert!(matches!(a2, RecoveryAction::AwaitLLM(_)));
+    }
+
+    #[test]
+    fn analyze_exception_memory_uses_checkpoint() {
+        let mut heal = SelfHeal::new();
+        let ctx = ErrorContext {
+            kind: "PageFault",
+            message: "#PF ip=1".into(),
+            file: "t".into(),
+            line: 1,
+            ring: 0,
+            daemon: "exception_handler".into(),
+            tick: 1,
+        };
+        let a = heal.analyze(&ctx, true);
+        assert!(matches!(a, RecoveryAction::CheckpointRestore));
+    }
+
+    #[test]
+    fn normalize_respawn_refuses_kernel() {
+        assert!(normalize_respawn_name("kernel").is_none());
+        assert_eq!(normalize_respawn_name("SelfHealAgent"), Some("self_heal"));
+        assert_eq!(normalize_respawn_name("network_agent"), Some("network_agent"));
     }
 }
 
