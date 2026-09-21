@@ -20,19 +20,18 @@ use k_hal::cap_gate::{fe_for_class, grant_fe, HalCap};
 use k_hal::device_cap::DeviceClass;
 use ticket_lock::TicketLock;
 
-/// Bridge instalado pelo bin: garante o expert residente no router REAL (o que
-/// tem os 7 experts registrados via `init_trinity` + `load_router_from_file`)
-/// e devolve os bytes residentes na arena. O hermes não tem os experts no seu
-/// próprio `globals::TRINITY` (vazio) — o seam evita duplicar o registro.
+/// Bridge instalado pelo bin: garante o expert residente no router REAL
+/// (`cortex::trinity::TRINITY` — hermes re-exporta o mesmo static, SESSION_273).
+/// Devolve bytes residentes na arena quando `set_expert_weight` / mmap injetou.
+/// Sem weight: `None` gracioso (residual Efeito Matrix).
 pub type MmapExpertFn = fn(ExpertKind) -> Option<usize>;
 
 static TRINITY_MMAP_BRIDGE: TicketLock<Option<MmapExpertFn>> = TicketLock::new(None);
 
-/// O bin registra o bridge apontando para o seu router (boot, junto dos outros
-/// bridges net/vfs). Sem isto, o hermes usa o fallback local (dev/host).
+/// O bin registra o bridge apontando para o router cortex (boot).
 pub fn install_trinity_mmap_bridge(f: MmapExpertFn) {
     *TRINITY_MMAP_BRIDGE.lock() = Some(f);
-    k_nano::slog_hermes!("TRINITY", "info", "mmap bridge instalado (Efeito Matrix)");
+    k_nano::slog_hermes!("TRINITY", "ok", "mmap bridge instalado (Efeito Matrix)");
 }
 
 /// Telemetria para HUD/SelfHeal: o bridge está ativo?
@@ -57,9 +56,9 @@ pub fn ensure_expert_resident(kind: ExpertKind) -> Option<usize> {
     }
 }
 
-/// Popula hermes::globals::TRINITY com experts do bin (Phase 6 boot).
-/// Copia name/description de cada expert registrado no bin para o router do hermes.
-/// Expert weights NÃO são copiados (lazy via get_or_mmap_expert + bridge).
+/// Garante gaps de experts no TRINITY único (cortex — hermes `pub use`).
+/// `init_trinity()` já registra os 7; este fill só adiciona kinds ausentes
+/// (idempotente). Pesos continuam lazy via bridge / `set_expert_weight`.
 pub fn populate_trinity_from_bin(
     bin_experts: &[(ExpertKind, &'static str, &'static str)],
 ) {
@@ -75,7 +74,7 @@ pub fn populate_trinity_from_bin(
     }
     let after = router.experts().len();
     k_nano::slog_hermes!(
-        "TRINITY", "info",
+        "TRINITY", "ok",
         "populate_trinity_from_bin: {} -> {} experts",
         before, after
     );
@@ -95,16 +94,18 @@ pub enum InjectOutcome {
 }
 
 /// Mapeamento ExpertKind → DeviceClass (para auto-inject no routing).
+/// Honesty s388: só concede Cap quando o expert precisa de HW real.
+/// LLM/código/segurança sem DeviceClass → None (sem teatro Gpu/Display).
 pub fn expert_device_class(kind: ExpertKind) -> Option<DeviceClass> {
     match kind {
-        ExpertKind::HwIdentify => Some(DeviceClass::Net),      // PCI/USB scan via NIC
-        ExpertKind::HwControl => Some(DeviceClass::Gpu),       // display/volume/brightness
-        ExpertKind::RustCoder => Some(DeviceClass::Gpu),    // code generation
-        ExpertKind::DiskDiag => Some(DeviceClass::Net),         // disk diagnostics via ATA/NVMe
-        ExpertKind::Security => Some(DeviceClass::Net),         // security analysis
-        ExpertKind::Generator => Some(DeviceClass::Display),    // text generation for HUD
-        ExpertKind::SpeechSynth => Some(DeviceClass::Snd),      // TTS audio output
-        ExpertKind::Unknown => None,
+        ExpertKind::HwIdentify => Some(DeviceClass::Net),
+        ExpertKind::HwControl => Some(DeviceClass::Gpu), // brilho/volume → FeCompute
+        ExpertKind::DiskDiag => Some(DeviceClass::Block),
+        ExpertKind::SpeechSynth => Some(DeviceClass::Snd),
+        ExpertKind::RustCoder
+        | ExpertKind::Security
+        | ExpertKind::Generator
+        | ExpertKind::Unknown => None,
     }
 }
 
@@ -264,7 +265,7 @@ pub fn inject_for_hw_pnp(
         Ok(InjectOutcome::Injected { expert, resident_bytes, .. }) => {
             k_nano::slog_hermes!(
                 "TRINITY",
-                "info",
+                "ok",
                 "hw_pnp family='{}' → expert {} injetado ({} bytes, Efeito Matrix)",
                 family,
                 expert,
@@ -366,20 +367,20 @@ mod tests {
             let name = cortex::trinity::expert_kind_name(k);
             assert!(!name.is_empty(), "expert_kind_name({:?}) should not be empty", k);
         }
-        assert!(router.expert_resident_count() >= 0);
+        // Resident count is usize — just exercise the getter (no tautology ≥0).
+        let _ = router.expert_resident_count();
     }
 
     #[test]
     fn expert_device_class_mapping() {
-        // Todos os experts conhecidos têm DeviceClass
+        // HW experts têm DeviceClass; LLM/código/segurança → None (s388)
         assert!(expert_device_class(ExpertKind::HwIdentify).is_some());
         assert!(expert_device_class(ExpertKind::HwControl).is_some());
-        assert!(expert_device_class(ExpertKind::RustCoder).is_some());
         assert!(expert_device_class(ExpertKind::DiskDiag).is_some());
-        assert!(expert_device_class(ExpertKind::Security).is_some());
-        assert!(expert_device_class(ExpertKind::Generator).is_some());
         assert!(expert_device_class(ExpertKind::SpeechSynth).is_some());
-        // Unknown não tem mapeamento
+        assert!(expert_device_class(ExpertKind::RustCoder).is_none());
+        assert!(expert_device_class(ExpertKind::Security).is_none());
+        assert!(expert_device_class(ExpertKind::Generator).is_none());
         assert!(expert_device_class(ExpertKind::Unknown).is_none());
     }
 
@@ -470,19 +471,21 @@ mod tests {
         let _g = CAP_TEST_LOCK.lock();
         install_trinity_mmap_bridge(|_kind| Some(1024));
         let wasm = crate::wasmi_rt::generate_wasm_module();
-        let result = try_inject_on_promote("generator", &wasm);
+        // generator sem DeviceClass (s388) — inject None; use speech_synth
+        assert!(try_inject_on_promote("generator", &wasm).is_none());
+        let result = try_inject_on_promote("speech_synth", &wasm);
         assert!(result.is_some());
         let outcome = result.unwrap().expect("inject ok");
         match outcome {
             InjectOutcome::Injected { cap, expert, resident_bytes } => {
-                assert_eq!(cap, HalCap::FeDisplay);
-                assert_eq!(expert, "generator");
+                assert_eq!(cap, HalCap::FeAudio);
+                assert_eq!(expert, "speech_synth");
                 assert_eq!(resident_bytes, 1024);
             }
             other => panic!("com bridge deveria injetar, veio {:?}", other),
         }
         *TRINITY_MMAP_BRIDGE.lock() = None;
-        k_hal::cap_gate::revoke_fe(HalCap::FeDisplay);
+        k_hal::cap_gate::revoke_fe(HalCap::FeAudio);
     }
 
     // === Novos testes: family_to_expert_kind + inject_for_hw_pnp ===
@@ -545,10 +548,10 @@ mod tests {
         assert!(k_hal::cap_gate::has_fe(HalCap::FeAudio));
         k_hal::cap_gate::revoke_fe(HalCap::FeAudio);
 
-        // disk → FeNet (DeviceClass::Net for DiskDiag)
+        // disk → DeviceIo (DeviceClass::Block) — s388 honesty
         let _r = inject_for_hw_pnp("disk", None).unwrap().unwrap();
-        assert!(k_hal::cap_gate::has_fe(HalCap::FeNet));
-        k_hal::cap_gate::revoke_fe(HalCap::FeNet);
+        assert!(k_hal::cap_gate::has_fe(HalCap::DeviceIo));
+        k_hal::cap_gate::revoke_fe(HalCap::DeviceIo);
     }
 
     #[test]
@@ -619,7 +622,7 @@ mod tests {
         crate::skill_opt::record_python_run("disk_diag", "a*b", true);
         crate::skill_opt::record_python_run("disk_diag", "a*b", true);
         crate::skill_opt::record_python_run("disk_diag", "a*b", true);
-        // try_inject_on_promote: disk_diag → ExpertKind::DiskDiag → FeNet
+        // try_inject_on_promote: disk_diag → ExpertKind::DiskDiag → DeviceIo
         let wasm = crate::wasmi_rt::generate_wasm_module();
         let result = try_inject_on_promote("disk_diag", &wasm);
         let outcome = result.expect("disk_diag deveria mapear para DiskDiag")
@@ -627,14 +630,14 @@ mod tests {
         match outcome {
             InjectOutcome::Degraded(_) => {}
             InjectOutcome::Injected { cap, expert, .. } => {
-                assert_eq!(cap, HalCap::FeNet, "DiskDiag → DeviceClass::Net → FeNet");
+                assert_eq!(cap, HalCap::DeviceIo, "DiskDiag → Block → DeviceIo");
                 assert_eq!(expert, "disk_diag");
             }
         }
-        assert!(k_hal::cap_gate::has_fe(HalCap::FeNet));
+        assert!(k_hal::cap_gate::has_fe(HalCap::DeviceIo));
         assert!(k_nano::SKILL_REGISTRY.lock().has_skill("disk_diag"));
         // Cleanup
-        k_hal::cap_gate::revoke_fe(HalCap::FeNet);
+        k_hal::cap_gate::revoke_fe(HalCap::DeviceIo);
         crate::skill_opt::EVOLVING.lock().clear();
     }
 

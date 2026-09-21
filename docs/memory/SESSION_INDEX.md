@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s387 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s388 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 388 | ModelHub+Trinity | bughunt AIOS | hub register/mmap/CapGate | set_* vs drop; weight=None residual; Active size; generate_from_slot; Block→DeviceIo; Vision≠LLM |
 | 387 | Falcon3 LLM | bughunt AIOS | 1.58bit header/RoPE/hub | set_model_header Observe; θ=1000042; GGUF rope_precompute; Active→set_model; download 3b; 16 fixes |
 | 386 | W2A8 | bughunt AIOS | KernelPack + CPU W2A8 honesty | READY_NO_DISPATCH; probe_done; gfx90c Mad; SCORE tri-state; ternary só pack; CpuStub refuse; XPU no submit; ADR-0084 F4 |
 | 385 | SGDB | bughunt AIOS | Tickv+NoProto+ART+BQ+NSGDB | sync md/ strip; put_doc sync; RAG lexical; degraded; CRDT wire; force_heavy SleepCycle; 18 tests |

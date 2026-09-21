@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s387 — Falcon3 LLM honesty
+# STATE — neural-os-core v1.9.99-s388 — ModelHub + Trinity honesty
 
-#   PISTA ATIVA: s387 — Falcon3 1.58bit bughunt (H1–H6 + M1–M6 + L1–L5)
-#   PISTA ANTERIOR: s386 W2A8/KernelPack honesty
+#   PISTA ATIVA: s388 — ModelHub + Trinity MoE bughunt (H1–H5 + M1–M5 + L1–L3)
+#   PISTA ANTERIOR: s387 Falcon3 LLM honesty
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
@@ -26,6 +26,7 @@
 
 | ID | Item | Estado |
 |----|------|--------|
+| s388 | ModelHub + Trinity CapGate/mmap honesty | ✅ |
 | s387 | Falcon3 LLM header/RoPE/hub honesty | ✅ |
 | s386 | W2A8/KernelPack honesty High→Low | ✅ |
 | s385 | SGDB/Tickv/NSGDB bughunt High→Low | ✅ |
@@ -36,3 +37,4 @@
 | IDEA #550 | NKP B0–B3 | 🟡 B1.2/B4 AWAITING_HW |
 | #558b/#559b/#561b | aceite voz metal | residual paralelo |
 | B2 | Mesh peer B | AWAITING operador |
+| #607 | Efeito Matrix mmap expert residual | ⏳ |

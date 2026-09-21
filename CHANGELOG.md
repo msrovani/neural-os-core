@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s388] - 2026-09-21 — ModelHub + Trinity MoE honesty bughunt
+
+- High: `register_model` → set_*; `get_or_mmap` weight-only; Falcon3 size→Active; HwExpert LLM redirect; `generate_from_slot(Active)`→CURRENT
+- Med: hub_status Pro alias; CapGate HW-only + Block→DeviceIo; slog ADR-0092; Vision≠generator
+- Low: populate doc; BitNet MoE idea-only; trim assert
+- Canvas: `hub-trinity-bughunt-s388.canvas.tsx`
+
 ## [1.9.99-s387] - 2026-09-21 — Falcon3 LLM 1.58bit honesty bughunt
 
 - **H1–H6:** `set_model_header` Observe wired; rope_theta Falcon3=1000042; GGUF rope_precompute; Active→`set_model` (não Pro→CURRENT); n3 gate sev ok/warn

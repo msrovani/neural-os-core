@@ -222,7 +222,7 @@ impl TrinityRouter {
         }
         crate::global_arena::reset_moe_cache();
         k_nano::slog_cortex!(
-            "TRINITY", "warn",
+            "TRINITY", "ok",
             "Router weights set: {}x{} (MoE cache reset)", ROUTER_HIDDEN, n_exp
         );
         true
@@ -677,27 +677,29 @@ impl TrinityRouter {
     }
 
     /// Carrega pesos de um expert na Cortex Arena sob demanda (Efeito Matrix).
-    /// Retorna Some(&PackedTernaryTensor) se o expert ja esta residente.
-    /// Se nao, verifica se o ModelSlot correspondente esta loaded no boot.
+    /// Retorna Some(&PackedTernaryTensor) só se o expert já tem weight injetado.
+    /// Slot ModelHub loaded ≠ tensor ternário no Expert — mmap FAT residual (s388).
     pub fn get_or_mmap_expert(&self, kind: ExpertKind) -> Option<&PackedTernaryTensor> {
-        // 1. Ja residente?
         if let Some(e) = self.experts.iter().find(|e| e.kind == kind) {
-            return e.weight.as_ref();
+            if let Some(ref w) = e.weight {
+                return Some(w);
+            }
         }
-        // 2. Mapear kind -> ModelSlot para buscar no FAT
         let slot = match kind {
             ExpertKind::HwIdentify => Some(crate::model_hub::ModelSlot::HwExpert),
             ExpertKind::RustCoder => Some(crate::model_hub::ModelSlot::RustCoder),
             ExpertKind::Generator => Some(crate::model_hub::ModelSlot::GeneratorPro),
             _ => None,
         };
-        let slot = slot?;
-        // 3. Se o slot ja foi carregado no boot, o expert esta residente
-        if crate::model_hub::slot_loaded(slot) {
-            let names = crate::model_hub::fat_names_for(slot);
-            if let Some(&name) = names.first() {
-                k_nano::slog_cortex!("TRINITY", "ok",
-                    "Expert {:?} residente no slot {} (pre-loaded)", kind, name);
+        if let Some(slot) = slot {
+            if crate::model_hub::slot_loaded(slot) {
+                k_nano::slog_cortex!(
+                    "TRINITY",
+                    "warn",
+                    "Expert {:?} slot={} loaded but weight=None (mmap residual — Efeito Matrix)",
+                    kind,
+                    slot.name()
+                );
             }
         }
         None

@@ -66,6 +66,8 @@ pub fn fe_for_class(class: crate::device_cap::DeviceClass) -> Option<HalCap> {
         DeviceClass::Gpu => Some(HalCap::FeCompute),
         DeviceClass::Snd => Some(HalCap::FeAudio),
         DeviceClass::Video => Some(HalCap::FeVideo),
+        // Honesty s388: Block → DeviceIo (sem FE inventado; disco ≠ FeNet)
+        DeviceClass::Block => Some(HalCap::DeviceIo),
         _ => None,
     }
 }

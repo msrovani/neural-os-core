@@ -84,19 +84,27 @@ pub fn slot_loaded(slot: ModelSlot) -> bool {
 }
 
 pub fn register_model(slot: ModelSlot, model: Box<dyn Model>) {
-    // Active / RustCoder / HwExpert vivem nos Mutex legados — só marca flag.
-    if matches!(
-        slot,
-        ModelSlot::Active | ModelSlot::RustCoder | ModelSlot::HwExpert
-    ) {
-        mark(slot, true);
-        k_nano::slog_bin!("MODEL", "ok", "hub mark slot={}", slot.name());
-        return;
+    // Honesty s388: Active/RustCoder/HwExpert vivem nos Mutex legados — NÃO drop.
+    match slot {
+        ModelSlot::Active => {
+            crate::cortex::set_model(model);
+            k_nano::slog_bin!("MODEL", "ok", "hub register Active → CURRENT_MODEL");
+        }
+        ModelSlot::RustCoder => {
+            crate::cortex::set_rustcoder_model(model);
+            k_nano::slog_bin!("MODEL", "ok", "hub register RustCoder → static");
+        }
+        ModelSlot::HwExpert => {
+            crate::cortex::set_hwexpert_model(model);
+            k_nano::slog_bin!("MODEL", "ok", "hub register HwExpert → static");
+        }
+        other => {
+            let i = idx(other);
+            HUB.lock().slots[i] = Some(model);
+            mark(other, true);
+            k_nano::slog_bin!("MODEL", "ok", "hub slot={} loaded", other.name());
+        }
     }
-    let i = idx(slot);
-    HUB.lock().slots[i] = Some(model);
-    mark(slot, true);
-    k_nano::slog_bin!("MODEL", "ok", "hub slot={} loaded", slot.name());
 }
 
 /// Ponto único de carga por bytes (ADR-0085 §7): load_model_v6 → ModelView
@@ -138,21 +146,31 @@ pub fn register_bytes(slot: ModelSlot, data: &[u8]) -> bool {
     match view {
         crate::model::ModelView::Llm(m) => {
             let boxed: Box<dyn Model> = Box::new(m);
-            if matches!(
-                slot,
-                ModelSlot::Active | ModelSlot::RustCoder | ModelSlot::HwExpert
-            ) {
-                match slot {
-                    // Honesty s387: set_model = MODEL_LOADED + EMBED_DIM + slog AI_READY
-                    ModelSlot::Active => crate::cortex::set_model(boxed),
-                    ModelSlot::RustCoder => *crate::cortex::RUSTCODER_MODEL.lock() = Some(boxed),
-                    _ => {}
+            match slot {
+                // Honesty s388: set_model = MODEL_LOADED + EMBED_DIM + slog AI_READY
+                ModelSlot::Active => {
+                    crate::cortex::set_model(boxed);
+                    mark(slot, true);
                 }
-            } else {
-                let i = idx(slot);
-                HUB.lock().slots[i] = Some(boxed);
+                ModelSlot::RustCoder => {
+                    crate::cortex::set_rustcoder_model(boxed);
+                }
+                ModelSlot::HwExpert => {
+                    // LLM bytes no slot HwExpert ≠ HWExpert v4 — não mentir loaded.
+                    k_nano::slog_bin!(
+                        "MODEL",
+                        "warn",
+                        "register_bytes: LLM no slot hw_identify — redireciona Active"
+                    );
+                    crate::cortex::set_model(boxed);
+                    mark(ModelSlot::Active, true);
+                }
+                other => {
+                    let i = idx(other);
+                    HUB.lock().slots[i] = Some(boxed);
+                    mark(other, true);
+                }
             }
-            mark(slot, true);
             k_nano::slog_bin!("MODEL", "ok", "register_bytes slot={} LLM v6 ok", slot.name());
             true
         }
@@ -179,10 +197,22 @@ pub fn mark_pro_alias(filled: bool) {
     mark(ModelSlot::GeneratorPro, filled);
 }
 
-/// Clona referência lógica: move para slot sem dropar Active se for o mesmo ptr — use register.
+/// Gera a partir do slot — Active/RustCoder leem os Mutex legados (não o array HUB).
 pub fn generate_from_slot(slot: ModelSlot, prompt: &str) -> Option<String> {
-    let hub = HUB.lock();
-    hub.slots[idx(slot)].as_ref().map(|m| m.generate(prompt))
+    match slot {
+        ModelSlot::Active => {
+            let guard = crate::cortex::CURRENT_MODEL.lock();
+            guard.as_ref().map(|m| m.generate(prompt))
+        }
+        ModelSlot::RustCoder => {
+            let guard = crate::cortex::RUSTCODER_MODEL.lock();
+            guard.as_ref().map(|m| m.generate(prompt))
+        }
+        other => {
+            let hub = HUB.lock();
+            hub.slots[idx(other)].as_ref().map(|m| m.generate(prompt))
+        }
+    }
 }
 
 /// Generate with structured decoding from a specific slot.
@@ -194,10 +224,7 @@ pub fn generate_structured_from_slot(
 ) -> Option<String> {
     let mut dec = crate::structured_decode::StructuredDecoder::new(grammar.into());
     crate::cortex::DECODER_CELL.set(&mut dec as *mut crate::structured_decode::StructuredDecoder);
-    let out = {
-        let hub = HUB.lock();
-        hub.slots[idx(slot)].as_ref().map(|m| m.generate(prompt))
-    };
+    let out = generate_from_slot(slot, prompt);
     // SESSION_359: limpa ponteiro residual se generate não consumiu (slot vazio / path sem take)
     let _ = crate::cortex::DECODER_CELL.take();
     out
@@ -260,10 +287,10 @@ fn fit_ok(slot: ModelSlot) -> bool {
 }
 
 fn pick_fit_fallback(preferred: ModelSlot) -> ModelSlot {
+    // Honesty s388: Vision ≠ gerador — só Pro/Agent/Reranker/Active.
     let order = [
         ModelSlot::GeneratorPro,
         ModelSlot::Agent,
-        ModelSlot::Vision,
         ModelSlot::Reranker,
         ModelSlot::Active,
     ];
@@ -292,11 +319,7 @@ fn pick_fit_fallback(preferred: ModelSlot) -> ModelSlot {
         "escalate slot={} reason=too_tight (no Good+ fallback)",
         preferred.name()
     );
-    if hub_has_blob(ModelSlot::Vision) {
-        ModelSlot::Vision
-    } else {
-        ModelSlot::Active
-    }
+    ModelSlot::Active
 }
 
 fn maybe_fit(slot: ModelSlot) -> ModelSlot {
@@ -345,7 +368,21 @@ pub fn hub_status() -> String {
         s.push(' ');
         s.push_str(slot.name());
         s.push('=');
-        s.push_str(if slot_loaded(slot) { "1" } else { "0" });
+        // Honesty s388: Pro pode ser alias do Active (7B no CURRENT) sem blob hub.
+        let tag = if slot == ModelSlot::GeneratorPro {
+            if hub_has_blob(slot) {
+                "1"
+            } else if slot_loaded(slot) {
+                "alias"
+            } else {
+                "0"
+            }
+        } else if slot_loaded(slot) {
+            "1"
+        } else {
+            "0"
+        };
+        s.push_str(tag);
     }
     s
 }
@@ -365,7 +402,7 @@ pub fn slot_from_bitnet_bytes(data: &[u8]) -> ModelSlot {
             _ => ModelSlot::GeneratorPro,
         };
     }
-    // Fallback: tamanho bruto (legado)
+    // Fallback: tamanho bruto (legado) — ADR-0101 lab 3B ~989MB = Active.
     let len = data.len();
     const MB: usize = 1024 * 1024;
     if len < 20 * MB {
@@ -374,11 +411,11 @@ pub fn slot_from_bitnet_bytes(data: &[u8]) -> ModelSlot {
         ModelSlot::Learner
     } else if len < 450 * MB {
         ModelSlot::Vision
-    } else if len < 1100 * MB {
-        // Falcon3-3B .BIN legado (~771MB) → Agent
-        ModelSlot::Agent
+    } else if len < 1200 * MB {
+        // Falcon3-3B v6 (~989MB) e Agent médios → Active (lab), não Agent stub.
+        ModelSlot::Active
     } else {
-        // Falcon3-3B/7B v6 (~1.74 GB) e maiores (10B ~2.5 GB) → GeneratorPro
+        // Falcon3-7B/10B / LLaMA-8B → GeneratorPro
         ModelSlot::GeneratorPro
     }
 }

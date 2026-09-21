@@ -1920,7 +1920,7 @@ impl Agent for HermesAgent {
                                 structured_skill,
                             );
                             crate::cognitive_bridge::note_route(&route);
-                            k_nano::slog_hermes!("ROUTE", "info", "{} — {}", route.reason, route.emotion);
+                            k_nano::slog_hermes!("ROUTE", "ok", "{} — {}", route.reason, route.emotion);
 
                             match route.kind {
                                 crate::cognitive_bridge::RouteKind::Tts => {

@@ -4271,17 +4271,13 @@ fn dispatch_hw_control(utterance: &str) -> String {
     String::from("[HW] controle nao reconhecido — diga ex: ajuste o volume para 80%")
 }
 
-/// Fallback: CURRENT_MODEL, depois ModelHub slots (Vision → GeneratorPro → Reranker).
+/// Fallback: CURRENT_MODEL, depois geradores do hub (Pro → Reranker).
+/// Honesty s388: Vision encoder ≠ gerador de texto.
 fn fallback_generate(prompt: &str) -> String {
     let guard = CURRENT_MODEL.lock();
     match guard.as_ref() {
         Some(m) => m.generate(prompt),
         None => {
-            if let Some(out) =
-                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::Vision, prompt)
-            {
-                return out;
-            }
             if let Some(out) = crate::model_hub::generate_from_slot(
                 crate::model_hub::ModelSlot::GeneratorPro,
                 prompt,
@@ -4359,8 +4355,8 @@ fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
         });
         let slot = match expert_name {
             "generator_pro" => crate::model_hub::ModelSlot::GeneratorPro,
-            "generator_fast" => crate::model_hub::ModelSlot::Vision,
-            "tinystories" => crate::model_hub::ModelSlot::Reranker,
+            // Honesty s388: Vision ≠ gerador de texto — alias de Active.
+            "generator_fast" | "tinystories" => crate::model_hub::select_generator_slot(prompt),
             _ => crate::model_hub::select_generator_slot(prompt),
         };
         k_nano::slog_cortex!("TRINITY", "ok", "MoE generator slot={}", slot.name());
@@ -4368,15 +4364,9 @@ fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
             if let Some(out) = crate::model_hub::generate_from_slot(slot, prompt) {
                 return out;
             }
-            // Pro miss → Fast → Active
+            // Pro miss → Active (não Vision encoder)
             if slot == crate::model_hub::ModelSlot::GeneratorPro {
-                if let Some(out) = crate::model_hub::generate_from_slot(
-                    crate::model_hub::ModelSlot::Vision,
-                    prompt,
-                ) {
-                    k_nano::slog_cortex!("TRINITY", "ok", "pro miss → generator_fast");
-                    return out;
-                }
+                k_nano::slog_cortex!("TRINITY", "warn", "pro miss → CURRENT_MODEL (Active)");
             }
         }
     }
