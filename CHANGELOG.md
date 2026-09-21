@@ -3,6 +3,7 @@
 ## [1.9.99-s385] - 2026-09-21 — SGDB/Tickv/NSGDB honesty bughunt
 
 - H1–H7: sync_write strip `md/Lx/`; put_doc→NSGDB+CRDT; RAG lexical+engine; engine refuse L2+ sem Tickv; TickvLite.degraded; force_heavy SleepCycle
+- **s385b:** remember_* → put_doc; pseudo→lexical first; sync Err slog; BQ top_k dim refuse
 - Med: sync_durable no-op; checkpoint compact só ram; memory_aware lexical; OsEmbedder pseudo warn
 - Low: noproto idea-only doc; BQ insert_1024 dim check; dual ART comentário canónico=NSGDB
 - Upstream: tickv/noproto **não** bump (idea-only); neural-sgdb 1.1.20

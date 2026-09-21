@@ -401,21 +401,33 @@ pub fn sync_write_to_nsgdb(key: &str, val: &[u8], layer: u8) {
             _ => MemoryLayer::L7Identity,
         };
         let doc = ExtDoc::new(ml, logical, val.to_vec());
-        let _ = db.put(doc);
+        if let Err(e) = db.put(doc) {
+            k_nano::slog_kai!(
+                "NSGDB",
+                "warn",
+                "sync_write put FAIL key={} err={}",
+                logical,
+                e
+            );
+        }
     });
 }
 
 /// Sincroniza um fact (L3) para o NSGDB.
 pub fn sync_fact_to_nsgdb(fact: &str, now: u64) {
     let _ = with_nsgdb(|db| {
-        let _ = db.remember_fact(fact, now);
+        if let Err(e) = db.remember_fact(fact, now) {
+            k_nano::slog_kai!("NSGDB", "warn", "sync_fact FAIL err={}", e);
+        }
     });
 }
 
 /// Sincroniza um exchange (L1+L2) para o NSGDB.
 pub fn sync_exchange_to_nsgdb(user: &str, response: &str) {
     let _ = with_nsgdb(|db| {
-        let _ = db.remember_exchange(user, response);
+        if let Err(e) = db.remember_exchange(user, response) {
+            k_nano::slog_kai!("NSGDB", "warn", "sync_exchange FAIL err={}", e);
+        }
     });
 }
 

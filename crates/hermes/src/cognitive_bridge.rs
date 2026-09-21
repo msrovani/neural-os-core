@@ -716,17 +716,29 @@ pub fn init_decision_layer() {
 /// Memory Interpreter (Fase 3.0-A): consome Hits tipados do neural-sgdb.
 /// Cada Hit tem content_type, path, matched_terms — o LLM interpreta.
 /// Fallback: se NSGDB indisponível, cai para engine interno.
-fn gated_rag_context(query_text: &str, q_emb: &[f32], k: usize) -> String {
-    // ADR-0008 / s385: semantic primeiro; se vazio → lexical (default MCP).
-    let mut typed_hits = k_ai::sgdb::nsgdb_bridge::recall_typed(q_emb, k);
+///
+/// `emb_path`: se `"pseudo"`, **pula** semantic (ruído) e vai lexical (ADR-0008).
+fn gated_rag_context(query_text: &str, q_emb: &[f32], k: usize, emb_path: &str) -> String {
+    let prefer_lexical = emb_path == "pseudo" || q_emb.is_empty();
+    let mut typed_hits = if prefer_lexical {
+        Vec::new()
+    } else {
+        k_ai::sgdb::nsgdb_bridge::recall_typed(q_emb, k)
+    };
     if typed_hits.is_empty() && !query_text.is_empty() {
         typed_hits = k_ai::sgdb::nsgdb_bridge::recall_lexical_bridge(query_text, k);
         if !typed_hits.is_empty() {
-            k_nano::slog_hermes!("RECALL", "ok", "RAG fallback lexical n={}", typed_hits.len());
+            k_nano::slog_hermes!(
+                "RECALL",
+                "ok",
+                "RAG lexical n={} (prefer_lex={})",
+                typed_hits.len(),
+                prefer_lexical
+            );
         }
     }
-    // Fallback engine interno (NSGDB frio / heavy pending)
-    if typed_hits.is_empty() && !q_emb.is_empty() {
+    // Engine BQ só com embedding real (pseudo = Hamming lixo)
+    if typed_hits.is_empty() && !q_emb.is_empty() && !prefer_lexical {
         let internal = k_ai::sgdb::rag_context(q_emb, k.min(3));
         if !internal.is_empty() {
             return format!("[MEMORY-RECALL engine]\n{}", internal);
@@ -801,16 +813,20 @@ fn gated_rag_context(query_text: &str, q_emb: &[f32], k: usize) -> String {
 /// - embedding_refs: referências a embeddings reutilizáveis
 pub fn memory_aware_route(
     user_intent: &str,
-) -> (String, Option<String>, Vec<([f32; 8] /* dim fixa por agora */)>) {
-    let (q_emb, _emb_path) = k_ai::memory_systems::embed_or_pseudo(user_intent);
-    let mut hits = k_ai::sgdb::nsgdb_bridge::recall_typed(&q_emb, 5);
+) -> (String, Option<String>, Vec<[f32; 8]>) {
+    let (q_emb, emb_path) = k_ai::memory_systems::embed_or_pseudo(user_intent);
+    let mut hits = if emb_path == "pseudo" || q_emb.is_empty() {
+        Vec::new()
+    } else {
+        k_ai::sgdb::nsgdb_bridge::recall_typed(&q_emb, 5)
+    };
     if hits.is_empty() {
         hits = k_ai::sgdb::nsgdb_bridge::recall_lexical_bridge(user_intent, 5);
     }
 
     let mut context_text = String::new();
     let mut intent_data: Option<String> = None;
-    let mut embedding_refs: Vec<[f32; 8]> = Vec::new();
+    let embedding_refs: Vec<[f32; 8]> = Vec::new();
 
     for hit in &hits {
         match hit.content_type {
@@ -875,7 +891,7 @@ pub fn cortex_system_prompt(user_intent: &str) -> String {
     // Gate determinístico (#314): path trust + blacklist + budget 3.
     let mut recall_path = "rag";
     let (q_emb, emb_path) = k_ai::memory_systems::embed_or_pseudo(user_intent);
-    let rag = gated_rag_context(user_intent, &q_emb, 5);
+    let rag = gated_rag_context(user_intent, &q_emb, 5, emb_path);
     if !rag.is_empty() {
         s.push_str(&rag);
         s.push('\n');
@@ -951,7 +967,7 @@ pub fn after_exchange(user: &str, response: &str, tick: u64) {
     let (emb_u, path_u) = k_ai::memory_systems::embed_or_pseudo(user);
     let (emb_a, path_a) = k_ai::memory_systems::embed_or_pseudo(response);
     k_ai::sgdb::remember_exchange_full(user, response, &emb_u, &emb_a, tick);
-    k_nano::slog_bin!("sgdb", "emb", "user={} asst={}", path_u, path_a);
+    k_nano::slog_hermes!("sgdb", "ok", "emb user={} asst={}", path_u, path_a);
     // Audit flush periódico (cada exchange — compacto)
     crate::globals::AUDIT_TRAIL.lock().flush_to_sgdb();
     // BGE paralelo (embeddings residual)

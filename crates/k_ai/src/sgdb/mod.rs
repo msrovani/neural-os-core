@@ -12,8 +12,8 @@ pub mod layers;
 pub mod memory_doc;
 pub mod metrics;
 pub mod store;
-// neural-sgdb v1.1.13 compila no_std (SSE2 gateado off x86_64-unknown-none
-// no upstream 3cc3010) — bridge real incondicional, sem stub.
+// neural-sgdb v1.1.20 compila no_std (SSE2 gateado off x86_64-unknown-none
+// no upstream) — bridge real incondicional, sem stub.
 pub mod tickv_adapter;
 pub mod nsgdb_bridge;
 

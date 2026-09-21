@@ -45,7 +45,13 @@
 | noproto 0.1.0 | idea-only — `k_nano::net::noproto` |
 | neural-sgdb 1.1.20 | manter junction; era_report MCP OK |
 
-## Residual
+## Residual s385b (hot-path completo)
 
-- ADR-0091 Fase 3: cortar dual-write (75 callers → NSGDB primário) — IDEA #537 ainda ⏳ cutover
-- Aceite QEMU PHASE 6/7 + heavy SleepCycle em file backend
+| ID | Fix |
+|----|-----|
+| H2b | `remember_*` / `remember_text` → `put_doc` + `sync_exchange`/`sync_fact` |
+| M4+ | `gated_rag` / `memory_aware`: `emb_path=pseudo` → lexical first |
+| M5 | sync_write/fact/exchange slog em Err |
+| M6 | BQ `top_k` refuse dim mismatch |
+
+Gates s385b: check k_ai+hermes OK; sgdb 18 pass.

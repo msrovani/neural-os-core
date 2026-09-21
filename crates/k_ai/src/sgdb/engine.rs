@@ -249,13 +249,9 @@ pub fn with_engine<R>(f: impl FnOnce(&mut AiosDatabaseEngine) -> R) -> Option<R>
     g.as_mut().map(f)
 }
 
-/// Put conveniência com texto (L1 working).
+/// Put conveniência com texto — via `store::put_doc` (sync NSGDB + CRDT).
 pub fn remember_text(layer: MemoryLayer, key: &str, text: &str) -> Result<u64, &'static str> {
-    with_engine(|e| {
-        let doc = MemoryDoc::new(layer, key, text.as_bytes().to_vec());
-        e.put(doc)
-    })
-    .unwrap_or(Err("engine down"))
+    super::store::put_doc(MemoryDoc::new(layer, key, text.as_bytes().to_vec()))
 }
 
 pub fn backend_note() -> String {

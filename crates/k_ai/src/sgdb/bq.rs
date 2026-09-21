@@ -91,6 +91,17 @@ impl BqFlatIndex {
         if w == 0 || self.ids.is_empty() {
             return Vec::new();
         }
+        // Honesty: dim mismatch → Hamming truncado = score mentiroso.
+        if query.len() != w {
+            k_nano::slog_kai!(
+                "SGDB",
+                "warn",
+                "BQ top_k dim mismatch query_words={} want={} — refuse",
+                query.len(),
+                w
+            );
+            return Vec::new();
+        }
         let mut scored: Vec<(u64, u32)> = Vec::with_capacity(self.ids.len());
         for (i, id) in self.ids.iter().enumerate() {
             let start = i * w;

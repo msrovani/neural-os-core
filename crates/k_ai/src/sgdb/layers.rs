@@ -17,22 +17,22 @@ pub fn ensure_ready() {
 }
 
 /// Pós-turno: L1 working (user) + L2 episódico curto (assistant).
+/// s385b: via `put_doc` (sync NSGDB + CRDT) — não contornar store.
 pub fn remember_exchange(user: &str, response: &str) {
     ensure_ready();
-    let _ = with_engine(|e| {
-        let u = MemoryDoc::new(
-            MemoryLayer::L1Working,
-            "last_user",
-            user.as_bytes().to_vec(),
-        );
-        let _ = e.put(u);
-        let a = MemoryDoc::new(
-            MemoryLayer::L2EpisodicShort,
-            "last_asst",
-            response.as_bytes().to_vec(),
-        );
-        e.put(a)
-    });
+    let u = MemoryDoc::new(
+        MemoryLayer::L1Working,
+        "last_user",
+        user.as_bytes().to_vec(),
+    );
+    let _ = super::store::put_doc(u);
+    let a = MemoryDoc::new(
+        MemoryLayer::L2EpisodicShort,
+        "last_asst",
+        response.as_bytes().to_vec(),
+    );
+    let _ = super::store::put_doc(a);
+    super::nsgdb_bridge::sync_exchange_to_nsgdb(user, response);
 }
 
 /// Indexa embedding L4 (BQ). Aceita BGE ou pseudo; `emb` vazio = no-op.
@@ -47,7 +47,7 @@ pub fn remember_semantic(key: &str, text: &str, emb: &[f32]) {
     }
     let mut doc = MemoryDoc::new(MemoryLayer::L4Semantic, key, payload);
     doc.bitvec = Some(quantize_f32(emb));
-    let _ = with_engine(|e| e.put(doc));
+    let _ = super::store::put_doc(doc);
     let _ = text;
 }
 
@@ -148,7 +148,8 @@ pub fn remember_fact(fact: &str) {
         &key,
         fact.as_bytes().to_vec(),
     );
-    let _ = with_engine(|e| e.put(doc));
+    let _ = super::store::put_doc(doc);
+    super::nsgdb_bridge::sync_fact_to_nsgdb(fact, ts);
 }
 
 /// Prefixo de prompt a partir de docs L1/L2 recentes.
@@ -186,6 +187,7 @@ pub fn prompt_slice(max_chars: usize) -> String {
 }
 
 /// Pós-turno completo: texto L1/L2 constantes + L2 timestamped + L4 BQ temporal.
+/// s385b: todos os puts via `put_doc` / `remember_text` (sync+CRDT); exchange NSGDB no fim.
 pub fn remember_exchange_full(
     user: &str,
     response: &str,
@@ -198,17 +200,17 @@ pub fn remember_exchange_full(
     let ts_u = alloc::format!("{}/u", ts);
     let ts_a = alloc::format!("{}/a", ts);
 
-    // L1/L2 constant keys (prompt_slice compat)
-    let _ = with_engine(|e| {
-        let u = MemoryDoc::new(MemoryLayer::L1Working, "last_user", user.as_bytes().to_vec());
-        let _ = e.put(u);
-        let a = MemoryDoc::new(
-            MemoryLayer::L2EpisodicShort,
-            "last_asst",
-            response.as_bytes().to_vec(),
-        );
-        e.put(a)
-    });
+    // L1/L2 constant keys (prompt_slice compat) — via put_doc
+    let _ = super::store::put_doc(MemoryDoc::new(
+        MemoryLayer::L1Working,
+        "last_user",
+        user.as_bytes().to_vec(),
+    ));
+    let _ = super::store::put_doc(MemoryDoc::new(
+        MemoryLayer::L2EpisodicShort,
+        "last_asst",
+        response.as_bytes().to_vec(),
+    ));
 
     // L2 timestamped text (acumula para recall RAG)
     let _ = super::engine::remember_text(MemoryLayer::L2EpisodicShort, &ts_u, user);
@@ -217,6 +219,9 @@ pub fn remember_exchange_full(
     // L4 timestamped embeddings
     remember_semantic(&ts_u, user, emb_u);
     remember_semantic(&ts_a, response, emb_a);
+
+    // NSGDB remember_exchange (episódico tipado / lexical) — além do sync_write genérico
+    super::nsgdb_bridge::sync_exchange_to_nsgdb(user, response);
 }
 
 /// RAG context: BQ recall + fetch payload + formato string pro prompt.
