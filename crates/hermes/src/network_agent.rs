@@ -512,7 +512,7 @@ pub fn network_agent_tick() {
     }
 
     if !CONTINUOUS_ANNOUNCED.swap(true, Ordering::Relaxed) {
-        k_nano::slog_hermes!("Net", "info", "Continuous active pós-init (SelfHeal/Disk Done) — gate=e1000 [smoltcp/NIC]");
+        k_nano::slog_hermes!("Net", "ok", "Continuous active pós-init (SelfHeal/Disk Done) — gate=e1000 [smoltcp/NIC]");
         drop(s);
         // netfs smoke handled by bin if needed; hermes netfs via crate::netfs
         // Best-effort: try hermes netfs smoke if available
@@ -520,7 +520,7 @@ pub fn network_agent_tick() {
         s = NET_STATE.lock();
     }
     if tick <= 20 || tick % 50 == 0 {
-        k_nano::slog_hermes!("Net", "info", "tick {}", tick);
+        k_nano::slog_hermes!("Net", "trace", "tick {}", tick);
     }
     if tick == 0 || tick == 1 || tick == 2 || tick == 5 || tick == 10 {
         log(tick, &alloc::format!("NetAgent tick started (tick={})", tick));

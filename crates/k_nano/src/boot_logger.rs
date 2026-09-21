@@ -59,7 +59,7 @@ pub fn ui_is_live() -> bool {
     UI_LIVE.load(Ordering::Acquire)
 }
 
-/// Heap talc jÃ¡ inicializado â€” obrigatÃ³rio antes de qualquer alloc no logger.
+/// Heap talc já inicializado — obrigatório antes de qualquer alloc no logger.
 static HEAP_READY: AtomicBool = AtomicBool::new(false);
 
 pub fn heap_ready() -> bool {
@@ -524,7 +524,7 @@ pub fn skip_disk_persist_except_usb() {
     mark_skip(SKIP_ATA | SKIP_AHCI | SKIP_NVME);
     #[cfg(feature = "fat-boot-log")]
     {
-        crate::slog_nano!("LOG", "info", "persist USB-only (live stick sem MSC)");
+        crate::slog_nano!("LOG", "ok", "persist USB-only (live stick sem MSC)");
     }
 }
 
@@ -734,7 +734,7 @@ fn persist_now(_dev: Option<&mut dyn BlockDevice>) -> bool {
     false
 }
 
-/// Init legado ATA (partiÃ§Ãµes jÃ¡ lidas).
+/// Init legado ATA (partições já lidas).
 pub fn init(ata: Option<&crate::ata::AtaDriver>, _parts: &[crate::fat32::Partition]) {
     #[cfg(feature = "fat-boot-log")]
     {
@@ -744,21 +744,38 @@ pub fn init(ata: Option<&crate::ata::AtaDriver>, _parts: &[crate::fat32::Partiti
         if let Some(a) = ata {
             let _ = a;
             let ok = persist_now(None);
-            crate::slog_nano!("LOG", "info", "BOOT.LOG persist ATA/USB={} writes={}",
+            crate::slog_nano!(
+                "LOG",
+                if ok { "ok" } else { "warn" },
+                "BOOT.LOG persist ATA/USB={} writes={}",
                 ok,
-                DISK_WRITES.load(Ordering::Relaxed));
+                DISK_WRITES.load(Ordering::Relaxed)
+            );
             if !ok {
-                crate::slog_nano!("LOG", "info", "WARN: BOOT.LOG nao gravado — confira FAT32 no stick");
+                crate::slog_nano!(
+                    "LOG",
+                    "warn",
+                    "BOOT.LOG nao gravado — confira FAT32 no stick"
+                );
             }
         } else {
             let ok = persist_now(None);
-            crate::slog_nano!("LOG", "info", "BOOT.LOG persist (no ATA arg) ok={}", ok);
+            crate::slog_nano!(
+                "LOG",
+                if ok { "ok" } else { "warn" },
+                "BOOT.LOG persist (no ATA arg) ok={}",
+                ok
+            );
         }
     }
     #[cfg(not(feature = "fat-boot-log"))]
     {
         let _ = ata;
-        crate::slog_nano!("LOG", "info", "SKIP fat session write (enable feature fat-boot-log to persist)");
+        crate::slog_nano!(
+            "LOG",
+            "warn",
+            "SKIP fat session write (enable feature fat-boot-log to persist)"
+        );
         FAT_READY.store(false, Ordering::Relaxed);
     }
 }
@@ -801,10 +818,10 @@ fn storage_available() -> bool {
     false
 }
 
-/// Registra mensagem. Com fat-boot-log: buffer; flush só com BlockDevice pronto.
+/// Registra mensagem. Honesty s389: só slog — `serial::emit` já faz append_raw
+/// quando `to_file` (ADR-0092 canal A). Evita duplicata slog+log_quiet.
 pub fn log(msg: &str) {
-    crate::slog_nano!("LOG", "info", "{}", msg);
-    log_quiet(msg);
+    crate::slog_nano!("LOG", "ok", "{}", msg);
 }
 
 /// Diagnóstico do path de persistência: serial + ramlog, SEM re-entrar no flush.
@@ -812,7 +829,7 @@ pub fn log(msg: &str) {
 /// SINCE_FLUSH≥16 → persist_now → ...) até stack overflow (#PF) quando o flush
 /// falha (ex: QEMU sem USB-MSC/ATA). SESSION_265.
 fn log_no_flush(msg: &str) {
-    crate::slog_nano!("LOG", "info", "{}", msg);
+    crate::slog_nano!("LOG", "warn", "{}", msg);
     buffer_log(msg);
 }
 
@@ -841,7 +858,7 @@ pub fn log_quiet(msg: &str) {
     }
 }
 
-/// Flush forÃ§ado (checkpoints crÃ­ticos). Retorna true se gravou em FAT.
+/// Flush forçado (checkpoints críticos). Retorna true se gravou em FAT.
 pub fn flush() -> bool {
     #[cfg(feature = "fat-boot-log")]
     {

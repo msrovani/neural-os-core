@@ -107,6 +107,20 @@ pub fn file_allows(sev: Sev) -> bool {
     sev != Sev::Trace || file_allows_trace()
 }
 
+#[cfg(test)]
+mod channel_a_tests {
+    use super::*;
+
+    /// ADR-0092: ok/warn/fail vão a ficheiro; trace só com boot-trace.
+    #[test]
+    fn file_gate_matches_adr0092() {
+        assert!(file_allows(Sev::Ok));
+        assert!(file_allows(Sev::Warn));
+        assert!(file_allows(Sev::Fail));
+        assert_eq!(file_allows(Sev::Trace), cfg!(feature = "boot-trace"));
+    }
+}
+
 /// Emite linha slog. TRACE não vai à consola (default); ficheiro só com `boot-trace`.
 pub fn emit(ring: &str, krate: &str, item: &str, sub: &str, args: core::fmt::Arguments) {
     let sev = Sev::from_sub(sub);

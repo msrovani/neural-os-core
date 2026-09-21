@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s389] - 2026-09-21 — Logging QEMU+HW honesty (ADR-0092)
+
+- High: slog→BOOT.LOG mesmo com COM1; log() sem duplicata; fetch FAIL sev fail
+- Med: CapGate DENY→ok; Net tick→trace; boot_logger sev; shutdown FAT flush
+- Low: mojibake; info→ok hotspots; file_allows test
+- Canvas: `logging-bughunt-s389.canvas.tsx`
+
 ## [1.9.99-s388] - 2026-09-21 — ModelHub + Trinity MoE honesty bughunt
 
 - High: `register_model` → set_*; `get_or_mmap` weight-only; Falcon3 size→Active; HwExpert LLM redirect; `generate_from_slot(Active)`→CURRENT

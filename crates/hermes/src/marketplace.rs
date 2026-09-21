@@ -195,15 +195,15 @@ pub fn install_from_url(url: &str, kind: PackageKind, name: &str) -> String {
     let (host, port, path) = match parse_http_url(url) {
         Ok(v) => v,
         Err(e) => {
-            k_nano::slog_hermes!("Market", "info", "fetch=deny reason={}", e);
+            k_nano::slog_hermes!("Market", "warn", "fetch=deny reason={}", e);
             return format!("[MARKET] fetch denied: {}", e);
         }
     };
-    k_nano::slog_hermes!("Market", "info", "fetch host={} port={} path={}", host, port, path);
+    k_nano::slog_hermes!("Market", "ok", "fetch host={} port={} path={}", host, port, path);
     let bytes = match crate::tls::fetch_url(url.trim()) {
         Ok(b) => b,
         Err(e) => {
-            k_nano::slog_hermes!("Market", "info", "fetch=fail {}", e);
+            k_nano::slog_hermes!("Market", "fail", "fetch=fail {}", e);
             return format!("[MARKET] fetch failed ({}) — noop honesto", e);
         }
     };
@@ -336,11 +336,11 @@ pub fn install_scanned(url: &str, kind: PackageKind, name: &str) -> String {
         match scan.veredict {
             crate::plugin_hub::ScanVerdict::Blocked => {
                 let details = scan.details.join("; ");
-                k_nano::slog_hermes!("Market", "info", "scan BLOCKED '{}': {}", name, details);
+                k_nano::slog_hermes!("Market", "warn", "scan BLOCKED '{}': {}", name, details);
                 return format!("[MARKET] scan BLOCKED '{}': {}", name, details);
             }
             crate::plugin_hub::ScanVerdict::Suspicious => {
-                k_nano::slog_hermes!("Market", "info", "scan SUSPICIOUS '{}': {:?}", name, scan.details);
+                k_nano::slog_hermes!("Market", "warn", "scan SUSPICIOUS '{}': {:?}", name, scan.details);
                 // Continua — approval gate pode pedir HITL
             }
             crate::plugin_hub::ScanVerdict::Safe => {}

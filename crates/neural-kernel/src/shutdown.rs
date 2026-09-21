@@ -17,12 +17,19 @@ fn now_tick() -> u64 {
 }
 
 fn dump_boot_log_sector() {
+    // Honesty s389: canal A = FAT BOOT.LOG via boot_logger; LBA ATA = legado.
+    let flushed = k_nano::boot_logger::flush();
+    if flushed {
+        k_nano::slog_bin!("SHUTDOWN", "ok", "BOOT.LOG flush FAT ok");
+    } else {
+        k_nano::slog_bin!("SHUTDOWN", "warn", "BOOT.LOG flush FAT skipped/fail");
+    }
     let log = crate::serial::BOOT_LOG.lock();
     let dump = log.dump();
     if dump.is_empty() {
         return;
     }
-    k_nano::slog_bin!("SHUTDOWN", "ok", "BOOT_LOG dump {} bytes", dump.len());
+    k_nano::slog_bin!("SHUTDOWN", "ok", "BOOT_LOG ring dump {} bytes", dump.len());
     let ata = crate::ATA_DRIVER.lock();
     if let Some(ref ata) = *ata {
         if dump.len() <= 512 {
@@ -32,11 +39,15 @@ fn dump_boot_log_sector() {
                 k_nano::slog_bin!(
                     "SHUTDOWN",
                     "ok",
-                    "Log escrito LBA {}",
+                    "Log ring escrito LBA {} (legado)",
                     crate::LOG_SECTOR
                 );
+            } else {
+                k_nano::slog_bin!("SHUTDOWN", "warn", "Log ring LBA write fail");
             }
         }
+    } else {
+        k_nano::slog_bin!("SHUTDOWN", "trace", "sem ATA — ring só serial/FAT");
     }
 }
 

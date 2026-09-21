@@ -81,7 +81,11 @@ pub fn clear_hal_as() { HAL_AS_ACTIVE.store(false, Ordering::SeqCst); HAL_AS_BAR
 pub fn check_map_bar(caller_ring: u8, has_cap: bool) -> CapResult {
     if !CAP_ENFORCE.load(Ordering::SeqCst) { return CapResult::Allow; }
     if caller_ring <= 1 { return CapResult::Allow; }
-    if caller_ring >= 3 && !has_cap { k_nano::slog_hal!("Cap", "warn", "MAP_BAR DENY ring={}", caller_ring); return CapResult::Deny; }
+    if caller_ring >= 3 && !has_cap {
+        // SESSION_360 / s389: DENY esperado do CapGate PoC → sev ok (não warn spam)
+        k_nano::slog_hal!("Cap", "ok", "MAP_BAR DENY ring={}", caller_ring);
+        return CapResult::Deny;
+    }
     if has_cap { CapResult::Allow } else { CapResult::Deny }
 }
 pub fn check_fe(caller_ring: u8, cap: HalCap, has_cap: bool) -> CapResult {
@@ -90,7 +94,12 @@ pub fn check_fe(caller_ring: u8, cap: HalCap, has_cap: bool) -> CapResult {
     match cap {
         HalCap::FeNet | HalCap::FeDisplay | HalCap::FeAudio | HalCap::FeCompute | HalCap::FeVideo => {
             if has_cap || caller_ring == 2 { CapResult::Allow }
-            else if caller_ring >= 3 && !has_cap { k_nano::slog_hal!("Cap", "warn", "FE DENY {:?} ring={}", cap, caller_ring); CapResult::Deny } else { CapResult::Deny }
+            else if caller_ring >= 3 && !has_cap {
+                k_nano::slog_hal!("Cap", "ok", "FE DENY {:?} ring={}", cap, caller_ring);
+                CapResult::Deny
+            } else {
+                CapResult::Deny
+            }
         }
         _ => check_map_bar(caller_ring, has_cap),
     }

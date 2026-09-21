@@ -66,11 +66,11 @@ impl SelfUpdate {
         expected_sig: Option<&str>,
     ) -> Result<(usize, String), &'static str> {
         let data = crate::tls::fetch_url(url).map_err(|e| {
-            k_nano::slog_hermes!("UPDATE", "ok", "fetch=FAIL err={}", e);
+            k_nano::slog_hermes!("UPDATE", "fail", "fetch=FAIL err={}", e);
             e
         })?;
         if data.is_empty() {
-            k_nano::slog_hermes!("UPDATE", "ok", "fetch=FAIL err=empty");
+            k_nano::slog_hermes!("UPDATE", "fail", "fetch=FAIL err=empty");
             return Err("update_empty");
         }
         let n = data.len();
@@ -141,7 +141,7 @@ impl SelfUpdate {
         if !Self::apply_update(&data) {
             k_nano::slog_hermes!(
                 "UPDATE",
-                "info",
+                "fail",
                 "fetch=FAIL err=apply bytes={} sha256={}",
                 n,
                 hash
@@ -150,7 +150,7 @@ impl SelfUpdate {
         }
         k_nano::slog_hermes!(
             "UPDATE",
-            "info",
+            "ok",
             "fetch=OK bytes={} sha256={}",
             n,
             hash

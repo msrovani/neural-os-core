@@ -146,13 +146,19 @@ fn dispatch_bytes(msg: &[u8], to_console: bool, to_file: bool, fb_args: Option<f
             log.start_tick = tick;
         }
         log.write(msg, tick);
+        // ADR-0092 canal A: BOOT.LOG espelha dmesg mesmo com COM1 (QEMU/HW UART).
+        // Antes: journal só se !serial → stick BOOT.LOG mudo sob QEMU.
+        write_to_disk_journal(msg, tick);
     }
 
     if to_console && !serial_avail {
         if let Some(a) = fb_args {
             let _ = crate::vga_buffer::fb_print(a);
         }
-        write_to_disk_journal(msg, tick);
+        // Sem COM: FB produto + journal (to_file já cobriu se sev permitido).
+        if !to_file {
+            write_to_disk_journal(msg, tick);
+        }
     }
 }
 
