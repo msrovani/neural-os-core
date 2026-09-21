@@ -235,6 +235,8 @@ pub struct TickvLite {
     index: BTreeMap<String, u64>,
     append_off: u64,
     ready: bool,
+    /// recover TIMEOUT / índice parcial — puts OK mas honesty: mount degradado.
+    degraded: bool,
     backend: &'static str,
     pub stats: TickvStats,
 }
@@ -245,6 +247,7 @@ impl TickvLite {
             index: BTreeMap::new(),
             append_off: 0,
             ready: false,
+            degraded: false,
             backend: "none",
             stats: TickvStats::default(),
         }
@@ -255,6 +258,9 @@ impl TickvLite {
     }
     pub fn is_ready(&self) -> bool {
         self.ready
+    }
+    pub fn is_degraded(&self) -> bool {
+        self.degraded
     }
     pub fn append_off(&self) -> u64 {
         self.append_off
@@ -281,10 +287,18 @@ impl TickvLite {
         }
         // D3: tenta ckpt rápido; fallback full scan (um deadline TSC p/ os dois)
         let deadline = mount_scan_deadline();
+        self.degraded = false;
         if self.try_mount_from_ckpt(deadline).is_err() {
             self.recover(deadline)?;
         }
         self.ready = true;
+        if self.degraded {
+            crate::slog_nano!(
+                "TICKV",
+                "warn",
+                "mount READY but DEGRADED — índice parcial; compact/HITL remount recomendado"
+            );
+        }
         // File/NVMe: nunca compact automático no boot — wipe de MB via PIO
         // congela K33 (SESSION_354 deep). Runtime chama set_gc_suspended(false).
         if self.backend == "file" || self.backend == "nvme" {
@@ -484,10 +498,11 @@ impl TickvLite {
         let mut hdr = [0u8; HEADER];
         while off + HEADER as u64 <= size {
             if mount_scan_expired(deadline) {
+                self.degraded = true;
                 crate::slog_nano!(
                     "TICKV",
                     "warn",
-                    "recover TIMEOUT off={}/{} keys={} — mount DEGRADED",
+                    "recover TIMEOUT off={}/{} keys={} — mount DEGRADED (índice parcial)",
                     off,
                     size,
                     self.index.len()
@@ -726,14 +741,15 @@ impl TickvLite {
 
     pub fn status_line(&self) -> String {
         format!(
-            "TICKV live={} dead={} corrupt={} gc={} append={} keys={} backend={}",
+            "TICKV live={} dead={} corrupt={} gc={} append={} keys={} backend={} deg={}",
             self.stats.live_bytes,
             self.stats.dead_bytes,
             self.stats.corrupt_records,
             self.stats.compactions,
             self.append_off,
             self.index.len(),
-            self.backend
+            self.backend,
+            if self.degraded { 1 } else { 0 }
         )
     }
 }
@@ -761,6 +777,18 @@ pub fn put_blob(key: &str, data: &[u8]) -> Result<(), &'static str> {
     if !kv.is_ready() {
         kv.mount()?;
     }
+    if kv.is_degraded() {
+        static WARNED: core::sync::atomic::AtomicBool =
+            core::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+            crate::slog_nano!(
+                "TICKV",
+                "warn",
+                "put while DEGRADED (recover timeout) — key example={}",
+                key
+            );
+        }
+    }
     kv.put(key, data)
 }
 
@@ -775,6 +803,11 @@ pub fn get_blob(key: &str) -> Result<Vec<u8>, &'static str> {
 
 pub fn is_ready() -> bool {
     TICKV.lock().as_ref().map(|k| k.is_ready()).unwrap_or(false)
+}
+
+/// True se recover timeoutou / índice parcial (ready mas honesty DEGRADED).
+pub fn is_degraded() -> bool {
+    TICKV.lock().as_ref().map(|k| k.is_degraded()).unwrap_or(false)
 }
 
 /// Após MSC: promove FileFlash, **migra** chaves RAM → stick, remonta TickvLite.

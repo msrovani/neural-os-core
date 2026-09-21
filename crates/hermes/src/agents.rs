@@ -3209,6 +3209,16 @@ impl SleepCycleAgent {
 
             // ── CONSOLIDATE: seed knowledge fast→slow layers, validate quality + EWC (IDEA #314c) ──
             3 => {
+                // s385: Remember — se boot skipou índices (md_keys>512), força agora.
+                if k_ai::sgdb::boot_sgdb_heavy_pending() {
+                    k_nano::slog_hermes!(
+                        "SLEEP",
+                        "warn",
+                        "CONSOLIDATE force_heavy_index_boot (ART/BQ/NSGDB frios)"
+                    );
+                    k_ai::sgdb::force_heavy_index_boot();
+                }
+
                 // #218: consolidação 4-tier (L2→L3→L4) — ambient mode
                 let stats = k_ai::tiers::consolidate_tiers(tick);
                 k_nano::slog_hermes!(

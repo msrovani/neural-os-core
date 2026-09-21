@@ -1,5 +1,14 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s385] - 2026-09-21 — SGDB/Tickv/NSGDB honesty bughunt
+
+- H1–H7: sync_write strip `md/Lx/`; put_doc→NSGDB+CRDT; RAG lexical+engine; engine refuse L2+ sem Tickv; TickvLite.degraded; force_heavy SleepCycle
+- Med: sync_durable no-op; checkpoint compact só ram; memory_aware lexical; OsEmbedder pseudo warn
+- Low: noproto idea-only doc; BQ insert_1024 dim check; dual ART comentário canónico=NSGDB
+- Upstream: tickv/noproto **não** bump (idea-only); neural-sgdb 1.1.20
+- Gates: check k-nano/k_ai/hermes 0 erros; `k_ai --lib sgdb` 18 pass
+- Canvas: `sgdb-tickv-nsgdb-bughunt-s385.canvas.tsx`
+
 ## [1.9.99-s384] - 2026-09-21 — LazyLock + smoltcp 0.14 + wasmi 2.0
 
 - spin::Lazy → LazyLock (fim deprecation 0.12)

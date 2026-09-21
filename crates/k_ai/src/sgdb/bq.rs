@@ -68,12 +68,16 @@ impl BqFlatIndex {
         self.insert(id, quantize_f32(v))
     }
 
-    pub fn insert_1024(&mut self, id: u64, bits: &[u64; 16]) {
+    pub fn insert_1024(&mut self, id: u64, bits: &[u64; 16]) -> bool {
         if self.words_per_vec == 0 {
             self.words_per_vec = 16;
         }
+        if self.words_per_vec != 16 {
+            return false;
+        }
         self.ids.push(id);
         self.flat.extend_from_slice(bits);
+        true
     }
 
     pub fn clear(&mut self) {

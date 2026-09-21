@@ -247,6 +247,18 @@ static CRDT_RECV: Mutex<Option<event_bus::Receiver>> = Mutex::new(None);
 /// Instância global do sync CRDT.
 static CRDT_GLOBAL: Mutex<Option<CrdtMemorySync>> = Mutex::new(None);
 
+/// Marca mutação local no CRDT global (versão monotônica).
+/// Chamado por put_kv/put_doc — sem isto local_version fica 0 e o mesh não propaga.
+pub fn crdt_record_change_global() {
+    let mut guard = CRDT_GLOBAL.lock();
+    if guard.is_none() {
+        *guard = Some(CrdtMemorySync::new());
+    }
+    if let Some(ref mut sync) = *guard {
+        sync.record_change();
+    }
+}
+
 /// Tick do sync CRDT — chamado pelo bin a cada bei_tick (após p2p_tick).
 pub fn crdt_sync_global(tick: u64) {
     {

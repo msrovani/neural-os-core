@@ -41,7 +41,7 @@ pub fn bench_smoke(n_art: usize, n_bq: usize) -> (bool, String) {
             let mut bits = [0u64; 16];
             bits[0] = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
             bits[i % 16] ^= 1u64 << (i % 64);
-            bq_idx.insert_1024(i as u64, &bits);
+            let _ = bq_idx.insert_1024(i as u64, &bits);
         } else {
             let mut v = [0.0f32; 16];
             v[i % 16] = 1.0;
@@ -120,7 +120,7 @@ pub fn bench_dod(art_n: usize, bq_n: usize) -> (bool, String) {
         let mut bits = [0u64; 16];
         bits[0] = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         bits[i % 16] ^= 1u64 << (i % 64);
-        bq_idx.insert_1024(i as u64, &bits);
+        let _ = bq_idx.insert_1024(i as u64, &bits);
     }
     let t3 = rdtsc();
     let mut bits0 = [0u64; 16];

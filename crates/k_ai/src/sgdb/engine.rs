@@ -1,5 +1,8 @@
 //! ADR-0063 F3/D2 — AiosDatabaseEngine: MemoryDoc ↔ TickvLite + ART + BQ.
 //! L0/L1: RAM-only por default (checkpoint explícito). ART guarda id lógico; key = md/...
+//!
+//! **Recall canónico (ADR-0091):** `neural-sgdb` via `nsgdb_bridge`.
+//! ART/BQ aqui = fallback frio (demo/boot) até cutover Fase 3.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -58,6 +61,9 @@ impl AiosDatabaseEngine {
             self.ram_puts = self.ram_puts.saturating_add(1);
         } else if k_nano::storage::is_ready() {
             k_nano::storage::put_blob(&sk, &blob).map_err(|_| "tickv put")?;
+        } else {
+            // Honesty: L2+ sem Tickv NÃO indexa — reboot mentiria persistência.
+            return Err("tickv not ready");
         }
 
         self.index_doc(id, &doc, &sk);

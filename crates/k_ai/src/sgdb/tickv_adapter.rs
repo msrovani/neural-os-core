@@ -30,9 +30,11 @@ impl Storage for TickvStorageAdapter {
     }
 
     fn durability(&self) -> Durability {
-        // Honesty: RAM Tickv = Buffered (volátil). File/NVMe = Flushed (append+CRC, sem fsync).
+        // Honesty s385: TickvLite append+CRC sobrevive reboot do guest se media
+        // escreveu (file/nvme) = Flushed. RAM = Buffered. Nunca Durable (sem fsync
+        // power-fail no bare-metal). sync_durable NÃO faz compact.
         match k_nano::storage::backend_name() {
-            "ram" => Durability::Buffered,
+            "ram" | "none" => Durability::Buffered,
             _ => Durability::Flushed,
         }
     }
@@ -78,10 +80,11 @@ impl Storage for TickvStorageAdapter {
     }
 
     fn sync_durable(&mut self) -> Result<(), SgdbError> {
-        // TickvLite: flush via compact (best-effort); sem fsync real em bare-metal
-        k_nano::storage::with_tickv(|kv| {
-            let _ = kv.compact();
-        });
+        // Honesty: TickvLite não tem fsync/power-barrier. put já escreveu na media.
+        // compact() ≠ sync — é GC caro (file/nvme hang). No-op OK = Durability::Flushed.
+        if k_nano::storage::is_degraded() {
+            return Err(SgdbError::Storage("tickv degraded"));
+        }
         Ok(())
     }
 }

@@ -1,11 +1,9 @@
-//! Zero-Copy NoProto Parser for P2P Communication
+//! Zero-Copy NoProto-style mesh header for P2P (ADR-0063 / ADR-0081).
 //!
-//! Implements zero-copy deserialization of AIOS task packets directly
-//! from network buffers without memory allocation.
-//!
-//! NoProto packets carry LogicalClock timestamps for ordering.
-//! Brain Mesh uses NoProto for node discovery broadcasts.
-//! VectorClock enables causal consistency in distributed inference.
+//! **Idea-only:** NÃO depende do crate `noproto`/`no_proto` do crates.io.
+//! É um header C-packed AIOS próprio (`AiosTaskPacket`) — lições de zero-copy
+//! + LogicalClock, sem puxar protobuf embedded. Upstream noproto 0.1.0 /
+//! no_proto 0.9.x = referência de desenho, não dep.
 
 use core::mem;
 

@@ -257,7 +257,18 @@ pub struct OsEmbedder;
 
 impl neural_sgdb::Embedder for OsEmbedder {
     fn embed(&self, text: &str) -> Result<Vec<f32>, neural_sgdb::SgdbError> {
-        let (emb, _path) = crate::memory_systems::embed_or_pseudo(text);
+        let (emb, path) = crate::memory_systems::embed_or_pseudo(text);
+        if path == "pseudo" {
+            static WARNED: core::sync::atomic::AtomicBool =
+                core::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                k_nano::slog_kai!(
+                    "NSGDB",
+                    "warn",
+                    "OsEmbedder path=pseudo — semantic recall é ruído; preferir lexical (ADR-0008)"
+                );
+            }
+        }
         if emb.is_empty() {
             return Err(neural_sgdb::SgdbError::Invalid("embed returned empty"));
         }
@@ -356,10 +367,27 @@ pub fn lifecycle_tick(now: u64, config: &MemoryLifecycleConfig) -> LifecycleTick
 /// Este é o glue que elimina o dual-write: o write vai para TickvLite
 /// (via put_blob direto) e NSGDB é notificado para atualizar seus
 /// índices derivados (ART/BQ/lexical).
+/// Extrai chave lógica de `md/Lx/<logical>` (evita `md/Lx/md/Lx/…` no NSGDB).
+fn logical_key_for_nsgdb(key: &str) -> &str {
+    if let Some(rest) = key.strip_prefix("md/") {
+        // md/L4/foo → foo ; md/L0/bar → bar
+        if rest.len() >= 3 {
+            let b = rest.as_bytes();
+            if b[0] == b'L' && b.get(2) == Some(&b'/') {
+                return &rest[3..];
+            }
+        }
+        return rest;
+    }
+    key
+}
+
 pub fn sync_write_to_nsgdb(key: &str, val: &[u8], layer: u8) {
+    let logical = logical_key_for_nsgdb(key);
+    if logical.is_empty() {
+        return;
+    }
     let _ = with_nsgdb(|db| {
-        // Re-read do TickvLite para popular o NSGDB engine
-        // O neural-sgdb reconstrói o doc do payload
         use neural_sgdb::MemoryDoc as ExtDoc;
         use neural_sgdb::MemoryLayer;
         let ml = match layer {
@@ -372,7 +400,7 @@ pub fn sync_write_to_nsgdb(key: &str, val: &[u8], layer: u8) {
             6 => MemoryLayer::L6Reserved,
             _ => MemoryLayer::L7Identity,
         };
-        let doc = ExtDoc::new(ml, key, val.to_vec());
+        let doc = ExtDoc::new(ml, logical, val.to_vec());
         let _ = db.put(doc);
     });
 }
@@ -433,9 +461,18 @@ mod tests {
     }
 
     #[test]
+    fn logical_key_strips_md_layer_prefix() {
+        assert_eq!(logical_key_for_nsgdb("md/L4/foo"), "foo");
+        assert_eq!(logical_key_for_nsgdb("md/L0/bar"), "bar");
+        assert_eq!(logical_key_for_nsgdb("hanr/user"), "hanr/user");
+        assert_eq!(logical_key_for_nsgdb("hw/cpu/isa"), "hw/cpu/isa");
+    }
+
+    #[test]
     fn sync_write_to_nsgdb_does_not_panic() {
         // Sync after write deve ser no-op gracioso sem NSGDB
         sync_write_to_nsgdb("test/key", b"value", 3);
+        sync_write_to_nsgdb("md/L3/test_key", b"value", 3);
     }
 
     #[test]

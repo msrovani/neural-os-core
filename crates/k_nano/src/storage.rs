@@ -9,7 +9,7 @@ pub mod tickv;
 pub use flash::{init_flash, ActiveFlash, FileFlash, FlashController, FLASH};
 pub use tickv::{
     backend_name, corrupt_smoke, crc32, dump_flash, encode_record, gc_is_suspended, gc_smoke,
-    get_blob, install_ram_flash, is_ready, power_loss_smoke, put_blob, record_size,
+    get_blob, install_ram_flash, is_degraded, is_ready, power_loss_smoke, put_blob, record_size,
     remount_after_usb_msc, scan_volume, set_gc_suspended, smoke as tickv_smoke,
     status_line as tickv_status, stress_gc_smoke, with_tickv, CKPT_KEY, HEADER, MAGIC, ScanResult,
     TickvLite, TickvStats, TICKV,

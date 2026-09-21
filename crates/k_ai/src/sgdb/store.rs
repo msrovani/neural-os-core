@@ -183,6 +183,33 @@ pub fn boot_sgdb_heavy_pending() -> bool {
     HEAVY_DEFERRED.load(Ordering::Acquire) && !HEAVY_DONE.load(Ordering::Acquire)
 }
 
+/// SleepCycle CONSOLIDATE / HITL: força rebuild+nsgdb mesmo se md_keys>512.
+/// AIOS Remember: índices frios = cognição morta — não deixar HEAVY_DEFERRED eterno.
+pub fn force_heavy_index_boot() {
+    if !boot_sgdb_heavy_pending() {
+        return;
+    }
+    if !k_nano::storage::is_ready() {
+        k_nano::slog_kai!("SGDB", "warn", "force_heavy SKIP (tickv not ready)");
+        return;
+    }
+    let backend = k_nano::storage::backend_name();
+    let md_keys = k_nano::storage::with_tickv(|kv| kv.keys_with_prefix("md/").len()).unwrap_or(0);
+    k_nano::slog_kai!(
+        "SGDB",
+        "warn",
+        "force_heavy_index_boot START backend={} md_keys={} (SleepCycle Remember)",
+        backend,
+        md_keys
+    );
+    run_heavy_index_boot(backend, md_keys);
+    boot_ckpt("hw_ns_forced");
+    populate_hw_namespace();
+    crate::boot_observe::ingest_bootlog();
+    k_nano::boot_report::publish_boot_ai();
+    k_nano::storage::set_gc_suspended(false);
+}
+
 /// ADR-0082 Onda CPU: `hw/<categoria>/<propriedade>` — valores string lowercase,
 /// via `k_nano::platform_probe::hw_info()`. Falhas de put são não-fatais (log warn).
 fn populate_hw_namespace() {
@@ -310,6 +337,7 @@ pub fn put_kv(key: &str, data: &[u8]) -> Result<(), &'static str> {
     if result.is_ok() {
         let layer = layer_from_key(key);
         super::nsgdb_bridge::sync_write_to_nsgdb(key, data, layer);
+        super::crdt_sync::crdt_record_change_global();
     }
     result
 }
@@ -343,9 +371,15 @@ pub fn get_kv(key: &str) -> Result<Option<Vec<u8>>, &'static str> {
 /// MemoryDoc via engine (também indexa ART/BQ).
 pub fn put_doc(doc: MemoryDoc) -> Result<u64, &'static str> {
     ensure_ready();
+    let sk = doc.storage_key();
+    let layer = doc.layer as u8;
+    let payload = doc.payload.clone();
     let result = with_engine(|e| e.put(doc)).unwrap_or(Err("engine down"));
-    // #537: sincroniza índices NSGDB após write de doc
-    // (doc já foi persistido no TickvLite pelo engine interno)
+    // #537 + s385: sync índices NSGDB + versão CRDT após write de doc
+    if result.is_ok() {
+        super::nsgdb_bridge::sync_write_to_nsgdb(&sk, &payload, layer);
+        super::crdt_sync::crdt_record_change_global();
+    }
     result
 }
 
@@ -354,12 +388,23 @@ pub fn get_doc(layer: MemoryLayer, key: &str) -> Result<Option<MemoryDoc>, &'sta
     with_engine(|e| e.get(layer, key)).unwrap_or(Err("engine down"))
 }
 
-/// SleepCycle CONSOLIDATE: flush L0/L1 RAM → Tickv (+ compact best-effort).
+/// SleepCycle CONSOLIDATE: flush L0/L1 RAM → Tickv (+ compact best-effort só em RAM).
 pub fn checkpoint_working() -> Result<usize, &'static str> {
     ensure_ready();
     let n = with_engine(|e| e.checkpoint_l0l1()).unwrap_or(Err("engine down"))?;
     if ready() {
-        let _ = k_nano::storage::with_tickv(|kv| kv.compact());
+        let backend = k_nano::storage::backend_name();
+        // Honesty: compact em file/nvme = wipe+rewrite PIO — nunca no SleepCycle hot path.
+        if backend == "ram" {
+            let _ = k_nano::storage::with_tickv(|kv| kv.compact());
+        } else {
+            k_nano::slog_kai!(
+                "SGDB",
+                "ok",
+                "checkpoint_working skip compact (backend={}) — use compact() explícito HITL",
+                backend
+            );
+        }
     }
     Ok(n)
 }
