@@ -20,7 +20,7 @@ pub struct LayerReport {
     pub std_approx: f32,
 }
 
-/// Soul-vector stub: 7 scalars.
+/// Features 7-D de saúde de pesos (telemetria / Jarbas) — **não** é AffectVector.
 pub struct SoulVector {
     pub dims: [f32; 7],
 }

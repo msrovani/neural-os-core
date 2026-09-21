@@ -3743,15 +3743,8 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
         let next_u16 = if COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed) && use_bpe {
             sample_token_coherence(&last_logits, 0, &recent_u16)
         } else if use_bpe {
-            // Greeting no longer uses a hardcoded token pool — full model argmax.
-            // (Audit 7.5: GREETING_BIAS_IDS was effectively canned output.)
-            if model.vocab_size > 0 && model.vocab_size <= 33_000 {
-                argmax_row_hf_vocab(&last_logits, 0, &recent_u16)
-            } else if false { // RUN_WEATHER_E2E_SKINNY placeholder
-                argmax_row_weather_only(&last_logits, 0, &recent_u16)
-            } else {
-                argmax_row_hf_vocab(&last_logits, 0, &recent_u16)
-            }
+            // Full-vocab argmax (greeting/weather canned pools removidos — Audit 7.5).
+            argmax_row_hf_vocab(&last_logits, 0, &recent_u16)
         } else {
             argmax_row_char_vocab(&last_logits, 0, recent_u16.last().copied())
         };
@@ -4236,7 +4229,16 @@ fn dispatch_hw_control(utterance: &str) -> String {
     }
     if lower.contains("brilho") || lower.contains("brightness") {
         let pct = extract_volume_percent(&lower).unwrap_or(80);
-        return alloc::format!("[HW] brilho {}% (backlight stub — CapGate/HAL pendente)", pct);
+        // Honesty AIOS: sem CapGate backlight — Escalate, não fingir sucesso HW.
+        k_nano::slog_cortex!(
+            "HW", "warn",
+            "brightness {}% DEGRADED — backlight CapGate/HAL AWAITING_HW",
+            pct
+        );
+        return alloc::format!(
+            "[HW] brilho {}% indisponivel (backlight AWAITING_HW — CapGate/HAL)",
+            pct
+        );
     }
     if lower.contains("volume") || lower.contains("vol") {
         let pct = extract_volume_percent(&lower).unwrap_or(80);

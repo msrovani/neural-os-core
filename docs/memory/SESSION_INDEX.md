@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s370 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s371 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 371 | cortex R2 | bughunt AIOS | TQ2_0 ggml 66B/256 + Unknown nbytes=0 | PrismML≠ggml; type ID comment 25→35; weather dead branch; brightness DEGRADED; burn_flex facade; poll_slice did |
 | 370 | agent-core | bughunt AIOS | budget wall-clock + Agency PackageHub | lifetime_paused crash; AP=BSP tick result; Agency empty→agency_specs; Specialist EventDriven; novelty boost |
 | 369 | Boot Trilha A | bughunt+wire | logwriter + init_from_phys + PHASE honesty | 12 fixes; soft-reboot morto; VirtioBlk no plano; Limine 12.9; uefi 0.35; aceite `E:\BOOT.LOG` AWAITING |
 | 368 | Fechamento 1.x | B1+B3.1+A0 | CI workspace 0 fail + mixer TSC | Plano aprovado; GGUF fixture; soft_stride/MHI locks; **apply_one_layer poison** (refuse sem invalidar x → KV desalinhado); `compute_mixer_want`; STATE gate checklist |

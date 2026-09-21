@@ -1027,17 +1027,16 @@ pub fn poll_slice() -> bool {
         return false;
     }
 
-    let mut did = false;
     if ACTIVE.lock().is_none() {
-        did = try_claim_into_active();
-    } else {
-        did = true;
+        let _ = try_claim_into_active();
     }
 
+    let mut did = false;
     let mut finished = false;
     {
         let mut guard = ACTIVE.lock();
         if let Some(ref mut st) = *guard {
+            did = true;
             match st.phase {
                 Phase::NeedPrefill => run_prefill(st),
                 Phase::Prefilling => run_prefill_step(st),
@@ -1050,9 +1049,6 @@ pub fn poll_slice() -> bool {
             if st.phase == Phase::Idle {
                 finished = true;
             }
-            did = true;
-        } else {
-            did = false;
         }
         if finished {
             *guard = None;

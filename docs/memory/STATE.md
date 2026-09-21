@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s370 — agent-core bughunt AIOS
+# STATE — neural-os-core v1.9.99-s371 — cortex TQ2_0 ggml + bughunt
 
-#   PISTA ATIVA: s370 — agent-core budget wall-clock + Agency PackageHub
-#   PISTA ANTERIOR: s369 Boot Trilha A; s368 Fechamento 1.x
+#   PISTA ATIVA: s371 — cortex GGUF TQ2_0 oficial + Unknown deny size
+#   PISTA ANTERIOR: s370 agent-core; s369 Boot Trilha A
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo

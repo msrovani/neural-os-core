@@ -1,5 +1,11 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s371] - 2026-09-21 — cortex GGUF TQ2_0 ggml + bughunt
+
+- TQ2_0: layout ggml 66B/256 (type 35); Unknown nbytes=0; weather dead branch removed
+- Honesty: brightness AWAITING_HW; burn_flex facade; neuos SoulVector doc; poll_slice `did` clean
+- SESSION_371; cortex tests 81 pass
+
 ## [1.9.99-s370] - 2026-09-21 — agent-core bughunt AIOS
 
 - Budget: overruns wall-clock (`note_wall_overrun`); `lifetime_paused_polls` crash@10k; AP `tick_agent_by_index` = BSP semantics
