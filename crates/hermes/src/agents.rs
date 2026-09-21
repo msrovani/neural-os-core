@@ -581,7 +581,7 @@ impl Agent for CortexAgent {
         if let Some(event) = self.healing_receiver.try_receive() {
             let healing_prompt = core::str::from_utf8(&event.payload).unwrap_or("");
             if !healing_prompt.is_empty() {
-                k_nano::slog_cortex!("LLM", "info", "HEALING_LLM_REQUEST: {}", healing_prompt);
+                k_nano::slog_cortex!("LLM", "ok", "HEALING_LLM_REQUEST: {}", healing_prompt);
                 let healing_system = alloc::format!(
                     "You are the AIOS self-healing engine. Diagnose the error and recommend a recovery action. Respond ONLY with JSON: {{\"action\":\"<restart_daemon|checkpoint_restore|create_skill|log_continue>\",\"reason\":\"<brief explanation>\",\"params\":{{}}}}"
                 );
@@ -2282,7 +2282,7 @@ impl Agent for BootSelfHealAgent {
                 1, "self_heal", "recover", _tick, u64::MAX,
             );
             if !trusted {
-                k_nano::slog_kai!("Gate", "n2", "trust DENY (token,agent,skill)=(1,self_heal,recover) — skip scan");
+                k_nano::slog_kai!("Gate", "warn", "trust DENY (token,agent,skill)=(1,self_heal,recover) — skip scan");
             } else {
                 // AIOS: DeviceTree já observado no boot_bind — não re-scan PCI.
                 // SESSION_262: scan_pci+FAT com ATA podia corromper heap (BTree
@@ -2302,7 +2302,7 @@ impl Agent for BootSelfHealAgent {
                     let inv = inventory::HardwareInventory::collect(devices, None);
                     inv.vid_class_triples()
                 } else {
-                    k_nano::slog_kai!("Gate", "n2", "skip PCI rescan (no ATA, tree empty)");
+                    k_nano::slog_kai!("Gate", "warn", "skip PCI rescan (no ATA, tree empty)");
                     tree
                 };
                 let fw_n = triples
@@ -2316,7 +2316,7 @@ impl Agent for BootSelfHealAgent {
                     fw_n,
                     has_ata);
                 if fw_n == 0 {
-                    k_nano::slog_kai!("Gate", "n2", "HEALTH_ISSUE: honest noop (fw_gated=0 — no known VID needs FW)");
+                    k_nano::slog_kai!("Gate", "ok", "HEALTH_ISSUE: honest noop (fw_gated=0 — no known VID needs FW)");
                 }
                 let mut heal = k_ai::self_heal::GLOBAL_SELF_HEAL.lock();
                 let report = heal.run_vid_gated_scan(&triples);
@@ -2350,16 +2350,16 @@ impl Agent for BootSelfHealAgent {
         };
         match last_cause {
             Some(k_ai::shutdown::ShutdownCause::Unexpected) => {
-                k_nano::slog_hermes!("SELF", "HEAL", "*** ULTIMO DESLIGAMENTO FOI INESPERADO! ***");
-                k_nano::slog_hermes!("SELF", "HEAL", "Analisando boot log para possiveis erros...");
+                k_nano::slog_hermes!("SELF", "warn", "*** ULTIMO DESLIGAMENTO FOI INESPERADO! ***");
+                k_nano::slog_hermes!("SELF", "warn", "Analisando boot log para possiveis erros...");
                 let _ = log_analyst_agent::write_log("self_heal",
                     "Ultimo desligamento foi INESPERADO. Iniciando analise de erros.");
                 if usb_boot {
-                    k_nano::slog_hermes!("SELF", "HEAL", "skip boot_log analyze (USB-MSC boot)");
+                    k_nano::slog_hermes!("SELF", "ok", "skip boot_log analyze (USB-MSC boot)");
                 } else if let Some(log) = boot_log_agent::BootLogAgent::read_last_boot_log() {
                     let diagnostics = boot_log_agent::BootLogAgent::analyze_log(&log);
                     for (kind, msg) in &diagnostics {
-                        k_nano::slog_hermes!("SELF", "HEAL", "Diagnostico: {} — {}", kind, msg);
+                        k_nano::slog_hermes!("SELF", "warn", "Diagnostico: {} — {}", kind, msg);
                         let _ = log_analyst_agent::write_log("self_heal",
                             &alloc::format!("Diagnostico: {} — {}", kind, msg));
                         if *kind == "PANIC" || *kind == "GPU_HUNG" {
@@ -2375,21 +2375,21 @@ impl Agent for BootSelfHealAgent {
                             // U4 ADR-0086: kernel novo falhou → volta o slot bom
                             if crate::self_update::SelfUpdate::rollback() {
                                 k_nano::slog_hermes!(
-                                    "SELF", "HEAL",
+                                    "SELF", "ok",
                                     "rollback OK — reboot no slot anterior (boot feliz no proximo boot)"
                                 );
                             }
                         }
                     }
                 } else {
-                    k_nano::slog_hermes!("SELF", "HEAL", "Boot log nao disponivel para analise.");
+                    k_nano::slog_hermes!("SELF", "warn", "Boot log nao disponivel para analise.");
                 }
             }
             Some(cause) => {
-                k_nano::slog_hermes!("SELF", "HEAL", "Ultimo desligamento: {} (ok)", k_ai::shutdown::label(cause));
+                k_nano::slog_hermes!("SELF", "ok", "Ultimo desligamento: {} (ok)", k_ai::shutdown::label(cause));
             }
             None => {
-                k_nano::slog_hermes!("SELF", "HEAL", "Primeiro boot ou sem registro de desligamento.");
+                k_nano::slog_hermes!("SELF", "ok", "Primeiro boot ou sem registro de desligamento.");
             }
         }
 

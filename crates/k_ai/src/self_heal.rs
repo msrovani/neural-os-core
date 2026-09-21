@@ -14,8 +14,17 @@ pub struct BudgetedRecovery {
 }
 
 impl BudgetedRecovery {
+    /// `max_budget` = ações por janela (canónico: HEALING_BUDGET_MAX=10).
     pub fn new(_max_ops: usize, max_budget: u64) -> Self {
-        Self { budget: max_budget, tick: 0 }
+        Self {
+            budget: max_budget,
+            tick: 0,
+        }
+    }
+
+    /// Budget canónico da janela de heal (ADR-0027 budgeted recovery).
+    pub fn canonical() -> Self {
+        Self::new(10, HEALING_BUDGET_MAX)
     }
     
     pub fn set_tick(&mut self, tick: u64) {
@@ -80,6 +89,11 @@ impl SilentFailureDetector {
             }
         }
         silent
+    }
+
+    /// True se há agentes observados além do próprio detector (fleet heartbeats).
+    pub fn watched_count(&self) -> usize {
+        self.failures.len()
     }
 }
 
@@ -296,9 +310,9 @@ pub const TOPIC_HEALING_LLM_REQUEST: &str = "HEALING_LLM_REQUEST";
 /// EventBus topic: CortexAgent → SelfHealAgent (healing diagnosis).
 pub const TOPIC_HEALING_LLM_RESPONSE: &str = "HEALING_LLM_RESPONSE";
 
-/// Maximum healing LLM requests per budget window.
+/// Maximum healing recovery actions per budget window.
 const HEALING_BUDGET_MAX: u64 = 10;
-/// Budget window in ticks (reset every ~100s at 1Hz).
+/// Budget window in PIT ticks (~18.2 Hz). 100_000 ≈ 91 min — não é "100s @ 1Hz".
 const HEALING_BUDGET_WINDOW: u64 = 100_000;
 
 pub struct SelfHeal {
@@ -396,24 +410,56 @@ impl SelfHeal {
     }
 
     /// I3: Verifica se um dispositivo conhecido tem firmware carregado.
-    /// Se nao tiver, registra pendencia e publica HEALTH_ISSUE.
+    /// Honesty: `loaded = false` hardcoded era mentira (todo VID-gated → HEALTH_ISSUE).
+    /// - NVIDIA class 03: `load_status::FwGpu` (Loaded → ok; Absent/Failed → I3).
+    /// - Demais VID-gated: probe não wired → observe-only (sem HEALTH_ISSUE falso).
     pub fn check_device_firmware(&mut self, vid: u16, did: u16, class: u8) -> bool {
         let needs_fw = Self::vid_class_needs_fw(vid, class);
-        if !needs_fw { return true; }
-        // Ring 1 (k-ai): nunca carrega ACR NVIDIA — só sinaliza HEALTH_ISSUE.
-        let loaded = false;
-        if !loaded {
-            let dev = alloc::format!("{:04X}:{:04X} class={}", vid, did, class);
-            self.pending_fixes.push((dev.clone(),
-                alloc::format!("firmware ausente para VID={:04X} DID={:04X}", vid, did)));
-            let msg = alloc::format!("HEALTH_ISSUE:I3:{}:firmware_ausente", dev);
-            let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
-                id: 0, topic: alloc::string::String::from("HEALTH_ISSUE"),
-                payload: msg.into_bytes(), token: event_bus::CapabilityToken::Legacy(1),
-            });
-            k_nano::slog_kai!("SelfHeal", "warn", "I3: {} precisa de firmware", dev);
-            return false;
+        if !needs_fw {
+            return true;
         }
+        let dev = alloc::format!("{:04X}:{:04X} class={}", vid, did, class);
+
+        // GPU NVIDIA: telemetria canônica N1.1
+        if vid == 0x10DE && class == 0x03 {
+            use k_nano::load_status::{get, AssetKind, LoadStatus};
+            match get(AssetKind::FwGpu) {
+                LoadStatus::Loaded => {
+                    k_nano::slog_kai!("SelfHeal", "ok", "I3: {} FwGpu=LOADED", dev);
+                    return true;
+                }
+                LoadStatus::Failed | LoadStatus::Absent => {
+                    self.pending_fixes.push((
+                        dev.clone(),
+                        alloc::format!(
+                            "firmware ausente para VID={:04X} DID={:04X} status={}",
+                            vid,
+                            did,
+                            get(AssetKind::FwGpu).as_str()
+                        ),
+                    ));
+                    let msg = alloc::format!("HEALTH_ISSUE:I3:{}:firmware_ausente", dev);
+                    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+                        id: 0,
+                        topic: alloc::string::String::from("HEALTH_ISSUE"),
+                        payload: msg.into_bytes(),
+                        token: event_bus::CapabilityToken::Legacy(1),
+                    });
+                    k_nano::slog_kai!("SelfHeal", "warn", "I3: {} precisa de firmware", dev);
+                    return false;
+                }
+            }
+        }
+
+        // iwlwifi / rtl / i915: sem slot load_status — não inventar "ausente".
+        k_nano::slog_kai!(
+            "SelfHeal",
+            "warn",
+            "I3 observe-only {:04X}:{:04X} class={:02X} — FW probe not wired (no HEALTH_ISSUE)",
+            vid,
+            did,
+            class
+        );
         true
     }
 
@@ -478,8 +524,11 @@ impl SelfHeal {
         }
         self.checkpoint.mhi_dram_bytes = Self::get_mhi_dram_bytes();
         self.checkpoint.tick = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
-        self.checkpoint.heap_start = 0x_4000_0000_0000; // ponytail: fixed heap addr from AGENTS.md
-        self.checkpoint.heap_size = 512 * 1024 * 1024;  // 512MB heap
+        // AIOS: heap segue RAM detectada (não hardcode 512MB).
+        let ram_mb = k_nano::memory::TOTAL_RAM_MB.load(Ordering::Relaxed);
+        let heap_mb = k_nano::memory::heap_budget_mb(ram_mb).max(512) as u64;
+        self.checkpoint.heap_start = 0x_4000_0000_0000;
+        self.checkpoint.heap_size = heap_mb.saturating_mul(1024 * 1024);
         self.checkpoint.page_table_pml4_addr = unsafe {
             x86_64::registers::control::Cr3::read().0.start_address().as_u64()
         };
@@ -638,18 +687,37 @@ impl SelfHeal {
 
     pub fn record_failure(&mut self, msg: String, action: String, tick: u64) {
         k_nano::slog_kai!("SELF", "warn", "Falha registrada: '{}' + '{}'", msg, action);
-        self.lessons.push(FailedStrategy { error_msg: msg, attempted_action: action, tick });
-    }    pub fn analyze(&mut self, ctx: &ErrorContext, recover: bool) -> RecoveryAction {
+        self.lessons.push(FailedStrategy {
+            error_msg: msg,
+            attempted_action: action,
+            tick,
+        });
+    }
+
+    pub fn analyze(&mut self, ctx: &ErrorContext, recover: bool) -> RecoveryAction {
         let class = FailureClass::classify(ctx.kind, &ctx.message);
-        k_nano::slog_kai!("SELF", "warn", "{:?}: {} daemon '{}' ({} lessons)", class, ctx.kind, ctx.daemon, self.lessons.len());
+        k_nano::slog_kai!(
+            "SELF",
+            "warn",
+            "{:?}: {} daemon '{}' ({} lessons)",
+            class,
+            ctx.kind,
+            ctx.daemon,
+            self.lessons.len()
+        );
 
-        if !recover { return RecoveryAction::LogAndContinue; }
+        if !recover {
+            return RecoveryAction::LogAndContinue;
+        }
 
-        // Phase 3: Build error history string for AI diagnosis
+        // Phase 3: só consultar LLM quando a ação imediata é AwaitLLM —
+        // publicar HEALING_LLM_REQUEST + RestartDaemon no mesmo tick = double-act.
         let history_str = {
             let mut s = alloc::string::String::new();
             for (i, l) in self.lessons.iter().enumerate() {
-                if i > 0 { s.push_str("; "); }
+                if i > 0 {
+                    s.push_str("; ");
+                }
                 s.push_str(&l.error_msg);
                 s.push_str("→");
                 s.push_str(&l.attempted_action);
@@ -657,45 +725,62 @@ impl SelfHeal {
             s
         };
 
-        // Phase 3: Publish HEALING_LLM_REQUEST for Falcon3 3B diagnosis
-        // (except for LogAndContinue — no point asking LLM to diagnose something we ignore)
-        let healing_prompt = alloc::format!(
-            "HEALING_DIAGNOSIS: Error class={:?} kind='{}' message='{}' daemon='{}' ring={} tick={}. History: [{}]. Available recovery: restart_daemon, create_skill, checkpoint_restore, log_continue. Respond with JSON: {{\"action\":\"<name>\",\"reason\":\"<brief>\",\"params\":{{}}}}",
-            class, ctx.kind, ctx.message, ctx.daemon, ctx.ring, ctx.tick, history_str
-        );
-        let _ = k_nano::EVENT_BUS.publish(Event {
-            id: 0,
-            topic: TOPIC_HEALING_LLM_REQUEST.into(),
-            payload: healing_prompt.into_bytes(),
-            token: CapabilityToken::Legacy(1),
-        });
-        k_nano::slog_kai!("SELF", "ok", "HEALING_LLM_REQUEST published for {:?}", class);
-
-        match class {
+        let action = match class {
             FailureClass::MemoryFault if !self.already_tried(&ctx.message, "restart") => {
-                self.lessons.push(FailedStrategy { error_msg: ctx.message.clone(), attempted_action: String::from("restart"), tick: ctx.tick });
+                self.lessons.push(FailedStrategy {
+                    error_msg: ctx.message.clone(),
+                    attempted_action: String::from("restart"),
+                    tick: ctx.tick,
+                });
                 RecoveryAction::RestartDaemon(ctx.daemon.clone(), None)
             }
-            FailureClass::ExecutionFault if !self.already_tried(&ctx.message, "checkpoint_restore") => {
-                self.lessons.push(FailedStrategy { error_msg: ctx.message.clone(), attempted_action: String::from("checkpoint_restore"), tick: ctx.tick });
+            FailureClass::ExecutionFault
+                if !self.already_tried(&ctx.message, "checkpoint_restore") =>
+            {
+                self.lessons.push(FailedStrategy {
+                    error_msg: ctx.message.clone(),
+                    attempted_action: String::from("checkpoint_restore"),
+                    tick: ctx.tick,
+                });
                 RecoveryAction::CheckpointRestore
             }
             FailureClass::ResourceFault if !self.already_tried(&ctx.message, "create") => {
                 let fix = alloc::format!("AI-heal: {}", ctx.message);
-                self.pending_fixes.push((ctx.daemon.clone(), fix.clone()));
-                self.lessons.push(FailedStrategy { error_msg: ctx.message.clone(), attempted_action: String::from("create"), tick: ctx.tick });
+                self.pending_fixes
+                    .push((ctx.daemon.clone(), fix.clone()));
+                self.lessons.push(FailedStrategy {
+                    error_msg: ctx.message.clone(),
+                    attempted_action: String::from("create"),
+                    tick: ctx.tick,
+                });
                 RecoveryAction::CreateSkill(ctx.daemon.clone(), fix, None)
             }
             FailureClass::LogicFault | FailureClass::ExternalFault => {
-                // Log and let LLM diagnose asynchronously via HEALING_LLM_RESPONSE
-                self.lessons.push(FailedStrategy { error_msg: ctx.message.clone(), attempted_action: String::from("log_await_llm"), tick: ctx.tick });
+                self.lessons.push(FailedStrategy {
+                    error_msg: ctx.message.clone(),
+                    attempted_action: String::from("log_await_llm"),
+                    tick: ctx.tick,
+                });
                 RecoveryAction::AwaitLLM(ctx.daemon.clone())
             }
-            _ => {
-                // Already tried or unknown — log only, await LLM response
-                RecoveryAction::AwaitLLM(ctx.daemon.clone())
-            }
+            _ => RecoveryAction::AwaitLLM(ctx.daemon.clone()),
+        };
+
+        if matches!(action, RecoveryAction::AwaitLLM(_)) {
+            let healing_prompt = alloc::format!(
+                "HEALING_DIAGNOSIS: Error class={:?} kind='{}' message='{}' daemon='{}' ring={} tick={}. History: [{}]. Available recovery: restart_daemon, create_skill, checkpoint_restore, log_continue. Respond with JSON: {{\"action\":\"<name>\",\"reason\":\"<brief>\",\"params\":{{}}}}",
+                class, ctx.kind, ctx.message, ctx.daemon, ctx.ring, ctx.tick, history_str
+            );
+            let _ = k_nano::EVENT_BUS.publish(Event {
+                id: 0,
+                topic: TOPIC_HEALING_LLM_REQUEST.into(),
+                payload: healing_prompt.into_bytes(),
+                token: CapabilityToken::Legacy(1),
+            });
+            k_nano::slog_kai!("SELF", "ok", "HEALING_LLM_REQUEST published for {:?}", class);
         }
+
+        action
     }
 
     pub fn list_pending(&self) -> Vec<String> {
@@ -777,4 +862,78 @@ pub fn push_respawn(daemon_name: &str) -> bool {
 pub static GLOBAL_SELF_HEAL: spin::LazyLock<k_nano::sync::IrqSafeLock<SelfHeal>> =
     spin::LazyLock::new(|| k_nano::sync::IrqSafeLock::new(SelfHeal::new()));
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn budget_canonical_is_ten_not_60k() {
+        let b = BudgetedRecovery::canonical();
+        assert!(b.can_execute());
+        let mut b = BudgetedRecovery::canonical();
+        for _ in 0..10 {
+            assert!(b.can_execute());
+            b.consume();
+        }
+        assert!(!b.can_execute());
+    }
+
+    #[test]
+    fn failure_class_page_fault_is_memory() {
+        assert_eq!(
+            FailureClass::classify("PageFault", "CR2=0"),
+            FailureClass::MemoryFault
+        );
+        assert_eq!(
+            FailureClass::classify("GeneralProtection", "GPF"),
+            FailureClass::ExecutionFault
+        );
+        assert_eq!(
+            FailureClass::classify("Unknown", "skill not found"),
+            FailureClass::ResourceFault
+        );
+    }
+
+    #[test]
+    fn silent_detector_self_only_not_watched_fleet() {
+        let mut s = SilentFailureDetector::new(10);
+        s.set_tick(0);
+        s.heartbeat("SelfHealAgent");
+        s.set_tick(5); // within threshold
+        assert_eq!(s.watched_count(), 1);
+        assert!(s.detect_silent().is_empty());
+    }
+
+    #[test]
+    fn nvidia_fw_loaded_skips_i3() {
+        use k_nano::load_status::{set, AssetKind, LoadStatus};
+        set(AssetKind::FwGpu, LoadStatus::Loaded);
+        let mut heal = SelfHeal::new();
+        assert!(heal.check_device_firmware(0x10DE, 0x1C82, 0x03));
+        set(AssetKind::FwGpu, LoadStatus::Absent);
+        assert!(!heal.check_device_firmware(0x10DE, 0x1C82, 0x03));
+        // Realtek: observe-only → true (no false HEALTH_ISSUE)
+        assert!(heal.check_device_firmware(0x10EC, 0x8168, 0x02));
+    }
+
+    #[test]
+    fn analyze_memory_fault_no_llm_publish_side_effect_lessons() {
+        // Unit: MemoryFault returns RestartDaemon without needing bus (publish may no-op).
+        let mut heal = SelfHeal::new();
+        let ctx = ErrorContext {
+            kind: "PageFault",
+            message: "OOM test".into(),
+            file: "t".into(),
+            line: 1,
+            ring: 0,
+            daemon: "net".into(),
+            tick: 1,
+        };
+        let a = heal.analyze(&ctx, true);
+        assert!(matches!(a, RecoveryAction::RestartDaemon(_, _)));
+        // Second time already_tried → AwaitLLM
+        let a2 = heal.analyze(&ctx, true);
+        assert!(matches!(a2, RecoveryAction::AwaitLLM(_)));
+    }
+}
 

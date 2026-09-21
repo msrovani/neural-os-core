@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s390] - 2026-09-21 — SelfHeal honesty (I3/budget/LLM/silent)
+
+- High: I3 FwGpu load_status; AI restart não envenena lessons; HEALING_LLM só AwaitLLM; budget canonical=10
+- Med: SilentFailure gate; pending clear; SKILL_CREATE no_consumer; heap_budget checkpoint
+- Low: BootSelfHeal sev; tests 5/5; disk health parens
+- Canvas: `selfheal-bughunt-s390.canvas.tsx`
+
 ## [1.9.99-s389b] - 2026-09-21 — Logging honesty follow-up (SCORE + fat-boot-log)
 
 - High: fat-boot-log default/`cargo nk`; PHASE_RANK SCORE; note_phase_status upgrade; ensure_persisted=flush

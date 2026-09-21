@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s389b TEST
+# SESSION INDEX — neural-os-core v1.9.99-s390 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 390 | SelfHeal | bughunt AIOS | I3/budget/LLM/silent | FwGpu load_status; no double-act; canonical budget=10; SKILL_CREATE honesty |
 | 389b | Logging | follow-up | SCORE/phase/fat-boot-log | default feature; PHASE_RANK; ensure_persisted; dump_into; HDA/TPM sev |
 | 389 | Logging | bughunt AIOS | QEMU+HW ADR-0092 | COM1→BOOT.LOG mirror; log() sem dup; CapGate DENY ok; fetch FAIL sev; Net tick trace |
 | 388 | ModelHub+Trinity | bughunt AIOS | hub register/mmap/CapGate | set_* vs drop; weight=None residual; Active size; generate_from_slot; Block→DeviceIo; Vision≠LLM |

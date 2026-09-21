@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s389b — Logging honesty follow-up
+# STATE — neural-os-core v1.9.99-s390 — SelfHeal honesty
 
-#   PISTA ATIVA: s389b — fat-boot-log default + SCORE phase + ensure_persisted
-#   PISTA ANTERIOR: s389 Logging ADR-0092 (H1–H3)
+#   PISTA ATIVA: s390 — SelfHeal I3/budget/double-act/silent (H1–L4)
+#   PISTA ANTERIOR: s389b Logging SCORE/phase/fat-boot-log
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
@@ -26,6 +26,7 @@
 
 | ID | Item | Estado |
 |----|------|--------|
+| s390 | SelfHeal honesty I3/budget/LLM/silent | ✅ |
 | s389b | Logging follow-up SCORE/phase/fat-boot-log | ✅ |
 | s389 | Logging QEMU+HW ADR-0092 honesty | ✅ |
 | s388 | ModelHub + Trinity CapGate/mmap honesty | ✅ |

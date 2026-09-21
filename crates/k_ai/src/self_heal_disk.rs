@@ -72,8 +72,10 @@ pub fn check_disk_health(dev: &mut dyn BlockDevice) -> bool {
         return false;
     }
     // MBR signature presente = disco responsivo
-    buf[0x1FE] == 0x55 && buf[0x1FF] == 0xAA || {
-        // Pode ser GPT sem MBR protetiva — tenta GPT header
-        dev.read_sectors(1, &mut buf) && &buf[0..8] == b"EFI PART"
-    }
+    // Precedência: (55 AA) OU GPT header — parênteses explícitos (s390 honesty).
+    (buf[0x1FE] == 0x55 && buf[0x1FF] == 0xAA)
+        || {
+            // Pode ser GPT sem MBR protetiva — tenta GPT header
+            dev.read_sectors(1, &mut buf) && &buf[0..8] == b"EFI PART"
+        }
 }
