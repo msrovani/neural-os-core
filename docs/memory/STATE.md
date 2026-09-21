@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s381 — jarbas honesty
+# STATE — neural-os-core v1.9.99-s382 — mouse USB tablet #542
 
-#   PISTA ATIVA: s381 — jarbas (avatar/slog/barge-in + trim)
-#   PISTA ANTERIOR: s380 hermes residuals; s379 hermes honesty
+#   PISTA ATIVA: s382 — IDEA #542 deferred HID sandbox/QEMU
+#   PISTA ANTERIOR: s381 jarbas honesty; s380 hermes residuals
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
@@ -30,6 +30,7 @@
 | B3.1 | Playback pacing free+TSC | ✅ s368 |
 | s374–s380 | honesty crates + hermes residuals | ✅ |
 | s381 | jarbas honesty | ✅ |
+| s382 | IDEA #542 mouse USB tablet deferred | ✅ |
 | B2 | Mesh peer B / relaunch | AWAITING operador |
 | Track C | Ring3/B/C/GPU/WiFi… | defer |
 | IDEA #562 | AUDIO_FRAME → ring SPSC | residual |

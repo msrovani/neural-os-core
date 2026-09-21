@@ -227,6 +227,8 @@ pub struct DisplayAgent {
     last_pointer_y: usize,
     /// try_enable_hw_cursor adiado — 1º tick só pinta orb (anti-splash hang).
     hw_cursor_tried: bool,
+    /// IDEA #542: tentativas de deferred P24b pós-UI (QEMU usb-tablet).
+    hid_defer_tries: u8,
 }
 
 impl DisplayAgent {
@@ -282,6 +284,7 @@ impl DisplayAgent {
             last_pointer_x: usize::MAX,
             last_pointer_y: usize::MAX,
             hw_cursor_tried: false,
+            hid_defer_tries: 0,
         }
     }
 
@@ -756,6 +759,20 @@ impl Agent for DisplayAgent {
                 k_nano::slog_jarbas!("Jarbas", "ok", "cursor software (HW não gateado)");
             }
             k_nano::slog_jarbas!("Jarbas", "ok", "cursor probe end");
+        }
+
+        // IDEA #542: 1× deferred HID após cursor probe (UI já live). Retries
+        // espaçados ficam no InputAgent (ticks 90/180/360) — não 2× EnableSlot
+        // em frames consecutivos (s361 hang).
+        if self.hid_defer_tries == 0 && !k_nano::xhci::mouse_is_ready() {
+            self.hid_defer_tries = 1;
+            k_nano::slog_jarbas!("MOUSE", "ok", "deferred HID after UI (IDEA 542 usb-tablet)");
+            unsafe {
+                let _ = k_nano::xhci::try_deferred_hid_bringup();
+            }
+            if k_nano::xhci::mouse_is_ready() {
+                k_nano::slog_jarbas!("MOUSE", "ok", "P24b ready — MOUSE_ABS via poll");
+            }
         }
 
         // Mic só depois do greeting drenar — evita freeze jarvis_voice (s361).

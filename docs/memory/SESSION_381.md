@@ -31,6 +31,7 @@
 
 ## Residual
 
+- EnableSlot flaky TCG (validate WHPX) — SESSION_382
 - IDEA #597/#602 spin/x86_64 workspace
-- IDEA #542 mouse USB tablet QEMU
+# (IDEA #542 ✅ s382)
 - heapless 0.9.x unused (removido; não bump)

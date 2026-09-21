@@ -1,5 +1,10 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s382] - 2026-09-21 — mouse USB tablet (#542)
+
+- Deferred HID bringup no QEMU/sandbox (InputAgent + DisplayAgent pós-UI)
+- `xhci::mouse_is_ready`; aux=0 com tablet é esperado — path = P24b abs
+
 ## [1.9.99-s381] - 2026-09-21 — jarbas honesty (avatar/slog/barge-in)
 
 - `read_audio_energy` sem pulso fake; barge-in não cancela InferQueue; pcm_buffer cap 30s

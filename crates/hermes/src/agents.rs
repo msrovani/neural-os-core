@@ -174,11 +174,12 @@ impl InputAgent {
 impl Agent for InputAgent {
     fn manifest(&self) -> &AgentManifest { &INPUT_MANIFEST }
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
-        // HID deferred: QEMU xhci EnableSlot timeout ~1.2s ×2 (tick 50+120) =
-        // "tick lento: input" e engasga o orb (s361). Skip em sandbox; metal OK.
-        let sandbox = k_nano::platform_probe::hypervisor().is_sandbox();
-        if !sandbox && (tick == 50 || tick == 120) {
-            if tick == 120 {
+        // IDEA #542: QEMU `-device usb-tablet` — PS/2 aux=0; precisa P24b/deferred.
+        // Não skip sandbox: `try_deferred_hid_bringup` já exige `ui_is_live` e
+        // marca DONE uma vez (EnableSlot caro). Ticks espaçados + 1 retry se
+        // mouse ainda não ready (s361: não chamar a cada tick).
+        if tick == 90 || tick == 180 || tick == 360 {
+            if (tick == 180 || tick == 360) && !k_nano::xhci::mouse_is_ready() {
                 k_nano::xhci::clear_hid_defer_flag();
             }
             unsafe {

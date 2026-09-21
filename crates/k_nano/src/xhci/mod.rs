@@ -919,6 +919,14 @@ pub unsafe fn poll_keyboard() -> Option<u8> {
     Some(sc)
 }
 
+/// IDEA #542: Display/Input consultam sem lock longo.
+pub fn mouse_is_ready() -> bool {
+    XHCI_STATE
+        .try_lock()
+        .and_then(|g| g.as_ref().map(|s| s.mouse_ready))
+        .unwrap_or(false)
+}
+
 /// Poll HID mouse — QEMU `usb-tablet` = abs 6 B; boot mouse = rel 3–4 B.
 /// IDEA 542: ler 6 B e mapear abs; relativo só se ainda não latched abs.
 pub unsafe fn poll_mouse() -> bool {
