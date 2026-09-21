@@ -19,6 +19,22 @@ pub use k_nano::boot_logger::{
     init,
 };
 
+/// Teto de linhas do session snapshot → ramlog phys (capa o ring; evita loops duplicados).
+const SESSION_RAMLOG_LINES: usize = 400;
+
+fn append_lines_to_ramlog(s: &str, max_lines: usize) {
+    for line in s.lines().take(max_lines) {
+        k_nano::boot_ramlog::append(line);
+    }
+}
+
+/// Copia o session BOOT.LOG (RAM) para o ramlog phys — fonte única p/ foto HW.
+fn snapshot_session_to_ramlog(max_lines: usize, fallback: &str) {
+    let content = k_nano::boot_logger::build_session_bytes();
+    let s = core::str::from_utf8(&content).unwrap_or(fallback);
+    append_lines_to_ramlog(s, max_lines);
+}
+
 /// Ponytail: expõe ramlog em RAM no FB quando pendrive não está pronto (K22/K137 hang).
 /// Chamado no final do boot e como fallback quando `try_flush_ramlog` não gravou.
 pub fn dump_ramlog_to_fb() {
@@ -33,9 +49,7 @@ pub fn dump_ramlog_to_fb() {
         }
         crate::display::fb::console_print(">>> FIM BOOT.LOG <<<");
         // Também mantém no ramlog phys (snapshot) para diagnóstico pós-reset.
-        for line in s.lines().take(80) {
-            k_nano::boot_ramlog::append(line);
-        }
+        append_lines_to_ramlog(s, 80);
     }
 }
 
@@ -76,11 +90,7 @@ pub fn maybe_uefi_flush_reboot(reason: &str) {
         if k_nano::boot_ramlog::skip_flush_reboot() {
             return;
         }
-        let content = k_nano::boot_logger::build_session_bytes();
-        let s = core::str::from_utf8(&content).unwrap_or(reason);
-        for line in s.lines().take(200) {
-            k_nano::boot_ramlog::append(line);
-        }
+        snapshot_session_to_ramlog(SESSION_RAMLOG_LINES, reason);
         let k = k_nano::boot_ramlog::last_ckpt();
         k_nano::slog_bin!(
             "RAMLOG", "info",
@@ -114,11 +124,7 @@ pub fn flush_bootlog_after_greeting(reason: &str) -> bool {
             k_nano::boot_ramlog::mark_skip_flush_reboot();
             return true;
         }
-        let content = k_nano::boot_logger::build_session_bytes();
-        let s = core::str::from_utf8(&content).unwrap_or(reason);
-        for line in s.lines().take(400) {
-            k_nano::boot_ramlog::append(line);
-        }
+        snapshot_session_to_ramlog(SESSION_RAMLOG_LINES, reason);
         k_nano::boot_ramlog::append(reason);
         k_nano::boot_ramlog::append("[JARBAS] greet OK — BOOT.LOG so ramlog (sem soft-reboot)");
         let k = k_nano::boot_ramlog::last_ckpt();

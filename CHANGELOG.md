@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s370] - 2026-09-21 — agent-core bughunt AIOS
+
+- Budget: overruns wall-clock (`note_wall_overrun`); `lifetime_paused_polls` crash@10k; AP `tick_agent_by_index` = BSP semantics
+- Agency: `register_agency_agents` ← PackageHub signed specs; SpecialistAgent EventDriven announce-once
+- Redução: remove `skill_map`; honesty Crew/StateGraph/Modify/FlowTrigger; `boost_novelty`
+- SESSION_370; testes agent-core 5/5
+
 ## [1.9.99-s369] - 2026-09-20 — Boot Trilha A + bughunt
 
 - Trilha A: `crates/logwriter-efi` (BOOTX64→BOOT.LOG via SFS→Limine); seal panic/reboot; **`init_from_phys` wired**

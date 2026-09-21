@@ -1,12 +1,15 @@
 //! Agent Hooks — Pre/Post tick hooks (IDEA A-015).
 //! HookRegistry com slots fixos de function pointers.
-//! Hooks retornam Allow/Block/Modify.
+//!
+//! `Allow` / `Block` são efetivos. `Modify` ≡ Allow até existir pipeline de
+//! mutação de tick (não inventar side-effect silencioso).
 
 /// Resultado de um hook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookResult {
     Allow,
     Block,
+    /// Reservado: hoje tratado como Allow (sem mutação).
     Modify,
 }
 

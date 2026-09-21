@@ -911,7 +911,7 @@ O `AgentScheduler` substitui o `NeuralExecutor`:
 | A-011 | **SelfHealAgent** — Já implementado como SelfHeal struct. Migrar para AgentKind::System com skill `recover` | 🟡 Sprint 40+ | Sprint 40 | Self-healing como agente. |
 | A-012 | **MemoryAgent** — Gerencia BitmapFrameAllocator, MHI tiers, Slab. Skills: `alloc`, `dealloc`, `status` | 🟡 Sprint 41+ | Sprint 41 | Memória como agente. |
 | A-013 | **Agent Schedules** — Tick-based (poll a cada N ticks), Event-driven (só acorda com evento), Continuous (roda todo tick), Idle (só responde, nunca inicia) | 🟡 Sprint 40+ | Sprint 40 | Eficiência energética. |
-| A-014 | **Agent Budget + Watchdog** — Cada agente tem tick_budget por ciclo. Se excede, watchdog pausa. Implementa IterationBudget (#199) | 🟡 Sprint 40+ | Sprint 40 | Previne runaway agents. |
+| A-014 | **Agent Budget + Watchdog** — Overruns = wall-clock (`TICK_WATCHDOG_MS`); recover@1000; crash@lifetime_paused≥10k. Count-based com 1 poll/ciclo era inerte (s370). | ✅ s370 | ADR-0088 | SESSION_370 |
 | A-015 | **Agent Hooks** — Pre/Post tick hooks. HookRegistry com slots fixos de function pointers. Hooks retornam Allow/Block/Modify (#206) | 🟡 Sprint 41+ | Sprint 41 | Plugin system via hooks. |
 | A-016 | **Multi-Agent Orchestration** — Graph-based: sequential, concurrent, handoff entre agents. EventBus padrão MS Agent (#235) | 🟡 Sprint 41+ | Sprint 41 | Composição de agentes. |
 | A-017 | **Agent as Pure Function** — Event-sourced: `f(history) -> next action`. Cada tick do agent é um ConversationEvent (#231) | 🟡 Sprint 41+ | Sprint 41 | Replay, debug, rollback. |

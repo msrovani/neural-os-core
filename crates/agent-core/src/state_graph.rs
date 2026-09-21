@@ -1,7 +1,8 @@
-//! StateGraph — scheduler baseado em grafo de estados (LangGraph-inspired).
-//! Substitui round-robin: cada agente e um no no grafo, arestas sao
-//! condicoes que disparam transicoes. Se nenhuma condicao e satisfeita,
-//! o scheduler continua no no atual (pollando o agente).
+//! StateGraph — grafo de estados LangGraph-inspired.
+//!
+//! API de biblioteca: nós = agentes, arestas = condições. **Não** substitui o
+//! round-robin de `AgentRegistry::run()` hoje — disponível p/ workflows Hermes
+//! (Observe→Plan→Act) sem fingir que o scheduler já é graph-driven.
 
 use alloc::vec::Vec;
 use alloc::string::String;

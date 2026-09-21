@@ -2396,13 +2396,14 @@ const HWDETECT_MANIFEST: AgentManifest = AgentManifest {
 };
 
 // ---------------------------------------------------------------------------
-// SpecialistAgent — agente generico que executa baseado em AgentSpec
-// Usado pelos agentes do The Agency (12 divisoes, 30+ especialistas)
+// SpecialistAgent — materializa AGENT.md agency assinados (ADR-0052)
+// Announce-once EventDriven — sem Continuous+Pending spam.
 // ---------------------------------------------------------------------------
 
 pub struct SpecialistAgent {
     manifest: AgentManifest,
     spec: agency::AgentSpec,
+    announced: bool,
 }
 
 impl SpecialistAgent {
@@ -2415,40 +2416,62 @@ impl SpecialistAgent {
             "infrastructure" | "data-science" | "spatial" => AgentKind::System,
             _ => AgentKind::Skill,
         };
-        // Use &'static str for the name - we leak it to make it static
         let name = Box::leak(spec.name.clone().into_boxed_str());
         SpecialistAgent {
-            manifest: AgentManifest { name, kind, schedule: ScheduleKind::Continuous, auto_start: true, persist: true },
+            manifest: AgentManifest {
+                name,
+                kind,
+                schedule: ScheduleKind::EventDriven,
+                auto_start: true,
+                persist: true,
+            },
             spec,
+            announced: false,
         }
     }
 }
 
 impl Agent for SpecialistAgent {
     fn manifest(&self) -> &AgentManifest { &self.manifest }
+    fn has_pending(&self) -> bool { !self.announced }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        // Cria skill sob demanda e publica no EventBus
-        // Ex: "driver-engineer" publica DRIVER_ENGINEER_REQUEST
+        if self.announced {
+            return AgentTickResult::Done;
+        }
         let topic = alloc::format!("AGENCY_{}", self.spec.name.to_ascii_uppercase());
         let _ = EVENT_BUS.publish(Event {
             id: 0, topic, payload: self.spec.skills.join(",").into_bytes(),
             token: CapabilityToken::Legacy(1),
         });
-        AgentTickResult::Pending
+        self.announced = true;
+        AgentTickResult::Done
     }
 }
 
-/// Registra todos os agentes do The Agency no registry
+/// PackageHub signed agency AGENT.md → EventDriven specialists.
+/// `Agency::new()` é vazio — nunca inventar stubs Continuous (ADR-0052).
 pub fn register_agency_agents(registry: &mut agent_core::AgentRegistry) {
-    let agency = agency::Agency::new();
+    let specs = crate::package_hub::PACKAGE_HUB.lock().agency_specs();
+    let agency = agency::Agency::from_specs(specs);
     for div in &agency.divisions {
         for spec in &div.agents {
             let agent = SpecialistAgent::new(spec.clone());
             registry.register(Box::new(agent));
         }
     }
-    let count: usize = agency.divisions.iter().map(|d| d.agents.len()).sum();
-    k_nano::slog_hermes!("AGENCY", "info", "{} agentes registrados via SpecialistAgent", count);
+    let count = agency.count();
+    if count == 0 {
+        k_nano::slog_hermes!(
+            "AGENCY", "ok",
+            "0 specialists (PackageHub sem AGENT.md agency signed — deny-by-default)"
+        );
+    } else {
+        k_nano::slog_hermes!(
+            "AGENCY", "ok",
+            "{} specialists EventDriven announce-once (PackageHub signed)",
+            count
+        );
+    }
 }
 
 /// Registra HwAgents como agentes nativos (um por dispositivo PCI)

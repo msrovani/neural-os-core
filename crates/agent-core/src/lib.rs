@@ -10,7 +10,6 @@ pub mod state_graph;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::collections::BTreeMap;
 use budget::{AgentWatchdogState, BudgetManager};
 use core::sync::atomic::AtomicPtr;
 use core::ptr::null_mut;
@@ -50,16 +49,18 @@ pub enum ScheduleKind {
 }
 
 /// FlowTrigger define quando um agente acorda.
-/// Substitui ScheduleKind puro por eventos semanticos.
+/// `Listen`/`Router` usam o mesmo sinal que EventDriven: `Agent::has_pending()`
+/// (o agent faz o bind ao EventBus). O rótulo `&'static str` é documentação /
+/// telemetria — o scheduler **não** subscribe sozinho (evita mentir wiring).
 #[derive(Clone, Debug, PartialEq)]
 pub enum FlowTrigger {
     /// Agenda tradicional (compatibilidade)
     Schedule(ScheduleKind),
     /// Acorda no boot (equivalente a Schedule(Oneshot) + auto_start)
     Start,
-    /// Acorda quando um topico do EventBus tem mensagem
+    /// Acorda quando `has_pending()` (agent escuta o tópico indicado)
     Listen(&'static str),
-    /// Acorda, le o payload do topico, roteia para handler baseado no conteudo
+    /// Idem Listen — agent roteia payload no tick
     Router(&'static str),
 }
 
@@ -173,8 +174,11 @@ pub struct AgentInstance {
     /// RuVix: coherence pressure — agents that comm together stay together.
     pub coherence_partner: Option<usize>,  // agent index to schedule near
     // ─── Budget watchdog (ADR-0078) ───
-    /// Ticks spent in Paused state; auto-recover at 1000, crash at 10000.
+    /// Polls consecutivos em Paused neste episódio; recover ao atingir 1000.
     pub paused_ticks: u64,
+    /// Polls acumulados em Paused na vida do agent; crash ao atingir 10000
+    /// (sobrevive a recovers — senão o ramo crash era dead code).
+    pub lifetime_paused_polls: u64,
 }
 
 impl AgentInstance {
@@ -213,13 +217,13 @@ impl AgentInstance {
             novelty_score: 0,
             coherence_partner: None,
             paused_ticks: 0,
+            lifetime_paused_polls: 0,
         }
     }
 }
 
 pub struct AgentRegistry {
     pub agents: Vec<AgentInstance>,
-    pub skill_map: BTreeMap<String, usize>,
     pub budget_manager: BudgetManager,
     /// HookRegistry — PreTick/PostTick/OnCrash/OnSpawn hooks.
     pub hooks: hooks::HookRegistry,
@@ -234,7 +238,6 @@ impl AgentRegistry {
     pub fn new() -> Self {
         AgentRegistry {
             agents: Vec::new(),
-            skill_map: BTreeMap::new(),
             budget_manager: BudgetManager::new(),
             hooks: hooks::HookRegistry::new(),
             init_trace: None,
@@ -268,7 +271,7 @@ impl AgentRegistry {
 
     /// Get agent count (for SafetyInvariants I2).
     pub fn active_agent_count(&self) -> usize {
-        self.agents.iter().filter(|a| a.state == AgentState::Active).count()
+        self.active_count()
     }
 
     pub fn activate(&mut self, idx: usize) {
@@ -278,7 +281,6 @@ impl AgentRegistry {
         }
     }
 
-    /// Override tick budget for an agent (default: 100).
     /// Register a hook callback.
     pub fn register_hook(&mut self, hook: hooks::Hook) {
         self.hooks.register(hook);
@@ -320,6 +322,17 @@ impl AgentRegistry {
         match self.get_mut(name) {
             Some(a) => {
                 a.goal_urgency = urgency;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// RuVix: sobe novelty (eventos novos / intent). Decay −1/tick no `run()`.
+    pub fn boost_novelty(&mut self, name: &str, amount: u8) -> bool {
+        match self.get_mut(name) {
+            Some(a) => {
+                a.novelty_score = a.novelty_score.saturating_add(amount);
                 true
             }
             None => false,
@@ -373,43 +386,65 @@ impl AgentRegistry {
     fn check_budget(&mut self, idx: usize) -> bool {
         let name = self.agents[idx].name;
 
-        // If already Paused: track pause time, maybe auto-recover, skip tick
+        // Já em Paused: acumula streak + lifetime; crash ANTES de recover
+        // (senão `>=1000` recover tornava `>=10000` dead code).
         if self.agents[idx].paused_ticks > 0 {
-            self.agents[idx].paused_ticks += 1;
-            if self.agents[idx].paused_ticks >= 1000 {
-                // Auto-recover after 1000 ticks in Paused
-                self.budget_manager.recover(name);
-                self.agents[idx].paused_ticks = 0;
-                maybe_log_budget(name, "recovered");
-            } else if self.agents[idx].paused_ticks >= 10000 {
-                // Safety net: too long paused → crash
+            self.agents[idx].paused_ticks = self.agents[idx].paused_ticks.saturating_add(1);
+            self.agents[idx].lifetime_paused_polls =
+                self.agents[idx].lifetime_paused_polls.saturating_add(1);
+            if self.agents[idx].lifetime_paused_polls >= 10_000 {
                 self.agents[idx].state = AgentState::Crashed;
                 maybe_log_budget(name, "crashed_timeout");
                 return false;
             }
-            return false; // skip tick while paused
+            if self.agents[idx].paused_ticks >= 1000 {
+                self.budget_manager.recover(name);
+                self.agents[idx].paused_ticks = 0;
+                maybe_log_budget(name, "recovered");
+            }
+            return false;
         }
 
-        // Consume 1 tick from budget
-        if !self.budget_manager.consume(name, 1) {
-            let wd = self.budget_manager
-                .get_state(name)
-                .unwrap_or(AgentWatchdogState::Normal);
-            match wd {
-                AgentWatchdogState::Paused | AgentWatchdogState::Crashed => {
-                    // First tick entering Paused — mark it and skip
-                    self.agents[idx].paused_ticks = 1;
-                    maybe_log_budget(name, "paused");
-                    return false;
-                }
-                AgentWatchdogState::Warning => {
-                    // Over budget but still Warning — log it but allow tick
-                    maybe_log_budget(name, "budget_warning");
-                }
-                _ => {}
-            }
+        // Poll permitido? (Paused/Crashed → false; senão marca ticks_used do ciclo)
+        if !self.budget_manager.allow_poll(name) {
+            self.agents[idx].paused_ticks = 1;
+            self.agents[idx].lifetime_paused_polls =
+                self.agents[idx].lifetime_paused_polls.saturating_add(1);
+            maybe_log_budget(name, "paused");
+            return false;
         }
         true
+    }
+
+    /// Aplica resultado de tick (BSP e AP compartilham — ADR-0089 honesty).
+    fn apply_tick_result(&mut self, idx: usize, result: AgentTickResult, tick_id: u64) {
+        if idx >= self.agents.len() {
+            return;
+        }
+        let agent_name = self.agents[idx].name;
+        self.agents[idx].last_poll = tick_id;
+        match result {
+            AgentTickResult::Pending => {
+                self.agents[idx].consecutive_pending =
+                    self.agents[idx].consecutive_pending.saturating_add(1);
+                if watchdog_should_crash(
+                    self.agents[idx].goal_urgency,
+                    self.agents[idx].consecutive_pending,
+                ) {
+                    self.agents[idx].state = AgentState::Crashed;
+                }
+            }
+            AgentTickResult::Done => {
+                self.agents[idx].consecutive_pending = 0;
+                if self.agents[idx].schedule == ScheduleKind::Oneshot {
+                    self.agents[idx].state = AgentState::Done;
+                }
+            }
+            AgentTickResult::Crashed => {
+                self.agents[idx].state = AgentState::Crashed;
+                self.hooks.run(hooks::HookType::OnCrash, agent_name, tick_id);
+            }
+        }
     }
 
     /// Boot Oneshot round-robin até todos Done **ou** timeout.
@@ -543,13 +578,13 @@ impl AgentRegistry {
             if ui_live {
                 if let Some(di) = self.agents.iter().position(|a| a.name == "display") {
                     if self.agents[di].state == AgentState::Active {
-                        let _ = with_agent_tick_lock(|| {
+                        let result = with_agent_tick_lock(|| {
                             self.agents[di].tick_counter += 1;
                             let tc = self.agents[di].tick_counter;
                             self.agents[di].agent.tick(tick_id, tc)
                         });
                         polled = polled.saturating_add(1);
-                        self.agents[di].last_poll = tick_id;
+                        self.apply_tick_result(di, result, tick_id);
                     }
                 }
             }
@@ -619,9 +654,8 @@ impl AgentRegistry {
                 if !should_poll {
                     continue;
                 }
-                self.agents[i].last_poll = tick_id;
 
-                // Budget watchdog guard — skip tick if budget exhausted
+                // Budget watchdog guard — skip tick if paused/crashed
                 if !self.check_budget(i) {
                     continue;
                 }
@@ -671,6 +705,9 @@ impl AgentRegistry {
                     let dt = c().wrapping_sub(wdt_t0);
                     if dt > TICK_WATCHDOG_MS {
                         report(agent_name, dt);
+                        // AIOS: overrun wall-clock alimenta o budget real
+                        // (count-based nunca estourava com 1 poll/ciclo).
+                        self.budget_manager.note_wall_overrun(agent_name);
                     }
                 }
                 polled = polled.saturating_add(1);
@@ -685,45 +722,19 @@ impl AgentRegistry {
                     if overdue {
                         if let Some(di) = self.agents.iter().position(|a| a.name == "display") {
                             if self.agents[di].state == AgentState::Active {
-                                let _ = with_agent_tick_lock(|| {
+                                let d_result = with_agent_tick_lock(|| {
                                     self.agents[di].tick_counter += 1;
                                     let tc = self.agents[di].tick_counter;
                                     self.agents[di].agent.tick(tick_id, tc)
                                 });
                                 polled = polled.saturating_add(1);
+                                self.apply_tick_result(di, d_result, tick_id);
                             }
                         }
                     }
                 }
 
-                // Watchdog: detecta loops infinitos (10000+ ticks sem Done).
-                // Só crashea agentes SEM urgency (espelha a isenção do rate-limit
-                // acima): interativos (urgency>0) retornam Pending por design e
-                // pollam todo tick — crashear por "nunca Done" os mataria em ~9 min
-                // sem recuperação (RESPAWN_QUEUE sem writers, hooks não wireados).
-                match result {
-                    AgentTickResult::Pending => {
-                        self.agents[i].consecutive_pending += 1;
-                        if watchdog_should_crash(
-                            self.agents[i].goal_urgency,
-                            self.agents[i].consecutive_pending,
-                        ) {
-                            self.agents[i].state = AgentState::Crashed;
-                        }
-                    }
-                    AgentTickResult::Done => {
-                        self.agents[i].consecutive_pending = 0;
-                        if self.agents[i].schedule == ScheduleKind::Oneshot {
-                            self.agents[i].state = AgentState::Done;
-                        }
-                    }
-                    AgentTickResult::Crashed => {
-                        self.agents[i].state = AgentState::Crashed;
-                        // OnCrash hook: notify registered crash handlers
-                        self.hooks.run(hooks::HookType::OnCrash, agent_name, tick_id);
-                    }
-                    _ => {}
-                }
+                self.apply_tick_result(i, result, tick_id);
             }
             // Scheduler-stage (freeze s330): IMEDIATAMENTE após o loop de agentes.
             // Congelar aqui = hang no maybe_log/BEI/halt (fora de qualquer tick).
@@ -974,9 +985,13 @@ pub fn tick_agent_by_index(idx: u32, tick_id: u32) -> bool {
         if reg.agents[i].state != AgentState::Active {
             return false;
         }
+        if !reg.check_budget(i) {
+            return false;
+        }
         reg.agents[i].tick_counter += 1;
         let tc = reg.agents[i].tick_counter;
-        let _ = reg.agents[i].agent.tick(tick_id as u64, tc);
+        let result = reg.agents[i].agent.tick(tick_id as u64, tc);
+        reg.apply_tick_result(i, result, tick_id as u64);
         true
     })
 }
@@ -1095,5 +1110,45 @@ mod tests {
         assert!(!watchdog_should_crash(200, 1_000_000));
         assert!(!watchdog_should_crash(0, 10000));
         assert!(watchdog_should_crash(0, 10001));
+    }
+
+    #[test]
+    fn pause_lifetime_crash_before_recover_loop() {
+        // Simula: paused_ticks sobe; lifetime_paused atinge 10000 → crash
+        // mesmo com recovers a cada 1000 (bug antigo: else-if morto).
+        let mut lifetime = 0u64;
+        let mut streak = 1u64;
+        let mut crashed = false;
+        for _ in 0..12_000 {
+            streak += 1;
+            lifetime += 1;
+            if lifetime >= 10_000 {
+                crashed = true;
+                break;
+            }
+            if streak >= 1000 {
+                streak = 0;
+            }
+        }
+        assert!(crashed);
+        assert!(lifetime >= 10_000);
+    }
+
+    #[test]
+    fn flow_listen_uses_has_event_like_event_driven() {
+        assert!(!should_poll_flow(
+            &FlowTrigger::Listen("SYS_INSTALL"),
+            10,
+            5,
+            false
+        ));
+        assert!(should_poll_flow(
+            &FlowTrigger::Listen("SYS_INSTALL"),
+            10,
+            5,
+            true
+        ));
+        assert!(should_poll_flow(&FlowTrigger::Start, 1, 0, false));
+        assert!(!should_poll_flow(&FlowTrigger::Start, 2, 1, false));
     }
 }

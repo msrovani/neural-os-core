@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s369 — Boot Trilha A + bughunt
+# STATE — neural-os-core v1.9.99-s370 — agent-core bughunt AIOS
 
-#   PISTA ATIVA: s369 — logwriter-efi + init_from_phys + honesty PHASE/flush
-#   PISTA ANTERIOR: s368 Fechamento 1.x B1/B3.1; s367 LLM gate
+#   PISTA ATIVA: s370 — agent-core budget wall-clock + Agency PackageHub
+#   PISTA ANTERIOR: s369 Boot Trilha A; s368 Fechamento 1.x
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo

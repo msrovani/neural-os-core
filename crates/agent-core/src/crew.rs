@@ -1,10 +1,9 @@
 //! Crew — grupo de agentes com objetivo comum (CrewAI-inspired).
-//! Um Crew é um time orquestrado: agentes colaboram, tasks sao delegadas,
-//! resultados sao consolidados. HermesAgent atua como ManagerAgent.
 //!
-//! Integracao: AgentRegistry::create_crew() monta um Crew a partir dos agentes
-//! registrados com mesmo objetivo. CrewPool::resolve() ordena execucao por
-//! dependencia. Scheduler usa order se crew_mode=true.
+//! API de biblioteca para Hermes/Cortex montarem crews. **Não** está ligada a
+//! `AgentRegistry::run()` (sem `create_crew`/`crew_mode` no scheduler) — honesty
+//! ADR-0088: disponível ≠ wired. Integração futura: Hermes chama
+//! `CrewPool::kickoff` + despacha tasks via EventBus.
 
 use alloc::string::String;
 use alloc::vec::Vec;
