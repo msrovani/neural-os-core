@@ -31,9 +31,12 @@ impl RiskLevel {
         match full.as_str() {
             // Auto: operações seguras / observabilidade
             "aios::log" | "aios::debug" | "aios::get_tick" => RiskLevel::Auto,
-            // SESSION_379: host ABI net/fs/gpu ainda não wired → Deny (não HITL-spin
-            // nem Ok fantasma). Ao ligar net_bridge/VFS/KernelPack, reclassificar.
-            "aios_fs::fs_read" | "aios_fs::fs_write" | "aios_net::http_get"
+            // SESSION_379 residual #604: Cap+bridge/VFS → Auto; sem wire → Deny.
+            // GPU permanece Deny até KernelPack Ready.
+            "aios_net::http_get" if crate::net_bridge::http_ready() => RiskLevel::Auto,
+            "aios_fs::fs_read" | "aios_fs::fs_write"
+                if crate::fs::vfs_ready_for_wasm() => RiskLevel::Auto,
+            "aios_net::http_get" | "aios_fs::fs_read" | "aios_fs::fs_write"
             | "aios_gpu::submit" => RiskLevel::Deny,
             _ if name.contains("dma") || name.contains("mmio") => RiskLevel::Deny,
             _ => RiskLevel::Confirm,
@@ -184,7 +187,7 @@ mod tests {
     fn test_risk_level_classify() {
         assert_eq!(RiskLevel::classify("aios", "log"), RiskLevel::Auto);
         assert_eq!(RiskLevel::classify("aios", "get_tick"), RiskLevel::Auto);
-        // SESSION_379: unwired host ABI = Deny até bridge/KernelPack
+        // Sem bridge/VFS no host test = Deny; GPU sempre Deny até KernelPack
         assert_eq!(RiskLevel::classify("aios_fs", "fs_read"), RiskLevel::Deny);
         assert_eq!(RiskLevel::classify("aios_fs", "fs_write"), RiskLevel::Deny);
         assert_eq!(RiskLevel::classify("aios_net", "http_get"), RiskLevel::Deny);

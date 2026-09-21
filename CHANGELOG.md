@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s380] - 2026-09-21 — hermes residuals (#604 wire + orphans)
+
+- `aios_net`/`aios_fs` host ABI → net_bridge + VFS (Cap+ready); GPU trap até KernelPack
+- TLS boot slog bridge-aware; WPA2 demo sem ReadyForTraffic; InferenceFs/Decode/Ata honesty
+- CapGate smoke fail se token0 aceite; orphans DEAD deleted; AGENTS A-019/020/023 ORPHAN
+- `cargo test -p hermes --lib` → 205/205
+
 ## [1.9.99-s379] - 2026-09-21 — hermes honesty (CapGate/WASM/TLS/evolve)
 
 - `evolve::hot_swap`: sandbox first; live/prev; registry only on OK

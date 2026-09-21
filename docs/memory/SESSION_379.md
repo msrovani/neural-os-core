@@ -33,9 +33,9 @@
 - `cargo test -p hermes --lib -- --test-threads=1` → **203/203**
 - `cargo check -p hermes --release` / `neural-kernel --release` → 0 erros
 
-## Residual
-
-- IDEA #599 wasmi 2.x sprint
-- IDEA #600 DynSkill CapGate token
-- IDEA #597 smoltcp/spin/x86_64 workspace
-- IDEA #604 wire aios_net/fs + orphans cleanup
+# Residual
+#
+# (closed in SESSION_380 / IDEA #604 ✅)
+# - IDEA #599 wasmi 2.x sprint
+# - IDEA #600 DynSkill CapGate token
+# - IDEA #597 smoltcp/spin/x86_64 workspace

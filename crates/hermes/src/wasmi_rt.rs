@@ -2,9 +2,8 @@
 //!
 //! Executa **módulos WebAssembly padrão** em sandbox (SFI + fuel + limite de
 //! memória), com host-imports `aios::*` **gated por CapGate + PermissionGate**.
-//! Host net/fs/gpu **não wired** → trap (honesty SESSION_379). WASI Preview1
-//! não está ligado neste path (`wasi_host` orphan). Backend **seguro por
-//! default** para apps/skills geradas por IA.
+//! Host net/fs: Cap + `net_bridge`/`VFS` → I/O real; sem bridge → trap.
+//! GPU → trap até KernelPack. WASI Preview1 não ligado (`wasi_host` orphan).
 //!
 //! Substitui a VM `Op` custom (`wasm_exec.rs`) e o interpretador parcial
 //! (`wasm.rs`) — aposentados pela ADR-0059.
@@ -82,6 +81,33 @@ fn check_cap(caller: &wasmi::Caller<'_, HostState>, required: u32, namespace: &s
     }
 }
 
+fn read_guest_bytes(
+    caller: &wasmi::Caller<'_, HostState>,
+    ptr: i32,
+    len: i32,
+) -> Result<Vec<u8>, wasmi::Error> {
+    let Some(wasmi::Extern::Memory(mem)) = caller.get_export("memory") else {
+        return Err(wasmi::Error::new("wasm memory missing"));
+    };
+    let data = mem.data(caller);
+    let (p, l) = (ptr as usize, (len as usize).min(MAX_WASM_ALLOC));
+    if p.saturating_add(l) > data.len() {
+        return Err(wasmi::Error::new("guest ptr OOB"));
+    }
+    Ok(data[p..p + l].to_vec())
+}
+
+fn read_guest_str(
+    caller: &wasmi::Caller<'_, HostState>,
+    ptr: i32,
+    len: i32,
+) -> Result<String, wasmi::Error> {
+    let bytes = read_guest_bytes(caller, ptr, len)?;
+    core::str::from_utf8(&bytes)
+        .map(|s| String::from(s))
+        .map_err(|_| wasmi::Error::new("guest str utf8"))
+}
+
 /// Instala os host-imports `aios::*`, `aios_net::*`, `aios_fs::*`
 /// e `wasi_snapshot_preview1` no linker, **gated por CapGate + PermissionGate**.
 fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> {
@@ -121,27 +147,55 @@ fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> 
     ).map_err(|_| "linker aios::get_tick")?;
 
     // ── aios_net::http_get(ptr,len) -> i32 ──────────────────────────────────
-    // Cap granted ≠ wired: trap (não Ok(-1)).
+    // Cap + net_bridge → body em HostState.out, retorna len; senão trap.
     linker.func_wrap("aios_net", "http_get",
-        |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32| -> Result<i32, wasmi::Error> {
+        |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32| -> Result<i32, wasmi::Error> {
             check_cap(&caller, CAP_NET, "aios_net", "http_get")?;
-            Err(wasmi::Error::new("aios_net::http_get not wired (honesty)"))
+            if !crate::net_bridge::http_ready() {
+                return Err(wasmi::Error::new("aios_net::http_get bridge absent"));
+            }
+            let url = read_guest_str(&caller, ptr, len)?;
+            let body = crate::net_bridge::http_get_url(&url)
+                .or_else(|_| crate::net_bridge::resolve_and_http_get_safe(&url))
+                .map_err(|e| wasmi::Error::new(e))?;
+            let n = body.len().min(MAX_WASM_ALLOC) as i32;
+            caller.data_mut().out = body;
+            Ok(n)
         },
     ).map_err(|_| "linker aios_net::http_get")?;
 
     // ── aios_fs::fs_read(ptr,len,max) -> i32 ────────────────────────────────
     linker.func_wrap("aios_fs", "fs_read",
-        |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32, _max: i32| -> Result<i32, wasmi::Error> {
+        |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32, max: i32| -> Result<i32, wasmi::Error> {
             check_cap(&caller, CAP_FS, "aios_fs", "fs_read")?;
-            Err(wasmi::Error::new("aios_fs::fs_read not wired (honesty)"))
+            if !crate::fs::vfs_ready_for_wasm() {
+                return Err(wasmi::Error::new("aios_fs::fs_read VFS absent"));
+            }
+            let path = read_guest_str(&caller, ptr, len)?;
+            let data = crate::fs::read_vfs(&path).map_err(|e| wasmi::Error::new(e))?;
+            let cap = (max as usize).min(MAX_WASM_ALLOC).min(data.len());
+            caller.data_mut().out = data[..cap].to_vec();
+            Ok(cap as i32)
         },
     ).map_err(|_| "linker aios_fs::fs_read")?;
 
     // ── aios_fs::fs_write(ptr,len) -> i32 ───────────────────────────────────
+    // Guest layout: path\0payload (path NUL-terminated); retorna bytes escritos.
     linker.func_wrap("aios_fs", "fs_write",
-        |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32| -> Result<i32, wasmi::Error> {
+        |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32| -> Result<i32, wasmi::Error> {
             check_cap(&caller, CAP_FS, "aios_fs", "fs_write")?;
-            Err(wasmi::Error::new("aios_fs::fs_write not wired (honesty)"))
+            if !crate::fs::vfs_ready_for_wasm() {
+                return Err(wasmi::Error::new("aios_fs::fs_write VFS absent"));
+            }
+            let blob = read_guest_bytes(&caller, ptr, len)?;
+            let nul = blob.iter().position(|&b| b == 0).ok_or_else(|| {
+                wasmi::Error::new("aios_fs::fs_write need path\\0payload")
+            })?;
+            let path = core::str::from_utf8(&blob[..nul])
+                .map_err(|_| wasmi::Error::new("aios_fs::fs_write path utf8"))?;
+            let payload = &blob[nul + 1..];
+            crate::fs::write_vfs(path, payload).map_err(|e| wasmi::Error::new(e))?;
+            Ok(payload.len() as i32)
         },
     ).map_err(|_| "linker aios_fs::fs_write")?;
 
@@ -273,7 +327,7 @@ const ADD_WASM: &[u8] = &[
 /// Usado por evolve/SkillOpt até Cortex emitir op-IR real (#412).
 ///
 /// Host ABI no runtime (CapGate): `aios::{log,debug,get_tick}` wired;
-/// `aios_net`/`aios_fs`/`aios_gpu` → **trap** até bridge (SESSION_379).
+/// Cap+bridge/VFS → I/O; GPU → **trap** até KernelPack (SESSION_379 residual).
 /// WASI Preview1 **não** ligado (`wasi_host` orphan).
 pub fn generate_wasm_module() -> Vec<u8> {
     let mut wasm = Vec::with_capacity(64);

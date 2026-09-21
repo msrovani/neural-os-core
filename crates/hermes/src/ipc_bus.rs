@@ -1,5 +1,6 @@
-//! Hermes helpers — MessageBus ponto-a-ponto (ADR-0068 / Labor 9).
+//! MessageBus ponto-a-ponto (ADR-0068 / Labor 9) + CapGate smoke.
 //! Não substitui EventBus; thin wrap sobre `k_nano::globals::MESSAGE_BUS`.
+//! Honesty: `capgate_boot_smoke` — token0 aceite = FAIL (enforce residual).
 
 use alloc::vec::Vec;
 use event_bus::{AgentId, CapabilityToken, Envelope};
@@ -36,26 +37,26 @@ pub fn boot_smoke() -> bool {
     ok
 }
 
-/// Labor 58: CapGate residual — envio sem token válido deve falhar honesty.
+/// Labor 58: CapGate residual — envio sem token válido deve falhar.
+/// Honesty: token0 aceite = smoke **FAIL** (enforce residual), não PASS PARTIAL.
 pub fn capgate_boot_smoke() -> bool {
     use event_bus::CapabilityToken;
     let from: AgentId = "cap_from";
     let to: AgentId = "cap_to";
-    // Token zero = deny esperado se CapGate enforce; senão PARTIAL
     let r = ipc_send(from, to, 0x58, b"cap", CapabilityToken::Legacy(0));
     match r {
         Ok(()) => {
             k_nano::slog_bin!(
                 "IPC",
-                "info",
-                "step=capgate status=OK VERDICT=PARTIAL reason=token0_accepted (enforce residual)"
+                "warn",
+                "step=capgate status=FAIL VERDICT=FAIL reason=token0_accepted (enforce residual)"
             );
-            true
+            false
         }
         Err(e) => {
             k_nano::slog_bin!(
                 "IPC",
-                "info",
+                "ok",
                 "step=capgate status=OK VERDICT=PASS reason=deny_{}",
                 e
             );

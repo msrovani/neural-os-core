@@ -1,5 +1,6 @@
-//! Ring 1 ownership: permanece em hermes (R3) por depender de agent tick model e k_nano::EVENT_BUS.
-//! ADR-0060 A.4: SafetyAgent mantido em hermes; invariantes I1-I4 em k_ai::safety_invariants.
+//! ORPHAN module body until wired — SESSION_379 residual: not registered in fleet.
+//! A-019 catálogo; runtime I1–I4 = `k_ai::safety_invariants`.
+//! ADR-0060 A.4: SafetyAgent tick model + EVENT_BUS vivem aqui se `pub mod` + register.
 //!
 //! Safety Interceptor — Asimov's Four Laws + Fail-Closed Safety Invariant (#315.18).
 //! Invariantes SMT-proof: process separation, pre-action, fail-closed, signed evidence.
@@ -52,8 +53,15 @@ pub struct SafetyInvariants {
 }
 
 impl SafetyInvariants {
+    /// Honesty: flags começam **off** — só o agent tick / wire liga enforcement.
+    /// I3 fail-closed default **on** (nega se safety inativo no check).
     pub const fn new() -> Self {
-        SafetyInvariants { i1_process_sep: true, i2_pre_action: true, i3_fail_closed: true, i4_signed: true }
+        SafetyInvariants {
+            i1_process_sep: false,
+            i2_pre_action: false,
+            i3_fail_closed: true,
+            i4_signed: false,
+        }
     }
     /// Verifica os 4 invariants para uma ação. Retorna SafetyVerdict.
     pub fn check(&self, action: &str, agent: &str, skill_name: &str) -> SafetyVerdict {

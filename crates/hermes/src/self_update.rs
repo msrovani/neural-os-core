@@ -66,11 +66,11 @@ impl SelfUpdate {
         expected_sig: Option<&str>,
     ) -> Result<(usize, String), &'static str> {
         let data = crate::tls::fetch_url(url).map_err(|e| {
-            k_nano::slog_hermes!("UPDATE", "info", "fetch=FAIL err={}", e);
+            k_nano::slog_hermes!("UPDATE", "ok", "fetch=FAIL err={}", e);
             e
         })?;
         if data.is_empty() {
-            k_nano::slog_hermes!("UPDATE", "info", "fetch=FAIL err=empty");
+            k_nano::slog_hermes!("UPDATE", "ok", "fetch=FAIL err=empty");
             return Err("update_empty");
         }
         let n = data.len();
@@ -206,7 +206,7 @@ impl SelfUpdate {
     pub fn rollback() -> bool {
         let (active, tries, _attempts) = Self::boot_state();
         if tries == 0 {
-            k_nano::slog_hermes!("UPDATE", "info", "rollback skip: no pending update (tries=0)");
+            k_nano::slog_hermes!("UPDATE", "ok", "rollback skip: no pending update (tries=0)");
             return false;
         }
         let cfg = Self::read_fat_file(BOOT_CFG);
@@ -233,7 +233,7 @@ impl SelfUpdate {
         let ok = Self::write_bootcfg(&cfg_text);
         k_nano::slog_hermes!(
             "UPDATE",
-            if ok { "info" } else { "error" },
+            if ok { "ok" } else { "fail" },
             "rollback -> slot {} promote={} cfg={}",
             fallback,
             ok,
@@ -266,7 +266,7 @@ impl SelfUpdate {
             active, cur_name
         );
         if Self::write_bootcfg(&cfg_text) {
-            k_nano::slog_hermes!("UPDATE", "info", "mark_boot_ok: slot {} confirmado (tries zerado)", active);
+            k_nano::slog_hermes!("UPDATE", "ok", "mark_boot_ok: slot {} confirmado (tries zerado)", active);
         }
     }
 

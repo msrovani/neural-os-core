@@ -222,26 +222,46 @@ pub fn install_from_url(url: &str, kind: PackageKind, name: &str) -> String {
     let sealed = match resign_imported(md) {
         Ok(s) => s,
         Err(e) => {
-            // tenta sign direto se já for manifesto válido
-            match sign_artifact_md(md) {
-                Ok(s) => s,
-                Err(_) => {
-                    k_nano::slog_hermes!("Market", "info", "fetch=fail resign={}", e);
-                    return format!("[MARKET] resign failed: {}", e);
-                }
-            }
+            k_nano::slog_hermes!("Market", "warn", "fetch=fail resign={}", e);
+            return format!("[MARKET] resign failed: {}", e);
         }
     };
+    // ADR-0052: imported exige sandbox_status: passed — resign deixa pending.
     match PackageHub::validate(kind, name, &sealed) {
         Ok(()) => {}
+        Err("import_sandbox_required") => {
+            let id = crate::globals::APPROVAL_GATE.lock().request(
+                name,
+                "marketplace",
+                "import HTTP — sandbox_status=pending; rode sandbox militar antes de Activate",
+                ApprovalLevel::Escalate,
+            );
+            k_nano::slog_hermes!(
+                "Market",
+                "ok",
+                "fetch=staged_pending sandbox=pending HITL=#{} name={}",
+                id,
+                name
+            );
+            return format!(
+                "[MARKET] fetched '{}' — sandbox_status=pending (NÃO no catálogo ativo). HITL #{} — sandbox + /approve",
+                name, id
+            );
+        }
         Err(e) => {
-            k_nano::slog_hermes!("Market", "info", "fetch=fail validate={}", e);
+            k_nano::slog_hermes!("Market", "warn", "fetch=fail validate={}", e);
             return format!("[MARKET] validate failed: {}", e);
         }
     }
     match install_local(kind, name, &sealed) {
         Ok((level, id)) => {
-            k_nano::slog_hermes!("Market", "info", "fetch=ok signed=true pending={} level={:?}", id, level);
+            k_nano::slog_hermes!(
+                "Market",
+                "ok",
+                "fetch=ok sandbox=passed pending={} level={:?}",
+                id,
+                level
+            );
             format!(
                 "[MARKET] fetched+staged '{}' pending #{} — /approve {}",
                 name, id, id

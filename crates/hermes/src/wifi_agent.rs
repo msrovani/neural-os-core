@@ -1,3 +1,7 @@
+//! ORPHAN — not in hermes/src/lib.rs (SESSION_379 residual).
+//! WiFi Continuous real = k_hal SoftMAC + WifiAgent no bin/fleet se wired.
+//! Este arquivo NÃO é A-023 no scheduler até `pub mod` + register.
+//!
 //! WiFi Agent — gerencia scan, seleção, senha, conexão, persistência, dual-network.
 //! Fluxo completo: detecta WiFi → scan → lista redes → usuário escolhe → senha → conecta
 //! → salva credenciais → notifica Hermes/Cortex → gerencia dual Ethernet+WiFi.

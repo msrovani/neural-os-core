@@ -513,6 +513,9 @@ pub enum LlmGate {
 }
 
 /// Trust no path LLM — superior ao HANR: token não-boot exige Escalate.
+///
+/// Honesty: `token == 1` é **só** o Legacy boot console (CapabilityToken::Legacy(1)),
+/// não “qualquer token positivo”. Demais tokens → HITL ApprovalGate.
 pub fn llm_gate(token: u64, now: u64) -> LlmGate {
     {
         let tc = crate::globals::TRUST_CACHE.lock();
@@ -522,7 +525,7 @@ pub fn llm_gate(token: u64, now: u64) -> LlmGate {
             return LlmGate::Allow;
         }
     }
-    // Só o console boot (Legacy 1) auto-cacheia — TTL curto, sem session_ready bypass
+    // Só Legacy(1) boot console auto-cacheia — TTL curto, sem session_ready bypass
     if token == 1 {
         let mut tc = crate::globals::TRUST_CACHE.lock();
         tc.check_or_cache(token, "llm_generate", now, LLM_BOOT_TTL);

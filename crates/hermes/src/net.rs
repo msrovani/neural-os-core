@@ -541,10 +541,13 @@ pub fn log_tls_status_boot() {
     use core::sync::atomic::{AtomicBool, Ordering};
     static LOGGED: AtomicBool = AtomicBool::new(false);
     if !LOGGED.swap(true, Ordering::Relaxed) {
+        let bridge = crate::tls::tls_ready();
         k_nano::slog_bin!(
             "TLS",
-            "info",
-            "VERDICT=WIRED trust=hybrid+certverify crate=embedded-tls-0.19 pins=TLSPINS.BIN"
+            if bridge { "ok" } else { "warn" },
+            "VERDICT={} trust=hybrid+certverify crate=embedded-tls-0.19 bridge={}",
+            if bridge { "BRIDGE_OK" } else { "BRIDGE_PENDING" },
+            bridge as u8
         );
     }
 }

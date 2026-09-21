@@ -101,11 +101,11 @@ You are a Senior Systems and AI Engineer building "neural-os-core", an AI-native
 | A-016 | HwDetectAgent | System | Oneshot | HwIdentifySkill + IA device tree |
 | A-017 | CronAgent | System | Continuous | Cron Scheduler |
 | A-018 | SecurityAgent | System | Continuous | 5 detectores + Pipeline |
-| A-019 | SafetyAgent | System | Continuous | 4 invariantes I1-I4 |
-| A-020 | OptimizerAgent | System | Continuous | Self-Optimization |
+| A-019 | SafetyAgent | System | Continuous | **ORPHAN** (não em lib.rs / fleet) — I1–I4 runtime em `k_ai::safety_invariants` |
+| A-020 | OptimizerAgent | System | Continuous | **ORPHAN** (não em lib.rs / fleet) — base em `k_ai` self_optimizing |
 | A-021 | SleepCycleAgent | System | PollEvery(1000) | 5 fases REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT |
 | A-022 | AutoLearnAgent | System | PollEvery(200) | Detecta necessidade → treina → registra expert |
-| A-023 | WifiAgent | Network | Continuous | 802.11 scan + WPA2 + conexão |
+| A-023 | WifiAgent | Network | Continuous | **ORPHAN** hermes `wifi_agent.rs`; SoftMAC BE = `k_hal` |
 | A-024 | WakeWordAgent | System | EventDriven | Detecção "Jarvis" por energia |
 | A-025 | HdaAudioAgent | Driver | Oneshot | Intel HDA audio driver |
 
@@ -191,7 +191,8 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: **v1.9.99-s379 TEST** — hermes honesty (CapGate/WASM/TLS/evolve);
+# Current Sprint: **v1.9.99-s380 TEST** — hermes residuals (#604 aios_net/fs + orphans);
+# s379 hermes honesty (CapGate/WASM/TLS/evolve);
 # s378 ticket-lock honesty (Sync/try_lock/IrqSafe);
 # s377 skill-registry honesty (WASM/Trust/cache/trim);
 # s376 neural-kernel honesty (shutdown/BootLog/slog/Cargo);

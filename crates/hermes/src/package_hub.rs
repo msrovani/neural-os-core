@@ -312,29 +312,102 @@ pub fn sign_artifact_md(content: &str) -> Result<String, &'static str> {
     Ok(format!("---\n{}---\n{}", fm, parts[2]))
 }
 
-/// Re-assina após sandbox passed (import Net → session trust).
+/// Re-assina import Net com `provenance: imported` + `sandbox_status: pending`.
+/// Honesty SESSION_379b / ADR-0052: **nunca** forçar `sandbox_status: passed`
+/// sem sandbox militar real. `passed` só via `mark_import_sandbox_passed`.
 pub fn resign_imported(content: &str) -> Result<String, &'static str> {
+    resign_imported_with_sandbox(content, false)
+}
+
+/// Após sandbox militar OK — promove `pending`→`passed` e re-assina.
+pub fn mark_import_sandbox_passed(content: &str) -> Result<String, &'static str> {
+    resign_imported_with_sandbox(content, true)
+}
+
+fn resign_imported_with_sandbox(
+    content: &str,
+    sandbox_passed: bool,
+) -> Result<String, &'static str> {
+    let patched = patch_import_frontmatter(content, sandbox_passed)?;
+    if !sandbox_passed {
+        k_nano::slog_hermes!(
+            "PKG",
+            "ok",
+            "resign_imported sandbox=pending (not passed — ADR-0052)"
+        );
+    }
+    sign_artifact_md(&patched)
+}
+
+/// Pure frontmatter patch (testable sem session key).
+fn patch_import_frontmatter(
+    content: &str,
+    sandbox_passed: bool,
+) -> Result<String, &'static str> {
+    let status = if sandbox_passed { "passed" } else { "pending" };
     let mut patched = String::new();
+    let mut saw_sandbox = false;
+    let mut saw_prov = false;
     for line in content.replace("\r\n", "\n").lines() {
         let t = line.trim();
         if t.starts_with("sandbox_status:") {
-            patched.push_str("sandbox_status: passed\n");
+            patched.push_str(&alloc::format!("sandbox_status: {}\n", status));
+            saw_sandbox = true;
             continue;
         }
         if t.starts_with("provenance:") {
             patched.push_str("provenance: imported\n");
+            saw_prov = true;
             continue;
         }
         patched.push_str(line);
         patched.push('\n');
     }
-    // Ensure frontmatter delimiters preserved if input was full md
-    let body = if patched.starts_with("---\n") {
-        patched
+    if !saw_sandbox {
+        if let Some(idx) = patched.find("\n---\n") {
+            let (fm, rest) = patched.split_at(idx + 1);
+            patched = alloc::format!("{}sandbox_status: {}\n{}", fm, status, rest);
+        } else {
+            return Err("sandbox_not_run");
+        }
+    }
+    if !saw_prov {
+        if let Some(idx) = patched.find("\n---\n") {
+            let (fm, rest) = patched.split_at(idx + 1);
+            patched = alloc::format!("{}provenance: imported\n{}", fm, rest);
+        }
+    }
+    if patched.starts_with("---\n") {
+        Ok(patched)
     } else {
-        format!("---\n{}---\n", patched)
-    };
-    sign_artifact_md(&body)
+        Ok(alloc::format!("---\n{}---\n", patched))
+    }
+}
+
+#[cfg(test)]
+mod resign_tests {
+    use super::*;
+
+    #[test]
+    fn resign_imported_never_forces_passed() {
+        let md = "---\nschema: 1\nkind: skill\nname: t\npackage_id: t\n\
+description: d\ngoal: g\ncontexto: c\nacionaveis: [on_demand]\n\
+required_tokens: [1]\ncapabilities: []\nprovenance: hermes_created\n\
+sandbox_status: none\ntrust_class: escalate\n\
+content_hash: \"0\"\nsignature: \"0\"\n---\n\n\
+## Contexto\nx\n\n## Goal\ny\n\n## Acionaveis\nz\n\n\
+## Workflow\nw\n\n## Pre-Flight\np\n\n## Success Criteria\ns\n\n\
+## Failure Policy\nf\n";
+        let patched = patch_import_frontmatter(md, false).expect("patch");
+        assert!(patched.contains("sandbox_status: pending"));
+        assert!(!patched.contains("sandbox_status: passed"));
+        assert!(patched.contains("provenance: imported"));
+        // Attacker-supplied passed must also be downgraded
+        let evil = md.replace("sandbox_status: none", "sandbox_status: passed");
+        let patched2 = patch_import_frontmatter(&evil, false).expect("patch evil");
+        assert!(patched2.contains("sandbox_status: pending"));
+        assert_eq!(patched2.matches("sandbox_status: passed").count(), 0);
+    }
 }
 
 /// Draft Hermes (ADR-0052) — assinado com session key quando disponível.

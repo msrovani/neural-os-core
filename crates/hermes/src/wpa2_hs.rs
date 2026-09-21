@@ -1,5 +1,6 @@
 //! WPA2 4-way handshake MVP — Labor 30 / ADR-0066.
 //! Reuse: derive_wpa2_pmk + wifi_crypto inject. Sem inventar Connected IP.
+//! Honesty SESSION_379: demo sem EAPOL/MMIO → HandshakingWpa, NÃO ReadyForTraffic.
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -67,9 +68,10 @@ pub fn tick_handshake_demo() -> ConnectionState {
                 );
             }
             HS.store(HsPhase::Msg4Done as u8, Ordering::Relaxed);
-            ConnectionState::ReadyForTraffic
+            // Honesty: demo sem EAPOL/MMIO ≠ ReadyForTraffic (SESSION_379 residual)
+            ConnectionState::HandshakingWpa
         }
-        x if x == HsPhase::Msg4Done as u8 => ConnectionState::ReadyForTraffic,
+        x if x == HsPhase::Msg4Done as u8 => ConnectionState::HandshakingWpa,
         _ => ConnectionState::Disconnected,
     }
 }

@@ -3587,9 +3587,14 @@ const GPUDRIVER_MANIFEST: AgentManifest = AgentManifest {
 impl Agent for GpuDriverAgent {
     fn manifest(&self) -> &AgentManifest { &GPUDRIVER_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        // GPU detect/DriverInit ja rodou em k_hal (Phase 5).
-        // Apenas reporta estado - virtio_gpu removido no emagrecer.
-        k_nano::slog_hermes!("GPU", "info", "GpuDriverAgent: probe done (k_hal backend)");
+        // Não re-probe: reporta estado k_hal (emagreçer).
+        let st = k_hal::gpu::backend::compute_state();
+        k_nano::slog_hermes!(
+            "GPU",
+            "ok",
+            "GpuDriverAgent status={:?} (k_hal; no re-probe)",
+            st
+        );
         AgentTickResult::Done
     }
 }

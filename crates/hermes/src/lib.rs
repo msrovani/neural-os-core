@@ -32,7 +32,7 @@ pub mod network_agent;
 pub mod plugin_hub;
 pub mod security;
 pub mod self_update;
-// pub mod shell; // DEAD — 0 callers; install via Command::Install (SESSION_293 / s359c)
+// pub mod shell; // DELETED SESSION_379 residual (0 callers; Command::Install)
 pub mod skill_gen;
 pub mod skill_loader;
 pub mod skill_manifest;
@@ -65,8 +65,8 @@ pub mod soul;
 pub use affect::*;
 pub use emotion::*;
 pub use soul::*;
-// pub mod notification_gate; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
-// pub mod aios_api; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
+// DEAD removed SESSION_379 residual: shell, notification_gate, aios_api, git_thin,
+// cf_challenge, voice_skill, proactive, net_fallback, graph_engine
 pub mod skill_opt;
 pub mod bei; // ADR-0060 — BeiState/tick (emagreçer s359: saiu do bin)
 pub mod skill_sync; // reativado s359 — wire bei_tick (HERMES_AUDIT mentia "0 callers")
@@ -78,13 +78,13 @@ pub mod vfs;
 pub mod globals;
 pub mod runtime_observe;
 pub mod wifi_protocol;
+pub mod wpa2_hs; // demo HS — ReadyForTraffic só com SoftMAC real (SESSION_379)
+pub mod ipc_bus; // CapGate smoke + MessageBus wrap (SESSION_379 residual)
 pub mod ntp;
 pub mod async_io;
-// pub mod git_thin; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod theme_bridge;
 pub mod manpages;
 pub mod hub_health;
-// pub mod cf_challenge; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 // ADR-0041 H3: MMIO WiFi BE em k-hal; hermes = FE
 pub use k_hal::net::generic_wifi;
 pub use k_hal::net::wifi_compat;
@@ -92,13 +92,9 @@ pub use k_hal::net::wifi_iwlwifi;
 pub use k_hal::net::wifi_msix;
 // ADR-0062 E3 — SoftMAC BE via k-hal; hermes re-exporta
 pub use k_hal::net::wifi_softmac;
-// pub mod voice_skill; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod trinity_inject;
-// pub mod proactive; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
-// pub mod net_fallback; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod stream_packet;
 pub mod chat_tree;
-// pub mod graph_engine; // DEAD CODE — 0 callers (HERMES_AUDIT.md)
 pub mod matrix_learn;
 pub mod tls;
 pub mod crdt;

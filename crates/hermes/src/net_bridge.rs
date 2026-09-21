@@ -36,6 +36,11 @@ pub fn register_dns_resolve(f: DnsResolveFn) {
     *DNS_RESOLVE.lock() = Some(f);
 }
 
+/// True se o bin registrou o bridge HTTP (não implica link up).
+pub fn http_ready() -> bool {
+    HTTP_GET_URL.lock().is_some() || RESOLVE_AND_HTTP_GET_SAFE.lock().is_some()
+}
+
 pub fn http_get_url(url: &str) -> Result<Vec<u8>, &'static str> {
     match *HTTP_GET_URL.lock() {
         Some(f) => f(url),

@@ -1,8 +1,8 @@
-//! ADR-0076 F5 — WASI Preview 2 host function stubs (wasi_snapshot_preview1).
+//! ORPHAN — not in hermes/src/lib.rs (SESSION_379). Do not wire as production WASI.
+//! ADR-0076 F5 — WASI Preview 1 host stubs (`wasi_snapshot_preview1`).
 //!
-//! Implements the `wasi_snapshot_preview1` flat namespace — the most widely
-//! supported ABI for wasm32-wasi binaries. Sufficient for "hello world" WASI
-//! modules and basic file-less workloads.
+//! Honesty: `random_get` zeros; `path_open` fake fd; not cryptographically sound.
+//! Runtime path = `wasmi_rt` without WASI until CapGate+ABI reviewed.
 //!
 //! # ponytail
 //! - Single preopen entry: fd=3 → "/"

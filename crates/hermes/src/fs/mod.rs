@@ -35,7 +35,12 @@ pub fn register_fs_agent(agent: Box<dyn FilesystemAgent>) {
     let name = alloc::format!("{}", agent.name());
     let mp = alloc::format!("{}", agent.mount_point());
     FS_AGENTS.lock().push(FsAgentEntry { agent });
-    k_nano::slog_bin!("FS", "info", "Agent '{}' registrado em {}", name, mp);
+    k_nano::slog_bin!("FS", "ok", "Agent '{}' registrado em {}", name, mp);
+}
+
+/// WASM host `aios_fs::*` só Auto se VFS já montou (não inventa I/O).
+pub fn vfs_ready_for_wasm() -> bool {
+    crate::vfs::VFS.lock().is_some() && !FS_AGENTS.lock().is_empty()
 }
 
 /// Find agent by name and call a read operation
