@@ -1,5 +1,6 @@
 //! DynamicSkill — skill gerada por LLM (texto) ou promovida com bytecode WASM (ADR-0059 F5).
 //! Honesty (SESSION_377): `wasm: Some` **não** executa wasmi aqui — fail-closed até bridge.
+//! CapGate (SESSION_383 / IDEA #600): `required_tokens = [DYNSKILL_TOKEN]` (0xD1), nunca Legacy(1).
 
 use alloc::string::String;
 use alloc::vec;
@@ -7,7 +8,7 @@ use alloc::vec::Vec;
 use crate::mcp::McpManifest;
 use crate::skill::Skill;
 
-/// Token reservado p/ promoção CapGate futura (hoje Hermes EventBus usa Legacy(1)).
+/// Token CapGate para DynamicSkill / mesh promote (≠ Legacy(1) do EventBus de sistema).
 pub const DYNSKILL_TOKEN: u64 = 0xD1;
 
 /// ADR-0059 F5: DynamicSkill com campo `wasm` opcional para hot-promote.
@@ -24,9 +25,7 @@ impl DynamicSkill {
             manifest: McpManifest {
                 name: String::from(name),
                 description: String::from(description),
-                // Legacy(1) = path Hermes EventBus. HITL escalate em promote — não é CapGate real
-                // (ADR-0052). DYNSKILL_TOKEN reservado p/ migração CapGate.
-                required_tokens: vec![1],
+                required_tokens: vec![DYNSKILL_TOKEN],
                 preconditions: Vec::new(),
                 context_links: Vec::new(),
                 output_schema: crate::OutputSchema::String,
@@ -45,7 +44,7 @@ impl DynamicSkill {
             manifest: McpManifest {
                 name: String::from(name),
                 description: String::from(description),
-                required_tokens: vec![1],
+                required_tokens: vec![DYNSKILL_TOKEN],
                 preconditions: Vec::new(),
                 context_links: Vec::new(),
                 output_schema: crate::OutputSchema::Any,
@@ -108,9 +107,11 @@ mod tests {
     }
 
     #[test]
-    fn dynskill_exports_reserved_token() {
+    fn dynskill_requires_capgate_token_not_legacy_one() {
         assert_eq!(DYNSKILL_TOKEN, 0xD1);
         let s = DynamicSkill::new("a", "b", "c");
-        assert_eq!(s.manifest().required_tokens, vec![1]);
+        assert_eq!(s.manifest().required_tokens, vec![DYNSKILL_TOKEN]);
+        let w = DynamicSkill::with_wasm("w", "d", "i", vec![0]);
+        assert_eq!(w.manifest().required_tokens, vec![DYNSKILL_TOKEN]);
     }
 }

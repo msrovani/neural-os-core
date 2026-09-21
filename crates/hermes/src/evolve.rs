@@ -91,7 +91,7 @@ impl EvolveLedger {
         self.live.insert(String::from(name), wasm.to_vec());
         let skill =
             crate::dynskill::DynamicSkill::with_wasm(name, "hot-swap skill", "", wasm.to_vec());
-        crate::globals::SKILL_REGISTRY.lock().register(Box::new(skill));
+        crate::dynskill::register_dynskill(skill);
         crate::self_evolve::publish_change("skill", name);
         self.swaps_ok = self.swaps_ok.saturating_add(1);
         k_nano::slog_hermes!("EVOLVE", "ok", "hot_swap OK skill={} gen={}", name, gen);
@@ -104,7 +104,7 @@ impl EvolveLedger {
         let bytes = entry.bytecode.clone();
         let gens = entry.generations;
         let roll = crate::dynskill::DynamicSkill::with_wasm(name, "rollback", "", bytes.clone());
-        crate::globals::SKILL_REGISTRY.lock().register(Box::new(roll));
+        crate::dynskill::register_dynskill(roll);
         self.live.insert(String::from(name), bytes);
         crate::self_evolve::publish_change("skill", name);
         self.rollbacks = self.rollbacks.saturating_add(1);

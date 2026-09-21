@@ -4,7 +4,7 @@ version = "1.9.9"
 edition = "2021"
 
 [dependencies]
-spin = "0.9"
+spin = "0.12"
 libm = "0.2"
 # ADR-0058: fundação 2D no_std — DrawTarget sobre DoubleBuffer (0.8.2 max_stable).
 embedded-graphics = "0.8.2"

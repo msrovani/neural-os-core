@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s383] - 2026-09-21 — CapGate DynSkill + MicFrameRing + spin 0.12
+
+- #600: DynamicSkill `required_tokens=[0xD1]`; `register_dynskill` + trust_allow; Legacy(1) deny
+- #562: `MicFrameRing` SPSC (VOICE+WAKE); capture sem EventBus AUDIO_FRAME
+- #602: política TicketLock vs spin documentada
+- #597 parcial: spin 0.9→0.12; residual x86_64/smoltcp; wasmi 2.x (#599) adiado
+- Tests: skill-registry 11, hermes 205, jarbas 102
+
 ## [1.9.99-s382] - 2026-09-21 — mouse USB tablet (#542)
 
 - Deferred HID bringup no QEMU/sandbox (InputAgent + DisplayAgent pós-UI)

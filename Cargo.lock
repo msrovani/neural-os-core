@@ -222,7 +222,7 @@ dependencies = [
  "k-nano",
  "lazy_static",
  "libm",
- "spin",
+ "spin 0.12.3",
  "ticket-lock",
  "x86_64",
 ]
@@ -696,7 +696,7 @@ dependencies = [
  "sha2",
  "skill-registry",
  "smoltcp",
- "spin",
+ "spin 0.12.3",
  "ticket-lock",
  "wasmi",
  "x86_64",
@@ -766,7 +766,7 @@ dependencies = [
  "k-nano",
  "libm",
  "skill-registry",
- "spin",
+ "spin 0.12.3",
  "ticket-lock",
 ]
 
@@ -778,7 +778,7 @@ dependencies = [
  "cortex",
  "event-bus",
  "k-nano",
- "spin",
+ "spin 0.12.3",
  "x86_64",
 ]
 
@@ -794,7 +794,7 @@ dependencies = [
  "libm",
  "skill-registry",
  "smoltcp",
- "spin",
+ "spin 0.12.3",
  "talc",
  "ticket-lock",
  "uart_16550",
@@ -814,7 +814,7 @@ dependencies = [
  "lazy_static",
  "libm",
  "neural-sgdb",
- "spin",
+ "spin 0.12.3",
  "ticket-lock",
  "x86_64",
 ]
@@ -825,7 +825,7 @@ version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 dependencies = [
- "spin",
+ "spin 0.9.9",
 ]
 
 [[package]]
@@ -913,7 +913,7 @@ dependencies = [
  "libm",
  "skill-registry",
  "smoltcp",
- "spin",
+ "spin 0.12.3",
  "talc",
  "ticket-lock",
  "x86_64",
@@ -1322,6 +1322,12 @@ name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
+
+[[package]]
+name = "spin"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0134f9043ed38b087ac4f7d4af44c79e2c9e5094421fe3164f435ce585953b10"
 dependencies = [
  "lock_api",
 ]
@@ -1539,7 +1545,7 @@ dependencies = [
  "arrayvec",
  "multi-stash",
  "smallvec",
- "spin",
+ "spin 0.9.9",
  "wasmi_collections",
  "wasmi_core",
  "wasmi_ir",

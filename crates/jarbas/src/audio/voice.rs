@@ -1,9 +1,7 @@
 //! VoiceSessionAgent — dona da sessão de voz (WS3/WS4 / SESSION_345).
 //!
-//! Consome `AUDIO_FRAME` (frames fixos de 320 amostras @16 kHz mono, produzidos pelo
-//! `AudioInputAgent`) e `VAD_TRANSITION` (VAD único do sistema). **Não** faz poll de
-//! mic, **não** tem VAD próprio e **não** descarta amostras — as três coisas que
-//! quebravam o pipeline antes (ver `capture.rs`).
+//! Consome frames do `MicFrameRing` (SPSC) e `VAD_TRANSITION` (VAD único).
+//! **Não** faz poll de mic, **não** tem VAD próprio e **não** usa EventBus p/ PCM.
 //!
 //! O estado é DERIVADO a cada tick e publicado só quando muda (`VOICE_STATE`), então
 //! orb/HUD desenham um snapshot em vez de decidirem por conta própria.
@@ -18,7 +16,8 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use event_bus::{CapabilityToken, Event, Receiver};
 
-use crate::audio::capture::{FRAME_SAMPLES, TOPIC_AUDIO_FRAME, TOPIC_VAD_TRANSITION};
+use crate::audio::capture::TOPIC_VAD_TRANSITION;
+use crate::audio::mic_ring::VOICE_MIC_RING;
 use crate::audio::ringbuf::AudioRingBuffer;
 use crate::audio::ser::{classify_emotion, extract_features};
 use crate::audio::settings;
@@ -155,7 +154,6 @@ const VOICE_MANIFEST: AgentManifest = AgentManifest {
 };
 
 pub struct JarbasVoiceAgent {
-    frame_in: Receiver,
     vad_in: Receiver,
     hermes_out: Receiver,
     wakeword_in: Receiver,
@@ -176,7 +174,6 @@ pub struct JarbasVoiceAgent {
 impl JarbasVoiceAgent {
     pub fn new() -> Self {
         JarbasVoiceAgent {
-            frame_in: k_nano::EVENT_BUS.subscribe(TOPIC_AUDIO_FRAME),
             vad_in: k_nano::EVENT_BUS.subscribe(TOPIC_VAD_TRANSITION),
             hermes_out: k_nano::EVENT_BUS.subscribe("HERMES_RESPONSE"),
             wakeword_in: k_nano::EVENT_BUS.subscribe(TOPIC_WAKEWORD),
@@ -430,21 +427,15 @@ impl Agent for JarbasVoiceAgent {
             }
         }
 
-        // --- Frames fixos de 16 kHz mono ---
+        // --- Frames fixos de 16 kHz mono (MicFrameRing SPSC) ---
         let mut frame_n = 0u32;
         while frame_n < 16 {
-            let Some(ev) = self.frame_in.try_receive() else { break; };
+            let Some(pcm) = VOICE_MIC_RING.try_pop() else { break; };
             frame_n += 1;
-            if ev.payload.len() < FRAME_SAMPLES * 2 {
-                continue;
-            }
             if !self.can_listen() || !self.listening {
                 continue;
             }
-            let pcm: &[i16] = unsafe {
-                core::slice::from_raw_parts(ev.payload.as_ptr() as *const i16, FRAME_SAMPLES)
-            };
-            self.pcm_buffer.extend_from_slice(pcm);
+            self.pcm_buffer.extend_from_slice(&pcm);
             // Cap ~30 s @16 kHz — evita runaway até VAD end (SESSION_352/381).
             const PCM_CAP: usize = 16_000 * 30;
             if self.pcm_buffer.len() > PCM_CAP {
@@ -452,7 +443,7 @@ impl Agent for JarbasVoiceAgent {
                 self.pcm_buffer.drain(..drop_n);
             }
             if self.emotion_samples.len() < 16000 {
-                self.emotion_samples.extend_from_slice(pcm);
+                self.emotion_samples.extend_from_slice(&pcm);
             }
         }
 

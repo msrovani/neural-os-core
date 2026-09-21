@@ -23,6 +23,16 @@ FIFO entre tickets emitidos. **Não** é MCS: todos os waiters fazem load no
 “Sem starvation” só vale se o holder soltar o lock (não-reentrante; hold infinito
 = fila parada). Wrap `usize` residual em x86_64.
 
+## Política spin vs TicketLock (IDEA #602 / SESSION_383)
+
+| Primário | Uso |
+|----------|-----|
+| `TicketLock` / `IrqSafeLock` | statics SMP, EventBus, registry — FIFO, IRQ-aware |
+| `spin::Mutex` 0.9 | legado / `lazy_static` / host-test onde já existe |
+
+**Não** substituir TicketLock por `spin` 0.12 (unfair) sem evidência de contenda.
+Bump de versão `spin`/`x86_64`/`smoltcp` = IDEA #597 (sprint dedicado), não trocar política.
+
 ## Contrato IRQ
 
 Não usar em IRQ se a thread pode segurar o mesmo lock. Em IRQ: `IrqSafeLock`
@@ -31,4 +41,4 @@ Não usar em IRQ se a thread pode segurar o mesmo lock. Em IRQ: `IrqSafeLock`
 ## Integration
 
 `event-bus`, `k_nano` (PMM/`IrqSafeLock`), hermes globals, neural-kernel statics.
-Upstream: **não** substituir por `spin` 0.12 (unfair) sem evidência — IDEA residual.
+Upstream: **não** substituir por `spin` 0.12 (unfair) sem evidência — IDEA #597.

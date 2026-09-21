@@ -6,8 +6,8 @@
 //! não `energy_history[..16]` (os mais velhos de 64 ≈ 1,28 s atrás).
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use event_bus::{CapabilityToken, Event, Receiver};
-use crate::audio::capture::{FRAME_SAMPLES, TOPIC_AUDIO_FRAME};
+use event_bus::{CapabilityToken, Event};
+use crate::audio::mic_ring::WAKE_MIC_RING;
 use crate::audio::settings::{self, WAKEWORD_SENSITIVITY};
 use crate::audio::TOPIC_WAKEWORD;
 
@@ -89,7 +89,6 @@ const HIST: usize = 64;
 const MLP_WIN: usize = 16;
 
 pub struct WakeWordAgent {
-    receiver: Receiver,
     /// Ring circular de RMS por frame (16 kHz / 320 = 50 Hz).
     energy_history: [f32; HIST],
     /// Próximo slot de escrita (mod HIST).
@@ -104,7 +103,6 @@ pub struct WakeWordAgent {
 impl WakeWordAgent {
     pub fn new() -> Self {
         WakeWordAgent {
-            receiver: k_nano::EVENT_BUS.subscribe(TOPIC_AUDIO_FRAME),
             energy_history: [0.0; HIST],
             write_idx: 0,
             filled: 0,
@@ -174,18 +172,10 @@ impl Agent for WakeWordAgent {
         }
 
         let mut drained = 0u32;
-        while let Some(ev) = self.receiver.try_receive() {
-            if drained >= 16 {
-                break;
-            }
+        while drained < 16 {
+            let Some(pcm) = WAKE_MIC_RING.try_pop() else { break; };
             drained += 1;
-            if ev.payload.len() < FRAME_SAMPLES * 2 {
-                continue;
-            }
-            let pcm: &[i16] = unsafe {
-                core::slice::from_raw_parts(ev.payload.as_ptr() as *const i16, FRAME_SAMPLES)
-            };
-            let energy = rms(pcm);
+            let energy = rms(&pcm);
             self.energy_history[self.write_idx] = energy;
             self.write_idx = (self.write_idx + 1) % HIST;
             if self.filled < HIST {

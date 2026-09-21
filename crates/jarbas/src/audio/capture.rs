@@ -31,6 +31,8 @@ pub const FRAME_SAMPLES: usize = 320;
 pub const VOICE_RATE: u32 = k_nano::audio::hda::VOICE_RATE_HZ;
 pub const VOICE_DECIM: usize = k_nano::audio::hda::VOICE_DECIM;
 
+/// Legado: tópico EventBus (hot path = `mic_ring`, IDEA #562).
+#[allow(dead_code)]
 pub const TOPIC_AUDIO_FRAME: &str = "AUDIO_FRAME";
 pub const TOPIC_VAD_TRANSITION: &str = "VAD_TRANSITION";
 
@@ -173,14 +175,7 @@ impl AudioInputAgent {
 
     fn drain_frames(&mut self) {
         while let Some(frame) = self.asm.take_frame() {
-            let bytes: alloc::vec::Vec<u8> =
-                frame.iter().flat_map(|s| s.to_le_bytes()).collect();
-            let _ = k_nano::EVENT_BUS.publish(Event {
-                id: 0,
-                topic: String::from(TOPIC_AUDIO_FRAME),
-                payload: bytes,
-                token: CapabilityToken::Legacy(1),
-            });
+            crate::audio::mic_ring::push_frame(&frame);
             FRAMES_PUBLISHED.fetch_add(1, Ordering::Relaxed);
 
             // VAD único do sistema: roda aqui, não em cada consumidor.

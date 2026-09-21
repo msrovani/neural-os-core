@@ -112,7 +112,7 @@ pub fn promote_skill_to_wasm(name: &str, source: &str) -> Result<(), &'static st
     wasmi_rt::run_wasm(&wasm, "_start", &[], 0).map_err(|_| "promote: sandbox fail")?;
     // Registra como DynamicSkill persistente
     let skill = crate::dynskill::DynamicSkill::with_wasm(name, source, "", wasm);
-    crate::globals::SKILL_REGISTRY.lock().register(Box::new(skill));
+    crate::dynskill::register_dynskill(skill);
     // SESSION_377: wasmi validou no promote; Skill::execute ainda fail-closed até bridge.
     k_nano::slog_hermes!(
         "SkillOpt",

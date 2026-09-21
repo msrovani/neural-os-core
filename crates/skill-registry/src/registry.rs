@@ -278,4 +278,29 @@ mod tests {
         assert_eq!(list[0].name, "echo");
         assert_eq!(list[0].description, "e");
     }
+
+    #[test]
+    fn dynskill_rejects_legacy_one_accepts_d1() {
+        use crate::dynskill::DYNSKILL_TOKEN;
+        let mut r = SkillRegistry::new();
+        r.set_policy("*", ToolPolicy { enabled: true, auto_approve: false });
+        r.register(Box::new(DynamicSkill::new("mesh_probe", "d", "body")));
+        assert!(!r.validate_token("mesh_probe", &CapabilityToken::Legacy(1)));
+        assert!(r.validate_token(
+            "mesh_probe",
+            &CapabilityToken::Legacy(DYNSKILL_TOKEN)
+        ));
+        assert_eq!(
+            r.execute_skill("mesh_probe", b"x", &CapabilityToken::Legacy(1)),
+            Err("token de capacidade nao autorizado para esta skill")
+        );
+        let out = r
+            .execute_skill(
+                "mesh_probe",
+                b"x",
+                &CapabilityToken::Legacy(DYNSKILL_TOKEN),
+            )
+            .unwrap();
+        assert!(!out.is_empty());
+    }
 }

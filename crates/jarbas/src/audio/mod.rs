@@ -1,8 +1,7 @@
 //! Audio subsystem — JARVIS voice pipeline (Sprint Sound / ADR-0045)
 //!
-//! Mic (HDA|UAC) → AUDIO_IN → AudioInputAgent → AUDIO_FRAME + VAD_TRANSITION
-//! WakeWordAgent: AUDIO_FRAME → WAKEWORD
-//! JarbasVoiceAgent: VAD → STT → STT_TEXT + USER_INTENT
+//! Mic (HDA|UAC) → AUDIO_IN → AudioInputAgent → MicFrameRing (SPSC) + VAD_TRANSITION
+//! WakeWordAgent / JarbasVoiceAgent: drenam rings (não EventBus AUDIO_FRAME)
 //! HermesAgent: USER_INTENT → LLM → HERMES_RESPONSE
 //! JarbasAgent: HERMES_RESPONSE / INFER_TTS_PARTIAL → Piper|formant → PLAYBACK_RING
 //! AudioMixerAgent: PLAYBACK_RING → HDA/UAC (pacing por free frames)
@@ -10,6 +9,7 @@
 
 pub mod frame;
 pub mod ringbuf;
+pub mod mic_ring;
 pub mod vad;
 pub mod tts;
 pub mod ser;
@@ -39,8 +39,8 @@ pub const TOPIC_STT_TEXT: &str = "STT_TEXT";
 /// Transcrição de baixa confiança (honesta) — Display/chat consomem.
 pub const TOPIC_STT_UNCERTAIN: &str = "STT_UNCERTAIN";
 pub const TOPIC_TTS_CMD: &str = "TTS_CMD";
-/// Frames de 320 amostras @16 kHz mono — contrato de entrada do consumidor de voz
-/// (produzido exclusivamente por `capture::AudioInputAgent`).
+/// Frames de 320 amostras @16 kHz mono — legado de tópico; hot path = `mic_ring`.
+/// Mantido p/ docs/compat; capture **não** publica mais neste tópico (IDEA #562).
 pub const TOPIC_AUDIO_FRAME: &str = "AUDIO_FRAME";
 /// Transição de VAD única do sistema (payload `start|end`).
 pub const TOPIC_VAD_TRANSITION: &str = "VAD_TRANSITION";

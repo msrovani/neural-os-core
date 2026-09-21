@@ -774,9 +774,26 @@ impl HermesAgent {
     }
 
     fn execute_skill(&mut self, name: &str, payload: &[u8], token: &CapabilityToken) -> Result<Vec<u8>, &'static str> {
-        let token_val = token.as_legacy();
         let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        // IDEA #600: DynSkill exige DYNSKILL_TOKEN; Legacy(1) do bus só remapeia
+        // se trust_allow(0xD1, name) já foi feito no register (mesh/promote).
+        let effective = {
+            use crate::dynskill::{dynskill_cap_token, DYNSKILL_TOKEN};
+            let accepts_dyn = {
+                let reg = SKILL_REGISTRY.lock();
+                reg.validate_token(name, &dynskill_cap_token())
+                    && !reg.validate_token(name, token)
+            };
+            if accepts_dyn && TRUST_CACHE.lock().is_trusted(DYNSKILL_TOKEN, name, now) {
+                dynskill_cap_token()
+            } else {
+                token.clone()
+            }
+        };
+        let token = &effective;
+        let token_val = token.as_legacy();
         // C2 Cap gate: skills de rede exigem Cap::RING_OP (ADR-0041)
+        // DynSkill (0xD1) → EMPTY (sandbox); Legacy(1) sistema → RING_OP.
         let held = if matches!(token, CapabilityToken::Legacy(1)) {
             k_hal::cap_gate::Cap::RING_OP.union(k_hal::cap_gate::Cap::PING)
         } else {

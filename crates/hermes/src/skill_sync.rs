@@ -290,17 +290,14 @@ pub fn register_mesh_g3_probe_on_master() {
     }
     const NAME: &str = "mesh_g3_probe";
     const DESC: &str = "GOAL3 SkillSync probe (Master-only post-TOFU)";
-    {
-        let mut reg = k_nano::SKILL_REGISTRY.lock();
-        if reg.has_skill(NAME) {
-            return;
-        }
-        reg.register(alloc::boxed::Box::new(skill_registry::DynamicSkill::new(
-            NAME,
-            DESC,
-            "mesh_g3_probe body — smoke SkillSync apply",
-        )));
+    if k_nano::SKILL_REGISTRY.lock().has_skill(NAME) {
+        return;
     }
+    crate::dynskill::register_dynskill(skill_registry::DynamicSkill::new(
+        NAME,
+        DESC,
+        "mesh_g3_probe body — smoke SkillSync apply",
+    ));
     // Garante push no próximo sync_skills (e no re-push pós clear_synced).
     register_skill_for_sync(NAME);
     slog_hermes!(
@@ -357,9 +354,10 @@ pub fn on_packet_received(pkt: &AiosTaskPacket, data: &[u8]) {
             slog_hermes!("SkillSync", "info", "Worker: skill '{}' ja existe (SKILL\\0)", name);
             return;
         }
-        reg.register(alloc::boxed::Box::new(skill_registry::DynamicSkill::new(
+        drop(reg);
+        crate::dynskill::register_dynskill(skill_registry::DynamicSkill::new(
             name, desc, body,
-        )));
+        ));
         crate::self_evolve::publish_change("mesh", name);
         slog_hermes!(
             "SkillSync", "info",
@@ -389,9 +387,10 @@ pub fn on_packet_received(pkt: &AiosTaskPacket, data: &[u8]) {
             slog_hermes!("SkillSync", "info", "Master: skill '{}' ja existe (promote ignorado)", name);
             return;
         }
-        reg.register(alloc::boxed::Box::new(
+        drop(reg);
+        crate::dynskill::register_dynskill(
             skill_registry::DynamicSkill::new(name, desc, "promoted from mesh worker"),
-        ));
+        );
         slog_hermes!(
             "SkillSync", "info",
             "Master: skill '{}' promovida do Worker node={}", name, pkt.source_id
@@ -418,9 +417,10 @@ pub fn on_packet_received(pkt: &AiosTaskPacket, data: &[u8]) {
         slog_hermes!("SkillSync", "info", "Worker: skill '{}' ja existe", name);
         return;
     }
-    reg.register(alloc::boxed::Box::new(
+    drop(reg);
+    crate::dynskill::register_dynskill(
         skill_registry::DynamicSkill::new(name, desc, "synced from mesh master"),
-    ));
+    );
     slog_hermes!("SkillSync", "info", "Worker: skill '{}' aplicada do Master", name);
 }
 
