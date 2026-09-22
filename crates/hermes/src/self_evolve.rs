@@ -208,12 +208,25 @@ pub fn llm_skill_prompt(name: &str, description: &str) -> String {
 
 /// Verifica + registra no SkillLoader. Retorna Ok(nome) ou Err(motivo).
 /// Ordem: SIGN FIRST → verificação ESTRITA do conteúdo selado → register.
-/// Fail-closed: se assinar falhar, sealed==raw e a verificação estrita rejeita.
+/// Fail-closed (H7, canvas onda 1): sem assinatura da sessão = Reject("unsigned")
+/// — nunca verificar/registrar o conteúdo cru.
 pub fn verify_and_register(loader: &mut SkillLoader, content: &str) -> Result<String, &'static str> {
     let tick = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
     // Sign FIRST (session key) — hash+assinatura são parte do contrato verificado.
-    let sealed = crate::package_hub::sign_artifact_md(content)
-        .unwrap_or_else(|_| String::from(content));
+    let sealed = match crate::package_hub::sign_artifact_md(content) {
+        Ok(s) => s,
+        Err(_) => {
+            VERIFIED_REJECT.fetch_add(1, Ordering::Relaxed);
+            k_nano::slog_hermes!("S108", "warn", "VERIFY REJECT reason=unsigned (sign_artifact_md falhou)");
+            crate::globals::AUDIT_TRAIL.lock().push(
+                tick,
+                "self_evolve",
+                "verify_reject",
+                b"unsigned",
+            );
+            return Err("unsigned");
+        }
+    };
     match verify_skill_md(&sealed) {
         VerifyVerdict::Ok => {}
         VerifyVerdict::Reject(reason) => {
@@ -229,6 +242,24 @@ pub fn verify_and_register(loader: &mut SkillLoader, content: &str) -> Result<St
         }
     }
     let name = extract_name(&sealed).unwrap_or_else(|| String::from("unnamed"));
+    // H7 (canvas onda 1): registro exige gate — skills sem risco (classify=Auto)
+    // passam; Confirm/Escalate precisam de HITL (pending até /approve <id>).
+    // Sem esse gate, qualquer SKILL.md gerado entrava no fleet sem humano.
+    {
+        let mut gate = crate::globals::APPROVAL_GATE.lock();
+        let level = crate::approval::ApprovalGate::classify(&name);
+        if !matches!(level, crate::approval::ApprovalLevel::Auto) && !gate.can_execute(&name) {
+            let id = gate.request(&name, "self_evolve", "skill auto-gerada requer HITL antes do registro", level);
+            k_nano::slog_hermes!("S108", "warn", "skill '{}' staged — pending HITL #{} (level={})", name, id, level.name());
+            crate::globals::AUDIT_TRAIL.lock().push(
+                tick,
+                "self_evolve",
+                "register_pending_hitl",
+                name.as_bytes(),
+            );
+            return Err("hitl_pending");
+        }
+    }
     loader.remove_skill(&name);
     match loader.register_skill(&sealed) {
         Ok(()) => {

@@ -71,12 +71,14 @@ impl AuditTrail {
         let signature = match sign_session(&entry_hash) {
             Some(sig) => sig,
             None => {
+                // H1 (onda1): refusal — NÃO encadear entry com sig de zeros.
+                // Entry não-assinada quebraria a cadeia Merkle com um elo falso.
                 k_nano::slog_kai!(
                     "AUDIT",
-                    "warn",
-                    "sign_session failed — entry unsigned (zeros)"
+                    "fail",
+                    "sign_session failed — entry REFUSED (not chained)"
                 );
-                [0u8; SIGNATURE_LEN]
+                return;
             }
         };
 
@@ -106,6 +108,10 @@ impl AuditTrail {
         let mut prev: Option<[u8; 32]> = None;
         let n = self.ring.len();
         let visit = |entry: &AuditEntry, prev: &mut Option<[u8; 32]>| -> bool {
+            // H1 (onda1): sig de zeros = entry nunca assinada → chain inválida.
+            if entry.signature == [0u8; SIGNATURE_LEN] {
+                return false;
+            }
             let use_prev = match *prev {
                 Some(p) => p,
                 None => entry.prev_hash, // subset load: âncora no prev declarado
@@ -470,9 +476,26 @@ impl AuditTrail {
 mod tests {
     use super::*;
 
+    /// H1: sem sessão de assinatura o push é recusado (nada de sig zeros).
+    #[test]
+    fn audit_refuses_unsigned_entry() {
+        if k_nano::identity::session_ready() {
+            return; // sessão já viva — coberto pelos testes de chain
+        }
+        let mut trail = AuditTrail::new();
+        trail.push(1, "a", "act", b"x");
+        assert_eq!(trail.entry_count(), 0, "push sem sessão deve ser recusado");
+    }
+
     /// Ring pequeno local: força wrap e valida chain + prev_hash.
     #[test]
     fn audit_chain_survives_wrap() {
+        if !k_nano::identity::session_ready() {
+            k_nano::identity::init_session_identity();
+        }
+        if !k_nano::identity::session_ready() {
+            return; // host sem sessão possível — nada a checar
+        }
         // Usa AUDIT_RING_SIZE real seria lento (4096); exercita a lógica via
         // push além de len e verify_chain na ordem cronológica.
         let mut trail = AuditTrail::new();
@@ -492,6 +515,12 @@ mod tests {
 
     #[test]
     fn audit_prev_hash_matches_push_chain() {
+        if !k_nano::identity::session_ready() {
+            k_nano::identity::init_session_identity();
+        }
+        if !k_nano::identity::session_ready() {
+            return;
+        }
         let mut trail = AuditTrail::new();
         trail.push(1, "boot", "init", b"x");
         trail.push(2, "boot", "plan", b"y");

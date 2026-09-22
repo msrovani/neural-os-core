@@ -211,8 +211,9 @@ impl Agent for MemoryAgent {
             ),
         }
 
-        // Resize heap
-        crate::allocator::resize_heap_to_mb(budget.heap_target_mb);
+        // Resize heap: DELETADO — resize_heap_to_mb mirava a pool errada
+        // (bump vs TALC). O auto-grow (grow_bump_auto) é o dono do sizing;
+        // budget.heap_target_mb segue só como telemetria.
 
         if budget.vram_model_mb > 0 {
             if let Some(ref vram) = *crate::gpu::vram::VRAM_BUDDY.lock() {

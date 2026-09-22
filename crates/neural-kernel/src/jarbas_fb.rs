@@ -123,7 +123,11 @@ pub unsafe fn map_fb_pages(
         return Err("EPERM: Cap::MAP_FB");
     }
     let _ = syscall::dispatch(SYS_MAP_FB, contract.phys_base, held)?;
-    let flags = address_space::rw_flags();
+    // H7: FB é MMIO — mapear NO_CACHE | WRITE_THROUGH (WB em MMIO =
+    // reads stale / writes reordenados).
+    let flags = address_space::rw_flags()
+        | PageTableFlags::NO_CACHE
+        | PageTableFlags::WRITE_THROUGH;
     let base_phys = contract.phys_base;
     for i in 0..DEMO_MAP_PAGES {
         let va = VirtAddr::new(JARBAS_FB_VA + (i as u64) * 4096);

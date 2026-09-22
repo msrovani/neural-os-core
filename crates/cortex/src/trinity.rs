@@ -337,25 +337,37 @@ impl TrinityRouter {
                     softmax(&mut scores);
                     let mut best_idx = 0usize;
                     let mut best_score = scores[0];
+                    let mut second_score = 0.0f32;
                     for (i, &s) in scores.iter().enumerate().skip(1) {
                         if s > best_score {
+                            second_score = best_score;
                             best_idx = i;
                             best_score = s;
+                        } else if s > second_score {
+                            second_score = s;
                         }
                     }
-                    if best_score > 0.05 {
+                    let margin = best_score - second_score;
+                    // M10 (onda1): 0.05 aceitava qualquer soft-max do router —
+                    // threshold honesto + margem top1-top2 separa rota neural
+                    // real de chute; sem margem cai no keyword fallback.
+                    if best_score > 0.35 && margin > 0.1 {
                         if let Some(trace) = crate::r3::record_router_trace(
                             arena,
                             &embedding,
                             &scores,
                             best_idx,
                         ) {
-                            k_nano::slog_cortex!("TRINITY", "ok", "MoE router (R3): expert {} (score={:.3}) arena_used={} B",
+                            k_nano::slog_cortex!("TRINITY", "ok", "MoE router (R3): expert {} (score={:.3} margin={:.3}) arena_used={} B",
                                 self.experts[best_idx].name,
                                 best_score,
+                                margin,
                                 arena.used_bytes());
                             return (&self.experts[best_idx], trace);
                         }
+                    } else {
+                        k_nano::slog_cortex!("TRINITY", "trace", "MoE router weak: score={:.3} margin={:.3} — keyword fallback",
+                            best_score, margin);
                     }
                 }
             }

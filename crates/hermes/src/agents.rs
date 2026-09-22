@@ -889,10 +889,25 @@ impl Agent for HermesAgent {
 
         // Atualiza métricas de consciência (sempre, leve)
         let skills_total = SKILL_REGISTRY.lock().skill_count() as u64;
+        // H6 (canvas onda 1): agentes ativos/total derivados do BudgetManager real
+        // (agent-agent-core stats). Sem wiring do stats → self_report degraded
+        // em vez dos literais 0,0 mentirosos.
+        let budget_stats = agent_core::agent_budget_stats();
+        let agents_total = budget_stats.len();
+        let agents_active = budget_stats
+            .iter()
+            .filter(|s| matches!(s.2,
+                agent_core::budget::AgentWatchdogState::Normal
+                | agent_core::budget::AgentWatchdogState::Warning))
+            .count();
+        if agents_total == 0 && _tick > 0 && _tick % 2000 == 0 {
+            k_nano::slog_hermes!("CONSCIOUSNESS", "warn", "self_report=degraded reason=budget_stats_unwired (agent_health sem fonte)");
+            log_analyst_agent::write_log("consciousness", "self_report=degraded reason=budget_stats_unwired");
+        }
         self.consciousness.tick(
             _tick,
             self.con_skills_ok, skills_total,
-            0, 0,
+            agents_active, agents_total,
             self.con_errors, self.con_errors_resolved,
             self.con_memories_total, self.con_anomaly_count,
             self.boot_greeted,
@@ -2901,34 +2916,31 @@ impl AutoLearnAgent {
             cortex::r3::persist_trained_router(&weights);
             k_nano::slog_hermes!("TRINITY", "Learn", "{}: R3 replay {} traces loss={:.4} (arena tokens={})", topic, n, loss, cortex::global_arena::token_steps());
         } else {
-            let mut dummy_trace = cortex::r3::RouteTrace {
-                embedding_addr: 0,
-                logits_addr: 0,
-                num_experts: 6,
-                selected_expert: 0,
-                old_log_prob: libm::logf(0.2),
-                token_ids_addr: 0,
-                token_count: 0,
-            };
-            let trinity = crate::globals::TRINITY.lock();
-            loss = cortex::r3::update_with_replay(&trinity, &dummy_trace, 0.5, &mut weights, 0.01, 0.0);
-            drop(trinity);
-            let _ = &mut dummy_trace;
-            let mut trainer = crate::globals::BITNET_TRAINER.lock();
-            trainer.trained += 1;
-            cortex::r3::persist_trained_router(&weights);
-            k_nano::slog_hermes!("TRINITY", "Learn", "{}: bootstrap R3 (sem cache) loss={:.4} steps={}", topic, loss, trainer.trained);
+            // H3 (canvas onda 1): sem traces R3 = bootstrap skip honesto — NÃO
+            // persistir pesos dummy, NÃO contar step, NÃO anunciar "APRENDEU".
+            k_nano::slog_hermes!("TRINITY", "warn", "{}: bootstrap_skipped n=0 — sem traces R3, nada a persistir (degraded)", topic);
         }
-        cortex::global_arena::reset_moe_cache();
-        k_nano::slog_hermes!("TRINITY", "Learn", "{}: TRINITY APRENDEU! (R3 reset O(1))", topic);
-        k_nano::slog_hermes!(
-            "TRINITY",
-            "ok",
-            "METRIC learn_done topic={} knowledge_bytes={} steps={} status=ok",
-            topic,
-            knowledge.len(),
-            steps.max(1)
-        );
+        if n > 0 {
+            cortex::global_arena::reset_moe_cache();
+            k_nano::slog_hermes!("TRINITY", "Learn", "{}: TRINITY APRENDEU! (R3 reset O(1))", topic);
+            k_nano::slog_hermes!(
+                "TRINITY",
+                "ok",
+                "METRIC learn_done topic={} knowledge_bytes={} steps={} status=ok loss={:.4}",
+                topic,
+                knowledge.len(),
+                steps,
+                loss
+            );
+        } else {
+            k_nano::slog_hermes!(
+                "TRINITY",
+                "ok",
+                "METRIC learn_done topic={} knowledge_bytes={} steps=0 status=bootstrap_skipped",
+                topic,
+                knowledge.len()
+            );
+        }
     }
 
     fn load_knowledge(&self, topic: &str) -> Vec<u8> {

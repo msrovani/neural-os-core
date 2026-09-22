@@ -139,22 +139,25 @@ impl Membrane {
         }
     }
 
-    /// Membrana para skill WASM confiável — mais permissiva.
+    /// Membrana para skill WASM — M12 (canvas onda 1): default endurecido.
+    /// fs: apenas /jail/<app>/* + /tmp/*; heap 64MB; write fora do allow = Deny.
     pub fn for_wasm(name: &str, caps: Vec<Capability>) -> Self {
         Self {
             name: String::from(name),
             fs_allow: vec![
+                alloc::format!("/jail/{}/*", name),
                 String::from("/tmp/*"),
-                String::from("/home/*"),
             ],
             fs_deny: vec![
                 String::from("/etc/*"),
                 String::from("/boot/*"),
+                String::from("/dev/*"),
+                String::from("/sys/*"),
             ],
             net_allow: Vec::new(),
             capabilities: caps,
             fuel_budget: 50_000_000,
-            heap_max: 512 * 1024 * 1024,
+            heap_max: 64 * 1024 * 1024,
             timeout_ms: 120_000,
         }
     }
@@ -199,8 +202,9 @@ impl Membrane {
                 return Verdict::Allow;
             }
         }
-        // Escalate se for write (pode ser necessário), deny se for read estranho
-        if write { Verdict::Escalate } else { Verdict::Deny }
+        // M12: write fora do allow = Deny (não Escalate); read estranho = Deny.
+        let _ = write;
+        Verdict::Deny
     }
 }
 

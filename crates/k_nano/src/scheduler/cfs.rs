@@ -1,5 +1,17 @@
 //! CFS Scheduler — Completely Fair Scheduler for agents (#335).
-//! Substitui round-robin do AgentScheduler por vruntime-based fairness.
+//!
+//! ## Estado honesto (L-doc / canvas-onda2 M3)
+//! A contabilidade aqui é **o esqueleto** (provide place_entity/update/status e o
+//! ponteiro global); os agents atuais **não** são agendados por vruntime — a
+//! escolha acontece em `agent-core` (cooperativo, com urgency) e a fila SMP em
+//! `smp/runqueue.rs` (EEVDF candeitada no upstream ADR-0089). Não declarar "CFS
+//! está agendando": este módulo coleta e provê a API; a decisão de rodagem vem
+//! dos outros dois pontos.
+//!
+//! ## ponytail
+//! EEVDF (virtual deadline = vruntime + slice) é o upgrade natural quando o
+//! agent-core ceder a seleção para cá — manter o struct pequeno até lá.
+//! Marcar como residual é a posição honesta: o valor do módulo hoje é a API.
 
 #![allow(dead_code)]
 

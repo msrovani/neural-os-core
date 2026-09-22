@@ -13,6 +13,8 @@ use crate::channel::BoundedChannel;
 pub type AgentId = &'static str;
 
 pub const DEFAULT_MAILBOX_CAP: usize = 32;
+/// M6: teto de mailboxes registradas (defesa contra DoS por nomes arbitrários).
+pub const MAX_MAILBOXES: usize = 64;
 
 /// Envelope ponto-a-ponto.
 #[derive(Clone)]
@@ -46,24 +48,29 @@ impl MessageBus {
         }
     }
 
-    /// Garante mailbox do agente (cria se ausente).
-    pub fn open_mailbox(&self, agent: AgentId) {
-        let key = String::from(agent);
+    /// Registra mailbox do agente (cria se ausente). M6: teto MAX_MAILBOXES —
+    /// `send` NÃO abre mailbox; alvo não registrado = `ipc_mailbox_missing`.
+    pub fn open_mailbox(&self, agent: AgentId) -> bool {
         let mut map = self.mailboxes.lock();
-        map.entry(key)
-            .or_insert_with(|| BoundedChannel::new(self.default_cap));
+        if map.contains_key(agent) {
+            return true;
+        }
+        if map.len() >= MAX_MAILBOXES {
+            return false;
+        }
+        map.insert(String::from(agent), BoundedChannel::new(self.default_cap));
+        true
     }
 
-    /// Envia para mailbox de `to`. Deny se token inválido.
+    /// Envia para mailbox de `to`. Deny se token inválido ou mailbox não
+    /// registrada (M6: sem criação implícita no caminho de envio).
     pub fn send(&self, env: Envelope) -> Result<(), &'static str> {
         if !env.token.is_valid() {
             return Err("ipc_token_invalid");
         }
-        let to = env.to;
-        self.open_mailbox(to);
         let map = self.mailboxes.lock();
         let ch = map
-            .get(to)
+            .get(env.to)
             .ok_or("ipc_mailbox_missing")?;
         ch.send(env)
     }

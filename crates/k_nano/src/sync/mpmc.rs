@@ -74,9 +74,16 @@ impl<T> MpmcQueue<T> {
                 continue;
             }
             // Revalida APÓS o CAS: a fila pode ter enchido na corrida (H1).
-            // Sem rollback lock-free seguro — falha espúria; o try_recv
-            // limitado auto-cura o gap (retorna None no slot fantasma).
+            // H14: rollback best-effort do enqueue_pos se ainda somos o topo;
+            // se já avançou, o gap fantasma fica — bounded (não infinito) e
+            // o try_recv limitado o pula (None), sem hang.
             if pos.wrapping_sub(self.dequeue_pos.load(Ordering::Acquire)) >= self.capacity {
+                let _ = self.enqueue_pos.compare_exchange(
+                    pos.wrapping_add(1),
+                    pos,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
                 return Err(item);
             }
             let slot = self.buffer.wrapping_add(pos & self.mask);
@@ -85,6 +92,12 @@ impl<T> MpmcQueue<T> {
                 while (*slot).state.compare_exchange(EMPTY, STORING, Ordering::Acquire, Ordering::Relaxed).is_err() {
                     spins += 1;
                     if spins >= MAX_RETRIES {
+                        let _ = self.enqueue_pos.compare_exchange(
+                            pos.wrapping_add(1),
+                            pos,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        );
                         return Err(item);
                     }
                     core::hint::spin_loop();
@@ -114,7 +127,14 @@ impl<T> MpmcQueue<T> {
                 continue;
             }
             // Revalida APÓS o CAS (H1): esvaziou na corrida → None.
+            // H14: rollback best-effort do dequeue_pos (mesmo raciocínio do send).
             if pos == self.enqueue_pos.load(Ordering::Acquire) {
+                let _ = self.dequeue_pos.compare_exchange(
+                    pos.wrapping_add(1),
+                    pos,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
                 return None;
             }
             let slot = self.buffer.wrapping_add(pos & self.mask);
@@ -123,6 +143,12 @@ impl<T> MpmcQueue<T> {
                 while (*slot).state.compare_exchange(READY, LOADING, Ordering::Acquire, Ordering::Relaxed).is_err() {
                     spins += 1;
                     if spins >= MAX_RETRIES {
+                        let _ = self.dequeue_pos.compare_exchange(
+                            pos.wrapping_add(1),
+                            pos,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        );
                         return None;
                     }
                     core::hint::spin_loop();
@@ -151,13 +177,20 @@ impl<T> MpmcQueue<T> {
 
 impl<T> Drop for MpmcQueue<T> {
     fn drop(&mut self) {
+        // H14: drena via try_recv (caminho canônico). Com &mut somos o único
+        // ator — try_recv só falha em slot fantasma (EnvItem nunca commitado
+        // no-slot); varredura final cobre os READY remanescentes entre gaps.
+        while let Some(item) = self.try_recv() {
+            drop(item);
+        }
         unsafe {
             let enq = self.enqueue_pos.load(Ordering::Relaxed);
             let deq = self.dequeue_pos.load(Ordering::Relaxed);
             for i in deq..enq {
                 let slot = self.buffer.wrapping_add(i & self.mask);
-                if (*slot).state.load(Ordering::Relaxed) != EMPTY {
+                if (*slot).state.load(Ordering::Relaxed) == READY {
                     core::ptr::drop_in_place((*slot).data.as_mut_ptr());
+                    (*slot).state.store(EMPTY, Ordering::Relaxed);
                 }
             }
             if let Some(l) = alloc::alloc::Layout::array::<Slot<T>>(self.capacity).ok() {

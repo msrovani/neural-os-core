@@ -9,6 +9,14 @@ pub const BITMAP_SIZE: usize = 2 * 1024 * 1024;
 const BITS_PER_BYTE: usize = 8;
 const FRAME_SIZE: u64 = 4096;
 
+/// Frames 0..255 (<1MB) reservados: IVT/BDA/EBDA + trampoline SMP real-mode.
+/// next_free_bit nasce aqui — nunca entregar lowmem ao geral.
+pub const LOWMEM_RESERVE_FRAMES: usize = 256;
+
+/// Piso único de heap (MB): nós <1.5GB usam SMALL, demais FULL.
+pub const HEAP_FLOOR_SMALL_MB: usize = 128;
+pub const HEAP_FLOOR_MB: usize = 256;
+
 // Fix (SESSION_233): section .data para evitar que o bump heap estendido
 // sobrescreva estas statics — HEAP_BUFFER (512MB) em .bss é seguido por
 // outras statics; estender HEAP_LIMIT alem de HEAP_SIZE corrompe total_frames.
@@ -119,7 +127,7 @@ impl BitmapFrameAllocator {
         }
         self.usable_frames = usable_count;
         self.allocated_count = 0;
-        self.next_free_bit = 256;
+        self.next_free_bit = LOWMEM_RESERVE_FRAMES;
         // Armazena RAM total para hw_profiler
         let ram_mb = (last_end / (1024 * 1024)) as u64;
         if ram_mb > 0 {
@@ -233,6 +241,9 @@ impl BitmapFrameAllocator {
                     self.set_bit(i + j);
                 }
                 self.mark_delivered(i, count);
+                // H13 (canvas-onda2): contabilidade de entrega — sem isto
+                // allocated_count divergia do bitmap (DMA/e1000/NVMe usam isto).
+                self.allocated_count += count;
                 self.next_free_bit = i + count;
                 return Some(PhysFrame::containing_address(PhysAddr::new(i as u64 * FRAME_SIZE)));
             }
@@ -456,6 +467,8 @@ impl FrameDeallocator<Size4KiB> for BitmapFrameAllocator {
 
 /// Heap = min(75% RAM, RAM − keep). Em nós apertados (<1.5G) o keep sobe:
 /// FB + PMM + FRAG working-set — senão o piso 512MB + TALC OOM em aloc minúscula.
+/// POLÍTICA (librarian): talc 4.4.3 e x86_64 0.14 PINADOS — bump 4.x/0.15 é
+/// breaking, fora deste lane. Memtype guard anti-aliasing = follow-up, não aqui.
 pub fn heap_budget_mb(ram_mb: u64) -> usize {
     if ram_mb == 0 {
         return 512;
@@ -467,19 +480,20 @@ pub fn heap_budget_mb(ram_mb: u64) -> usize {
     } else {
         (ram_mb / 8).max(128)
     };
-    let floor = if ram_mb < 1536 { 128 } else { 256 };
+    let floor = if ram_mb < 1536 { HEAP_FLOOR_SMALL_MB } else { HEAP_FLOOR_MB };
     pct75
         .min(ram_mb.saturating_sub(kernel_keep))
-        .max(floor) as usize
+        .max(floor as u64) as usize
 }
 
 /// Piso inicial do bump no boot — AIOS mede RAM, não hardcode 512 em 1G.
+/// Invariante: piso >= HEAP_FLOOR_MB (nunca abaixo do floor do budget).
 pub fn heap_piso_mb(ram_mb: u64) -> usize {
     if ram_mb == 0 {
         return 512;
     }
     if ram_mb < 1536 {
-        256
+        HEAP_FLOOR_MB
     } else {
         512
     }

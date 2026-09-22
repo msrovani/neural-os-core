@@ -735,7 +735,7 @@ pub fn heap_stats() -> (usize, usize) {
     }
 }
 
-#[alloc_error_handler]
+#[cfg_attr(feature = "global-alloc", alloc_error_handler)]
 fn oom(layout: core::alloc::Layout) -> ! {
     unsafe {
         core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b'O', options(nostack, preserves_flags));

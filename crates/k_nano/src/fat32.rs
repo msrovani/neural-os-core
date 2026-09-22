@@ -310,6 +310,9 @@ pub unsafe fn mount_partitions(ata: &AtaDriver) {
             vfs.mount(Box::leak(mount_point.clone().into_boxed_str()), fs_name);
         }
         // ResidentKind::Block (tier Hdd): chave LBA, nunca memcpy CPU.
+        // NOTA: a chave é lba*512 (offset de disco), NÃO endereço RAM — o
+        // summary do MHI imprime `@{:x}` cru; prefixo `lba:` é follow-up do
+        // lane dono de mhi.rs, não aqui.
         crate::mhi::MHI_REGISTRY.lock().register(
             x86_64::PhysAddr::new(part.lba_start as u64 * 512),
             part.sector_count as usize * 512, crate::mhi::AllocTier::Hdd, &mount_point);

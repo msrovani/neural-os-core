@@ -32,12 +32,9 @@ pub struct SafetyStatus {
 
 impl SafetyStatus {
     pub fn all_pass(&self) -> bool {
-        // Warning = degraded observe (AIOS honesty), não fail-closed.
-        // Só Violation dispara fail-closed / contador.
-        self.i1_heap != InvariantResult::Violation
-            && self.i2_agents != InvariantResult::Violation
-            && self.i3_trust != InvariantResult::Violation
-            && self.i4_scheduler != InvariantResult::Violation
+        // H2 (onda1): Warning CONTA. all_pass só é verdade com tudo Pass
+        // (antes ignorava Warning — telemetria mentia "ok" em degraded).
+        self.all_green()
     }
 
     /// True se todos os invariantes estão Pass (sem Warning).
@@ -129,18 +126,33 @@ impl SafetyInvariants {
 
     /// I3: Trust intact check.
     /// Honesty: k_ai não pode ler hermes::TRUST_CACHE (dep direction).
-    /// Warning = "não verificado neste anel", NÃO Pass (= íntegro).
+    /// H2 (onda1): pré-fleet (agent_count==0) = Warning "ainda sem dado";
+    /// pós-fleet sem dado = Violation — "Warning eterno não-verificado"
+    /// mascara ausência real de Trust pós-Phase 6.
     /// Hermes SafetyAgent faz o check real (entry_count).
     fn check_trust_intact(&self) -> InvariantResult {
-        static WARNED: AtomicBool = AtomicBool::new(false);
-        if !WARNED.swap(true, Ordering::Relaxed) {
-            k_nano::slog_kai!(
-                "Safety",
-                "warn",
-                "I3 proxy: TrustCache delegated to hermes — returning Warning (not Pass)"
-            );
+        let fleet_up = crate::agent_stats::current_agent_count() > 0;
+        if fleet_up {
+            static WARNED_V: AtomicBool = AtomicBool::new(false);
+            if !WARNED_V.swap(true, Ordering::Relaxed) {
+                k_nano::slog_kai!(
+                    "Safety",
+                    "fail",
+                    "I3 VIOLATION: fleet up mas sem dado de Trust neste anel"
+                );
+            }
+            InvariantResult::Violation
+        } else {
+            static WARNED_W: AtomicBool = AtomicBool::new(false);
+            if !WARNED_W.swap(true, Ordering::Relaxed) {
+                k_nano::slog_kai!(
+                    "Safety",
+                    "warn",
+                    "I3 proxy: TrustCache delegated to hermes — Warning pré-fleet (not Pass)"
+                );
+            }
+            InvariantResult::Warning
         }
-        InvariantResult::Warning
     }
 
     /// I4: Scheduler tick check.

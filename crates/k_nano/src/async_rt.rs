@@ -405,6 +405,9 @@ pub fn request_wake_processing() {
 /// Chamada do loop principal / idle do scheduler: processa os wakes fora do IRQ.
 pub fn drain_pending_wakes() {
     if WAKES_PENDING.swap(false, Ordering::AcqRel) {
+        // HC7: avança os TimerFutures aqui (1 tick = 1 wake) — decrementar no
+        // `poll` era o lugar errado (poll é chamado por várias razões).
+        tick_timer_slots();
         global_executor().process_wakes();
     }
 }
@@ -448,34 +451,66 @@ pub extern "x86-interrupt" fn apic_timer_handler(_stack_frame: x86_64::structure
 pub fn init_async_rt() {
     let executor = global_executor();
     executor.start();
-
-    // Register a demo TimerFuture that fires every 100 ticks
-    let _ = executor.register_future(Box::pin(TimerFuture::new(100)));
-
-    // Configure APIC timer (this would call into the apic module)
-    // For now, this is a stub - the timer handler is already registered in IDT
-    // unsafe {
-    //     crate::apic::configure_timer(32, 0x800000); // Vector 32, count
-    // }
+    // HC7: demo TimerFuture removida — o registro fixo ocupava um slot da
+    // WakerQueue para sempre sem consumidor (slot vazado).
 }
 
-/// TimerFuture — wakes after N scheduler ticks
-/// 
-/// Simple timer future for testing the async executor.
-/// Uses the global executor's wake mechanism.
+/// TimerFuture — fires after N timer tick wakes.
+///
+/// HC7 (canvas-onda2): os ticks são decrementados em `drain_pending_wakes`
+/// (um por wake do timer), não no `poll`. O `poll` apenas confere o slot.
+/// Slots globais estáticos — `new` reivindica um; sem slot livre → Ready imediato
+/// (falha honesta, não vaza slot fantasma com um `register_future(async {})`).
+const TIMER_SLOT_COUNT: usize = 16;
+static TIMER_SLOTS: [AtomicU64; TIMER_SLOT_COUNT] =
+    [const { AtomicU64::new(0) }; TIMER_SLOT_COUNT];
+
+/// Sem slot livre: fallback legível no log (não silencioso).
+const TIMER_SLOT_NONE: usize = usize::MAX;
+
+fn tick_timer_slots() {
+    for s in TIMER_SLOTS.iter() {
+        let v = s.load(Ordering::Acquire);
+        if v > 0 {
+            s.store(v - 1, Ordering::Release);
+        }
+    }
+}
+
 pub struct TimerFuture {
-    ticks_remaining: AtomicU64,
-    total_ticks: u64,
-    index: AtomicUsize,
+    slot: usize,
 }
 
 impl TimerFuture {
-    /// Create a new TimerFuture that completes after `ticks` scheduler ticks
+    /// Create a new TimerFuture that completes after `ticks` timer wakes.
     pub fn new(ticks: u64) -> Self {
-        Self {
-            ticks_remaining: AtomicU64::new(ticks),
-            total_ticks: ticks,
-            index: AtomicUsize::new(0),
+        if ticks == 0 {
+            return Self { slot: TIMER_SLOT_NONE };
+        }
+        for i in 0..TIMER_SLOT_COUNT {
+            if TIMER_SLOTS[i]
+                .compare_exchange(0, ticks, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Self { slot: i };
+            }
+        }
+        crate::slog_nano!(
+            "ASYNC",
+            "warn",
+            "TimerFuture sem slot ({}/{} ocupados) — Ready imediato",
+            TIMER_SLOT_COUNT,
+            TIMER_SLOT_COUNT
+        );
+        Self { slot: TIMER_SLOT_NONE }
+    }
+
+    /// Ticks restantes (leitura honesta do slot; sem slot = 0).
+    pub fn remaining(&self) -> u64 {
+        if self.slot == TIMER_SLOT_NONE {
+            0
+        } else {
+            TIMER_SLOTS[self.slot].load(Ordering::Acquire)
         }
     }
 }
@@ -485,21 +520,21 @@ impl core::future::Future for TimerFuture {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        
-        // Register waker on first poll
-        if this.index.load(Ordering::Acquire) == 0 {
-            let idx = global_executor().register_future(Box::pin(async {})).unwrap_or(0);
-            this.index.store(idx, Ordering::Release);
-        }
-        
-        let remaining = this.ticks_remaining.load(Ordering::Acquire);
-        if remaining == 0 {
+        if this.remaining() == 0 {
             Poll::Ready(())
         } else {
-            // Store waker for when timer fires
-            this.ticks_remaining.fetch_sub(1, Ordering::Release);
+            // Re-arm: o executor acorda de novo no próximo tick (drain).
             cx.waker().wake_by_ref();
             Poll::Pending
+        }
+    }
+}
+
+impl Drop for TimerFuture {
+    fn drop(&mut self) {
+        // Aliviar slot (recliação de slot, zero-leak).
+        if self.slot != TIMER_SLOT_NONE {
+            TIMER_SLOTS[self.slot].store(0, Ordering::Release);
         }
     }
 }

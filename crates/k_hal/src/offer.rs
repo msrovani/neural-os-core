@@ -26,6 +26,11 @@ pub const TOPIC_INPUT_EVENT: &str = "INPUT_EVENT";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OfferStatus {
     Absent,
+    /// M15 (onda1): ausência em cache do backoff — NÃO é confirmação fresco
+    /// (query() não consultou OFFERS nem logou). Distingue "ausente confirmado"
+    /// de "ausente presumido": consumidores que reagem a Absent (alertas,
+    /// self-heal) devem tratar AbsentCached como não-decisivo.
+    AbsentCached,
     Available,
     Bound,
     Quarantined,
@@ -189,10 +194,10 @@ fn port_sync_bound(class: DeviceClass, bound: bool) {
 pub fn refresh_from_tree() {
     let tree = discovery::device_tree();
     let mut offers = OFFERS.lock();
-    let prev_binds: Vec<(DeviceClass, Option<String>, OfferStatus)> = offers
+    let prev_binds: Vec<(DeviceClass, Option<String>)> = offers
         .iter()
         .filter(|o| o.status == OfferStatus::Bound)
-        .map(|o| (o.class, o.bound_agent.clone(), o.status))
+        .map(|o| (o.class, o.bound_agent.clone()))
         .collect();
     offers.clear();
 
@@ -203,13 +208,16 @@ pub fn refresh_from_tree() {
         } else {
             OfferStatus::Available
         };
+        // M15 (onda1): preserva o bind anterior SÓ se o cap ainda está bound —
+        // antes o status Bound histórico sobrevivia a um cap desacoplado,
+        // mentindo "Bound" após perda do device.
         let mut agent = None;
-        let mut st = status;
-        for (c, a, ps) in &prev_binds {
-            if *c == cap.id.class {
-                agent = a.clone();
-                st = *ps;
-                break;
+        if cap.bound {
+            for (c, a) in &prev_binds {
+                if *c == cap.id.class {
+                    agent = a.clone();
+                    break;
+                }
             }
         }
         if cap.id.class == DeviceClass::Video {
@@ -217,7 +225,7 @@ pub fn refresh_from_tree() {
         }
         offers.push(OfferSlot {
             class: cap.id.class,
-            status: st,
+            status,
             name: String::from(cap.name),
             bound_agent: agent,
             topic: topic_for(cap.id.class),
@@ -264,7 +272,7 @@ pub fn refresh_from_tree() {
                 OfferStatus::Bound => 3u8,
                 OfferStatus::Available => 2,
                 OfferStatus::Quarantined => 1,
-                OfferStatus::Absent => 0,
+                OfferStatus::Absent | OfferStatus::AbsentCached => 0,
             })
             .unwrap_or(OfferStatus::Absent);
         if st != OfferStatus::Absent {
@@ -290,7 +298,7 @@ pub fn query(class: DeviceClass) -> OfferStatus {
         t.delay != 0 && now < t.next_effective
     };
     if silenced {
-        return OfferStatus::Absent;
+        return OfferStatus::AbsentCached;
     }
     let offers = OFFERS.lock();
     let st = offers
@@ -301,7 +309,7 @@ pub fn query(class: DeviceClass) -> OfferStatus {
             OfferStatus::Bound => 3u8,
             OfferStatus::Available => 2,
             OfferStatus::Quarantined => 1,
-            OfferStatus::Absent => 0,
+            OfferStatus::Absent | OfferStatus::AbsentCached => 0,
         })
         .unwrap_or(OfferStatus::Absent);
     drop(offers);
@@ -486,7 +494,7 @@ pub fn list() -> Vec<OfferEntry> {
 /// Pedido genérico: query + bind para qualquer classe.
 pub fn request(class: DeviceClass, agent_name: &str) -> Result<BindHandle, OfferError> {
     match query(class) {
-        OfferStatus::Absent => Err(OfferError::Absent),
+        OfferStatus::Absent | OfferStatus::AbsentCached => Err(OfferError::Absent),
         OfferStatus::Quarantined => Err(OfferError::Quarantined),
         OfferStatus::Available | OfferStatus::Bound => bind(class, agent_name),
     }
@@ -523,8 +531,9 @@ mod tests {
             assert_eq!(t.delay, 100);
             assert_eq!(t.next_effective, 50);
         }
-        // 2ª consulta no mesmo tick (0 < 50): silenciada — estado intacto.
-        assert_eq!(query(DeviceClass::Gpu), OfferStatus::Absent);
+        // 2ª consulta no mesmo tick (0 < 50): silenciada → AbsentCached
+        // (cache do backoff, NÃO ausência confirmada) — estado intacto.
+        assert_eq!(query(DeviceClass::Gpu), OfferStatus::AbsentCached);
         {
             let b = ABSENT_BACKOFF.lock();
             let t = &b[DeviceClass::Gpu as usize];

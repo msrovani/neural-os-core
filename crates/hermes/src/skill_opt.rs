@@ -2,14 +2,12 @@
 //! Escalonamento Evolutivo de Código (JIT Cognitivo):
 //! Python efêmero → WASM persistente → Rust no_std via Cortex LLM.
 
-use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
 use spin::Mutex;
 
 use crate::structured_decode::SkillOptimizer;
-use crate::wasmi_rt;
 
 /// Estágio de evolução de um skill gerado on-demand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,25 +102,12 @@ pub fn mark_rust_promoted(name: &str, rust_source: &str) {
 }
 
 /// Promove um skill efêmero para WASM persistente no wasmi runtime.
-/// Gera bytecode dummy, valida no wasmi, registra no SkillRegistry (ADR-0059 F5).
-/// ponytail: bytecode dummy (i32.const 42; end) — o gerador real é Cortex/LLM.
+/// H8 (canvas onda 1): sem gerador de bytes — sem bytecode real = Err.
+/// O gerador real é Cortex op-IR (#412 / wasm_build); dummy seria mentira.
 pub fn promote_skill_to_wasm(name: &str, source: &str) -> Result<(), &'static str> {
-    let wasm = wasmi_rt::generate_wasm_module();
-    // Valida e testa no wasmi
-    wasmi_rt::run_wasm(&wasm, "_start", &[], 0).map_err(|_| "promote: sandbox fail")?;
-    // Registra como DynamicSkill persistente
-    let skill = crate::dynskill::DynamicSkill::with_wasm(name, source, "", wasm);
-    crate::dynskill::register_dynskill(skill);
-    // SESSION_377: wasmi validou no promote; Skill::execute ainda fail-closed até bridge.
-    k_nano::slog_hermes!(
-        "SkillOpt",
-        "warn",
-        "'{}' WASM no registry (execute=wasm_runtime_unwired até bridge)",
-        name
-    );
-    // ADR-0063: índice skill no SGDB (meta; bytecode WASM residual)
-    let _ = k_ai::sgdb::put_skill_blob(name, source);
-    Ok(())
+    let _ = source;
+    k_nano::slog_hermes!("SkillOpt", "warn", "'{}' promote SKIP no-wasm-bytes", name);
+    Err("no-wasm-bytes")
 }
 
 /// Pipeline completo: analisa mercado WASM + skills evolutivos pendentes.

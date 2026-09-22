@@ -105,6 +105,16 @@ pub fn set_governor(g: Governor) {
     apply_governor();
 }
 
+/// M7 (canvas-onda2): guard interno — NUNCA escrever IA32_PERF_CTL sem a sonda
+/// ter provado que o MSR é real. Wrmsr em hypervisor/QEMU parcial = #GP: o gate
+/// de hypervisor do probe cobre o caminho "eletrônica" (probe_and_init), mas
+/// callers pós-boot (governor tick, UI) precisam deste guard de última linha.
+/// (O gate em `main.rs` da Onda2b é a contraparte do outro lane.)
+#[inline(always)]
+fn msr_write_allowed() -> bool {
+    HAS_PSTATE.load(Ordering::Acquire) != 0
+}
+
 /// Set Energy Performance Bias (0 = performance, 15 = max power saving).
 /// Default is 6 ("balanced"). Call once during boot after MSR probe.
 pub fn set_energy_perf_bias(bias: u8) {
@@ -296,6 +306,10 @@ fn detect_max_ratio_cpuid() -> u8 {
 
 /// Apply current governor policy.
 fn apply_governor() {
+    // M7: sem P-state proado, o write é perigoso/no-op — não tocar MSR.
+    if !msr_write_allowed() {
+        return;
+    }
     match current_governor() {
         Governor::Performance => {
             let p0 = P0_RATIO.load(Ordering::Acquire);
@@ -320,6 +334,10 @@ fn apply_governor() {
 /// `ap_work::has_pending()`, which checks the global work queue.
 pub fn ondemand_tick(work_pending: bool) {
     if current_governor() != Governor::Ondemand {
+        return;
+    }
+    // M7: sem P-state confirmado, tick não escreve MSR (guard interno).
+    if !msr_write_allowed() {
         return;
     }
     let current = LAST_RATIO.load(Ordering::Acquire);

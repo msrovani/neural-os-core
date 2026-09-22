@@ -460,6 +460,10 @@ unsafe fn find_rsdp(physical_memory_offset: u64) -> Option<u64> {
     let boot_rsdp = BOOT_RSDP_PHYS.load(Ordering::Acquire);
     if boot_rsdp != 0 {
         let addr = VirtAddr::new(physical_memory_offset + boot_rsdp).as_u64();
+        // HC5: nunca ler a página sem prova de mapeamento (HHDM pode ter holes).
+        if !crate::memory::is_page_present(addr) {
+            return None;
+        }
         let ptr = addr as *const u8;
         if read_volatile(ptr.add(0)) == b'R'
             && read_volatile(ptr.add(1)) == b'S'
@@ -486,6 +490,11 @@ unsafe fn find_rsdp(physical_memory_offset: u64) -> Option<u64> {
 
     let mut addr = ebda_start.as_u64();
     while addr < ebda_end.as_u64() {
+        // HC5: EBDA pode não estar mapeada não-seekable no PMO — guard antes de ler.
+        if !crate::memory::is_page_present(addr) {
+            addr += 16;
+            continue;
+        }
         let ptr = addr as *const u8;
         if read_volatile(ptr.add(0)) == b'R'
             && read_volatile(ptr.add(1)) == b'S'
@@ -508,6 +517,10 @@ unsafe fn find_rsdp(physical_memory_offset: u64) -> Option<u64> {
 
     addr = bios_start.as_u64();
     while addr < bios_end.as_u64() {
+        if !crate::memory::is_page_present(addr) {
+            addr += 16;
+            continue;
+        }
         let ptr = addr as *const u8;
         if read_volatile(ptr.add(0)) == b'R'
             && read_volatile(ptr.add(1)) == b'S'
@@ -591,12 +604,37 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
         } else {
             read_volatile(entry_ptr.add(entry_offset) as *const u32) as u64
         };
+        // HC5: entrada nula stales XSDT — pular antes de ler via HHDM.
+        if table_phys == 0 {
+            continue;
+        }
         let table_virt = VirtAddr::new(physical_memory_offset + table_phys);
         let table_ptr = table_virt.as_u64() as *const u8;
 
         let mut table_sig = [0u8; 4];
         for j in 0..4 {
             table_sig[j] = read_volatile(table_ptr.add(j));
+        }
+
+        // HC5: guard de integridade — tabela com header insano ou checksum
+        // inválido é lixo (firmware/ponteiro corrupto); pular, não parsear.
+        {
+            let tlen = read_volatile(table_ptr.add(4) as *const u32) as usize;
+            if !(36..=(1 << 20)).contains(&tlen) {
+                crate::slog_nano!(
+                    "ACPI", "warn", "skip table {:.4} len={} (insano)",
+                    core::str::from_utf8(&table_sig).unwrap_or("????"), tlen
+                );
+                continue;
+            }
+            let raw = core::slice::from_raw_parts(table_ptr, tlen);
+            if !checksum_valid(raw) {
+                crate::slog_nano!(
+                    "ACPI", "warn", "skip table {:.4} checksum fail (len={})",
+                    core::str::from_utf8(&table_sig).unwrap_or("????"), tlen
+                );
+                continue;
+            }
         }
 
         match &table_sig {
@@ -638,6 +676,13 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
                     let entry_len_ptr = table_ptr.add(offset + 1) as *const u8;
                     let entry_type = read_volatile(entry_type_ptr);
                     let entry_len = read_volatile(entry_len_ptr) as usize;
+
+                    // HC5: entry_len==0 → offset nunca avança (loop infinito em
+                    // MADT corrompida no metal). Fail-closed: aborta a tabela.
+                    if entry_len == 0 {
+                        crate::slog_nano!("ACPI", "warn", "MADT entry_len=0 @{} — abort parse", offset);
+                        break;
+                    }
 
                     match entry_type {
                         0 => {

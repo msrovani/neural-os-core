@@ -34,28 +34,45 @@ pub fn is_constrained() -> bool {
 
 /// argmax do `row` respeitando a máscara de permitidos (se houver).
 /// Sem máscara: equivalente a `argmax_row` (mesmo desempate = primeiro máximo).
-pub fn argmax_constrained(logits: &Tensor, row: usize) -> u16 {
+/// Retorna u32 — vocabulário Falcon3 (131072) não cabe em u16.
+///
+/// M5: máscara com `len != cols` é contrato quebrado → **fail-closed**
+/// (retorna token 0 e loga), nunca "melhor esforço" com índices fora da
+/// gramática.
+pub fn argmax_constrained(logits: &Tensor, row: usize) -> u32 {
     let cols = logits.shape.1;
     let start = row * cols;
     let guard = ALLOW_MASK.lock();
-    let mut best = 0u16;
+    if let Some(ref m) = *guard {
+        if m.len() != cols {
+            k_nano::slog_cortex!(
+                "DECODE",
+                "warn",
+                "allow_mask len={} != cols={} — fail-closed token=0",
+                m.len(),
+                cols
+            );
+            return 0;
+        }
+    }
+    let mut best = 0usize;
     let mut best_val = f32::NEG_INFINITY;
     let mut found = false;
     for j in 0..cols {
         if let Some(ref m) = *guard {
             // Token bloqueado pela gramática → ignora.
-            if j >= m.len() || !m[j] {
+            if !m[j] {
                 continue;
             }
         }
         let v = logits.data[start + j];
         if !found || v > best_val {
             best_val = v;
-            best = j as u16;
+            best = j;
             found = true;
         }
     }
-    best
+    best as u32
 }
 
 /// Self-test determinístico (sem modelo): prova a equivalência no-op e a

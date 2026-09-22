@@ -131,16 +131,23 @@ pub fn inject_capability(
     let resident_bytes = ensure_expert_resident(kind);
     let expert_name = cortex::trinity::expert_kind_name(kind);
 
+    // CapGate FE-granular (classe do dispositivo → FE lógica) — checagem
+    // antes do bytecode para que erro de classe reporte a causa real.
+    let cap = fe_for_class(class).ok_or("trinity: classe sem FE no CapGate")?;
+
     // 2. Skill WASM no runtime wasmi (registra no SKILL_REGISTRY real)
+    // H8 (canvas onda 1): sem bytecode real = Err — nunca módulo dummy.
     let wasm: Vec<u8> = match wasm_bytecode {
         Some(w) => w.to_vec(),
-        None => crate::wasmi_rt::generate_wasm_module(),
+        None => {
+            k_nano::slog_hermes!("TRINITY", "warn", "inject SKIP no-wasm-bytes (op-IR pendente #412)");
+            return Err("no-wasm-bytes");
+        }
     };
     let desc = alloc::format!("trinity expert {:?}", kind);
     crate::wasmi_rt::register_wasm_skill(&wasm, expert_name, &desc)?;
 
-    // 3. CapGate FE-granular (classe do dispositivo → FE lógica)
-    let cap = fe_for_class(class).ok_or("trinity: classe sem FE no CapGate")?;
+    // 3. Conceder FE apenas com skill+cap confirmados.
     grant_fe(cap);
 
     match resident_bytes {
@@ -305,6 +312,11 @@ mod tests {
     /// compartilhados — `cargo test` paralelo causava FeNet flaky).
     static CAP_TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
 
+    /// H8: produção exige bytecode WASM real; testes usam o módulo canned.
+    fn canned() -> Vec<u8> {
+        crate::wasmi_rt::canned_test_module()
+    }
+
     /// Host: bridge ausente → degrade honesto, mas skill WASM registrada e cap
     /// concedida (os 2 passos orquestráveis em host).
     #[test]
@@ -313,7 +325,8 @@ mod tests {
         // Garante bridge limpo (pode estar instalado por outro teste)
         *TRINITY_MMAP_BRIDGE.lock() = None;
         assert!(!trinity_bridge_installed());
-        let out = inject_capability(ExpertKind::HwIdentify, DeviceClass::Net, None).expect("inject");
+        let w = canned();
+        let out = inject_capability(ExpertKind::HwIdentify, DeviceClass::Net, Some(&w)).expect("inject");
         match out {
             InjectOutcome::Degraded(_) => {}
             other => panic!("host sem bridge deveria degradar, veio {:?}", other),
@@ -333,7 +346,8 @@ mod tests {
     fn inject_with_bridge_reports_injected() {
         let _g = CAP_TEST_LOCK.lock();
         install_trinity_mmap_bridge(|_kind| Some(42));
-        let out = inject_capability(ExpertKind::Generator, DeviceClass::Display, None).expect("inject");
+        let w = canned();
+        let out = inject_capability(ExpertKind::Generator, DeviceClass::Display, Some(&w)).expect("inject");
         match out {
             InjectOutcome::Injected { cap, expert, resident_bytes } => {
                 assert_eq!(cap, HalCap::FeDisplay);
@@ -387,7 +401,8 @@ mod tests {
     #[test]
     fn auto_inject_for_expert_degraded_on_host() {
         // Host sem bridge → degradado mas skill+cap ok
-        let result = auto_inject_for_expert(ExpertKind::HwIdentify, None);
+        let w = canned();
+        let result = auto_inject_for_expert(ExpertKind::HwIdentify, Some(&w));
         assert!(result.is_some()); // HwIdentify tem DeviceClass
         let outcome = result.unwrap().expect("inject should succeed");
         match outcome {
@@ -429,7 +444,7 @@ mod tests {
         let _g = CAP_TEST_LOCK.lock();
         // bridge ausente → degradado mas cap concedida
         *TRINITY_MMAP_BRIDGE.lock() = None;
-        let wasm = crate::wasmi_rt::generate_wasm_module();
+        let wasm = crate::wasmi_rt::canned_test_module();
         let result = try_inject_on_promote("hw_identify", &wasm);
         assert!(result.is_some());
         let outcome = result.unwrap().expect("inject ok");
@@ -452,14 +467,14 @@ mod tests {
         let _g = CAP_TEST_LOCK.lock();
         *TRINITY_MMAP_BRIDGE.lock() = None;
         // hw_control → FeCompute (DeviceClass::Gpu)
-        let wasm = crate::wasmi_rt::generate_wasm_module();
+        let wasm = crate::wasmi_rt::canned_test_module();
         let r = try_inject_on_promote("hw_control", &wasm).unwrap().unwrap();
         assert!(matches!(r, InjectOutcome::Degraded(_)));
         assert!(k_hal::cap_gate::has_fe(HalCap::FeCompute));
         k_hal::cap_gate::revoke_fe(HalCap::FeCompute);
 
         // speech_synth → FeAudio (DeviceClass::Snd)
-        let wasm2 = crate::wasmi_rt::generate_wasm_module();
+        let wasm2 = crate::wasmi_rt::canned_test_module();
         let r = try_inject_on_promote("speech_synth", &wasm2).unwrap().unwrap();
         assert!(matches!(r, InjectOutcome::Degraded(_)));
         assert!(k_hal::cap_gate::has_fe(HalCap::FeAudio));
@@ -470,7 +485,7 @@ mod tests {
     fn try_inject_on_promote_with_bridge_reports_injected() {
         let _g = CAP_TEST_LOCK.lock();
         install_trinity_mmap_bridge(|_kind| Some(1024));
-        let wasm = crate::wasmi_rt::generate_wasm_module();
+        let wasm = crate::wasmi_rt::canned_test_module();
         // generator sem DeviceClass (s388) — inject None; use speech_synth
         assert!(try_inject_on_promote("generator", &wasm).is_none());
         let result = try_inject_on_promote("speech_synth", &wasm);
@@ -519,7 +534,8 @@ mod tests {
     fn inject_for_hw_pnp_triggers_for_known_family() {
         let _g = CAP_TEST_LOCK.lock();
         *TRINITY_MMAP_BRIDGE.lock() = None;
-        let result = inject_for_hw_pnp("net", None);
+        let w = canned();
+        let result = inject_for_hw_pnp("net", Some(&w));
         assert!(result.is_some());
         let outcome = result.unwrap().expect("inject ok");
         assert!(matches!(outcome, InjectOutcome::Degraded(_)));
@@ -538,18 +554,18 @@ mod tests {
         let _g = CAP_TEST_LOCK.lock();
         *TRINITY_MMAP_BRIDGE.lock() = None;
         // gpu → FeCompute (DeviceClass::Gpu)
-        let _r = inject_for_hw_pnp("gpu", None).unwrap().unwrap();
+        let _r = inject_for_hw_pnp("gpu", Some(&canned())).unwrap().unwrap();
         // host sem bridge → Degraded ou Injected (router local)
         assert!(k_hal::cap_gate::has_fe(HalCap::FeCompute));
         k_hal::cap_gate::revoke_fe(HalCap::FeCompute);
 
         // audio → FeAudio (DeviceClass::Snd)
-        let _r = inject_for_hw_pnp("audio", None).unwrap().unwrap();
+        let _r = inject_for_hw_pnp("audio", Some(&canned())).unwrap().unwrap();
         assert!(k_hal::cap_gate::has_fe(HalCap::FeAudio));
         k_hal::cap_gate::revoke_fe(HalCap::FeAudio);
 
         // disk → DeviceIo (DeviceClass::Block) — s388 honesty
-        let _r = inject_for_hw_pnp("disk", None).unwrap().unwrap();
+        let _r = inject_for_hw_pnp("disk", Some(&canned())).unwrap().unwrap();
         assert!(k_hal::cap_gate::has_fe(HalCap::DeviceIo));
         k_hal::cap_gate::revoke_fe(HalCap::DeviceIo);
     }
@@ -559,7 +575,7 @@ mod tests {
         let _g = CAP_TEST_LOCK.lock();
         install_trinity_mmap_bridge(|_kind| Some(2048));
         assert!(trinity_bridge_installed(), "bridge deveria estar ativo");
-        let result = inject_for_hw_pnp("net", None);
+        let result = inject_for_hw_pnp("net", Some(&canned()));
         assert!(result.is_some());
         let outcome = result.unwrap().expect("inject ok");
         // Com bridge ativo → Injected com bytes; senão → Degraded (race com outro teste)
@@ -588,7 +604,7 @@ mod tests {
         let _g = CAP_TEST_LOCK.lock();
         *TRINITY_MMAP_BRIDGE.lock() = None;
         // Simula o card de um NIC PCI (Realtek RTL8139, class 0x02)
-        let result = inject_for_hw_pnp("net", None);
+        let result = inject_for_hw_pnp("net", Some(&canned()));
         let outcome = result.expect("inject_for_hw_pnp deveria retornar Some")
             .expect("inject ok no host");
         match outcome {
@@ -623,7 +639,7 @@ mod tests {
         crate::skill_opt::record_python_run("disk_diag", "a*b", true);
         crate::skill_opt::record_python_run("disk_diag", "a*b", true);
         // try_inject_on_promote: disk_diag → ExpertKind::DiskDiag → DeviceIo
-        let wasm = crate::wasmi_rt::generate_wasm_module();
+        let wasm = crate::wasmi_rt::canned_test_module();
         let result = try_inject_on_promote("disk_diag", &wasm);
         let outcome = result.expect("disk_diag deveria mapear para DiskDiag")
             .expect("inject ok");

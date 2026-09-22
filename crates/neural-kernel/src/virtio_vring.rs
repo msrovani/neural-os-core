@@ -90,12 +90,18 @@ pub fn setup_vring(buf: &PinnedDmaBuf, held: Cap) -> Result<VringHandle, &'stati
         core::ptr::write_bytes(phys_va(payload_pa), 0, 4096);
 
         // Cadeia de 1 descritor: device WRITE no payload pinnado.
+        // H4 (sessão i225): struct packed — u64/u32 via write_unaligned,
+        // nunca `&mut` desalinhado.
         let desc = phys_va(desc_pa) as *mut Desc;
-        let d0 = &mut *desc;
-        d0.addr = payload_pa;
-        d0.len = PAYLOAD_LEN;
-        d0.flags = VIRTQ_DESC_F_WRITE;
-        d0.next = 0;
+        core::ptr::write_unaligned(
+            desc,
+            Desc {
+                addr: payload_pa,
+                len: PAYLOAD_LEN,
+                flags: VIRTQ_DESC_F_WRITE,
+                next: 0,
+            },
+        );
 
         let avail = phys_va(avail_pa) as *mut AvailRing;
         (*avail).flags = 0;
@@ -123,7 +129,9 @@ pub fn setup_vring(buf: &PinnedDmaBuf, held: Cap) -> Result<VringHandle, &'stati
 fn verify_desc_points_pinned(h: &VringHandle) -> Result<(), &'static str> {
     unsafe {
         let desc = phys_va(h.desc_phys) as *const Desc;
-        let d = &*desc;
+        // H4: cópia local via read_unaligned — campos de packed não podem
+        // ser lidos por referência direta.
+        let d = core::ptr::read_unaligned(desc);
         let addr = d.addr;
         let len = d.len;
         let flags = d.flags;

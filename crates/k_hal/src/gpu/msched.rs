@@ -19,6 +19,7 @@ impl MschedPredictor {
     }
 
     /// Prediz qual pagina de VRAM nao sera usada por mais tempo (OPT/Belady).
+    /// Nunca vista (unwrap_or MAX) = infinitamente longe = vítima ideal — intencional, não fallback.
     pub fn predict_evict(&self, working_set: &[u64]) -> Option<u64> {
         let mut farthest = None;
         let mut farthest_dist = 0usize;

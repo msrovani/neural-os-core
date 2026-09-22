@@ -119,7 +119,7 @@ impl VramBuddy {
             self.free[(current_order - MIN_ORDER) as usize].push(b);
         }
 
-        self.total_allocated += req;
+        self.total_allocated += 1u64 << o; // bloco real pós-split, não req
         Some(current)
     }
 
@@ -130,7 +130,7 @@ impl VramBuddy {
         let mut block_size = 1u64 << o;
         let mut current = addr;
 
-        self.total_allocated = self.total_allocated.saturating_sub(req);
+        self.total_allocated = self.total_allocated.saturating_sub(1u64 << o); // simétrico ao alloc
 
         // Tenta merge: sobe níveis enquanto buddy está livre
         loop {
@@ -147,7 +147,7 @@ impl VramBuddy {
             }
         }
 
-        let idx = (o - MIN_ORDER) as usize;
+        let idx = core::cmp::min((o - MIN_ORDER) as usize, NUM_ORDERS - 1); // merge além de MAX_ORDER = corrupção; clamp, nunca OOB
         self.free[idx].push(current);
     }
 
@@ -257,8 +257,9 @@ pub fn msched_record(addr: u64) {
     k_nano::mhi::record_access(addr, 0);
 }
 
-pub fn msched_predict(working_set: &[u64]) -> u64 {
-    MSCHED.lock().as_ref().and_then(|m| m.predict_evict(working_set)).unwrap_or(0)
+/// None = sem predição (MSCHED off ou working set vazio) — 0 seria vítima ambígua.
+pub fn msched_predict(working_set: &[u64]) -> Option<u64> {
+    MSCHED.lock().as_ref().and_then(|m| m.predict_evict(working_set))
 }
 
 pub fn msched_status() -> alloc::string::String {

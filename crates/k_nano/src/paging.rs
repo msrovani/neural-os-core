@@ -99,10 +99,20 @@ unsafe fn clone_table(src: PhysFrame<Size4KiB>) -> Result<PhysFrame<Size4KiB>, &
 }
 
 impl AddressSpace {
-    pub fn clone_current() -> Result<Self, &'static str> {
+    /// Clone SHALLOW do CR3 atual: copia apenas a L4 — L3/L2/L1 são
+    /// **compartilhadas** com o kernel até `ensure_owned_child` (CoW on-map).
+    /// NÃO é isolamento de verdade: writes fora do caminho CoW vazam entre
+    /// os espaços. CoW completo = residual ADR-0077 (Onda 6+). Para sandboxes
+    /// reais use `create_sandbox_as()`.
+    pub fn clone_current_shallow_shared() -> Result<Self, &'static str> {
         let (src_l4, _) = Cr3::read();
         let dst_l4 = unsafe { clone_table(src_l4)? };
         Ok(Self { l4_frame: dst_l4 })
+    }
+
+    /// Alias legado — ver [`AddressSpace::clone_current_shallow_shared`].
+    pub fn clone_current() -> Result<Self, &'static str> {
+        Self::clone_current_shallow_shared()
     }
 
     unsafe fn ensure_owned_child(

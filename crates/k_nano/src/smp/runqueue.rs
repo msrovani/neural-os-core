@@ -149,11 +149,16 @@ static RUN_QUEUES: [PerCoreRunQueue; MAX_CORES] = [const { PerCoreRunQueue::new(
 
 // ─── Telemetria por-CPU ────────────────────────────────────────────────────
 
+/// EQ_COUNTS (L-doc): os campos são **contadores cumulativos** (deltas desde o
+/// boot), NÃO carga atual. `enqueued` nunca é decrementado no dequeue; carga
+/// instantânea = `RUN_QUEUES[i].len()` / `total_pending()`. Razão: contadores
+/// são métrica, não estado da fila — nunca usar `enqueued` para lógica.
 #[repr(C, align(64))]
 pub struct CpuStats {
     pub running: AtomicU32,
     pub blocked: AtomicU32,
     pub stolen: AtomicU32,
+    /// Enqueues desde boot (cumulative — NÃO é o tamanho atual da fila).
     pub enqueued: AtomicU32,
     _pad: [u8; 48],
 }

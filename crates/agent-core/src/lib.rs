@@ -194,6 +194,18 @@ impl AgentInstance {
             ScheduleKind::PollEvery(_) => 1,
             ScheduleKind::EventDriven => 2,
         };
+        // M16 (onda1): Continuous que devolve Pending por design (input/net/
+        // bridge interativos) morria de fome pelo rate-limit (urgency==0 e
+        // consecutive>50) — default>0 isenta; callers podem ajustar com
+        // set_urgency. Oneshot/PollEvery/EventDriven ficam 0 (inativos por
+        // design, não merecem isenção).
+        // ponytail: urgency>0 também isenta o watchdog (watchdog_should_crash)
+        // — Continuous travado em Pending vive para sempre. Se surgir thrash
+        // de watchdog, mover o default p/ um flag "interactive" no manifest.
+        let default_urgency: u8 = match schedule {
+            ScheduleKind::Continuous => 100,
+            _ => 0,
+        };
         AgentInstance {
             agent,
             state: AgentState::Inactive,
@@ -213,7 +225,7 @@ impl AgentInstance {
             },
             tier: AgentTier::Permanent,
             affinity_ring,
-            goal_urgency: 0,
+            goal_urgency: default_urgency,
             novelty_score: 0,
             coherence_partner: None,
             paused_ticks: 0,
@@ -318,6 +330,9 @@ impl AgentRegistry {
     /// (rate-limit só atinge `urgency == 0 && consecutive_pending > 50`).
     /// Agentes interativos (input, hw_bridge, net, mouse) devem marcar urgency
     /// alto — senão o rate-limit os mata de fome e input/rede morrem (~50 ticks).
+    /// M16 (onda1): `#[must_use]` — um nome de manifest errado (SESSION_258:
+    /// "net" vs "network_agent") devolvia false e o fix era morto silencioso.
+    #[must_use = "false = nome não bate com nenhum manifest — fix silencioso"]
     pub fn set_urgency(&mut self, name: &str, urgency: u8) -> bool {
         match self.get_mut(name) {
             Some(a) => {

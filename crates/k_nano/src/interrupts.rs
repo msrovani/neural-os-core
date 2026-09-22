@@ -284,6 +284,12 @@ const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 const PAGE_FAULT_IST_INDEX: u16 = 1;
 const GENERAL_PROTECTION_IST_INDEX: u16 = 2;
 const TIMER_IST_INDEX: u16 = 3;
+// H12 (canvas-onda2): timer/teclado/mouse/HDA compartilhavam TIMER_IST —
+// IRQ nested no meio do handler reutiliza o MIB da stack e corrompe o frame
+// do primeiro handler. ISTs distintos por fonte de IRQ (BSP). TSS tem 7 slots.
+const KEYBOARD_IST_INDEX: u16 = 4;
+const MOUSE_IST_INDEX: u16 = 5;
+const HDA_IST_INDEX: u16 = 6;
 
 // BSP TSS only in BSS (T-037). APs: heap via expand_gdt_aps.
 static mut BSP_TSS_STORAGE: TaskStateSegment = TaskStateSegment::new();
@@ -313,6 +319,25 @@ lazy_static! {
         };
         tss.interrupt_stack_table[TIMER_IST_INDEX as usize] = {
             const STACK_SIZE: usize = 4096 * 4;
+            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
+            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
+            stack_start + STACK_SIZE
+        };
+        // H12: stacks próprias para IRQs de teclado/mouse/HDA (não a do timer).
+        tss.interrupt_stack_table[KEYBOARD_IST_INDEX as usize] = {
+            const STACK_SIZE: usize = 4096 * 2;
+            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
+            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
+            stack_start + STACK_SIZE
+        };
+        tss.interrupt_stack_table[MOUSE_IST_INDEX as usize] = {
+            const STACK_SIZE: usize = 4096 * 2;
+            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
+            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
+            stack_start + STACK_SIZE
+        };
+        tss.interrupt_stack_table[HDA_IST_INDEX as usize] = {
+            const STACK_SIZE: usize = 4096 * 2;
             static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
             let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
             stack_start + STACK_SIZE
@@ -545,12 +570,44 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     let cr2 = x86_64::registers::control::Cr2::read();
     dump_exception("#PF", &f, Some(code.bits() as u64));
     puts(b" CR2="); puthex(cr2.as_u64()); putc(b'\n');
+    // H2 (canvas-onda2): cura ANTES de contar — 1) demand-page do heap/kernel
+    // (allocator::try_fault_in_heap cobre HEAP_BUFFER + LARGE_HEAP + kernel virt),
+    // 2) seam registrável por camadas superiores (demand-page Ring3/sandbox,
+    // ADR-0077 — `register_pf_cure_fn`). Sem cura = todo #PF era "+1 no contador".
+    if crate::allocator::try_fault_in_heap(cr2.as_u64()) {
+        puts(b"[#PF] cured (demand-map)\n");
+        return;
+    }
+    if cr2_is_cured(cr2.as_u64()) {
+        puts(b"[#PF] cured (seam)\n");
+        return;
+    }
     let count = PAGE_FAULT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if count <= 3 {
         return;
     }
     puts(b"[SELF-HEAL] #PF threshold exceeded -- halting.\n");
     loop { x86_64::instructions::hlt(); }
+}
+
+/// Seam H2: cura de #PF por camada superior (demand-page Ring3, aulas,
+/// mapeamentos lazy). fn(cr2) -> true se curou (página agora presente).
+/// Nenhum registrado = sem cura (fail-closed, honesto).
+static PF_CURE_FN: AtomicU64 = AtomicU64::new(0);
+
+/// Registra o hook de cura de #PF. Chamado uma vez pela camada que
+/// implementa demand-paging (ex.: Ring3 sandbox do bin).
+pub fn register_pf_cure_fn(f: fn(u64) -> bool) {
+    PF_CURE_FN.store(f as usize as u64, Ordering::Release);
+}
+
+fn cr2_is_cured(cr2: u64) -> bool {
+    let p = PF_CURE_FN.load(Ordering::Acquire);
+    if p == 0 {
+        return false;
+    }
+    let f: fn(u64) -> bool = unsafe { core::mem::transmute::<usize, fn(u64) -> bool>(p as usize) };
+    f(cr2)
 }
 
 // --------------------------------------------------------------------------
@@ -887,10 +944,10 @@ lazy_static! {
 
         // Hardware IRQs — use IST to avoid stack overflow at top boundary
         unsafe { idt[32].set_handler_fn(timer_handler).set_stack_index(TIMER_IST_INDEX); }
-        unsafe { idt[33].set_handler_fn(keyboard_interrupt_handler).set_stack_index(TIMER_IST_INDEX); }
-        unsafe { idt[44].set_handler_fn(mouse_interrupt_handler).set_stack_index(TIMER_IST_INDEX); }
+        unsafe { idt[33].set_handler_fn(keyboard_interrupt_handler).set_stack_index(KEYBOARD_IST_INDEX); }
+        unsafe { idt[44].set_handler_fn(mouse_interrupt_handler).set_stack_index(MOUSE_IST_INDEX); }
         // HDA audio capture (SD0) - vector 0x30 (48), routed via IOAPIC
-        unsafe { idt[0x30].set_handler_fn(hda_interrupt_handler).set_stack_index(TIMER_IST_INDEX); }
+        unsafe { idt[0x30].set_handler_fn(hda_interrupt_handler).set_stack_index(HDA_IST_INDEX); }
 
         // IPI handlers para SMP (vetores 0x80-0x82)
         idt[0x80].set_handler_fn(ipi_reschedule_handler);
@@ -904,9 +961,11 @@ lazy_static! {
                 .set_privilege_level(PrivilegeLevel::Ring3);
         }
 
-        // Demais vetores (34-255, exceto IPI + syscall)
+        // Demais vetores (34-255, exceto IRQs/IPI/syscall já instalados acima).
+        // H1: skip-list inclui mouse (44/0x2C) e HDA (0x30) — sem o skip o
+        // catch-all sobrescrevia os handlers reais.
         for i in 34..=255usize {
-            if i == 0x80 || i == 0x81 || i == 0x82 || i == 0x90 {
+            if i == 44 || i == 0x30 || i == 0x80 || i == 0x81 || i == 0x82 || i == 0x90 {
                 continue;
             }
             idt[i].set_handler_fn(unhandled_interrupt_handler);
@@ -939,6 +998,12 @@ pub fn init_ap_tss(ap_index: usize, ist_tops: [VirtAddr; 3]) -> ApTss {
     tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = ist_tops[1];
     tss.interrupt_stack_table[GENERAL_PROTECTION_IST_INDEX as usize] = ist_tops[2];
     tss.interrupt_stack_table[TIMER_IST_INDEX as usize] = ist_tops[0];
+    // H12: o IDT é compartilhado com o BSP — as entradas IRQ apontam para os
+    // ISTs 4–6. Na AP o PerCpu só aloca 3 stacks; IRQs são roteadas ao BSP
+    // (IOAPIC), mas para nunca cair em IST=0 apontamos 4–6 para a stack GP.
+    tss.interrupt_stack_table[KEYBOARD_IST_INDEX as usize] = ist_tops[2];
+    tss.interrupt_stack_table[MOUSE_IST_INDEX as usize] = ist_tops[2];
+    tss.interrupt_stack_table[HDA_IST_INDEX as usize] = ist_tops[2];
 
     let selector = crate::gdt::tss_selector(ap_index + 1).unwrap_or(crate::gdt::sels().tss_selectors[0]);
     ApTss { tss, ist_stacks: ist_tops, selector }

@@ -2,7 +2,6 @@
 //! Complementa self_evolve.rs (SKILL.md). Sandbox test → promote | rollback.
 //! Honesty SESSION_379: nunca snapshot do candidato; registry só após sandbox OK.
 
-use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -118,31 +117,25 @@ lazy_static::lazy_static! {
 }
 
 /// Promove skill efêmera (SkillOpt) → wasmi_rt (ADR-0059 F5).
-/// Honesty: materializa bytecode dummy `_start→42` até Cortex emitir op-IR real (#412).
+/// H8 (canvas onda 1): sem gerador de bytes — o gerador real é Cortex op-IR
+/// (#412 / wasm_build). Sem bytes reais = `Err("no-wasm-bytes")`, sem dummy.
 pub fn promote_ephemeral_to_wasm(name: &str, _description: &str) -> Result<(), &'static str> {
     if name.is_empty() || name.len() > 64 {
         return Err("bad_name");
     }
-    let wasm = wasmi_rt::generate_wasm_module();
-    let mut ledger = EVOLVE_LEDGER.lock();
-    ledger.hot_swap(name, &wasm, WasmOrigin::Compiled)?;
     k_nano::slog_hermes!(
         "EVOLVE",
         "warn",
-        "ephemeral→WASM skill={} (dummy _start=42 até op-IR real)",
+        "ephemeral→WASM skill={} SKIP no-wasm-bytes (gerador op-IR pendente #412)",
         name
     );
-    Ok(())
+    Err("no-wasm-bytes")
 }
 
-/// Boot / DREAM hook: demo swap on builtin "echo" skill (non-fatal).
+/// Boot / DREAM hook: demo swap. H8: sem bytecode real não há swap.
 pub fn evolve_dream_tick() -> &'static str {
-    let demo_wasm = wasmi_rt::generate_wasm_module();
-    let mut ledger = EVOLVE_LEDGER.lock();
-    match ledger.hot_swap("echo", &demo_wasm, WasmOrigin::Generated) {
-        Ok(()) => "OK",
-        Err(_) => "SKIP",
-    }
+    k_nano::slog_hermes!("EVOLVE", "warn", "dream_tick SKIP no-wasm-bytes");
+    "SKIP"
 }
 
 /// Origem do bytecode WASM (tomada de decisão).
@@ -174,20 +167,9 @@ pub fn genesis_spawn(parent: &str, _child_desc: &str) -> Result<alloc::string::S
     if n >= MAX_GENESIS {
         return Err("genesis limit");
     }
-    let child_name = alloc::format!("gen_{}_{}", parent, n + 1);
-    let code = wasmi_rt::generate_wasm_module();
-    let mut ledger = EVOLVE_LEDGER.lock();
-    ledger.hot_swap(&child_name, &code, WasmOrigin::Generated)?;
-    GENESIS_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    k_nano::slog_hermes!(
-        "GENESIS",
-        "ok",
-        "parent={} spawned={} (count={}) dummy_wasm",
-        parent,
-        child_name,
-        n + 1
-    );
-    Ok(child_name)
+    // H8: sem gerador de WASM real — nunca materializar código dummy em criança.
+    k_nano::slog_hermes!("GENESIS", "warn", "spawn parent={} SKIP no-wasm-bytes (op-IR pendente #412)", parent);
+    Err("no-wasm-bytes")
 }
 
 pub fn genesis_gate_status() -> &'static str {
@@ -222,7 +204,7 @@ mod tests {
     #[test]
     fn hot_swap_success_then_rollback_restores_previous() {
         let mut led = EvolveLedger::new();
-        let good = wasmi_rt::generate_wasm_module();
+        let good = wasmi_rt::canned_test_module();
         assert!(led.hot_swap("echo", &good, WasmOrigin::Compiled).is_ok());
         assert!(led.live.get("echo").is_some());
         // Second success snapshots first into prev

@@ -93,31 +93,11 @@ pub fn read_file_by_name(name: &str) -> Option<alloc::vec::Vec<u8>> {
     None
 }
 
-/// Write a file to fw_cfg (DMA mode not implemented; I/O mode only for small files).
-/// Returns true on success.
-pub fn write_file(selector: u16, data: &[u8]) -> bool {
-    if !SEEN.load(Ordering::Relaxed) {
-        return false;
-    }
-    if data.len() > 65536 {
-        return false;
-    }
-    unsafe {
-        outw(0x510, selector);
-        // Write size (4 bytes, big-endian)
-        let truncated_len = core::cmp::min(data.len(), u32::MAX as usize) as u32;
-        let size_bytes = truncated_len.to_be_bytes();
-        for &b in &size_bytes {
-            core::arch::asm!("out dx, al", in("dx") 0x511u16, in("al") b, options(nostack, preserves_flags));
-        }
-        // Write data
-        for &b in data {
-            core::arch::asm!("out dx, al", in("dx") 0x511u16, in("al") b, options(nostack, preserves_flags));
-        }
-    }
-    true
-}
+// `write_file` removido (L-doc canvas-onda2): o spec fw_cfg não tem guest-write
+// nos arquivos de configuração, e não há caller. Stub honesto: não existir.
 
+/// Sonda fw_cfg e lê o diretório. Retorna true SÓ se o signature QEMU
+/// respondeu (não é "deu tudo certo" — a leitura do diretório é probe adicional).
 pub fn boot_smoke() -> bool {
     let ok = probe();
     if ok {
@@ -142,5 +122,5 @@ pub fn boot_smoke() -> bool {
             "step=probe status=SKIP VERDICT=SKIP reason=no_qemu_fw_cfg"
         );
     }
-    true
+    ok
 }

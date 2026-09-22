@@ -152,14 +152,10 @@ pub fn session_record(role: &str, text: &str, tick: u64) {
         let drain = log.entries.len() - SESSION_CAP;
         log.entries.drain(0..drain);
     }
-    // FASE 2.5: Add to HNSW index
-    {
-        let mut hnsw_guard = SESSION_HNSW.lock();
-        if let Some(ref mut hnsw) = *hnsw_guard {
-            let vec = session_project(&text);
-            hnsw.insert(log.entries.len() as u32, vec);
-        }
-    }
+    // H5 (canvas onda 1): HNSW rank desabilitado — session_project é projeção
+    // por hash de bytes, NÃO embedding semântico (rank mentia). Reabilitar só
+    // quando houver embedding real (BGE). Índice permanece construído mas vazio.
+    let _ = &SESSION_HNSW;
     // Persistência leve: append SESSION.log
     let mut prev = crate::globals::read_vfs("/mnt/neural/SESSION.log").unwrap_or_default();
     if prev.len() > 16_000 {
@@ -195,38 +191,24 @@ pub fn session_search(query: &str, top_k: usize) -> String {
     if q.is_empty() {
         return String::from("[SESSION] search <query>");
     }
-    // FASE 2.5: Try HNSW semantic search first
+    // H5 (canvas onda 1): busca por substring apenas — rank HNSW com projeção
+    // hash (não-semântica) desabilitado até embedding real (BGE).
     let log = SESSION.lock();
-    let mut hits: Vec<&SessionEntry> = Vec::new();
-    {
-        let mut hnsw_guard = SESSION_HNSW.lock();
-        if let Some(ref mut hnsw) = *hnsw_guard {
-            let query_vec = session_project(query);
-            let results = hnsw.search(&query_vec, top_k.max(1).min(16));
-            for (_dist, id) in results {
-                if (id as usize) < log.entries.len() {
-                    hits.push(&log.entries[id as usize]);
-                }
-            }
-        }
-    }
-    // Fallback to substring if HNSW empty
+    let mut hits: Vec<&SessionEntry> = log
+        .entries
+        .iter()
+        .filter(|e| e.text.to_ascii_lowercase().contains(&q) || e.role.contains(&q))
+        .collect();
+    hits.reverse();
+    hits.truncate(top_k.max(1).min(16));
     if hits.is_empty() {
-        hits = log
-            .entries
-            .iter()
-            .filter(|e| e.text.to_ascii_lowercase().contains(&q) || e.role.contains(&q))
-            .collect();
-        hits.reverse();
-        hits.truncate(top_k.max(1).min(16));
-    }
-    if hits.is_empty() {
-        // Fallback BGE se disponível
+        // H5: fallback para índice semântico do k_ai — sem BGE real ele é
+        // hash/pseudo-semântico → tag honesta, não "[SESSION+BGE]".
         let sem = k_ai::memory_systems::semantic_search(query, top_k.min(5));
         if sem.is_empty() {
             return format!("[SESSION] no hits for '{}'", q);
         }
-        let mut s = format!("[SESSION+BGE] '{}'\n", q);
+        let mut s = format!("[SESSION+HASH-FALLBACK] '{}'\n", q);
         for (label, score) in sem {
             s.push_str(&format!("  {:.2} {}\n", score, label));
         }

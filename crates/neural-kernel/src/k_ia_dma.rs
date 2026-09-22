@@ -69,6 +69,12 @@ pub fn pin_frames(n: usize, held: Cap) -> Result<PinnedDmaBuf, &'static str> {
                 return Err(e);
             }
         };
+        // H8: frame de DMA precisa de mapping UC no HHDM — WB lê cache
+        // stale silenciosamente quando o device escreve via DMA.
+        let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Acquire);
+        unsafe {
+            crate::apic::map_page_uc(frame.start_address().as_u64(), pmoff);
+        }
         reg.frames[start_slot + i] = Some(frame);
         reg.len = start_slot + i + 1;
     }
@@ -130,8 +136,12 @@ pub fn unpin_frames(buf: &PinnedDmaBuf, held: Cap) -> Result<(), &'static str> {
         }
     }
     let start = start.ok_or("p5: unpin miss")?;
+    let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Acquire);
     for i in 0..buf.pages {
         if let Some(frame) = reg.frames[start + i].take() {
+            // H8: devolve ao WB antes de devolver o frame ao allocator —
+            // senão a próxima reuse herda UC silenciosamente.
+            let _ = unsafe { crate::apic::set_page_wb(frame.start_address().as_u64(), pmoff) };
             unsafe { crate::memory::dealloc_physical_frame(frame) };
             PIN_COUNT.fetch_sub(1, Ordering::Relaxed);
         }

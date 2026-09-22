@@ -167,13 +167,13 @@ pub fn ap_idle_loop(worker_id: usize) -> ! {
             continue;
         }
         if let Some(task) = super::work_stealing::try_steal_global(worker_id) {
-            unsafe { task(core::ptr::null_mut()) };
+            unsafe { task.run() };
             continue;
         }
         if let Some(task) = super::work_stealing::global_pool()
             .and_then(|p| p.pop_local(worker_id))
         {
-            unsafe { task(core::ptr::null_mut()) };
+            unsafe { task.run() };
             continue;
         }
 

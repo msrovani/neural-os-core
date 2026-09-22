@@ -746,7 +746,13 @@ pub fn hwexpert_v4_predict(vid: u16, did: u16) -> Option<crate::tensor::HwPredic
 
 /// Cache de Key/Value para geracao autoregressiva.
 /// Armazena K e V por layer, evitando reprocessar tokens anteriores.
-/// Armazena K e V por layer, evitando reprocessar tokens anteriores.
+/// (L17/ponytail) `Vec<Vec<f32>>` no hot path é exceção documentada a "sem
+/// alloc em render/infer": o cache crece 1 page/frame por token e reallocs de
+/// `extend_from_slice` são amortizados; arena fica p/ tensores pesados
+/// (modelo/logits), o KV vive fora porque `mhi` registra a arena como
+/// VirtMapped — sub-buffers individuais do KV complicariam o tracking sem
+/// ganho medido. Se o prefill “hiccup” virar gargalo (s328+), migrar para
+/// slabs no TensorArena com capacidade reservada.
 pub struct KvCache {
     pub k: Vec<Vec<f32>>,
     pub v: Vec<Vec<f32>>,

@@ -41,7 +41,8 @@ pub fn with_arena<R>(f: impl FnOnce(&mut TensorArena) -> R) -> Option<R> {
 pub fn reset_moe_cache() {
     if let Some(arena) = CORTEX_ARENA.lock().as_mut() {
         arena.reset_moe_cache();
-        k_nano::mhi::record_access(arena.virt_base() as u64, 0);
+        // Sem record_access: VirtMapped nunca promove (mhi_tick não faz memcpy
+        // de VA) — bump de access_count aqui seria telemetria morta.
         k_nano::slog_cortex!(
             "R3",
             "ok",

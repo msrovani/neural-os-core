@@ -9,44 +9,72 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use x86_64::PhysAddr;
 
 /// Hook opcional: k_hal/vram registra apos `init_vram_tier` (IDEA #67).
-static mut VRAM_ALLOC_HOOK: Option<fn(usize) -> Option<u64>> = None;
-static MHI_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
+/// AtomicU64(fn as u64, 0=None) — IRQ-safe (static mut era data-race).
+static VRAM_ALLOC_HOOK: AtomicU64 = AtomicU64::new(0);
+/// Contador de logs DMA (sem once-only; cada chamada loga com n=seq).
+static MHI_DMA_LOG_COUNT: AtomicU64 = AtomicU64::new(0);
+
+fn load_vram_alloc() -> Option<fn(usize) -> Option<u64>> {
+    let v = VRAM_ALLOC_HOOK.load(Ordering::Relaxed);
+    if v == 0 {
+        None
+    } else {
+        // ponytail: fn addr != 0 garantido acima; transmute u64->fn é o padrão do repo p/ hooks
+        Some(unsafe { core::mem::transmute::<u64, fn(usize) -> Option<u64>>(v) })
+    }
+}
 
 /// Registra alocador VRAM (BAR buddy). Sem hook = Vram tier retorna None.
 pub fn register_vram_allocator(hook: fn(usize) -> Option<u64>) {
-    unsafe { VRAM_ALLOC_HOOK = Some(hook) };
+    VRAM_ALLOC_HOOK.store(hook as u64, Ordering::Relaxed);
     crate::slog_bin!("MHI", "info", "VRAM alloc hook registered (IDEA #67)");
 }
 
 /// ADR-0087 Fase 4b→5 (SESSION_274): copier tier1→tier0 via engine (CE DMA).
 /// k_hal registra quando o canário CE passa (`ce_ready`); sem hook a promoção
 /// Dram→Vram continua metadata-only + AWAITING (comportamento QEMU inalterado).
-static mut TIER0_COPY_HOOK: Option<fn(u64, u64, usize) -> bool> = None;
-static mut VRAM_FREE_HOOK: Option<fn(u64, usize)> = None;
+static TIER0_COPY_HOOK: AtomicU64 = AtomicU64::new(0);
+static VRAM_FREE_HOOK: AtomicU64 = AtomicU64::new(0);
+
+fn load_tier0_copy() -> Option<fn(u64, u64, usize) -> bool> {
+    let v = TIER0_COPY_HOOK.load(Ordering::Relaxed);
+    if v == 0 {
+        None
+    } else {
+        Some(unsafe { core::mem::transmute::<u64, fn(u64, u64, usize) -> bool>(v) })
+    }
+}
+
+fn load_vram_free() -> Option<fn(u64, usize)> {
+    let v = VRAM_FREE_HOOK.load(Ordering::Relaxed);
+    if v == 0 {
+        None
+    } else {
+        Some(unsafe { core::mem::transmute::<u64, fn(u64, usize)>(v) })
+    }
+}
 
 pub fn register_tier0_copier(copy: fn(u64, u64, usize) -> bool, free: fn(u64, usize)) {
-    unsafe {
-        TIER0_COPY_HOOK = Some(copy);
-        VRAM_FREE_HOOK = Some(free);
-    }
+    TIER0_COPY_HOOK.store(copy as u64, Ordering::Relaxed);
+    VRAM_FREE_HOOK.store(free as u64, Ordering::Relaxed);
     crate::slog_bin!("MHI", "info", "tier0 copier (CE DMA) registrado — Dram→Vram com dados reais");
 }
 
 fn log_mhi_dma_awaiting(reason: &str) {
-    if MHI_DMA_LOGGED.swap(true, Ordering::Relaxed) {
-        return;
-    }
+    let n = MHI_DMA_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::slog_bin!(
         "MHI-DMA",
         "info",
-        "step=peer_dma status=UNSUPPORTED detail={}",
-        reason
+        "step=peer_dma status=UNSUPPORTED detail={} n={}",
+        reason,
+        n
     );
     crate::slog_bin!(
         "MHI-DMA",
         "info",
-        "VERDICT=AWAITING_REAL_HW reason={}",
-        reason
+        "VERDICT=AWAITING_REAL_HW reason={} n={}",
+        reason,
+        n
     );
 }
 
@@ -93,13 +121,19 @@ pub enum CopySkip {
     NotPresent,
 }
 
-/// VA HHDM para um PA, ou None se o offset ainda não existe.
+/// VA HHDM para um PA, ou None se o offset ainda não existe ou a página não
+/// está presente. Para cópias multi-byte prefira `hhdm_copy_checked` (valida o
+/// range inteiro); este helper checa só a primeira página.
 pub fn hhdm_ptr(pa: u64) -> Option<*mut u8> {
     let off = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     if off == 0 {
         return None;
     }
-    Some((pa.wrapping_add(off)) as *mut u8)
+    let va = pa.wrapping_add(off);
+    if !crate::memory::is_page_present(va & !0xfff) {
+        return None;
+    }
+    Some(va as *mut u8)
 }
 
 fn hhdm_range_present(pa: u64, len: usize) -> bool {
@@ -171,6 +205,16 @@ pub fn record_block_access(lba: u64) {
         }
     }
     BLOCK_HITS[0].fetch_add(1, Ordering::Relaxed);
+}
+
+/// Leitor da telemetria de disco (evita BLOCK_LBA/HITS write-only).
+pub fn block_hits(lba: u64) -> u64 {
+    for i in 0..BLOCK_SLOTS {
+        if BLOCK_LBA[i].load(Ordering::Relaxed) == lba {
+            return BLOCK_HITS[i].load(Ordering::Relaxed);
+        }
+    }
+    0
 }
 
 /// Janela "quente" em ticks: acessos dentro desta janela contam para o streak
@@ -353,15 +397,33 @@ impl MhiRegistry {
         }
     }
 
-    /// Sugere migrations via arc_suggest_tier
+    /// Sugere migrations via arc_suggest_tier (wrapper compat: weight=0.5 GPU-bound).
     pub fn suggest_migration(&self, tick: u64) -> Vec<(PhysAddr, AllocTier, AllocTier)> {
+        self.suggest_migration_weighted(tick, 0.5)
+    }
+
+    /// Núcleo parametrizável: weight ≥0.5 prefere VRAM p/ working set quente.
+    /// M11 (onda1): só migração HONESTA entra na fila — Dram↔Dram (soft-copy
+    /// real) ou Dram→Vram quando os hooks VRAM/CE estão registrados. Sugerir
+    /// Dram→Hdd/Nvme/Usb mas executar "demote metadata-only" (frame retido,
+    /// tier trocado no rótulo) era telemetria mentirosa.
+    pub fn suggest_migration_weighted(
+        &self,
+        tick: u64,
+        weight: f32,
+    ) -> Vec<(PhysAddr, AllocTier, AllocTier)> {
+        let vram_live = load_vram_alloc().is_some() && load_tier0_copy().is_some();
         let mut migrations = Vec::new();
         for (_key, p) in &self.allocations {
             if p.kind != ResidentKind::CpuRam {
                 continue;
             }
-            let suggested = arc_suggest_tier(p, tick, 0.5);
-            if suggested != p.tier {
+            if p.tier != AllocTier::Dram {
+                continue;
+            }
+            let suggested = arc_suggest_tier(p, tick, weight);
+            let allowed = suggested == AllocTier::Dram || (suggested == AllocTier::Vram && vram_live);
+            if suggested != p.tier && allowed {
                 migrations.push((p.phys_addr, p.tier, suggested));
             }
         }
@@ -459,6 +521,18 @@ impl MemoryHierarchy {
     pub fn best_tier(&self) -> AllocTier {
         AllocTier::Dram
     }
+
+    /// Tiers realmente utilizáveis AGORA (honesto, M11 onda1): DRAM sempre;
+    /// VRAM só com alocador registrado (hook k_hal). Block tiers ficam fora —
+    /// `alloc_by_tier`/demote ainda não gravam dado (archival = evento futuro),
+    /// reportar NVMe/HDD/USB como online seria status mentiroso.
+    pub fn tiers_online(&self) -> Vec<AllocTier> {
+        let mut t = alloc::vec![AllocTier::Dram];
+        if load_vram_alloc().is_some() {
+            t.push(AllocTier::Vram);
+        }
+        t
+    }
 }
 
 impl Clone for MemoryHierarchy {
@@ -470,8 +544,15 @@ impl Clone for MemoryHierarchy {
 }
 
 impl AllocTier {
-    pub fn from_usb_bw(_bw_mbs: u32) -> Self {
-        AllocTier::UsbMsc
+    /// Classifica pelo throughput medido: NVMe ~3000, SATA ~200+, USB stick baixo.
+    pub fn from_usb_bw(bw_mbs: u32) -> Self {
+        if bw_mbs >= 1000 {
+            AllocTier::Nvme
+        } else if bw_mbs >= 80 {
+            AllocTier::Hdd
+        } else {
+            AllocTier::UsbMsc
+        }
     }
 }
 
@@ -485,8 +566,7 @@ pub fn alloc_by_tier(tier: AllocTier, size: usize) -> Option<x86_64::PhysAddr> {
             Some(frame.start_address())
         }
         AllocTier::Vram => {
-            let hook = unsafe { VRAM_ALLOC_HOOK };
-            if let Some(f) = hook {
+            if let Some(f) = load_vram_alloc() {
                 if let Some(pa) = f(size) {
                     return Some(PhysAddr::new(pa));
                 }
@@ -499,10 +579,6 @@ pub fn alloc_by_tier(tier: AllocTier, size: usize) -> Option<x86_64::PhysAddr> {
             None
         }
     }
-}
-
-pub fn megatrain_tick() {
-    mhi_tick(0);
 }
 
 /// Executa 1 migracao por tick.
@@ -557,7 +633,7 @@ pub fn mhi_tick(tick: u64) {
 /// hook / sem VRAM / cópia falhou — o caller segue no caminho metadata-only.
 /// Rollback: VRAM alocada é devolvida se a cópia falhar (lição CoW F2).
 fn try_tier0_promote(req: &MigrationRequest) -> bool {
-    let copy = match unsafe { TIER0_COPY_HOOK } {
+    let copy = match load_tier0_copy() {
         Some(f) => f,
         None => return false,
     };
@@ -566,7 +642,7 @@ fn try_tier0_promote(req: &MigrationRequest) -> bool {
     };
     let dst_pa = dst.as_u64();
     if !copy(req.phys_addr, dst_pa, req.size) {
-        if let Some(free) = unsafe { VRAM_FREE_HOOK } {
+        if let Some(free) = load_vram_free() {
             free(dst_pa, req.size);
         }
         return false;
@@ -592,6 +668,12 @@ static MHI_DEMOTE_FREED: AtomicU64 = AtomicU64::new(0);
 /// aliasing PT/heap (forense #PF-storm: PT escrita sobre nós BTree vivos).
 static DEMOTE_FREES_FRAMES: AtomicBool = AtomicBool::new(false);
 static MHI_PROMOTE_LOADED: AtomicU64 = AtomicU64::new(0);
+
+/// Opt-in: permite ao demote devolver frames ao PMM. Default false (retém).
+/// Só ative com ownership frame→owner no PMM (forense #PF-storm).
+pub fn set_demote_frees(v: bool) {
+    DEMOTE_FREES_FRAMES.store(v, Ordering::Relaxed);
+}
 
 fn execute_soft_migrate(req: MigrationRequest) {
     let is_cpu_ram = MHI_REGISTRY
@@ -936,7 +1018,7 @@ mod tests {
             owner: String::from("kv_test"),
         };
         // Sem hook: honesto — false (caller cai no metadata-only/AWAITING).
-        unsafe { TIER0_COPY_HOOK = None };
+        TIER0_COPY_HOOK.store(0, Ordering::Relaxed);
         assert!(!try_tier0_promote(&req));
 
         // Com hooks: registry migra Dram@src → Vram@dst preservando o owner.
@@ -957,10 +1039,8 @@ mod tests {
         register_tier0_copier(fake_ce_copy_fail, fake_vram_free);
         assert!(!try_tier0_promote(&req));
         assert!(MHI_REGISTRY.lock().allocations.get(&FAKE_VRAM_PA).is_none());
-        unsafe {
-            TIER0_COPY_HOOK = None;
-            VRAM_FREE_HOOK = None;
-            VRAM_ALLOC_HOOK = None;
-        }
+        TIER0_COPY_HOOK.store(0, Ordering::Relaxed);
+        VRAM_FREE_HOOK.store(0, Ordering::Relaxed);
+        VRAM_ALLOC_HOOK.store(0, Ordering::Relaxed);
     }
 }

@@ -183,10 +183,7 @@ impl Agent for CronAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         let now = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         let _ = _tick; let _ = _count;
-        // Labor 10: uma tentativa NTP se ainda não synced (non-fatal)
-        if !crate::ntp::is_synced() && now > 200 {
-            let _ = crate::ntp::try_sync();
-        }
+        // HC1: NTP só via job ntp_resync — sem chamada inline por tick (cooldown)
         for job in &mut self.jobs {
             if now >= job.last_run + job.interval {
                 job.last_run = now;

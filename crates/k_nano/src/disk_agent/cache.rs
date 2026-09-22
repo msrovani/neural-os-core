@@ -1,6 +1,6 @@
-//! ARC cache com write-back coalescing, dirty tracking, evict com flush.
-//! ADR-0087 §6: `CachedDisk` wrapper torna a cache funcional no hot path
-//! (NeuralFS via with_dev) com write-through — sem dirty em bare-metal.
+//! ARC cache read-through + write-through (CachedDisk).
+//! ADR-0087 §6: write-back deletado — bare-metal sem bateria = sem dirty
+//! (lição F16 SESSION_252). Só get/insert; nunca há dirty a flushar.
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
@@ -12,15 +12,12 @@ pub struct CacheEntry {
     pub data: Vec<u8>,
     pub freq: u16,
     pub last_access: u64,
-    pub last_write: u64,
-    pub dirty: bool,
 }
 
 pub struct ArcCache {
     entries: BTreeMap<u64, CacheEntry>,
     max_entries: usize,
     pub tier_name: &'static str,
-    write_coalesce_ms: u64,
 }
 
 impl ArcCache {
@@ -32,7 +29,6 @@ impl ArcCache {
             // ex: 1024 KB → 2048 setores ≈ 1MB de cache.
             max_entries: (max_kb * 2).max(16),
             tier_name: tier,
-            write_coalesce_ms: 100,
         }
     }
 
@@ -48,44 +44,17 @@ impl ArcCache {
     pub fn insert(&mut self, lba: u64, data: &[u8]) {
         if self.entries.len() >= self.max_entries { self.evict_one(); }
         self.entries.insert(lba, CacheEntry {
-            data: data.to_vec(), freq: 1, last_access: now(), last_write: 0, dirty: false,
+            data: data.to_vec(), freq: 1, last_access: now(),
         });
     }
 
-    pub fn mark_dirty(&mut self, lba: u64) {
-        if let Some(entry) = self.entries.get_mut(&lba) {
-            entry.dirty = true;
-            entry.last_write = now();
-        }
-    }
-
-    pub fn tick(&mut self, flush_fn: &mut dyn FnMut(u64, &[u8])) -> usize {
-        let tick = now();
-        let threshold = tick.saturating_sub(self.write_coalesce_ms);
-        let to_flush: Vec<u64> = self.entries.iter()
-            .filter(|(_, e)| e.dirty && e.last_write < threshold)
-            .map(|(k, _)| *k).collect();
-        let n = to_flush.len();
-        for lba in &to_flush {
-            if let Some(entry) = self.entries.get(lba) {
-                flush_fn(*lba, &entry.data);
-                if let Some(e) = self.entries.get_mut(lba) { e.dirty = false; }
-            }
-        }
-        n
-    }
-
-    /// Evita o entry menos frequente (LFU) — faz writeback se dirty
+    /// Evita o entry menos frequente (LFU).
     fn evict_one(&mut self) {
         let tick = now();
         let victim = self.entries.iter()
             .min_by_key(|(_, e)| (e.freq, (tick - e.last_access)))
             .map(|(k, _)| *k);
         if let Some(lba) = victim {
-            let dirty = self.entries.get(&lba).map_or(false, |e| e.dirty);
-            if dirty {
-                crate::slog_nano!("CACHE", "warn", "evict dirty {:#x} without flush_fn — DATA LOSS RISK", lba);
-            }
             self.entries.remove(&lba);
         }
     }
@@ -96,8 +65,8 @@ impl ArcCache {
     }
 
     pub fn stats(&self) -> (usize, usize, usize) {
-        let dirty = self.entries.iter().filter(|(_, e)| e.dirty).count();
-        (self.entries.len(), self.max_entries, dirty)
+        // 3º campo = dirty count, sempre 0 (write-through; mantido p/ não quebrar API).
+        (self.entries.len(), self.max_entries, 0)
     }
 }
 

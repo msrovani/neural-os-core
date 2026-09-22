@@ -7,8 +7,31 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::cell::UnsafeCell;
 
-/// Work-Stealing Task — closure ou função a ser executada
-pub type Task = unsafe fn(*mut ());
+/// Work-Stealing Task — função + argumento opaco.
+/// H5 (canvas-onda2): antes era só `unsafe fn(*mut())` — o arg era descartado
+/// nas chamadas (`task(null_mut())`), o que impedia qualquer payload real.
+#[derive(Clone, Copy)]
+pub struct Task {
+    /// Função executável (raw — o caller prova unicidade/vida do arg).
+    pub f: unsafe fn(*mut ()),
+    /// Argumento opaco do job (NULL = nenhum).
+    pub arg: *mut (),
+}
+
+impl Task {
+    /// Cria task sem payload.
+    pub const fn bare(f: unsafe fn(*mut ())) -> Self {
+        Self { f, arg: core::ptr::null_mut() }
+    }
+    /// Cria task com payload.
+    pub const fn with(f: unsafe fn(*mut ()), arg: *mut ()) -> Self {
+        Self { f, arg }
+    }
+    /// Executa a task (herda a garantia de unicidade/vida do autor do push).
+    pub unsafe fn run(&self) {
+        (self.f)(self.arg)
+    }
+}
 
 /// Work-Stealing Deque (Chase-Lev) simplificada — array circular
 pub struct WorkStealingDeque {
@@ -34,42 +57,56 @@ impl WorkStealingDeque {
         }
     }
     
-    /// Push local (owner) — adiciona task no bottom
-    pub fn push(&self, task: Task) {
+    /// Push local (owner) — adiciona task no bottom.
+    /// Retorna `false` se cheia (H5: antes caía silenciosamente).
+    pub fn push(&self, task: Task) -> bool {
         let b = self.bottom.load(Ordering::Relaxed);
         let t = self.top.load(Ordering::Acquire);
-        
-        if b - t >= self.capacity {
-            // Deque cheia — descarta
-            return;
+
+        if b.wrapping_sub(t) >= self.capacity {
+            // Deque cheia — o caller decide (retry, spill, drop contado)
+            return false;
         }
-        
+
         unsafe {
             let buffer = &mut *self.buffer.get();
             buffer[(b & self.mask) as usize] = Some(task);
         }
-        
+
         core::sync::atomic::fence(Ordering::Release);
         self.bottom.store(b + 1, Ordering::Relaxed);
+        true
     }
-    
-    /// Pop local (owner) — remove task do bottom
+
+    /// Pop local (owner) — remove task do bottom.
     pub fn pop(&self) -> Option<Task> {
-        let b = self.bottom.load(Ordering::Relaxed) - 1;
+        let b0 = self.bottom.load(Ordering::Relaxed);
+        let t0 = self.top.load(Ordering::Acquire);
+        // H5: guard bottom==top — deque vazia não decrementa (o `-1` cego no
+        // índice mas restaurava; o guard é a chave de leitura correta e evita
+        // race com push concomitante lendo bottom subtraído).
+        if t0 == b0 {
+            return None;
+        }
+        let b = b0 - 1;
         self.bottom.store(b, Ordering::Relaxed);
-        
+
         let t = self.top.load(Ordering::Acquire);
-        
+
         if t <= b {
             // Deque não vazia
             let task = unsafe {
                 let buffer = &*self.buffer.get();
                 buffer[(b & self.mask) as usize]
             };
-            
+
             if t == b {
                 // Último elemento — tenta CAS para evitar race com steal
-                if self.top.compare_exchange_weak(t, t + 1, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
+                if self
+                    .top
+                    .compare_exchange_weak(t, t + 1, Ordering::SeqCst, Ordering::Relaxed)
+                    .is_ok()
+                {
                     self.bottom.store(b + 1, Ordering::Relaxed);
                     return task;
                 }
@@ -77,30 +114,34 @@ impl WorkStealingDeque {
                 return task;
             }
         }
-        
+
         // Deque vazia
         self.bottom.store(b + 1, Ordering::Relaxed);
         None
     }
-    
-    /// Steal remoto — remove task do top (para outras cores)
+
+    /// Steal remoto — remove task do top (para outras cores).
     pub fn steal(&self) -> Option<Task> {
         let t = self.top.load(Ordering::Acquire);
         let b = self.bottom.load(Ordering::Acquire);
-        
+
         if t >= b {
             return None; // Deque vazia
         }
-        
-        let task = unsafe {
+
+        // H5: CAS primeiro — o slot em `t` é slot exclusivo quem venceu o CAS;
+        // ler o slot só DEPOIS do CAS evita entregar a task duas vezes se o
+        // owner pop/steal concorrente mudar o buffer entre leitura e CAS.
+        if self
+            .top
+            .compare_exchange_weak(t, t + 1, Ordering::SeqCst, Ordering::Relaxed)
+            .is_err()
+        {
+            return None;
+        }
+        unsafe {
             let buffer = &*self.buffer.get();
             buffer[(t & self.mask) as usize]
-        };
-        
-        if self.top.compare_exchange_weak(t, t + 1, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
-            task
-        } else {
-            None
         }
     }
     
@@ -154,10 +195,12 @@ impl WorkStealingPool {
         }
     }
     
-    /// Push task na deque local do worker
-    pub fn push_local(&self, worker_id: usize, task: Task) {
+    /// Push task na deque local do worker. false = cheia/inválido (H5).
+    pub fn push_local(&self, worker_id: usize, task: Task) -> bool {
         if worker_id < self.num_workers {
-            self.deques[worker_id].push(task);
+            self.deques[worker_id].push(task)
+        } else {
+            false
         }
     }
     
@@ -192,13 +235,13 @@ impl WorkStealingPool {
         loop {
             // Tenta pop local primeiro
             if let Some(task) = self.pop_local(worker_id) {
-                unsafe { task(core::ptr::null_mut()); }
+                unsafe { task.run(); }
                 continue;
             }
-            
+
             // Se local vazia, tenta steal
             if let Some(task) = self.steal(worker_id) {
-                unsafe { task(core::ptr::null_mut()); }
+                unsafe { task.run(); }
                 continue;
             }
             

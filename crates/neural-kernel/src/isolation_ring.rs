@@ -30,9 +30,19 @@ pub fn init_connectors() {
 /// Native execution entry — ELF64 ou blob JIT em sandbox CPL=3.
 pub fn ring3_run_native(code: &[u8], caps: u32) -> Result<i64, &'static str> {
     if crate::elf_loader::ElfLoader::is_valid_elf(code) {
+        // H10: path ELF entra em CPL=3 via load_and_spawn → run_process —
+        // exige ENTER_USER explícito, nunca gate implícito só por parsing.
+        if caps as u64 & k_nano::paging::Cap::ENTER_USER.bits() == 0 {
+            k_nano::slog_bin!(
+                "CapGate",
+                "ok",
+                "DENY ELF ring3 sem ENTER_USER caps=0x{:x}",
+                caps
+            );
+            return Err("EPERM: Cap::ENTER_USER (ELF)");
+        }
         let pid = crate::elf_loader::load_and_spawn(code, "sandbox")?;
         crate::user_mode::run_process(pid)?;
-        let _ = caps;
         // Honesty: não inventar Ok(0) sem ler estado — Exited(code) do process manager.
         let exit = {
             let pm = crate::process::PROCESS_MANAGER.lock();

@@ -63,8 +63,12 @@ fn parse_unix_from_reply(pkt: &[u8]) -> Option<u64> {
         return None;
     }
     let mode = pkt[0] & 0x07;
-    // server mode 4 preferred; accept 3–5
-    if mode < 3 || mode > 5 {
+    // M5: apenas server mode 4; stratum >= 1 (0 = kiss-o'-death/unsynced)
+    if mode != 4 {
+        return None;
+    }
+    let stratum = pkt[1];
+    if stratum < 1 {
         return None;
     }
     let secs = u32::from_be_bytes([pkt[40], pkt[41], pkt[42], pkt[43]]) as u64;
@@ -74,8 +78,15 @@ fn parse_unix_from_reply(pkt: &[u8]) -> Option<u64> {
     Some(secs - NTP_UNIX_DELTA)
 }
 
-fn apply_sync(unix: u64, server: [u8; 4]) {
-    let ticks = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+/// M5: true se o server ecoou nosso origin timestamp (t1) — habilita
+/// correção RTT/2 no ponto de amostragem do relógio.
+fn has_origin_ts(pkt: &[u8]) -> bool {
+    pkt.len() >= 48 && pkt[24..32].iter().any(|&b| b != 0)
+}
+
+fn apply_sync(unix: u64, server: [u8; 4], tick_override: Option<u64>) {
+    let ticks = tick_override
+        .unwrap_or_else(|| k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64);
     UNIX_AT_SYNC.store(unix, Ordering::Relaxed);
     TICKS_AT_SYNC.store(ticks, Ordering::Relaxed);
     SYNCED.store(true, Ordering::Relaxed);
@@ -86,6 +97,11 @@ fn apply_sync(unix: u64, server: [u8; 4]) {
 /// Sync one-shot. Non-fatal. Retorna true se PASS.
 pub fn sync_once() -> bool {
     k_nano::slog_bin!("NTP", "info", "step=sync status=START");
+    // HC1: marca tentativa ANTES de enviar — cooldown não pode ser furado por retry concorrente
+    LAST_ATTEMPT_TICKS.store(
+        k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64,
+        Ordering::Relaxed,
+    );
 
     // Try servers in rotation
     let mut server_idx = LAST_SERVER_IDX.lock();
@@ -107,6 +123,7 @@ pub fn sync_once() -> bool {
     }
 
     let req = build_request();
+    let t_send = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
     let resp = match crate::net_bridge::udp_xfer(server, NTP_PORT, &req) {
         Some(r) => r,
         None => {
@@ -136,7 +153,17 @@ pub fn sync_once() -> bool {
         }
     };
 
-    apply_sync(unix, server);
+    // M5: RTT/2 — timestamp t3 vale aprox. em t_recv - RTT/2; só quando o
+    // server ecoou nosso origin t1 (hoje o request manda t=0 → nunca aplica;
+    // fica honesto e pronto p/ build_request com t1 preenchido).
+    let tick_override = if has_origin_ts(&resp) {
+        let t_recv = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+        Some(t_send + (t_recv.saturating_sub(t_send)) / 2)
+    } else {
+        None
+    };
+
+    apply_sync(unix, server, tick_override);
     let (h, m, s) = format_hms(unix);
     k_nano::slog_bin!(
         "NTP",
@@ -160,7 +187,10 @@ pub fn try_sync() -> bool {
     // ponytail: NTP via UDP não funciona em sandbox (SLIRP/TCG bloqueia UDP)
     if k_nano::env::is_sandbox() { return false; }
     let now = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    // HC1: lê `last` ANTES de marcar — senão o cooldown nunca dispara
     let last = LAST_ATTEMPT_TICKS.load(Ordering::Relaxed);
+    // HC1: marca tentativa no início (sync_once marca de novo; mesma fonte)
+    LAST_ATTEMPT_TICKS.store(now, Ordering::Relaxed);
 
     if is_synced() {
         // Periodic resync

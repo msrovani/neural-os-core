@@ -25,6 +25,42 @@ const PF_W: u32 = 2;
 const SHT_RELA: u32 = 4;
 const R_X86_64_RELATIVE: u32 = 8;
 
+/// H9: teto de p_memsz por segmento (cap anti-DoS de frames).
+const MAX_SEG_MEMSZ: u64 = 64 * 1024 * 1024;
+/// H9: PT_LOAD nunca acima do half inferior (0x0000_8000... = bit 47).
+const USER_VADDR_LIMIT: u64 = 0x0000_8000_0000_0000;
+
+/// H9: NO_EXECUTE só se EFER.NXE estiver ativo (bit NX num PTE sem NXE =
+/// reserved-bit #PF). Limine ativa NXE; medimos em vez de assumir.
+#[cfg(target_os = "none")]
+fn nxe_enabled() -> bool {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    static CACHED: AtomicU64 = AtomicU64::new(0xFFFF_FFFF_FFFF_FFFF);
+    let c = CACHED.load(Ordering::Relaxed);
+    if c != 0xFFFF_FFFF_FFFF_FFFF {
+        return c == 1;
+    }
+    let lo: u32;
+    let hi: u32;
+    unsafe {
+        core::arch::asm!(
+            "rdmsr",
+            in("ecx") 0xC000_0080u32,
+            out("eax") lo,
+            out("edx") hi,
+            options(nostack, preserves_flags)
+        );
+    }
+    let efer = ((hi as u64) << 32) | lo as u64;
+    let on = efer & (1 << 11) != 0;
+    CACHED.store(on as u64, Ordering::Relaxed);
+    on
+}
+#[cfg(not(target_os = "none"))]
+fn nxe_enabled() -> bool {
+    false
+}
+
 /// Result of a successful ELF load.
 #[derive(Debug)]
 pub struct ElfLoadResult {
@@ -131,6 +167,28 @@ impl ElfLoader {
                 continue;
             }
 
+            // H9 guards (fail-closed):
+            // - PT_LOAD nunca no half superior (colidiria com HHDM/kernel).
+            // - p_memsz com teto de 64MB (anti-DoS de frames).
+            // - filesz > memsz = ELF malformado; file data além do buffer =
+            //   truncado -> Err (antes: silenciosamente não copiava).
+            if p_vaddr >= USER_VADDR_LIMIT || p_vaddr.checked_add(p_memsz).is_none_or(|e| e > USER_VADDR_LIMIT) {
+                return Err("ELF: p_vaddr acima do half inferior");
+            }
+            if p_memsz > MAX_SEG_MEMSZ {
+                return Err("ELF: p_memsz acima do teto (64MB)");
+            }
+            if p_filesz > p_memsz {
+                return Err("ELF: filesz > memsz");
+            }
+            let file_end = match p_offset.checked_add(p_filesz) {
+                Some(e) => e,
+                None => return Err("ELF: segment offset overflow"),
+            };
+            if file_end > data.len() as u64 {
+                return Err("ELF: segment data truncated");
+            }
+
             // Map pages for this segment
             let start_page = p_vaddr & !0xFFF;
             let end = p_vaddr.saturating_add(p_memsz);
@@ -185,11 +243,15 @@ impl ElfLoader {
                 }
 
                 // Determine page flags (ADR-0082 F2.1: RX para segmento
-                // executável, RW para dados; NX não forçado no MVP).
+                // executável, RW para dados; H9: NO_EXECUTE nos dados quando NXE ativo).
                 let flags = if p_flags & PF_X != 0 {
                     address_space::user_code_flags()
                 } else {
-                    address_space::user_data_flags()
+                    let mut f = address_space::user_data_flags();
+                    if nxe_enabled() {
+                        f |= x86_64::structures::paging::PageTableFlags::NO_EXECUTE;
+                    }
+                    f
                 };
 
                 unsafe {
@@ -219,9 +281,14 @@ impl ElfLoader {
                     4096,
                 );
             }
+            // H9: stack USER_DATA + NX (W^X) quando NXE ativo.
+            let mut st_flags = address_space::user_data_flags();
+            if nxe_enabled() {
+                st_flags |= x86_64::structures::paging::PageTableFlags::NO_EXECUTE;
+            }
             unsafe {
                 aspace
-                    .map_user_page(va, frame, address_space::user_data_flags())
+                    .map_user_page(va, frame, st_flags)
                     .map_err(|_| "ELF: stack map failed")?;
             }
         }

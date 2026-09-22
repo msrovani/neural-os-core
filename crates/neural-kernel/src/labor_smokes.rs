@@ -114,7 +114,7 @@ pub fn run_deferred_usb_live(boot_tag: &str) {
 pub fn run_deferred(boot_tag: &str) {
     k_hal::hw_gate::emit_all();
 
-    // DEAD CODE: let _ = hermes_crate::ipc_bus::boot_smoke(); // (HERMES_AUDIT.md)
+    let _ = hermes_crate::ipc_bus::boot_smoke(); // IPC roundtrip (M6 message_bus fix)
     let _ = hermes_crate::async_io::boot_smoke();
     // DEAD CODE: let _ = hermes_crate::git_thin::boot_smoke(); // (HERMES_AUDIT.md)
 

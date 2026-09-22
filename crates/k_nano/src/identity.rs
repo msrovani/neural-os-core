@@ -56,6 +56,9 @@ pub fn verify_signature(
 }
 
 /// Aceita chave trusted embutida **ou** public key da sessão boot.
+/// ⚠️ H4 (onda1): a session PK torna isto inútil p/ artefatos de terceiros —
+/// packs/skills/marketplace/updates DEVEM usar [`verify_pinned`] (pinned-only).
+/// Sessão é válida apenas para audit local (o próprio sistema assinando seu log).
 pub fn verify_trusted(message: &[u8], signature: &[u8; SIGNATURE_LEN]) -> bool {
     for key in TRUSTED_PUBLIC_KEYS {
         if verify_signature(key, message, signature) {
@@ -71,18 +74,27 @@ pub fn verify_trusted(message: &[u8], signature: &[u8; SIGNATURE_LEN]) -> bool {
     false
 }
 
+/// H4 (onda1): verificação **pinned-only** para packs/skills/marketplace.
+/// `verify_trusted` aceita a session PK (OK só p/ audit local — qualquer coisa
+/// assinada pela própria sessão não prova origem externa). Artefatos de
+/// terceiros (KernelPack, skills, marketplace, updates) NUNCA aceitam a chave
+/// da sessão — chamem esta API, não `verify_trusted`.
+pub fn verify_pinned(message: &[u8], signature: &[u8; SIGNATURE_LEN]) -> bool {
+    for key in TRUSTED_PUBLIC_KEYS {
+        if verify_signature(key, message, signature) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Auditoria #7: verifica a assinatura Ed25519 do UPDATE (manifest `sig`).
 /// A assinatura cobre o DIGEST sha256 do blob (`digest`), não o blob inteiro —
 /// o servidor assina `sha256(kernel)`, o kernel confere sha256 E assinatura.
 /// Aceita SOMENTE as chaves trusted pinadas (NUNCA a session pk — update é
 /// assinado pela release key do dono, não por uma identidade de boot local).
 pub fn verify_update_signature(digest: &[u8; 32], signature: &[u8; SIGNATURE_LEN]) -> bool {
-    for key in TRUSTED_PUBLIC_KEYS {
-        if verify_signature(key, digest, signature) {
-            return true;
-        }
-    }
-    false
+    verify_pinned(digest, signature)
 }
 
 #[derive(Debug, Clone)]

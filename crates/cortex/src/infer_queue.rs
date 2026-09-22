@@ -316,16 +316,30 @@ pub fn submit(prompt: String, mode: InferMode, reply_topic: &str) -> Result<u64,
         }
         t
     };
-    let t = TAIL.load(Ordering::Relaxed);
-    let h = HEAD.load(Ordering::Acquire);
-    if t.wrapping_sub(h) >= QUEUE_CAP {
-        return Err(SubmitErr::Full);
-    }
-    let idx = t % QUEUE_CAP;
+    // M6: multi-producer (BSP pode submeter enquanto CortexAgent também
+    // submete) — CAS no TAIL antes de escrever o slot. CLAIM do consumer
+    // continua por CAS no HEAD (abaixo).
+    let idx = loop {
+        let t = TAIL.load(Ordering::Acquire);
+        let h = HEAD.load(Ordering::Acquire);
+        if t.wrapping_sub(h) >= QUEUE_CAP {
+            return Err(SubmitErr::Full);
+        }
+        let slot = &slots()[t % QUEUE_CAP];
+        if slot.occupied.load(Ordering::Acquire) {
+            // Pode ser transiente (HEAD avançou e occupied ainda não caiu) —
+            // honesto: Full; o chamador retenta no próximo tick se quiser.
+            return Err(SubmitErr::Full);
+        }
+        if TAIL
+            .compare_exchange_weak(t, t + 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            break t % QUEUE_CAP;
+        }
+        core::hint::spin_loop();
+    };
     let slot = &slots()[idx];
-    if slot.occupied.load(Ordering::Acquire) {
-        return Err(SubmitErr::Full);
-    }
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     *slot.prompt.lock() = Some(prompt);
     *slot.reply_topic.lock() = Some(topic);
@@ -333,7 +347,6 @@ pub fn submit(prompt: String, mode: InferMode, reply_topic: &str) -> Result<u64,
     slot.cancel.store(false, Ordering::Release);
     slot.id.store(id, Ordering::Release);
     slot.occupied.store(true, Ordering::Release);
-    TAIL.store(t + 1, Ordering::Release);
     PENDING_COUNT.fetch_add(1, Ordering::Release);
     k_nano::smp::ap_work::notify_idle_wake();
     unsafe {

@@ -84,10 +84,13 @@ pub extern "C" fn ap_entry(_cpu_id: u64) -> ! {
             };
         }
     }
+    // H11 (canvas-onda2): `ap_load_idt_and_tss` termina com `sti` — soltar o
+    // AP_BOOT_LOCK ANTES, senão uma IRQ no AP corre com o spinlock segurado
+    // (handler que toque o lock = deadlock; TicketLock não é reentrante, S316).
+    drop(_lock);
     unsafe {
         crate::interrupts::ap_load_idt_and_tss(ap_tss.as_ref().map(|t| t.selector));
     }
-    drop(_lock);
 
     let ready = AP_IDT_READY.fetch_add(1, Ordering::SeqCst) + 1;
     let expected = AP_EXPECTED.load(Ordering::Acquire);

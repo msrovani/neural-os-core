@@ -104,7 +104,7 @@ pub fn dispatch_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
                     if let Some(t) = got {
                         return Some(t);
                     }
-                    k_nano::net::mesh::record_peer_failure(0xFF);
+                    mesh_note_failure();
                 }
             }
         }
@@ -216,6 +216,24 @@ fn deserialize_mesh_response(data: &[u8]) -> Option<Tensor> {
     Some(Tensor { shape: (rows, cols), data: d })
 }
 
+/// M4: id do alvo do circuit breaker = primeiro peer online (nunca o
+/// broadcast 0xFF — que poluía PEER_HEALTH com um pseudo-peer).
+#[cfg(feature = "p2p")]
+fn mesh_first_peer_id() -> Option<u8> {
+    k_nano::net::mesh::MESH_ENGINE
+        .lock()
+        .as_ref()
+        .and_then(|eng| eng.online_nodes().next().map(|n| n.capabilities.node_id[0]))
+}
+
+#[cfg(feature = "p2p")]
+fn mesh_note_failure() {
+    match mesh_first_peer_id() {
+        Some(p) => k_nano::net::mesh::record_peer_failure(p),
+        None => k_nano::slog_cortex!("MESH", "warn", "peer failure sem peer online — skip circuit breaker"),
+    }
+}
+
 /// Worker side: envia request "MW\0" e espera síncrona pela resposta "MR\0".
 /// Timeout ~200 TIMER_TICKS (~2s a 100Hz). Retorna `None` em timeout/falha →
 /// o dispatch cai no fallback local. Pacotes que não são a nossa resposta são
@@ -308,10 +326,12 @@ fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
             }
             // Não é a nossa resposta — DROP (não re-injetar no RX do mesh).
         }
-        core::hint::spin_loop();
+        // M4: yield em vez de spin puro — espera avanço por TSC (~1ms/iter)
+        // sem encravar o loop no poll do NIC.
+        k_nano::tsc::sleep_us(1_000);
     }
-    // Phase 3: timeout → registra falha no circuit breaker.
-    k_nano::net::mesh::record_peer_failure(0xFF);
+    // Phase 3: timeout → registra falha no circuit breaker (peer real, M4).
+    mesh_note_failure();
     k_nano::slog_cortex!("MESH", "warn", "matmul timeout node={} - fallback local", node_id);
     None
 }

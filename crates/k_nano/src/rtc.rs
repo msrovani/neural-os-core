@@ -46,14 +46,38 @@ fn bcd_to_bin(bcd: u8) -> u8 {
     (bcd & 0x0f) + ((bcd >> 4) * 10)
 }
 
+/// Aguarda UIP=0 (bit 7 do Reg A) com budget. TSC se calibrada, senão
+/// spin cap fixo. UIP duradouro > ~2 s = CMOS quebrado (nunca spin infinito
+/// em HW ruim — a leitura devolve o snapshot bruto em vez de travar o boot).
+fn uip_clear_wait() {
+    let use_tsc = crate::tsc::TSC_HZ.load(core::sync::atomic::Ordering::Relaxed) != 0;
+    let start = if use_tsc { crate::tsc::now_us() } else { 0 };
+    let mut spins: u32 = 0;
+    while (cmos_read(0x0A) & 0x80) != 0 {
+        if use_tsc {
+            if crate::tsc::now_us().wrapping_sub(start) >= 2_000_000 {
+                return;
+            }
+        } else {
+            spins += 1;
+            if spins >= 2_000_000 {
+                return;
+            }
+        }
+        core::hint::spin_loop();
+    }
+}
+
 /// Lê data/hora atual do RTC CMOS com loop de consistência.
 ///
 /// Estratégia wait-snapshot-verify: espera UIP=0, captura todos os registros,
 /// verifica se o RTC iniciou um novo update durante a captura.
+/// O wait tem budget (nunca trava o boot em CMOS ruim) e o parse cobre 12h.
 pub fn read_rtc() -> RtcDateTime {
+    let mut tries = 0u32;
     let (second, minute, hour, day, month, year, century, status_b) = loop {
         // 1. Aguarda fim de qualquer update em progresso (UIP bit 7 do Reg A)
-        while (cmos_read(0x0A) & 0x80) != 0 {}
+        uip_clear_wait();
 
         // 2. Snapshot — leitura de todos os registros de uma vez
         let second = cmos_read(0x00);
@@ -69,14 +93,35 @@ pub fn read_rtc() -> RtcDateTime {
         if (cmos_read(0x0A) & 0x80) == 0 {
             break (second, minute, hour, day, month, year, century, status_b);
         }
-        // senão, repete
+        tries += 1;
+        if tries >= 4 {
+            // Não consegue uma leitura consistente — devolve o último snapshot
+            // (data aproximada > boot travado). O RTC é hint, não source of truth.
+            break (second, minute, hour, day, month, year, century, status_b);
+        }
     };
 
     let is_bcd = (status_b & 0x04) == 0;
 
     let sec = if is_bcd { bcd_to_bin(second) } else { second };
     let min = if is_bcd { bcd_to_bin(minute) } else { minute };
-    let hr = if is_bcd { bcd_to_bin(hour) } else { hour };
+    // Mode bit: 24h = (status_b & 0x02) != 0. Em 12h, bit 7 do reg de hora = PM.
+    let hr = if (status_b & 0x02) != 0 {
+        if is_bcd { bcd_to_bin(hour) } else { hour }
+    } else {
+        let pm = (hour & 0x80) != 0;
+        let h12 = {
+            let raw = hour & 0x7F;
+            if is_bcd { bcd_to_bin(raw) } else { raw }
+        };
+        if pm {
+            match h12 { 12 => 12, x => x + 12 }
+        } else if h12 == 12 {
+            0
+        } else {
+            h12
+        }
+    };
     let d = if is_bcd { bcd_to_bin(day) } else { day };
     let mon = if is_bcd { bcd_to_bin(month) } else { month };
     let yr = if is_bcd { bcd_to_bin(year) } else { year };

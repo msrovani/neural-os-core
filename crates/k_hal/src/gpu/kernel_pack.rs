@@ -193,7 +193,9 @@ pub fn parse_and_verify(buf: &[u8]) -> Option<KernelPack> {
         return None;
     }
 
-    let verified = k_nano::identity::verify_trusted(canonical, &signature);
+    // H4 (onda1): pack só-PINNED. `verify_trusted` aceitaria a session PK,
+    // que não prova origem externa — sessão é só audit local.
+    let verified = k_nano::identity::verify_pinned(canonical, &signature);
     if !verified {
         k_nano::slog_hal!("NKP", "warn", "signature NOT trusted — pack em Escalate/deny ativo");
     }
@@ -218,7 +220,7 @@ pub fn parse_and_verify(buf: &[u8]) -> Option<KernelPack> {
     })
 }
 
-/// Carrega NKP do FAT (`NKP_*.BIN`). Unsigned ≠ ativo até promote_with_session.
+/// Carrega NKP do FAT (`NKP_*.BIN`). Unsigned ≠ ativo — pinned-only (H4).
 /// k-hal: só FAT (sem hermes VFS — evita ciclo de deps).
 pub fn load_named(name: &str) -> Option<KernelPack> {
     let aliases: &[&str] = match name {
@@ -349,7 +351,7 @@ fn pack_name_candidates(isa: IsaTag, op: PackOp) -> &'static [&'static str] {
 }
 
 /// Match pack para vendor+isa+op (multi-ISA; sem hardcodar só sm_61).
-/// Aceita signature trusted **ou** promove unsigned (hash ok) com session key.
+/// Só aceita assinatura PINNED (H4); unsigned + hash ok ≠ Ready.
 pub fn find_active_pack(vendor: GpuVendor, isa: IsaTag, op: PackOp) -> Option<KernelPack> {
     let pv = PackVendor::from_gpu(vendor)?;
     let mut names: alloc::vec::Vec<&str> = pack_name_candidates(isa, op).to_vec();
@@ -361,31 +363,18 @@ pub fn find_active_pack(vendor: GpuVendor, isa: IsaTag, op: PackOp) -> Option<Ke
         "NKP_VECADD_BIN",
     ]);
     for n in &names {
-        if let Some(mut pack) = load_named(n) {
+        if let Some(pack) = load_named(n) {
             if pack.header.vendor != pv || pack.header.isa != isa || pack.header.op != op {
                 continue;
             }
             if !pack.verified {
-                if let Some(p2) = promote_with_session(&pack) {
-                    k_nano::slog_hal!(
-                        "NKP",
-                        "ok",
-                        "session-promoted {} isa={} op={} bytes={}",
-                        n,
-                        isa.as_str(),
-                        op as u32,
-                        p2.payload.len()
-                    );
-                    pack = p2;
-                } else {
-                    k_nano::slog_hal!(
-                        "NKP",
-                        "warn",
-                        "{} hash ok but unsigned/session unavailable — skip Ready",
-                        n
-                    );
-                    continue;
-                }
+                k_nano::slog_hal!(
+                    "NKP",
+                    "warn",
+                    "{} unsigned (pinned-only, H4) — skip Ready; assine com release key",
+                    n
+                );
+                continue;
             }
             if pack.verified {
                 k_nano::slog_hal!(
@@ -409,52 +398,19 @@ pub fn is_cpu_stub_pack(pack: &KernelPack) -> bool {
     pack.header.ir == IrOrigin::CpuStub
 }
 
-/// Reassina pack com session Ed25519 (boot). Hash deve já bater.
-/// Honesty s386: CpuStub NUNCA vira verified — stub ≠ KernelPack device.
+/// H4 (onda1): a sessão NUNCA instala pack/skills — `promote_with_session`
+/// virou refuse explícito. Um blob assinado pela session PK não prova origem
+/// externa; instalação exige release key pinada (`verify_pinned` no parse).
+/// Mantido como API negativa p/ chamadores legados: sempre `None`.
 pub fn promote_with_session(pack: &KernelPack) -> Option<KernelPack> {
-    if is_cpu_stub_pack(pack) {
-        k_nano::slog_hal!(
-            "NKP",
-            "warn",
-            "promote refuse CpuStub isa={} op={:?} — gere CUBIN/zebin/HSACO",
-            pack.header.isa.as_str(),
-            pack.header.op
-        );
-        return None;
-    }
-    if pack.verified {
-        return Some(pack.clone());
-    }
-    if !k_nano::identity::session_ready() {
-        return None;
-    }
-    let canonical = build_canonical(
-        pack.header.vendor,
-        pack.header.isa,
-        pack.header.op,
-        pack.header.golden,
-        pack.header.compiler,
-        pack.header.ir,
-        pack.header.workgroup_x,
-        pack.header.shared_mem,
-        &pack.payload,
+    k_nano::slog_hal!(
+        "NKP",
+        "warn",
+        "promote refuse isa={} op={:?} — session PK não instala pack (H4); assine com release key",
+        pack.header.isa.as_str(),
+        pack.header.op
     );
-    let expect = fnv1a64(&canonical);
-    let got = u64::from_le_bytes(pack.content_hash);
-    if expect != got {
-        return None;
-    }
-    let sig = k_nano::identity::sign_session(&canonical)?;
-    if !k_nano::identity::verify_trusted(&canonical, &sig) {
-        return None;
-    }
-    Some(KernelPack {
-        header: pack.header.clone(),
-        payload: pack.payload.clone(),
-        content_hash: pack.content_hash,
-        signature: sig,
-        verified: true,
-    })
+    None
 }
 
 /// Serializa header+payload canônico (host tools espelham este layout).

@@ -317,13 +317,15 @@ const ADD_WASM: &[u8] = &[
     0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b, // code: get0 get1 i32.add end
 ];
 
-/// Gera um módulo WASM mínimo com `_start` → i32(42) (sem imports).
-/// Usado por evolve/SkillOpt até Cortex emitir op-IR real (#412).
+/// Módulo WASM enlatado para TESTES (`_start` → i32(42)). H8 (canvas onda 1):
+/// em produção NÃO há gerador de bytes — código produtivo sem WASM recebe
+/// `Err("no-wasm-bytes")`. A geração real vem do op-IR (#412 / wasm_build).
 ///
 /// Host ABI no runtime (CapGate): `aios::{log,debug,get_tick}` wired;
 /// Cap+bridge/VFS → I/O; GPU → **trap** até KernelPack (SESSION_379 residual).
 /// WASI Preview1 **não** ligado (`wasi_host` orphan).
-pub fn generate_wasm_module() -> Vec<u8> {
+#[cfg(test)]
+pub fn canned_test_module() -> Vec<u8> {
     let mut wasm = Vec::with_capacity(64);
     // magic + version
     wasm.extend_from_slice(&[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);

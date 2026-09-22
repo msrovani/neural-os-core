@@ -888,7 +888,13 @@ impl JarbasDesktop {
         self.damage.clear();
 
         // Orb anima a cada paint (time-driven dentro do SoulMirror).
-        self.dirty_orb = true;
+        // L19 (onda1): com o modal de energia aberto o orb NÃO reanima — ele
+        // está coberto pelo modal, e o clear da bbox dele apagaria o modal e
+        // o forçaria a repintar todo frame. Só reanima no frame do dirty_dialog
+        // (open/close), quando o modal repinta por cima logo depois.
+        if !self.power_dialog || self.dirty_dialog {
+            self.dirty_orb = true;
+        }
         // HUD + dock clock: ~1s @18Hz (PIT) / ~0.5s @64Hz. Sem dirty_hud o
         // present_frame não apresenta o dock e o relógio fica 00:00.
         if tick % 16 == 0 {
@@ -1333,19 +1339,22 @@ impl JarbasDesktop {
             );
         }
 
-        // Diálogo de energia — NÃO só em dirty_dialog: o orb limpa o centro
-        // a cada paint (dirty_orb sticky) e apagava o modal no frame seguinte.
-        // Dano no open/close; paint sempre enquanto aberto (após o orb).
-        if self.dirty_dialog || self.power_dialog {
+        // Diálogo de energia — damage-rect próprio, NÃO repinta todo frame.
+        // L19 (onda1): com o modal aberto o orb está clipado fora do rect dele
+        // (dirty_orb suprimido em render_inner), então o repaint do modal só
+        // acontece quando algo realmente o sobrescreve: open/close (dirty_dialog),
+        // vcon fullscreen contínuo, ou slide do Hub Health (pinta por cima).
+        // Virtual console
+        let vcon_active = crate::vconsole::active();
+        let hub_animating = self.hub_anim_start_us != 0
+            && now.saturating_sub(self.hub_anim_start_us) < HUB_SLIDE_US;
+        let paint_power = self.power_dialog && (self.dirty_dialog || vcon_active != 0 || hub_animating);
+        if paint_power {
             let (dx, dy, dw, dh) = power_dialog_rect(self.w, self.h);
             self.damage
                 .push(dx.saturating_sub(4), dy.saturating_sub(4), dw + 8, dh + 8, w, h);
         }
-        // Placeholder: paint real DEPOIS do Hub Health (z-order modal > plaque).
-        let paint_power = self.power_dialog;
 
-        // Virtual console
-        let vcon_active = crate::vconsole::active();
         if vcon_active != 0 {
             let lines = crate::vconsole::get_active_visible();
             for (i, line) in lines.iter().enumerate() {

@@ -50,7 +50,8 @@ pub fn generate_from_pattern(
 ) -> Result<Vec<u8>, &'static str> {
     match pattern {
         SkillPattern::Add => Ok(generate_add_wasm()),
-        SkillPattern::Echo | SkillPattern::Default => Ok(wasmi_rt::generate_wasm_module()),
+        // H8 (canvas onda 1): sem gerador de bytes honesto — errar, não dummy.
+        SkillPattern::Echo | SkillPattern::Default => Err("no-wasm-bytes"),
         SkillPattern::Card => Err("card_ir_pending"),
     }
 }
