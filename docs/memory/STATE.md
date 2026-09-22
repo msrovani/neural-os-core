@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s390b — SelfHeal residual wire
+# STATE — neural-os-core v1.9.99-s391 — Desktop/UI/Orb honesty
 
-#   PISTA ATIVA: s390b — KERNEL_ERROR + Safety + checkpoint + SKILL_CREATE
-#   PISTA ANTERIOR: s390 SelfHeal I3/budget/double-act/silent
+#   PISTA ATIVA: s391 — Jarbas theme/hover/dock/mesh/client_buf
+#   PISTA ANTERIOR: s390b SelfHeal residual KERNEL_ERROR/Safety/checkpoint
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
@@ -26,6 +26,7 @@
 
 | ID | Item | Estado |
 |----|------|--------|
+| s391 | Desktop/UI/Orb theme+hover+dock+mesh honesty | ✅ |
 | s390b | SelfHeal residual KERNEL_ERROR/Safety/checkpoint/SKILL_CREATE | ✅ |
 | s390 | SelfHeal honesty I3/budget/LLM/silent | ✅ |
 | s389b | Logging follow-up SCORE/phase/fat-boot-log | ✅ |
@@ -42,4 +43,4 @@
 | #558b/#559b/#561b | aceite voz metal | residual paralelo |
 | B2 | Mesh peer B | AWAITING operador |
 | #607 | Efeito Matrix mmap expert residual | ⏳ |
-| #608 | slog info restante → canónico | 🟡 parcial s389b (bring-up) |
+| #608 | slog info restante → canónico | 🟡 parcial s391 (UI slog) |

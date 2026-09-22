@@ -318,11 +318,11 @@ pub fn probe_raw_framebuffer(
 pub fn paint_tts_response(text: &str) {
     let guard = GPU.lock();
     let Some(gpu) = guard.as_ref() else {
-        k_nano::slog_jarbas!("JARBAS", "TTS-FB", "skip — sem FB");
+        k_nano::slog_jarbas!("JARBAS", "warn", "TTS-FB skip — sem FB");
         return;
     };
     if !gpu.present || gpu.fb_addr == 0 {
-        k_nano::slog_jarbas!("JARBAS", "TTS-FB", "skip — FB nao present");
+        k_nano::slog_jarbas!("JARBAS", "warn", "TTS-FB skip — FB nao present");
         return;
     }
     let bpp = gpu.bytes_per_pixel();
@@ -397,7 +397,7 @@ pub fn paint_tts_response(text: &str) {
     if !line.is_empty() && y + 16 <= fb_h {
         splash_draw_text(fb_addr, fb_w, fb_h, fb_stride, fb_bpp, rgb_order, 16, y, &line);
     }
-    k_nano::slog_jarbas!("JARBAS", "TTS-FB", "painted len={} {}x{}",
+    k_nano::slog_jarbas!("JARBAS", "ok", "TTS-FB painted len={} {}x{}",
         text.len(),
         w,
         h);

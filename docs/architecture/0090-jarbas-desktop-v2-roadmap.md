@@ -96,24 +96,17 @@ Particles usam `SIN_LUT[(tick.wrapping_add(seed) % 256) as usize]` em vez de `si
 
 ---
 
-### 3.4 Dock Rendering (compositor.rs + dock.rs) — 2 dias
+### 3.4 Dock Rendering (compositor.rs + dock.rs) — ✅ DONE (s294 + s391)
 
-**Problema:** `Dock` tem lógica completa (`dock.rs` 123 LOC) mas `compositor.rs` NUNCA
-chama `dock.render()`. O dock está "morto" — launchers registrados mas invisíveis.
+**Status s391:** `dock.render()` é chamado no compositor (CAMADA 2.5); click via
+`handle_pointer_click` + `dock.hit_test`; hover via `hit_test_hover` (JD-03/11).
+Tray honesty: só `NET` se mesh vivo — sem BAT/VOL inventados (JD-05). Clock
+stack-buf sem `format!` no paint (JD-14).
 
-**Solução:**
-1. Integrar `dock.render()` no compositor como CAMADA 2.5 (entre HUD e Windows)
-2. Adicionar hover detection no mouse_move (highlight no item sob o cursor)
-3. Adicionar click handling (toggle_app ao clicar no launcher)
-
-**Arquivos:**
-- `crates/jarbas/src/display/dock.rs` — implementar `render()` real (hover highlight)
-- `crates/jarbas/src/display/compositor.rs` — chamar `dock.render()` após HUD
-- `crates/jarbas/src/display/agent.rs` — `handle_pointer_click()` detecta dock hit
+**Problema histórico:** `Dock` tinha lógica completa mas `compositor.rs` NUNCA
+chamava `dock.render()` — claim stale até SESSION_294/s391.
 
 **Validação:** QEMU boot → dock visível na parte inferior → clique abre/fecha janela.
-
-**LOC:** +120 (dock.render) +30 (compositor integration) +40 (click handling) = ~190 LOC.
 
 ---
 

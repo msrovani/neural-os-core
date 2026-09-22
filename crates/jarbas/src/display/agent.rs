@@ -133,6 +133,18 @@ pub struct MeshPeerNode {
     pub p99_rtt: u32,
 }
 
+impl MeshPeerNode {
+    pub const fn empty() -> Self {
+        Self {
+            node_id: 0,
+            role: 4,
+            reachable: false,
+            avg_rtt: 0,
+            p99_rtt: 0,
+        }
+    }
+}
+
 /// Rótulo curto do papel no grafo (MST/MEM/CMP/WRK/?).
 #[inline]
 pub fn mesh_role_label(role: u8) -> &'static str {
@@ -361,7 +373,7 @@ impl DisplayAgent {
                 }
             }
             match mode {
-                OverlayMode::HitlConfirm => k_nano::slog_jarbas!("JARBAS", "HITL", "request received"),
+                OverlayMode::HitlConfirm => k_nano::slog_jarbas!("JARBAS", "ok", "HITL request received"),
                 OverlayMode::MemoryNudge => k_nano::slog_jarbas!("JARBAS", "ok", "MEMORY_NUDGE"),
                 OverlayMode::HitlTerminal => {}
             }
@@ -389,14 +401,14 @@ impl DisplayAgent {
                     *POWER_STATE.lock() = PowerState::None;
                     self.power_armed_until = 0;
                     let tag = if action == PowerDialogAction::Cancel { "power_cancel" } else { "power_outside" };
-                    k_nano::slog_jarbas!("JARBAS", "POWER", "dialog CANCELADO ({})", tag);
+                    k_nano::slog_jarbas!("JARBAS", "ok", "POWER dialog CANCELADO ({})", tag);
                     return tag;
                 }
                 PowerDialogAction::ShutDown => {
                     COMPOSITOR.lock().as_mut().map(|d| d.close_power_dialog());
                     *POWER_STATE.lock() = PowerState::ShuttingDown;
                     *POWER_BANNER.lock() = Some("Desligando...");
-                    k_nano::slog_jarbas!("JARBAS", "POWER", "DESLIGAR — publicando SYSTEM_SHUTDOWN");
+                    k_nano::slog_jarbas!("JARBAS", "ok", "POWER DESLIGAR — publicando SYSTEM_SHUTDOWN");
                     let _ = EVENT_BUS.publish(event_bus::Event {
                         id: 0,
                         topic: alloc::string::String::from("SYSTEM_SHUTDOWN"),
@@ -410,7 +422,7 @@ impl DisplayAgent {
                     COMPOSITOR.lock().as_mut().map(|d| d.close_power_dialog());
                     *POWER_STATE.lock() = PowerState::Hibernating;
                     *POWER_BANNER.lock() = Some("Hibernando...");
-                    k_nano::slog_jarbas!("JARBAS", "POWER", "HIBERNAR — publicando SYSTEM_HIBERNATE");
+                    k_nano::slog_jarbas!("JARBAS", "ok", "POWER HIBERNAR — publicando SYSTEM_HIBERNATE");
                     let _ = EVENT_BUS.publish(event_bus::Event {
                         id: 0,
                         topic: alloc::string::String::from("SYSTEM_HIBERNATE"),
@@ -424,7 +436,7 @@ impl DisplayAgent {
                     COMPOSITOR.lock().as_mut().map(|d| d.close_power_dialog());
                     *POWER_STATE.lock() = PowerState::Rebooting;
                     *POWER_BANNER.lock() = Some("Reiniciando...");
-                    k_nano::slog_jarbas!("JARBAS", "POWER", "REINICIAR — publicando SYSTEM_REBOOT");
+                    k_nano::slog_jarbas!("JARBAS", "ok", "POWER REINICIAR — publicando SYSTEM_REBOOT");
                     let _ = EVENT_BUS.publish(event_bus::Event {
                         id: 0,
                         topic: alloc::string::String::from("SYSTEM_REBOOT"),
@@ -442,7 +454,7 @@ impl DisplayAgent {
             COMPOSITOR.lock().as_mut().map(|d| d.open_power_dialog());
             *POWER_STATE.lock() = PowerState::Dialog;
             *POWER_BANNER.lock() = None;
-            k_nano::slog_jarbas!("JARBAS", "POWER", "dialog ABERTO");
+            k_nano::slog_jarbas!("JARBAS", "ok", "POWER dialog ABERTO");
             return "power_dialog_open";
         }
         // Micro badge Hub Health (4 LEDs no HUD) — clique alterna o painel.
@@ -539,7 +551,7 @@ impl DisplayAgent {
                 desktop.invalidate_windows();
             }
             ui_spec::mark_ui_ok();
-            k_nano::slog_jarbas!("ADR", "0047-H", "ui_spec applied title={}", spec.title);
+            k_nano::slog_jarbas!("UI", "ok", "ui_spec applied title={} (ADR-0047-H)", spec.title);
         }
     }
 }
@@ -671,7 +683,7 @@ impl Agent for DisplayAgent {
         if !self.gpu_inited {
             // Initialize GPU backend (k_hal GPU BE) — check compute state
             if let Err(e) = gpu_backend::init_gpu_backend() {
-                k_nano::slog_jarbas!("GPU", "init", "backend init: {}", e);
+                k_nano::slog_jarbas!("GPU", "warn", "backend init: {}", e);
             } else {
                 k_nano::slog_jarbas!(
                     "GPU",
@@ -812,13 +824,20 @@ impl Agent for DisplayAgent {
         if mx != self.last_pointer_x || my != self.last_pointer_y {
             self.last_pointer_x = mx;
             self.last_pointer_y = my;
-            if k_hal::gpu::intel_display::hw_cursor_active() {
-                // Cursor HW: mover = 1 register write, sem repaint/save-under.
+            // s391 JD-03: hover zone viva (dock idx / orb / chat aberto).
+            if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                desktop.hit_test_hover(mx, my);
+                if k_hal::gpu::intel_display::hw_cursor_active() {
+                    unsafe {
+                        k_hal::gpu::intel_display::hw_cursor_move(mx as i32, my as i32);
+                    }
+                } else {
+                    desktop.invalidate_cursor();
+                }
+            } else if k_hal::gpu::intel_display::hw_cursor_active() {
                 unsafe {
                     k_hal::gpu::intel_display::hw_cursor_move(mx as i32, my as i32);
                 }
-            } else if let Some(ref mut desktop) = *COMPOSITOR.lock() {
-                desktop.invalidate_cursor();
             }
         }
         // Clique confiável: edge no Display (nao so EventBus — pacotes intermediários

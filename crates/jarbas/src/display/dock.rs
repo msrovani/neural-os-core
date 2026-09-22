@@ -66,8 +66,6 @@ impl Dock {
     }
 
     pub fn render(&self, target: &mut super::fb::DoubleBuffer, theme: &super::theme::Theme) {
-        
-
         // Background (native fill_rect avoids FbTarget borrow conflict)
         target.fill_rect(self.rect.x as usize, self.rect.y as usize,
             self.rect.width as usize, self.height as usize,
@@ -94,12 +92,13 @@ impl Dock {
             super::compositor::draw_text(target, text_x as usize, text_y as usize, &item.label, self.rect.width as usize, color.0, color.1, color.2);
         }
 
-        // Clock (top-right)
-        let clock_str = format_time();
+        // Clock (top-right) — s391 JD-14: stack buf, zero String no paint.
+        let mut clock_buf = [0u8; 8];
+        let clock_str = format_time_into(&mut clock_buf);
         let clock_x = self.rect.x + self.rect.width as i32 - clock_str.len() as i32 * 6 - 16;
-        super::compositor::draw_text(target, clock_x as usize, (self.rect.y + 16) as usize, &clock_str, self.rect.width as usize, theme.fg.0, theme.fg.1, theme.fg.2);
+        super::compositor::draw_text(target, clock_x as usize, (self.rect.y + 16) as usize, clock_str, self.rect.width as usize, theme.fg.0, theme.fg.1, theme.fg.2);
 
-        // System tray indicators (battery, volume, network) - placeholders
+        // s391 JD-05: tray honesto — só NET se mesh vivo (sem BAT/VOL fake).
         draw_system_tray(target, theme, self.rect);
     }
 }
@@ -112,16 +111,26 @@ pub(crate) fn clock_parts(ticks: u64, hz_raw: u64) -> (u64, u64, u64) {
     ((secs / 3600) % 24, (secs / 60) % 60, secs % 60)
 }
 
-fn format_time() -> String {
+fn write_2dig(buf: &mut [u8], off: usize, v: u64) {
+    buf[off] = b'0' + ((v / 10) % 10) as u8;
+    buf[off + 1] = b'0' + (v % 10) as u8;
+}
+
+fn format_time_into(buf: &mut [u8; 8]) -> &str {
     // TODO: RTC real quando disponível. Até 1h mostra mm:ss (visível a cada segundo).
-    // wall_ticks = IRQ + soft (hlt morto no metal não deixa 00:00 eterno).
     let ticks = k_nano::interrupts::wall_ticks();
     let hz = k_nano::interrupts::TIMER_HZ.load(core::sync::atomic::Ordering::Relaxed);
     let (hours, mins, secs) = clock_parts(ticks, hz);
     if hours == 0 {
-        alloc::format!("{:02}:{:02}", mins, secs)
+        write_2dig(buf, 0, mins);
+        buf[2] = b':';
+        write_2dig(buf, 3, secs);
+        core::str::from_utf8(&buf[..5]).unwrap_or("00:00")
     } else {
-        alloc::format!("{:02}:{:02}", hours, mins)
+        write_2dig(buf, 0, hours);
+        buf[2] = b':';
+        write_2dig(buf, 3, mins);
+        core::str::from_utf8(&buf[..5]).unwrap_or("00:00")
     }
 }
 
@@ -142,11 +151,21 @@ mod clock_tests {
 }
 
 fn draw_system_tray(target: &mut super::fb::DoubleBuffer, theme: &super::theme::Theme, dock_rect: Rect) {
-    // Placeholders para bateria, volume, rede
-    let indicators = ["BAT", "VOL", "NET"];
-    let mut x = dock_rect.x + 10;
-    for ind in indicators {
-        super::compositor::draw_text(target, x as usize, (dock_rect.y + 16) as usize, ind, dock_rect.width as usize, theme.fg_muted.0, theme.fg_muted.1, theme.fg_muted.2);
-        x += 30;
+    // Honesty: sem bateria/volume medidos → não inventar BAT/VOL.
+    // NET só quando mesh engine está vivo (rótulo curto, zero alloc).
+    let mesh_live = k_nano::net::mesh::MESH_ENGINE.lock().is_some();
+    if !mesh_live {
+        return;
     }
+    let x = dock_rect.x + 10;
+    super::compositor::draw_text(
+        target,
+        x as usize,
+        (dock_rect.y + 16) as usize,
+        "NET",
+        dock_rect.width as usize,
+        theme.success.0,
+        theme.success.1,
+        theme.success.2,
+    );
 }

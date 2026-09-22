@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s391] - 2026-09-21 — Desktop/UI/Orb honesty (Jarbas compositor)
+
+- High: `/theme` unificado via `USE_NAMED_THEME` + `current_theme` (COSMIC_DARK navy)
+- Med: `core_bar_data`; hover wire + Chat real; tray NET-only; slog ADR-0092; `theme.bg` clear; client_buffer `0..aw`; mesh stack `[Peer;16]`
+- Low: Tier4 residual headers; dock hit_test idx; clock stack buf; ADR-0090 §3.4 DONE
+- Gates: jarbas+neural-kernel check release 0 erros; theme 5 + clock 1 pass
+- Canvas: `desktop-ui-orb-bughunt-s391.canvas.tsx`
+
 ## [1.9.99-s390b] - 2026-09-21 — SelfHeal residual wire (KERNEL_ERROR + Safety)
 
 - High: IRQ note→KERNEL_ERROR; save_checkpoint AgentFleet+shutdown; can_spawn/normalize; SafetyAgent fleet + Security I1–I4; boot analyze(false); SKILL_CREATE→Hermes

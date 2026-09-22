@@ -796,7 +796,11 @@ impl JarbasDesktop {
         if self.dock.visible {
             let dh = self.dock.height as usize;
             if my >= h.saturating_sub(dh) {
-                let zone = HoverZone::DockItem(0);
+                let idx = self
+                    .dock
+                    .hit_test(mx as i32, my as i32)
+                    .unwrap_or(0);
+                let zone = HoverZone::DockItem(idx);
                 if zone != self.hover_zone {
                     self.hover_prev = self.hover_zone;
                     self.hover_zone = zone;
@@ -821,15 +825,23 @@ impl JarbasDesktop {
             }
             return self.hover_zone;
         }
-        let left_w = w * 35 / 100;
-        if mx < left_w {
-            let zone = HoverZone::Chat;
-            if zone != self.hover_zone {
-                self.hover_prev = self.hover_zone;
-                self.hover_zone = zone;
-                self.dirty_cursor = true;
+        // s391 JD-04: Chat só se janela HermesChat aberta (não 35% fantasma).
+        if let Some(win) = self.windows.iter().find(|w| {
+            w.app_id == Some(AppId::HermesChat) && w.visible
+        }) {
+            let cx0 = win.rect.x.max(0) as usize;
+            let cy0 = win.rect.y.max(0) as usize;
+            let cw0 = win.rect.width as usize;
+            let ch0 = win.rect.height as usize;
+            if mx >= cx0 && mx < cx0 + cw0 && my >= cy0 && my < cy0 + ch0 {
+                let zone = HoverZone::Chat;
+                if zone != self.hover_zone {
+                    self.hover_prev = self.hover_zone;
+                    self.hover_zone = zone;
+                    self.dirty_cursor = true;
+                }
+                return self.hover_zone;
             }
-            return self.hover_zone;
         }
         if self.hover_zone != HoverZone::None {
             self.hover_prev = self.hover_zone;
@@ -1032,7 +1044,8 @@ impl JarbasDesktop {
             let cw = (orb_cr * 2 + 24).min(w.saturating_sub(x0));
             let ch = (orb_cr * 2 + 24).min(h.saturating_sub(y0));
             if cw > 0 && ch > 0 {
-                self.fb.fill_rect_fast(x0, y0, cw, ch, 8, 12, 24);  // JARVIS_BG
+                // s391 JD-07: theme.bg (não navy hardcoded) — light/HC respeitados.
+                self.fb.fill_rect_fast(x0, y0, cw, ch, theme.bg.0, theme.bg.1, theme.bg.2);
                 self.last_orb_x0 = x0;
                 self.last_orb_y0 = y0;
                 self.last_orb_w = cw;
@@ -1076,10 +1089,10 @@ impl JarbasDesktop {
                 let c = s.color();
                 let lx = bx + i * 8;
                 self.fb.fill_rect_fast(lx, by, 6, 6, c.0, c.1, c.2);
-                self.fb.fill_rect_fast(lx, by, 6, 1, 8, 12, 24);
-                self.fb.fill_rect_fast(lx, by + 5, 6, 1, 8, 12, 24);
-                self.fb.fill_rect_fast(lx, by, 1, 6, 8, 12, 24);
-                self.fb.fill_rect_fast(lx + 5, by, 1, 6, 8, 12, 24);
+                self.fb.fill_rect_fast(lx, by, 6, 1, theme.bg.0, theme.bg.1, theme.bg.2);
+                self.fb.fill_rect_fast(lx, by + 5, 6, 1, theme.bg.0, theme.bg.1, theme.bg.2);
+                self.fb.fill_rect_fast(lx, by, 1, 6, theme.bg.0, theme.bg.1, theme.bg.2);
+                self.fb.fill_rect_fast(lx + 5, by, 1, 6, theme.bg.0, theme.bg.1, theme.bg.2);
             }
         }
 
@@ -1117,15 +1130,15 @@ impl JarbasDesktop {
 
                 // ── Per-core load bars (T-044: HUD pending/core) ──
         {
-            let snap = crate::display::gauges::snapshot();
-            let n = snap.core_count as usize;
+            let (loads, core_count) = crate::display::gauges::core_bar_data();
+            let n = core_count as usize;
             if n > 0 {
                 let bar_w = 3usize;
                 let bar_h = 10usize;
                 let gap = 2usize;
                 let base_x = 12 + 6 * 8 + 12;
                 for c in 0..n.min(32) {
-                    let load = snap.per_core_load[c].clamp(0.0, 1.0);
+                    let load = loads[c].clamp(0.0, 1.0);
                     let filled = (load * bar_h as f32) as usize;
                     let x = base_x + c * (bar_w + gap);
                     self.fb.fill_rect(x, 14, bar_w, bar_h, 20, 25, 35);
@@ -1446,7 +1459,7 @@ impl JarbasDesktop {
             self.fb.copy_rect_in(0, 0, w, HUD_CHROME_H, &self.hud_chrome);
             return;
         }
-        self.fb.fill_rect_fast(0, 0, w, HUD_CHROME_H, 8, 12, 24); // JARVIS_BG
+        self.fb.fill_rect_fast(0, 0, w, HUD_CHROME_H, theme.bg.0, theme.bg.1, theme.bg.2);
         self.fb.fill_rect_fast(
             0,
             HUD_CHROME_H - 1,
@@ -1528,10 +1541,18 @@ impl JarbasDesktop {
 
     /// Mesh P2P — arestas + satélites em torno do orb (brand = Soul Mirror).
     /// Labels MST/MEM/CMP/WRK: hub local sempre; satélites se MESH_GRAPH vivo.
+    /// s391 JD-09: stack [Peer;16] — zero Vec alloc no dirty_orb sticky.
     fn draw_mesh_graph(&mut self) {
         let peers = crate::display::agent::MESH_GRAPH.lock();
-        let alive: alloc::vec::Vec<_> = peers.iter().filter(|p| p.reachable).copied().collect();
-        let n = alive.len().min(8);
+        let mut alive = [crate::display::agent::MeshPeerNode::empty(); 16];
+        let mut n = 0usize;
+        for p in peers.iter() {
+            if p.reachable && n < 16 {
+                alive[n] = *p;
+                n += 1;
+            }
+        }
+        drop(peers);
         let (w, h) = (self.w, self.h);
         let cx = (w / 2) as isize;
         let cy = (h / 2) as isize;
@@ -2227,7 +2248,7 @@ impl JarbasDesktop {
         decorations::draw_rounded_rect(&mut self.fb, pill_x, cy - 2, pill_w, pill_h, 4, pc.0, pc.1, pc.2);
         let plabel = pill_label(hermes::hub_health::panel_pill());
         let plx = pill_x + pill_w.saturating_sub(plabel.len() * 9) / 2;
-        draw_text(&mut self.fb, plx, cy + 1, plabel, self.w, 8, 12, 24);
+        draw_text(&mut self.fb, plx, cy + 1, plabel, self.w, HUB_BG.0, HUB_BG.1, HUB_BG.2);
 
         cy += (24 * s_q) >> 8;
         draw_text(&mut self.fb, x + pad, cy, hh.live_line(), self.w, 122, 150, 170);

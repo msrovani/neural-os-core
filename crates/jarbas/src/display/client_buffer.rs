@@ -49,14 +49,14 @@ impl AppBuffer {
         self.dirty = true;
         let bpp = self.bpp;
         let stride = self.width * bpp;
-        let pix = u32::from_le_bytes([b, g, r, 0xFF]);
+        // s391 JD-08: loop em pixels (0..aw), NÃO aw/4 — mesmo bug SESSION_294.
+        let pix = [b, g, r, 0xFFu8];
         for dy in 0..ah {
             let off = (y + dy) * stride + x * bpp;
-            for dx in 0..(aw / 4) {
-                let idx = off + dx * 4;
+            for dx in 0..aw {
+                let idx = off + dx * bpp;
                 if idx + 4 <= self.data.len() {
-                    let slot = &mut self.data[idx..idx+4];
-                    slot.copy_from_slice(&pix.to_le_bytes());
+                    self.data[idx..idx + 4].copy_from_slice(&pix);
                 }
             }
         }

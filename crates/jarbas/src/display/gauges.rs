@@ -220,7 +220,8 @@ pub fn refresh_snapshot(log_serial: bool) {
 
 /// Desenha a barra a partir do snapshot (sem reamostrar).
 pub fn draw_status_gauges(fb: &mut DoubleBuffer, screen_w: usize) {
-    fb.fill_rect(0, 0, screen_w, STATUS_BAR_H, 8, 12, 24);
+    let theme = crate::display::theme::current_theme();
+    fb.fill_rect(0, 0, screen_w, STATUS_BAR_H, theme.bg.0, theme.bg.1, theme.bg.2);
 
     let snap = if SNAPSHOT_READY.load(Ordering::Acquire) {
         SNAPSHOT.lock().clone()
@@ -332,9 +333,15 @@ fn gauge_color(pct: f32) -> (u8, u8, u8) {
     }
 }
 
-/// Retorna copia do snapshot (compositor per-core).
+/// Retorna copia do snapshot (compositor per-core). Preferir `core_bar_data` no hot path.
 pub fn snapshot() -> GaugeSnapshot {
     SNAPSHOT.lock().clone()
+}
+
+/// s391: Copy-only para barras per-core no HUD — sem String clone.
+pub fn core_bar_data() -> ([f32; 32], u8) {
+    let g = SNAPSHOT.lock();
+    (g.per_core_load, g.core_count)
 }
 
 // ══════════════════════════════════════════════════════════════════════════

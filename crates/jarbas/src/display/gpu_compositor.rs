@@ -1,8 +1,10 @@
-//! ADR-0090 Tier 4 - GPU Compositing
+//! ADR-0090 Tier 4 - GPU Compositing (RESIDUAL / gated)
 //!
 //! Uses k_hal GPU BE (blit_2d, fill_rect_2d) for DMA-accelerated compositing.
 //! Gated by `is_blit_ready()` (Intel BCS canary passed); otherwise CPU path.
 //! Default OFF: QEMU / não-Intel / canário falho → CPU.
+//! s391 JD-10: módulo pub mas NÃO é o paint path do compositor — residual até
+//! `present_frame` adoptar GpuCompositor de ponta a ponta em HW real.
 
 use crate::display::gpu_backend;
 use crate::display::fb::DoubleBuffer;

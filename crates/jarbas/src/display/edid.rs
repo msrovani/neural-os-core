@@ -1,7 +1,8 @@
-//! ADR-0090 Tier 4 - Multi-Monitor via EDID
+//! ADR-0090 Tier 4 - Multi-Monitor via EDID (RESIDUAL / AWAITING_HW)
 //!
 //! EDID 1.3/1.4 parser for monitor detection via I2C/DDC.
 //! Gate: AWAITING_HW (QEMU does not emulate DDC/I2C).
+//! s391 JD-10: parser existe; sem producer I2C no boot — honesty residual.
 
 use alloc::string::String;
 use alloc::vec::Vec;

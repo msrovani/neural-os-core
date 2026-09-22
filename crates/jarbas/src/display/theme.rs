@@ -112,17 +112,21 @@ pub static THEMES: [Theme; 5] = [
 
 pub static ACTIVE_THEME: AtomicUsize = AtomicUsize::new(0);
 static THEME_MODE_ATOMIC: AtomicU8 = AtomicU8::new(0); // 0=Dark, 1=Light, 2=HighContrast
+/// s391: `/theme <nome>` pinta via THEMES[]; mode toggle usa COSMIC_*.
+static USE_NAMED_THEME: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
 // Static theme constants for cosmic modes (used by current_theme).
+// SESSION_291 navy — alinhado a Theme::cosmic_dark() (não cinza 0x0F).
 const COSMIC_DARK: Theme = Theme::new(
     "cosmic-dark",
-    (0x0F,0x0F,0x12), (0x18,0x18,0x1C),
-    (0xE8,0xE8,0xE8), (0x88,0x88,0x88),
-    (0xFF,0x8C,0x00), (0xCC,0x70,0x00),
-    (0x2A,0x2A,0x30), (0x14,0x14,0x18),
-    (0x2A,0x2A,0x30), (0xF4,0x43,0x36),
-    (0x4C,0xAF,0x50), (0xFF,0xB3,0x00),
-    (0x0F,0x0F,0x12),
+    (8, 12, 24), (0x18, 0x18, 0x1C),
+    (0xE8, 0xE8, 0xE8), (0x88, 0x88, 0x88),
+    (0xFF, 0x8C, 0x00), (0xCC, 0x70, 0x00),
+    (0x2A, 0x2A, 0x30), (0x14, 0x14, 0x18),
+    (0x2A, 0x2A, 0x30), (0xF4, 0x43, 0x36),
+    (0x4C, 0xAF, 0x50), (0xFF, 0xB3, 0x00),
+    (8, 12, 24),
 );
 const COSMIC_LIGHT: Theme = Theme::new(
     "cosmic-light",
@@ -180,8 +184,13 @@ pub fn current_mode() -> ThemeMode {
 }
 
 /// Lock-free theme lookup — called ~30x/frame no render loop.
+/// s391: `/theme` (USE_NAMED) e `set_mode` (COSMIC) compartilham o mesmo paint path.
 #[inline(always)]
 pub fn current_theme() -> &'static Theme {
+    if USE_NAMED_THEME.load(Ordering::Relaxed) {
+        let i = ACTIVE_THEME.load(Ordering::Relaxed).min(THEMES.len() - 1);
+        return &THEMES[i];
+    }
     match THEME_MODE_ATOMIC.load(Ordering::Relaxed) {
         1 => &COSMIC_LIGHT,
         2 => &HIGH_CONTRAST,
@@ -190,9 +199,31 @@ pub fn current_theme() -> &'static Theme {
 }
 
 pub fn apply(name: &str) -> Result<(), &'static str> {
+    match name {
+        "cosmic-dark" | "dark" => {
+            USE_NAMED_THEME.store(false, Ordering::Relaxed);
+            set_mode(ThemeMode::Dark);
+            k_nano::slog_jarbas!("THEME", "ok", "Aplicado: cosmic-dark");
+            return Ok(());
+        }
+        "cosmic-light" | "light" => {
+            USE_NAMED_THEME.store(false, Ordering::Relaxed);
+            set_mode(ThemeMode::Light);
+            k_nano::slog_jarbas!("THEME", "ok", "Aplicado: cosmic-light");
+            return Ok(());
+        }
+        "high-contrast" | "hc" => {
+            USE_NAMED_THEME.store(false, Ordering::Relaxed);
+            set_mode(ThemeMode::HighContrast);
+            k_nano::slog_jarbas!("THEME", "ok", "Aplicado: high-contrast");
+            return Ok(());
+        }
+        _ => {}
+    }
     for (i, t) in THEMES.iter().enumerate() {
         if t.name == name {
             ACTIVE_THEME.store(i, Ordering::Relaxed);
+            USE_NAMED_THEME.store(true, Ordering::Relaxed);
             k_nano::slog_jarbas!("THEME", "ok", "Aplicado: {}", name);
             return Ok(());
         }
@@ -201,17 +232,18 @@ pub fn apply(name: &str) -> Result<(), &'static str> {
 }
 
 pub fn set_mode(mode: ThemeMode) {
+    USE_NAMED_THEME.store(false, Ordering::Relaxed);
     THEME_MODE_ATOMIC.store(mode as u8, Ordering::Relaxed);
 }
 
 pub fn toggle_mode() {
     let prev = THEME_MODE_ATOMIC.load(Ordering::Relaxed);
     let next = match prev {
-        0 => 1u8, // Dark → Light
-        1 => 2,   // Light → HighContrast
-        _ => 0,   // HighContrast → Dark
+        0 => ThemeMode::Light,
+        1 => ThemeMode::HighContrast,
+        _ => ThemeMode::Dark,
     };
-    THEME_MODE_ATOMIC.store(next, Ordering::Relaxed);
+    set_mode(next);
 }
 
 pub fn list_names() -> Vec<&'static str> {

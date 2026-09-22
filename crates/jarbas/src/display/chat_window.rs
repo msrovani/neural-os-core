@@ -457,7 +457,7 @@ impl ChatWindow {
             if cy < input_y + INPUT_H && cx >= mic_x && cx < mic_x + mic_w {
                 let new_val = !MIC_ACTIVE.load(Ordering::Relaxed);
                 MIC_ACTIVE.store(new_val, Ordering::Relaxed);
-                k_nano::slog_jarbas!("CHAT", "mic", "microfone {}", if new_val { "LIGADO" } else { "DESLIGADO" });
+                k_nano::slog_jarbas!("CHAT", "ok", "microfone {}", if new_val { "LIGADO" } else { "DESLIGADO" });
                 self.dirty = true;
                 return true;
             }

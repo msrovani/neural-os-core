@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s390b TEST
+# SESSION INDEX — neural-os-core v1.9.99-s391 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 391 | Jarbas UI | bughunt AIOS | Desktop/orb theme+hover | USE_NAMED; core_bar_data; hit_test_hover; tray honesty; theme.bg; aw/4; mesh stack; ADR-0090 §3.4 |
 | 390b | SelfHeal | residual wire | KERNEL_ERROR+Safety+CP | drain IRQ; can_spawn; Safety fleet; SKILL_CREATE Hermes; checkpoint fleet/shutdown |
 | 390 | SelfHeal | bughunt AIOS | I3/budget/LLM/silent | FwGpu load_status; no double-act; canonical budget=10; SKILL_CREATE honesty |
 | 389b | Logging | follow-up | SCORE/phase/fat-boot-log | default feature; PHASE_RANK; ensure_persisted; dump_into; HDA/TPM sev |
