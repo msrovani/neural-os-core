@@ -334,6 +334,10 @@ impl SttEngine {
         self.vocab
     }
 
+    /// M2: nome ausente → `&[]` (slice vazio honesto). Antes caía em
+    /// `&self.w[0].1` — silenciosamente devolvia o tensor ERRADO (a primeira
+    /// entrada do índice), o que produzia logits de um tensor que não era o
+    /// pedido sem nenhum sinal. Todos os callers verificam `.len()`.
     fn w(&self, name: &str) -> &[f32] {
         let alt = if name.contains("w_ih") {
             name.replace("w_ih", "weight_ih")
@@ -351,11 +355,7 @@ impl SttEngine {
                 return d;
             }
         }
-        if !self.w.is_empty() {
-            &self.w[0].1
-        } else {
-            &[]
-        }
+        &[]
     }
 
     // LSTM cell: w_ih: [4*dim, in_features] row-major; stride = inp.len().
@@ -939,6 +939,37 @@ pub fn is_stt_header(data: &[u8]) -> bool {
     saw_stt
 }
 
+/// M1: tamanho REAL do blob STT derivado do header/índice (não um hint fixo
+/// de 512 KB — blob maior era parseado truncado; menor lia além).
+///
+/// Offsets de tensor podem estar em bytes ou em índices f32 (ver `load`); o
+/// tamanho é o máximo das duas interpretações, limitado a 4 MB (STT CTC tiny).
+pub fn stt_blob_size(data: &[u8]) -> Option<usize> {
+    if !is_stt_header(data) {
+        return None;
+    }
+    let r4 = |o: usize| u32::from_le_bytes(data[o..o + 4].try_into().unwrap_or([0; 4]));
+    let n = r4(8) as usize;
+    let idx_end = 16usize.saturating_add(n.saturating_mul(40));
+    if data.len() < 64.min(idx_end) {
+        return None;
+    }
+    let mut end_b = idx_end; // offsets em bytes
+    let mut end_i = idx_end; // offsets em índices f32
+    let probe = n.min((data.len() - 16) / 40);
+    for i in 0..probe {
+        let b = 16 + i * 40;
+        let off = r4(b + 32) as usize;
+        let cnt = r4(b + 36) as usize;
+        if cnt == 0 {
+            continue;
+        }
+        end_b = end_b.max(off.saturating_add(cnt.saturating_mul(4)));
+        end_i = end_i.max(off.saturating_add(cnt).saturating_mul(4).saturating_add(16));
+    }
+    Some(end_b.max(end_i).min(4 * 1024 * 1024))
+}
+
 /// QEMU `-device loader` — scan [4G..6G) como Piper (addr sequencial do mesh ≠ 0x163).
 pub fn try_load_from_qemu_loader() -> bool {
     // Caminho canônico legado (scripts antigos).
@@ -962,8 +993,8 @@ pub fn try_load_from_qemu_loader() -> bool {
             addr = addr.saturating_add(0x100_000);
             continue;
         }
-        // Blob STT típico < 1 MB — fault-in 1 MB e parse.
-        let want = 1024 * 1024usize;
+        // M1: tamanho do header (índice); floor 64 KB, cap 4 MB.
+        let want = stt_blob_size(hdr).unwrap_or(1024 * 1024).clamp(64 * 1024, 4 * 1024 * 1024);
         let mut mapped = 0usize;
         while mapped < want {
             let page = va.saturating_add(mapped as u64);
@@ -1011,7 +1042,7 @@ fn try_load_stt_at(load_addr: u64) -> bool {
     if !is_stt_header(hdr) {
         return false;
     }
-    let size_hint = 512 * 1024usize;
+    let size_hint = stt_blob_size(hdr).unwrap_or(512 * 1024).clamp(64 * 1024, 4 * 1024 * 1024);
     let data = unsafe { core::slice::from_raw_parts(va, size_hint) };
     let mut eng = SttEngine::new();
     if eng.load(data) {

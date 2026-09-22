@@ -370,11 +370,10 @@ impl CorePairAllocator {
         let _ = core;
     }
 
-    /// Get current timestamp
+    /// Get current timestamp (TSC microssegundos, host cai no fallback da
+    /// calibragem CPUID — M7 onda 4; antes era placeholder 0 permanente).
     fn get_timestamp(&self) -> u64 {
-        // In a real implementation, this would read TSC
-        // For now, return a placeholder
-        0
+        crate::tsc::now_us()
     }
 
     /// Set MWAIT C-state

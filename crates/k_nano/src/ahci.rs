@@ -235,25 +235,29 @@ impl AhciDriver {
         let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
         let port_base = port.mmio_virt;
 
-        // Allocate command table (128 bytes)
-        let ct_pa = alloc_ahci_page();
+        // H4: command table page cacheada por driver (comandos síncronos, 1 slot).
+        let ct_pa = ahci_ct_page();
         if ct_pa == 0 { return false; }
         let ct_va = ct_pa + pmoff;
         core::ptr::write_bytes(ct_va as *mut u8, 0, 256);
 
-        // Allocate PRDT (Physical Region Descriptor Table)
-        let prdt_va = ct_va + 0x80;
-        let buf_pa = dma_va_to_pa(buffer.as_ptr() as u64, pmoff);
-
-        // PRDT entry
-        core::ptr::write_volatile((prdt_va + 0x00) as *mut u32, buf_pa as u32);       // DBA
-        core::ptr::write_volatile((prdt_va + 0x04) as *mut u32, (buf_pa >> 32) as u32); // DBA upper
-        core::ptr::write_volatile((prdt_va + 0x08) as *mut u32, ((count * 512 - 1) as u32) | 0x40000000); // DBC + IOC
+        // H3: PRDT por página de 4KB (DMA não-contíguo ok); reject se o
+        // buffer cruzar mais páginas do que cabe na command table (248 entradas)
+        // ou passar do teto DBC de 22 bits (4MB).
+        let bytes = count * 512;
+        let prdt_n = match build_prdt(ct_va + 0x80, buffer.as_ptr() as u64, bytes, pmoff, true) {
+            Some(n) => n,
+            None => {
+                crate::slog_nano!("Disk", "warn", "AHCI read refuse: count={} ({}B) fora do limite PRDT", count, bytes);
+                return false;
+            }
+        };
 
         // Command Header (32 bytes) at CLB + slot*32
+        // H1: DW0 bits 0-4 CFL=5, bit5 A=0 (ATA, não ATAPI!), bit6 W=0 (read).
         let ch_va = (port.clb_pa + pmoff) as *mut u8;
-        core::ptr::write_volatile(ch_va as *mut u16, (0x80 | 0x25) as u16);
-        core::ptr::write_volatile(ch_va.add(0x04) as *mut u16, 1);
+        core::ptr::write_volatile(ch_va as *mut u16, 5u16);
+        core::ptr::write_volatile(ch_va.add(0x02) as *mut u16, prdt_n as u16); // PRDTL
         core::ptr::write_volatile(ch_va.add(0x08) as *mut u32, ct_pa as u32);
         core::ptr::write_volatile(ch_va.add(0x0C) as *mut u32, (ct_pa >> 32) as u32);
         core::ptr::write_volatile(ch_va.add(0x10) as *mut u32, 0);
@@ -299,23 +303,24 @@ impl AhciDriver {
         let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
         let port_base = port.mmio_virt;
 
-        let ct_pa = alloc_ahci_page();
+        let ct_pa = ahci_ct_page();
         if ct_pa == 0 { return false; }
         let ct_va = ct_pa + pmoff;
         core::ptr::write_bytes(ct_va as *mut u8, 0, 256);
 
-        let prdt_va = ct_va + 0x80;
+        let bytes = count * 512;
+        let prdt_n = match build_prdt(ct_va + 0x80, buffer.as_ptr() as u64, bytes, pmoff, false) {
+            Some(n) => n,
+            None => {
+                crate::slog_nano!("Disk", "warn", "AHCI write refuse: count={} ({}B) fora do limite PRDT", count, bytes);
+                return false;
+            }
+        };
 
-        // Traducao de endereco: buffer do usuario -> fisico (ver dma_va_to_pa).
-        let buf_pa = dma_va_to_pa(buffer.as_ptr() as u64, pmoff);
-
-        core::ptr::write_volatile((prdt_va + 0x00) as *mut u32, buf_pa as u32);
-        core::ptr::write_volatile((prdt_va + 0x04) as *mut u32, (buf_pa >> 32) as u32);
-        core::ptr::write_volatile((prdt_va + 0x08) as *mut u32, ((count * 512 - 1) as u32) | 0x40000000);
-
+        // H1: CFL=5, W=1 (bit6), A=0 — nunca ATAPI num disco ATA.
         let ch_va = (port.clb_pa + pmoff) as *mut u8;
-        core::ptr::write_volatile(ch_va as *mut u16, (0x40 | 0x25) as u16);
-        core::ptr::write_volatile(ch_va.add(0x04) as *mut u16, 1);
+        core::ptr::write_volatile(ch_va as *mut u16, (0x40 | 5) as u16);
+        core::ptr::write_volatile(ch_va.add(0x02) as *mut u16, prdt_n as u16); // PRDTL
         core::ptr::write_volatile(ch_va.add(0x08) as *mut u32, ct_pa as u32);
         core::ptr::write_volatile(ch_va.add(0x0C) as *mut u32, (ct_pa >> 32) as u32);
         core::ptr::write_volatile(ch_va.add(0x10) as *mut u32, 0);
@@ -357,7 +362,7 @@ impl AhciDriver {
         let port = &self.ports[0];
         let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
         let port_base = port.mmio_virt;
-        let ct_pa = alloc_ahci_page();
+        let ct_pa = ahci_ct_page();
         if ct_pa == 0 {
             return false;
         }
@@ -409,4 +414,52 @@ fn alloc_ahci_page() -> u64 {
         Some(f) => f.start_address().as_u64(),
         None => 0,
     }
+}
+
+/// H4 (onda3): página de command table alocada UMA vez por driver — comandos
+/// são síncronos (espera PxCI), slot único basta. Antes: allocate_contiguous
+/// por I/O, sem free = leak de frames do PMM a cada read/write.
+static AHCI_CT_PAGE: spin::Mutex<u64> = spin::Mutex::new(0);
+
+fn ahci_ct_page() -> u64 {
+    let mut g = AHCI_CT_PAGE.lock();
+    if *g == 0 {
+        *g = alloc_ahci_page();
+    }
+    *g
+}
+
+/// Entradas PRDT que cabem na página de 4KB da command table:
+/// PRDT começa em +0x80 → (4096 - 128) / 16 = 248.
+const AHCI_PRDT_MAX: usize = 248;
+/// DBC tem 22 bits → um entry carrega no máx 4MB (nossos chunks são ≤4KB).
+const AHCI_MAX_XFER: usize = AHCI_PRDT_MAX * 4096;
+
+/// H3 (onda3): monta a PRDT página a página — o buffer não precisa ser
+/// fisicamente contíguo; cada página vira uma entrada. `ioc_last` marca IOC
+/// (bit 31, Interrupt On Completion) apenas na última entrada.
+/// None = transferência grande demais (logado pelo caller).
+unsafe fn build_prdt(prdt_va: u64, buf_va: u64, bytes: usize, pmoff: u64, ioc_last: bool) -> Option<usize> {
+    if bytes == 0 || bytes > AHCI_MAX_XFER {
+        return None;
+    }
+    let mut n = 0usize;
+    let mut off = 0usize;
+    while off < bytes {
+        if n >= AHCI_PRDT_MAX {
+            return None;
+        }
+        let va = buf_va + off as u64;
+        let chunk = core::cmp::min(bytes - off, 4096 - (va as usize & 0xFFF));
+        let pa = dma_va_to_pa(va, pmoff);
+        let e = prdt_va + (n * 16) as u64;
+        core::ptr::write_volatile(e as *mut u32, pa as u32);                     // DBA
+        core::ptr::write_volatile((e + 4) as *mut u32, (pa >> 32) as u32);       // DBA upper
+        let ioc = if ioc_last && off + chunk == bytes { 0x4000_0000 } else { 0 };
+        core::ptr::write_volatile((e + 8) as *mut u32, (chunk - 1) as u32 | ioc); // DBC + IOC
+        core::ptr::write_volatile((e + 12) as *mut u32, 0);                      // reserved
+        n += 1;
+        off += chunk;
+    }
+    Some(n)
 }

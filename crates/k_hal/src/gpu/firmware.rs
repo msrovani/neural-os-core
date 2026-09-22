@@ -21,6 +21,9 @@ use spin::Mutex;
 static FW_PRELOAD: Mutex<BTreeMap<String, Vec<u8>>> = Mutex::new(BTreeMap::new());
 static LAST_ACR: Mutex<Option<AcrReport>> = Mutex::new(None);
 static LAST_SW: Mutex<Option<SwReport>> = Mutex::new(None);
+/// MED (onda3): cache de presença por nome 8.3 — stat de diretório é idempotente,
+/// não repetir walk do root a cada probe (catálogo tem ~50 nomes × dispositivos).
+static FW_PRESENCE: Mutex<BTreeMap<String, bool>> = Mutex::new(BTreeMap::new());
 
 /// Injeta blob (ex.: lido via USB-MSC no bin) antes do ACR — chave = nome lógico (`fecs_bl.bin`).
 pub fn preload_blob(logical_name: &str, data: Vec<u8>) {
@@ -49,15 +52,9 @@ pub fn last_sw_report() -> Option<SwReport> {
     *LAST_SW.lock()
 }
 
-/// Carrega blob de firmware (preload → FAT 8.3 → VFS).
-pub fn load_firmware_file(name: &str) -> Option<Vec<u8>> {
-    if let Some(data) = FW_PRELOAD.lock().get(name) {
-        if !data.is_empty() {
-            return Some(data.clone());
-        }
-    }
-    // Aliases 8.3 gravados no FAT pela mkfat32 (encode_83).
-    let short: &[&str] = match name {
+/// Aliases 8.3 gravados no FAT pela mkfat32 (encode_83) para um nome lógico.
+fn firmware_aliases(name: &str) -> &'static [&'static str] {
+    match name {
         "fecs_bl.bin" => &["FECS_BL.BIN", "FW_FECS_BL_BIN"],
         "fecs_data.bin" => &["FECS_DAT.BIN", "FW_FECS_DATA_BIN"],
         "fecs_inst.bin" => &["FECS_INS.BIN", "FW_FECS_INST_BIN"],
@@ -122,7 +119,17 @@ pub fn load_firmware_file(name: &str) -> Option<Vec<u8>> {
         "gc_11_5_0_pfp.bin" => &["GC115PFP.BIN", "FW_GC_11_5_0_PFP_BIN"],
         "gc_11_5_0_rlc.bin" => &["GC115RLC.BIN", "FW_GC_11_5_0_RLC_BIN"],
         _ => &[],
-    };
+    }
+}
+
+/// Carrega blob de firmware (preload → FAT 8.3 → VFS).
+pub fn load_firmware_file(name: &str) -> Option<Vec<u8>> {
+    if let Some(data) = FW_PRELOAD.lock().get(name) {
+        if !data.is_empty() {
+            return Some(data.clone());
+        }
+    }
+    let short = firmware_aliases(name);
 
     for alias in short {
         if let Some(data) = read_fat32_root(alias) {
@@ -148,18 +155,39 @@ pub fn load_firmware_file(name: &str) -> Option<Vec<u8>> {
     None
 }
 
-/// Leitura direta da raiz FAT32 (ATA) — caminho HW real (USB/AHCI com MBR 0x0C).
+/// Leitura da raiz FAT32 em QUALQUER device detectado (ATA→AHCI→NVMe→USB,
+/// M3 onda3: antes só ATA — boot pendrive sem ATA não achava firmware).
+/// Cobre MBR FAT 0x0B/0x0C/0x1C/0x73 e GPT 0xEF/0x0C via `read_root_file_dev`.
 fn read_fat32_root(name: &str) -> Option<Vec<u8>> {
     unsafe {
-        let ata = k_nano::ATA_DRIVER.lock();
-        let ata = ata.as_ref()?;
-        let parts = k_nano::fat32::read_mbr(ata);
-        for p in &parts {
-            if !matches!(p.type_code, 0x0B | 0x0C | 0x1C | 0x73) {
-                continue;
+        if let Some(ref mut d) = *k_nano::globals::ATA_DRIVER.lock() {
+            let dev: &mut dyn k_nano::block_dev::BlockDevice = d;
+            for p in k_nano::fat32::partitions_on_dev(dev) {
+                if let Some(data) = k_nano::fat32::read_root_file_dev(dev, &p, name) {
+                    return Some(data);
+                }
             }
-            if let Some(fs) = k_nano::fat32::Fat32Reader::new(ata, p) {
-                if let Some(data) = fs.read_file(name) {
+        }
+        if let Some(ref mut d) = *k_nano::globals::AHCI_DRIVER.lock() {
+            let dev: &mut dyn k_nano::block_dev::BlockDevice = d;
+            for p in k_nano::fat32::partitions_on_dev(dev) {
+                if let Some(data) = k_nano::fat32::read_root_file_dev(dev, &p, name) {
+                    return Some(data);
+                }
+            }
+        }
+        if let Some(ref mut d) = *k_nano::disk_agent::nvme::NVME_DRIVER.lock() {
+            let dev: &mut dyn k_nano::block_dev::BlockDevice = d;
+            for p in k_nano::fat32::partitions_on_dev(dev) {
+                if let Some(data) = k_nano::fat32::read_root_file_dev(dev, &p, name) {
+                    return Some(data);
+                }
+            }
+        }
+        if let Some(ref mut d) = *k_nano::globals::USB_MSC.lock() {
+            let dev: &mut dyn k_nano::block_dev::BlockDevice = d;
+            for p in k_nano::fat32::partitions_on_dev(dev) {
+                if let Some(data) = k_nano::fat32::read_root_file_dev(dev, &p, name) {
                     return Some(data);
                 }
             }
@@ -168,9 +196,53 @@ fn read_fat32_root(name: &str) -> Option<Vec<u8>> {
     None
 }
 
-/// Probe de presença (FAT/VFS) sem carregar o blob inteiro na heap se já cacheado.
+/// Stat de presença (nome → bool) com cache — NÃO lê o blob (probe M8/onda3).
+fn fat_root_present(name: &str) -> bool {
+    if let Some(hit) = FW_PRESENCE.lock().get(name) {
+        return *hit;
+    }
+    let found = unsafe {
+        let mut ok = false;
+        if let Some(ref mut d) = *k_nano::globals::ATA_DRIVER.lock() {
+            ok |= k_nano::fat32::lookup_file_on_dev(d, name).is_some();
+        }
+        if !ok {
+            if let Some(ref mut d) = *k_nano::globals::AHCI_DRIVER.lock() {
+                ok |= k_nano::fat32::lookup_file_on_dev(d, name).is_some();
+            }
+        }
+        if !ok {
+            if let Some(ref mut d) = *k_nano::disk_agent::nvme::NVME_DRIVER.lock() {
+                ok |= k_nano::fat32::lookup_file_on_dev(d, name).is_some();
+            }
+        }
+        if !ok {
+            if let Some(ref mut d) = *k_nano::globals::USB_MSC.lock() {
+                ok |= k_nano::fat32::lookup_file_on_dev(d, name).is_some();
+            }
+        }
+        ok
+    };
+    FW_PRESENCE.lock().insert(String::from(name), found);
+    found
+}
+
+/// Probe de presença (FAT/VFS) por nome — cache de diretório, sem ler o blob.
+/// Antes: `load_firmware_file().is_some()` carregava o blob inteiro na heap
+/// só para descartar (~1MB+ por probe, por arquivo do catálogo).
 pub fn has_named_blob(name: &str) -> bool {
-    load_firmware_file(name).is_some()
+    if FW_PRELOAD.lock().get(name).map_or(false, |d| !d.is_empty()) {
+        return true;
+    }
+    for alias in firmware_aliases(name) {
+        if fat_root_present(alias) {
+            return true;
+        }
+    }
+    // Legado: FW_<NAME> / FW_GP108_<NAME>
+    let upper = name.to_uppercase().replace(".", "_");
+    fat_root_present(&alloc::format!("FW_{}", upper))
+        || fat_root_present(&alloc::format!("FW_GP108_{}", upper))
 }
 
 /// Carrega ACR Pascal via `nvidia_pascal_acr` + aplica `sw_*` quando WPR ok.

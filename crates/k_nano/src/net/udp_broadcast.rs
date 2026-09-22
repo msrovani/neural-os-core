@@ -582,7 +582,8 @@ pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
             continue;
         }
         let chunk = &pkt[FRAG_HEADER_SIZE..];
-        if chunk.is_empty() {
+        // M10 (onda 4): chunk maior que o máximo = header mentiroso — drop.
+        if chunk.is_empty() || chunk.len() > FRAG_MAX_CHUNK {
             continue;
         }
         let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
@@ -663,6 +664,16 @@ pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
             }
             table[slot_pos] = None;
             drop(table);
+            // M10: o total do header tem que bater com o que foi reassemblado —
+            // divergência = header mentiroso / truncamento silencioso.
+            if out.len() != complete_len {
+                crate::slog_nano!(
+                    "P2P", "warn",
+                    "frag RX id={} DROP len_mismatch out={} esperado={}",
+                    complete_id, out.len(), complete_len
+                );
+                continue;
+            }
             crate::slog_nano!(
                 "P2P", "ok",
                 "frag RX id={} partes={} len={}", complete_id, complete_parts, complete_len
@@ -699,6 +710,11 @@ fn send_frack(dest_mac: [u8; 6], port: u16, frag_id: u32, idx: u32) -> bool {
     ack.extend_from_slice(&idx.to_le_bytes());
     send_unicast(&ack, dest_mac, port)
 }
+
+/// Stash de pacotes não-FRACK consumidos no ACK-wait do
+/// `send_fragmented_unicast` (M10 onda 4): antes eram silenciosamente
+/// descartados. `recv_fragmented_unicast` drena a stash antes do NIC.
+static UCAST_STASH: Mutex<Vec<(Vec<u8>, [u8; 6])>> = Mutex::new(Vec::new());
 
 /// Envia payload unicast; fragmenta se > 1200B. O payload deve ser o blob JÁ
 /// assinado (NoProto+payload+assinatura) — a fragmentação é ANTES do wire, o
@@ -737,13 +753,22 @@ pub fn send_fragmented_unicast(payload: &[u8], dest_mac: [u8; 6], port: u16) -> 
                     if now.wrapping_sub(start) >= FRACK_TIMEOUT_TICKS {
                         break; // timeout → retransmite
                     }
-                    if let Some((rx, _src_mac)) = recv_unicast_with_mac(port) {
+                    if let Some((rx, src_mac)) = recv_unicast_with_mac(port) {
                         if rx.len() >= FRACK_HEADER_SIZE && &rx[0..6] == b"FRACK\0" {
                             let ack_id = u32::from_le_bytes([rx[6], rx[7], rx[8], rx[9]]);
                             let ack_idx = u32::from_le_bytes([rx[10], rx[11], rx[12], rx[13]]);
                             if ack_id == id && ack_idx == idx {
                                 acked = true;
                                 break;
+                            }
+                        } else {
+                            // M10: pacote não-FRACK chegou no meio do ACK-wait —
+                            // faz stash p/ recv_fragmented_unicast, não descarta.
+                            let mut st = UCAST_STASH.lock();
+                            if st.len() < 8 {
+                                st.push((rx, src_mac));
+                            } else {
+                                crate::net::mesh::note_frag_drop_other();
                             }
                         }
                     }
@@ -788,7 +813,17 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
         }
     }
     loop {
-        let Some((pkt, src_mac)) = recv_unicast_with_mac(port) else { return None; };
+        // M10: drena a stash (não-FRACK do ACK-wait) antes do NIC.
+        let (pkt, src_mac) = {
+            let mut st = UCAST_STASH.lock();
+            if !st.is_empty() {
+                st.remove(0)
+            } else {
+                drop(st);
+                let Some(rx) = recv_unicast_with_mac(port) else { return None; };
+                rx
+            }
+        };
         if !pkt.starts_with(b"FRAG\0") {
             // Payload normal (compatibilidade) — retorna direto.
             return Some(pkt);
@@ -815,7 +850,8 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
             continue;
         }
         let chunk = &pkt[FRAG_HEADER_SIZE..];
-        if chunk.is_empty() {
+        // M10: chunk maior que o máximo = header mentiroso — drop.
+        if chunk.is_empty() || chunk.len() > FRAG_MAX_CHUNK {
             continue;
         }
         let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
@@ -907,6 +943,15 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
             }
             table[slot_pos] = None;
             drop(table);
+            // M10: o total do header tem que bater com o reassemblado.
+            if out.len() != complete_len {
+                crate::slog_nano!(
+                    "P2P", "warn",
+                    "frag-unicast RX id={} DROP len_mismatch out={} esperado={}",
+                    complete_id, out.len(), complete_len
+                );
+                continue;
+            }
             crate::slog_nano!(
                 "P2P", "info",
                 "frag-unicast RX id={} partes={} len={}", complete_id, complete_parts, complete_len

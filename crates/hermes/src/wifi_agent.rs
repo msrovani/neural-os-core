@@ -169,10 +169,13 @@ impl WifiAgent {
             return;
         }
 
-        // Inicializa driver
+        // Inicializa driver (onda 4: o Err era engolido — loga o motivo;
+        // o H4 no engine k_hal recusa send/recv sem init bem-sucedido).
         ACTIVE_DRIVER.lock(|driver| {
             if let Some(wifi) = driver {
-                let _ = wifi.init();
+                if let Err(e) = wifi.init() {
+                    k_nano::slog_bin!("WIFI-HW", "warn", "wifi init ERR={}", e);
+                }
             }
         });
 

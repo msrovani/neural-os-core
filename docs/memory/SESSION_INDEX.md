@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s394 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s400 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,12 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 400 | Tools/Data/FW | bughunt AIOS | §10/§11/§13 recon | FW não-rep.; vendor non-numérico; hash random labels; paths hardcoded; §13 contagens stale |
+| 399 | Audio/IA | bughunt AIOS | §5+§7 fixes | infer_queue race; piper 16k; TTS dropped; H2O sort; STT blob size; UAC usage |
+| 398 | Rede | bughunt AIOS | §4 fixes | mesh probe rw+cleanup; RemoteCellChannel deletado; transport BE; wifi UAF/inits |
+| 397 | GPU/Storage | bughunt AIOS | §3+§6 fixes | AHCI CFL/PRDT; Intel MI opcodes; NVMe 4Kn; ATA IDENTIFY bps*2; sys_installer closure |
+| 396 | Kernel Core | bughunt AIOS | §2 fixes | IDT/ISTs; #PF cure; Chase-Lev; AP lock+sti; NTP honesto; mailbox teto |
+| 395 | Agentes+Seg | bughunt AIOS | §1+§8+§9 fixes | audit fail-closed; safety all_green; AutoLearn honesty; verify_pinned; hash-fallback |
 | 394 | BEI | bughunt AIOS | ADR-0060 H1-H11/M12-M22/LOW | MPMC bounded CAS; merge_pair real; feed_plasticity; L0 TTL+auto_promote+L7 cap; LAST_BUDGET anti-spam; hal_offer sev; wasmi portable-dispatch OK; agents.rs:905 path fix |
 | 392 | Boot/Limine | bughunt AIOS | GUID ESP+stack RSP+OVMF | bytes_le; saturating_sub; dual pflash; ELF overflow; FAT bps; PACK none; canvas |
 | 393 | MHI | bughunt docs-only | fix-1/2/3 + canvas + pins | buddy 1<<o+clamp; write-back morto del; facade mhi_tick; talc 4.4.3/x86_64 0.14 PINADOS; rogue revert; checks OK |

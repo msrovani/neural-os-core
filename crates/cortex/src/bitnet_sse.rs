@@ -3,6 +3,12 @@
 //! Contrato Onda 0: W∈{-1,0,+1} ⇒ ADD / SUB / SKIP da ativação — **sem** `W*x` mul.
 //! Accumulação em XMM (`_mm_add_ps`). Soft-float: sem intrins XMM de load/store i8
 //! (SESSION_336); pesos lidos via `get_weight` + delta f32.
+//!
+//! Canário: `sse2_sret_boot_canary()` (abaixo) é o guarda do bug sret soft-float
+//! (SESSION_336/362) — host test `sse2_sret_boot_canary_passes_on_host` +
+//! paridade SSE2↔scalar (`sse2_add_sub_skip_parity_vs_scalar`, formas
+//! Falcon3-like em `falcon3_shaped_parity_64x32`) cobrem o caminho. O canário
+//! host não prova o target soft-float — aceite de metal depende do boot canary.
 
 use crate::tensor::{PackedTernaryTensor, Tensor};
 

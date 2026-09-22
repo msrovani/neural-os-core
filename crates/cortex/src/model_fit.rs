@@ -409,18 +409,25 @@ pub fn falcon3_boot_names() -> &'static [&'static str] {
     ]
 }
 
+/// M7: match por **prefixo** FALCON* (um filename FAT 8.3 nunca contém FALCON no
+/// meio) + alias legado `BITNET3B*` → Daily3B (o nome BITNET3B era o SKU errado —
+/// SESSION_298; o blob de 3B lab é Falcon3).
 pub fn falcon3_kind_of_name(name: &str) -> Option<Falcon3Kind> {
     let u = name.to_ascii_uppercase();
-    if u.contains("10B") || u.contains("FALCON10") || u.contains("F10B") || u.contains("FALCN10") {
+    if u.starts_with("BITNET3B") {
+        return Some(Falcon3Kind::Daily3B);
+    }
+    // Tokens de tamanho primeiro ("FALCON3_1B.V6" é 1B, não 3B — SESSION_298).
+    if u.contains("10B") || u.starts_with("FALCON10") || u.starts_with("FALCN10") || u.starts_with("F10B") {
         return Some(Falcon3Kind::Large10B);
     }
-    if u.contains("PRO") || u.contains("7B") || u.contains("FALCON7") || u.contains("FALCN7") {
+    if u.contains("PRO") || u.contains("7B") || u.starts_with("FALCON7") || u.starts_with("FALCN7") {
         return Some(Falcon3Kind::Goal7B);
     }
-    if u.contains("1B") || u.contains("F1B") || u.contains("FALCN1") {
+    if u.contains("1B") || u.starts_with("FALCN1") || u.starts_with("F1B") {
         return Some(Falcon3Kind::Tiny1B);
     }
-    if u.contains("3B") || u.contains("FALCON3") || u.contains("FALCN3") {
+    if u.starts_with("FALCON3") || u.starts_with("FALCN3") || u.starts_with("F3B") {
         return Some(Falcon3Kind::Daily3B);
     }
     None

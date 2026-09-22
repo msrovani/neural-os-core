@@ -681,15 +681,22 @@ pub fn issuer_pinned(issuer_der: &[u8]) -> bool {
 }
 
 pub fn ca_chain_boot_smoke() -> bool {
+    // M11 (onda 4): CA e leaf são blobs DISTINTOS — o teste antigo usava o
+    // mesmo blob dos dois lados (circular: qualquer membership trivial passava).
+    // Passa = CA pinado ∧ leaf NÃO está nos pins (fail esperado = parte da prova).
     let ca = b"NEURAL-OS-TEST-CA-DER-V1";
-    let leaf_issuer = ca;
-    let ok = pin_ca_der(ca) && issuer_pinned(leaf_issuer);
+    let leaf = b"NEURAL-OS-TEST-LEAF-DER-V1";
+    let pin_ok = pin_ca_der(ca);
+    let ca_in = issuer_pinned(ca);
+    let leaf_in_ca = issuer_pinned(leaf);
+    let ok = pin_ok && ca_in && !leaf_in_ca;
     k_nano::slog_hermes!(
         "TLS",
         "info",
-        "step=ca_chain status={} pins={} VERDICT={}",
+        "step=ca_chain status={} pins={} leaf_in_ca={} VERDICT={}",
         if ok { "OK" } else { "FAIL" },
         CA_N.load(Ordering::Relaxed),
+        leaf_in_ca,
         if ok { "PASS" } else { "FAIL" }
     );
     ok

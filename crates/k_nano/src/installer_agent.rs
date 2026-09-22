@@ -252,26 +252,31 @@ impl AutoInstallerAgent {
         for idx in start..=3 {
             // Valida target ≠ source: fonte é sempre o boot device
             if idx == 0 { continue; }
-            let target = SysInstaller::device_for_index(idx);
-            let Some(tgt) = target else { continue; };
-            // Nunca instalar no próprio boot device (destruiria a fonte)
-            let tgt_ptr: *mut dyn BlockDevice = tgt;
-            if core::ptr::eq(src_ptr as *const u8, tgt_ptr as *const u8) {
-                crate::slog_nano!("INSTALL", "warn",
-                    "disco #{} e o proprio boot device, skip", idx);
-                continue;
-            }
-            let mut inst = SysInstaller::new();
-            // SAFETY: source e target são dispositivos distintos (endereços
-            // comparados acima) em locks diferentes — não há aliasing.
-            let src = unsafe { &mut *src_ptr };
-            match inst.install(src, tgt, kernel) {
-                Ok(()) => {
-                    return Ok(alloc::format!("instalado em disco #{} ({} bytes)", idx, inst.bytes_copied));
+            // M6 (onda3): closure sob o lock — sem &'static mut vazando do Mutex.
+            let outcome = SysInstaller::with_device(idx, |tgt| {
+                let tgt_ptr: *mut dyn BlockDevice = tgt;
+                if core::ptr::eq(src_ptr as *const u8, tgt_ptr as *const u8) {
+                    crate::slog_nano!("INSTALL", "warn",
+                        "disco #{} e o proprio boot device, skip", idx);
+                    return None;
                 }
-                Err(e) => {
-                    crate::slog_nano!("INSTALL", "warn", "disco #{} falhou: {}", idx, e);
-                    continue;
+                let mut inst = SysInstaller::new();
+                // SAFETY: source e target são dispositivos distintos (endereços
+                // comparados acima) em locks diferentes — sem aliasing.
+                let src = unsafe { &mut *src_ptr };
+                match inst.install(src, tgt, kernel) {
+                    Ok(()) => Some(inst.bytes_copied),
+                    Err(e) => {
+                        crate::slog_nano!("INSTALL", "warn", "disco #{} falhou: {}", idx, e);
+                        None
+                    }
+                }
+            });
+            match outcome {
+                // Disco existe mas é o boot device ou falhou → próximo.
+                None | Some(None) => continue,
+                Some(Some(bytes)) => {
+                    return Ok(alloc::format!("instalado em disco #{} ({} bytes)", idx, bytes));
                 }
             }
         }

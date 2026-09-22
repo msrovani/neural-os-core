@@ -119,14 +119,16 @@ impl AtaDriver {
         best
     }
 
-    /// Detecta bytes per sector via IDENTIFY words 117-118.
-    /// Word 117 = logical sector size (low 16 bits)
-    /// Word 118 = logical sector size (high 16 bits)
-    /// Valor 0 = não reportado → assume 512.
+    /// Detecta bytes per sector via IDENTIFY (ATA/ATAPI-8 §7.16.7.1):
+    /// word 106 bit 12 = "bytes per logical sector > 512, words 117-118 válidas".
+    /// Words 117-118 = tamanho em **palavras de 16 bits** (não bytes) → ×2.
+    /// Sem o bit 12 (ou valor 0), 117-118 não são válidas → 512.
     fn detect_sector_size(id: &[u16; 256]) -> u32 {
-        let lo = id[117] as u32;
-        let hi = id[118] as u32;
-        let bps = lo | (hi << 16);
+        if id[106] & (1 << 12) == 0 {
+            return 512;
+        }
+        let words = (id[117] as u32) | ((id[118] as u32) << 16);
+        let bps = words.saturating_mul(2);
         // FAT spec: 512, 1024, 2048, 4096. Outros valores → 512.
         match bps {
             512 | 1024 | 2048 | 4096 => bps,
@@ -456,6 +458,7 @@ mod tests {
 
     #[test]
     fn detect_sector_size_512() {
+        // bit12 de word 106 apagado → 117-118 não válidos → 512 padrão.
         let mut id = [0u16; 256];
         id[117] = 512;
         id[118] = 0;
@@ -464,8 +467,10 @@ mod tests {
 
     #[test]
     fn detect_sector_size_4096() {
+        // bit12 set + 117-118 = 2048 palavras de 16 bits → 4096 bytes.
         let mut id = [0u16; 256];
-        id[117] = 4096;
+        id[106] = 1 << 12;
+        id[117] = 2048;
         id[118] = 0;
         assert_eq!(AtaDriver::detect_sector_size(&id), 4096);
     }
@@ -479,7 +484,8 @@ mod tests {
     #[test]
     fn detect_sector_size_invalid_defaults_512() {
         let mut id = [0u16; 256];
-        id[117] = 750; // não é potência de 2 válida
+        id[106] = 1 << 12;
+        id[117] = 375; // 750 bytes — não é tamanho válido
         assert_eq!(AtaDriver::detect_sector_size(&id), 512);
     }
 

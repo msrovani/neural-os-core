@@ -2,6 +2,8 @@
 //! PCI class 0x020000. MMIO-based register access.
 //! TX/RX descriptor rings (64 entries each).
 //! Baseado na Intel Gigabit Ethernet Controller datasheet.
+//! Fonte única: a implementação mora aqui — `k_hal::net::e1000` é só uma
+//! facade `pub use` deste módulo (M9 onda 4).
 
 use alloc::vec::Vec;
  // kept for potential I/O bar fallback

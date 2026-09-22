@@ -110,16 +110,18 @@ pub fn parse_model_header(data: &[u8]) -> Option<ModelHeader> {
 // ── Static: header do modelo carregado ─────────────────────────────────
 
 static HEADER_LOADED: AtomicBool = AtomicBool::new(false);
-static mut LOADED_HEADER: ModelHeader = ModelHeader {
+// L4: sem `static mut` — ModelHeader é Copy/plain-data; leitura/escrita via
+// spin::Mutex (barreira Acquire/Release explícita, sem UB de data race).
+static LOADED_HEADER: spin::Mutex<ModelHeader> = spin::Mutex::new(ModelHeader {
     hidden: 0, num_layers: 0, num_heads: 0, vocab: 0, max_seq: 0,
     intermediate: 0, kv_heads: 0, q_dim: 0, num_medusa: 0,
     tie: false, feat: 0, embed_type: 0, file_size: 0,
-};
+});
 
 /// Store the header of the loaded model (called from set_model or load path).
 /// AIOS: dispara sync de SKU Falcon3 (1B/3B/7B/10B) no lado k_hal via hook.
 pub fn set_model_header(h: ModelHeader) {
-    unsafe { LOADED_HEADER = h; }
+    *LOADED_HEADER.lock() = h;
     HEADER_LOADED.store(true, Ordering::Release);
     let f = MODEL_HEADER_HOOK.load(Ordering::Acquire);
     if f != 0 {
@@ -161,7 +163,7 @@ pub fn register_model_header_hook(f: fn()) {
 /// Get the header of the currently loaded model, if any.
 pub fn loaded_model_header() -> Option<ModelHeader> {
     if HEADER_LOADED.load(Ordering::Acquire) {
-        unsafe { Some(LOADED_HEADER) }
+        Some(*LOADED_HEADER.lock())
     } else {
         None
     }

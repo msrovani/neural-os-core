@@ -5,4 +5,4 @@
 
 pub mod mesh;
 
-pub use mesh::{CellChannel, CellMessageDescriptor, LocalCellChannel, RemoteCellChannel, ChannelType};
+pub use mesh::{CellChannel, CellMessageDescriptor, LocalCellChannel, ChannelType};

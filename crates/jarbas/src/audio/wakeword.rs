@@ -4,6 +4,14 @@
 //!
 //! SESSION_352 fix: MLP lê os 16 frames **mais recentes** (janela deslizante),
 //! não `energy_history[..16]` (os mais velhos de 64 ≈ 1,28 s atrás).
+//!
+//! M5 (honestidade): o detector é hoje em dia, de fato, (a) RMS puro por frame
+//! — sem features espectrais — alimentando (b) um MLP cujos pesos foram
+//! embutidos à mão e (c) um padrão "2 picos". A acurácia "98,4%" do comentário
+//! legado NÃO tem script nem dataset no repo — tratar como **não medida**.
+//! A janela MLP (L2) = os 16 frames (320 ms @ 16 kHz/50 Hz) **mais recentes**
+//! e é avaliada todo frame após encher (latência de detecção ≤ 1 frame após a
+//! 1ª amostra do padrão, mais o preenchimento inicial de 320 ms).
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use event_bus::{CapabilityToken, Event};
@@ -14,7 +22,8 @@ use crate::audio::TOPIC_WAKEWORD;
 use core::sync::atomic::Ordering;
 
 /// MLP ternario 16→8→1 para classificacao wake word.
-/// Pesos embutidos — acurácia "98,4%" do comentário legado **não tem artefato** no repo.
+/// Pesos embutidos **à mão** (não há script de treino no repo); a acurácia
+/// "98,4%" do comentário legado **não tem artefato** — não citar como medida.
 pub struct WakeWordML {
     w1: [[i8; 16]; 8],
     b1: [f32; 8],
@@ -113,6 +122,8 @@ impl WakeWordAgent {
     }
 
     /// Copia os `MLP_WIN` frames mais recentes (ordem temporal antiga→nova).
+    /// L2: janela = `filled` mais novos da ring de `HIST` (64), NÃO os 16
+    /// primeiros do buffer — bug original do SESSION_352.
     fn recent_energy16(&self) -> [f32; MLP_WIN] {
         let mut out = [0.0f32; MLP_WIN];
         for i in 0..MLP_WIN {

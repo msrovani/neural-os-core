@@ -51,17 +51,13 @@ pub fn h2o_evict(cache: &mut KvCache, recent: usize, heavy: usize) -> usize {
         }
         scores.push((pos, acc));
     }
-    // Partial select: keep top `heavy` by score
+    // M6: partial select → sort_unstable (scores ~centenas de posições; a
+    // seleção manual O(older×heavy) era quadrática no caminho hot do decode).
+    // Ordem decrescente de score; NaN não ocorre (k_dim guarded) — Equal fallback.
+    scores.sort_unstable_by(|a, b| {
+        b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal)
+    });
     let keep_h = heavy.min(scores.len());
-    for i in 0..keep_h {
-        let mut best = i;
-        for j in (i + 1)..scores.len() {
-            if scores[j].1 > scores[best].1 {
-                best = j;
-            }
-        }
-        scores.swap(i, best);
-    }
     let mut keep_idx: Vec<usize> = scores.iter().take(keep_h).map(|(p, _)| *p).collect();
     keep_idx.sort_unstable();
     // Append recent positions

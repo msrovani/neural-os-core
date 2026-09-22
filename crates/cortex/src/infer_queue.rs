@@ -418,13 +418,21 @@ fn try_claim_into_active() -> bool {
         if h >= t {
             return false;
         }
+        let slot = &slots()[h % QUEUE_CAP];
+        // H1: submit publica os campos do slot ANTES do store occupied=true
+        // (Release). Avançar HEAD num slot ainda não publicado lia lixo/=
+        // "[cancelled]" silencioso. Claim só se occupied==true; HEAD só avança
+        // quando há slot publicado para clamar.
+        if !slot.occupied.load(Ordering::Acquire) {
+            return false;
+        }
         if HEAD
             .compare_exchange_weak(h, h + 1, Ordering::SeqCst, Ordering::Relaxed)
             .is_err()
         {
             continue;
         }
-        let slot = &slots()[h % QUEUE_CAP];
+        // Cinto-e-suspensórios pós-CAS: revalida occupied (cancel race).
         if !slot.occupied.swap(false, Ordering::AcqRel) {
             continue;
         }
@@ -557,6 +565,9 @@ fn finish_job(st: &mut ActiveState, text: &str) {
     );
 }
 
+/// Fronteira de frase para TTS parcial — **whitelist** fechada: só `. ! ? ;`
+/// e só quando seguidos de ` '/\n' ou fim (não divide "3.14" nem a...
+/// reticências"). Qualquer outro byte (vírgula, dois-pontos, UTF-8) nunca corta.
 fn sentence_boundary(buf: &str) -> Option<usize> {
     let b = buf.as_bytes();
     for i in 0..b.len() {

@@ -70,7 +70,9 @@ pub fn enqueue(f: ApJobFn, job_id: usize) -> bool {
     }
     TAIL.store(t + 1, Ordering::Release);
     // Wake APs: write the monitor flag so MWAIT-idle APs see store-before-IPI.
-    MONITOR_FLAG.0.store(MONITOR_FLAG.0.load(Ordering::Relaxed).wrapping_add(1), Ordering::Release);
+    // L22 (onda 4): fetch_add, não load+store — perdia wake entre enqueues
+    // concorrentes (lost update).
+    MONITOR_FLAG.0.fetch_add(1, Ordering::Release);
     true
 }
 

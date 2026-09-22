@@ -16,7 +16,7 @@
 //! Exemplo:
 //! `[T+12] [R1] [k-hal] [USB] [ok] - home=k_hal::usb::hub_msc | MSC bringup OK port=5`
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 /// Privilege / consciousness ring tag.
 pub const R0: &str = "R0";
@@ -124,6 +124,26 @@ mod channel_a_tests {
 /// Emite linha slog. TRACE não vai à consola (default); ficheiro só com `boot-trace`.
 pub fn emit(ring: &str, krate: &str, item: &str, sub: &str, args: core::fmt::Arguments) {
     let sev = Sev::from_sub(sub);
+    // L20 (onda 4 / ADR-0092): token de severidade DESCONHECIDO caía em Trace
+    // mudo — dmesg cego. Emite UMA linha warn rate-limited (a cada ~300 ticks)
+    // nomeando o token para o dev mapear em `Sev::from_sub`. A linha original
+    // continua com a severidade classificada (Trace) — não promove a mensagem.
+    if sev == Sev::Trace
+        && !matches!(sub, "trace" | "TRACE" | "debug" | "ckpt" | "mmIO" | "mmio")
+    {
+        static LAST_UNK_LOG: AtomicU64 = AtomicU64::new(0);
+        let n = UNK_SUB_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+        let last = LAST_UNK_LOG.load(Ordering::Relaxed);
+        if last == 0 || now.wrapping_sub(last) >= 300 {
+            LAST_UNK_LOG.store(now, Ordering::Relaxed);
+            crate::serial::emit_tagged(
+                "slog", "slog", "slog", "warn",
+                format_args!("sev desconhecida '{}' — total={} (mapear em Sev::from_sub)", sub, n),
+                true, true,
+            );
+        }
+    }
     let to_console = console_allows(sev);
     let to_file = file_allows(sev);
     if !to_console && !to_file {
@@ -131,6 +151,9 @@ pub fn emit(ring: &str, krate: &str, item: &str, sub: &str, args: core::fmt::Arg
     }
     crate::serial::emit_tagged(ring, krate, item, sev.as_str(), args, to_console, to_file);
 }
+
+/// Contagem total de linhas slog com severidade desconhecida (diagnóstico).
+static UNK_SUB_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Core structured log. Prefer crate helpers `slog_hal!` / `slog_hermes!` etc.
 #[macro_export]

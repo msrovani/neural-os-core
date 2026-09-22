@@ -452,7 +452,7 @@ impl NvmeDriver {
             return false;
         }
         let sectors = (buf.len() / 512) as u32;
-        let (pa, va) = match Self::alloc_dma(((sectors as usize * 512) + 4095) / 4096) {
+        let (pa, va) = match bounce_dma(((sectors as usize * 512) + 4095) / 4096) {
             Some(b) => b,
             None => return false,
         };
@@ -489,23 +489,36 @@ impl NvmeDriver {
         }
         let sectors = (buf.len() / 512) as u32;
         let pages = ((sectors as usize * 512) + 4095) / 4096;
-        let (pa, va) = match Self::alloc_dma(pages) {
+        if self.lba_size == 4096 {
+            // H5 (onda3): 4Kn — RMW por setor físico de 4KB; antes só o 1º LBA
+            // era escrito e o tail (>8 setores) era silenciosamente descartado.
+            let (pa, va) = match bounce_dma(1) {
+                Some(b) => b,
+                None => return false,
+            };
+            let total_sectors = buf.len() / 512;
+            let mut done = 0usize; // setores de 512B já tratados
+            while done < total_sectors {
+                let lba4k = (lba + done as u64) / 8;
+                let off_in = ((lba + done as u64) % 8) as usize * 512;
+                let chunk = core::cmp::min(4096 - off_in, buf.len() - done * 512);
+                if !self.io_nvm(IO_READ, lba4k, pa, 0, 1) {
+                    return false;
+                }
+                core::ptr::copy_nonoverlapping(buf.as_ptr().add(done * 512), va.add(off_in), chunk);
+                if !self.io_nvm(IO_WRITE, lba4k, pa, 0, 1) {
+                    return false;
+                }
+                done += chunk / 512;
+            }
+            return true;
+        }
+        let (pa, va) = match bounce_dma(pages) {
             Some(b) => b,
             None => return false,
         };
-        if self.lba_size == 4096 {
-            // RMW for partial 4K
-            let start_lba = lba / 8;
-            if !self.io_nvm(IO_READ, start_lba, pa, 0, 1) {
-                return false;
-            }
-            let dst = va.add(((lba % 8) * 512) as usize);
-            core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, buf.len());
-            self.io_nvm(IO_WRITE, start_lba, pa, 0, 1)
-        } else {
-            core::ptr::copy_nonoverlapping(buf.as_ptr(), va, buf.len());
-            self.io_nvm_prp(IO_WRITE, lba, pa, pages * 4096, sectors)
-        }
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), va, buf.len());
+        self.io_nvm_prp(IO_WRITE, lba, pa, pages * 4096, sectors)
     }
 
     unsafe fn io_nvm(&mut self, opcode: u8, lba: u64, prp1: u64, prp2: u64, blocks: u32) -> bool {
@@ -600,6 +613,34 @@ impl NvmeDriver {
         let pm = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
         Some((phys, (phys + pm) as *mut u8))
     }
+}
+
+/// H4 (onda3): bounce buffer cacheado — sem alloc por I/O (allocate_contiguous
+/// nunca era devolvido; leak de frames a cada read/write). Cresce uma vez até
+/// o pico e reusa; cap de 512 páginas (2MB) = limite da lista PRP fixa.
+/// ponytail: request maior que o pico faz nova alloc e o buffer antigo vaza —
+/// frame bouncer dedicado é dívida, não refazer sem requisito.
+static NVME_BOUNCE: Mutex<Option<(u64, usize, usize)>> = Mutex::new(None);
+
+fn bounce_dma(pages: usize) -> Option<(u64, *mut u8)> {
+    if pages == 0 || pages > 512 {
+        if pages > 512 {
+            crate::slog_nano!("NVMe", "warn", "bounce refuse: {} paginas > 512 (limite PRP)", pages);
+        }
+        return None;
+    }
+    let mut g = NVME_BOUNCE.lock();
+    let (pa, va, n) = match *g {
+        Some(t @ (_, _, n)) if n >= pages => t,
+        _ => {
+            let (pa, va) = unsafe { NvmeDriver::alloc_dma(pages) }?;
+            let t = (pa, va as usize, pages);
+            *g = Some(t);
+            t
+        }
+    };
+    let _ = n;
+    Some((pa, va as *mut u8))
 }
 
 unsafe fn write_u64(mmio: *mut u32, off: u64, val: u64) {

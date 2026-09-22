@@ -72,12 +72,14 @@ impl Agent for AudioMixerAgent {
             let Some(ev) = self.tts_receiver.try_receive() else { break; };
             n_ev += 1;
             let vol = AUDIO_VOLUME.load(Ordering::Relaxed) as f32 / 100.0;
-            let pcm: &[i16] = unsafe {
-                core::slice::from_raw_parts(
-                    ev.payload.as_ptr() as *const i16,
-                    ev.payload.len() / 2,
-                )
-            };
+            // M3: u8→i16 via chunks_exact — `from_raw_parts` sobre bytes é UB
+            // quando o payload não está alinhado a 2 (EventBus Vec<u8> não
+            // garante). Byte-swap explícito é a conversão LE correta.
+            let pcm: alloc::vec::Vec<i16> = ev
+                .payload
+                .chunks_exact(2)
+                .map(|c| i16::from_le_bytes([c[0], c[1]]))
+                .collect();
             let take = pcm.len().min(4096);
             if take == 0 {
                 continue;

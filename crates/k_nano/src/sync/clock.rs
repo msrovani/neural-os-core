@@ -43,10 +43,11 @@ impl LogicalClock {
     /// Update the clock based on a received clock value
     /// Sets clock to max(local, received) + 1
     pub fn update(&self, received_clock: u64) -> u64 {
-        let current = self.counter.load(Ordering::Acquire);
-        let new_clock = current.max(received_clock) + 1;
-        self.counter.store(new_clock, Ordering::Release);
-        new_clock
+        // L14 (onda 4): fetch_max atômico — load+store perdiam updates sob
+        // concorrência de dois nós (Lamport anti-replay exige monotonicidade).
+        self.counter
+            .fetch_max(received_clock + 1, Ordering::AcqRel)
+            .max(received_clock + 1)
     }
 
     /// Reset the clock to 0 (useful for testing)

@@ -76,6 +76,11 @@ impl FilesystemDriver for NetFs {
         _dev: &mut dyn k_nano::block_dev::BlockDevice,
         _start_lba: u64,
     ) -> Result<FsInfo, &'static str> {
+        // L18 (onda 4): mount era falso-positivo (Ok sem tocar a rede).
+        // Probe LIST da raiz: gateway inalcançável = Err honesto.
+        if netfs_send(2, b"/").is_none() {
+            return Err("netfs gateway unreachable (LIST / falhou)");
+        }
         Ok(FsInfo {
             fs_type: "netfs",
             label: self.name.clone(),

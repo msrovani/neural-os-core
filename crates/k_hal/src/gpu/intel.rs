@@ -28,29 +28,41 @@ fn wait_ring_idle(mmio: u64, head_off: u64, want: u32, _spin_fallback: u32) -> b
     })
 }
 
-// GPU commands (dwords)
-// MI_BATCH_BUFFER_END = MI_INSTR(0xA, 0) = 0x0A<<23 = 0x05000000 (i915).
-// NÃO emitir no *ring* — o engine para e HEAD nunca alcança TAIL (ADR-0087).
-pub const MI_BATCH_BUFFER_START: u32 = 0x31A00000;
-pub const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
-pub const MI_NOOP: u32 = 0x00000000;
-/// MI_FLUSH_DW (não o MI_FLUSH antigo 0x02000000!) — `MI_INSTR(0x26, 1)` = 3 dwords.
+// GPU commands (dwords) — H2 (onda3): validados contra i915
+// `drivers/gpu/drm/i915/gt/intel_gpu_commands.h`:
+//   MI_INSTR(opcode, flags) = (opcode << 23) | flags
+//   MI_BATCH_BUFFER_START = MI_INSTR(0x31, 0) = 0x18800000 (era 0x31A00000 — errado)
+//   MI_BATCH_BUFFER_END   = MI_INSTR(0x0A, 0) = 0x05000000 — NÃO emitir no *ring*
+//     (o engine para e HEAD nunca alcança TAIL, ADR-0087).
+//   MI_FLUSH_DW           = MI_INSTR(0x26, 1) = 0x4C000001 (3 dwords; grep-confirmado)
+/// MI_INSTR da i915: opcode nos bits 28:23, flags/dword-len nos bits baixos.
+const fn mi(opcode: u32, flags: u32) -> u32 {
+    (opcode << 23) | flags
+}
+
+pub const MI_BATCH_BUFFER_START: u32 = mi(0x31, 0);
+/// Gen8+: mesmo opcode com address de 64 bits (3 dwords) — `MI_INSTR(0x31, 1)`.
+pub const MI_BATCH_BUFFER_START_GEN8: u32 = mi(0x31, 1);
+pub const MI_BATCH_BUFFER_END: u32 = mi(0x0A, 0);
+pub const MI_NOOP: u32 = 0;
 /// Fase 3 ADR-0087: flush de caches pós-blit (coerência CPU↔GPU no BCS).
-pub const MI_FLUSH_DW: u32 = 0x4C000001;
+pub const MI_FLUSH_DW: u32 = mi(0x26, 1);
 
 // MEDIA_OBJECT — submete compute shader para Execution Units
-pub const MEDIA_OBJECT: u32 = 0x2A000000;
-/// GPGPU_WALKER (Gen9) — Mesa 0x7105<<16; length nos bits baixos.
+// i915: (0x3<<29)|(0x2<<27)|(0x1<<24)|(0x0<<16) = 0x71000000 (era 0x2A000000).
+pub const MEDIA_OBJECT: u32 = 0x7100_0000;
+/// GPGPU_WALKER (Gen9) — i915: (0x3<<29)|(0x2<<27)|(0x1<<24)|(0x5<<16).
 pub const GPGPU_WALKER: u32 = 0x7105_0000;
 /// COMPUTE_WALKER (Xe-HPG / Arc) — backend separado de Gen9.
 pub const COMPUTE_WALKER: u32 = 0x2280_0000;
 
-// PIPELINE_SELECT — alterna entre render e compute pipelines
-pub const PIPELINE_SELECT: u32 = 0x30000000;
-const PIPELINE_SELECT_MEDIA: u32 = 0x00000001;
+// PIPELINE_SELECT — i915: (0x3<<29)|(0x1<<27)|(0x1<<24)|(0x4<<16) = 0x69040000
+// (era 0x30000000 — errado).
+pub const PIPELINE_SELECT: u32 = 0x6904_0000;
+const PIPELINE_SELECT_MEDIA: u32 = 0x0000_0001; // REG_BIT(0)
 
-// STATE_BASE_ADDRESS — configura endereços base de estado
-pub const STATE_BASE_ADDRESS: u32 = 0x31000000;
+// STATE_BASE_ADDRESS — i915: (0x3<<29)|(0x1<<24)|(0x1<<16) = 0x61010000
+pub const STATE_BASE_ADDRESS: u32 = 0x6101_0000;
 
 pub struct IntelRing {
     pub mmio: u64,           // BAR0 virtual
@@ -174,10 +186,11 @@ impl IntelRing {
         wait_ring_idle(self.mmio, RENDER_RING_HEAD, self.tail & RING_PTR_MASK, timeout)
     }
 
-    /// Executa MI_BATCH_BUFFER_START (submete batch buffer em separado)
+    /// Executa MI_BATCH_BUFFER_START (submete batch buffer em separado).
+    /// Gen8+: 3 dwords com endereço 64-bit (i915 MI_BATCH_BUFFER_START_GEN8).
     pub fn exec_batch(&mut self, batch_pa: u64) -> bool {
         self.write(&[
-            MI_BATCH_BUFFER_START | 0x02,
+            MI_BATCH_BUFFER_START_GEN8,
             (batch_pa & 0xFFFFFFFF) as u32,
             (batch_pa >> 32) as u32,
         ]);

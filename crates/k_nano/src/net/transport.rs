@@ -183,6 +183,20 @@ pub enum TransportError {
     InvalidPacket,
 }
 
+/// Checksum IPv4 (RFC 1071) — nécessário: o campo sai a zero e o payload
+/// nunca passa num NIC real (QEMU tolera).
+fn ipv4_header_checksum(hdr: &[u8]) -> u16 {
+    let mut sum: u32 = 0;
+    for chunk in hdr.chunks(2) {
+        let word = u16::from_be_bytes([chunk[0], *chunk.get(1).unwrap_or(&0)]);
+        sum = sum.wrapping_add(word as u32);
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
 /// Hybrid transport for P2P communication
 pub struct HybridTransport {
     /// Transport configuration
@@ -266,7 +280,8 @@ impl HybridTransport {
             self.config.ethertype,
         );
 
-        // Write header to buffer (little-endian for ethertype)
+        // Write header to buffer (native LE — MACs são arrays; ethertype é
+        // corrigido p/ big-endian logo abaixo)
         unsafe {
             let dst = buffer.as_mut_ptr() as *mut EthernetHeader;
             dst.write(eth_header);
@@ -337,6 +352,25 @@ impl HybridTransport {
             dst.write(udp_header);
         }
         offset += udp_size;
+
+        // H3 (onda 4): as structs acima foram escritas em layout nativo
+        // (little-endian) — corrige os campos multi-byte para network byte
+        // order no wire. Byte arrays (MAC/IP) já são ordem-de-rede.
+        // Ethernet: EtherType 0x0800 big-endian.
+        buffer[12..14].copy_from_slice(&0x0800u16.to_be_bytes());
+        // IPv4 (base 14): total_length @2, flags_fragment @6 (Don't Fragment),
+        // checksum @10 (calculado depois de tudo zerado).
+        let ip_base = eth_size;
+        buffer[ip_base + 2..ip_base + 4].copy_from_slice(&ip_total_length.to_be_bytes());
+        buffer[ip_base + 6..ip_base + 8].copy_from_slice(&0x4000u16.to_be_bytes());
+        buffer[ip_base + 10..ip_base + 12].copy_from_slice(&[0, 0]); // zera antes do somatório
+        let csum = ipv4_header_checksum(&buffer[ip_base..ip_base + ip_size]);
+        buffer[ip_base + 10..ip_base + 12].copy_from_slice(&csum.to_be_bytes());
+        // UDP (base 34): src/dst port, length (checksum opcional em IPv4 = 0).
+        let udp_base = ip_base + ip_size;
+        buffer[udp_base..udp_base + 2].copy_from_slice(&self.config.udp_port.to_be_bytes());
+        buffer[udp_base + 2..udp_base + 4].copy_from_slice(&self.config.udp_port.to_be_bytes());
+        buffer[udp_base + 4..udp_base + 6].copy_from_slice(&udp_length.to_be_bytes());
 
         // Copy packet data
         buffer[offset..total_size].copy_from_slice(packet_data);

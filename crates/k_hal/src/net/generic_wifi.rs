@@ -127,10 +127,14 @@ pub struct AgnosticWifiEngine {
     tx_ring: [DmaDescriptor; 64],
     rx_ring: [DmaDescriptor; 64],
     rx_buf: [[u8; 2048]; 64],
+    // H4 (onda 4): buffer TX interno — o descritor DMA aponta para cá, NUNCA
+    // para o slice do chamador (UAF: o buffer do caller morre antes do HW ler).
+    tx_buf: [[u8; 2048]; 64],
     io: ChipIoInterface,
     tx_head: usize,
     rx_tail: usize,
     ring_sz: usize,
+    initialized: bool,
 }
 
 impl AgnosticWifiEngine {
@@ -145,10 +149,12 @@ impl AgnosticWifiEngine {
             tx_ring: unsafe { core::mem::zeroed() },
             rx_ring: unsafe { core::mem::zeroed() },
             rx_buf: unsafe { core::mem::zeroed() },
+            tx_buf: unsafe { core::mem::zeroed() },
             io,
             tx_head: 0,
             rx_tail: 0,
             ring_sz,
+            initialized: false,
         }
     }
 }
@@ -157,6 +163,11 @@ impl WifiChipset for AgnosticWifiEngine {
     fn init(&mut self) -> Result<(), &'static str> {
         if self.io.base == 0 {
             return Err("wifi_bar_invalid");
+        }
+        // H4: fail-closed sem mapa — mapa zerado (ETH_FALLBACK_MAP) não pode
+        // programar DMA (rings terminariam em offsets 0 do BAR).
+        if self.io.map.ring_size == 0 || self.io.map.rx_buf_len == 0 {
+            return Err("wifi_map_zero");
         }
         let sz = self.ring_sz;
         // Prepara ring de RX
@@ -178,18 +189,27 @@ impl WifiChipset for AgnosticWifiEngine {
             self.io.start_rx();
         }
         k_nano::slog_hal!("Wifi", "dma", "{} rings: TX@{:#x} RX@{:#x}", sz, tx_pa, rx_pa);
+        self.initialized = true;
         Ok(())
     }
 
     fn send_packet(&mut self, packet: &[u8]) -> Result<(), &'static str> {
         if self.io.map.ring_size == 0 { return Err("ethernet_unwired"); }
+        // H4: gate init — enviar sem rings programados = DMA em endereço lixo.
+        if !self.initialized { return Err("wifi_not_initialized"); }
+        if packet.is_empty() || packet.len() > BUF_SIZE { return Err("wifi_packet_size"); }
         let idx = self.tx_head % self.ring_sz;
+        // H4: copia para o buffer TX interno (estável) — o caller dropa `packet`
+        // enquanto o HW ainda pode ler via DMA (UAF).
+        self.tx_buf[idx][..packet.len()].copy_from_slice(packet);
+        compiler_fence(Ordering::Release);
+        let tx_pa = virt_to_phys(self.tx_buf[idx].as_ptr() as u64);
         let desc = &mut self.tx_ring[idx];
         let flags = unsafe { read_volatile(&desc.len_flags) };
         if (flags & OWNED_BY_HW) != 0 {
             return Err("TX ring full");
         }
-        desc.buf_addr = virt_to_phys(packet.as_ptr() as u64);
+        desc.buf_addr = tx_pa;
         desc.len_flags = (packet.len() as u32) | OWNED_BY_HW | (1 << 30) | (1 << 29);
         compiler_fence(Ordering::Release);
         self.tx_head = (idx + 1) % self.ring_sz;
@@ -199,6 +219,7 @@ impl WifiChipset for AgnosticWifiEngine {
 
     fn receive_packet(&mut self, buffer: &mut [u8]) -> Result<usize, &'static str> {
         if self.io.map.ring_size == 0 { return Err("ethernet_unwired"); }
+        if !self.initialized { return Err("wifi_not_initialized"); }
         let idx = self.rx_tail % self.ring_sz;
         let desc = &mut self.rx_ring[idx];
         let flags = unsafe { read_volatile(&desc.len_flags) };

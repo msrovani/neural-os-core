@@ -211,15 +211,19 @@ impl Agent for AudioInputAgent {
             if ev.payload.len() < 2 {
                 continue;
             }
-            let pcm: &[i16] = unsafe {
-                core::slice::from_raw_parts(
-                    ev.payload.as_ptr() as *const i16,
-                    ev.payload.len() / 2,
-                )
-            };
+            // M3: byte-swap LE + chunks_exact — o cast `*const i16` sobre
+            // `payload.as_ptr()` era UB potencial (alinhamento não garantido).
+            let pcm: alloc::vec::Vec<i16> = ev
+                .payload
+                .chunks_exact(2)
+                .map(|c| i16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            if pcm.is_empty() {
+                continue;
+            }
             // FFT do orb continua alimentada pelo sinal CRU (o orb reage a voz).
-            crate::display::avatar::process_audio_fft(pcm);
-            self.asm.ingest(pcm);
+            crate::display::avatar::process_audio_fft(&pcm);
+            self.asm.ingest(&pcm);
         }
         self.drain_frames();
         AgentTickResult::Pending

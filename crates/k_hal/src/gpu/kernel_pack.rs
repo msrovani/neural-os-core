@@ -269,21 +269,25 @@ pub fn pack_present_on_fat(isa: IsaTag, op: PackOp) -> bool {
     false
 }
 
+/// M3 (onda3): raiz FAT32 em QUALQUER device (ATA→AHCI→NVMe→USB), não só ATA.
 fn read_fat32_root(name: &str) -> Option<alloc::vec::Vec<u8>> {
     unsafe {
-        let ata = k_nano::ATA_DRIVER.lock();
-        let ata = ata.as_ref()?;
-        let parts = k_nano::fat32::read_mbr(ata);
-        for p in &parts {
-            if !matches!(p.type_code, 0x0B | 0x0C | 0x1C | 0x73) {
-                continue;
-            }
-            if let Some(fs) = k_nano::fat32::Fat32Reader::new(ata, p) {
-                if let Some(data) = fs.read_file(name) {
-                    return Some(data);
+        macro_rules! try_dev {
+            ($lock:expr) => {
+                if let Some(ref mut d) = *$lock {
+                    let dev: &mut dyn k_nano::block_dev::BlockDevice = d;
+                    for p in k_nano::fat32::partitions_on_dev(dev) {
+                        if let Some(data) = k_nano::fat32::read_root_file_dev(dev, &p, name) {
+                            return Some(data);
+                        }
+                    }
                 }
-            }
+            };
         }
+        try_dev!(k_nano::globals::ATA_DRIVER.lock());
+        try_dev!(k_nano::globals::AHCI_DRIVER.lock());
+        try_dev!(k_nano::disk_agent::nvme::NVME_DRIVER.lock());
+        try_dev!(k_nano::globals::USB_MSC.lock());
     }
     None
 }

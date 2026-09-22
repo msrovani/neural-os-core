@@ -22,7 +22,10 @@ use alloc::vec;
 use alloc::string::String;
 use libm::expf;
 
-pub const PIPER_SR: u32 = 22050;
+/// H2: alinhado ao pipeline de voz (capture/mixer `VOICE_RATE_HZ` = 16 kHz).
+/// O `22050` nominal do checkpoint Piper criava um voice pipeline fora de fase
+/// (TTS 22,05 kHz dentro de um anel/mixer de 16 kHz — tom e duração errados).
+pub const PIPER_SR: u32 = 16000;
 
 const PIPER_MAGIC: u32 = 0xBE11BE11;
 const PIPER_VERSION: u32 = 3;
@@ -66,11 +69,7 @@ pub fn piper_blob_size(data: &[u8]) -> Option<usize> {
 
 fn sigmoid(x: f32) -> f32 { 1.0 / (1.0 + expf(-x)) }
 
-struct W { name: String, data: Vec<f32>, rows: usize, cols: usize } // rows=out_ch, cols=in_ch*k for conv
-
-impl W {
-    fn get(&self, r: usize, c: usize) -> f32 { self.data[r * self.cols + c] }
-}
+struct W { name: String, data: Vec<f32>, rows: usize, cols: usize } // cols=in_ch, rows=vocab (emb)
 
 pub struct PiperEngine { w: Vec<W>, loaded: bool }
 
@@ -167,11 +166,6 @@ impl PiperEngine {
 
     pub fn is_loaded(&self) -> bool { self.loaded }
 
-    fn w(&self, name: &str) -> &W {
-        for w in &self.w { if w.name.contains(name) { return w; } }
-        &self.w[0]
-    }
-
     /// Embedding de fonemas: `emb.weight` (alias) ou `sid` [V,192] do ONNX Piper.
     fn emb_table(&self) -> Option<&W> {
         for key in ["emb.weight", "sid"] {
@@ -191,54 +185,6 @@ impl PiperEngine {
             }
         }
         best
-    }
-
-    fn dump_w(&self) { // debug
-        for w in &self.w { if w.data.len() > 1000 { k_nano::slog_bin!("Log", "msg", "{}: {}x{}={}", w.name, w.rows, w.cols, w.data.len()); } }
-    }
-
-    // Conv1d: [in_ch, in_len] × weight[out_ch, in_ch*k] → [out_ch, out_len]
-    fn conv1d(&self, input: &[f32], in_ch: usize, in_len: usize, wt: &W, k: usize, out_ch: usize, stride: usize) -> (Vec<f32>, usize) {
-        let out_len = if stride > 1 { in_len * stride } else { core::cmp::max(in_len as isize - k as isize + 1, 0) as usize };
-        let mut out = vec![0.0f32; out_ch * out_len];
-        if out_len == 0 { return (out, 0); }
-        // Weight layout: wt.data[row * (in_ch * k) + c * k + j]
-        for o in 0..out_ch {
-            for i in 0..out_len {
-                let mut sum = 0.0f32;
-                if stride == 1 {
-                    for c in 0..in_ch {
-                        for j in 0..k {
-                            let src = i + j;
-                            if src < in_len {
-                                sum += wt.get(o, c * k + j) * input[c * in_len + src];
-                            }
-                        }
-                    }
-                }
-                out[o * out_len + i] = sum;
-            }
-        }
-        (out, out_len)
-    }
-
-    // Transposed conv (upsample): [in_ch, in_len] → [out_ch, in_len * stride]
-    fn conv_transpose1d(&self, input: &[f32], in_ch: usize, in_len: usize, wt: &W, k: usize, out_ch: usize, stride: usize) -> (Vec<f32>, usize) {
-        let out_len = in_len * stride;
-        let mut out = vec![0.0f32; out_ch * out_len];
-        for o in 0..out_ch {
-            for i in 0..in_len {
-                for c in 0..in_ch {
-                    for j in 0..k {
-                        let dst = i * stride + j;
-                        if dst < out_len {
-                            out[o * out_len + dst] += wt.get(o, c * k + (k - 1 - j)) * input[c * in_len + i];
-                        }
-                    }
-                }
-            }
-        }
-        (out, out_len)
     }
 
     pub fn generate(&self, text: &str) -> Vec<i16> {

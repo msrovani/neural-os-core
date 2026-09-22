@@ -104,6 +104,17 @@ impl MicroPythonSandbox {
         }
         k_nano::slog_hermes!("MicroPython", "info", "eval: {}", python_code);
 
+        // M12 (onda 4): o módulo MVP embutido NÃO é um runtime Python — é um
+        // stub wasmi que ecoa o argumento. Devolver `Result: <hash>` fingia
+        // execução. Sem o binário real, recusa honesta.
+        if self.wasm.len() < 256 {
+            k_nano::slog_hermes!(
+                "MicroPython", "warn",
+                "eval REFUSED reason=mvp_stub — bytecode real ausente (tools/build_micropython_wasm.py)"
+            );
+            return Err("micropython_mvp_stub: runtime real ausente — o MVP embutido não executa Python");
+        }
+
         let code_hash = simple_hash(python_code) as i32;
         let r = wasmi_rt::run_wasm(&self.wasm, "python_eval", &[code_hash], 0)
             .or_else(|_| wasmi_rt::run_wasm(&self.wasm, "exec", &[code_hash], 0))
@@ -256,13 +267,17 @@ pub fn intercept_wasi_call(wasi_call: &str, _args: &[i64]) -> Result<i64, &'stat
 }
 
 /// Registra MicroPython como skill no SkillRegistry (não-fatal se WASM ausente).
+/// M12: agora REGISTRA de verdade (antes só carregava o sandbox e logava).
 pub fn register_micropython_skill() -> Result<(), &'static str> {
     let mut skill = MicroPythonSkill::new("micropython");
     skill.init()?;
+    crate::globals::SKILL_REGISTRY
+        .lock()
+        .register(alloc::boxed::Box::new(skill));
     k_nano::slog_hermes!(
         "MicroPython",
         "info",
-        "Skill pronta para registro no SkillRegistry"
+        "Skill 'micropython' REGISTRADA no SkillRegistry"
     );
     Ok(())
 }

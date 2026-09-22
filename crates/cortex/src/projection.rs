@@ -25,8 +25,22 @@ pub fn f32_to_f16_bits(v: f32) -> F16Bits {
     if exp <= 0 {
         return sign; // underflow
     }
-    let mant16 = (mant >> 13) as u16;
-    sign | ((exp as u16) << 10) | mant16
+    // M9: round-to-nearest-even no f32→f16 (antes era truncamento puro —
+    // bias sistemático pra baixo em todo LatentBus). Padrão IEEE: soma
+    // 0x0FFF + lsb do quociente; carry da mantissa aumenta o expoente.
+    let mut e = exp as u16;
+    let mut mant16 = (mant >> 13) as u32;
+    let round_inc = 0x0FFFu32 + (mant16 & 1);
+    mant16 += round_inc;
+    if mant16 & 0x0400 != 0 {
+        // carry da mantissa → próximo expoente
+        mant16 = 0;
+        e += 1;
+        if e >= 31 {
+            return sign | 0x7C00; // overflow após arredondamento → Inf
+        }
+    }
+    sign | (e << 10) | mant16 as u16
 }
 
 /// Project arbitrary-length hidden to [f16; 256] via chunk mean-pool (or pad/trunc).

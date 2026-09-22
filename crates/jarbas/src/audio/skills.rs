@@ -465,9 +465,11 @@ impl Skill for SttSkill {
     }
 
     fn execute(&self, input: &[u8]) -> Result<Vec<u8>, &'static str> {
-        let pcm: &[i16] = unsafe {
-            core::slice::from_raw_parts(input.as_ptr() as *const i16, input.len() / 2)
-        };
+        // M3: chunks_exact + LE — cast cru u8→i16 era UB potencial.
+        let pcm: alloc::vec::Vec<i16> = input
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect();
         if pcm.is_empty() {
             return Ok(alloc::vec![b'?']);
         }
@@ -484,7 +486,7 @@ impl Skill for SttSkill {
             }
         }
 
-        let text = crate::audio::stt::transcribe_global(pcm);
+        let text = crate::audio::stt::transcribe_global(&pcm);
         let result = if text.is_empty() {
             alloc::format!("[STT] empty vad_segs={} samples={}", speech_segments, pcm.len())
         } else {

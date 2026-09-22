@@ -1414,18 +1414,12 @@ pub fn probe_node(target_id: u8) -> bool {
                                         h.probe_failures = 0;
                                         h.probe_timeout_ticks = PROBE_BASE_TIMEOUT_TICKS;
                                         break;
-}
-    }
-    // Phase 2: Cleanup TTL de health entries a cada ~500 ticks.
-    static LAST_HEALTH_CLEANUP: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-    let last_cleanup = LAST_HEALTH_CLEANUP.load(Ordering::Relaxed);
-    if last_cleanup == 0 || now.wrapping_sub(last_cleanup) >= 500 {
-        LAST_HEALTH_CLEANUP.store(now, Ordering::Relaxed);
-        cleanup_peer_health_ttl();
-    }
-}
-    }
-}
+                                    }
+                                }
+                            }
+                        }
+                        return true;
+                    }
                 }
             }
         }
@@ -1949,6 +1943,16 @@ pub fn p2p_tick(_tick: u64) {
     }
 
     let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+
+    // Phase 2: Cleanup TTL de health entries a cada ~500 ticks — vive no
+    // p2p_tick (H1 onda 4), NÃO no probe_node: o caminho quente do probe não
+    // pode varrer a tabela (e o scheduling periódico fica aqui).
+    static LAST_HEALTH_CLEANUP: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let last_cleanup = LAST_HEALTH_CLEANUP.load(Ordering::Relaxed);
+    if last_cleanup == 0 || now.wrapping_sub(last_cleanup) >= 500 {
+        LAST_HEALTH_CLEANUP.store(now, Ordering::Relaxed);
+        cleanup_peer_health_ttl();
+    }
 
     // Heartbeat a cada ~110 ticks do timer (~1.1s a 100Hz). Usa last-sent
     // tracking (não depende de `now % 110 == 0` exato — o scheduler pode

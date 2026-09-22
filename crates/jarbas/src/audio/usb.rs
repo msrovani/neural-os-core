@@ -95,7 +95,12 @@ pub fn parse_config_for_audio(cfg: &[u8]) -> Option<UacInterfaceInfo> {
                 let attr = cfg[i + 3];
                 let maxp = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]);
                 let is_iso = (attr & 0x03) == 0x01;
-                if is_iso {
+                // M4: USB 2.0 §9.6.6 — bits 5:4 = usage type; só **00 (data)**
+                // é stream de áudio. 01=feedback / 10=feedback-implicit NÃO
+                // são endpoints de dados (o parser agregava feedback EP como
+                // se fosse capture/playback).
+                let usage_data = (attr >> 4) & 0x03 == 0;
+                if is_iso && usage_data {
                     info.max_packet = info.max_packet.max(maxp);
                     if addr & 0x80 != 0 {
                         info.capture_ep = addr;

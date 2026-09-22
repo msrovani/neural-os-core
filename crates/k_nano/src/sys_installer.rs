@@ -59,42 +59,43 @@ impl SysInstaller {
         }
     }
 
-    /// Retorna o BlockDevice para um dado índice de disco.
-    /// index 0 = boot ATA (source), index 1+ = devices não-boot em ordem de prioridade.
+    /// Executa `f` com o BlockDevice do índice **sob o lock** — M6 (onda3):
+    /// antes vazava `&'static mut` do Mutex guard (self-alias de device globals).
+    /// index 0 = boot ATA (source), 1+ = não-boot em prioridade AHCI→NVMe→USB.
     /// Retorna None se o índice não mapear a um device válido.
-    pub fn device_for_index(index: usize) -> Option<&'static mut dyn BlockDevice> {
+    pub fn with_device<R>(
+        index: usize,
+        f: impl FnOnce(&mut dyn BlockDevice) -> R,
+    ) -> Option<R> {
         if index == 0 {
-            // boot ATA (source)
             let mut g = crate::globals::ATA_DRIVER.lock();
-            return g.as_mut().map(|d| {
-                let p: *mut dyn BlockDevice = d;
-                unsafe { &mut *p }
-            });
+            return g.as_mut().map(|d| f(d as &mut dyn BlockDevice));
         }
-        // index 1+ = não-boot em prioridade: AHCI → NVMe → USB
         let mut seen = 0usize;
-        if let Some(g) = crate::globals::AHCI_DRIVER.lock().as_mut() {
+        if let Some(d) = crate::globals::AHCI_DRIVER.lock().as_mut() {
             seen += 1;
             if seen == index {
-                let p: *mut dyn BlockDevice = g;
-                return Some(unsafe { &mut *p });
+                return Some(f(d as &mut dyn BlockDevice));
             }
         }
-        if let Some(g) = crate::disk_agent::nvme::NVME_DRIVER.lock().as_mut() {
+        if let Some(d) = crate::disk_agent::nvme::NVME_DRIVER.lock().as_mut() {
             seen += 1;
             if seen == index {
-                let p: *mut dyn BlockDevice = g;
-                return Some(unsafe { &mut *p });
+                return Some(f(d as &mut dyn BlockDevice));
             }
         }
-        if let Some(g) = crate::globals::USB_MSC.lock().as_mut() {
+        if let Some(d) = crate::globals::USB_MSC.lock().as_mut() {
             seen += 1;
             if seen == index {
-                let p: *mut dyn BlockDevice = g;
-                return Some(unsafe { &mut *p });
+                return Some(f(d as &mut dyn BlockDevice));
             }
         }
         None
+    }
+
+    /// Data pointer do device (ignora o vtable da fat pointer).
+    pub fn device_key(dev: &mut dyn BlockDevice) -> usize {
+        dev as *mut dyn BlockDevice as *mut u8 as usize
     }
     pub fn scan_disks(&mut self) {
         self.status = InstallStatus::Scanning;
@@ -152,6 +153,11 @@ impl SysInstaller {
         target: &mut dyn BlockDevice,
         kernel_elf: &[u8],
     ) -> Result<(), &'static str> {
+        // M6 (onda3): double-check por endereço — nunca instalar sobre o source.
+        if Self::device_key(source) == Self::device_key(target) {
+            self.status = InstallStatus::Failed;
+            return Err("source == target (mesmo device)");
+        }
         let total_lba = target.total_sectors();
         if total_lba < 2048 + 512 + 64 {
             return Err("target too small");

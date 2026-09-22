@@ -1,8 +1,26 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// Injeta pacote RX vindo do MSI-X/WiFi diretamente na interface smoltcp.
-pub fn inject_rx_packet(_pkt: &[u8]) {
+/// H5 (onda 4): contador de RX injetado e DESCARTADO. smoltcp lê direto dos
+/// rings do NIC via `nic_recv` — não há fila RX intermediária onde injetar;
+/// o pacote cai. Contar é honesto; fingir entrega era silencioso.
+static DROPPED_INJECT: AtomicU64 = AtomicU64::new(0);
+
+/// Contagem de drops de `inject_rx_packet` (diagnóstico HW).
+pub fn dropped_inject_count() -> u64 {
+    DROPPED_INJECT.load(Ordering::Relaxed)
+}
+
+/// Pacote RX do MSI-X/WiFi: sem fila smoltcp para injetar → drop contado.
+pub fn inject_rx_packet(pkt: &[u8]) {
+    let n = DROPPED_INJECT.fetch_add(1, Ordering::Relaxed) + 1;
+    if n == 1 || n % 64 == 0 {
+        k_nano::slog_hermes!(
+            "NET", "warn",
+            "inject_rx_packet DROP n={} len={} (smoltcp sem fila RX — pacote perdido)",
+            n, pkt.len()
+        );
+    }
 }
 use core::sync::atomic::{AtomicU64, Ordering};
 use k_nano::slip;
@@ -28,7 +46,13 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
         qname.extend_from_slice(part.as_bytes());
     }
     qname.push(0);
-    let txid: u16 = 0x1234;
+    // L16 (onda 4): TXID randomizado por consulta — TXID fixo 0x1234 aceitava
+    // resposta stale/injetada de uma query anterior com o mesmo id.
+    let txid: u16 = {
+        use rand_core::RngCore;
+        let mut rng = crate::tls::client::KernelRng;
+        (rng.next_u32() & 0xFFFF) as u16
+    };
     let mut dns = Vec::with_capacity(12 + qname.len() + 4);
     dns.extend_from_slice(&txid.to_be_bytes());
     dns.extend_from_slice(&[0x01, 0x00]);

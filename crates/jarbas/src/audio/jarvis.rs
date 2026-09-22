@@ -18,6 +18,21 @@ static HW_GREET_EMITTED: AtomicBool = AtomicBool::new(false);
 /// Resto do PCM da saudação de boot (register só empurra 2560 samples no ring).
 static BOOT_GREET_REMAINING: spin::Mutex<alloc::vec::Vec<i16>> =
     spin::Mutex::new(alloc::vec::Vec::new());
+/// H3: amostras que o PLAYBACK_RING recusou (ring cheio) e foram descartadas.
+/// Antes o código ignorava o retorno de `push()` e avançava `pos` como se tudo
+/// tivesse entrado — áudio silenciosamente truncado quando o ring enchia.
+pub static TTS_PUSH_DROPPED: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+/// Push honesto: devolve o que ENTROU de fato; o que não coube é contado.
+fn tts_push(samples: &[i16]) -> usize {
+    let pushed = PLAYBACK_RING.push(samples);
+    let dropped = samples.len().saturating_sub(pushed);
+    if dropped > 0 {
+        TTS_PUSH_DROPPED.fetch_add(dropped as u64, Ordering::Relaxed);
+    }
+    pushed
+}
 /// Ledger do texto JÁ falado via `INFER_TTS_PARTIAL`.
 ///
 /// Antes existia um `bool` único (`SKIP_NEXT_FULL_TTS`): ele pulava o
@@ -344,7 +359,7 @@ pub fn emit_hw_greeting_at_register() {
     if !pcm.is_empty() {
         const CHUNK: usize = 2560;
         let n = pcm.len().min(CHUNK);
-        let _ = PLAYBACK_RING.push(&pcm[..n]);
+        let _ = tts_push(&pcm[..n]);
         if pcm.len() > n {
             let mut rem = BOOT_GREET_REMAINING.lock();
             rem.clear();
@@ -488,9 +503,9 @@ impl Agent for JarbasAgent {
                         let total = pcm.len();
                         if total > 0 {
                             let cn = total.min(CHUNK);
-                            let _ = PLAYBACK_RING.push(&pcm[..cn]);
+                            let pushed = tts_push(&pcm[..cn]);
                             self.stream_tts = StreamingTtsState::Streaming {
-                                gen, buffer: pcm, pos: cn, queue,
+                                gen, buffer: pcm, pos: pushed, queue,
                             };
                         } else {
                             self.stream_tts = StreamingTtsState::Streaming {
@@ -588,12 +603,12 @@ impl Agent for JarbasAgent {
                 if total > 0 {
                     const CHUNK: usize = 2560;
                     let n = total.min(CHUNK);
-                    let _ = PLAYBACK_RING.push(&pcm[..n]);
-                    if total > n || !rest.is_empty() {
+                    let pushed = tts_push(&pcm[..n]);
+                    if total > pushed || !rest.is_empty() {
                         self.stream_tts = StreamingTtsState::Streaming {
                             gen: crate::audio::voice::tts_generation(),
                             buffer: pcm,
-                            pos: n.min(total),
+                            pos: pushed,
                             queue: rest,
                         };
                         break;
@@ -668,12 +683,12 @@ impl Agent for JarbasAgent {
                 if total > 0 {
                     const CHUNK: usize = 2560;
                     let n = total.min(CHUNK);
-                    let _ = PLAYBACK_RING.push(&pcm[..n]);
-                    if total > n {
+                    let pushed = tts_push(&pcm[..n]);
+                    if total > pushed {
                         self.stream_tts = StreamingTtsState::Streaming {
                             gen: crate::audio::voice::tts_generation(),
                             buffer: pcm,
-                            pos: n,
+                            pos: pushed,
                             queue: rest,
                         };
                     } else if !rest.is_empty() {

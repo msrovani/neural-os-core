@@ -35,6 +35,10 @@ struct PageCache {
     fetched_at_tick: u64,
 }
 
+/// L17 (onda 4): TTL do cache — PIT ~18 Hz → 18_000 ticks ≈ 16 min.
+/// Antes: hit eterno, página nunca era re-buscada.
+const CACHE_TTL_TICKS: u64 = 18_000;
+
 impl BrowserAgent {
     pub fn new() -> Self {
         BrowserAgent {
@@ -122,12 +126,17 @@ impl Agent for BrowserAgent {
             k_nano::slog_hermes!("BROWSER", "info", "Fetch: {}", url);
 
             if let Some(cached) = self.cache.get(url) {
-                let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
-                    id: 0, topic: String::from(TOPIC_FETCH_RESPONSE),
-                    payload: cached.text.as_bytes().to_vec(),
-                    token: event_bus::CapabilityToken::Legacy(1),
-                });
-                continue;
+                let now = k_nano::interrupts::TIMER_TICKS
+                    .load(core::sync::atomic::Ordering::Relaxed) as u64;
+                if now.wrapping_sub(cached.fetched_at_tick) < CACHE_TTL_TICKS {
+                    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+                        id: 0, topic: String::from(TOPIC_FETCH_RESPONSE),
+                        payload: cached.text.as_bytes().to_vec(),
+                        token: event_bus::CapabilityToken::Legacy(1),
+                    });
+                    continue;
+                }
+                // TTL expirado — cai no refetch abaixo.
             }
 
             if ui_overdue || did_fetch {
