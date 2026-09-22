@@ -8,6 +8,8 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// Nível de compressão adaptativa.
 /// Mais compressão = menos memória mas menor qualidade de inferência.
+// ponytail: CompressionTier alinhado à ADR-0060 §4.1 (compressão adaptativa);
+// enum preservado — apenas a âncora doc, sem reescrita.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CompressionTier {
     /// Sem compressão (qualidade máxima)
@@ -64,7 +66,7 @@ pub struct BudgetManager {
     pub cycle_limit: usize,
     // --- Memory tracking (legado) ---
     used_memory_bytes: AtomicUsize,
-    temperature: f32,
+    _temperature: f32,
 }
 
 impl BudgetManager {
@@ -77,7 +79,7 @@ impl BudgetManager {
             inference_cycles: AtomicUsize::new(0),
             cycle_limit: 100,
             used_memory_bytes: AtomicUsize::new(0),
-            temperature: 0.3,
+            _temperature: 0.3,
         }
     }
 
@@ -134,11 +136,15 @@ impl BudgetManager {
 
     // ── Métodos de memória (legado) ──
 
-    /// Pressão de memória atual (0.0 - 1.0).
+    /// Pressão de memória atual (0.0 - 1.0), derivada do heap real
+    /// (`k_nano::allocator::heap_observe`): `1.0 - headroom/window`.
+    /// Fail-closed 1.0 quando a janela é indisponível (window == 0).
     pub fn pressure(&self) -> f32 {
-        let used = self.used_memory_bytes.load(Ordering::Relaxed) as f32;
-        let max = self.max_heap_bytes as f32;
-        if max == 0.0 { 1.0 } else { (used / max).min(1.0) }
+        let obs = k_nano::allocator::heap_observe();
+        if obs.window_mb == 0 {
+            return 1.0;
+        }
+        (1.0 - obs.headroom_mb as f32 / obs.window_mb as f32).clamp(0.0, 1.0)
     }
 
     /// Tenta alocar `bytes` no orçamento. Retorna false se estourar.
@@ -170,14 +176,9 @@ impl BudgetManager {
         self.max_heap_bytes
     }
 
-    /// Define temperatura do sistema (0.0 - 1.0).
+    /// Define temperatura do sistema (0.0 - 1.0). Write-only.
     pub fn set_temperature(&mut self, t: f32) {
-        self.temperature = t.clamp(0.0, 1.0);
-    }
-
-    /// Temperatura atual do sistema.
-    pub fn temperature(&self) -> f32 {
-        self.temperature
+        self._temperature = t.clamp(0.0, 1.0);
     }
 }
 

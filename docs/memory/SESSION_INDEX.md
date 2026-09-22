@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s392 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s394 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,7 +8,9 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 394 | BEI | bughunt AIOS | ADR-0060 H1-H11/M12-M22/LOW | MPMC bounded CAS; merge_pair real; feed_plasticity; L0 TTL+auto_promote+L7 cap; LAST_BUDGET anti-spam; hal_offer sev; wasmi portable-dispatch OK; agents.rs:905 path fix |
 | 392 | Boot/Limine | bughunt AIOS | GUID ESP+stack RSP+OVMF | bytes_le; saturating_sub; dual pflash; ELF overflow; FAT bps; PACK none; canvas |
+| 393 | MHI | bughunt docs-only | fix-1/2/3 + canvas + pins | buddy 1<<o+clamp; write-back morto del; facade mhi_tick; talc 4.4.3/x86_64 0.14 PINADOS; rogue revert; checks OK |
 | 391 | Jarbas UI | bughunt AIOS | Desktop/orb theme+hover | USE_NAMED; core_bar_data; hit_test_hover; tray honesty; theme.bg; aw/4; mesh stack; ADR-0090 §3.4 |
 | 390b | SelfHeal | residual wire | KERNEL_ERROR+Safety+CP | drain IRQ; can_spawn; Safety fleet; SKILL_CREATE Hermes; checkpoint fleet/shutdown |
 | 390 | SelfHeal | bughunt AIOS | I3/budget/LLM/silent | FwGpu load_status; no double-act; canonical budget=10; SKILL_CREATE honesty |

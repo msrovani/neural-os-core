@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s394] - 2026-09-22 — BEI bughunt ADR-0060 (High→Low)
+
+- High: MPMC CAS bounded (anti-stall); merge_pair real; feed_plasticity liga observe(); lifecycle gate; pressure() via heap_observe; L0 TTL + auto_promote + L7 cap; anti-spam ProceedWithBudget (LAST_BUDGET); sev ADR-0092 (hal_offer/memory_store); facade MPMC dedup; agents.rs:905 path fix.
+- Med: low_mem gate ×3 seções; lock-order pc→net; PromoteSkill dummy honesto; init log ok; budget_per_tick; sleep_cycle idle; flush_all merges→splits→births; used incremental.
+- Low: saturating_sub; Reverse(count); docs honestas.
+- Deps: wasmi 2.0.0 final + portable-dispatch OK; talc/x86_64 upgrades bloqueados → IDEA_BANK.
+- Canvas: `docs/memory/BEI_BUGHUNT_CANVAS.md`; gate: `cargo check --release` 0 erros.
+
 ## [1.9.99-s391] - 2026-09-21 — Desktop/UI/Orb honesty (Jarbas compositor)
 
 - High: `/theme` unificado via `USE_NAMED_THEME` + `current_theme` (COSMIC_DARK navy)

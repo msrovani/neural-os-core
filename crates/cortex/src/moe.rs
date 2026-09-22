@@ -277,9 +277,11 @@ impl DynamicMoE {
     }
 
     pub fn flush_all(&mut self) {
-        self.flush_births();
+        // Ordem: merges → splits → births (births por último — índices novos
+        // não são afetados pelos shifts de merge/split).
         self.flush_merges();
         self.flush_splits();
+        self.flush_births();
     }
 
     /// Try to create a new expert for a detected intent gap.
@@ -444,19 +446,39 @@ impl DynamicMoE {
     }
 
     fn merge_pair(a: &BitLinear, b: &BitLinear) -> BitLinear {
+        // Guard: shape divergente → clone de a (sem panic).
+        if a.weights.shape != b.weights.shape {
+            return BitLinear::new(
+                PackedTernaryTensor {
+                    shape: a.weights.shape,
+                    packed_data: a.weights.packed_data.clone(),
+                },
+                a.bias.clone(),
+            );
+        }
+        // Média por-posição dos pesos ternários (padrão de pack de clone_with_noise).
+        let shape = a.weights.shape;
+        let n = shape.0 * shape.1;
+        let mut w = Vec::with_capacity(n);
+        for i in 0..n {
+            // i16 para somar sem overflow; truncamento p/ zero mantém s {-1,0,+1}
+            let s = a.weights.get_weight(i) as i16 + b.weights.get_weight(i) as i16;
+            w.push((s / 2) as i8);
+        }
         let weights = PackedTernaryTensor {
-            shape: a.weights.shape,
-            packed_data: a.weights.packed_data.clone(),
+            shape,
+            packed_data: PackedTernaryTensor::pack_weights(&w),
         };
-        let bias = match &a.bias {
-            Some(ref ta) => {
+        // Bias: média só quando ambos existem e batem em tamanho; senão clone de a.
+        let bias = match (&a.bias, &b.bias) {
+            (Some(ta), Some(tb)) if ta.shape == tb.shape && ta.data.len() == tb.data.len() => {
                 let mut avg = Tensor::new(ta.shape);
                 for j in 0..avg.data.len() {
-                    avg.data[j] = (ta.data[j] + b.bias.as_ref().map_or(0.0, |bt| bt.data[j])) / 2.0;
+                    avg.data[j] = (ta.data[j] + tb.data[j]) / 2.0;
                 }
                 Some(avg)
             }
-            None => None,
+            (ta, _) => ta.clone(),
         };
         BitLinear::new(weights, bias)
     }

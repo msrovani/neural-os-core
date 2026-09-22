@@ -82,7 +82,8 @@ impl BeiState {
         // ─── Wave 3: Dynamic MoE ───
         // Note: DynamicMoE needs a base MoELayer. We'll create a minimal one.
         let dynamic_moe = Arc::new(Mutex::new(Self::create_dynamic_moe()));
-        k_nano::slog_bin!("BEI", "warn", "wave3 DynamicMoE created (zero_weights scaffold — not trained MoE)");
+        // M13: honesto — scaffold com pesos zero, NÃO é um MoE treinado.
+        k_nano::slog_bin!("BEI", "warn", "wave3 DynamicMoE DEGRADED (zero_weights scaffold — sem pesos treinados)");
         
         // ─── Wave 4: Memory L0-L7 ───
         let memory_store = Arc::new(Mutex::new({
@@ -195,45 +196,54 @@ impl BeiState {
         let current_tick = *tick;
         drop(tick);
         
+        // M12: BEI state tick (cognição local) — bloco distinto do mesh abaixo.
+        let obs = k_nano::allocator::heap_observe();
+        let low_mem = obs.headroom_mb < 48;
+        // M20: sob headroom crítico só o snapshot (AFFECT) roda; o resto espera.
+
         // 1. Advance CellNetwork scheduler (skip sob heap critico — MPMC #PF)
-        {
-            let obs = k_nano::allocator::heap_observe();
-            if obs.headroom_mb >= 48 {
-                let mut net = self.cell_network.lock();
-                net.tick_advance();
-                while let Some((cell_id, _messages)) = net.round_robin() {
-                    net.mark_processed(cell_id);
-                }
-                net.reap_dead();
+        if !low_mem {
+            let mut net = self.cell_network.lock();
+            net.tick_advance();
+            while let Some((cell_id, _messages)) = net.round_robin() {
+                net.mark_processed(cell_id);
             }
+            net.reap_dead();
         }
-        
+
         // 2. Advance PlasticityController
-        {
-            let mut pc = self.plasticity_controller.lock();
-            pc.tick_advance();
-            
-            // Check for growth/pruning per region
-            for region in 0..pc.num_regions() {
-                if pc.should_grow(region) {
-                    k_nano::slog_bin!("BEI", "warn", "Region {} should GROW (entropy={:.2})", region, pc.region_entropy(region));
-                    // Spawn new cell in this region
-                    let mut net = self.cell_network.lock();
-                    let _ = net.spawn_cell(CellType::Reasoning, region);
-                }
-                if pc.should_prune(region) {
-                    k_nano::slog_bin!("BEI", "warn", "Region {} should PRUNE (activation={:.2})", region, pc.region_activation[region]);
-                    // Mark lowest-activation cell in region for death
-                    let dead_id = {
-                        let net = self.cell_network.lock();
-                        net.cells().iter()
-                            .filter(|c| c.region == region && c.state != cortex::cellular::CellState::Dead)
-                            .min_by(|a, b| a.unprocessed().cmp(&b.unprocessed()))
-                            .map(|c| c.id)
-                    };
-                    if let Some(id) = dead_id {
-                        self.cell_network.lock().mark_dead(id);
+        // M21: coleta sob lock do pc, dropa, e só então toca o cell_network
+        // (ordem de lock pc→net dentro do loop era inversão potencial).
+        if !low_mem {
+            let mut grows = alloc::vec::Vec::new();
+            let mut prunes = alloc::vec::Vec::new();
+            {
+                let mut pc = self.plasticity_controller.lock();
+                pc.tick_advance();
+                for region in 0..pc.num_regions() {
+                    if pc.should_grow(region) {
+                        grows.push((region, pc.region_entropy(region)));
                     }
+                    if pc.should_prune(region) {
+                        prunes.push((region, pc.region_activation[region]));
+                    }
+                }
+            }
+            for (region, ent) in grows {
+                k_nano::slog_bin!("BEI", "warn", "Region {} should GROW (entropy={:.2})", region, ent);
+                let _ = self.cell_network.lock().spawn_cell(CellType::Reasoning, region);
+            }
+            for (region, act) in prunes {
+                k_nano::slog_bin!("BEI", "warn", "Region {} should PRUNE (activation={:.2})", region, act);
+                let dead_id = {
+                    let net = self.cell_network.lock();
+                    net.cells().iter()
+                        .filter(|c| c.region == region && c.state != cortex::cellular::CellState::Dead)
+                        .min_by(|a, b| a.unprocessed().cmp(&b.unprocessed()))
+                        .map(|c| c.id)
+                };
+                if let Some(id) = dead_id {
+                    self.cell_network.lock().mark_dead(id);
                 }
             }
         }
@@ -250,8 +260,10 @@ impl BeiState {
             affect.decay();
         }
         
-        let mut phase_deg: u32 = 0;
-        // 5. ExecutiveSupervisor tick (7-phase loop)
+        static LAST_PHASE_DEG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+        // 5. ExecutiveSupervisor tick (7-phase loop) — skip sob heap crítico,
+        // mantendo o último phase p/ o snapshot (M20).
+        if !low_mem {
         {
             let mut supervisor = self.executive_supervisor.lock();
             let verdict = supervisor.tick_supervise(10); // base budget = 10
@@ -278,7 +290,13 @@ impl BeiState {
                             );
                         }
                     } else {
-                        k_nano::slog_bin!("BEI", "ok", "ProceedWithBudget: {}", budget);
+                        // H8: só loga quando o budget muda — log por tick é spam.
+                        static LAST_BUDGET: core::sync::atomic::AtomicU64 =
+                            core::sync::atomic::AtomicU64::new(0);
+                        let prev = LAST_BUDGET.swap(budget, core::sync::atomic::Ordering::Relaxed);
+                        if prev != budget {
+                            k_nano::slog_bin!("BEI", "ok", "ProceedWithBudget: {}", budget);
+                        }
                     }
                 }
                 SupervisorVerdict::Ponder(steps) => {
@@ -305,7 +323,7 @@ impl BeiState {
                         Ok(()) => k_nano::slog_bin!(
                             "BEI",
                             "ok",
-                            "PromoteSkill: {} → WASM promovida",
+                            "PromoteSkill: {} → WASM promovida (dummy stub até #412)",
                             skill_name
                         ),
                         Err(e) => k_nano::slog_bin!(
@@ -318,19 +336,26 @@ impl BeiState {
                     }
                 }
             }
+            // H9: supervisor não recebe entradas de resultado reais — confidence/
+            // latency verdadeiros não existem neste escopo (veredito é derivado,
+            // não medido). Registrar aqui sem medição = métrica inventada.
+            // Gap: wire quando o tick observar latency/domínio reais.
             // Capture phase before supervisor lock is dropped
-            phase_deg = supervisor.phase.rotation_deg();
+            LAST_PHASE_DEG.store(supervisor.phase.rotation_deg(), core::sync::atomic::Ordering::Relaxed);
         }
-        
+        }
+
         // 6. Sync AFFECT_SNAPSHOT for compositor (hermes::globals bridge) —
         // o OrbState do compositor lê daqui; sem cópia local no BEI.
         {
             let affect = self.affect_regulator.lock().affect;
+            let phase_deg = LAST_PHASE_DEG.load(core::sync::atomic::Ordering::Relaxed);
             crate::globals::sync_affect_snapshot(&affect, phase_deg);
         }
         
         // 7. DynamicMoE lifecycle (birth/merge/split)
-        if current_tick % 100 == 0 {
+        // H4: sem experts registrados o lifecycle é morto — gate cedo.
+        if current_tick % 100 == 0 && !self.dynamic_moe.lock().base.experts.is_empty() {
             let mut dmoe = self.dynamic_moe.lock();
             let mut lifecycle = self.expert_lifecycle.lock();
             let _budget = self.budget_manager.lock();
@@ -421,8 +446,8 @@ pub fn init_bei() {
             BEI_STATE.store(ptr, Ordering::Release);
             k_nano::slog_bin!(
                 "BEI",
-                "warn",
-                "BEI allocated DEGRADED (8 waves; cross-wire=tick/noop — connect_components PARTIAL)"
+                "ok",
+                "BEI 8 waves up (connect PARTIAL — wire no tick)"
             );
         }
         None => {

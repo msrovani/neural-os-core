@@ -26,16 +26,19 @@ fn publish(topic: &str, payload: String) {
 }
 
 /// Pedido genérico: query + bind se Available (qualquer DeviceClass).
+/// M22: cache de Absent já vive em k_hal::offer (`ABSENT_BACKOFF`,
+/// `AbsentCached`) — aqui só se trata como ausente não-decisivo.
 pub fn request_device(class: DeviceClass, agent_name: &str) -> DeviceRequestResult {
     let st = offer::query(class);
     match st {
-        OfferStatus::Absent => {
+        OfferStatus::Absent | OfferStatus::AbsentCached => {
             let ack = format!(
-                "HalOffer Absent class={} agent={}",
+                "HalOffer Absent class={} agent={}{}",
                 class.as_str(),
-                agent_name
+                agent_name,
+                if st == OfferStatus::AbsentCached { " (cached)" } else { "" }
             );
-            k_nano::slog_hermes!("HalOffer", "request", "{}", ack);
+            k_nano::slog_hermes!("HalOffer", "warn", "{}", ack);
             publish(
                 offer::TOPIC_HW_OFFER,
                 format!("status=Absent;class={};agent={}", class.as_str(), agent_name),
@@ -50,7 +53,7 @@ pub fn request_device(class: DeviceClass, agent_name: &str) -> DeviceRequestResu
         }
         OfferStatus::Quarantined => {
             let ack = format!("HalOffer Quarantined class={}", class.as_str());
-            k_nano::slog_hermes!("HalOffer", "request", "{}", ack);
+            k_nano::slog_hermes!("HalOffer", "warn", "{}", ack);
             publish(
                 offer::TOPIC_HW_OFFER,
                 format!("status=Quarantined;class={}", class.as_str()),
@@ -71,7 +74,7 @@ pub fn request_device(class: DeviceClass, agent_name: &str) -> DeviceRequestResu
                     agent_name,
                     h.topic
                 );
-                k_nano::slog_hermes!("HalOffer", "request", "{}", ack);
+                k_nano::slog_hermes!("HalOffer", "ok", "{}", ack);
                 let wire = format!(
                     "status=Bound;class={};agent={};topic={}",
                     class.as_str(),
@@ -105,7 +108,7 @@ pub fn request_device(class: DeviceClass, agent_name: &str) -> DeviceRequestResu
                     class.as_str(),
                     e
                 );
-                k_nano::slog_hermes!("HalOffer", "request", "{}", ack);
+                k_nano::slog_hermes!("HalOffer", "fail", "{}", ack);
                 let reason = match e {
                     OfferError::CapDenied => "CapDenied",
                     OfferError::NeedsFw => "NeedsFw",

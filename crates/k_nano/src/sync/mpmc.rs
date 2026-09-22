@@ -6,6 +6,12 @@ const STORING: usize = 1;
 const READY: usize = 2;
 const LOADING: usize = 3;
 
+/// Budget máximo de tentativas por chamada try_* (H1).
+/// try_* é non-blocking: sob contenção, falha (Err/None) após o budget
+/// em vez de girar infinito e travar o boot. Falha espúria sob contenção
+/// é semântica padrão de try_* lock-free.
+const MAX_RETRIES: usize = 64;
+
 struct Slot<T> {
     state: AtomicUsize,
     data: MaybeUninit<T>,
@@ -51,17 +57,38 @@ impl<T> MpmcQueue<T> {
     }
 
     pub fn try_send(&self, item: T) -> Result<(), T> {
+        let mut retries = 0usize;
         loop {
             let pos = self.enqueue_pos.load(Ordering::Relaxed);
-            if pos - self.dequeue_pos.load(Ordering::Acquire) >= self.capacity {
+            if pos.wrapping_sub(self.dequeue_pos.load(Ordering::Acquire)) >= self.capacity {
                 return Err(item);
             }
             if self.enqueue_pos
-                .compare_exchange_weak(pos, pos + 1, Ordering::Relaxed, Ordering::Relaxed)
-                .is_err() { continue; }
+                .compare_exchange_weak(pos, pos.wrapping_add(1), Ordering::Relaxed, Ordering::Relaxed)
+                .is_err()
+            {
+                retries += 1;
+                if retries >= MAX_RETRIES {
+                    return Err(item);
+                }
+                continue;
+            }
+            // Revalida APÓS o CAS: a fila pode ter enchido na corrida (H1).
+            // Sem rollback lock-free seguro — falha espúria; o try_recv
+            // limitado auto-cura o gap (retorna None no slot fantasma).
+            if pos.wrapping_sub(self.dequeue_pos.load(Ordering::Acquire)) >= self.capacity {
+                return Err(item);
+            }
             let slot = self.buffer.wrapping_add(pos & self.mask);
             unsafe {
-                while (*slot).state.compare_exchange(EMPTY, STORING, Ordering::Acquire, Ordering::Relaxed).is_err() {}
+                let mut spins = 0usize;
+                while (*slot).state.compare_exchange(EMPTY, STORING, Ordering::Acquire, Ordering::Relaxed).is_err() {
+                    spins += 1;
+                    if spins >= MAX_RETRIES {
+                        return Err(item);
+                    }
+                    core::hint::spin_loop();
+                }
                 (*slot).data.as_mut_ptr().write(item);
                 (*slot).state.store(READY, Ordering::Release);
             }
@@ -70,17 +97,36 @@ impl<T> MpmcQueue<T> {
     }
 
     pub fn try_recv(&self) -> Option<T> {
+        let mut retries = 0usize;
         loop {
             let pos = self.dequeue_pos.load(Ordering::Relaxed);
             if pos == self.enqueue_pos.load(Ordering::Acquire) {
                 return None;
             }
             if self.dequeue_pos
-                .compare_exchange_weak(pos, pos + 1, Ordering::Relaxed, Ordering::Relaxed)
-                .is_err() { continue; }
+                .compare_exchange_weak(pos, pos.wrapping_add(1), Ordering::Relaxed, Ordering::Relaxed)
+                .is_err()
+            {
+                retries += 1;
+                if retries >= MAX_RETRIES {
+                    return None;
+                }
+                continue;
+            }
+            // Revalida APÓS o CAS (H1): esvaziou na corrida → None.
+            if pos == self.enqueue_pos.load(Ordering::Acquire) {
+                return None;
+            }
             let slot = self.buffer.wrapping_add(pos & self.mask);
             unsafe {
-                while (*slot).state.compare_exchange(READY, LOADING, Ordering::Acquire, Ordering::Relaxed).is_err() {}
+                let mut spins = 0usize;
+                while (*slot).state.compare_exchange(READY, LOADING, Ordering::Acquire, Ordering::Relaxed).is_err() {
+                    spins += 1;
+                    if spins >= MAX_RETRIES {
+                        return None;
+                    }
+                    core::hint::spin_loop();
+                }
                 let item = (*slot).data.as_ptr().read();
                 (*slot).state.store(EMPTY, Ordering::Release);
                 return Some(item);
@@ -89,7 +135,9 @@ impl<T> MpmcQueue<T> {
     }
 
     pub fn len(&self) -> usize {
-        self.enqueue_pos.load(Ordering::Relaxed) - self.dequeue_pos.load(Ordering::Relaxed)
+        // Snapshot relaxed pode observar deq > enq transitoriamente;
+        // saturating_sub evita underflow/panic (LOW).
+        self.enqueue_pos.load(Ordering::Relaxed).saturating_sub(self.dequeue_pos.load(Ordering::Relaxed))
     }
 
     pub fn is_empty(&self) -> bool {

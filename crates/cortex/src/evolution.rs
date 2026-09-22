@@ -24,6 +24,9 @@ impl PlasticityController {
         }
     }
 
+    /// Alimentado por `CellNetwork::feed_plasticity` (cortex::cellular) —
+    /// sem esse feeder, observe() nunca é chamado e should_grow/should_prune
+    /// ficam sempre false.
     pub fn observe(&mut self, region: usize, entropy: f32, error: f32, activated: f64) {
         if region >= self.region_entropy.len() { return; }
         self.region_entropy[region] = self.region_entropy[region] * 0.9 + entropy * 0.1;

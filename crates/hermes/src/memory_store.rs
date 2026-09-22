@@ -52,7 +52,7 @@ fn read_hanr(name: &str, vfs_path: &str) -> String {
     let from_vfs = read_path(vfs_path);
     if !from_vfs.is_empty() && k_ai::sgdb::ready() {
         let _ = k_ai::sgdb::put_hanr(name, &from_vfs);
-        k_nano::slog_hermes!("sgdb", "hanr", "hydrate {} from vfs", name);
+        k_nano::slog_hermes!("sgdb", "ok", "hydrate {} from vfs", name);
     }
     from_vfs
 }
@@ -63,14 +63,14 @@ fn write_hanr(name: &str, vfs_path: &str, body: &str) -> Result<(), &'static str
     if k_ai::sgdb::ready() {
         match k_ai::sgdb::put_hanr(name, body) {
             Ok(()) => sgdb_ok = true,
-            Err(e) => k_nano::slog_hermes!("sgdb", "hanr", "put {} FAIL {}", name, e),
+            Err(e) => k_nano::slog_hermes!("sgdb", "warn", "put {} FAIL {}", name, e),
         }
     }
     let vfs_ok = write_path(vfs_path, body).is_ok();
     if sgdb_ok || vfs_ok {
         k_nano::slog_hermes!(
             "sgdb",
-            "hanr",
+            "ok",
             "write {} sgdb={} vfs={}",
             name,
             sgdb_ok,

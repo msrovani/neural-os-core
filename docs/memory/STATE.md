@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s392 — Boot/Limine bughunt
+# STATE — neural-os-core v1.9.99-s394 — BEI bughunt ADR-0060
 
-#   PISTA ATIVA: s392 — Boot/Limine H1–H5/M1–M5/L1–L3 + canvas
-#   PISTA ANTERIOR: s391 Jarbas theme/hover/dock/mesh honesty
+#   PISTA ATIVA: s394 — BEI (BitNet Ecosystem Intelligence) H1–H11/M12–M22/LOW + canvas
+#   PISTA ANTERIOR: s393 MHI docs-only bughunt
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
@@ -44,3 +44,5 @@
 | B2 | Mesh peer B | AWAITING operador |
 | #607 | Efeito Matrix mmap expert residual | ⏳ |
 | #608 | slog info restante → canónico | 🟡 parcial s391 (UI slog) |
+| s392 | Boot/Limine bughunt H1–H5/M1–M5/L1–L3 + canvas | ✅ SESSION_392 |
+| s393 | MHI bughunt docs-only (fix-1/2/3 + canvas + pins talc/x86_64) | ✅ SESSION_393 + IDEA #609; código = outros lanes |

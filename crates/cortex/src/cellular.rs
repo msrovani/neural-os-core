@@ -6,7 +6,14 @@ use k_nano::sync::mpmc::MpmcQueue;
 pub enum CellType { Reasoning, Memory, Perception, Motor }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CellState { Idle, Active, Blocked, Dead }
+pub enum CellState {
+    Idle,
+    Active,
+    /// Scaffold sem produtor atual — nenhuma transição para Blocked existe;
+    /// reservado para backpressure futuro.
+    Blocked,
+    Dead,
+}
 
 pub type CellId = u64;
 pub type CellIndex = usize;
@@ -61,6 +68,7 @@ pub struct CellNetwork {
     next_id: CellId,
     scheduler_cursor: CellIndex,
     budget_per_tick: usize,
+    used_this_tick: usize,
     inbox_capacity: usize,
     tick: u64,
     reap_after_ticks: u64,
@@ -73,6 +81,7 @@ impl CellNetwork {
             next_id: 1,
             scheduler_cursor: 0,
             budget_per_tick,
+            used_this_tick: 0,
             inbox_capacity,
             tick: 0,
             reap_after_ticks: 1000,
@@ -136,11 +145,21 @@ impl CellNetwork {
     }
 
     pub fn tick_advance(&mut self) {
+        self.used_this_tick = 0;
         self.tick += 1;
+        // SleepCycle a cada 64 ticks quando tudo Idle e filas vazias.
+        if self.tick % 64 == 0
+            && self
+                .cells
+                .iter()
+                .all(|c| c.state == CellState::Idle && c.inbox.len() == 0)
+        {
+            self.sleep_cycle();
+        }
     }
 
     pub fn round_robin(&mut self) -> Option<(CellId, Vec<CellMessage>)> {
-        if self.cells.is_empty() {
+        if self.cells.is_empty() || self.used_this_tick >= self.budget_per_tick {
             return None;
         }
         let start = self.scheduler_cursor;
@@ -149,6 +168,7 @@ impl CellNetwork {
             if self.cells[idx].state == CellState::Idle && self.cells[idx].inbox.len() > 0 {
                 self.cells[idx].state = CellState::Active;
                 self.scheduler_cursor = (idx + 1) % self.cells.len();
+                self.used_this_tick += 1;
                 let id = self.cells[idx].id;
                 let msgs = self.drain_cell(id);
                 return Some((id, msgs));
@@ -223,6 +243,31 @@ impl CellNetwork {
 
     pub fn cells(&self) -> &[CognitiveCell] {
         &self.cells
+    }
+
+    /// BEI: alimenta o PlasticityController com observações reais por região
+    /// (load = soma das filas; activation = fração Active; error = 0.0 honesto —
+    /// sem sinal de erro medido ainda). Sem este feeder, should_grow/should_prune
+    /// do PlasticityController nunca disparam.
+    pub fn feed_plasticity(&mut self, plasticity: &mut crate::evolution::PlasticityController) {
+        for r in 0..plasticity.num_regions() {
+            let mut load = 0usize;
+            let mut total = 0usize;
+            let mut active = 0usize;
+            for c in self.cells.iter().filter(|c| c.region == r) {
+                load += c.inbox.len();
+                total += 1;
+                if c.state == CellState::Active {
+                    active += 1;
+                }
+            }
+            let activated = if total == 0 {
+                0.0
+            } else {
+                active as f64 / total as f64
+            };
+            plasticity.observe(r, load as f32, 0.0, activated);
+        }
     }
 
     // ── BEI Onda 2: SleepCycle batch processing ─────────────────────────

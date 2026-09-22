@@ -18,7 +18,7 @@ impl MemoryLevel {
             MemoryLevel::L4 => 64 * 1024 * 1024,
             MemoryLevel::L5 => 128 * 1024 * 1024,
             MemoryLevel::L6 => 256 * 1024 * 1024,
-            MemoryLevel::L7 => usize::MAX,
+            MemoryLevel::L7 => 1024 * 1024 * 1024, // H7: finito — evict em vez de órfão
         }
     }
 
@@ -100,17 +100,21 @@ pub trait MemoryTier {
     fn evict_expired(&mut self, tick: u64) -> usize;
     fn clear(&mut self);
     fn contains(&self, key: &str) -> bool;
+    /// Entry mais "quente" (maior access_count) para batch promotion.
+    /// Default: None — tiers sem índice de calor não promovem em batch.
+    fn promotion_candidate(&self) -> Option<(String, u64)> { None }
 }
 
 pub struct InMemoryTier {
     level: MemoryLevel,
     map: BTreeMap<String, MemoryEntry>,
     max_bytes: usize,
+    used: usize,
 }
 
 impl InMemoryTier {
     pub fn new(level: MemoryLevel) -> Self {
-        InMemoryTier { level, map: BTreeMap::new(), max_bytes: level.capacity() }
+        InMemoryTier { level, map: BTreeMap::new(), max_bytes: level.capacity(), used: 0 }
     }
 }
 
@@ -125,35 +129,41 @@ impl MemoryTier for InMemoryTier {
 
     fn write(&mut self, key: &str, value: &[u8], tick: u64) {
         if let Some(entry) = self.map.get_mut(key) {
+            let old = entry.data.len();
             entry.data = value.to_vec();
+            self.used = self.used - old + entry.data.len();
             entry.access_count += 1;
             entry.last_access_tick = tick;
             return;
         }
         let bytes = value.len();
         if self.max_bytes < usize::MAX {
-            loop {
-                let used: usize = self.map.values().map(|e| e.data.len()).sum();
-                if used + bytes <= self.max_bytes { break; }
+            // M19: contador incremental — sem sum() O(n) por iteração.
+            while self.used + bytes > self.max_bytes {
                 if self.evict_one().is_none() { break; }
             }
         }
+        self.used += bytes;
         self.map.insert(key.into(), MemoryEntry::new(value.to_vec(), tick));
     }
 
-    fn remove(&mut self, key: &str) { self.map.remove(key); }
+    fn remove(&mut self, key: &str) {
+        if let Some(e) = self.map.remove(key) { self.used -= e.data.len(); }
+    }
 
     fn level(&self) -> MemoryLevel { self.level }
 
-    fn used_bytes(&self) -> usize { self.map.values().map(|e| e.data.len()).sum() }
+    fn used_bytes(&self) -> usize { self.used }
 
     fn entry_count(&self) -> usize { self.map.len() }
 
     fn evict_one(&mut self) -> Option<String> {
         let target = self.map.iter()
-            .min_by_key(|(_, e)| (e.last_access_tick, -(e.access_count as i64)))
+            .min_by_key(|(_, e)| (e.last_access_tick, core::cmp::Reverse(e.access_count)))
             .map(|(k, _)| k.clone());
-        if let Some(ref k) = target { self.map.remove(k); }
+        if let Some(ref k) = target {
+            if let Some(e) = self.map.remove(k) { self.used -= e.data.len(); }
+        }
         target
     }
 
@@ -165,13 +175,21 @@ impl MemoryTier for InMemoryTier {
             .map(|(k, _)| k.clone())
             .collect();
         let n = keys.len();
-        for k in keys { self.map.remove(&k); }
+        for k in keys {
+            if let Some(e) = self.map.remove(&k) { self.used -= e.data.len(); }
+        }
         n
     }
 
-    fn clear(&mut self) { self.map.clear(); }
+    fn clear(&mut self) { self.map.clear(); self.used = 0; }
 
     fn contains(&self, key: &str) -> bool { self.map.contains_key(key) }
+
+    fn promotion_candidate(&self) -> Option<(String, u64)> {
+        self.map.iter()
+            .max_by_key(|(_, e)| e.access_count)
+            .map(|(k, e)| (k.clone(), e.access_count))
+    }
 }
 
 pub struct MemoryStore {
@@ -230,13 +248,9 @@ impl MemoryStore {
 
     pub fn tick_advance(&mut self) {
         self.tick += 1;
-        // L0: clear every tick (volatile)
-        if let Some(ref mut l0) = self.tiers[0] {
-            l0.clear();
-        }
-        // TTL sweep every 10 ticks
+        // H7: L0 não é clear() cego — eviction por TTL (ttl_ticks=1) como os demais.
         if self.tick % 10 == 0 {
-            for lv in 1..8 {
+            for lv in 0..8 {
                 if let Some(ref mut tier) = self.tiers[lv] {
                     tier.evict_expired(self.tick);
                 }
@@ -249,8 +263,22 @@ impl MemoryStore {
     }
 
     fn auto_promote(&mut self) {
-        // ponytail: batch promotion happens at read-time (Atkinson-Shiffrin threshold).
-        // Batch-only: iterate lower tiers for high-frequency entries.
+        // H7: batch promotion — entry quente sobe um tier (lv → lv-1, L0 é o mais
+        // quente; espelha a promoção read-time). Sem dado inventado: threshold real.
+        for lv in 1..8 {
+            let candidate = self.tiers[lv].as_ref().and_then(|t| t.promotion_candidate());
+            let (key, count) = match candidate { Some(c) => c, None => continue };
+            let threshold = MemoryLevel::try_from(lv).ok().map_or(u64::MAX, |l| l.promote_threshold());
+            if count < threshold { continue; }
+            if let Some((data, _)) = self.tiers[lv].as_mut().and_then(|t| t.read(&key, self.tick)) {
+                if let Some(dest) = self.tiers[lv - 1].as_mut() {
+                    dest.write(&key, &data, self.tick);
+                }
+                if let Some(src) = self.tiers[lv].as_mut() {
+                    src.remove(&key);
+                }
+            }
+        }
     }
 
     pub fn contains(&self, key: &str) -> bool {

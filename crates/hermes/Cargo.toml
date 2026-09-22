@@ -18,7 +18,9 @@ cortex = { path = "../cortex", features = ["p2p"] }
 k_ai = { path = "../k_ai" }
 smoltcp = { version = "0.14", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
-wasmi = { version = "2.0", default-features = false, features = ["validate", "prefer-btree-collections", "libm", "stable"] }
+# portable-dispatch forçado: executor portátil (sem threading de dispatch
+# auto) — determinístico no bare-metal; feature existe no wasmi 2.0 (verificado).
+wasmi = { version = "2.0", default-features = false, features = ["validate", "prefer-btree-collections", "libm", "stable", "portable-dispatch"] }
 cranelift-codegen = { version = "0.133", default-features = false, features = ["core"], optional = true }
 # C5 TLS (soft-float): embedded-tls 0.19 + p256/rsa — canônico hermes (lesson 241/249)
 embedded-tls = { version = "0.19", default-features = false }
