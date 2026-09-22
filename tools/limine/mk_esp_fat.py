@@ -285,10 +285,21 @@ def build_esp(esp_dir: str, out_path: str, size_mb: int = 128) -> None:
         nonlocal next_cluster, fat
         if not data:
             return 0
+        max_cluster = clusters + 1  # clusters de dados: 2..clusters+1
+        if next_cluster > max_cluster:
+            raise SystemExit(
+                f"[ERRO] ESP cheia (ENOSPC): sem clusters livres "
+                f"(next={next_cluster} max={max_cluster}). Aumente --size-mb."
+            )
         first = next_cluster
         cluster = first
         remaining = data
         while True:
+            if cluster > max_cluster:
+                raise SystemExit(
+                    f"[ERRO] ESP cheia (ENOSPC): arquivo nao cabe "
+                    f"(cluster={cluster} max={max_cluster}). Aumente --size-mb."
+                )
             chunk = remaining[: spc * SECTOR]
             remaining = remaining[spc * SECTOR :]
             c_off = cluster_to_off(cluster)

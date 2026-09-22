@@ -1409,6 +1409,32 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
     }
 }
 
+/// SESSION_254/258 (H2): reserva a stack Limine de 2MB via RSP atual.
+/// O protocolo Limine NÃO expõe o endereço da stack (só `{ revision }`),
+/// então deriva-se do RSP (o kernel EXECUTA nessa stack; RSP virtual =
+/// phys + pm_offset no HHDM). Retorna false com log fail se pm_offset==0
+/// (RSP físico derivado seria lixo e a reserva corromperia o PMM).
+/// saturating_sub evita underflow quando rsp < pm_offset ou base < 4MB.
+fn reserve_limine_stack(
+    fa: &mut k_nano::memory::BitmapFrameAllocator,
+    rsp: u64,
+    pm_offset: u64,
+) -> bool {
+    if pm_offset == 0 {
+        k_nano::slog_bin!("MEM", "fail", "stack Limine NAO reservada: pm_offset==0 (rsp={:#x})", rsp);
+        return false;
+    }
+    let rsp_phys = rsp.saturating_sub(pm_offset);
+    // Stack pode não ser 2MB-alinhada → margem: reserva 8MB a partir de
+    // (rsp alinhado p/ baixo em 2MB) − 4MB. Cobre a stack 2MB + folga
+    // mesmo se a base estiver até ~4MB abaixo do RSP atual.
+    let aligned = rsp_phys & !(2 * 1024 * 1024 - 1);
+    let stack_base = aligned.saturating_sub(4 * 1024 * 1024);
+    fa.reserve_range(stack_base, 8 * 1024 * 1024);
+    k_nano::slog_bin!("MEM", "info", "reserva stack via RSP {:#x} len=8MB (rsp_phys={:#x})", stack_base, rsp_phys);
+    true
+}
+
 /// Boot comum (ADR-0062 E2): `handoff` = trait unificado.
 pub(crate) fn kernel_boot(
     handoff: &impl k_nano::boot_handoff::BootHandoff,
@@ -1524,13 +1550,7 @@ pub(crate) fn kernel_boot(
         // janela de 2MB que a contém (RSP virtual = phys + pm_offset no HHDM).
         let rsp: u64;
         unsafe { core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nomem, nostack, preserves_flags)); }
-        let rsp_phys = rsp.wrapping_sub(pm_offset);
-        // Stack pode não ser 2MB-alinhada → margem: reserva 4MB a partir de
-        // (rsp alinhado p/ baixo em 2MB) − 2MB. Cobre a stack 2MB + folga
-        // mesmo se a base estiver até ~2MB abaixo do RSP atual.
-        let stack_base = (rsp_phys & !(2 * 1024 * 1024 - 1)) - 4 * 1024 * 1024;
-        frame_allocator.reserve_range(stack_base, 8 * 1024 * 1024);
-        k_nano::slog_bin!("MEM", "info", "reserva stack via RSP {:#x} len=8MB (rsp_phys={:#x})", stack_base, rsp_phys);
+        reserve_limine_stack(frame_allocator, rsp, pm_offset);
         // Ramlog físico (logwriter UEFI lê no próximo boot) — SESSION_330 clobberable.
         frame_allocator.reserve_range(
             k_nano::boot_ramlog::BOOT_RAMLOG_PHYS,

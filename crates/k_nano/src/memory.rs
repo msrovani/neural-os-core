@@ -628,6 +628,8 @@ pub fn is_page_present(virt: u64) -> bool {
     use x86_64::VirtAddr;
     let pm = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
     if pm == 0 {
+        // L2: HHDM ainda não setado — warn (não silêncio) p/ diagnóstico de boot.
+        crate::slog_nano!("MEM", "warn", "is_page_present: pm==0 (HHDM nao setado)");
         return false;
     }
     let v = VirtAddr::new(virt);

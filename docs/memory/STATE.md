@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s391 — Desktop/UI/Orb honesty
+# STATE — neural-os-core v1.9.99-s392 — Boot/Limine bughunt
 
-#   PISTA ATIVA: s391 — Jarbas theme/hover/dock/mesh/client_buf
-#   PISTA ANTERIOR: s390b SelfHeal residual KERNEL_ERROR/Safety/checkpoint
+#   PISTA ATIVA: s392 — Boot/Limine H1–H5/M1–M5/L1–L3 + canvas
+#   PISTA ANTERIOR: s391 Jarbas theme/hover/dock/mesh honesty
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo

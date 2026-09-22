@@ -1559,12 +1559,14 @@ impl<'a> Fat32Writer<'a> {
             let chunk = &data[written..written + chunk_len];
             for s in 0..spc {
                 let off = s as usize * bps;
-                let mut sector = [0u8; 512];
+                // M3: buffer por bps (4Kn) — [0u8;512] fixo truncava setor com bps>512.
+                let mut sector = [0u8; 4096];
+                let sector = &mut sector[..bps];
                 if off < chunk.len() {
                     let end = (off + bps).min(chunk.len());
                     sector[..end - off].copy_from_slice(&chunk[off..end]);
                 }
-                if !self.reader.ata.write_sectors(lba + s, &sector, 1) {
+                if !self.reader.ata.write_sectors(lba + s, sector, 1) {
                     return false;
                 }
             }
@@ -1609,6 +1611,8 @@ impl<'a> Fat32Writer<'a> {
 
         let mut src = 0usize;
         // Completa espaço livre no último cluster (parcial)
+        // M3: offsets por bps (4Kn) — `* 512` fixo corrompia com bps>512.
+        let bps = self.reader.bytes_per_sector as usize;
         let pad = size % cluster_size;
         if pad != 0 && last >= 2 {
             let space = cluster_size - pad;
@@ -1616,20 +1620,20 @@ impl<'a> Fat32Writer<'a> {
             let lba = self.reader.cluster_lba(last);
             let mut cluster_buf = vec![0u8; cluster_size];
             for s in 0..self.reader.sectors_per_cluster as u32 {
-                let off = s as usize * 512;
+                let off = s as usize * bps;
                 self.reader.ata.read_sectors(
                     lba + s,
-                    &mut cluster_buf[off..off + 512],
+                    &mut cluster_buf[off..off + bps],
                     1,
                 );
             }
             cluster_buf[pad..pad + take].copy_from_slice(&data[..take]);
             for s in 0..self.reader.sectors_per_cluster as u32 {
-                let off = s as usize * 512;
+                let off = s as usize * bps;
                 if !self
                     .reader
                     .ata
-                    .write_sectors(lba + s, &cluster_buf[off..off + 512], 1)
+                    .write_sectors(lba + s, &cluster_buf[off..off + bps], 1)
                 {
                     return false;
                 }

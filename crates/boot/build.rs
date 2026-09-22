@@ -25,6 +25,10 @@ fn main() {
     // ─── Limine boot image ────────────────────────────────────────────────
     let limine_dir = workspace.join("tools").join("limine");
     let limine_efi = limine_dir.join("vendor").join("BOOTX64.EFI");
+    // H5: inputs Limine que mudam a ESP sem tocar no kernel — sem isso uefi.img stale.
+    println!("cargo:rerun-if-changed={}", limine_dir.join("limine.conf").display());
+    println!("cargo:rerun-if-changed={}", limine_efi.display());
+    println!("cargo:rerun-if-changed={}", limine_dir.join("mk_esp_fat.py").display());
 
     // Prune ESP tree (bughunt H4/B2): leftovers de layouts antigos entravam no FAT.
     let esp_root = target_dir.join("limine-esp-tree");

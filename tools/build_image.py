@@ -143,12 +143,12 @@ def main():
     env = os.environ.copy()
     env.pop("SKIP_2B", None)
     env["BOOT_MODE"] = boot_mode
-    # Falcon3 3B é o modelo principal (PACK_LLM default). Compat: se PACK_LLM não
-    # estiver no env, mkfat32 cai em 850; aqui documentamos/expomos o default novo
-    # e permitimos override via env (PACK_LLM=850|13|2b|3b|falcon3|all).
+    # PACK_LLM default=none (opt-in falcon3|all) — evita baixar/converter
+    # Falcon3 3B inline (multi-GB) e o timeout de build_image --hw --unified.
+    # Override via env (PACK_LLM=850|13|2b|3b|falcon3|all|none).
     if "PACK_LLM" not in env or not env["PACK_LLM"].strip():
-        env["PACK_LLM"] = "falcon3"
-        print("[PACK_LLM] default falcon3 (override com PACK_LLM=850|13|2b|3b|all|none)")
+        env["PACK_LLM"] = "none"
+        print("[PACK_LLM] default none (opt-in com PACK_LLM=falcon3|all|2b|3b)")
 
     # ADR-0086 s3.6A (I12): imagem instalável fixa — sem modelos grandes; o alvo
     # baixa o brain no 1º boot via ModelProvisioner. PACK_LLM=none + MODELS_SOURCE.

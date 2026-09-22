@@ -374,9 +374,11 @@ pub fn set_heap_budget_mb(mb: usize) {
     crate::slog_nano!("HEAP", "BUDGET", "budget={}MB (window=~{}MB)", mb, window_mb);
 }
 
-/// Limite do LazyBumpAllocator — o array HEAP_BUFFER tem 512MB (todo seguro).
-/// Nunca estender alem de HEAP_SIZE: alem do array .bss ha outras statics
-/// (GLOBAL_ALLOCATOR, etc.) — corrompe total_frames (SESSION_233).
+/// Teto atual do bump (redimensionável via grow_bump_auto/resize_bump_heap).
+/// HEAP_SIZE (512MB) é só o tamanho INICIAL do array HEAP_BUFFER em `.bss.heap`
+/// no FIM da imagem — crescer além dele é SEGURO (mapeia frames novos em espaço
+/// livre via map_page_direct; SESSION_233 corrigido pelo link_section `.kheap`).
+/// O limite REAL é a janela endereçável (~2GB, bump_max_offset) + HEAP_BUDGET_MB.
 pub static HEAP_LIMIT: AtomicUsize = AtomicUsize::new(HEAP_SIZE);
 
 /// Phys do `HEAP_BUFFER` (bump). 0 = ainda não reservado no PMM.
@@ -456,6 +458,11 @@ pub fn try_alloc_check() -> bool {
 pub fn resize_heap_to_mb(target_mb: usize) {
     let current = CURRENT_HEAP_MB.load(Ordering::SeqCst);
     if target_mb <= current {
+        return;
+    }
+    // ponytail: gate window — TALC não bypassa a janela endereçável.
+    let diff_bytes = target_mb.saturating_sub(current).saturating_mul(1024 * 1024);
+    if !can_alloc_bytes(diff_bytes, 0) {
         return;
     }
     let diff_pages = (target_mb - current).saturating_mul(256);
@@ -579,8 +586,9 @@ pub fn try_fault_in_heap(cr2: u64) -> bool {
     }
 
     // Determine which range the fault is in:
-    let start = HEAP_START as u64;
-    let talc_end = start + (CURRENT_HEAP_MB.load(Ordering::Relaxed) as u64) * 1024 * 1024;
+    // ponytail: range TALC canônico (LARGE_HEAP_*), não CURRENT_HEAP_MB (bump).
+    let start = LARGE_HEAP_START as u64;
+    let talc_end = start + LARGE_HEAP_SIZE as u64;
     let in_talc = cr2 >= start && cr2 < talc_end;
 
     let bump_start = unsafe { HEAP_BUFFER.as_mut_ptr() as u64 };
@@ -727,7 +735,6 @@ pub fn heap_stats() -> (usize, usize) {
     }
 }
 
-#[cfg(feature = "global-alloc")]
 #[alloc_error_handler]
 fn oom(layout: core::alloc::Layout) -> ! {
     unsafe {
@@ -799,34 +806,6 @@ pub fn talc_init_post_memory() -> Result<(), &'static str> {
 /// imagem (limine.ld) — a extensão além dele mapeia frames novos em espaço
 /// livre, sem corromper statics .bss adjacentes (GLOBAL_ALLOCATOR, etc).
 pub fn resize_bump_heap(target_mb: usize) {
-    let current = CURRENT_HEAP_MB.load(Ordering::Relaxed);
-    if target_mb <= current { return; }
-    let diff_mb = target_mb - current;
-    let diff_pages = diff_mb * 256;
-    let heap_start = unsafe { HEAP_BUFFER.as_mut_ptr() as usize };
-    let base = VirtAddr::new(crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed));
-    if base.as_u64() == 0 { return; }
-
-    let mut allocated = 0usize;
-    for _i in 0..diff_pages {
-        let phys = {
-            let mut g = crate::memory::GLOBAL_ALLOCATOR.lock();
-            match g.as_mut().and_then(|a| a.allocate_frame()) {
-                Some(f) => f.start_address().as_u64(),
-                None => break,
-            }
-        };
-        let virt = VirtAddr::new((heap_start + HEAP_SIZE + allocated * 4096) as u64);
-        unsafe {
-            map_page_direct(base, virt, phys);
-        }
-        allocated += 1;
-    }
-    if allocated > 0 {
-        let new_limit = HEAP_SIZE + allocated * 4096;
-        HEAP_LIMIT.store(new_limit, Ordering::Release);
-        let new_mb = (new_limit + 1024*1024 - 1) / (1024*1024);
-        CURRENT_HEAP_MB.store(new_mb, Ordering::SeqCst);
-        crate::slog_nano!("HEAP", "BUMP", "extendido para {} MB ({} páginas)", new_mb, allocated);
-    }
+    // ponytail: delega ao path canônico (budget/window/heap_pte_present); mantém API.
+    grow_bump_auto(target_mb.saturating_mul(1024 * 1024));
 }

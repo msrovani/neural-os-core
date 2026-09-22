@@ -35,9 +35,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SECTOR = 512
 DEFAULT_SIZE_MB = 3072  # 3GB partição dados (FAT32 file limit ≈4GB-1)
 
-# GPT type GUIDs (mixed-endian as stored on disk)
-GUID_ESP = bytes.fromhex("28732ac11ff8d211ba4b00a0c93ec93b")  # C12A7328-F81F-11D2-BA4B-00A0C93EC93B
-GUID_BASIC = bytes.fromhex("a2a0d0ebb9e5334487c068b6b72699c7")  # EBD0A0A2-B9E5-4433-87C0-68B6B72699C7
+# GPT type GUIDs on-disk em little-endian misto (fonte única com
+# tools/limine/mk_esp_fat.py:107 — nunca bytes.fromhex textual/BE).
+GUID_ESP = uuid.UUID("C12A7328-F81F-11D2-BA4B-00A0C93EC93B").bytes_le  # EFI System
+GUID_BASIC = uuid.UUID("EBD0A0A2-B9E5-4433-87C0-68B6B72699C7").bytes_le  # Basic Data
 
 
 def align_up(v: int, a: int) -> int:

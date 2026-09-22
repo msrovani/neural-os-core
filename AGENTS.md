@@ -164,22 +164,24 @@ cargo build --release → python tools/build_image.py --bios → qemu
 #    Fronteira de execução não-confiável = wasmi (A) + Ring3 (ADR-0077, gated).
 # ═══════════════════════════════════════════════════════════════
 
-# Active Dependencies (neural-kernel)
+# Active Dependencies (neural-kernel — sincronizado com Cargo.lock)
 | Crate | Versão |
 |---|---|
-| bootloader | 0.11.15 |
-| spin | 0.9 |
-| lazy_static | 1.4 (spin_no_std) |
-| uart_16550 | 0.2 |
-| x86_64 | 0.14.11 |
-| linked_list_allocator | 0.9 |
+| spin | 0.12.3 (req 0.12) |
+| lazy_static | 1.5.0 (req 1.4, spin_no_std) |
+| uart_16550 | 0.2.19 (req 0.2) |
+| x86_64 | 0.14.13 (req 0.14.11, teto da linha — 0.15 exige nightly posterior ao pin) |
+| talc | 4.4.3 (heap canônico; linked_list_allocator removido) |
 | libm | 0.2 |
-| pic8259 | 0.10 |
-| smoltcp | 0.13 (alloc, medium-ethernet, proto-ipv4, tcp, udp) |
+| smoltcp | 0.14 (alloc, medium-ethernet, proto-ipv4, socket-tcp/udp/dhcpv4) |
 | ed25519-compact | 2.3.1 |
+| uefi | 0.35.0 (só `crates/logwriter-efi`, binário autônomo — não linkado no kernel) |
+| Limine (binário UEFI) | 12.9.0 (vendor BOOTX64.EFI; bootloader 0.11 removido S232) |
 | event-bus | workspace |
 | skill-registry | workspace |
 | ticket-lock | workspace |
+<!-- ponytail: removidos stale bootloader 0.11.15 / linked_list_allocator 0.9 / pic8259 0.10 — crate ausente no Cargo.lock; pic8259 removido, contrato máscara abaixo -->
+- **Contrato máscara PIC (fallback, sem crate pic8259):** master `0xF8` (IRQ0 PIT + IRQ1 teclado + IRQ2 cascade abertos; `0xFA` mascarava IRQ1 — SESSION_252) + slave `0xEF` (bit4 limpo → IRQ12 mouse PS/2 aberto; `0xFF` mascarava mouse — SESSION_315). Vive em `crates/k_nano/src/interrupts.rs::remap_pic_pit_fallback` (ICW1-4 + máscaras + `pit_init`, sem STI) e `crates/neural-kernel/src/interrupts_ext.rs::init_pic_fallback_and_sti` (mesmo remap + STI; `disable_pic()` mascara na transição p/ APIC).
 
 # Key Architectural Decisions (resumo)
 - VGA address: `0xB8000 + physical_memory_offset` (runtime)
@@ -191,7 +193,8 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: **v1.9.99-s391 TEST** — Desktop/UI/Orb theme/hover/dock/mesh honesty;
+# Current Sprint: **v1.9.99-s392 TEST** — Boot/Limine bughunt (GUID ESP/stack RSP/OVMF/ELF/FAT) + canvas;
+# s391 Desktop/UI/Orb theme/hover/dock/mesh honesty;
 # s390b SelfHeal residual KERNEL_ERROR/Safety/checkpoint;
 # s390 SelfHeal honesty I3/budget/LLM/silent (H1–L4);
 # s389b Logging SCORE/phase/fat-boot-log (H4–L6);

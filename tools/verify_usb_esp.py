@@ -117,26 +117,25 @@ def read_chain(vol: bytes, start_cl: int, size: int) -> bytes:
 
 def find_file(vol: bytes, want: str) -> bytes | None:
     want_u = want.upper()
-    # root
-    subdirs = []
-    for name, cl, size, is_dir in walk_dir(vol, fat_ctx(vol)[4]):
-        if is_dir and name not in (".", ".."):
-            subdirs.append((name, cl))
-            continue
-        if name.upper() == want_u:
-            return read_chain(vol, cl, size)
-    # EFI/BOOT (BOOTX64.EFI)
-    for dname, dcl in subdirs:
-        if dname.upper() != "EFI":
-            continue
-        for n2, cl2, sz2, is2 in walk_dir(vol, dcl):
-            if is2 and n2.upper() == "BOOT":
-                for n3, cl3, sz3, is3 in walk_dir(vol, cl2):
-                    if not is3 and n3.upper() == want_u:
-                        return read_chain(vol, cl3, sz3)
-            if not is2 and n2.upper() == want_u:
-                return read_chain(vol, cl2, sz2)
-    return None
+
+    def search_dir(start_cl: int, depth: int = 0) -> bytes | None:
+        # Recursivo (depth<=2): cobre root, EFI, EFI/BOOT e EFI/neural.
+        if depth > 2:
+            return None
+        subdirs: list[tuple[str, int, int]] = []
+        for name, cl, size, is_dir in walk_dir(vol, start_cl):
+            if is_dir and name not in (".", ".."):
+                subdirs.append((name, cl, size))
+                continue
+            if name.upper() == want_u:
+                return read_chain(vol, cl, size)
+        for _, dcl, _ in subdirs:
+            hit = search_dir(dcl, depth + 1)
+            if hit is not None:
+                return hit
+        return None
+
+    return search_dir(fat_ctx(vol)[4])
 
 
 def main() -> int:
@@ -164,6 +163,16 @@ def main() -> int:
         print("FAIL: BOOTX64.EFI ausente")
         return 1
     print(f"BOOTX64.EFI {len(efi)}")
+    limine = find_file(vol, "limine.efi")
+    if limine is None:
+        print("FAIL: limine.efi ausente na ESP (EFI/neural) — metal fica Limine-only")
+        return 1
+    print(f"limine.efi {len(limine)}")
+    conf = find_file(vol, "limine.conf")
+    if conf is None:
+        print("FAIL: limine.conf ausente na ESP (boot/) — sem entry de boot")
+        return 1
+    print(f"limine.conf {len(conf)}")
     tree = os.path.join(ROOT, "target", "limine-esp-tree", "kernel.elf")
     if os.path.isfile(tree):
         tsha = sha256(open(tree, "rb").read())
@@ -171,7 +180,7 @@ def main() -> int:
         if tsha != ksha:
             print("FAIL: ESP kernel != limine-esp-tree (ESP stale)")
             return 1
-    print("OK: ESP kernel.elf + BOOTX64.EFI")
+    print("OK: ESP kernel.elf + BOOTX64.EFI + limine.efi + limine.conf")
     return 0
 
 

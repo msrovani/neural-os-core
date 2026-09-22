@@ -90,9 +90,14 @@ impl ElfLoader {
 
         for i in 0..phnum {
             // Checked arithmetic: phoff + i * phentsize pode overflow usize.
+            // M2: sem unwrap_or(0) — overflow vira Err, nunca offset 0 silencioso.
             let off = phoff as usize;
             let entry_size = phentsize;
-            let off = match off.checked_add(i.checked_mul(entry_size).unwrap_or(0)) {
+            let stride = match i.checked_mul(entry_size) {
+                Some(v) => v,
+                None => return Err("ELF: program header offset overflow"),
+            };
+            let off = match off.checked_add(stride) {
                 Some(v) => v,
                 None => return Err("ELF: program header offset overflow"),
             };

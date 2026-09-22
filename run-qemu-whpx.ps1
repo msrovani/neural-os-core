@@ -46,13 +46,15 @@ $bridgeLog = Join-Path $logDir "bridge_$timestamp.log"
 $bridgeErr = Join-Path $logDir "bridge_$timestamp.err.log"
 
 $uefi = Join-Path $Root "target\uefi.img"
-$ovmf = Join-Path $Root "target\ovmf.fd"
+$ovmfCode = Join-Path $Root "target\ovmf_code.fd"
+$ovmfVars = Join-Path $Root "target\ovmf_vars.fd"
 $qemu = "C:\Program Files\qemu\qemu-system-x86_64.exe"
 $bridgeScript = Join-Path $Root "tools\serial_bridge.py"
 $netmodeFile = Join-Path $Root "target\netmode.flag"
 
 if (!(Test-Path $uefi)) { Write-Host "ERRO: target\uefi.img ausente. cargo build --release"; exit 1 }
-if (!(Test-Path $ovmf)) { Write-Host "ERRO: target\ovmf.fd ausente"; exit 1 }
+if (!(Test-Path $ovmfCode)) { Write-Host "ERRO: target\ovmf_code.fd ausente"; exit 1 }
+if (!(Test-Path $ovmfVars)) { Write-Host "ERRO: target\ovmf_vars.fd ausente"; exit 1 }
 if (!(Test-Path $qemu)) { Write-Host "ERRO: QEMU nao encontrado"; exit 1 }
 
 $script:bridgeProc = $null
@@ -299,7 +301,8 @@ try {
         # COM1 = log file; COM2 = SLIP only if peer started (-SerialBridge).
         # Without peer, tcp client aborts QEMU - use null when SLIP frozen.
         $a += @(
-            "-drive", "if=pflash,format=raw,file=$ovmf,readonly=on",
+            "-drive", "if=pflash,format=raw,file=$ovmfCode,readonly=on",
+            "-drive", "if=pflash,format=raw,file=$ovmfVars",
             "-serial", "file:$logfile"
         )
         if ($wantSlip) {

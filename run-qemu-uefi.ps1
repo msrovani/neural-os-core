@@ -21,15 +21,20 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $logfile = Join-Path $logDir "boot_uefi_$timestamp.txt"
 
 $uefi = Join-Path $Root "target\uefi.img"
-$ovmf = Join-Path $Root "target\ovmf.fd"
+$ovmfCode = Join-Path $Root "target\ovmf_code.fd"
+$ovmfVars = Join-Path $Root "target\ovmf_vars.fd"
 $qemu = "C:\Program Files\qemu\qemu-system-x86_64.exe"
 
 if (!(Test-Path $uefi)) {
     Write-Host "ERRO: target\uefi.img ausente. Rode: cargo build --release" -ForegroundColor Red
     exit 1
 }
-if (!(Test-Path $ovmf)) {
-    Write-Host "ERRO: target\ovmf.fd ausente. Copie OVMF.fd para target\ovmf.fd" -ForegroundColor Red
+if (!(Test-Path $ovmfCode)) {
+    Write-Host "ERRO: target\ovmf_code.fd ausente. Copie OVMF_CODE.fd para target\ovmf_code.fd" -ForegroundColor Red
+    exit 1
+}
+if (!(Test-Path $ovmfVars)) {
+    Write-Host "ERRO: target\ovmf_vars.fd ausente. Copie OVMF_VARS.fd para target\ovmf_vars.fd" -ForegroundColor Red
     exit 1
 }
 if (!(Test-Path $qemu)) {
@@ -140,7 +145,7 @@ if (-not $NoSerialBridge) {
 Write-Host "=== NEURAL-OS-CORE (UEFI) ===" -ForegroundColor Cyan
 Write-Host "RAM: ${RamGB}G | CPU: try $($smpTry -join ',') (TCG) | NIC: e1000 ($netMode)"
 Write-Host "Boot:  $uefi"
-Write-Host "OVMF:  $ovmf"
+Write-Host "OVMF:  $ovmfCode + $ovmfVars"
 if ($disk) { Write-Host "FAT32: $disk (IDE index=1)" -ForegroundColor Green }
 Write-Host "Log:   $logfile"
 Write-Host "Serial: COM2=tcp client -> 127.0.0.1:$SerialBridgePort" -ForegroundColor Gray
@@ -181,8 +186,9 @@ function Build-QemuArgs {
         }
     }
     $unique = $unique | Sort-Object -Property Length -Descending
-    # Filtra placeholders vazios (<10KB) e modelos grandes (>70MB = OOM no heap 1024MB)
-    $unique = @($unique | Where-Object { $_.Length -gt 10240 -and $_.Length -le 70MB })
+    # Só filtra placeholders vazios (<10KB). Modelos grandes carregam todos;
+    # kernel ajusta heap dinamicamente (fix: total_needed = file + estimated).
+    $unique = @($unique | Where-Object { $_.Length -gt 10240 })
     $modelAddr = 0x100000000  # 4GB base
     $modelGap = 0x100000      # 1MB gap entre modelos
     $loaded = 0
@@ -202,7 +208,8 @@ function Build-QemuArgs {
     }
     # COM1=log; COM2=SLIP (QEMU cliente → bridge TCP server; SEM server=on)
     $a += @(
-        "-drive", "if=pflash,format=raw,file=$ovmf,readonly=on",
+        "-drive", "if=pflash,format=raw,file=$ovmfCode,readonly=on",
+        "-drive", "if=pflash,format=raw,file=$ovmfVars",
         "-serial", "file:$logfile",
         "-serial", "tcp:127.0.0.1:${SerialBridgePort}"
     )
