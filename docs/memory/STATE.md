@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s394 — BEI bughunt ADR-0060
+# STATE — neural-os-core v1.9.99-s401 — Revisão TECNOLOGIAS ondas fechadas
 
-#   PISTA ATIVA: s394 — BEI (BitNet Ecosystem Intelligence) H1–H11/M12–M22/LOW + canvas
-#   PISTA ANTERIOR: s393 MHI docs-only bughunt
+#   PISTA ATIVA: s401 — Onda 6 aplicada + MEDs onda 3 (vram ACS ring) + §13 re-medido
+#   PISTA ANTERIOR: s395–s400 ondas 1–6 (s394 BEI)
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo

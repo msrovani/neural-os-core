@@ -3,7 +3,7 @@
 import os, sys, re, json
 from pathlib import Path
 
-TARGET = Path(r"C:\DEV\neural-os-core\tools\target")
+TARGET = Path(__file__).parent / "target"
 KERNEL = TARGET / "linux"
 TARGET.mkdir(exist_ok=True)
 
@@ -86,7 +86,19 @@ PCI_TABLE_RE = re.compile(
     r'|{0x(\w{4})\s*,\s*0x(\w{4})\s*,\s*[^}]*}'  # { vendor, device, ... }
     r'|{PCI_DEVICE\(\s*0x(\w{4})\s*,\s*0x(\w{4})\s*\)}'
 )
+# include/linux/pci_ids.h — top vendors usados em PCI_VDEVICE(nome, id).
+# O macro PCI_VDEVICE resolve PCI_VENDOR_ID_<NOME> para o ID numérico.
+PCI_VENDOR_IDS = {
+    "INTEL": "8086", "NVIDIA": "10DE", "AMD": "1002", "ATI": "1002",
+    "REALTEK": "10EC", "BROADCOM": "14E4", "ATHEROS": "168C",
+    "QUALCOMM": "168C", "MEDIATEK": "14C3", "MARVELL": "11AB",
+    "VMWARE": "15AD", "VIRTIO": "1AF4", "QEMU": "1B36",
+    "IBM": "1014", "HP": "103C", "DELL": "1028",
+    "SAMSUNG": "144D", "SANDISK": "15B7", "LSI": "1000",
+    "MELLANOX": "15B3", "CISCO": "1137", "MICROCHIP": "1055",
+}
 kernel_entries = set()
+discarded_macros = set()
 for root, dirs, files in os.walk(KERNEL / "drivers"):
     for fname in files:
         if not fname.endswith(".c") and not fname.endswith(".h"):
@@ -99,14 +111,22 @@ for root, dirs, files in os.walk(KERNEL / "drivers"):
         for m in PCI_TABLE_RE.finditer(text):
             g = m.groups()
             if g[0] and g[1]:  # PCI_VDEVICE
-                # PCI_VDEVICE(name, device_id) -> vendor from name
-                vendor_name = g[0]
-                device_id = int(g[1], 16) if g[1].startswith("0x") else int(g[1], 16)
-                kernel_entries.add(("PCI_VDEVICE", vendor_name, f"{device_id:04X}"))
+                # PCI_VDEVICE(name, device_id) -> vendor via tabela PCI_VENDOR_ID_*
+                macro = g[0]
+                hexvid = PCI_VENDOR_IDS.get(macro)
+                if hexvid is None:
+                    discarded_macros.add(macro)  # honesto: não fabricar vendor
+                    continue
+                device_id = int(g[1], 16)
+                kernel_entries.add(("PCI_VDEVICE", hexvid, f"{device_id:04X}"))
             elif g[2] and g[3]:  # { vendor, device }
                 kernel_entries.add(("PAIR", g[2], g[3]))
             elif g[4] and g[5]:  # PCI_DEVICE(vendor, device)
                 kernel_entries.add(("PCI_DEVICE", g[4], g[5]))
+
+if discarded_macros:
+    print(f"[KERNEL] {len(discarded_macros)} macros PCI_VENDOR_ID_* fora da tabela "
+          f"descartados: {sorted(discarded_macros)[:8]}")
 
 print(f"[KERNEL] {len(kernel_entries)} PCI entries de drivers do kernel")
 

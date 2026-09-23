@@ -55,7 +55,7 @@ fn try_device_w2a8(
     img_code_len: usize,
 ) -> Option<Tensor> {
     let buf = w2a8_device::prepare_device_buffers(w, x, profile)?;
-    if !w2a8_device::try_stage_upload(&buf) {
+    if !w2a8_device::validate_for_stage(&buf) {
         slog_hal!(
             "COMPUTE",
             "warn",

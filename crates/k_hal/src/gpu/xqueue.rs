@@ -92,7 +92,7 @@ impl XQueue {
         if completed {
             if let Some(job) = self.in_flight.pop_front() {
                 let gj = GpuJob { cmd: job.cmd, arg0: job.arg0, arg1: job.arg1, arg2: job.arg2 };
-                if unsafe { ring.submit_and_wait(&gj, 100) } {
+                if unsafe { ring.submit_and_wait(&gj, 100) }.unwrap_or(false) {
                     self.running = Some(XqJob { submitted_tick: now_tick, ..job });
                 } else {
                     self.failed += 1;

@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.99-s400 TEST
+# SESSION INDEX — neural-os-core v1.9.99-s401 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 401 | Revisão ondas | fechamento | MEDs onda3 + onda6 aplicada | vram binário; ACS cap+4 hi; ring fail-closed; tools paths/labels; §13 re-medido 90 blobs; update_tecnologias.py criado |
 | 400 | Tools/Data/FW | bughunt AIOS | §10/§11/§13 recon | FW não-rep.; vendor non-numérico; hash random labels; paths hardcoded; §13 contagens stale |
 | 399 | Audio/IA | bughunt AIOS | §5+§7 fixes | infer_queue race; piper 16k; TTS dropped; H2O sort; STT blob size; UAC usage |
 | 398 | Rede | bughunt AIOS | §4 fixes | mesh probe rw+cleanup; RemoteCellChannel deletado; transport BE; wifi UAF/inits |

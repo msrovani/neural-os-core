@@ -85,8 +85,11 @@ impl IntelRing {
         // NOTA: map_bars_uc() já mapeou BAR0 inteiro como UC antes deste probe.
         // Acessar MMIO diretamente via pm_offset é seguro porque o PTE já é UC.
 
+        // M7 (s397): FORCE_WAKEUP ler 0 é valor legítimo do registrador
+        // (ECO Gen9) — NÃO reprova presença. Só 0xFFFF_FFFF é assinatura de
+        // MMIO não mapeado (pull-up do barramento).
         let test_val = unsafe { core::ptr::read_volatile((mmio + FORCE_WAKEUP) as *const u32) };
-        if test_val == 0xFFFFFFFF || test_val == 0 {
+        if test_val == 0xFFFFFFFF {
             k_nano::slog_hal!("INTEL", "warn", "GPU nao respondeu. test_val={:#x}", test_val);
             return None;
         }

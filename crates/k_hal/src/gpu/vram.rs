@@ -30,28 +30,16 @@ fn order(size: u64) -> u32 {
     o
 }
 
-/// Maior potência de 2 **≤** `size` (nunca cresce além da VRAM física).
-fn floor_order(size: u64) -> u32 {
-    let mut o = MIN_ORDER;
-    while o < MAX_ORDER && (1u64 << (o + 1)) <= size {
-        o += 1;
-    }
-    o
-}
-
 fn buddy(addr: u64, size: u64) -> u64 {
     addr ^ size
 }
 
 impl VramBuddy {
+    /// Buddy seedado pela decomposição binária de `size` (não-pow2 ok).
     pub fn new(base: u64, size: u64, gpu_name: &'static str) -> Self {
-        // Floor: se size não for potência de 2, NÃO arredondar para cima
-        // (ceil 3GB→4GB alocaria além da aperture).
-        let o = floor_order(size.max(1u64 << MIN_ORDER));
-        let aligned_size = 1u64 << o;
         let mut vram = VramBuddy {
             base,
-            size: aligned_size,
+            size,
             free: [
                 Vec::new(),
                 Vec::new(),
@@ -78,16 +66,30 @@ impl VramBuddy {
             total_allocated: 0,
             gpu_name,
         };
-        vram.free[(o - MIN_ORDER) as usize].push(base);
+        // Seeding por decomposição binária: NÃO usar um único bloco floor-pow2
+        // (3GB virava 2GB — metade da aperture morta). Cada bit setado de
+        // `size` vira um bloco cuja ordem é o próprio bit (bit mais baixo
+        // primeiro → o offset acumulado o mantém alinhado à sua ordem, dado
+        // que base é BAR-aligned pow2 ≥ size). Clamp em MAX_ORDER (4GB):
+        // acima disso emite múltiplos blocos de 4GB.
+        let mut addr = base;
+        let mut rem = size & !((1u64 << MIN_ORDER) - 1); // descarta sub-página
+        let mut nblocks = 0u32;
+        while rem != 0 {
+            let o = rem.trailing_zeros().clamp(MIN_ORDER, MAX_ORDER);
+            vram.free[(o - MIN_ORDER) as usize].push(addr);
+            addr += 1u64 << o;
+            rem -= 1u64 << o;
+            nblocks += 1;
+        }
         k_nano::slog_hal!(
             "VRAM",
             "BUDDY",
-            "{}: base={:#x} size={}MB ordem={} (floor of {}MB)",
+            "{}: base={:#x} size={}MB blocos={}",
             gpu_name,
             base,
-            aligned_size / (1024 * 1024),
-            o,
-            size / (1024 * 1024)
+            size / (1024 * 1024),
+            nblocks
         );
         vram
     }
@@ -175,14 +177,20 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
 
     // SESSÃO_260 (HW real GTX 1050): BAR size medido pode vir lixo (ex:
     // 2^64-1 como o VGA dummy do QEMU logou) → o loop do mapeamento 2MB
-    // rodaria bilhões de iterações = freeze aparente. BARs são potências de 2
-    // e VRAM > 64GB não existe em placa consumer. Skip honesto se lixo.
-    if gpu.vram_size > 64 * 1024 * 1024 * 1024 || gpu.vram_size.count_ones() != 1 {
-        k_nano::slog_hal!("VRAM", "warn", "{}: vram_size suspeito {:#x} — skip (medicao de BAR duvidosa)", gpu.name, gpu.vram_size);
+    // rodaria bilhões de iterações = freeze aparente. Guarda por RANGE
+    // sensato (s397/M1): VRAM consumer cabe em 256MB..64GB e BARs são
+    // alinhados a 16MB. O check antigo de pow2 (`count_ones()!=1`)
+    // rejeitava aperturas válidas não-pow2 (6GB/3GB).
+    let mb = 1024 * 1024;
+    if gpu.vram_size < 256 * mb || gpu.vram_size > 64 * 1024 * mb || gpu.vram_size % (16 * mb) != 0 {
+        k_nano::slog_hal!("VRAM", "warn", "{}: vram_size suspeito {:#x} — skip (fora de 256MB..64GB ou mal alinhado)", gpu.name, gpu.vram_size);
         return false;
     }
 
     let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    // M2 (s397): `GpuInfo.bar2` carrega a aperture VRAM JÁ resolvida pelo
+    // detect (det_maior BAR ≥64MB) — AMD dGPU mapeia VRAM→BAR0 e o detect
+    // a reporta AQUI (bar2 é papel lógico, não o BAR físico 2).
     let vram_phys = gpu.bar2;
     let vram_size = gpu.vram_size;
 

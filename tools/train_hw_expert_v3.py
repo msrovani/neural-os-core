@@ -2,7 +2,7 @@
 """Treino HW Expert v3 com dataset completo: SDIO + pci.ids + usb.ids + kernel + firmware metadata.
 Uso: python tools/train_hw_expert_v3.py --epochs 100 --hidden 128
 """
-import os, sys, json, re, argparse, torch
+import os, sys, json, re, argparse, hashlib, torch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -55,7 +55,7 @@ def build_dataset(sdio, pci_ids, usb_ids, kernel_pci):
         key = (vid, did)
         if key in seen: return
         seen.add(key)
-        cls = hash(cls_seed) % vocab
+        cls = int(hashlib.sha256(cls_seed.encode()).hexdigest(), 16) % vocab  # estável (não PYTHONHASHSEED)
         tok = [(vid>>8)%vocab, vid%vocab, (did>>8)%vocab, did%vocab]
         tokens.append(tok + [0]*12)
         targets.append([cls] + [0]*15)

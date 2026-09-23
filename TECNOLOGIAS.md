@@ -267,7 +267,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 11.2 | `extract_firmware_metadata.py` | 🏆 Parser do manifesto WHENCE + headers .h + READMEs. Extração de registros, defines, HWIDs de todos os diretórios. | linux-firmware.git | MIT | `tools/extract_firmware_metadata.py` |
 | 11.3 | `fetch_pci_usb_ids.py` | 🏆 Download + parse de pci-ids e usb-ids oficiais. Estruturação como JSON hierárquico (vendor→device). | pci-ids.ucw.cz, linux-usb.org | MIT | `tools/fetch_pci_usb_ids.py` |
 | 11.4 | `train_hw_expert_v3.py` | 🏆 Pipeline de treino do HW Expert com dataset combinado (SDIO + pci-ids + usb-ids + kernel). | PyTorch, BitNet arquitetura | MIT | `tools/train_hw_expert_v3.py` |
-| 11.5 | `mkfat32.py` / `build_image.py` | 🏆 Gerador de imagem FAT32 bootável com modelos, firmware, e config. Inclui 111 blobs de firmware no disco. | mkfs.fat (Linux) | GPLv2 | `tools/mkfat32.py`, `tools/build_image.py` |
+| 11.5 | `mkfat32.py` / `build_image.py` | 🏆 Gerador de imagem FAT32 bootável com modelos, firmware, e config. Inclui os 90 blobs presentes em `firmware/` (medido s392; rtl_nic/rtlwifi/iwlwifi exigem clone upstream). | mkfs.fat (Linux) | GPLv2 | `tools/mkfat32.py`, `tools/build_image.py` |
 | 11.6 | `train_stt.py` | ✅ Treino CTC STT PCM→MFCC kernel-aligned. | PyTorch CTC | MIT | `tools/train_stt.py` |
 | 11.7 | `convert_piper_to_bitnet.py` | ✅ ONNX Piper → `.bin` + validação manifesto. VITS forward = soft-float blocker. | Piper / ONNX | MIT | `tools/convert_piper_to_bitnet.py` |
 
@@ -309,12 +309,16 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 | Grupo | Blobs | Tamanho | Fonte | Licença | Uso |
 |-------|-------|---------|-------|---------|-----|
-| NVIDIA GP108 (FECS+GPCCS) | 8 | 39 KB | linux-firmware.git | MIT | GPU WPR secure boot |
-| Intel i915 SKL+KBL (GuC+HuC+DMC) | 24 | 3.8 MB | linux-firmware.git | MIT | Intel GPU scheduling |
-| Realtek NIC (rtl_nic) | 41 | 217 KB | linux-firmware.git | MIT | RTL8168/8125 |
-| Realtek WiFi (rtlwifi) | 38 | 1 MB | linux-firmware.git | MIT | RTL8188/8192/8822 |
-| Intel WiFi (iwlwifi AX200/210) | 5 | 7.51 MB (API77) | linux-firmware.git | MIT | SESSION_154; gap `.pnvm` |
-| **Total** | **116** | **~12.5 MB** | linux-firmware.git | MIT | |
+| NVIDIA GP108 (FECS+GPCCS+ACR+sw_*) | 28 | 156 KB | linux-firmware.git | MIT | GPU WPR secure boot |
+| NVIDIA TU106 GR (RTX 2060) | 13 | 81 KB | linux-firmware.git | MIT | Turing GR |
+| Intel i915 SKL+KBL+DG2 (GuC+HuC+DMC) | 10 | 2.1 MB | linux-firmware.git | MIT | Intel GPU Gen9/Arc scheduling |
+| Intel xe (BMG/LNL/PTL) | 8 | 5.1 MB | linux-firmware.git | MIT | Arc novo / Battlemage |
+| AMD amdgpu (Cezanne/Raphael/Strix) | 28 | 4.9 MB | linux-firmware.git | MIT | GPU AMD 5600G/7700G/Strix |
+| Atheros ath10k QCA6174 | 3 | 1.4 MB | linux-firmware.git | MIT/BSD firmware | WiFi Note (SESSION_161) |
+| Realtek NIC (rtl_nic) | 0 | — | linux-firmware.git | MIT | não coletado no repo; `rtl_specs` faz fallback do clone (s392) |
+| Realtek WiFi (rtlwifi) | 0 | — | linux-firmware.git | MIT | idem |
+| Intel WiFi (iwlwifi AX200/210) | 0 | — | linux-firmware.git | MIT | idem (`intel/iwlwifi` no fallback); gap `.pnvm` SESSION_154 |
+| **Total** | **90** | **~14.4 MB** | linux-firmware.git | MIT | medido em firmware/ (s392) |
 
 ---
 

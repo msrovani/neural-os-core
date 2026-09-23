@@ -3,8 +3,11 @@
 import os, struct, re, json
 from pathlib import Path
 
-SDIO_INDEX = Path(r"C:\Users\msrov\Downloads\SDIO\indexes\SDIO")
-TARGET = Path("target")
+SDIO_INDEX = Path(os.environ.get(
+    "SDIO_INDEX_DIR",
+    str(Path(__file__).resolve().parent.parent / "target" / "sdio" / "indexes" / "SDIO"),
+))
+TARGET = Path(__file__).parent / "target"
 TARGET.mkdir(exist_ok=True)
 
 def analyze_bin(path):

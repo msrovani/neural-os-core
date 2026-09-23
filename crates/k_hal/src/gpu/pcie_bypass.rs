@@ -125,24 +125,29 @@ pub fn try_enable_resizable_bar(
 /// (bloqueiam peer DMA GPU↔GPU/disco). Limpar = habilitar P2P.
 const ACS_P2P_REDIRECT: u32 = (1 << 2) | (1 << 3);
 
-/// Valor atual do control ACS da ponte (None = sem cap ACS).
+/// Valor atual do **control** ACS da ponte (16-bit, None = sem cap ACS).
+/// M4 (s397): dword cap+4 = [31:16]=Control · [15:0]=Capability — ler a
+/// metade alta; o dword cru misturava o capability register no valor.
 pub fn acs_control(cfg: &dyn PciConfigIo) -> Option<u32> {
     let cap = find_cap(cfg, CAP_ACS)?;
-    Some(cfg.read_dword(cap + 4))
+    Some((cfg.read_dword(cap + 4) >> 16) & 0xFFFF)
 }
 
 /// Limpa os redirects P2P (bits 2|3) na ponte — habilita peer DMA.
 /// RMW + readback verificado; ponte sem ACS → Err explícito (nunca silencioso).
+/// Control está na metade alta do dword cap+4 — preserva o capability
+/// register (metade baixa, read-only) na escrita.
 /// ⚠️ Segurança: sem IOMMU, peer DMA enfraquece isolamento — chamada explícita
 /// (HITL/CapGate), nunca automática no boot.
 pub fn try_clear_p2p_redirect(cfg: &mut dyn PciConfigIo) -> Result<u32, &'static str> {
     let cap = find_cap(cfg, CAP_ACS).ok_or("ponte sem capability ACS")?;
-    let ctrl = cfg.read_dword(cap + 4);
+    let d = cfg.read_dword(cap + 4);
+    let ctrl = (d >> 16) & 0xFFFF;
     let new_ctrl = ctrl & !ACS_P2P_REDIRECT;
     if new_ctrl != ctrl {
-        cfg.write_dword(cap + 4, new_ctrl);
+        cfg.write_dword(cap + 4, (d & 0xFFFF) | (new_ctrl << 16));
         let back = cfg.read_dword(cap + 4);
-        if back & ACS_P2P_REDIRECT != 0 {
+        if (back >> 16) & ACS_P2P_REDIRECT != 0 {
             return Err("ponte recusou limpar os redirects P2P");
         }
     }
@@ -201,10 +206,14 @@ mod tests {
             f.bytes[0x4C] = 0xF0;
             f.bytes[0x4D] = 0x7F;
             // control em 0x50 default zero (→ 1MB atual)
-            // ACS @0x58: control em 0x5C com P2P Request+Completion Redirect
+            // ACS @0x58: dword cap+4 = [31:16] Control (bytes 0x5E-0x5F) ·
+            // [15:0] Capability (bytes 0x5C-0x5D). Control com P2P Request+
+            // Completion Redirect; capability register marcado 0x00FF p/
+            // provar que a escrita preserva a metade baixa.
             f.bytes[0x58] = CAP_ACS;
             f.bytes[0x59] = 0x00;
-            f.bytes[0x5C] = (1 << 2) as u8 | (1 << 3) as u8;
+            f.bytes[0x5C] = 0xFF;
+            f.bytes[0x5E] = (1 << 2) as u8 | (1 << 3) as u8;
             f
         }
     }
@@ -276,6 +285,8 @@ mod tests {
         assert_eq!(acs_control(&f), Some(0x0C));
         assert_eq!(try_clear_p2p_redirect(&mut f), Ok(0));
         assert_eq!(acs_control(&f), Some(0));
+        // capability register (metade baixa do dword) preservado
+        assert_eq!(f.bytes[0x5C], 0xFF);
         // idempotente: segunda chamada no-op Ok
         assert_eq!(try_clear_p2p_redirect(&mut f), Ok(0));
         let mut p = FakePciConfig::plain();

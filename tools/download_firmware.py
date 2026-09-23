@@ -209,6 +209,14 @@ def rtl_specs() -> list[tuple[str, str]]:
     for sub in ("rtl_nic", "rtlwifi", "intel/iwlwifi"):
         base = REPO_FW / sub
         if not base.is_dir():
+            # Fallback upstream: rel path no clone é idêntico ao do repo
+            base = GIT_DIR / sub
+            if not base.is_dir():
+                continue
+            for f in sorted(base.rglob("*")):
+                if f.is_file():
+                    rel = f.relative_to(GIT_DIR).as_posix()
+                    specs.append((rel, rel))
             continue
         for f in sorted(base.rglob("*")):
             if not f.is_file():

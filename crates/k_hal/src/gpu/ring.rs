@@ -27,7 +27,6 @@ pub struct GpuJobRing {
     pub ring_pa: u64,          // physical address do ring buffer
     ring_va: *mut u32,         // virtual address
     pub tail: u32,             // CPU escreve ate aqui (producer)
-    pub head: u32,             // GPU leu ate aqui (consumer, polling)
     bar0_virt: u64,            // BAR0 virtual para doorbell
     doorbell: DoorbellFn,      // vendor-specific doorbell
     pub gpu_vendor: GpuVendor,
@@ -92,21 +91,32 @@ impl GpuJobRing {
             ring_pa,
             ring_va,
             tail: 0,
-            head: 0,
             bar0_virt,
             doorbell,
             gpu_vendor: gpu.vendor,
         })
     }
 
-    /// Adiciona um job ao ring (CPU side, producer)
-    pub fn push(&mut self, job: &GpuJob) -> bool {
+    /// Doorbell real wired para este vendor? M5 (s397): só NVIDIA tem um
+    /// doorbell verdadeiro aqui (PFIFO 0x2000). Intel = fila de software
+    /// (RCS consome `IntelRing`, não este) e AMD/VirtIO são noop explícitos.
+    pub fn doorbell_wired(&self) -> bool {
+        matches!(self.gpu_vendor, GpuVendor::Nvidia)
+    }
+
+    /// Adiciona um job ao ring (CPU side, producer).
+    /// Fail-closed: vendor sem doorbell wired → **Err** (não fingir ring vivo
+    /// com jobs que a GPU nunca será acordada para consumir).
+    pub fn push(&mut self, job: &GpuJob) -> Result<(), &'static str> {
+        if !self.doorbell_wired() {
+            return Err("doorbell nao wired para este vendor — ring inerte (fail-closed)");
+        }
         let h = self.head_reg() as usize;
         let t = self.tail as usize;
         let space = if t >= h { RING_SIZE_DWORDS as usize - (t - h) } else { h - t };
         if space < 4 {
             k_nano::slog_hal!("GPU", "RING", "ring full (tail={}, head={}, space={})", self.tail, self.head_reg(), space);
-            return false;
+            return Err("ring cheio");
         }
         let idx = self.tail as usize;
         unsafe {
@@ -117,7 +127,7 @@ impl GpuJobRing {
             fence(Ordering::Release);
         }
         self.tail = ((idx + 4) as u32) % RING_SIZE_DWORDS;
-        true
+        Ok(())
     }
 
     /// Acorda GPU: escreve doorbell register
@@ -149,25 +159,27 @@ impl GpuJobRing {
         crate::wait::until(2_000_000, || self.head_reg() == target)
     }
 
-    /// Enfileira job + doorbell + poll completion
-    pub unsafe fn submit_and_wait(&mut self, job: &GpuJob, timeout: u32) -> bool {
-        if !self.push(job) { return false; }
+    /// Enfileira job + doorbell + poll completion.
+    /// Err propagado do push (vendor sem doorbell → nunca finge progresso).
+    pub unsafe fn submit_and_wait(&mut self, job: &GpuJob, timeout: u32) -> Result<bool, &'static str> {
+        self.push(job)?;
         self.ring_doorbell();
-        self.poll_head(timeout)
+        Ok(self.poll_head(timeout))
     }
 
-    /// Le head atual (quanto a GPU já consumiu)
-    pub fn head(&self) -> u32 { self.head }
+    /// Le head atual (quanto a GPU já consumiu) — head_reg **real**,
+    /// não cache local que nunca avançava (M5).
+    pub fn head(&self) -> u32 { self.head_reg() }
 
-    /// Jobs pendentes (tail - head)
+    /// Jobs pendentes (tail - head real)
     pub fn pending(&self) -> u32 {
-        self.tail.wrapping_sub(self.head) % RING_SIZE_DWORDS
+        self.tail.wrapping_sub(self.head_reg()) % RING_SIZE_DWORDS
     }
 
     /// Estado do ring para debug
     pub fn status(&self) -> alloc::string::String {
         alloc::format!("[GPU-RING] tail={} head={} pending={} dwords",
-            self.tail, self.head, self.pending())
+            self.tail, self.head_reg(), self.pending())
     }
 }
 

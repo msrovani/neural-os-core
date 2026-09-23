@@ -177,24 +177,28 @@ def parse_whence():
     text = open(WHENCE, "r", errors="replace").read()
     entries = []
     current = {}
+    file_cont = False  # só juntar continuação logo após a linha File:
     for line in text.split("\n"):
         if line.strip() == "" or line.strip().startswith("---"):
             if current.get("File") or current.get("Driver"):
                 current["type"] = "firmware"
                 entries.append(current)
                 current = {}
+            file_cont = False
             continue
         m = re.match(r'^File:\s*(.*)', line)
         if m:
             current["File"] = m.group(1).strip()
+            file_cont = True
             if current.get("File"):
                 parts = current["File"].replace("\\", "/").split("/")
                 current["category"] = parts[0] if len(parts) > 1 else "root"
             continue
         if line.startswith(" "):
-            if "File" in current and not any(line.lower().startswith(k) for k in ["version:", "info:", "licen", "source:", "orig"]):
+            if file_cont and "File" in current:
                 current["File"] += " " + line.strip()
             continue
+        file_cont = False
         for k, v in [("Version:", "Version"), ("Info:", "Info"),
                      ("Licen", "License"), ("Source:", "Source"),
                      ("Driver:", "Driver")]:
@@ -247,9 +251,6 @@ def main():
             r["registers"] = r["registers"][:20]
         if len(r.get("hwids", [])) > 10:
             r["hwids"] = r["hwids"][:10]
-        # Remove full text to keep JSON lean
-        if "full_text" not in r:
-            pass
 
     with open(out, "w", encoding="utf-8") as f:
         json.dump(records, f, indent=1, ensure_ascii=False)

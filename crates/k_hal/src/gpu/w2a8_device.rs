@@ -145,9 +145,10 @@ pub fn upload_byte_len(buf: &W2a8DeviceBuffers) -> usize {
     buf.x_i8.len() + buf.w_i8.len()
 }
 
-/// Tenta “upload” — hoje só valida tamanho; CE/VRAM = AWAITING_HW.
-/// Retorna false se stub/profile Scalar (não sobe device).
-pub fn try_stage_upload(buf: &W2a8DeviceBuffers) -> bool {
+/// Valida se os buffers são candidatos a stage (tamanho>0, profile não-Scalar).
+/// L6 (s397): rebatizado de `validate_for_stage` — **não** faz upload;
+/// CE/VRAM = AWAITING_HW. O nome antigo fingia ação.
+pub fn validate_for_stage(buf: &W2a8DeviceBuffers) -> bool {
     if matches!(buf.profile, OpProfile::ScalarInt8) {
         return false;
     }
@@ -181,7 +182,7 @@ mod tests {
         assert!(buf.w_i8.iter().all(|&v| v == 1));
         let out = host_gemv_signed(&buf).expect("gemv");
         assert!((out[0] - 10.0).abs() < 0.6, "got {}", out[0]);
-        assert!(try_stage_upload(&buf));
+        assert!(validate_for_stage(&buf));
     }
 
     #[test]
@@ -190,6 +191,6 @@ mod tests {
         let mut x = Tensor::new((1, 2));
         x.data = alloc::vec![1.0, 1.0];
         let buf = prepare_device_buffers(&w, &x, OpProfile::ScalarInt8).expect("prep");
-        assert!(!try_stage_upload(&buf));
+        assert!(!validate_for_stage(&buf));
     }
 }

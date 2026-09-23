@@ -7,7 +7,10 @@ import os, sys, re, json, struct, time, hashlib, argparse, csv, io
 from pathlib import Path
 from collections import defaultdict
 
-SDIO_PATH = r"C:\Users\msrov\Downloads\SDIO\drivers"
+SDIO_PATH = os.environ.get(
+    "SDIO_DRIVERS_DIR",
+    str(Path(__file__).resolve().parent.parent / "target" / "sdio" / "drivers"),
+)
 TARGET = Path(__file__).parent / "target"
 
 try:
@@ -15,18 +18,11 @@ try:
 except ImportError:
     py7zr = None
 
-SEVENZ_EXE = r"C:\Program Files\7-Zip\7z.exe"
-
-HWID_RE = re.compile(
-    r'(?:PCI|VEN|DEV|SUBSYS|REV|CC)'
-    r'|USB\\VID_\w{4}&PID_\w{4}'
-    r'|ACPI\\\w{8}'
-    r'|HDAUDIO\\\w+&\w+'
-    r'|SD\\\w+'
-    r'|PCI\\VEN_\w{4}&DEV_\w{4}'
-    r'|PCIVEN_\w{4}&DEV_\w{4}'
-    r'|USB\\\w+'
-    r'|PCI\_CC\_\w+'
+import shutil as _shutil
+SEVENZ_EXE = (
+    _shutil.which("7z")
+    or os.environ.get("SEVEN_ZIP")
+    or r"C:\Program Files\7-Zip\7z.exe"
 )
 
 CLASS_MAP = {
@@ -149,8 +145,13 @@ def parse_hwid_to_parts(hwid):
     if m and not did: did = int(m.group(1), 16)
 
     # ACPI\XXXX
-    m = re.search(r'ACPI\\(\w{8})', h)
-    if m: vid = int(m.group(1)[:4], 16); did = int(m.group(1)[4:], 16)
+    m = re.search(r'ACPI\\([0-9A-F]{8})', h)
+    if m:
+        try:
+            vid = int(m.group(1)[:4], 16)
+            did = int(m.group(1)[4:], 16)
+        except ValueError:
+            pass
 
     return vid, did
 
@@ -223,6 +224,7 @@ def main():
             return
 
         all_hwids = set()
+        hwid_class = {}  # hwid -> classe derivada do nome do pack
         total_inf = 0
         t0 = time.time()
 
@@ -232,10 +234,12 @@ def main():
             hwids, n_inf = extract_from_7z(pack)
             cat = cat_from_name(pack.name)
             all_hwids.update(hwids)
+            for h in hwids:
+                hwid_class.setdefault(h, cat)
             total_inf += n_inf
             print(f"  {len(hwids)} HWIDs, {n_inf} .inf files", flush=True)
 
-        structured = [{"hwid": h, "class": "unknown"} for h in all_hwids]
+        structured = [{"hwid": h, "class": hwid_class.get(h, "unknown")} for h in all_hwids]
         with open(cache_file, "w") as f:
             json.dump(structured, f)
 
@@ -264,6 +268,7 @@ def main():
 
     # Prepara dataset SDIO
     sdio_tokens = []
+    skipped_did = 0
     for entry in sdio_data[:50000]:
         hwid = entry.get("hwid", "")
         vid, did = 0, 0
@@ -275,14 +280,18 @@ def main():
         if m: vid = int(m.group(1), 16)
         if not did: m = re.search(r'PID_(\w{4})', hwid)
         if m: did = int(m.group(1), 16)
-        if not did: did = (vid + len(hwid)) & 0xFFFF
+        if not did:
+            skipped_did += 1  # honesto: sem DID real no HWID, não fabricar sintético
+            continue
 
         vocab = 64
         inp = [(vid>>8)%vocab, vid%vocab, (did>>8)%vocab, did%vocab]
         inp = (inp + [0]*16)[:15]
-        cls = hash(entry.get("class", "unknown")) % vocab
+        cls = int(hashlib.sha256(entry.get("class", "unknown").encode()).hexdigest(), 16) % vocab  # estável
         tgt = [cls] + [0]*14
         sdio_tokens.append((inp[:15], tgt[:15]))
+    if skipped_did:
+        print(f"  [SKIP] {skipped_did} HWIDs sem DID real (sem sintetizar)")
 
     # PCI dataset
     pci_entries = gen_pci_dataset()
