@@ -1,9 +1,10 @@
 # ADR-0110: Avaliação e Decisões sobre o White Paper "Laya-Zero"
 
-**Status**: PROPOSED | Accepted  
+**Status**: ACCEPTED | Lifecycle: `fazendo` (after Phase 1 dispatch)  
 **Date**: 2026-09-22  
 **Author**: Workflow Manager  
-**Tags**: laya-zero, architecture, viability, phase-1
+**Tags**: laya-zero, architecture, viability, phase-1  
+**Lifecycle (INDEX)**: `fazendo` → `completa` after Fase 1
 
 ---
 
@@ -21,7 +22,7 @@ Este documento registra as decisões de arquitetura resultantes da análise do w
 - **Scheduler/k-nano** (exp-1/2): scheduling cooperativo + tick-based; `AgentTickBusy` via `consecutive_pending` + `goal_urgency`; rate-limiting `urgency==0 && consecutive > 50 && tick_id % 5 != 0` (80% skip após 50 Pending); watchdog `consecutive_pending > 10000 → Crashed` apenas para non-interativos (urgency==0); `has_pending()` trait para EventDriven agents; `sleep_us`/`busy_wait_us` via TSC calibration; `TIMER_TICKS ≈ 18.2 Hz` (PIT); `consecutive_pending` watchdog needs `watchdog_should_crash(urgency, consecutive) = urgency==0 && consecutive>10000` para não crashar agentes interativos
 - **Bootloader protocols** (exp-1/2): Limine 2.0 wireado com `.requests` section no linker; bootflow 8 phases testadas (WHPX+OVMF); UEFI/OVMF funciona, BIOS dá triple-fault; estruturas chave: `HhdmRequest`, `MemmapRequest`, `FramebufferRequest`, `KernelAddressRequest`; `init_from_usable_ranges` para frame allocator; `TOTAL_RAM_MB` derivado de usable ranges; `KernelAddressRequest` marca região kernel como OCUPADA no allocator (SESSION_252/ora-1)
 - **Memory management** (lib-1/2): `BitmapFrameAllocator` static array `[u8; BITMAP_SIZE]` (64GiB cap) com ops inline `#[under]` under `TicketLock`; `HEAP_BUFFER` 512MB em `.bss` requer fix `.data` section (SESSION_233) para evitar bump heap overwrite; `TOTAL_RAM_MB` AtomicU64 detectado no boot; `heap_budget_mb(ram_mb)` → `min(75% RAM, RAM−keep)` com floor enforcement; `grow_bump_auto` cresce 256MB/step com `heap_pte_present` guard — NÃO eager 6GB em TCG (exaure frames → reboot loop); `reserve_range()` marca frames ocupados sem `delivered` flag; `deallocate_frame` recusa non-delivered (IDEA #526) — previne DMA corrupção; `needs_airllm(params, file_mb)` quando modelo + heap > 75% RAM → AirLLM (layer streaming) em vez de carregar todo modelo residente
-- **Event bus / NoProto** (lib-1/2): `AiosTaskPacket` `repr(C,packed)` 36 bytes (magic=0x41494F53="AIOS", clock u64, `TaskType` enum 8 values, priority, tensor_len u32, param_len u32, `PacketFlags` com persist/require_ack/compressed/encrypted); `NoProtoParser` zero-copy slice-overlay unsafe parse; `serialize_header`/`validate_packet` completam round-trip; bounded channels: `DEFAULT_QUEUE_DEPTH=64` (control)/`STREAM_QUEUE_DEPTH=8` (audio); `push_bounded` drop oldest quando full; `Receiver::has_pending()` sem consumir; zombie prune via `Arc::strong_count==1`; `SecurityAgent` subscreve `NET_EVENT`+`SYSTEM_EVENT`; `correlate` → 3+ alerts janela curta → publica `SECURITY_ALERT`; `TaskType` values: Unknown=0, Inference=1, Training=2, Sync=3, ModelUpdate=4, Heartbeat=5, Error=6, Shutdown=7
+- **Event bus / NoProto** (lib-1/2): `AiosTaskPacket` `repr(C,packed)` 36 bytes (magic=0x41494F53="AIOS", clock u64, `TaskType` enum 8 values, priority, tensor_len u32, param_len u32, `PacketFlags` com persist/require_ack/compressed/encrypted); `NoProtoParser` zero-copy slice-overlay unsafe parse; `serialize_header`/`validate_packet` completam round-trip; bounded channels: `DEFAULT_QUEUE_DEPTH=64` (control)/`STREAM_QUEUE_DEPTH=8` (audio); `push_bounded` drop oldest quando full; `Receiver::has_pending()` sem consumir; zombie prune via `Arc::strong_count==1`; `SecurityAgent` subscreve `NET_EVENT`+`SYSTEM_EVENT`; `correlate` → 3+ alerts janela curta → publica `SECURITY_ALERT` no EventBus + Hermes `TOPIC_HERMES_RESPONSE`; `TaskType` values: Unknown=0, Inference=1, Training=2, Sync=3, ModelUpdate=4, Heartbeat=5, Error=6, Shutdown=7
 - **Security desde o boot** (fix-1/2): `SecurityAgent` estrutura com 5 detectores (PORT_SCAN, ARP_SPOOF, PingFlood, DhcpStarvation, TimerAnomaly); `feed_net_event` routes por tipo; `correlate` → 3+ alerts → publica `SECURITY_ALERT` no EventBus + Hermes `TOPIC_HERMES_RESPONSE`; cadeia de confiança HITL: `SystemAgent`, `MonitorAgent`, `SelfHealAgent`; `seed_embedded_agents()` com trust compilation; `record_access` sem callers → política ruído; `NoProto` + `SecurityAgent` integração: `SecurityAgent::tick()` lê `NET_EVENT`; classificação de intenção antes do `cortex`; short-circuit: publish `SECURITY_ALERT` e skip detectores pesados; se classifier não inicializado → retorna `Intent::Normal` fallback seguro
 
 ---
@@ -137,7 +138,7 @@ Meta desejável: < 35ms na maioria dos builds, mas não garantida absolutamente
 ### 4.3 Fase 3 — Longo Prazo (3-4 sprints, alto risco)
 
 **Tasks principais:**
-1. Novo crate `mesh-transport` no `k-hal` para protocolo P2P neurológico — baseado em ADR-0081 mesh (16 slots reassembly + ACK seletivo FRAG\0→FRACK\0, stop-and-wait; `peer_p99_rtt` via `(count*99+99)/100` sem `f32::ceil`; token bucket rate limiting 1/tick burst 20; TOFU anti-replay `PK\0+pk` no heartbeat)
+1. Novo crate `mesh-transport` no `k-hal` para protocolo P2P neurológico
 2. Laya como dispatcher de carga excedente via mesh P2P
 3. Garantias de TTR < 35ms (requer HW específico; meta desejável, não garantida)
 
@@ -158,6 +159,7 @@ Meta desejável: < 35ms na maioria dos builds, mas não garantida absolutamente
 | **SESSION_252/ora-1** | `KernelAddressRequest` + `LIMINE_KERNEL_ADDR` — marca região kernel como OCUPADA no allocator |
 | **ADR-0059** | App Factory wasmi; seletor A/B/C; F7 arena W^X |
 | **ADR-0088** | Premissa AIOS-First: IA desde o boot |
+| **ADR-0106** | Decisões calibradas — confiança, abstenção e HITL |
 | **White Paper "Laya-Zero"** | Documento referência externa (non-repo) |
 
 ---
@@ -177,10 +179,10 @@ Meta desejável: < 35ms na maioria dos builds, mas não garantida absolutamente
 ## 7. Próximos Passos
 
 1. **Dispatch de especialistas** já realizado (sessions exp-1/2, lib-1/2, fix-1/2 completas e reconciliadas)
-2. **Criar tasks** no sistema de tracking com os task IDs correspondentes (já feito nas 6 sessions)
+2. **Executar tasks** da Fase 1: @explorer discovery, @fixer implementation, @librarian research — tasks já têm IDs registrados nas 6 sessions
 3. **Reconciliar resultados** após conclusão da Fase 1 e decidir sobre Fase 2/3
 4. **Atualizar INDEX** com lifecycle `por_fazer` → `fazendo` → `completa` conforme progresso
-5. **Implementar Fase 1** com as 3 tasks principais já identificadas e reconciliadas
+5. **Mover ADR-110 lifecycle** de `por_fazer` para `completa` (Fase 1) após validação empírica
 
 ---
 
@@ -196,8 +198,36 @@ Meta desejável: < 35ms na maioria dos builds, mas não garantida absolutamente
 | **Sprints impactados** | Sprints 106-110 (Fase 1), 111-113 (Fase 2), 114-117 (Fase 3) |
 | **Evidence directory** | `docs/evidence/laya-zero/` (criar se necessário) |
 
----
-
 **Assinatura**: Workflow Manager — 2026-09-22  
 **Revisão solicitada por**: Sistema de scheduler (Ponytail full mode)  
-**Próxima revisão**: Após conclusão da Fase 1 (estimated 2 sprints, após dispatch das 3 tasks principais já reconciliadas)
+**Próxima revisão**: Após conclusão da Fase 1 (estimated 2 sprints, após dispatch e execução das 3 tasks principais já reconciliadas)
+
+---
+
+## 9. Integração com Infraestrutura Existente
+
+### 9.1 Contrato `Decision<T>` (ADR-0106)
+O classificador Laya System 1 integra-se ao contrato `Decision<T>` da ADR-0106:
+- `choice: Option<Intent>` — saída do classify `hw_expert_v6`
+- `confidence: Confidence(u8)` — Q8 confidence do forward pass
+- `margin: Confidence` — separa confiança de empate (p1 - p2)
+- `source: DecisionSource::Neural` — source neural, heurística fallback
+- `abstain: Option<AbstainReason>` — `LowConfidence`, `Tie`, `NoOptions`, `ScorerAbsent`
+
+### 9.2 NoProto TaskType::LayaIntent
+Adicionar `LayaIntent = 8` ao enum `TaskType` NoProto (próximo disponível após Shutdown=7). Habilitar `SecurityAgent::tick()` para publicar pacotes `LayaIntent` no `NET_EVENT`. Isso conecta a triagem de segurança de ADR-110 com a infraestrutura NoProto existente.
+
+### 9.3 RAM Gate Implementation
+Implementar o gate `if TOTAL_RAM_MB >= 8192 && HEAP_FREE_MB > 200 { embed_model() } else { fall_back_to_scalar() }` antes de qualquer embedding de modelo. Usar o `TOTAL_RAM_MB` AtomicU64 já existente de `init_from_usable_ranges` (memory.rs:56-98). O fallback `fall_back_to_scalar()` usa o forward pass ternário existente via `bitnet_avx2.rs` intrínsecas SIMD ou dispatch scalar.
+
+### 9.4 Boot Report BOOT_AI Line
+Adicionar linha `BOOT_AI` ao `boot_report` (per #0092 T-001..T-004): `observe/plan/act/verify` counts da pipeline de classificação Laya. Isso fornece o loop de medição empírica que a AIOS-First exige: detect → measure → decide → optimize → version.
+
+### 9.5 SecurityAgent Triage Integration
+Em `SecurityAgent::tick()`, após `k_ai::laya::classify(packet_payload)`:
+- Se `Intent::Malicious` → publish `SECURITY_ALERT` no EventBus + skip remaining detectores (eles são "pesados" per ADR-110)
+- Se classifier não inicializado → retornar `Intent::Normal` fallback seguro
+- Publicar `LayaIntent` pacote NoProto com `TaskType::LayaIntent = 8`
+
+---
+</content>
