@@ -121,6 +121,10 @@ python tools/qemu_l2_hub.py
 # 3) Subir os 6 QEMU (script de relaunch do lab / run-qemu-*-mesh)
 # Topologia: A=3G/3c Master · B=2G/2c · C–F=1G/1c
 # STATIC 10.0.3.x — ver netmode_*.flag / logs/boot_mesh_*.txt
+# NOTAS (s402, validadas): flag netmode deve estar em endereço MB-aligned
+# e FORA da região de modelos do QEMU-loader (ex.: 0x13E000000) — bytes
+# 'B'/'S' dentro do blob do modelo geram falso BRIDGE/STATIC e matam o mesh;
+# link `-netdev socket` não tem reconnect: reiniciar A exige reiniciar B.
 ```
 
 Aceite visual: orb com peers coloridos por role, Hub Health aberto como SystemInfo, HDA armado no QEMU. Aceite serial: `MESH_ENGINE` / `mesh role=` / FRAG TX/RX com sev `ok`. Residual: estabilizar peer B em toda a topologia.
@@ -141,12 +145,16 @@ sudo apt install qemu-system-x86-64 ovmf
 
 ### Baixar OVMF (firmware UEFI)
 
-O projeto precisa de OVMF para boot UEFI em QEMU:
+O projeto precisa de OVMF para boot UEFI em QEMU. Os launchers canônicos
+(`run-qemu-whpx.ps1`, `run-qemu-uefi.ps1`) exigem o par dual-file pflash
+(SESSION_293 — `-bios ovmf.fd` combinado não serve):
 
 ```powershell
-# Windows — copie do MSYS2 ou baixe de:
-# https://github.com/retrage/edk2-nightly/raw/master/OVMF-pure-efi.fd
-Copy-Item "C:\msys64\usr\share\ovmf\OVMF.fd" "target\ovmf.fd"
+# Windows — QEMU 11 traz edk2-*.fd em share\; recrie o par se ausente:
+Copy-Item "C:\Program Files\qemu\share\edk2-x86_64-code.fd" target\ovmf_code.fd
+Copy-Item "C:\Program Files\qemu\share\edk2-i386-vars.fd" target\ovmf_vars.fd
+# Instâncias mesh simultâneas precisam de VARS separados (cópias):
+#   Copy-Item target\ovmf_vars.fd target\ovmf_vars_a.fd (e _b)
 ```
 
 ### Gerar imagem de disco
