@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s401 — Revisão TECNOLOGIAS ondas fechadas
+# STATE — neural-os-core v1.9.99-s402 — Self-deadlocks slog + EMIT_GUARD + mesh Master/Memory
 
-#   PISTA ATIVA: s401 — Onda 6 aplicada + MEDs onda 3 (vram ACS ring) + §13 re-medido
-#   PISTA ANTERIOR: s395–s400 ondas 1–6 (s394 BEI)
+#   PISTA ATIVA: s402 — D1/D2/D3 locks + EMIT_GUARD (133 NESTED) + FAT expert + wasm promote + mitigações (commit 2f571fae)
+#   PISTA ANTERIOR: s401 ondas/MEDs (vram ACS ring, §13 90 blobs)
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo

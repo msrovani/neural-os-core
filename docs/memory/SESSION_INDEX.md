@@ -8,7 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
-| 401 | Revisão ondas | fechamento | MEDs onda3 + onda6 aplicada | vram binário; ACS cap+4 hi; ring fail-closed; tools paths/labels; §13 re-medido 90 blobs; update_tecnologias.py criado |
+| 402 | slog/mesh | self-deadlocks + EMIT_GUARD + mesh | BOOT_LOG/PRE_FAT_BUF/LAST relocks; EMIT_GUARD 133 NESTED; FAT expert LOADED; wasm promote; A Master B Memory peers=1 | 401 | Revisão ondas | fechamento | MEDs onda3 + onda6 aplicada | vram binário; ACS cap+4 hi; ring fail-closed; tools paths/labels; §13 re-medido 90 blobs; update_tecnologias.py criado |
 | 400 | Tools/Data/FW | bughunt AIOS | §10/§11/§13 recon | FW não-rep.; vendor non-numérico; hash random labels; paths hardcoded; §13 contagens stale |
 | 399 | Audio/IA | bughunt AIOS | §5+§7 fixes | infer_queue race; piper 16k; TTS dropped; H2O sort; STT blob size; UAC usage |
 | 398 | Rede | bughunt AIOS | §4 fixes | mesh probe rw+cleanup; RemoteCellChannel deletado; transport BE; wifi UAF/inits |
