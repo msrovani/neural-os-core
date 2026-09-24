@@ -211,6 +211,45 @@ pub fn invalidate_skill_index() {
     SKILLS_INDEXED.store(false, Ordering::Relaxed);
 }
 
+/// Boot hook (in-hermes): re-registra `/skills/*.wasm` persistidos no VFS
+/// no sandbox wasmi (Caminho A). Best-effort: VFS ausente → 0, sem erro.
+/// NOTA: o call-site no boot (neural-kernel) é residual — esta função só
+/// expõe o hook; ninguém a chama ainda.
+pub fn reload_persisted_wasm_skills() -> u32 {
+    let items = match crate::fs::list_vfs("/skills") {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let mut n = 0u32;
+    for item in &items {
+        if !item.ends_with(".wasm") {
+            continue;
+        }
+        let path = alloc::format!("/skills/{}", item.trim_start_matches('/'));
+        let bytes = match crate::fs::read_vfs(&path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        if !crate::wasmi_rt::sandbox_validate_and_run(&bytes) {
+            continue;
+        }
+        let name = item
+            .trim_start_matches('/')
+            .strip_suffix(".wasm")
+            .unwrap_or(item);
+        let skill = crate::dynskill::DynamicSkill::with_wasm(
+            name,
+            "reloaded /skills/*.wasm",
+            "",
+            bytes,
+        );
+        crate::dynskill::register_dynskill(skill);
+        n = n.saturating_add(1);
+    }
+    k_nano::slog_hermes!("SKILL", "info", "reloaded {} persisted wasm skill(s)", n);
+    n
+}
+
 pub fn load_embedded_skills() -> SkillLoader {
     let mut loader = SkillLoader::new();
 

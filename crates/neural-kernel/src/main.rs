@@ -2386,6 +2386,11 @@ pub(crate) fn kernel_boot(
     });
     k_nano::slog_bin!("VFS", "ok", "FS agents OK — bridge Hermes");
     crate::boot_logger::log("BOOT: FS agents OK");
+    // #412: re-registra skills .wasm persistidas em /skills (0 = ausente/VFS vazio).
+    let n_wasm = crate::skill_loader::reload_persisted_wasm_skills();
+    if n_wasm > 0 {
+        k_nano::slog_bin!("VFS", "ok", "wasm skills recarregadas n={}", n_wasm);
+    }
     if usb_live_fb {
         crate::display::fb::boot_progress_line("BOOT: FS ok — disk...");
     }
@@ -4465,6 +4470,88 @@ pub(crate) fn kernel_boot(
                 // Pós-carga: escreve predições no SGDB /hw/pci/*
                 crate::boot_logger::log("BOOT: HW Expert v4 predictions → SGDB /hw/pci/");
                 let _ = k_ai::sgdb::store::predict_all_pci();
+            }
+        }
+        // HW expert pequeno (~0.25MB): ordem HWEXPRT4.BIN → HWEXPRT.v6 →
+        // HW_EXPERT.BIN, virtio-blk primeiro depois ATA via read_root_file_dev
+        // (precedente piper skills.rs:253, cap PIO 8MB). Nunca Falcon3/grandes
+        // por aqui. Ausente = 1 warn + SKIP (sem inventar pesos).
+        // Gate modelo-grande: com FALCON3 residente (989MB) o decode + arena
+        // disparam grow ~1GB que congela o boot (QEMU 8G, spin PRE_FAT_BUF);
+        // e o gate Trinity segue ABSENT mesmo após LOADED (slot não alimenta
+        // o router) — ou seja, em A o load só adiciona risco. Small expert
+        // é fallback p/ configs sem modelo (B), onde o path é saudável.
+        if !hw_ok
+            && !crate::cortex::hwexpert_v4_is_loaded()
+            && cortex_crate::model::loaded_model_header().is_none()
+        {
+            fn try_hwexpert_small_fat() -> bool {
+                const PIO_CAP: usize = 8 * 1024 * 1024;
+                unsafe fn try_dev(
+                    dev: &mut dyn crate::block_dev::BlockDevice,
+                    backend: &str,
+                ) -> bool {
+                    for p in k_nano::fat32::partitions_on_dev(dev) {
+                        for name in ["HWEXPRT4.BIN", "HWEXPRT.v6", "HW_EXPERT.BIN"] {
+                            let Some(sz) =
+                                k_nano::fat32::lookup_root_file_dev(dev, &p, name)
+                            else {
+                                continue;
+                            };
+                            if sz > PIO_CAP {
+                                continue;
+                            }
+                            let Some(data) =
+                                k_nano::fat32::read_root_file_dev(dev, &p, name)
+                            else {
+                                continue;
+                            };
+                            if crate::model_hub::register_bytes(
+                                crate::model_hub::ModelSlot::HwExpert,
+                                &data,
+                            ) {
+                                k_nano::slog_bin!("HWEXPERT", "ok", "small expert LOADED file={} size={}KB via {} (FAT)", name, data.len() / 1024, backend);
+                                return true;
+                            }
+                            // Legado v3 bitnet (register_bytes só entende v6/GGUF).
+                            if let Some(m) = crate::cortex::load_model(&data) {
+                                crate::cortex::set_hwexpert_model(
+                                    alloc::boxed::Box::new(m),
+                                );
+                                k_nano::slog_bin!("HWEXPERT", "ok", "small expert LOADED file={} size={}KB via {} (FAT, legacy v3)", name, data.len() / 1024, backend);
+                                return true;
+                            }
+                        }
+                    }
+                    false
+                }
+                unsafe {
+                    let mut vb_guard = k_nano::virtio_blk::VIRTIO_BLK_DEV.lock();
+                    if let Some(vb) = vb_guard.as_mut() {
+                        let dev: &mut dyn crate::block_dev::BlockDevice = vb;
+                        if try_dev(dev, "virtio-blk") {
+                            return true;
+                        }
+                    }
+                    // ATA PIO vale sob hypervisor: BOOT.LOG persiste por ele
+                    // todo boot (QEMU WHPX/TCG); o gate is_sandbox() (=true p/
+                    // qualquer hv) matava este ramo sempre — era o SKIP fantasma.
+                    // Precedente piper media *benchmark*, não leitura (SESSION_299).
+                    {
+                        let mut ata_guard = crate::ATA_DRIVER.lock();
+                        if let Some(ata) = ata_guard.as_mut() {
+                            let dev: &mut dyn crate::block_dev::BlockDevice = ata;
+                            if try_dev(dev, "ATA") {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                k_nano::slog_bin!("HWEXPERT", "warn", "small expert ausente (HWEXPRT4.BIN/HWEXPRT.v6/HW_EXPERT.BIN) — SKIP sem pesos");
+                false
+            }
+            if try_hwexpert_small_fat() {
+                crate::boot_logger::log("BOOT: HW Expert small loaded (FAT fallback)");
             }
         }
     }

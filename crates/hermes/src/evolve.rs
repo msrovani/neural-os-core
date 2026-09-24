@@ -117,19 +117,70 @@ lazy_static::lazy_static! {
 }
 
 /// Promove skill efêmera (SkillOpt) → wasmi_rt (ADR-0059 F5).
-/// H8 (canvas onda 1): sem gerador de bytes — o gerador real é Cortex op-IR
-/// (#412 / wasm_build). Sem bytes reais = `Err("no-wasm-bytes")`, sem dummy.
-pub fn promote_ephemeral_to_wasm(name: &str, _description: &str) -> Result<(), &'static str> {
+/// Caminho real (sandbox A only): op-IR mínima sintetizada
+/// (`I32Const(0)` — skill ainda sem corpo gerado pelo Cortex #412)
+/// → `wasm_build::validate` → `wasm_build::build_run_module`
+/// → sandbox wasmi (`sandbox_validate_and_run`, CAP_NONE) → registro via
+/// `dynskill::DynamicSkill::with_wasm` + `register_dynskill` → persistência
+/// best-effort dos bytes .wasm via `fs::write_vfs` em `/skills/{name}.wasm`
+/// (package_hub AgentWasm exige approval plumbing → write_vfs direto).
+/// wasmi (caminho A) ONLY — nunca toca gates B/C de execução nativa.
+pub fn promote_ephemeral_to_wasm(name: &str, description: &str) -> Result<(), &'static str> {
     if name.is_empty() || name.len() > 64 {
         return Err("bad_name");
     }
+    // Corpo mínimo honesto até o Cortex #412 gerar op-IR real por skill.
+    let ops = [crate::wasm_build::Op::I32Const(0)];
+    promote_ephemeral_ops_to_wasm(name, description, 0, &ops)
+}
+
+/// Variante com op-IR do caller (Cortex/Trinity/LLM, constrangida por #412).
+/// `n_params` = aridade da função `run`; `ops` deve deixar 1×i32 na stack.
+pub fn promote_ephemeral_ops_to_wasm(
+    name: &str,
+    description: &str,
+    n_params: u32,
+    ops: &[crate::wasm_build::Op],
+) -> Result<(), &'static str> {
+    if name.is_empty() || name.len() > 64 {
+        return Err("bad_name");
+    }
+    // 1. op-IR → bytes wasm (build_run_module já revalida a op-IR).
+    crate::wasm_build::validate(n_params, ops).map_err(|_| "bad-op-ir")?;
+    let wasm = crate::wasm_build::build_run_module(n_params, ops).map_err(|_| "build-fail")?;
+    // 2. Sandbox wasmi FIRST (Caminho A, CAP_NONE) — sem tocar registry antes.
+    if !crate::wasmi_rt::sandbox_validate_and_run(&wasm) {
+        k_nano::slog_hermes!(
+            "EVOLVE",
+            "warn",
+            "ephemeral→WASM skill={} SKIP sandbox fail (registry untouched)",
+            name
+        );
+        return Err("sandbox-fail");
+    }
+    // 3. Registro (DynamicSkill::with_wasm + trust via register_dynskill).
+    let skill =
+        crate::dynskill::DynamicSkill::with_wasm(name, description, "", wasm.clone());
+    crate::dynskill::register_dynskill(skill);
+    crate::self_evolve::publish_change("skill", name);
+    // 4. Persistência best-effort: VFS pode não existir no boot cedo/host.
+    let path = alloc::format!("/skills/{}.wasm", name);
+    if crate::fs::write_vfs(&path, &wasm).is_err() {
+        k_nano::slog_hermes!(
+            "EVOLVE",
+            "warn",
+            "ephemeral→WASM skill={} registered, persist SKIP (VFS absent)",
+            name
+        );
+    }
     k_nano::slog_hermes!(
         "EVOLVE",
-        "warn",
-        "ephemeral→WASM skill={} SKIP no-wasm-bytes (gerador op-IR pendente #412)",
-        name
+        "ok",
+        "ephemeral→WASM skill={} OK bytes={} (wasmi A)",
+        name,
+        wasm.len()
     );
-    Err("no-wasm-bytes")
+    Ok(())
 }
 
 /// Boot / DREAM hook: demo swap. H8: sem bytecode real não há swap.
@@ -199,6 +250,33 @@ mod tests {
         assert!(led.live.get("x").is_none());
         assert_eq!(led.skips, 1);
         assert_eq!(led.swaps_ok, 0);
+    }
+
+    #[test]
+    fn promote_ops_op_to_wasm_bytes_validate_passes() {
+        // Op->wasm bytes->validate: (a*b+7) com (6,7) == 49 no sandbox wasmi.
+        let ops = [
+            crate::wasm_build::Op::LocalGet(0),
+            crate::wasm_build::Op::LocalGet(1),
+            crate::wasm_build::Op::I32Mul,
+            crate::wasm_build::Op::I32Const(7),
+            crate::wasm_build::Op::I32Add,
+        ];
+        assert!(crate::wasm_build::validate(2, &ops).is_ok());
+        let wasm = crate::wasm_build::build_run_module(2, &ops).expect("build");
+        assert!(!wasm.is_empty());
+        assert_eq!(&wasm[0..4], &[0x00, 0x61, 0x73, 0x6D]); // magic \0asm
+        assert!(crate::wasmi_rt::sandbox_validate_and_run(&wasm));
+        assert_eq!(
+            crate::wasmi_rt::run_wasm(&wasm, "run", &[6, 7], crate::wasmi_rt::CAP_NONE)
+                .expect("run"),
+            49
+        );
+        // Promoção real registra (persist VFS é best-effort no host).
+        assert!(promote_ephemeral_ops_to_wasm("evolve_test_skill", "test", 2, &ops).is_ok());
+        // op-IR inválida é rejeitada antes de tocar o registry.
+        let bad = [crate::wasm_build::Op::I32Add];
+        assert!(promote_ephemeral_ops_to_wasm("evolve_bad", "test", 2, &bad).is_err());
     }
 
     #[test]

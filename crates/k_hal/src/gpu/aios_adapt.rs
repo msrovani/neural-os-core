@@ -175,9 +175,15 @@ pub fn adapt_on_model_loaded() {
                 h.num_layers,
                 ram
             );
-            if let Some(mut p) = *LAST.lock() {
-                p.sku = sku;
-                *LAST.lock() = Some(p);
+            // Um lock só: `if let Some(p) = *LAST.lock()` mantém o guard
+            // vivo no corpo do if; o segundo `LAST.lock()` = self-deadlock
+            // do spin::Mutex (não-reentrante) — boot congelava aqui (QEMU
+            // 8G/8c após "Remember SKU", RIP em pause/ret do spin_loop).
+            {
+                let mut g = LAST.lock();
+                if let Some(p) = g.as_mut() {
+                    p.sku = sku;
+                }
             }
         }
     }

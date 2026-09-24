@@ -24,8 +24,12 @@ fn dump_boot_log_sector() {
     } else {
         k_nano::slog_bin!("SHUTDOWN", "warn", "BOOT.LOG flush FAT skipped/fail");
     }
-    let log = crate::serial::BOOT_LOG.lock();
-    let n = log.len_written();
+    // Escopo curto: soltar o guard ANTES de slogar (TicketLock não-reentrante;
+    // nested slog → dispatch → BOOT_LOG.lock = self-deadlock no poweroff).
+    let n = {
+        let log = crate::serial::BOOT_LOG.lock();
+        log.len_written()
+    };
     if n > 0 {
         k_nano::slog_bin!("SHUTDOWN", "ok", "BOOT_LOG ring ~{} bytes (FAT=fonte)", n);
     }

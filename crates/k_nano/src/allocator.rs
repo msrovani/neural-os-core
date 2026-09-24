@@ -491,10 +491,15 @@ pub fn resize_heap_to_mb(target_mb: usize) {
         let new_size = new_mb * 1024 * 1024;
         unsafe {
             let mut guard = TALC_ALLOC.lock();
-            if let Some(old) = *CLAIMED_HEAP.lock() {
-                let req = Span::from_base_size(LARGE_HEAP_START as *mut u8, new_size - SLAB_SIZE);
-                let extended = guard.extend(old, req);
-                *CLAIMED_HEAP.lock() = Some(extended);
+            // Um lock só: o guard de `*CLAIMED_HEAP.lock()` vive no corpo do
+            // if; o segundo lock = self-deadlock do TicketLock (mesma classe
+            // do LAST em k_hal aios_adapt — congela o boot sem serial).
+            {
+                let mut claimed = CLAIMED_HEAP.lock();
+                if let Some(old) = *claimed {
+                    let req = Span::from_base_size(LARGE_HEAP_START as *mut u8, new_size - SLAB_SIZE);
+                    *claimed = Some(guard.extend(old, req));
+                }
             }
         }
         CURRENT_HEAP_MB.store(new_mb, Ordering::SeqCst);

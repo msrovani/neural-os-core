@@ -232,11 +232,25 @@ fn buffer_log(msg: &str) {
     }
     let tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
     let line = alloc::format!("[T+{}] {}\n", tick, msg);
-    let mut buf = PRE_FAT_BUF.lock();
+    // Best-effort: o espelho RAM nunca bloqueia o path de slog — o serial
+    // já fluiu antes (dispatch). try_lock sob contenção = drop da linha no
+    // espelho (BOOT.LOG perde linhas sob pressão, nunca trava o boot).
+    // Evidência: spin eterno em PRE_FAT_BUF.lock() durante heap-grow 1GB+
+    // (QEMU 8G; holder nunca identificado — APs HLT, handlers lock-free).
+    let Some(mut buf) = PRE_FAT_BUF.try_lock() else { return };
     if buf.len() < PRE_FAT_CAPACITY {
         buf.push(line.into_bytes());
     }
     PRE_FAT_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Drena o espelho RAM após persist com sucesso (snapshot já foi p/ FAT).
+/// Sem dreno o buffer satura uma vez (512) e vira fóssil — linhas novas
+/// nunca mais entram no BOOT.LOG.
+fn drain_pre_fat_buf() {
+    if let Some(mut buf) = PRE_FAT_BUF.try_lock() {
+        buf.clear();
+    }
 }
 
 fn encode_83(name: &str) -> [u8; 11] {
@@ -564,6 +578,7 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
             DISK_WRITES.fetch_add(1, Ordering::Relaxed);
             note_persist_ok();
             SINCE_FLUSH.store(0, Ordering::Relaxed);
+            drain_pre_fat_buf();
             clear_breaker_on_success();
         } else {
             let first = !HEAL_FIRED.load(Ordering::Relaxed);
@@ -727,6 +742,7 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
         DISK_WRITES.fetch_add(1, Ordering::Relaxed);
         note_persist_ok();
         SINCE_FLUSH.store(0, Ordering::Relaxed);
+        drain_pre_fat_buf();
         clear_breaker_on_success();
         let _ = session_name_for_persist(); // grava BOOT.LOG ou timestamp no SESSION_FILENAME
     }
@@ -1018,6 +1034,15 @@ pub fn ensure_persisted() -> bool {
 }
 
 /// Anexa texto sem `serial_println` (evita recursao no path sem-COM do serial.rs).
+/// NUNCA chama `persist_now` aqui: o único caller é `write_to_disk_journal`
+/// (serial.rs), que roda com `BOOT_LOG` segurado (drop após o journal —
+/// confirmado no objdump de `dispatch_bytes`). `persist_now` →
+/// `overwrite_boot_log` → `log_no_flush` → slog → `BOOT_LOG.lock()` seria
+/// self-deadlock do TicketLock (não-reentrante): QEMU 8G/8c congelava após
+/// o persist com o BSP em `TicketLock<BootLog>::lock` e a própria linha
+/// "OK ... bytes em BOOT.LOG" na stack (emit_tagged aninhado). Persistência
+/// continua via `log_quiet` (SINCE_FLUSH) e `flush`/`try_flush_ramlog`
+/// (checkpoints) — paths sem `BOOT_LOG` segurado.
 pub fn append_raw(msg: &str) {
     if !HEAP_READY.load(Ordering::Relaxed) {
         crate::boot_ramlog::append(msg);
@@ -1026,17 +1051,8 @@ pub fn append_raw(msg: &str) {
     buffer_log(msg);
     #[cfg(feature = "fat-boot-log")]
     {
-        if !storage_available() && !FAT_READY.load(Ordering::Relaxed) {
-            return;
-        }
-        let n = SINCE_FLUSH.fetch_add(1, Ordering::Relaxed) + 1;
-        if n >= FLUSH_EVERY {
-            if !persist_allowed_now() {
-                SINCE_FLUSH.store(FLUSH_EVERY, Ordering::Relaxed);
-                return;
-            }
-            let _ = persist_now(None);
-        }
+        // Só contabiliza: o flush real fica p/ log_quiet/flush (fora do lock).
+        let _ = SINCE_FLUSH.fetch_add(1, Ordering::Relaxed);
     }
 }
 

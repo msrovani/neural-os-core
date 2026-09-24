@@ -70,7 +70,7 @@ impl Sev {
             | "e1000" | "i225" | "ahci" | "ata" | "nvme" | "NVMe" | "virtio" | "VIRTIO"
             | "MBR" | "GPT" | "FAT32" | "ACPI" | "HEAP" | "MEM" | "P2P" | "PCI"
             | "IDT" | "GDT" | "PIC" | "INSTALL" | "SYS-INST" | "SLIP" | "USB"
-            | "SMP" | "Net" | "Disk"
+            | "SMP" | "Net" | "Disk" | "BUDGET" | "BUMP"
             // SESSION_373 k_hal: probe/init/intel no slot sev (BCS Ring OK era TRACE).
             | "init" | "intel" | "INTEL" | "NVIDIA" | "AMD" | "BLIT" | "NKP"
             | "ATH10K" | "IWL" | "FE" | "cursor" | "bind" | "probe" | "kvdma"

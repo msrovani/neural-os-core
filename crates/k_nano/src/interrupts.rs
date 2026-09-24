@@ -393,7 +393,7 @@ pub fn shared_tss_selector() -> SegmentSelector {
 fn putc(c: u8) {
     unsafe { core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") c, options(nostack, preserves_flags)); }
 }
-fn puts(s: &[u8]) { for &c in s { putc(c); } }
+pub(crate) fn puts(s: &[u8]) { for &c in s { putc(c); } }
 fn puthex(mut n: u64) {
     putc(b'0'); putc(b'x');
     for _ in 0..16 {

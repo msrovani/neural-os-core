@@ -171,8 +171,26 @@ fn emit_raw(args: fmt::Arguments, to_console: bool, to_file: bool) {
     dispatch_bytes(&buf[..n], to_console, to_file, Some(args));
 }
 
+/// Guarda de reentrância do emit (locks não-reentrantes): um slog aninhado
+/// — ex.: `format!` do journal aloca → heap pressionado → grow → slog de
+/// entrada do grow → dispatch — cai no fallback lock-free em vez de
+/// deadlockar no BOOT_LOG com o outer segurando (backtrace com format!
+/// aninhado + RDI=BOOT_LOG + IF=0 durante heap-grow 1GB+). Evidência QEMU.
+static EMIT_GUARD: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 fn dispatch_bytes(msg: &[u8], to_console: bool, to_file: bool, fb_args: Option<fmt::Arguments>) {
     use fmt::Write;
+    // Emit aninhado → fallback: serial cru sem locks (puts lock-free, mesmo
+    // usado nos handlers de IRQ), sem ficheiro/FB. A linha segue visível no
+    // dmesg marcada [NESTED]; o outer completa e libera os locks.
+    if EMIT_GUARD.swap(true, core::sync::atomic::Ordering::SeqCst) {
+        if to_console {
+            crate::interrupts::puts(b"[NESTED] ");
+            crate::interrupts::puts(msg);
+        }
+        return;
+    }
     let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
 
     let mut serial_avail = false;
@@ -207,6 +225,7 @@ fn dispatch_bytes(msg: &[u8], to_console: bool, to_file: bool, fb_args: Option<f
             write_to_disk_journal(msg, tick);
         }
     }
+    EMIT_GUARD.store(false, core::sync::atomic::Ordering::SeqCst);
 }
 
 /// Tenta escrever no journal de sessão no disco (HW real sem serial).
