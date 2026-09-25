@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s405 — Memmap sem teto (1378MB→16GB)
+# STATE — neural-os-core v1.9.99-s406 — Heap auto-fracionado advisory
 
-#   PISTA ATIVA: s405 — Limine 128 regiões + push_usable coalesce (commit 191d6b78); prova real pendente de imagem+reboot no i7
-#   PISTA ANTERIOR: s404 imagem HW 8GB + R3/R6
+#   PISTA ATIVA: s406 — carve por core + quota por ScheduleKind + grow-gate (commit 2b650c56)
+#   PISTA ANTERIOR: s405 memmap sem teto (commit 191d6b78)
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
