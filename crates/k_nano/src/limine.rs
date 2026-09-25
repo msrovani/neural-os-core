@@ -305,12 +305,37 @@ pub fn apply_hhdm(offset: u64) -> u64 {
 // ─── BootHandoff impl (ADR-0062 E2) ──────────────────────────────────────
 use crate::boot_handoff::{BootHandoff, MemRegion};
 
+/// Teto de regiões usable no handoff. Firmware real denso (Raptor Lake+)
+/// passa de 64 entradas no memmap — com 64 o kernel via só a RAM baixa
+/// (i7 16GB reportava 1378MB: a cauda com a RAM alta caía fora).
+pub const MAX_MEM_REGIONS: usize = 128;
+
+/// Insere região usable coalescendo com a anterior adjacente (mapas densos
+/// têm runs fragmentados; sem coalescência o teto estoura à toa). Nunca
+/// estoura o array: além do teto, descarta (saturante documentado).
+fn push_usable(regions: &mut [MemRegion; MAX_MEM_REGIONS], count: &mut usize, base: u64, len: u64) {
+    if len == 0 {
+        return;
+    }
+    if *count > 0 {
+        let last = &mut regions[*count - 1];
+        if last.base.saturating_add(last.len) == base {
+            last.len = last.len.saturating_add(len);
+            return;
+        }
+    }
+    if *count < MAX_MEM_REGIONS {
+        regions[*count] = MemRegion { base, len };
+        *count += 1;
+    }
+}
+
 /// Coleta os dados do handoff Limine para o trait `BootHandoff`.
 /// Copia as informações dos requests; as seções `.requests` ficam no bin.
 pub struct LimineHandoff {
     pub pm_offset: u64,
     pub rsdp: Option<u64>,
-    pub regions: [MemRegion; 64],
+    pub regions: [MemRegion; MAX_MEM_REGIONS],
     pub region_count: usize,
     /// Endereço físico onde o Limine carregou o kernel (KernelAddressRequest).
     /// Usado para marcar a imagem do kernel (incl. .bss.heap) como OCUPADA no
@@ -332,7 +357,7 @@ impl LimineHandoff {
         Self {
             pm_offset: 0,
             rsdp: None,
-            regions: [MemRegion { base: 0, len: 0 }; 64],
+            regions: [MemRegion { base: 0, len: 0 }; MAX_MEM_REGIONS],
             region_count: 0,
             kernel_phys: 0,
             kernel_virt: 0,
@@ -372,20 +397,18 @@ impl LimineHandoff {
         };
         h.pm_offset = offset;
 
-        // Memmap — apenas usable (e guarda a região do kernel, tipo 1)
+        // Memmap — apenas usable (e guarda a região do kernel, tipo 1).
+        // Lê TODAS as entradas (firmware denso passa de 64) e coalesce
+        // adjacentes via push_usable (nunca estoura MAX_MEM_REGIONS).
         if !memmap.response.is_null() {
             let mm = unsafe { &*memmap.response };
             let count = mm.entry_count as usize;
-            for i in 0..core::cmp::min(count, 64) {
+            for i in 0..count {
                 let e = unsafe { *mm.entries.add(i) };
                 if !e.is_null() {
                     let ent = unsafe { &*e };
                     if ent.entry_type == MEMMAP_USABLE {
-                        h.regions[h.region_count] = MemRegion {
-                            base: ent.base,
-                            len: ent.length,
-                        };
-                        h.region_count += 1;
+                        push_usable(&mut h.regions, &mut h.region_count, ent.base, ent.length);
                     } else if ent.entry_type == MEMMAP_KERNEL_AND_MODULES && ent.length > 0 {
                         // SESSION_252: fallback do KernelAddressRequest (response null
                         // nesta build do Limine). Guarda a MAIOR região tipo 6 (kernel
@@ -470,6 +493,46 @@ impl BootHandoff for LimineHandoff {
     }
     fn kernel_region(&self) -> (u64, u64) {
         self.kernel_region
+    }
+}
+
+#[cfg(test)]
+mod mem_region_tests {
+    use super::*;
+
+    fn fresh() -> ([MemRegion; MAX_MEM_REGIONS], usize) {
+        ([MemRegion { base: 0, len: 0 }; MAX_MEM_REGIONS], 0)
+    }
+
+    #[test]
+    fn adjacent_coalesce() {
+        let (mut r, mut n) = fresh();
+        push_usable(&mut r, &mut n, 0x100000, 0x100000);
+        push_usable(&mut r, &mut n, 0x200000, 0x200000);
+        assert_eq!(n, 1);
+        assert_eq!((r[0].base, r[0].len), (0x100000, 0x300000));
+    }
+
+    #[test]
+    fn gap_splits_and_zero_skipped() {
+        let (mut r, mut n) = fresh();
+        push_usable(&mut r, &mut n, 0x100000, 0x100000);
+        push_usable(&mut r, &mut n, 0x300000, 0);
+        push_usable(&mut r, &mut n, 0x400000, 0x100000);
+        assert_eq!(n, 2);
+        assert_eq!((r[1].base, r[1].len), (0x400000, 0x100000));
+    }
+
+    #[test]
+    fn cap_saturates_without_overflow() {
+        let (mut r, mut n) = fresh();
+        // 200 regiões disjuntas de 1MB com gap de 1MB: sem coalescência
+        // caberiam 128; o resto satura sem estourar o array.
+        for i in 0..200u64 {
+            push_usable(&mut r, &mut n, i * 0x200000, 0x100000);
+        }
+        assert_eq!(n, MAX_MEM_REGIONS);
+        assert_eq!(r[MAX_MEM_REGIONS - 1].base, 127 * 0x200000);
     }
 }
 
