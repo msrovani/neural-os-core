@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s403 — Auditoria: triagem + R2 BOOT.LOG pré-alocado
+# STATE — neural-os-core v1.9.99-s404 — Imagem HW 8GB + R3/R6
 
-#   PISTA ATIVA: s403 — audit×logs×n-sgdb (só R2 novo: BOOT.LOG 256KB em mkfat32+disco, flush ok=true); I4/xHCI/Ring3/badsig já-cobertos ou by-design
-#   PISTA ANTERIOR: s402 locks + EMIT_GUARD + mesh (commit 2f571fae)
+#   PISTA ATIVA: s404 — usb_hw.img 8319MB PACK_LLM=all pronta p/ Rufus (kernel c/ panic-FB); R3 sev 11→Ok; R6 SECURITY.BIN stub
+#   PISTA ANTERIOR: s403 triagem audit (só R2 novo, flush ok=true)
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo

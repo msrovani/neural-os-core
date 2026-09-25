@@ -424,6 +424,10 @@ def populate(path):
         # Sem dirent o flush falha sempre ("BOOT.LOG ausente no root"); com
         # dirent o kernel sobrescreve só dados (data-only, sem rasgar dir).
         ("BOOT.LOG", b"\x00" * (256 * 1024)),
+        # R6 (audit run-R2): stub de knowledge por tópico p/ AutoLearn
+        # (learn_topic usa bytes só p/ is_empty/len; treino real vem de
+        # traces R3 — precedente MICROPY.WASM 71B). Conteúdo real via SDIO.
+        ("SECURITY.BIN", b"neural-os-core topic knowledge stub (SDIO pipeline for real data)\n"),
     ]
     # ADR-0056: LEGOs cedo (antes do walk firmware) — evita esgotar root dir
     _inject_device_legos(files)

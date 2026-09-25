@@ -71,6 +71,11 @@ impl Sev {
             | "MBR" | "GPT" | "FAT32" | "ACPI" | "HEAP" | "MEM" | "P2P" | "PCI"
             | "IDT" | "GDT" | "PIC" | "INSTALL" | "SYS-INST" | "SLIP" | "USB"
             | "SMP" | "Net" | "Disk" | "BUDGET" | "BUMP"
+            // s404 (audit R2-run): subsistemas que usavam o slot sev e caiam
+            // em TRACE mudo + warn "sev desconhecida" (dmesg cego, ADR-0092).
+            // Verbos de evento (await/dbg/smoke/query/...) ficam TRACE.
+            | "pci" | "hid" | "http" | "FS" | "TALC" | "ARENA" | "hub"
+            | "stt" | "AGENTS" | "ANALYST" | "boot"
             // SESSION_373 k_hal: probe/init/intel no slot sev (BCS Ring OK era TRACE).
             | "init" | "intel" | "INTEL" | "NVIDIA" | "AMD" | "BLIT" | "NKP"
             | "ATH10K" | "IWL" | "FE" | "cursor" | "bind" | "probe" | "kvdma"
