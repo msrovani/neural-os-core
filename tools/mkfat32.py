@@ -420,6 +420,10 @@ def populate(path):
         ("AGENT.BIN", find_file("AGENT.v6") or find_file("AGENT.BIN") or find_file("AGENT.BITNET")),
         # GOAL3: MicroPython WASM (tools/build_micropython_wasm.py → models/MICROPY.WASM)
         ("MICROPY.WASM", find_file("MICROPY.WASM") or find_file("micropython.wasm")),
+        # R2 (audit s402): BOOT.LOG pré-alocado (256KB zeros = BOOT_LOG_CAP).
+        # Sem dirent o flush falha sempre ("BOOT.LOG ausente no root"); com
+        # dirent o kernel sobrescreve só dados (data-only, sem rasgar dir).
+        ("BOOT.LOG", b"\x00" * (256 * 1024)),
     ]
     # ADR-0056: LEGOs cedo (antes do walk firmware) — evita esgotar root dir
     _inject_device_legos(files)

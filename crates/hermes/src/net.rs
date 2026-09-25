@@ -285,6 +285,9 @@ pub fn detect_qemu_net_mode() -> QemuNetMode {
         // colidem com QEMU-loader de modelos e geram falso BRIDGE/STATIC.
         const CANDIDATES: &[u64] = &[
             0x0200_0000,
+            // s402: flag baixa p/ lab 1–2GB (QEMU-loader @0x16400000;
+            // bytes estáveis do load ao T+0 + 40min runtime em QEMU 11).
+            0x1640_0000,
             0x13E0_00000,
             NETMODE_LOADER_PHYS,
             0x1100_00000,

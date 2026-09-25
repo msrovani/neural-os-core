@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s402 — Self-deadlocks slog + EMIT_GUARD + mesh Master/Memory
+# STATE — neural-os-core v1.9.99-s403 — Auditoria: triagem + R2 BOOT.LOG pré-alocado
 
-#   PISTA ATIVA: s402 — D1/D2/D3 locks + EMIT_GUARD (133 NESTED) + FAT expert + wasm promote + mitigações (commit 2f571fae)
-#   PISTA ANTERIOR: s401 ondas/MEDs (vram ACS ring, §13 90 blobs)
+#   PISTA ATIVA: s403 — audit×logs×n-sgdb (só R2 novo: BOOT.LOG 256KB em mkfat32+disco, flush ok=true); I4/xHCI/Ring3/badsig já-cobertos ou by-design
+#   PISTA ANTERIOR: s402 locks + EMIT_GUARD + mesh (commit 2f571fae)
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
