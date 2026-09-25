@@ -10,7 +10,7 @@ mod hub;
 pub use bringup::{
     bringup_boot_msc, bringup_hid_keyboard, bringup_hid_mouse, bringup_uac, bringup_uvc,
     clear_msc_port_skips, disable_slot, mark_msc_port_failed, try_deferred_hid_bringup,
-    clear_hid_defer_flag,
+    clear_hid_defer_flag, ADDR_FAIL_COUNT,
     address_device_loc, ep0_mps_for_speed, host_address_device, host_configure_msc,
     host_device_class, host_disable_slot, host_enable_slot, host_ep0_class_nodata,
     host_ep0_control_in, host_ep0_tr_va, host_mark_hub, host_max_ports, host_port_ccs,
@@ -79,6 +79,9 @@ pub static XHCI_STAGE: core::sync::atomic::AtomicU8 = core::sync::atomic::Atomic
 pub static XHCI_LAST_BDF: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 /// Nº de candidatos xHCI (0x0C/0x03) do último scan (diagnóstico Hub Health).
 pub static XHCI_CAND_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+/// Último resultado do failover multi-HC (diagnóstico Hub Health, lock-free).
+/// 0=ainda não tentado, 1=bound outro HC ok, 2=bind falhou, 3=single-HC nada a fazer.
+pub static FAILOVER_LAST: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 pub const XHCI_STAGE_MSC_DOWN: u8 = 20;
 
@@ -90,6 +93,10 @@ pub fn xhci_last_bdf() -> u32 {
 }
 pub fn xhci_cand_count() -> u8 {
     XHCI_CAND_COUNT.load(Ordering::Relaxed)
+}
+/// Último resultado do failover (`FAILOVER_LAST`, relaxed, nunca bloqueia).
+pub fn failover_last() -> u8 {
+    FAILOVER_LAST.load(Ordering::Relaxed)
 }
 /// `true` se o R1 tentou MSC sem controller (distinguível de "0 portas CCS").
 pub fn xhci_msc_down() -> bool {
@@ -172,6 +179,7 @@ pub unsafe fn failover_next_hc() -> bool {
     }
     let cands = xhci_pci_candidates();
     let Some(next) = failover_next_index(cur, cands.len()) else {
+        FAILOVER_LAST.store(3, Ordering::Relaxed);
         return false;
     };
     let old_bdf = XHCI_LAST_BDF.load(Ordering::Relaxed);
@@ -189,6 +197,7 @@ pub unsafe fn failover_next_hc() -> bool {
     let ok = init_xhci_select(next);
     let bound = ok && XHCI_STATE.lock().as_ref().is_some();
     if bound {
+        FAILOVER_LAST.store(1, Ordering::Relaxed);
         crate::slog_nano!(
             "USB",
             "ok",
@@ -199,6 +208,7 @@ pub unsafe fn failover_next_hc() -> bool {
             old_bdf
         );
     } else {
+        FAILOVER_LAST.store(2, Ordering::Relaxed);
         crate::slog_nano!(
             "USB",
             "warn",

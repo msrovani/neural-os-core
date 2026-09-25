@@ -518,20 +518,24 @@ pub fn refresh_hub_health() {
     let maxp = k_nano::xhci::host_max_ports();
     let ccs = k_nano::xhci::host_ccs_count();
     let msc_info = k_nano::xhci::host_msc_info();
+    // xHCI/MSC diagnósticos (lock-free, relaxed): DbC cached + failover + Addr fails.
+    let dbc = k_nano::dbc::dbc_present() as u8;
+    let fo = k_nano::xhci::FAILOVER_LAST.load(Ordering::Relaxed);
+    let af = k_nano::xhci::ADDR_FAIL_COUNT.load(Ordering::Relaxed);
     let (st, val, pill) = match (msc, maxp) {
         (true, _) => {
             let v = match msc_info {
-                Some((p, 0)) => alloc::format!("msc p{} s?", p),
-                Some((p, s)) => alloc::format!("msc p{} s{}", p, s),
-                None => alloc::string::String::from("msc ready"),
+                Some((p, 0)) => alloc::format!("msc p{} s? dbc{} fo{} af{}", p, dbc, fo, af),
+                Some((p, s)) => alloc::format!("msc p{} s{} dbc{} fo{} af{}", p, s, dbc, fo, af),
+                None => alloc::format!("msc ready dbc{} fo{} af{}", dbc, fo, af),
             };
             (HubState::Ok, v, true)
         }
         (false, Some(p)) => {
             let st = if k_nano::xhci::xhci_msc_down() { HubState::Fail } else { HubState::Warn };
-            (st, alloc::format!("{}p ccs{} no msc", p, ccs), true)
+            (st, alloc::format!("{}p ccs{} no msc dbc{} fo{} af{}", p, ccs, dbc, fo, af), true)
         }
-        (false, None) => (HubState::Na, alloc::string::String::from("no xhci"), false),
+        (false, None) => (HubState::Na, alloc::format!("no xhci dbc{} fo{} af{}", dbc, fo, af), false),
     };
     hub_set(&mut hh.rows[1], "usb", st, pill, val);
 

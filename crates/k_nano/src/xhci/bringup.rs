@@ -3,7 +3,11 @@
 //! Sem isto, `usb_msc::probe` usava slot=2 fantasma e BOOT.LOG nunca gravava.
 
 use super::{alloc_phys, pop_event, portsc_addr, r32, w32, BulkEndpoint, XHCI_STATE};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+/// Contador de AddressDevice FAIL (diagnóstico Hub Health, lock-free).
+/// Incrementado nos sites com log FAIL (MSC + HID); UAC/UVC silenciosos não contam.
+pub static ADDR_FAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 fn hc_context_size() -> usize {
     XHCI_STATE
@@ -293,6 +297,7 @@ unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
     };
 
     if !address_device(slot, port, speed, max_packet) {
+        ADDR_FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
         crate::slog_nano!("USB", "msc", "Address Device FAIL slot={} port={}", slot, port);
         let _ = cmd_disable_slot(slot);
         return None;
@@ -535,6 +540,7 @@ unsafe fn bringup_hid_boot(kind: HidBootKind) -> bool {
             _ => 64,
         };
         if !address_device(slot, port, speed, max_packet) {
+            ADDR_FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
             crate::slog_nano!("USB", "hid", "{} Address FAIL slot={}", tag, slot);
             continue;
         }
