@@ -834,6 +834,32 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     // o serial é mudo no notebook real → freeze parecia "travou sem razão".
     // console_print desenha direto no FB (sem alocar, sem depender do VGA).
     crate::display::fb::console_print("[PANIC] ");
+    // HW sem COM: o motivo+arquivo:linha ia só p/ VGA (morta) e serial
+    // (mudo) — na tela aparecia só "[PANIC] ". Pinta o PanicInfo completo
+    // no FB via buffer de stack (sem heap, sem locks): próximo boot em
+    // metal mostra o site exato do panic (i7 pós-greeting sem UI).
+    {
+        struct StackFmt<'a>(&'a mut [u8], usize);
+        impl<'a> core::fmt::Write for StackFmt<'a> {
+            fn write_str(&mut self, s: &str) -> core::fmt::Result {
+                let n = s.len().min(self.0.len().saturating_sub(self.1));
+                self.0[self.1..self.1 + n].copy_from_slice(&s.as_bytes()[..n]);
+                self.1 += n;
+                Ok(())
+            }
+        }
+        let mut buf = [0u8; 512];
+        let n = {
+            let mut w = StackFmt(&mut buf, 0);
+            let _ = write!(w, "[PANIC] {}", info);
+            w.1
+        };
+        if n > 0 {
+            if let Ok(s) = core::str::from_utf8(&buf[..n]) {
+                crate::display::fb::console_print(s);
+            }
+        }
+    }
 
     // Sela ramlog + warm-reset → logwriter grava BOOT.LOG no próximo boot.
     k_nano::boot_ramlog::append("[PANIC] seal+reboot");
