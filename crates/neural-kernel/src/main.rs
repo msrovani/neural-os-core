@@ -861,11 +861,54 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         }
     }
 
-    // Sela ramlog + warm-reset → logwriter grava BOOT.LOG no próximo boot.
+    // HW sem serial: congela com regs p/ foto — reboot apagaria a única
+    // evidência. Snapshot via asm + CR2/CR3 (stack-only, sem heap, sem
+    // locks novos; console_print é o canal já usado acima).
+    {
+        fn panic_reg(label: &str, val: u64) {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            let mut buf = [0u8; 32];
+            let lb = label.as_bytes();
+            let m = lb.len().min(8);
+            buf[..m].copy_from_slice(&lb[..m]);
+            let mut n = m;
+            buf[n] = b'='; n += 1;
+            buf[n] = b'0'; n += 1;
+            buf[n] = b'x'; n += 1;
+            let mut i = 15u32;
+            loop {
+                buf[n] = HEX[((val >> (i * 4)) & 0xF) as usize];
+                n += 1;
+                if i == 0 { break; }
+                i -= 1;
+            }
+            if let Ok(s) = core::str::from_utf8(&buf[..n]) {
+                crate::display::fb::console_print(s);
+            }
+        }
+        let mut rsp: u64 = 0;
+        let mut rip: u64 = 0;
+        let mut rflags: u64 = 0;
+        unsafe {
+            core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack));
+            core::arch::asm!("lea {0}, [rip]", out(reg) rip, options(nostack));
+            core::arch::asm!("pushfq; pop {}", out(reg) rflags, options(nostack));
+        }
+        let cr2 = x86_64::registers::control::Cr2::read().as_u64();
+        let cr3 = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+        panic_reg("RIP", rip);
+        panic_reg("RSP", rsp);
+        panic_reg("RFLAGS", rflags);
+        panic_reg("CR2", cr2);
+        panic_reg("CR3", cr3);
+        crate::display::fb::console_print("[PANIC] halt (foto regs acima)");
+    }
+
+    // Sela ramlog + HALT → logwriter grava BOOT.LOG no próximo boot (power cycle).
     k_nano::boot_ramlog::append("[PANIC] seal+reboot");
     k_nano::boot_ramlog::seal_for_next_boot();
     x86_64::instructions::interrupts::disable();
-    unsafe { k_nano::boot_ramlog::warm_reset() }
+    loop { x86_64::instructions::hlt(); }
 }
 
 

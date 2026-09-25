@@ -95,6 +95,42 @@ impl DevLoc {
             mtt: false,
         }
     }
+
+    /// Filho atrás de hub (Chitti `enumerate_hub` / Linux
+    /// `xhci_setup_addressable_virt_dev`): route estende a do hub via
+    /// `push_route`, root_port herdada, TT quando o hub é HS (speed 3+) e o
+    /// filho é LS/FS (speed 1/2). `tt_slot` = slot do hub (dono do TT);
+    /// `mtt` = hub Multi-TT (wHubCharacteristics bit 0, lido pelo R1).
+    /// None = hub_port inválida ou route cheia (5 níveis). Groundwork p/ o
+    /// hook R1 (`k_hal::usb` endereça via `host_address_device`); o
+    /// fallback R0 root-only segue usando `DevLoc::root` (inalterado).
+    pub fn child(
+        parent: &DevLoc,
+        hub_port: u8,
+        child_speed: u8,
+        tt_slot: u8,
+        mtt: bool,
+    ) -> Option<Self> {
+        let route = push_route(parent.route, hub_port)?;
+        // SS hubs não traduzem LS/FS (USB2 tem roothub separado, xHCI §4.3.1);
+        // na prática o filho aparece no hub USB2 (speed 3) — `>= 3` espelha o R1.
+        let need_tt = (child_speed == 1 || child_speed == 2) && parent.speed >= 3;
+        Some(Self {
+            root_port: parent.root_port,
+            route,
+            speed: child_speed,
+            parent_slot: if need_tt { tt_slot } else { 0 },
+            parent_port: if need_tt { hub_port } else { 0 },
+            tt: need_tt,
+            mtt: need_tt && mtt,
+        })
+    }
+
+    /// Gate hub-child: route/TT só existem atrás de hub. Root-only (QEMU
+    /// qemu-xhci tablet/kbd) = false → retry e TT-delay nunca disparam.
+    pub fn is_hub_child(&self) -> bool {
+        self.route != 0 || self.tt || self.mtt
+    }
 }
 
 pub fn ep0_mps_for_speed(speed: u8) -> u16 {
@@ -1136,8 +1172,30 @@ unsafe fn address_device(slot: u8, port: u8, speed: u8, ep0_mps: u16) -> bool {
     address_device_loc(slot, DevLoc::root(port, speed), ep0_mps)
 }
 
+/// TT think-time (Chitti hub enumerate / Linux TT): filho LS/FS sob hub HS
+/// Multi-TT precisa de settle antes do AddressDevice. Gate estrito — root-only
+/// (route=0, tt/mtt=false) retorna sem esperar: QEMU inalterado.
+/// Sem locks (só spin TSC) — seguro fora de IRQ.
+fn tt_think_time_wait(loc: &DevLoc) {
+    if !(loc.tt && loc.mtt && (loc.speed == 1 || loc.speed == 2)) {
+        return;
+    }
+    // Pior caso TTT USB2 (hub desc bits 5:6 = 3 → 32 FS bit-times ≈ 40µs)
+    // com margem p/ settle do downstream após o reset do hub (job do R1).
+    crate::tsc::sleep_us(100);
+    crate::slog_nano!(
+        "USB",
+        "hub",
+        "TT think-time wait route={:#x} speed={}",
+        loc.route,
+        loc.speed
+    );
+}
+
 /// Address Device com route string + TT (hub children — k_hal::usb).
 pub unsafe fn address_device_loc(slot: u8, loc: DevLoc, ep0_mps: u16) -> bool {
+    // (2) TT think-time — no-op fora de hub child LS/FS sob HS Multi-TT.
+    tt_think_time_wait(&loc);
     let ctx = match alloc_phys(2) {
         Some(c) => c,
         None => return false,
@@ -1207,7 +1265,41 @@ pub unsafe fn address_device_loc(slot: u8, loc: DevLoc, ep0_mps: u16) -> bool {
         }
     }
 
-    issue_address_or_config_cmd(ctx.0, slot, 11) // Address Device
+    // (3) Root-only: 1 tentativa — path QEMU qemu-xhci inalterado.
+    if !loc.is_hub_child() {
+        return issue_address_or_config_cmd(ctx.0, slot, 11); // Address Device
+    }
+    // Hub child (hook R1): até 3 tentativas; antes de cada retry, re-executa o
+    // port-reset sequencing xHCI §4.3.1 na root port (USB2 PR vs USB3 WPR +
+    // PRC/WRC + PED — dentro de `reset_port`, budgets TSC preservados).
+    // Reset downstream do hub é job do R1 (class request, já feito no hook);
+    // aqui o reset só re-estabelece o path como último recurso — o próximo
+    // bringup re-enumera o hub do zero. Falha final = false, como antes.
+    if issue_address_or_config_cmd(ctx.0, slot, 11) {
+        return true;
+    }
+    for attempt in 1..3 {
+        crate::slog_nano!(
+            "USB",
+            "warn",
+            "hub child AddressDevice retry {}/2 route={:#x}",
+            attempt,
+            loc.route
+        );
+        if !reset_port(loc.root_port, loc.speed) {
+            crate::slog_nano!(
+                "USB",
+                "warn",
+                "hub child retry reset FAIL root_port={}",
+                loc.root_port
+            );
+            return false;
+        }
+        if issue_address_or_config_cmd(ctx.0, slot, 11) {
+            return true;
+        }
+    }
+    false
 }
 
 unsafe fn configure_msc_endpoints_cmd(
@@ -2418,7 +2510,7 @@ pub unsafe fn host_mark_hub(slot: u8, loc: DevLoc, nbr_ports: u8, ttt: u32, mtt:
 
 #[cfg(test)]
 mod msc_desc_tests {
-    use super::{input_context_offset, parse_msc_config};
+    use super::{input_context_offset, parse_msc_config, push_route, DevLoc};
 
     #[test]
     fn context_offsets_follow_hccparams_csz() {
@@ -2502,5 +2594,39 @@ mod msc_desc_tests {
         let info = parse_msc_config(&cfg).expect("msc ep2/3");
         assert_eq!(info.ep_out, 0x02);
         assert_eq!(info.ep_in, 0x83);
+    }
+
+    #[test]
+    fn push_route_nibbles_and_depth_cap() {
+        assert_eq!(push_route(0, 3), Some(0x3));
+        assert_eq!(push_route(0x3, 5), Some(0x53));
+        assert_eq!(push_route(0, 0), None);
+        assert_eq!(push_route(0, 16), None);
+        assert_eq!(push_route(0x54321, 1), None); // 5 níveis cheios
+    }
+
+    #[test]
+    fn devloc_child_tt_route_and_gate() {
+        let hub = DevLoc::root(2, 3); // hub HS na root 2
+        assert!(!hub.is_hub_child());
+        // Filho LS sob HS Multi-TT: route + TT + MTT + dono do TT.
+        let c = DevLoc::child(&hub, 4, 1, 7, true).expect("child");
+        assert_eq!(c.route, 0x4);
+        assert_eq!(c.root_port, 2);
+        assert!(c.tt && c.mtt);
+        assert_eq!(c.parent_slot, 7);
+        assert_eq!(c.parent_port, 4);
+        assert!(c.is_hub_child());
+        // Filho HS: sem TT, mas route != 0 ainda é hub child (gate do retry).
+        let hs = DevLoc::child(&hub, 4, 3, 7, true).expect("hs");
+        assert!(!hs.tt && !hs.mtt);
+        assert_eq!(hs.parent_slot, 0);
+        assert!(hs.is_hub_child());
+        // Aninhado: route estende (0x4 → 0x24), root herdada, sem MTT.
+        let nest = DevLoc::child(&hs, 2, 2, 9, false).expect("nest");
+        assert_eq!(nest.route, 0x24);
+        assert_eq!(nest.root_port, 2);
+        assert!(nest.tt && !nest.mtt);
+        assert!(DevLoc::child(&hub, 0, 1, 7, true).is_none());
     }
 }

@@ -881,6 +881,14 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
         d.vendor_id,
         d.device_id
     );
+    // HW-log (s402+): registra capability DbC (0x0A) no dmesg — visível em
+    // serial (QEMU) e BOOT.LOG/espelho (HW com MSC); sem foto necessária.
+    crate::slog_nano!(
+        "USB",
+        if crate::dbc::dbc_present() { "ok" } else { "info" },
+        "xHCI DbC present={}",
+        crate::dbc::dbc_present() as u8
+    );
     true
 }
 
