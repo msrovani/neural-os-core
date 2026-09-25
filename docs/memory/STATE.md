@@ -1,7 +1,7 @@
-# STATE — neural-os-core v1.9.99-s404 — Imagem HW 8GB + R3/R6
+# STATE — neural-os-core v1.9.99-s405 — Memmap sem teto (1378MB→16GB)
 
-#   PISTA ATIVA: s404 — usb_hw.img 8319MB PACK_LLM=all pronta p/ Rufus (kernel c/ panic-FB); R3 sev 11→Ok; R6 SECURITY.BIN stub
-#   PISTA ANTERIOR: s403 triagem audit (só R2 novo, flush ok=true)
+#   PISTA ATIVA: s405 — Limine 128 regiões + push_usable coalesce (commit 191d6b78); prova real pendente de imagem+reboot no i7
+#   PISTA ANTERIOR: s404 imagem HW 8GB + R3/R6
 #   Não declarar v2.0.0
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
