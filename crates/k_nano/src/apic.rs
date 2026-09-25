@@ -563,6 +563,7 @@ pub fn init_pat() -> bool {
 /// Mapa uma pagina de 4KB para MMIO no endereco fisico `phys_addr`,
 /// criando entradas de tabela se necessario, e marca como NO_CACHE + WRITE_THROUGH.
 /// Se uma huge page (2MB/1GB) ja cobrir o endereco, modifica as flags diretamente.
+#[track_caller]
 pub unsafe fn map_page_uc(phys_addr: u64, phys_mem_offset: u64) {
     map_page_uc_at(phys_addr + phys_mem_offset, phys_addr, phys_mem_offset);
 }
@@ -571,6 +572,7 @@ pub unsafe fn map_page_uc(phys_addr: u64, phys_mem_offset: u64) {
 /// Fase 4a) com NO_CACHE + WRITE_THROUGH. Mesmo walk L4→L3→L2→L1 de
 /// `map_page_uc`, mas o destino virtual é explícito — permite mapear VRAM no
 /// espaço do heap (0x4020_0000_0000+) sem depender da identidade phys+pmoff.
+#[track_caller]
 pub unsafe fn map_page_uc_at(virt_addr: u64, phys_addr: u64, phys_mem_offset: u64) {
     use x86_64::structures::paging::PageTable;
     use x86_64::VirtAddr;
@@ -621,9 +623,16 @@ pub unsafe fn map_page_uc_at(virt_addr: u64, phys_addr: u64, phys_mem_offset: u6
     let l1_virt = base + l1_entry.addr().as_u64();
     let l1_table = &mut *(l1_virt.as_mut_ptr::<PageTable>());
 
-    // L1 → 4KB page
+    // L1 → 4KB page. HW real programa BARs sub-4K (i7 pós-greeting →
+    // set_addr assert): alinha p/ baixo (mapeia a página que contém o
+    // endereço — correto p/ MMIO) e grita o caller (fonte do culpado no HW).
+    let pa = phys_addr & !0xFFF;
+    if pa != phys_addr {
+        crate::slog_nano!("MMIO", "warn", "map unaligned phys={:#x}→{:#x} ({})",
+            phys_addr, pa, core::panic::Location::caller());
+    }
     let pte = &mut l1_table[usize::from(virt.p1_index())];
-    pte.set_addr(PhysAddr::new(phys_addr),
+    pte.set_addr(PhysAddr::new(pa),
         PageTableFlags::PRESENT | PageTableFlags::WRITABLE
         | PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH);
 
@@ -651,11 +660,13 @@ unsafe fn set_huge_entry_wc(
 ///
 /// ⚠️ Ganho de WC/NT é **metal-only**: QEMU/RAM é WB comum e o hint
 /// non-temporal é ignorado — não dá para medir em QEMU.
+#[track_caller]
 pub unsafe fn map_page_wc(phys_addr: u64, phys_mem_offset: u64) -> bool {
     map_page_wc_at(phys_addr + phys_mem_offset, phys_addr, phys_mem_offset)
 }
 
 /// `map_page_wc` com VA de destino explícito (mesmo walk de `map_page_uc_at`).
+#[track_caller]
 pub unsafe fn map_page_wc_at(virt_addr: u64, phys_addr: u64, phys_mem_offset: u64) -> bool {
     use x86_64::structures::paging::PageTable;
     use x86_64::VirtAddr;
@@ -712,8 +723,14 @@ pub unsafe fn map_page_wc_at(virt_addr: u64, phys_addr: u64, phys_mem_offset: u6
     let l1_table = &mut *(l1_virt.as_mut_ptr::<PageTable>());
 
     // L1 → folha 4KB: bit 7 = PAT (na folha, NÃO é huge), PCD/PWT = 0.
+    // Mesmo endurecimento do path UC (BAR sub-4K em HW real).
+    let pa = phys_addr & !0xFFF;
+    if pa != phys_addr {
+        crate::slog_nano!("MMIO", "warn", "map-wc unaligned phys={:#x}→{:#x} ({})",
+            phys_addr, pa, core::panic::Location::caller());
+    }
     let pte = &mut l1_table[usize::from(virt.p1_index())];
-    pte.set_addr(PhysAddr::new(phys_addr),
+    pte.set_addr(PhysAddr::new(pa),
         PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
     let mut raw = pte.flags().bits();
     raw &= !(PageTableFlags::NO_CACHE.bits() | PageTableFlags::WRITE_THROUGH.bits());
