@@ -235,6 +235,10 @@ pub unsafe fn bringup_boot_msc_root_only() -> Option<MscDevice> {
         }
     }
     crate::slog_nano!("USB", "warn", "MSC bringup FAIL em todas as portas CCS");
+    // Multi-HC (notebooks): o HC bound pode ser decoy (AddressDevice FAIL)
+    // enquanto outro HC funciona — tenta o próximo UMA vez. Single-HC
+    // (QEMU): no-op imediato (guard false), comportamento idêntico.
+    let _ = super::failover_next_hc();
     None
 }
 

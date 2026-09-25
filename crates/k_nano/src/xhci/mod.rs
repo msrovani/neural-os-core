@@ -135,6 +135,83 @@ pub fn xhci_selected_index() -> usize {
     XHCI_SELECT.load(Ordering::Relaxed)
 }
 
+/// Query pura: o HC bound produziu zero devices MSC desde o bind.
+/// Reusa `XhciState::msc_port` (sem contador novo): 0 no bind
+/// (`init_xhci_select` cria estado zerado), != 0 em todo sucesso MSC —
+/// R0 (`try_msc_on_port`) e R1 (`host_set_msc_port`, hook hub_msc).
+/// `try_lock` (nunca bloqueia): sem HC ou lock ocupado = false (fail-closed).
+/// Não prova "scan completo" sozinha — o caller (`failover_next_hc`,
+/// chamado no ponto de scan-completion do bringup) garante o contexto.
+pub fn xhci_bound_hc_has_zero_msc() -> bool {
+    match XHCI_STATE.try_lock() {
+        Some(g) => g.as_ref().map(|st| st.msc_port == 0).unwrap_or(false),
+        None => false,
+    }
+}
+
+/// Aritmética pura do failover: próximo índice ou None.
+/// None = single-HC (QEMU) ou atual já é o último — sem bind, sem log.
+fn failover_next_index(cur: usize, n: usize) -> Option<usize> {
+    if n <= 1 || cur + 1 >= n {
+        None
+    } else {
+        Some(cur + 1)
+    }
+}
+
+/// Failover multi-HC (bounded, passo único): se o HC bound produziu zero
+/// MSC após scan completo e há candidatos PCI além de `XHCI_SELECT`, binda
+/// o próximo via `init_xhci_select`. Retorna true se um novo HC foi bound.
+/// Single-HC (QEMU): guard imediato false, zero mudança de estado.
+/// Chamar UMA vez no ponto de scan-completion (bringup_boot_msc_root_only),
+/// nunca em hot loop nem em IRQ (scan PCI + init MMIO com budgets TSC).
+pub unsafe fn failover_next_hc() -> bool {
+    let cur = XHCI_SELECT.load(Ordering::Relaxed);
+    if !xhci_bound_hc_has_zero_msc() {
+        return false;
+    }
+    let cands = xhci_pci_candidates();
+    let Some(next) = failover_next_index(cur, cands.len()) else {
+        return false;
+    };
+    let old_bdf = XHCI_LAST_BDF.load(Ordering::Relaxed);
+    let nd = cands[next];
+    let new_bdf = ((nd.bus as u32) << 8) | ((nd.device as u32) << 3) | (nd.function as u32);
+    crate::slog_nano!(
+        "USB",
+        "warn",
+        "xHCI failover: HC[{}] BDF={:#x} zero MSC apos scan — tenta HC[{}] BDF={:#x}",
+        cur,
+        old_bdf,
+        next,
+        new_bdf
+    );
+    let ok = init_xhci_select(next);
+    let bound = ok && XHCI_STATE.lock().as_ref().is_some();
+    if bound {
+        crate::slog_nano!(
+            "USB",
+            "ok",
+            "xHCI failover: bound HC[{}] BDF={:#x} (era HC[{}] BDF={:#x})",
+            next,
+            XHCI_LAST_BDF.load(Ordering::Relaxed),
+            cur,
+            old_bdf
+        );
+    } else {
+        crate::slog_nano!(
+            "USB",
+            "warn",
+            "xHCI failover: HC[{}] BDF={:#x} bind FAIL (HC[{}] BDF={:#x} segue sem MSC)",
+            next,
+            new_bdf,
+            cur,
+            old_bdf
+        );
+    }
+    bound
+}
+
 // ── Isochronous (USB Audio) ────────────────────────────────────────────────
 // ADR-0045 UAC: TRBs isócronos (Type 5, NÃO 8 — o work order dizia 8; o layout
 // correto foi validado contra Linux xhci.h/xhci-ring.c):
@@ -1748,5 +1825,28 @@ mod transfer_trb_tests {
     fn scratchpad_count_combines_hi_and_lo_fields() {
         let hcs2 = (2u32 << 21) | (3u32 << 27);
         assert_eq!(max_scratchpads(hcs2), 67);
+    }
+}
+
+#[cfg(test)]
+mod failover_tests {
+    use super::failover_next_index;
+
+    #[test]
+    fn single_hc_never_fails_over() {
+        assert_eq!(failover_next_index(0, 0), None);
+        assert_eq!(failover_next_index(0, 1), None); // QEMU: 1 HC
+    }
+
+    #[test]
+    fn last_candidate_never_fails_over() {
+        assert_eq!(failover_next_index(1, 2), None);
+        assert_eq!(failover_next_index(2, 3), None);
+    }
+
+    #[test]
+    fn multi_hc_steps_one_forward() {
+        assert_eq!(failover_next_index(0, 2), Some(1));
+        assert_eq!(failover_next_index(1, 3), Some(2));
     }
 }
