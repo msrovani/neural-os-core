@@ -6,6 +6,7 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::fmt::Write;
 use core::sync::atomic::{AtomicIsize, AtomicU64, AtomicUsize, Ordering};
+use agent_core::{AgentKind, ScheduleKind};
 use spin::Mutex;
 use talc::{Span, Talc, Talck, ErrOnOom};
 use x86_64::structures::paging::{FrameAllocator, PageTable, PageTableFlags};
@@ -138,6 +139,11 @@ fn grow_bump_auto(need: usize) -> bool {
     if need <= current_limit {
         return true; // já coberto
     }
+    // (3) Grow-gate entry: quotas + observe via ATOMICS ONLY — nunca
+    // BOOT_LOG/EVENT_BUS/MHI/GLOBAL_ALLOCATOR locks aqui, nunca publish
+    // (publish_heap_pressure_if_due roda FORA do grow — pode alocar).
+    let entry_obs = heap_observe();
+    let _entry_carve0 = core_quota_for(0);
     // Fix C: log do need na ENTRADA (o path wrap/refuse era cego).
     crate::slog_nano!("HEAP", "BUMP", "grow entry need={}MB limit={}MB",
         need / (1024 * 1024), current_limit / (1024 * 1024));
@@ -154,6 +160,16 @@ fn grow_bump_auto(need: usize) -> bool {
     let heap_start = unsafe { HEAP_BUFFER.as_mut_ptr() as usize };
     let base = VirtAddr::new(crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed));
     if base.as_u64() == 0 {
+        return false;
+    }
+
+    // (3) Large-path gate lock-free: grows com ≥64MB descobertos precisam passar
+    // em can_alloc_bytes (margem 8MB = CRITICAL_RESERVE); refuse → honesto, sem panic/halt.
+    let uncovered = need.saturating_sub(current_limit);
+    if uncovered >= 64 * 1024 * 1024 && !can_alloc_bytes(uncovered, 8) {
+        note_alloc_refused(need, bump_max_offset(), "grow");
+        crate::slog_nano!("HEAP", "fail", "grow refuse need={}MB uncovered={}MB headroom={}MB (advisory quota gate)",
+            need / (1024 * 1024), uncovered / (1024 * 1024), entry_obs.headroom_mb);
         return false;
     }
 
@@ -218,6 +234,9 @@ fn grow_bump_auto(need: usize) -> bool {
             current_limit / (1024 * 1024), new_mb, need / (1024 * 1024), allocated);
     }
     // Retorna true SÓ se o novo limite cobre `need` (senão o alloc re-tenta).
+    // (3) Exit: re-lê quotas + observe via atomics (sem publish — fora do grow).
+    let _exit_obs = heap_observe();
+    let _exit_carve0 = core_quota_for(0);
     need <= HEAP_LIMIT.load(Ordering::Relaxed)
 }
 
@@ -372,6 +391,116 @@ pub fn set_heap_budget_mb(mb: usize) {
     let mb = mb.min(window_mb);
     HEAP_BUDGET_MB.store(mb, Ordering::Release);
     crate::slog_nano!("HEAP", "BUDGET", "budget={}MB (window=~{}MB)", mb, window_mb);
+}
+
+// ─── (1) Per-core carve accounting (advisory auto-fractioning) ───────────────
+// Fracionamento consultivo do budget por core: BSP 40%, APs dividem 60% igual.
+// Computado UMA vez no boot via init_core_carves() (chamado de
+// smp::runqueue::init_roles_from_pools — topologia final: budget veio de
+// heap_budget_mb(RAM), divisor é CPU_COUNT). Pure atomics: nunca BOOT_LOG /
+// EVENT_BUS / MHI / GLOBAL_ALLOCATOR locks aqui.
+// ponytail: fair-share consultivo — o path de alloc não carimba cpu, então uso
+// por-core NÃO é rastreado; a conta é quota (fatia justa) vs heap_used_bytes()
+// global. Upgrade path: carimbar allocs por cpu se pressão por-core virar política.
+// ─── (2) Per-agent quota table (advisory auto-fractioning) ───────────────────
+// Mapa SEPARADO (não alarga AgentManifest): quota de headroom por ScheduleKind.
+// Inference (Cortex/Hermes) despeja p/ MHI/arquivo, nunca bump (quota 0 no alloc).
+// Lookup puro p/ o spawn path (runqueue::enqueue_agent*): over-quota → overflow
+// global existente, nunca panic.
+
+// (1) Carve máximo espelha smp::runqueue::MAX_CORES sem acoplar const cross-mod.
+const CORE_CARVE_MAX: usize = 256;
+static CORE_QUOTA: [AtomicUsize; CORE_CARVE_MAX] = [const { AtomicUsize::new(0) }; CORE_CARVE_MAX];
+static CORE_CARVE_DONE: AtomicUsize = AtomicUsize::new(0);
+
+/// Matemática pura do split (host-testável): quota em bytes p/ `cpu`.
+/// BSP (cpu 0) = 40%; APs dividem 60% igualmente (resto do arredondamento no último AP).
+fn split_core_carve(budget_bytes: usize, n_cores: usize, cpu: usize) -> usize {
+    if n_cores == 0 || cpu >= n_cores {
+        return 0;
+    }
+    if n_cores == 1 {
+        return if cpu == 0 { budget_bytes } else { 0 };
+    }
+    let bsp = budget_bytes * 2 / 5;
+    if cpu == 0 {
+        return bsp;
+    }
+    let rem = budget_bytes.saturating_sub(bsp);
+    let aps = n_cores - 1;
+    let per = rem / aps;
+    if cpu == n_cores - 1 {
+        rem.saturating_sub(per.saturating_mul(aps - 1))
+    } else {
+        per
+    }
+}
+
+/// Quota (fatia justa) do core em bytes. Pós-carve lê o static; pré-carve
+/// (boot inicial, topologia ainda aberta) deriva on-the-fly dos atomics atuais
+/// sem armazenar nem slogar — leitura pura, sem locks.
+pub fn core_quota_for(cpu: usize) -> usize {
+    if CORE_CARVE_DONE.load(Ordering::Acquire) == 1 {
+        return CORE_QUOTA[cpu.min(CORE_CARVE_MAX - 1)].load(Ordering::Relaxed);
+    }
+    let budget = HEAP_BUDGET_MB.load(Ordering::Relaxed).saturating_mul(1024 * 1024).max(HEAP_SIZE);
+    let n = (crate::smp::percpu::CPU_COUNT.load(Ordering::Relaxed) as usize).max(1).min(CORE_CARVE_MAX);
+    split_core_carve(budget, n, cpu.min(CORE_CARVE_MAX - 1))
+}
+
+/// Headroom consultivo de um core: quota menos a fatia igual do uso global.
+/// Contabiliza contra o heap_used_bytes() existente. Atomics only.
+pub fn core_carve_headroom_bytes(cpu: usize) -> usize {
+    let n = (crate::smp::percpu::CPU_COUNT.load(Ordering::Relaxed) as usize).max(1);
+    core_quota_for(cpu).saturating_sub(heap_used_bytes() / n)
+}
+
+/// Carve único no boot (idempotente — primeiro caller vence). Emite
+/// `HEAP BUMP carve cpu<N>=<MB>` uma vez. Só atomics + slog.
+pub fn init_core_carves() {
+    if CORE_CARVE_DONE.compare_exchange(0, 1, Ordering::SeqCst, Ordering::Relaxed).is_err() {
+        return;
+    }
+    let budget = HEAP_BUDGET_MB.load(Ordering::Relaxed).saturating_mul(1024 * 1024).max(HEAP_SIZE);
+    let n = (crate::smp::percpu::CPU_COUNT.load(Ordering::Relaxed) as usize).max(1).min(CORE_CARVE_MAX);
+    for i in 0..n {
+        CORE_QUOTA[i].store(split_core_carve(budget, n, i), Ordering::Relaxed);
+    }
+    for i in 0..n {
+        crate::slog_nano!("HEAP", "BUMP", "carve cpu{}={}MB", i, CORE_QUOTA[i].load(Ordering::Relaxed) / (1024 * 1024));
+    }
+}
+
+// (2) Quotas por ScheduleKind: Continuous=8MB, PollEvery=2MB, Oneshot/EventDriven=512KB.
+/// Mapa estático separado indexado por discriminante de ScheduleKind:
+/// [Oneshot, Continuous, PollEvery, EventDriven]. Não mexer no AgentManifest.
+pub static AGENT_MEM_QUOTA: [usize; 4] = [
+    512 * 1024,       // Oneshot
+    8 * 1024 * 1024,  // Continuous
+    2 * 1024 * 1024,  // PollEvery
+    512 * 1024,       // EventDriven
+];
+/// Menor quota — backpressure genérico do spawn path (slot não custa bump,
+/// mas freia spawn sob pressão real). Atomics only no caller.
+pub const AGENT_QUOTA_MIN_BYTES: usize = 512 * 1024;
+
+/// Lookup puro: quota de headroom p/ um ScheduleKind. Sem locks, sem alloc.
+pub fn agent_mem_quota_for(schedule: &ScheduleKind) -> usize {
+    match schedule {
+        ScheduleKind::Oneshot => AGENT_MEM_QUOTA[0],
+        ScheduleKind::Continuous => AGENT_MEM_QUOTA[1],
+        ScheduleKind::PollEvery(_) => AGENT_MEM_QUOTA[2],
+        ScheduleKind::EventDriven => AGENT_MEM_QUOTA[3],
+    }
+}
+
+/// Política do path de alloc: kinds de inferência (Cortex/Hermes) despejam p/
+/// MHI/arquivo e nunca consomem bump (quota 0 = sem orçamento bump).
+pub fn agent_bump_quota(kind: &AgentKind, schedule: &ScheduleKind) -> usize {
+    if matches!(kind, AgentKind::Inference) {
+        return 0;
+    }
+    agent_mem_quota_for(schedule)
 }
 
 /// Teto atual do bump (redimensionável via grow_bump_auto/resize_bump_heap).
@@ -813,4 +942,45 @@ pub fn talc_init_post_memory() -> Result<(), &'static str> {
 pub fn resize_bump_heap(target_mb: usize) {
     // ponytail: delega ao path canônico (budget/window/heap_pte_present); mantém API.
     grow_bump_auto(target_mb.saturating_mul(1024 * 1024));
+}
+
+#[cfg(test)]
+mod auto_fractioning_tests {
+    use super::*;
+
+    #[test]
+    fn agent_quota_table_lookup() {
+        assert_eq!(agent_mem_quota_for(&ScheduleKind::Continuous), 8 * 1024 * 1024);
+        assert_eq!(agent_mem_quota_for(&ScheduleKind::PollEvery(200)), 2 * 1024 * 1024);
+        assert_eq!(agent_mem_quota_for(&ScheduleKind::Oneshot), 512 * 1024);
+        assert_eq!(agent_mem_quota_for(&ScheduleKind::EventDriven), 512 * 1024);
+        assert_eq!(AGENT_QUOTA_MIN_BYTES, 512 * 1024);
+    }
+
+    #[test]
+    fn inference_spills_to_mhi_never_bump() {
+        assert_eq!(agent_bump_quota(&AgentKind::Inference, &ScheduleKind::Continuous), 0);
+        assert_eq!(agent_bump_quota(&AgentKind::Inference, &ScheduleKind::Oneshot), 0);
+        assert_eq!(agent_bump_quota(&AgentKind::System, &ScheduleKind::Continuous), 8 * 1024 * 1024);
+        assert_eq!(agent_bump_quota(&AgentKind::Driver, &ScheduleKind::PollEvery(1)), 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn core_carve_split_math() {
+        let b = 1536 * 1024 * 1024;
+        // n=1: tudo no BSP
+        assert_eq!(split_core_carve(b, 1, 0), b);
+        // BSP = 40%
+        assert_eq!(split_core_carve(b, 4, 0), b * 2 / 5);
+        // soma fecha no budget (resto no último AP)
+        let sum4: usize = (0..4).map(|c| split_core_carve(b, 4, c)).sum();
+        assert_eq!(sum4, b);
+        let sum2: usize = (0..2).map(|c| split_core_carve(b, 2, c)).sum();
+        assert_eq!(sum2, b);
+        // APs iguais entre si
+        assert_eq!(split_core_carve(b, 4, 1), split_core_carve(b, 4, 2));
+        // fora do range = 0
+        assert_eq!(split_core_carve(b, 4, 9), 0);
+        assert_eq!(split_core_carve(b, 0, 0), 0);
+    }
 }

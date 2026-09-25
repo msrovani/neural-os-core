@@ -16,6 +16,7 @@
 //! atômicos + CAS. Sem heap, sem const-fn restriction, compatível com static.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use agent_core::ScheduleKind;
 
 // ─── SyncCell pattern (from ap_work.rs) ────────────────────────────────────
 
@@ -307,11 +308,31 @@ pub fn enqueue_agent(core_id: usize, task: AgentTask) -> bool {
     if core_id >= MAX_CORES {
         return false;
     }
+    // (2) Backpressure genérico de spawn: slot não custa bump, mas sob pressão
+    // real (headroom < menor quota) desvia p/ o overflow global existente
+    // (honesty, Tokio injector spirit). Só atomics; nunca panic.
+    if crate::allocator::heap_headroom_bytes() < crate::allocator::AGENT_QUOTA_MIN_BYTES {
+        OVERFLOW_TOTAL.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
     let ok = RUN_QUEUES[core_id].enqueue(task);
     if ok {
         CPU_STATS[core_id].enqueued.fetch_add(1, Ordering::Relaxed);
     }
     ok
+}
+
+/// (2) Spawn com quota do ScheduleKind (lookup em AGENT_MEM_QUOTA, sem alargar
+/// AgentManifest): over-quota → overflow global existente, nunca panic.
+/// Inference (Cortex/Hermes) passa aqui (slot ≠ bump); os *pesos* é que
+/// despejam p/ MHI/arquivo via allocator::agent_bump_quota()==0, nunca bump.
+pub fn enqueue_agent_with_schedule(core_id: usize, task: AgentTask, schedule: &ScheduleKind) -> bool {
+    let quota = crate::allocator::agent_mem_quota_for(schedule);
+    if crate::allocator::heap_headroom_bytes() < quota {
+        OVERFLOW_TOTAL.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    enqueue_agent(core_id, task)
 }
 
 pub fn dequeue_agent(core_id: usize) -> Option<AgentTask> {
@@ -336,12 +357,50 @@ fn affinity_allows(core_id: usize, affinity_ring: u8) -> bool {
 }
 
 /// Work-stealing: só se vítima `len>1` **e** affinity permite no ladrão (Redox-like soft).
+/// (4) Preferência de steal: vítima de MENOR pressão primeiro. Pressão = `len()`
+/// instantâneo (loads atômicos, estilo has_pending — sem locks novos; `enqueued[]`
+/// é cumulativo desde o boot por design e nunca serve p/ carga). Duas passadas
+/// sem heap; fallback p/ scan ordenado se os mínimos bloquearem por affinity.
 pub fn steal_agent(core_id: usize) -> Option<AgentTask> {
     let cores = crate::smp::percpu::CPU_COUNT.load(Ordering::Relaxed) as usize;
     let n = cores.min(MAX_CORES);
     if n <= 1 {
         return None;
     }
+    // Passada 1: menor len>1 entre as vítimas.
+    let mut min_len = usize::MAX;
+    for offset in 1..n {
+        let victim = (core_id + offset) % n;
+        if victim == core_id {
+            continue;
+        }
+        let l = RUN_QUEUES[victim].len();
+        if l > 1 && l < min_len {
+            min_len = l;
+        }
+    }
+    if min_len == usize::MAX {
+        return None;
+    }
+    // Passada 2: tenta só as vítimas no nível mínimo (menor pressão).
+    for offset in 1..n {
+        let victim = (core_id + offset) % n;
+        if victim == core_id {
+            continue;
+        }
+        if RUN_QUEUES[victim].len() != min_len {
+            continue;
+        }
+        if let Some(task) = RUN_QUEUES[victim].dequeue() {
+            if !affinity_allows(core_id, task.affinity_ring) {
+                let _ = RUN_QUEUES[victim].enqueue(task);
+                continue;
+            }
+            CPU_STATS[victim].stolen.fetch_add(1, Ordering::Relaxed);
+            return Some(task);
+        }
+    }
+    // Fallback: scan ordenado legado (mínimos bloquearam por affinity).
     for offset in 1..n {
         let victim = (core_id + offset) % n;
         if victim == core_id {
@@ -661,6 +720,8 @@ pub fn init_roles_from_pools(n_cores: usize) {
         n_work,
         n_mem
     );
+    // (1) Carve único do budget por core com a topologia final (BSP 40% + APs).
+    crate::allocator::init_core_carves();
 }
 
 /// Alias legado — delega para `init_roles_from_pools`.
