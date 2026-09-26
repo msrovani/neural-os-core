@@ -1309,7 +1309,10 @@ impl TransformerModel {
             return;
         }
 
+        let t0 = k_nano::tsc::now_us();
         let norm = self.rms_norm_tensor(x, &layer.rms_attn);
+        let t1 = k_nano::tsc::now_us();
+        crate::layer_diag::note(crate::layer_diag::S_ATTN_NORM, t1.saturating_sub(t0));
 
         // SESSION_359: matmul fail → abort layer (não zero-fill fingindo OK)
         let Some(mut q) = layer.q.matmul_hybrid(&norm) else {
@@ -1352,11 +1355,15 @@ impl TransformerModel {
             &self.rope_cos, &self.rope_sin, start_pos);
         rope_apply_heads(&mut k.data, new_len, self.num_kv_heads, qk_head_dim,
             &self.rope_cos, &self.rope_sin, start_pos);
+        let t2 = k_nano::tsc::now_us();
+        crate::layer_diag::note(crate::layer_diag::S_QKV, t2.saturating_sub(t1));
 
         cache.append(layer_idx, &k, &v);
 
         let total_k = cache.k_all(layer_idx, total_seq);
         let total_v = cache.v_all(layer_idx, total_seq);
+        let t3 = k_nano::tsc::now_us();
+        crate::layer_diag::note(crate::layer_diag::S_KV, t3.saturating_sub(t2));
         if !total_k.is_valid() || !total_v.is_valid() {
             *x = Tensor::zero((0, 0));
             return;
@@ -1482,6 +1489,9 @@ impl TransformerModel {
             }
         }
 
+        let t4 = k_nano::tsc::now_us();
+        crate::layer_diag::note(crate::layer_diag::S_ATTN, t4.saturating_sub(t3));
+
         let Some(attn_out) = Tensor::from_row_major((new_len, kv_dim), attn_out_data) else {
             return;
         };
@@ -1497,8 +1507,12 @@ impl TransformerModel {
         if let Some(summed) = x.add(&proj) {
             *x = summed;
         }
+        let t5 = k_nano::tsc::now_us();
+        crate::layer_diag::note(crate::layer_diag::S_O_PROJ, t5.saturating_sub(t4));
 
         let norm2 = self.rms_norm_tensor(x, &layer.rms_ffn);
+        let t6 = k_nano::tsc::now_us();
+        crate::layer_diag::note(crate::layer_diag::S_FFN_NORM, t6.saturating_sub(t5));
         let Some(mut gate) = layer.gate.matmul_hybrid(&norm2) else {
             k_nano::slog_cortex!("FWD", "fail", "L{} gate matmul refuse", layer_idx);
             return;
@@ -1556,6 +1570,12 @@ impl TransformerModel {
                     x.data[xi] += down.data[di];
                 }
             }
+        }
+        let t7 = k_nano::tsc::now_us();
+        crate::layer_diag::note(crate::layer_diag::S_MLP, t7.saturating_sub(t6));
+        // Fecha o forward: 1 linha por passada (na última camada).
+        if layer_idx + 1 == self.layers.len() {
+            crate::layer_diag::dump_and_reset();
         }
     }
 

@@ -10,6 +10,9 @@ const MATMUL_BARRIER_TIMEOUT_US: u64 = 60_000_000;
 /// Instrumentação s-prefill: 1 log enter/exit a cada 20 chamadas de cada caminho.
 static MATMUL_LOG_CALLS: AtomicU64 = AtomicU64::new(0);
 static TERNARY_LOG_CALLS: AtomicU64 = AtomicU64::new(0);
+/// Fase 2 (s-prefill): separa compute (worker) de sync (barreira) no SMP.
+static TERN_MAX_WORKER_US: AtomicU64 = AtomicU64::new(0);
+static TERN_WORKERS_DONE: AtomicU64 = AtomicU64::new(0);
 
 struct MatmulJobCtx {
     a_ptr: *const f32,
@@ -180,29 +183,70 @@ unsafe fn ternary_worker(_job_id: usize, _worker: usize) {
         return;
     }
     let c = &*ctx;
+    let t_w0 = k_nano::tsc::now_us();
     let w = &*c.w_ptr;
-    // Tile de colunas (reusa heurística de tile por cache; mínimo 8).
-    let tile = k_nano::platform_probe::matmul_tile_rows(c.k, c.n).max(8);
+    // Tile de colunas múltiplo de 4 (byte-alinhado p/ bulk-load 4 pesos/byte).
+    let tile = k_nano::platform_probe::matmul_tile_rows(c.k, c.n).clamp(8, 256) & !3;
+    // Fase 2d: t-externo (acesso sequencial) + BULK — 1 load de byte por 4 pesos
+    // em vez de 1 por peso. O LUT (que ADICIONAVA um load) regrediu 2,1×; este
+    // remove 3 de cada 4 loads. Sem tabela, sem SIMD.
+    let mut acc = [0.0f32; 256];
     loop {
         let jstart = COLS_CLAIMED.fetch_add(tile, Ordering::Relaxed);
         if jstart >= c.n {
             break;
         }
         let jend = (jstart + tile).min(c.n);
+        let width = jend - jstart;
         for i in 0..c.m {
-            for j in jstart..jend {
-                let mut sum = 0.0f32;
-                for t in 0..c.k {
-                    match w.get_weight(t * c.n + j) {
-                        1 => sum += *c.x_ptr.add(i * c.k + t),
-                        -1 => sum -= *c.x_ptr.add(i * c.k + t),
+            for a in acc[..width].iter_mut() {
+                *a = 0.0;
+            }
+            for t in 0..c.k {
+                let xv = *c.x_ptr.add(i * c.k + t);
+                let base = t * c.n + jstart;
+                let mut jj = 0usize;
+                while jj + 4 <= width {
+                    let byte = *w.packed_data.get_unchecked((base + jj) >> 2);
+                    match byte & 3 {
+                        1 => acc[jj] += xv,
+                        2 => acc[jj] -= xv,
                         _ => {}
                     }
+                    match (byte >> 2) & 3 {
+                        1 => acc[jj + 1] += xv,
+                        2 => acc[jj + 1] -= xv,
+                        _ => {}
+                    }
+                    match (byte >> 4) & 3 {
+                        1 => acc[jj + 2] += xv,
+                        2 => acc[jj + 2] -= xv,
+                        _ => {}
+                    }
+                    match (byte >> 6) & 3 {
+                        1 => acc[jj + 3] += xv,
+                        2 => acc[jj + 3] -= xv,
+                        _ => {}
+                    }
+                    jj += 4;
                 }
-                *c.c_ptr.add(i * c.n + j) = sum;
+                while jj < width {
+                    match w.get_weight(base + jj) {
+                        1 => acc[jj] += xv,
+                        -1 => acc[jj] -= xv,
+                        _ => {}
+                    }
+                    jj += 1;
+                }
+            }
+            for jj in 0..width {
+                *c.c_ptr.add(i * c.n + jstart + jj) = acc[jj];
             }
         }
     }
+    let wd = k_nano::tsc::now_us().saturating_sub(t_w0);
+    TERN_MAX_WORKER_US.fetch_max(wd, Ordering::Relaxed);
+    TERN_WORKERS_DONE.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Ternary matmul distribuído entre BSP + APs. Retorna `None` se SMP não está
@@ -279,12 +323,21 @@ pub fn parallel_ternary_matmul(
         return None;
     }
     T_CTX.store(core::ptr::null_mut(), Ordering::Release);
+    let t_total = k_nano::tsc::now_us().saturating_sub(t_mm0);
+    let wmax = TERN_MAX_WORKER_US.swap(0, Ordering::Relaxed);
+    let wdone = TERN_WORKERS_DONE.swap(0, Ordering::Relaxed);
     if log_it {
         k_nano::slog_cortex!(
             "cortex",
             "warn",
-            "matmul exit ok=true us={}",
-            k_nano::tsc::now_us().saturating_sub(t_mm0)
+            "matmul exit m={} k={} n={} us={} workers={} worker_max_us={} sync_us={}",
+            m,
+            k,
+            n,
+            t_total,
+            wdone,
+            wmax,
+            t_total.saturating_sub(wmax)
         );
     }
     Some(result)
