@@ -15,7 +15,8 @@ cortex = { path = "../cortex" }
 k-nano = { path = "../k_nano" }
 k-hal = { path = "../k_hal" }
 # neural-sgdb: path = junction local → C:\DEV\neural-sgdb (repo comunitário).
-# Sempre acompanhar a tip de lá (hoje v1.1.20). default-features=false =
+# Sempre acompanhar a tip de lá (s410 verificado: junction tip = v1.2.1 = Cargo.lock;
+# comentarios antigos diziam 1.1.20 — stale). default-features=false =
 # no_std puro (SSE2 gateado off em x86_64-unknown-none desde upstream 3cc3010).
 neural-sgdb = { path = "../neural-sgdb", default-features = false }
 

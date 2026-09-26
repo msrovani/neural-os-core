@@ -115,7 +115,8 @@ impl Sev {
             //   h4/h5_demo/p3 = demos PoC CapGate/VirtIO (SESSION_360: ok)
             //   0040/0047-* = gates ADR-0040/0047 (status report de boot)
             //   dbg        = debug de boot (bin) → TRACE
-            | "msg" | "master" | "worker" | "await" | "life" | "mode" | "map"
+            //   sync       = k_ai CRDT sync iniciado (mesh P2P ativo — sucesso)
+            | "msg" | "master" | "worker" | "sync" | "await" | "life" | "mode" | "map"
             | "observe" | "pcie" | "populate" | "Learn" | "CONSOLIDATE" | "REFLECT"
             | "h4" | "h5_demo" | "p3"
             | "0040" | "0047-G3" | "0047-G4" | "0047-G5" | "0047-H" | "0047-L3"
@@ -337,7 +338,7 @@ mod tests {
     #[test]
     fn s410_subs_are_ok() {
         for sub in [
-            "msg", "master", "worker", "await", "life", "mode", "map", "observe",
+            "msg", "master", "worker", "sync", "await", "life", "mode", "map", "observe",
             "pcie", "populate", "Learn", "CONSOLIDATE", "REFLECT", "h4", "h5_demo",
             "p3", "0040", "0047-G3", "0047-G4", "0047-G5", "0047-H", "0047-L3",
             "0047-NGRAM",
