@@ -150,7 +150,13 @@ if ($useModels) {
 
 $modelGap = 0x100000
 if (-not $useModels) { $modelEndAddr = 0x100000000 }
-$netmodeAddr = [math]::Ceiling(($modelEndAddr + $modelGap) / $modelGap) * $modelGap
+# s402: o kernel le o flag netmode so em CANDIDATES baixas (0x0200_0000 /
+# 0x1640_0000) e exige addr < ram_end. Com guest <= 4G o scan alto nem roda
+# (ram_end <= 0x1_0000_0000 -> User direto). O endereco alto antigo
+# (~0x100100000) era ignorado -> IP default 10.0.2.15 nas DUAS instancias ->
+# node_id=15 colide -> add_or_update_node deduplica -> peers=0, nodes=1,
+# ambas Master. 0x16400000 = hermes::net::NETMODE_LOADER_PHYS (lab 1-2GB).
+$netmodeAddr = 0x16400000
 $netmodeAddrHex = "0x{0:X}" -f [int64]$netmodeAddr
 
 function Start-MeshInstance {

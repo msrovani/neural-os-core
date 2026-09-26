@@ -1,7 +1,15 @@
 //! Parallel Matmul — ADR-0055: chunks + barreira + IPI wake nos APs.
 
 use crate::tensor::Tensor;
-use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU64, AtomicUsize, Ordering};
+
+/// Deadline do barrier SMP de um matmul. Um matmul isolado levar >60s em
+/// soft-float já é wedge, não lentidão — o caller degrada para single-core.
+const MATMUL_BARRIER_TIMEOUT_US: u64 = 60_000_000;
+
+/// Instrumentação s-prefill: 1 log enter/exit a cada 20 chamadas de cada caminho.
+static MATMUL_LOG_CALLS: AtomicU64 = AtomicU64::new(0);
+static TERNARY_LOG_CALLS: AtomicU64 = AtomicU64::new(0);
 
 struct MatmulJobCtx {
     a_ptr: *const f32,
@@ -76,7 +84,7 @@ pub fn parallel_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
         return Tensor::from_row_major((m, n), c_data);
     }
 
-    let mut ctx = MatmulJobCtx {
+    let mut ctx = alloc::boxed::Box::new(MatmulJobCtx {
         a_ptr: a.data.as_ptr(),
         b_ptr: b.data.as_ptr(),
         c_ptr: c_data.as_mut_ptr(),
@@ -85,12 +93,17 @@ pub fn parallel_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
         k,
         row_start: 0,
         row_end: m,
-    };
+    });
     ROWS_CLAIMED.store(0, Ordering::Release);
-    CTX.store(&mut ctx as *mut _, Ordering::Release);
+    CTX.store(&mut *ctx as *mut _, Ordering::Release);
 
     let aps = k_nano::smp::ap_entry_count() as usize;
     let n_workers = aps + 1;
+    let log_it = MATMUL_LOG_CALLS.fetch_add(1, Ordering::Relaxed) % 20 == 0;
+    let t_mm0 = k_nano::tsc::now_us();
+    if log_it {
+        k_nano::slog_cortex!("cortex", "warn", "matmul enter m={} k={} n={} aps={}", m, k, n, aps);
+    }
     k_nano::smp::ap_work::clear_queue();
     // Barreira = só APs (BSP sincroniza localmente após seu próprio trabalho)
     k_nano::smp::ap_work::reset_barrier(aps.min(n_workers.saturating_sub(1)) as u32);
@@ -106,11 +119,40 @@ pub fn parallel_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     unsafe {
         matmul_worker(0, 0);
     }
-    if aps > 0 {
-        k_nano::smp::ap_work::wait_barrier();
+    if aps > 0 && !k_nano::smp::ap_work::wait_barrier_timeout(MATMUL_BARRIER_TIMEOUT_US) {
+        CTX.store(core::ptr::null_mut(), Ordering::Release);
+        k_nano::slog_cortex!(
+            "cortex",
+            "warn",
+            "matmul barrier timeout pending={} done={}",
+            k_nano::smp::ap_work::barrier_pending(),
+            k_nano::smp::ap_work::barrier_done()
+        );
+        if log_it {
+            k_nano::slog_cortex!(
+                "cortex",
+                "warn",
+                "matmul exit ok=false us={}",
+                k_nano::tsc::now_us().saturating_sub(t_mm0)
+            );
+        }
+        // APs podem ainda escrever no ctx/resultado → vazar em vez de liberar
+        // (use-after-free). Backstop do caminho de estouro, nunca do feliz.
+        // ponytail: leak só no timeout; resultado numérico intacto.
+        let _ = alloc::boxed::Box::leak(ctx);
+        core::mem::forget(c_data);
+        return None;
     }
 
     CTX.store(core::ptr::null_mut(), Ordering::Release);
+    if log_it {
+        k_nano::slog_cortex!(
+            "cortex",
+            "warn",
+            "matmul exit ok=true us={}",
+            k_nano::tsc::now_us().saturating_sub(t_mm0)
+        );
+    }
     Tensor::from_row_major((m, n), c_data)
 }
 
@@ -186,19 +228,24 @@ pub fn parallel_ternary_matmul(
     if !result.is_valid() {
         return None;
     }
-    let mut ctx = TernaryJobCtx {
+    let mut ctx = alloc::boxed::Box::new(TernaryJobCtx {
         w_ptr: weight as *const _,
         x_ptr: input.data.as_ptr(),
         c_ptr: result.data.as_mut_ptr(),
         m,
         k,
         n,
-    };
+    });
     COLS_CLAIMED.store(0, Ordering::Release);
-    T_CTX.store(&mut ctx as *mut _, Ordering::Release);
+    T_CTX.store(&mut *ctx as *mut _, Ordering::Release);
 
     let aps = k_nano::smp::ap_entry_count() as usize;
     let n_workers = aps + 1;
+    let log_it = TERNARY_LOG_CALLS.fetch_add(1, Ordering::Relaxed) % 20 == 0;
+    let t_mm0 = k_nano::tsc::now_us();
+    if log_it {
+        k_nano::slog_cortex!("cortex", "warn", "matmul enter m={} k={} n={} aps={}", m, k, n, aps);
+    }
     k_nano::smp::ap_work::clear_queue();
     k_nano::smp::ap_work::reset_barrier(aps.min(n_workers.saturating_sub(1)) as u32);
     for jid in 0..aps.min(n_workers.saturating_sub(1)) {
@@ -208,9 +255,37 @@ pub fn parallel_ternary_matmul(
         k_nano::apic::send_ipi_reschedule();
         ternary_worker(0, 0);
     }
-    if aps > 0 {
-        k_nano::smp::ap_work::wait_barrier();
+    if aps > 0 && !k_nano::smp::ap_work::wait_barrier_timeout(MATMUL_BARRIER_TIMEOUT_US) {
+        T_CTX.store(core::ptr::null_mut(), Ordering::Release);
+        k_nano::slog_cortex!(
+            "cortex",
+            "warn",
+            "matmul barrier timeout pending={} done={}",
+            k_nano::smp::ap_work::barrier_pending(),
+            k_nano::smp::ap_work::barrier_done()
+        );
+        if log_it {
+            k_nano::slog_cortex!(
+                "cortex",
+                "warn",
+                "matmul exit ok=false us={}",
+                k_nano::tsc::now_us().saturating_sub(t_mm0)
+            );
+        }
+        // APs podem ainda escrever no ctx/resultado → vazar (use-after-free).
+        // ponytail: leak só no timeout; caller cai em AVX512/CPU.
+        let _ = alloc::boxed::Box::leak(ctx);
+        core::mem::forget(result);
+        return None;
     }
     T_CTX.store(core::ptr::null_mut(), Ordering::Release);
+    if log_it {
+        k_nano::slog_cortex!(
+            "cortex",
+            "warn",
+            "matmul exit ok=true us={}",
+            k_nano::tsc::now_us().saturating_sub(t_mm0)
+        );
+    }
     Some(result)
 }

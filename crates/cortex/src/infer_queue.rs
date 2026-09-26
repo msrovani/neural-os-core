@@ -127,6 +127,19 @@ static A2_SLOW_SLICES: AtomicU64 = AtomicU64::new(0);
 static A2_ABSENT_LOGGED: AtomicBool = AtomicBool::new(false);
 /// Log `waiting for slot` emitido 1×/boot (retry Full é silencioso).
 static A2_SLOT_WAIT_LOGGED: AtomicBool = AtomicBool::new(false);
+/// Deadline wall (TSC absoluto, µs) da prova. 0 = desarmado. Se estourar, o
+/// gate `a2_proof_pending` é liberado — a prova nunca muta o CortexAgent para sempre.
+static A2_PROOF_DEADLINE_AT_US: AtomicU64 = AtomicU64::new(0);
+static A2_PROOF_TIMEOUT_LOGGED: AtomicBool = AtomicBool::new(false);
+/// Deadline da prova: 300s. Bem além do esperado (1 token) — só dispara em wedge.
+const A2_PROOF_DEADLINE_US: u64 = 300_000_000;
+/// Diagnóstico decisivo rate-limited no topo de `poll_slice`.
+static SLICE_POLL_CALLS: AtomicU64 = AtomicU64::new(0);
+/// Loga em n==1 (prova que `poll_slice` é chamado) e depois a cada N chamadas.
+const SLICE_DIAG_EVERY: u64 = 200;
+/// Instrumentação s-prefill: enter/exit dos primeiros N steps (máx ~40/boot).
+static PREFILL_STEP_LOGGED: AtomicU64 = AtomicU64::new(0);
+const PREFILL_STEP_LOG_CAP: u64 = 40;
 
 /// Lane D: aborta antes do 4º slice lento (4 overruns → Paused global) ou com
 /// UI rendida (ui_yield). Só decisão local sobre a prova — fila real intacta,
@@ -358,6 +371,16 @@ pub fn maybe_submit_a2_proof() -> bool {
         Ok(id) => {
             A2_PROOF_ID.store(id, Ordering::Release);
             A2_PROOF_SUBMITTED.store(true, Ordering::Release);
+            // Deadline wall: now==0 (TSC não calibrada) = desarmado (honesto).
+            let now = k_nano::tsc::now_us();
+            A2_PROOF_DEADLINE_AT_US.store(
+                if now == 0 {
+                    0
+                } else {
+                    now.saturating_add(A2_PROOF_DEADLINE_US)
+                },
+                Ordering::Release,
+            );
             k_nano::slog_cortex!("InferQ", "ok", "a2_proof submit id={}", id);
             // Lane Q6: evidência loss-proof (serial é racy sob SMP) — BOOT.LOG
             // via API existente, best-effort, sem eco serial. Só is_proof.
@@ -1031,6 +1054,20 @@ fn run_prefill_step(st: &mut ActiveState) {
     let mut applied = 0usize;
     let mut pad_oom = false;
 
+    // Instrumentação s-prefill: prova em qual layer o slice ENTRA (o EXIT
+    // correspondente vem depois do loop; ausência = hang dentro da layer).
+    let step_log = PREFILL_STEP_LOGGED.fetch_add(1, Ordering::Relaxed) < PREFILL_STEP_LOG_CAP;
+    if step_log {
+        k_nano::slog_cortex!(
+            "InferQ",
+            "warn",
+            "prefill_step enter layer={}/{} proof={}",
+            st.prefill_layer,
+            n_layers,
+            st.is_proof as u8
+        );
+    }
+
     while st.prefill_layer < n_layers && applied < layers_per_slice {
         let li = st.prefill_layer;
         st.prefill_layer += 1;
@@ -1070,6 +1107,16 @@ fn run_prefill_step(st: &mut ActiveState) {
 
     let now1 = k_nano::tsc::now_us();
     let slice_us = now1.saturating_sub(t_slice0);
+    if step_log {
+        k_nano::slog_cortex!(
+            "InferQ",
+            "warn",
+            "prefill_step exit layer={} applied={} us={}",
+            st.prefill_layer,
+            applied,
+            slice_us
+        );
+    }
     TELEM_PREFILL_SLICES.fetch_add(1, Ordering::Relaxed);
     TELEM_PREFILL_US.fetch_add(slice_us, Ordering::Relaxed);
     TELEM_LAST_PREFILL_US.store(slice_us, Ordering::Relaxed);
@@ -1315,12 +1362,67 @@ fn run_coarse(st: &mut ActiveState) {
     finish_job(st, &text);
 }
 
+/// Diagnóstico decisivo rate-limited + deadline wall da prova. Roda no topo de
+/// `poll_slice` (antes do latch), então o deadline dispara mesmo com o slice
+/// preso noutro core. Não bloqueia em `ACTIVE` (try_lock — o lock pode estar
+/// segurado por outro core no meio do slice).
+fn slice_diag_and_proof_deadline() {
+    // Deadline wall da prova: nunca deixa `a2_proof_pending` preso para sempre.
+    if a2_proof_pending() {
+        let at = A2_PROOF_DEADLINE_AT_US.load(Ordering::Acquire);
+        let now = k_nano::tsc::now_us();
+        if at != 0 && now != 0 && now >= at {
+            let id = A2_PROOF_ID.load(Ordering::Acquire);
+            if !A2_PROOF_TIMEOUT_LOGGED.swap(true, Ordering::Relaxed) {
+                k_nano::slog_cortex!(
+                    "InferQ",
+                    "warn",
+                    "a2_proof timeout id={} elapsed_us={}",
+                    id,
+                    now.saturating_sub(at.saturating_sub(A2_PROOF_DEADLINE_US))
+                );
+            }
+            a2_note_terminal(id);
+        }
+    }
+    // Diagnóstico: prova qual gate travou no próximo run. n==1 sempre.
+    let n = SLICE_POLL_CALLS.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    if n == 1 || n % SLICE_DIAG_EVERY == 0 {
+        let active = match ACTIVE.try_lock() {
+            Some(g) => g.is_some(),
+            None => true, // lock segurado = slice em curso noutro core
+        };
+        k_nano::slog_cortex!(
+            "InferQ",
+            "warn",
+            "poll_slice diag n={} busy={} ui_yield={} ap={} active={}",
+            n,
+            SLICE_BUSY.load(Ordering::Relaxed) as u8,
+            k_nano::smp::ui_yield_infer() as u8,
+            k_nano::smp::ap_pollable() as u8,
+            active as u8
+        );
+    }
+}
+
 /// Executa no máximo 1 slice. Seguro chamar do InferWorker ou AP idle (sem AGENT_TICK_BUSY).
 /// Retorna true se havia trabalho (claim ou decode).
 pub fn poll_slice() -> bool {
+    // Deadline/diagnóstico antes do latch: independe do SLICE_BUSY.
+    slice_diag_and_proof_deadline();
+
     if SLICE_BUSY.swap(true, Ordering::AcqRel) {
         return false;
     }
+    // RAII: nenhum early-return (ou panic contido) deixa o latch setado.
+    struct SliceGuard;
+    impl Drop for SliceGuard {
+        fn drop(&mut self) {
+            SLICE_BUSY.store(false, Ordering::Release);
+        }
+    }
+    let _busy = SliceGuard;
+
     // Lane A2: 1 inferência de prova por boot (fora do tick; não compete).
     let _ = maybe_submit_a2_proof();
 
@@ -1352,7 +1454,6 @@ pub fn poll_slice() -> bool {
         }
     }
 
-    SLICE_BUSY.store(false, Ordering::Release);
     did
 }
 
@@ -1378,6 +1479,9 @@ mod tests {
         A2_SLOW_SLICES.store(0, Ordering::Release);
         A2_ABSENT_LOGGED.store(false, Ordering::Release);
         A2_SLOT_WAIT_LOGGED.store(false, Ordering::Release);
+        A2_PROOF_DEADLINE_AT_US.store(0, Ordering::Release);
+        A2_PROOF_TIMEOUT_LOGGED.store(false, Ordering::Release);
+        SLICE_POLL_CALLS.store(0, Ordering::Release);
         for i in 0..QUEUE_CAP {
             slots()[i].occupied.store(false, Ordering::Release);
         }
@@ -1523,6 +1627,23 @@ mod tests {
         assert!(a2_proof_pending(), "re-armado bloqueia de novo");
         A2_PROOF_DONE.store(true, Ordering::Release);
         assert!(!a2_proof_pending(), "DONE libera");
+        drain_infer_queue_statics();
+    }
+
+    #[test]
+    fn a2_proof_deadline_releases_gate() {
+        // Patch 4: deadline wall nunca deixa a prova mutar o CortexAgent para sempre.
+        let _g = TEST_LOCK.lock();
+        drain_infer_queue_statics();
+        assert!(k_nano::tsc::now_us() != 0, "host TSC calibrada");
+        A2_PROOF_SUBMITTED.store(true, Ordering::Release);
+        A2_PROOF_DONE.store(false, Ordering::Release);
+        A2_PROOF_ID.store(7, Ordering::Release);
+        A2_PROOF_DEADLINE_AT_US.store(1, Ordering::Release); // deadline no passado
+        assert!(a2_proof_pending(), "armado bloqueia antes do check");
+        slice_diag_and_proof_deadline();
+        assert!(!a2_proof_pending(), "deadline estourado libera o gate");
+        assert!(A2_PROOF_DONE.load(Ordering::Acquire));
         drain_infer_queue_statics();
     }
 

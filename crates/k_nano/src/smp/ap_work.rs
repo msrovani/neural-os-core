@@ -7,7 +7,7 @@
 //! um job no slot por-AP e o IPI de reschedule acorda o AP dormindo.
 
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 /// A wrapper around UnsafeCell that implements Sync.
 /// SAFETY: Access to SLOTS is guarded by atomic HEAD/TAIL indices:
@@ -38,17 +38,73 @@ static PENDING: AtomicU32 = AtomicU32::new(0);
 static DONE: AtomicU32 = AtomicU32::new(0);
 /// Epoch da leva atual — APs só executam se epoch == ACTIVE_EPOCH.
 static ACTIVE_EPOCH: AtomicU32 = AtomicU32::new(0);
+/// Instrumentação: 1 log na transição não-gateado → gateado (evita spam).
+static UI_GATED_LOGGED: AtomicBool = AtomicBool::new(false);
 
 pub fn reset_barrier(pending: u32) {
     DONE.store(0, Ordering::Release);
     PENDING.store(pending, Ordering::Release);
 }
 
-pub fn wait_barrier() {
+/// Espera a barreira até `timeout_us` (relógio monotônico TSC). Retorna `true`
+/// se `DONE >= PENDING`; `false` se o deadline estourou.
+///
+/// Fail-closed: quem chama cai no caminho single-core em vez de wedgar. O
+/// `wait_barrier` sem deadline era a causa-raiz do hang de prefill: um job
+/// perdido em `try_dequeue` deixava `DONE < PENDING` para sempre.
+pub fn wait_barrier_timeout(timeout_us: u64) -> bool {
     let target = PENDING.load(Ordering::Acquire);
-    while DONE.load(Ordering::Acquire) < target {
+    if target == 0 {
+        return true;
+    }
+    let start = crate::tsc::now_us();
+    if start == 0 {
+        // Sem relógio (TSC não calibrável) não há deadline mensurável; bound
+        // por iteração como último recurso — nunca hang silencioso.
+        // ponytail: 500M spins (~segundos) quando TSC ausente; remover se
+        // tsc_hz() virar garantidamente != 0 no boot.
+        let mut iters: u64 = 0;
+        while DONE.load(Ordering::Acquire) < target {
+            if iters >= 500_000_000 {
+                return false;
+            }
+            iters += 1;
+            core::hint::spin_loop();
+        }
+        return true;
+    }
+    let mut last_log_us: u64 = 0;
+    loop {
+        if DONE.load(Ordering::Acquire) >= target {
+            return true;
+        }
+        let elapsed = crate::tsc::now_us().saturating_sub(start);
+        if elapsed >= timeout_us {
+            return false;
+        }
+        // Instrumentação s-prefill: torna barrier lento/wedged visível (a cada ~5s).
+        if elapsed.saturating_sub(last_log_us) >= 5_000_000 {
+            last_log_us = elapsed;
+            crate::slog_nano!(
+                "SMP",
+                "warn",
+                "barrier wait pending={} done={} us={}",
+                PENDING.load(Ordering::Acquire),
+                DONE.load(Ordering::Acquire),
+                elapsed
+            );
+        }
         core::hint::spin_loop();
     }
+}
+
+/// Snapshot de PENDING/DONE para log honesto de estouro de barreira.
+pub fn barrier_pending() -> u32 {
+    PENDING.load(Ordering::Acquire)
+}
+
+pub fn barrier_done() -> u32 {
+    DONE.load(Ordering::Acquire)
 }
 
 pub fn job_done() {
@@ -91,8 +147,16 @@ pub fn try_dequeue() -> Option<(ApJobFn, usize)> {
     }
     unsafe {
         let slot = &(*SLOTS.0.get())[h % MAX_JOBS];
-        let f = slot.f?;
-        Some((f, slot.job_id))
+        match slot.f {
+            Some(f) => Some((f, slot.job_id)),
+            // Slot vazio após o claim (clear_queue/race): conta como done para
+            // nunca deixar `DONE < PENDING` (barreira ilimitada = wedge). O
+            // oracle do hang de prefill provou que o `?` daqui perdia o job.
+            None => {
+                job_done();
+                None
+            }
+        }
     }
 }
 
@@ -192,6 +256,27 @@ pub fn ap_idle_loop(worker_id: usize) -> ! {
             continue;
         }
 
+        // Gate transitório (UI atrasada): `try_infer_poll_slice` retornou false
+        // por `ui_yield_infer` — o AP NÃO está ocioso. Dormir em `hlt`/`mwait`
+        // aqui = lost wakeup: sem novo submit ninguém acorda o AP e o job
+        // ACTIVE nunca retoma (causa-raiz do hang pós-1º-slice). Espera bounded
+        // (~1ms) e re-checa, retomando sozinho quando o flag limpar.
+        if crate::smp::ui_yield_infer() {
+            if !UI_GATED_LOGGED.swap(true, Ordering::Relaxed) {
+                crate::slog_nano!("SMP", "warn", "ap idle gated by ui_yield (bounded retry)");
+            }
+            crate::tsc::sleep_us(1000);
+            continue;
+        }
+        if UI_GATED_LOGGED.load(Ordering::Relaxed) {
+            UI_GATED_LOGGED.store(false, Ordering::Relaxed);
+        }
+        // TOCTOU: o gate pode ter limpado entre o poll acima e a checagem
+        // explícita; sem re-tentar, o AP dormiria com um job ACTIVE e sem wake.
+        if crate::smp::try_infer_poll_slice() {
+            continue;
+        }
+
         if use_mwait {
             unsafe { mwait_idle() };
         } else if x86_64::instructions::interrupts::are_enabled() {
@@ -219,4 +304,66 @@ pub fn notify_idle_wake() {
             MONITOR_FLAG.0.load(Ordering::Relaxed).wrapping_add(1),
             Ordering::Release,
         );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use spin::Mutex;
+
+    /// Statics partilhados entre testes — serializa.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn reset() {
+        HEAD.store(0, Ordering::Release);
+        TAIL.store(0, Ordering::Release);
+        PENDING.store(0, Ordering::Release);
+        DONE.store(0, Ordering::Release);
+    }
+
+    #[test]
+    fn try_dequeue_empty_slot_marks_done() {
+        // Bug do prefill: CAS no HEAD + `slot.f?` retornava None sem job_done()
+        // → DONE < PENDING para sempre (barreira ilimitada). Deve contar o job.
+        let _g = TEST_LOCK.lock();
+        reset();
+        unsafe {
+            (*SLOTS.0.get())[0] = JobSlot {
+                f: None,
+                job_id: 7,
+            };
+        }
+        TAIL.store(1, Ordering::Release);
+        PENDING.store(1, Ordering::Release);
+        let got = try_dequeue();
+        assert!(got.is_none(), "slot vazio → None");
+        assert_eq!(
+            DONE.load(Ordering::Acquire),
+            1,
+            "job perdido não pode deixar DONE<PENDING"
+        );
+        reset();
+    }
+
+    #[test]
+    fn wait_barrier_timeout_expires_fail_closed() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        PENDING.store(1, Ordering::Release);
+        assert!(
+            !wait_barrier_timeout(2_000),
+            "sem DONE a barreira deve estourar (fail-closed)"
+        );
+        DONE.store(1, Ordering::Release);
+        assert!(wait_barrier_timeout(2_000), "DONE>=PENDING fecha");
+        reset();
+    }
+
+    #[test]
+    fn wait_barrier_timeout_no_pending_is_true() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        assert!(wait_barrier_timeout(1), "sem pending não espera");
+        reset();
+    }
 }
