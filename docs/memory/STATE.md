@@ -1,4 +1,4 @@
-# STATE - neural-os-core v1.9.99-s411 - A2 proof 1 token real (lost wakeup AP) + mesh node_id + BPE Falcon3
+# STATE - neural-os-core v1.9.99-s412 - ternary_worker SMP: tile de colunas (1,9x) + AVX2 refutado
 
 #   PISTA ATIVA: s410m — forget cognitivo HITL (/forget) + leitura de conflitos (/conflicts)
 #     via ApprovalGate Escalate (skills sgdb_forget/conflict_resolve); tombstone Superseded
@@ -8,6 +8,17 @@
 #     (s410l CRDT merge_remote; s410k mesh RX batch; s410j compact batch; s410i interop TKLV)
 #   PISTA ANTERIOR: s406 heap auto-fracionado advisory (commit 2b650c56)
 #   Não declarar v2.0.0
+
+## Perf SMP - tile do worker ternario (s412) [OK]
+
+| Item | Estado |
+|------|--------|
+| Tile de colunas (formula de tile de LINHAS) | OK - `clamp(8,256)` -> `clamp(32,256)`; 8 col = 2 B/linha de cache (64 B) |
+| Worker k=2048 n=8192 (Falcon3-1B, m=8) | OK - 204 -> **105 ms** (1,9x); prefill 20,9 -> **12,7 s** (1,65x) |
+| Sweep do piso | OK - 8/16/32/64/128 -> 204/154/105/130/127 ms (32 = fit L1: 16 KB strip + 8 KB x) |
+| AVX2 unpack 2-bit | REFUTADO - **12x PIOR** no alvo soft-float (nao emite AVX2; f32 vira libcall); deletado |
+| Sync SMP ~4,2 ms/dispatch | conhecido - custo FIXO (ternario E f32); bypass no ternario medio = regressao (~4x worker) |
+| Threshold nos tiny f32 (k=8 n=256, 14x ~4,2 ms) | residual (nao implementado - decisao ponytail) |
 
 ## A2 proof - marco zero (s411) [OK]
 

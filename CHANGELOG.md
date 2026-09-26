@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s412] - 2026-09-26 - ternary_worker SMP: tile de colunas (1,9x) + AVX2 refutado
+
+- High: **tile de colunas do worker ternario SMP** - `matmul_tile_rows` e formula de tile de LINHAS aplicada a COLUNAS (devolvia 4; `clamp(8,..)` = 8 colunas = **2 B usados por linha de cache de 64 B**). Sweep do piso no lab (Falcon3-1B, prefill m=8, worker k=2048 n=8192): 8->204 ms, 16->154, **32->105**, 64->130, 128->127; prefill 20,9 -> **12,7 s**. Fix `clamp(32,256)` (1 linha) = **1,9x no worker / 1,65x no prefill** (32 e o fit: strip `k/4` B/col = 16 KB + `x` 8 KB cabe no L1).
+- High: **AVX2 unpack 2-bit refutado** - `tern_tile_avx2` compila para o alvo e passa teste host, mas no metal soft-float e **12x PIOR** (2536 ms; prefill 191 s). `bitnet_avx2.rs:8-12` ja documentava AVX2 host-only: `#[target_feature(enable="avx2")]` nao emite AVX2 no alvo (`Do not know how to split` no vpermd; 256-bit cai em escalar e cada f32 vira libcall). Deletado.
+- Med: **`sync_us` do SMP e custo FIXO** (~4,2 ms/dispatch, constante de `k=2048 n=1024` a `n=131072`, nos caminhos ternario e f32). No decode o sync chega a 2x o trabalho; no prefill o tile fix o levou de 4,2 -> 1,4 ms. Decisao: NAO fazer bypass no ternario medio (workers dividem colunas -> solo ~4x `worker_max_us` = regressao).
+- Gates: `cargo check --release` 0 erros; `cargo build --release -p boot` OK; lab 6 runs PASS.
+- Session: SESSION_412
+
 ## [1.9.99-s411] - 2026-09-26 - A2 proof: 1 token real + lost wakeup do AP + mesh node_id + BPE Falcon3
 
 - High: **a2_proof FECHADO (marco zero)** - FALCON3-3B gerou 1 token real num run QEMU 6G/4c WHPX (`a2_proof done id=2 toks=1 prefill_us=69042824`, evidencia no BOOT.LOG em disco). Causa-raiz do hang (3 runs travados em `layer=1/22`): **lost wakeup** - slice de 4,2 s liga `ui_yield` -> `ap_idle_loop` faz `hlt`; o flag limpa mas ninguem envia IPI (job ja ACTIVE, sem submit novo) -> stall eterno. Fix em `k_nano/smp/ap_work.rs`: AP so dorme sem gate + 2o re-check (fecha TOCTOU); sob gate faz espera bounded de 1 ms.

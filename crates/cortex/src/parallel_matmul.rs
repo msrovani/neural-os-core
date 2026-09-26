@@ -186,7 +186,14 @@ unsafe fn ternary_worker(_job_id: usize, _worker: usize) {
     let t_w0 = k_nano::tsc::now_us();
     let w = &*c.w_ptr;
     // Tile de colunas múltiplo de 4 (byte-alinhado p/ bulk-load 4 pesos/byte).
-    let tile = k_nano::platform_probe::matmul_tile_rows(c.k, c.n).clamp(8, 256) & !3;
+    // `matmul_tile_rows` é fórmula de tile de LINHAS e devolvia 4 → 8 colunas =
+    // 2 B usados por linha de cache (64 B). Sweep do piso em s411 (worker
+    // k=2048 n=8192, Falcon3-1B, prefill m=8): 8→204, 16→154, 32→105, 64→130,
+    // 128→127 ms. 32 é o ótimo — o strip packed (k/4 B por coluna) cabe no L1
+    // junto do x (16 KB + 8 KB = 24 KB de 32); 16 amortece pouco o load de x e 64
+    // já estoura o L1 (32 KB + 8 KB). AVX2 no alvo soft-float é 12× PIOR (256-bit
+    // não emite; f32 vira libcall) — não reintroduzir.
+    let tile = k_nano::platform_probe::matmul_tile_rows(c.k, c.n).clamp(32, 256) & !3;
     // Fase 2d: t-externo (acesso sequencial) + BULK — 1 load de byte por 4 pesos
     // em vez de 1 por peso. O LUT (que ADICIONAVA um load) regrediu 2,1×; este
     // remove 3 de cada 4 loads. Sem tabela, sem SIMD.
