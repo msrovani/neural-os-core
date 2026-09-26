@@ -36,6 +36,15 @@ SP32_DEFAULT_SRC = ROOT / "target" / "hf_cache" / "1bitLLM__bitnet_b1_58-xl" / "
 SP32_DEFAULT_DST = ROOT / "target" / "bpe_vocab_sp32.bin"
 
 
+def _first_id(id2: dict[int, str], *names: str, default: int) -> int:
+    """Primeiro id cujo conteúdo bate com um dos nomes; senão `default`."""
+    for n in names:
+        i = next((k for k, s in id2.items() if s == n), None)
+        if i is not None:
+            return i
+    return default
+
+
 def export(src: Path, dst: Path, *, sp32: bool) -> int:
     if not src.is_file():
         print(f"FAIL: missing {src}", file=sys.stderr)
@@ -55,9 +64,12 @@ def export(src: Path, dst: Path, *, sp32: bool) -> int:
         eos = next((i for i, s in id2.items() if s == "</s>"), 2)
         eot = eos
     else:
-        bos = next((i for i, s in id2.items() if s == "<|begin_of_text|>"), 128000)
-        eos = next((i for i, s in id2.items() if s == "<|end_of_text|>"), 128001)
-        eot = next((i for i, s in id2.items() if s == "<|eot_id|>"), 128009)
+        # Llama-3 (BitNet 2B) usa <|begin_of_text|>/<|end_of_text|>/<|eot_id|>;
+        # Falcon3 usa <|startoftext|> (10) / <|endoftext|> (11). Fallback final
+        # preserva o comportamento Llama quando nenhum dos dois existe.
+        bos = _first_id(id2, "<|begin_of_text|>", "<|startoftext|>", default=128000)
+        eos = _first_id(id2, "<|end_of_text|>", "<|endoftext|>", default=128001)
+        eot = _first_id(id2, "<|eot_id|>", "<|endoftext|>", default=128009)
 
     pieces: list[bytes] = []
     offsets: list[int] = []
@@ -114,12 +126,16 @@ def export(src: Path, dst: Path, *, sp32: bool) -> int:
         f"OK [{mode}] {dst} size={size} ({size/1024:.1f}KB) "
         f"vocab_n={vocab_n} bos={bos} eos={eos} eot={eot} merges={len(merge_pairs)}"
     )
+    # Preview ASCII-safe: o console Windows (cp1252) não imprime `Ġ`/`▁` cru.
+    def _show(tid: int) -> str:
+        return repr(id2.get(tid, "?")).encode("ascii", "backslashreplace").decode("ascii")
+
     if sp32:
         for tid in (1, 2, 288, 433, 18600, 15043):
-            print(f"  id {tid} = {id2.get(tid, '?')!r}")
+            print(f"  id {tid} = {_show(tid)}")
     else:
         for tid in (24108, 30081, 39298, 1788):
-            print(f"  id {tid} = {id2.get(tid, '?')!r}")
+            print(f"  id {tid} = {_show(tid)}")
     return 0
 
 
