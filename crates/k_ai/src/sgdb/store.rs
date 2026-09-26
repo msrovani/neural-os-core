@@ -405,6 +405,13 @@ pub fn checkpoint_working() -> Result<usize, &'static str> {
                 backend
             );
         }
+        // s410f: persiste o snapshot IDX (1.2.0 IDX2 paginado — header +
+        // chunks) pós-consolidação; o próximo boot faz fast-mount pelo
+        // fingerprint em vez do full rebuild dos índices.
+        let now = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+        if super::nsgdb_bridge::persist_index_snapshot_nsgdb(now) {
+            k_nano::slog_kai!("SGDB", "ok", "idx_snapshot persisted (IDX2) tick={}", now);
+        }
     }
     Ok(n)
 }

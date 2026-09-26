@@ -40,7 +40,12 @@ lazy_static! {
 /// Inicializa o NSGDB global. Chamado no boot após TickvLite montado.
 pub fn nsgdb_init() -> usize {
     let adapter = TickvStorageAdapter;
-    let mut db = match neural_sgdb::Sgdb::open(adapter) {
+    // s410f: fast-mount via snapshot IDX (1.2.0/1.2.1) — monta ART/entidades
+    // do snapshot `sys/idx/snapshot` (IDX2 paginado) validando fingerprint;
+    // fallback automático p/ full rebuild se ausente/stale/corrupto
+    // (storage = fonte da verdade, ADR-0009 §1). BQ fica vazio no fast-mount
+    // até o primeiro reinforce — lexical/scan funcionam completos.
+    let mut db = match neural_sgdb::Sgdb::open_with_snapshot(mesh_node_id(), adapter) {
         Ok(db) => db,
         Err(e) => {
             k_nano::slog_kai!("NSGDB", "fail", "FAIL: Sgdb::open error={}", e);
@@ -58,6 +63,11 @@ pub fn nsgdb_init() -> usize {
         n
     );
     n
+}
+
+/// node_id do mesh (fonte: k_nano::net::mesh) — identidade do engine NSGDB.
+fn mesh_node_id() -> u8 {
+    k_nano::net::mesh::node_id()
 }
 
 /// Executa uma operação no NSGDB global. Retorna None se não disponível.
@@ -243,6 +253,108 @@ pub fn remember_fact_nsgdb(fact: &str, now: u64) {
 /// Remember exchange via neural-sgdb (L1 + L2).
 pub fn remember_exchange_nsgdb(user: &str, response: &str) {
     let _ = with_nsgdb(|db| db.remember_exchange(user, response));
+}
+
+// ─── s410f: ganhos reais da 1.2.1 wire no kernel ──────────────────────────
+
+/// Veredito do merge CRDT policy-aware (`Sgdb::merge_remote`, 1.2.0).
+/// Espelha `crdt::MergeVerdict` sem expor o tipo do crate (no_std: p2p
+/// feature OFF) — camada cognitiva só precisa da decisão.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NsMergeVerdict {
+    /// Sem local → adoção limpa.
+    Applied,
+    /// Eco/duplicata/conteúdo igual.
+    Duplicate,
+    /// Local domina causalmente (sem regressão).
+    Stale,
+    /// Clocks concorrentes — conflito PRESERVADO (nunca LWW cego),
+    /// resolvido pela camada superior (política por layer do crate).
+    Conflict,
+    /// Layer não aceita remoto (L0/L1/L6 — MergePolicy::for_layer).
+    Rejected,
+}
+
+/// Converte o MemoryDoc interno (NMD1) para o tipo externo e aplica o merge
+/// CRDT **policy-aware** do neural-sgdb 1.2.x: `MergePolicy::for_layer`
+/// decide por camada (L0/L1 nunca adotam remoto; L2/L3 multi-value; L4
+/// causal-LWW; L5/L7 controlled-LWW), clock happens-before sem regressão,
+/// side-metadata (state/validity) evolui sem tocar o NMD1, e CONFLITO
+/// concorrente é preservado — nunca LWW cego (ADR-0081 C4).
+///
+/// Chamado pelo RX do mesh_knowledge no lugar do put_doc cego.
+pub fn merge_remote_nsgdb(
+    layer: crate::sgdb::MemoryLayer,
+    key: &str,
+    payload: Vec<u8>,
+    clock: crate::sgdb::VectorClock,
+) -> NsMergeVerdict {
+    use neural_sgdb::MemoryLayer as ExtLayer;
+    let ext_layer = match layer {
+        crate::sgdb::MemoryLayer::L0Sensory => ExtLayer::L0Sensory,
+        crate::sgdb::MemoryLayer::L1Working => ExtLayer::L1Working,
+        crate::sgdb::MemoryLayer::L2EpisodicShort => ExtLayer::L2EpisodicShort,
+        crate::sgdb::MemoryLayer::L3EpisodicLong => ExtLayer::L3EpisodicLong,
+        crate::sgdb::MemoryLayer::L4Semantic => ExtLayer::L4Semantic,
+        crate::sgdb::MemoryLayer::L5Procedural => ExtLayer::L5Procedural,
+        crate::sgdb::MemoryLayer::L6Reserved => ExtLayer::L6Reserved,
+        crate::sgdb::MemoryLayer::L7Identity => ExtLayer::L7Identity,
+    };
+    // Clock NMD1 (72B fixos: 8×node + 8×count) → tipo externo (campos pub;
+    // overflow do crate fica vazio — nós >8 não existem no wire NMD1).
+    let ext_clock = neural_sgdb::VectorClock {
+        nodes: clock.nodes,
+        counts: clock.counts,
+        overflow: alloc::vec::Vec::new(),
+    };
+    let doc = neural_sgdb::MemoryDoc::new(ext_layer, key, payload);
+    // clock é reconstruído (NMD1 do wire é a fonte; `new` zera o clock).
+    let doc = neural_sgdb::MemoryDoc {
+        clock: ext_clock,
+        ..doc
+    };
+    let rec = neural_sgdb::MemoryRecord::new(doc, neural_sgdb::MemoryState::Active, None);
+    match with_nsgdb(|db| db.merge_remote(rec)) {
+        Some(Ok(v)) => match v {
+            neural_sgdb::MergeVerdict::Applied => NsMergeVerdict::Applied,
+            neural_sgdb::MergeVerdict::Duplicate => NsMergeVerdict::Duplicate,
+            neural_sgdb::MergeVerdict::Stale => NsMergeVerdict::Stale,
+            neural_sgdb::MergeVerdict::Conflict => NsMergeVerdict::Conflict,
+            neural_sgdb::MergeVerdict::Rejected => NsMergeVerdict::Rejected,
+            _ => NsMergeVerdict::Conflict, // SelfPacket/variantes novas = decisao conservadora
+        },
+        // NSGDB down ou erro: sem merge policy → deixa o caller aplicar
+        // pelo path legado (put_doc) — nunca perde memória por bridge down.
+        _ => NsMergeVerdict::Applied,
+    }
+}
+
+/// Recall híbrido **RRF** (1.1.14+): fusão Reciprocal Rank Fusion dos
+/// pools semântico (BQ) e lexical (BM25) com oversample 4× e k_rrf=60.
+/// Substitui o recall_hybrid (interleaving simples) no path de RAG —
+/// o RRF é o padrão dos motores de busca (Elasticsearch/Weaviate) e não
+/// precisa calibrar pesos entre os dois sinais.
+pub fn recall_hybrid_rrf_bridge(query_emb: &[f32], query_text: &str, k: usize) -> Vec<Hit> {
+    if query_emb.is_empty() || query_text.is_empty() {
+        return Vec::new();
+    }
+    with_nsgdb(|db| db.recall_hybrid_rrf(query_emb, query_text, k).unwrap_or_default())
+        .unwrap_or_default()
+}
+
+/// Delete de memória por (layer, key) — **O(1) reverso** da 1.2.1 (log com
+/// delete O(1) + BQ orphan reclaim proativo). Chamado pelo forget cognitivo.
+pub fn delete_nsgdb(layer: crate::sgdb::MemoryLayer, key: &str) -> bool {
+    let logical = alloc::format!("md/{}/{}", layer.as_str(), key);
+    with_nsgdb(|db| db.delete(&logical).unwrap_or(false)).unwrap_or(false)
+}
+
+/// Persiste o snapshot IDX (1.2.0 IDX2 paginado: header + chunks em
+/// `sys/idx/snapshot/p/<NNNN>` — blob único estourava MAX_VLEN em ~7k
+/// writes). Chamado pós-checkpoint CONSOLIDATE; o próximo boot faz
+/// fast-mount pelo fingerprint em vez do full rebuild.
+pub fn persist_index_snapshot_nsgdb(now: u64) -> bool {
+    with_nsgdb(|db| db.persist_index_snapshot(now).is_ok()).unwrap_or(false)
 }
 
 // ─── Fase 2.5-B: Embedder Seam ───────────────────────────────────────────────

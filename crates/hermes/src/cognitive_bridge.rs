@@ -697,40 +697,9 @@ pub fn init_decision_layer() {
 /// recall (bq+fp32/bq; "empty" = pula), aplica blacklist de injeção e cap de 3.
 /// Memory Interpreter (Fase 3.0-A): consome Hits tipados do neural-sgdb.
 /// Cada Hit tem content_type, path, matched_terms — o LLM interpreta.
-/// Fallback: se NSGDB indisponível, cai para engine interno.
-///
-/// `emb_path`: se `"pseudo"`, **pula** semantic (ruído) e vai lexical (ADR-0008).
-fn gated_rag_context(query_text: &str, q_emb: &[f32], k: usize, emb_path: &str) -> String {
-    let prefer_lexical = emb_path == "pseudo" || q_emb.is_empty();
-    let mut typed_hits = if prefer_lexical {
-        Vec::new()
-    } else {
-        k_ai::sgdb::nsgdb_bridge::recall_typed(q_emb, k)
-    };
-    if typed_hits.is_empty() && !query_text.is_empty() {
-        typed_hits = k_ai::sgdb::nsgdb_bridge::recall_lexical_bridge(query_text, k);
-        if !typed_hits.is_empty() {
-            k_nano::slog_hermes!(
-                "RECALL",
-                "ok",
-                "RAG lexical n={} (prefer_lex={})",
-                typed_hits.len(),
-                prefer_lexical
-            );
-        }
-    }
-    // Engine BQ só com embedding real (pseudo = Hamming lixo)
-    if typed_hits.is_empty() && !q_emb.is_empty() && !prefer_lexical {
-        let internal = k_ai::sgdb::rag_context(q_emb, k.min(3));
-        if !internal.is_empty() {
-            return format!("[MEMORY-RECALL engine]\n{}", internal);
-        }
-        return String::new();
-    }
-    if typed_hits.is_empty() {
-        return String::new();
-    }
-
+/// s410f: renderização compartilhada dos hits tipados (blacklist #314 +
+/// tags path/content_type) — usada pelo path principal e pelo hybrid-RRF.
+fn render_typed_hits(typed_hits: Vec<k_ai::sgdb::nsgdb_bridge::Hit>, _query: &str, _k: usize) -> String {
     // Injection-pattern blacklist (gate #314)
     const DANGEROUS: [&str; 10] = [
         "ignore all", "ignore seus comandos", "you are now",
@@ -778,6 +747,58 @@ fn gated_rag_context(query_text: &str, q_emb: &[f32], k: usize, emb_path: &str) 
     if out.is_empty() { return String::new(); }
     format!("[MEMORY-RECALL top-{}]
 {}", n, out)
+}
+
+/// Fallback: se NSGDB indisponível, cai para engine interno.
+///
+/// `emb_path`: se `"pseudo"`, **pula** semantic (ruído) e vai lexical (ADR-0008).
+fn gated_rag_context(query_text: &str, q_emb: &[f32], k: usize, emb_path: &str) -> String {
+    let prefer_lexical = emb_path == "pseudo" || q_emb.is_empty();
+    // s410f: recall híbrido RRF (neural-sgdb 1.2.x) quando temos embedding
+    // real + texto — fusão Reciprocal Rank Fusion dos pools semântico e
+    // lexical (oversample 4x, k_rrf=60) substitui o fallback serial
+    // semantic→lexical (o RRF é o padrão de motores de busca e não precisa
+    // calibrar pesos entre os sinais).
+    let mut typed_hits = if prefer_lexical {
+        Vec::new()
+    } else {
+        let rrf = k_ai::sgdb::nsgdb_bridge::recall_hybrid_rrf_bridge(q_emb, query_text, k);
+        if !rrf.is_empty() {
+            k_nano::slog_hermes!(
+                "RECALL",
+                "ok",
+                "RAG hybrid-RRF n={} (emb_path={})",
+                rrf.len(),
+                emb_path
+            );
+            return render_typed_hits(rrf, query_text, k);
+        }
+        k_ai::sgdb::nsgdb_bridge::recall_typed(q_emb, k)
+    };
+    if typed_hits.is_empty() && !query_text.is_empty() {
+        typed_hits = k_ai::sgdb::nsgdb_bridge::recall_lexical_bridge(query_text, k);
+        if !typed_hits.is_empty() {
+            k_nano::slog_hermes!(
+                "RECALL",
+                "ok",
+                "RAG lexical n={} (prefer_lex={})",
+                typed_hits.len(),
+                prefer_lexical
+            );
+        }
+    }
+    // Engine BQ só com embedding real (pseudo = Hamming lixo)
+    if typed_hits.is_empty() && !q_emb.is_empty() && !prefer_lexical {
+        let internal = k_ai::sgdb::rag_context(q_emb, k.min(3));
+        if !internal.is_empty() {
+            return format!("[MEMORY-RECALL engine]\n{}", internal);
+        }
+        return String::new();
+    }
+    if typed_hits.is_empty() {
+        return String::new();
+    }
+    render_typed_hits(typed_hits, query_text, k)
 }
 
 

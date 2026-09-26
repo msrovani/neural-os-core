@@ -82,6 +82,22 @@
 - **Medição (host, N=256, 3 runs):** individual 216–529µs vs batch 147–308µs = **speedup 1.47–1.76×** (~1.6× típico). No `nsgdb_init` em si o ganho é **pequeno** (init só faz scan_prefix + open; o put em massa fica no checkpoint do SleepCycle e no rebuild) — o beneficiário real do boot é `rebuild_indices_from_tickv`-adjacente (writes) e o CONSOLIDATE periódico. Ganho estrutural mais importante: 1 aquisição de lock por N writes elimina janela de reordenação entre agentes no SMP.
 - **Verificação:** check 0 erros (rebuild real ~11s); testes k-nano 210, k_ai 57 — 0 fail.
 
+## Adendo s410f — ganhos reais da neural-sgdb 1.2.1 wire no kernel
+
+Os 4 ganhos residuais da 1.2.1 identificados no adendo s410b foram wired:
+
+1. **`merge_remote` (CRDT policy-aware) ✅** — `nsgdb_bridge::merge_remote_nsgdb()` converte o NMD1 do wire (layer/key/payload/VectorClock 72B) para `MemoryRecord` externo e aplica `Sgdb::merge_remote`: `MergePolicy::for_layer` decide por camada (L0/L1 **nunca** adotam remoto; L2/L3 multi-value; L4 causal-LWW com histórico; L5/L7 controlled-LWW), `happens-before` sem regressão, side-metadata (state/validity) evolui sem tocar o NMD1, e **conflito concorrente é PRESERVADO em ConflictRecord** — nunca LWW cego. Consumidor: `mesh_knowledge::on_memory_doc` substituiu o pre-check manual `clock_dominates` + `put_doc` cego (veredictos Applied/Duplicate/Stale/Conflict/Rejected logados). Upstream (neural-sgdb): gate `p2p` removido de `merge_remote` + `pub mod crdt` — o core CRDT é no_std (só o UdpTransport de demo é std).
+
+2. **`recall_hybrid_rrf` ✅** — `nsgdb_bridge::recall_hybrid_rrf_bridge()` expõe a fusão Reciprocal Rank Fúsion (pools semântico 4× oversample + lexical BM25, k_rrf=60). Consumidor: `cognitive_bridge::gated_rag_context` tenta RRF primeiro quando há embedding real + texto (antes: fallback serial semantic→lexical); renderização dos hits extraída para `render_typed_hits` compartilhada (blacklist #314 mantida).
+
+3. **`delete` O(1) reverso ✅** — `nsgdb_bridge::delete_nsgdb(layer, key)` expõe o delete da 1.2.1 (log delete O(1) + `reclaim_bq_orphans` proativo do BQ append-only). Disponível para o forget cognitivo (sem consumidor ainda — honesto no doc).
+
+4. **IDX2 snapshot ✅ (2 direções)** — (a) boot: `nsgdb_init` usa `Sgdb::open_with_snapshot` (fast-mount ART/entidades do snapshot `sys/idx/snapshot` validando fingerprint; fallback automático p/ full rebuild); (b) `checkpoint_working` (SleepCycle CONSOLIDATE) persiste o snapshot pós-consolidação via `persist_index_snapshot_nsgdb` — o próximo boot monta rápido. O IDX2 paginado (header + chunks `sys/idx/snapshot/p/<NNNN>`) resolve o estouro de MAX_VLEN do blob único em ~7k writes.
+
+**Nota put_batch (s410e):** já coberto no adendo anterior — adapter `put_many` sobrescrito + `checkpoint_l0l1` no batch.
+
+**Verificação:** neural-sgdb compila std E no-default-features (no_std); kernel check 0 erros (k-nano/k-hal/cortex/k_ai/hermes/jarbas); testes k-nano 210 / hermes 210 / k_ai 57 — 0 fail.
+
 ## Lições
 - **Dedup com nonce auto-incrementado não dedupa:** qualquer dedupe cuja chave inclui estado que muda a cada emissão (clock.tick(), timestamp, seq) é um filtro morto — fingerprint de CONTEÚDO (hash) é a condição de dedupe válida; memória replicada em mesh precisa dedupe TX+RX.
 - **Estruturas "aprendizes" sem cap = OOM a médio prazo:** observations/requests/marketplace crescem com o runtime; cap + evicção FIFO é o mínimo para hot-path de agente.

@@ -251,7 +251,7 @@ pub fn poll_p2p() {
 /// (a mesma que `get_doc` lê). Decisão documentada: como `put_doc` cobre todas
 /// as camadas L0–L7, NÃO foi preciso o fallback `remember_fact` só para L3.
 fn on_memory_doc(pkt: &AiosTaskPacket, body: &[u8]) {
-    let doc = match MemoryDoc::decode(body) {
+    let mut doc = match MemoryDoc::decode(body) {
         Ok(d) => d,
         Err(e) => {
             slog_hermes!("MeshKnowledge", "warn", "RX MEM decode fail: {}", e);
@@ -281,40 +281,63 @@ fn on_memory_doc(pkt: &AiosTaskPacket, body: &[u8]) {
         );
         return;
     }
-    let apply = match k_ai::sgdb::get_doc(doc.layer, &doc.key) {
-        Ok(None) => true, // key inexistente → aplica
-        Ok(Some(local)) => clock_dominates(&doc.clock, &local.clock, pkt.source_id),
-        Err(_) => true, // engine indisponível → deixa o put decidir
-    };
-    if !apply {
-        slog_hermes!(
-            "MeshKnowledge", "info",
-            "RX MEM drop (clock dominado) layer={} key='{}' node={}",
-            doc.layer.as_str(), doc.key, pkt.source_id
-        );
-        return;
-    }
     let layer = doc.layer.as_str();
     let key = doc.key.clone();
-    match k_ai::sgdb::put_doc(doc) {
-        Ok(_) => {
+    // s410f: merge CRDT policy-aware do neural-sgdb 1.2.x no lugar do
+    // put_doc cego + clock_dominates manual (pre-check removido — o merge
+    // policy já decide: MergePolicy::for_layer por camada, L0/L1 nunca
+    // adotam; L4 causal-LWW; L2/L3 multi-value; conflito PRESERVADO).
+    use k_ai::sgdb::nsgdb_bridge::NsMergeVerdict;
+    match k_ai::sgdb::nsgdb_bridge::merge_remote_nsgdb(
+        doc.layer,
+        &doc.key,
+        core::mem::take(&mut doc.payload),
+        doc.clock.clone(),
+    ) {
+        NsMergeVerdict::Applied => {
             MEMORY_DOCS_SYNCED.fetch_add(1, Ordering::Relaxed);
             LAST_RX_HASH[slot].store(h, Ordering::Relaxed);
             slog_hermes!(
                 "MeshKnowledge", "info",
-                "RX MEM aplicada layer={} key='{}' node={}",
+                "RX MEM aplicada (merge) layer={} key='{}' node={}",
                 layer, key, pkt.source_id
             );
         }
-        Err(e) => slog_hermes!("MeshKnowledge", "warn", "RX MEM put FAIL: {}", e),
+        NsMergeVerdict::Duplicate | NsMergeVerdict::Stale => {
+            // Sem regressão / eco: registra hash p/ anti-bloat e ignora.
+            LAST_RX_HASH[slot].store(h, Ordering::Relaxed);
+            slog_hermes!(
+                "MeshKnowledge", "info",
+                "RX MEM merge={} layer={} key='{}' (sem regressão)",
+                if matches!(NsMergeVerdict::Duplicate, NsMergeVerdict::Duplicate) { "dup" } else { "stale" },
+                layer, key
+            );
+        }
+        NsMergeVerdict::Conflict => {
+            // Conflito preservado no NSGDB (ConflictRecord) — camada
+            // cognitiva decide depois; NUNCA overwrite silencioso (ADR-0081).
+            LAST_RX_HASH[slot].store(h, Ordering::Relaxed);
+            slog_hermes!(
+                "MeshKnowledge", "warn",
+                "RX MEM CONFLICT preservado layer={} key='{}' node={}",
+                layer, key, pkt.source_id
+            );
+        }
+        NsMergeVerdict::Rejected => {
+            slog_hermes!(
+                "MeshKnowledge", "info",
+                "RX MEM rejeitada (layer local-only) layer={} key='{}'",
+                layer, key
+            );
+        }
     }
 }
 
 /// O clock recebido domina o local se o count do node_id do remetente no clock
 /// recebido for maior que no clock local (comparação por nó, não total).
-fn clock_dominates(remote: &VectorClock, local: &VectorClock, sender: u8) -> bool {
-    clock_count(remote, sender) > clock_count(local, sender)
-}
+// s410f: clock_dominates/clock_count removidos — a decisão causal virou
+// responsabilidade do merge policy-aware do neural-sgdb 1.2.x
+// (merge_remote_nsgdb: happens-before + MergePolicy::for_layer).
 
 fn clock_count(vc: &VectorClock, node: u8) -> u64 {
     for i in 0..8 {
