@@ -154,6 +154,26 @@ O `crdt_sync` (path `CRDT\\0`, wire legado da Fase C) usava o merge LWW interno 
 - **Bughunt:** o 1º teste colocava lixo no MEIO do blob — o iterador fail-stop parava ali e o frame seguinte nunca era aplicado (assert "missing"). O cenário real de corrupção é truncamento no FIM; corrigido o teste (e documentado o contrato fail-stop do iterador).
 - **Verificação:** check 0 erros (7 crates); testes k_ai 63, hermes 230, k-nano 213, k-hal 56, cortex 90, jarbas 107 — 0 fail.
 
+## Adendo s410m — forget cognitivo HITL (/forget) + conflitos (/conflicts)
+
+**Objetivo:** conectar `delete_nsgdb` ao fluxo de forget cognitivo com approval gate (HITL) e expor os ConflictRecords do NSGDB para resolução pela camada cognitiva.
+
+**Bridge k_ai (`nsgdb_bridge`):**
+- `forget_nsgdb(layer, key) -> Result<(bool,bool), &str>` — tombstone `MemoryState::Superseded` ANTES do delete físico (o delete só apaga se o tombstone foi gravado); fail-closed se NSGDB down (nunca "apagado" fantasma).
+- `conflicts_nsgdb() -> Vec<ConflictSummary>` (conflict_id, subject, n_candidates, n_nodes, open, resolved_winner) + `open_conflicts_nsgdb()` + `open_conflicts_count_nsgdb()` + `resolve_conflict_nsgdb(conflict_id, winner_vid) -> Result<(), &str>` (delega ao `Sgdb::resolve_conflict` — idempotente, importa vencedor, perdedores viram parents).
+
+**Comandos hermes:**
+- `/forget <layer> <key>` → política de layer: só L2–L5 (episodic/semantic/procedural/RAG) são forgetable; L0/L1/L6/L7 negados. HITL `ApprovalLevel::Escalate` com skill `sgdb_forget` → `forget::register_pending(id, layer, key)`.
+- `/conflicts` → lista particionada abertos/resolvidos (candidatos + status, `n/a` honesto). `/conflicts resolve <id> <winner>` → HITL Escalate skill `conflict_resolve` → `forget::register_conflict_pending(id, cid, winner)`.
+- **Hooks no Approve/Deny genéricos:** skill `sgdb_forget` → `forget_nsgdb` + AUDIT_TRAIL; skill `conflict_resolve` → `resolve_conflict_nsgdb` + AUDIT_TRAIL; Deny limpa pendências (sem execução, sem vazamento de registro).
+- `/forget` removido do alias de `rm_skill` no parser (colisão de comando).
+
+**Registry pendente (`hermes::forget`, NOVO):** `PENDING_FORGETS`/`PENDING_CONFLICTS` `Mutex<Vec>` com CAP 32 FIFO (mesma doutrina runtime-hygiene s410d — toda estrutura de runtime crescente precisa cap + evicção determinística). `register_pending`/`pending_target`/`clear_pending` + pares de conflito. 3 testes.
+
+**Testes (hermes 235 total, +5):** `forget_nsgdb_deletes_and_tombstones` (seed → forget → get None; key inexistente = phys=false, sem erro) e `conflicts_listing_and_resolve_roundtrip` (conflito sintético via 2 `merge_remote` com clocks concorrentes nós 3/4; resolve com id inexistente = Err honesto). Catálogo slash (`hitl_ui.rs`) com /forget e /conflicts.
+
+**Verificação:** check 0 erros (7 crates); testes k-nano 213, k_ai 63, hermes 235, k-hal 56, cortex 91, jarbas 107 — 0 fail.
+
 ## Lições
 - **Formato de blob sem length prefix não é iterável (SESSION_410 s410l):** NMD1 não carrega tamanho total — para concatenar docs num blob, cada frame precisa de `[len u32le][payload]`; e a corrupção no MEIO (len absurdo) obriga a política do parser: fail-stop (aplica prefixo) vs resync (procura próximo magic). Fail-stop é honesto e simples, mas o teste deve exercitar o truncamento onde ele realmente acontece (fim do blob/corte de rede).
 - **Guard de recursão precisa de telemetria monotônica separada da janela de log (SESSION_410 s410j):** o contador de "GC skipado" era drenado (swap) pelo log do próprio compact antes do teste ler — total monotônico (fetch_add, nunca drenado) + janela efêmera são duas variáveis, não uma. E o guard de re-entrada deve checar ANTES de qualquer política global (GC_SUSPENDED) — guard é invariant, política é configuração.
@@ -163,4 +183,7 @@ O `crdt_sync` (path `CRDT\\0`, wire legado da Fase C) usava o merge LWW interno 
 - **Dedup com nonce auto-incrementado não dedupa:** qualquer dedupe cuja chave inclui estado que muda a cada emissão (clock.tick(), timestamp, seq) é um filtro morto — fingerprint de CONTEÚDO (hash) é a condição de dedupe válida; memória replicada em mesh precisa dedupe TX+RX.
 - **Estruturas "aprendizes" sem cap = OOM a médio prazo:** observations/requests/marketplace crescem com o runtime; cap + evicção FIFO é o mínimo para hot-path de agente.
 - **Warn repetido por tick também é ruído de dínamo:** além de mentir, o warn constante alimenta loops de observação (I4→LLM) — sev honesta (`trace` para cache) + cortar o loop de feedback resolve os dois.
-- **Amplificação Master: intents de saúde geradas pelo próprio agente:** `should_escalate_health_to_llm` escalando `sched=Violation/Warning` gera intents de "diagnostique e corrija" em loop (7× vs workers); escalada é para saúde *nova*, não para o eco da própria decis\u00e3o.
+- **Amplificação Master: intents de saúde geradas pelo próprio agente:** `should_escalate_health_to_llm` escalando `sched=Violation/Warning` gera intents de "diagnostique e corrija" em loop (7× vs workers); escalada é para saúde *nova*, não para o eco da própria decisão.
+- **`let-else` não serve em handler que é expressão (SESSION_410 s410m):** handler de comando em agents.rs é uma expressão que produz String — `let Some(x) = opt else { return ... }` dá mismatch (`return` sai da função do tick, não só do branch). Padrão: `match opt { None => ..., Some(x) => { ... } }`. Custou 3 rounds de erro de delimitador — delimitadores de match aninhado em expressão grande merecem fechamento imediato.
+- **Delete sem tombstone prévio = forget que o mesh ressuscita:** se o RX replicado re-chega a um peer que ainda tem o doc, o delete físico sozinho é apagado de volta no próximo sync — tombstone `Superseded` ANTES do `delete` dá ao CRDT uma ordem parcial honesta. E fail-closed: NSGDB down ⇒ `(false,false)` + Err, nunca "apagado OK" fantasma (regra SESSION_354).
+- **Registry pendente de approval precisa do mesmo cap que o gate:** o ApprovalGate tem CAP 64 FIFO, mas o registro side-car (PENDING_FORGETS) sem cap próprio cresceria para sempre se pedidos acumulam sem resolve/deny — cap 32 FIFO espelhado, mesma doutrina s410d.

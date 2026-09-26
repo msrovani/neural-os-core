@@ -1,8 +1,9 @@
 # STATE - neural-os-core v1.9.99-s411 - A2 proof 1 token real (lost wakeup AP) + mesh node_id + BPE Falcon3
 
-#   PISTA ATIVA: s410l — política CRDT unificada: crdt_sync RX também via merge_remote
-#     (blob CRDT\0 = frames NMD1; master aplica conteúdo; fallback LWW p/ wire legado);
-#     s410k mesh RX batch; s410j compact batch+guard; s410i CI interop TKLV; s410h motor único
+#   PISTA ATIVA: s410m — forget cognitivo HITL (/forget) + leitura de conflitos (/conflicts)
+#     via ApprovalGate Escalate (skills sgdb_forget/conflict_resolve); tombstone Superseded
+#     antes do delete físico; fail-closed NSGDB down; registry pendente cap 32 FIFO
+#     (s410l CRDT merge_remote; s410k mesh RX batch; s410j compact batch; s410i interop TKLV)
 #   PISTA ANTERIOR: s406 heap auto-fracionado advisory (commit 2b650c56)
 #   Não declarar v2.0.0
 

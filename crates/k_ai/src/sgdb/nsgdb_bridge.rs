@@ -351,10 +351,99 @@ pub fn recall_hybrid_rrf_bridge(query_emb: &[f32], query_text: &str, k: usize) -
 }
 
 /// Delete de memória por (layer, key) — **O(1) reverso** da 1.2.1 (log com
-/// delete O(1) + BQ orphan reclaim proativo). Chamado pelo forget cognitivo.
+/// delete O(1) + BQ orphan reclaim proativo). Chamado pelo forget cognitivo
+/// APÓS o approval gate (s410m — HITL /forget; nunca chamar direto).
 pub fn delete_nsgdb(layer: crate::sgdb::MemoryLayer, key: &str) -> bool {
     let logical = alloc::format!("md/{}/{}", layer.as_str(), key);
     with_nsgdb(|db| db.delete(&logical).unwrap_or(false)).unwrap_or(false)
+}
+
+/// s410m — Forget cognitivo (HITL): delete físico + tombstone lógico na
+/// camada superior (soft-delete `Superseded`) — o slot para de aparecer no
+/// recall MAS a evidência/história sobrevive para CRDT/audit. Retorna
+/// `(fisico, logico)`:
+/// - `Ok((true, true))` — doc existia: apagado + marcado Superseded.
+/// - `Ok((true, false))` — apagado (tombstone sem efeito — doc já ido).
+/// - `Ok((false, _))` — doc não existia (nada a apagar).
+/// - `Err(_)` — NSGDB indisponível (NÃO apagar = fail-closed).
+pub fn forget_nsgdb(
+    layer: crate::sgdb::MemoryLayer,
+    key: &str,
+) -> Result<(bool, bool), &'static str> {
+    use neural_sgdb::MemoryLayer as ExtLayer;
+    let ext_layer = match layer {
+        crate::sgdb::MemoryLayer::L0Sensory => ExtLayer::L0Sensory,
+        crate::sgdb::MemoryLayer::L1Working => ExtLayer::L1Working,
+        crate::sgdb::MemoryLayer::L2EpisodicShort => ExtLayer::L2EpisodicShort,
+        crate::sgdb::MemoryLayer::L3EpisodicLong => ExtLayer::L3EpisodicLong,
+        crate::sgdb::MemoryLayer::L4Semantic => ExtLayer::L4Semantic,
+        crate::sgdb::MemoryLayer::L5Procedural => ExtLayer::L5Procedural,
+        crate::sgdb::MemoryLayer::L6Reserved => ExtLayer::L6Reserved,
+        crate::sgdb::MemoryLayer::L7Identity => ExtLayer::L7Identity,
+    };
+    with_nsgdb(|db| {
+        // (a) tombstone lógico ANTES do físico: o doc precisa existir para
+        // set_state. Se o físico apagar primeiro, o tombstone falha.
+        let logical = alloc::format!("md/{}/{}", layer.as_str(), key);
+        let tomb_ok = db.set_state(&logical, neural_sgdb::MemoryState::Superseded).is_ok();
+        // (b) delete físico (O(1) + BQ reclaim proativo do crate).
+        let phys = db.delete(&logical).unwrap_or(false);
+        Ok((phys, tomb_ok))
+    })
+    .unwrap_or(Err("nsgdb unavailable"))
+}
+
+// ─── s410m: ConflictRecords — leitura/resolução pela camada cognitiva ────
+
+/// Snapshot compacto de um conflito para consumo HITL (sem record bytes —
+/// evidência completa fica no core; a decisão só precisa de quem/qué/quando).
+#[derive(Debug, Clone)]
+pub struct ConflictSummary {
+    pub conflict_id: String,
+    pub subject: String,
+    pub candidates: Vec<String>,
+    pub nodes: Vec<u8>,
+    pub open: bool,
+    pub resolved_winner: Option<String>,
+}
+
+/// Lista conflitos (Open + Resolved) como summaries — leitura cognitiva/HITL.
+pub fn conflicts_nsgdb() -> Vec<ConflictSummary> {
+    with_nsgdb(|db| {
+        db.conflicts()
+            .into_iter()
+            .map(|c| ConflictSummary {
+                conflict_id: c.conflict_id,
+                subject: c.subject,
+                candidates: c.candidates,
+                nodes: c.nodes,
+                open: c.status == neural_sgdb::ConflictStatus::Open,
+                resolved_winner: c.resolved_winner,
+            })
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Conflicts abertos apenas (o que a camada cognitiva precisa decidir).
+pub fn open_conflicts_nsgdb() -> Vec<ConflictSummary> {
+    conflicts_nsgdb().into_iter().filter(|c| c.open).collect()
+}
+
+/// Contagem de conflitos abertos — para HUD/health gate.
+pub fn open_conflicts_count_nsgdb() -> usize {
+    open_conflicts_nsgdb().len()
+}
+
+/// Resolução EXPLÍCITA de conflito (HITL): importa o vencedor por
+/// `version_id`, registra linhagem (perdedores viram parents) e marca
+/// Resolved. O core não decide — só executa a decisão da camada cognitiva.
+pub fn resolve_conflict_nsgdb(conflict_id: &str, winner_vid: &str) -> Result<(), &'static str> {
+    with_nsgdb(|db| {
+        db.resolve_conflict(conflict_id, winner_vid)
+            .map_err(|_| "resolve_conflict fail")
+    })
+    .unwrap_or(Err("nsgdb unavailable"))
 }
 
 /// Persiste o snapshot IDX (1.2.0 IDX2 paginado: header + chunks em

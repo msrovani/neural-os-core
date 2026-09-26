@@ -352,6 +352,11 @@ pub enum Command {
     Ring3(String),
     /// ADR-0106: status | theta <auto> <review> | persist
     Decisions(String),
+    /// s410m — Forget cognitivo HITL: /forget <layer> <key> | /forget approve <id>
+    /// | /forget deny <id>
+    Forget(String),
+    /// s410m — ConflictRecords: /conflicts (lista abertos) | /conflict resolve <id> <winner_vid>
+    Conflicts(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -706,8 +711,18 @@ pub fn parse_command(line: &str) -> Command {
             let desc = parts.next().unwrap_or("").trim().to_string();
             return Command::Learn(arg, desc);
         }
-        if name.eq_ignore_ascii_case("rm_skill") || name.eq_ignore_ascii_case("remove_skill") || name.eq_ignore_ascii_case("forget") {
+        if name.eq_ignore_ascii_case("rm_skill") || name.eq_ignore_ascii_case("remove_skill") {
             return Command::RmSkill(parts.next().unwrap_or("").trim().to_string());
+        }
+        // s410m: /forget é o forget cognitivo HITL (delete de memória SGDB),
+        // distinto de /rm_skill (skills do registry).
+        if name.eq_ignore_ascii_case("forget") {
+            let arg = parts.next().unwrap_or("").trim().to_string();
+            return Command::Forget(arg);
+        }
+        if name.eq_ignore_ascii_case("conflicts") || name.eq_ignore_ascii_case("conflict") {
+            let arg = parts.next().unwrap_or("").trim().to_string();
+            return Command::Conflicts(arg);
         }
         if name.eq_ignore_ascii_case("reload_skills") || name.eq_ignore_ascii_case("reset_skills") {
             return Command::ReloadSkills;

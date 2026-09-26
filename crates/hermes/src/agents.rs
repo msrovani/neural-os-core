@@ -1239,6 +1239,8 @@ impl Agent for HermesAgent {
                 hermes::Command::Install => "Install",
                 hermes::Command::Ring3(_) => "Ring3",
                 hermes::Command::Decisions(_) => "Decisions",
+                hermes::Command::Forget(_) => "Forget",
+                hermes::Command::Conflicts(_) => "Conflicts",
                 hermes::Command::Chat(_) => "Chat",
                 hermes::Command::ModelSwap(_) => "ModelSwap",
             };
@@ -1452,7 +1454,75 @@ impl Agent for HermesAgent {
                         let now = k_nano::interrupts::TIMER_TICKS
                             .load(core::sync::atomic::Ordering::Relaxed)
                             as u64;
-                        if skill_name.as_deref() == Some("llm_generate") {
+                        if skill_name.as_deref() == Some("sgdb_forget") {
+                            // s410m: forget HITL — executa o delete físico + tombstone.
+                            let target = crate::forget::pending_target(&id.to_string());
+                            crate::forget::clear_pending(&id.to_string());
+                            match target {
+                                None => alloc::format!("Requisicao #{} aprovada. [FORGET] alvo não registrado (bug) — nada apagado.", id),
+                                Some((layer, key)) => {
+                                match k_ai::sgdb::nsgdb_bridge::forget_nsgdb(layer, &key) {
+                                    Ok((phys, tomb)) => {
+                                        let detail = alloc::format!(
+                                            "forget {} {} phys={} tomb={}",
+                                            layer.as_str(), key, phys, tomb
+                                        );
+                                        crate::globals::AUDIT_TRAIL.lock().push(
+                                            now, "hermes", "forget", detail.as_bytes(),
+                                        );
+                                        if phys {
+                                            alloc::format!(
+                                                "Requisicao #{} aprovada. [FORGET] '{} {}' apagado (tombstone={}). Auditado.",
+                                                id, layer.as_str(), key, tomb
+                                            )
+                                        } else {
+                                            alloc::format!(
+                                                "Requisicao #{} aprovada. [FORGET] '{} {}' não existia.",
+                                                id, layer.as_str(), key
+                                            )
+                                        }
+                                    }
+                                    Err(e) => {
+                                        // Fail-closed: gate aprovado mas NSGDB down → nada apagado.
+                                        alloc::format!(
+                                            "Requisicao #{} aprovada. [FORGET] FAIL ({}): '{} {}' NÃO apagado.",
+                                            id, e, layer.as_str(), key
+                                        )
+                                    }
+                                }
+                                }
+                            }
+                        } else if skill_name.as_deref() == Some("conflict_resolve") {
+                            // s410m: resolução de conflito HITL — importa o vencedor
+                            // por version_id (core executa; a decisão foi da camada cognitiva).
+                            let decision = crate::forget::pending_conflict(&id.to_string());
+                            crate::forget::clear_conflict_pending(&id.to_string());
+                            match decision {
+                                None => alloc::format!("Requisicao #{} aprovada. [CONFLICT] decisão não registrada (bug).", id),
+                                Some((conflict_id, winner_vid)) => {
+                                match k_ai::sgdb::nsgdb_bridge::resolve_conflict_nsgdb(&conflict_id, &winner_vid) {
+                                    Ok(()) => {
+                                        let tick = k_nano::interrupts::TIMER_TICKS
+                                            .load(core::sync::atomic::Ordering::Relaxed) as u64;
+                                        let detail = alloc::format!("resolve {} winner={}", conflict_id, winner_vid);
+                                        crate::globals::AUDIT_TRAIL.lock().push(
+                                            tick, "hermes", "conflict_resolve", detail.as_bytes(),
+                                        );
+                                        alloc::format!(
+                                            "Requisicao #{} aprovada. [CONFLICT] {} resolvido — vencedor {} importado (linhagem preservada). Auditado.",
+                                            id, conflict_id, winner_vid
+                                        )
+                                    }
+                                    Err(e) => {
+                                        alloc::format!(
+                                            "Requisicao #{} aprovada. [CONFLICT] FAIL ({}): conflito {} NÃO resolvido.",
+                                            id, e, conflict_id
+                                        )
+                                    }
+                                }
+                                }
+                            }
+                        } else if skill_name.as_deref() == Some("llm_generate") {
                             crate::cognitive_bridge::grant_llm_after_approve(1, now);
                             alloc::format!(
                                 "Requisicao #{} aprovada. [TRUST] llm_generate OK — reenvie o chat",
@@ -1492,7 +1562,21 @@ impl Agent for HermesAgent {
                     }
                 }
                 hermes::Command::Deny(id) => {
+                    let skill_name = {
+                        let gate = APPROVAL_GATE.lock();
+                        gate.pending()
+                            .iter()
+                            .find(|r| r.id == id)
+                            .map(|r| r.skill.clone())
+                    };
                     let gate_ok = APPROVAL_GATE.lock().resolve(id, false);
+                    // s410m: limpar pendências de forget/conflict do gate negado.
+                    if skill_name.as_deref() == Some("sgdb_forget") {
+                        crate::forget::clear_pending(&id.to_string());
+                    }
+                    if skill_name.as_deref() == Some("conflict_resolve") {
+                        crate::forget::clear_conflict_pending(&id.to_string());
+                    }
                     let _ = crate::package_hub::PACKAGE_HUB.lock().deny_pending(id);
                     if gate_ok {
                         alloc::format!("Requisicao #{} negada.", id)
@@ -1819,6 +1903,150 @@ impl Agent for HermesAgent {
                         String::from(
                             "Decisions: status | theta <a> <r> | persist | export | correct <expert> <text>",
                         )
+                    }
+                }
+                hermes::Command::Forget(ref arg) => {
+                    let lower = arg.trim().to_ascii_lowercase();
+                    let mut parts = lower.split_whitespace();
+                    let sub = parts.next().unwrap_or("");
+                    // (1) Resolução HITL: /forget approve <req_id> | /forget deny <req_id>
+                    if sub == "approve" || sub == "deny" {
+                        let approve = sub == "approve";
+                        let req_id: u64 = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+                        if req_id == 0 {
+                            alloc::format!("[FORGET] usage: /forget {} <request-id>", sub)
+                        } else {
+                            // Recupera o alvo pendente registrado no gate.
+                            let target = crate::forget::pending_target(&req_id.to_string());
+                            let gate_ok = APPROVAL_GATE.lock().resolve(req_id, approve);
+                            crate::forget::clear_pending(&req_id.to_string());
+                            if !gate_ok {
+                                alloc::format!("[FORGET] Requisição #{} não encontrada ou já resolvida.", req_id)
+                            } else if !approve {
+                                let _ = target;
+                                alloc::format!("[FORGET] #{} NEGADO — memória preservada (nada foi apagado).", req_id)
+                            } else {
+                                match target {
+                                    None => alloc::format!("[FORGET] #{} aprovado mas alvo não registrado (bug) — nada apagado.", req_id),
+                                    Some((layer, key)) => {
+                                    // Gate aprovado → delete físico + tombstone lógico.
+                                    match k_ai::sgdb::nsgdb_bridge::forget_nsgdb(layer, &key) {
+                                        Ok((phys, tomb)) => {
+                                            let tick = k_nano::interrupts::TIMER_TICKS
+                                                .load(core::sync::atomic::Ordering::Relaxed) as u64;
+                                            let detail = alloc::format!("forget {} {} phys={} tomb={}", layer.as_str(), key, phys, tomb);
+                                            crate::globals::AUDIT_TRAIL.lock().push(tick, "hermes", "forget", detail.as_bytes());
+                                            if phys {
+                                                alloc::format!("[FORGET] '{} {}' apagado (tombstone={}). Auditado.", layer.as_str(), key, tomb)
+                                            } else {
+                                                alloc::format!("[FORGET] '{} {}' não existia (nada apagado).", layer.as_str(), key)
+                                            }
+                                        }
+                                        Err(e) => {
+                                            // Fail-closed: gate aprovado mas NSGDB down → nada apagado.
+                                            alloc::format!("[FORGET] FAIL ({}): '{} {}' NÃO apagado — nada foi perdido silenciosamente.", e, layer.as_str(), key)
+                                        }
+                                    }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // (2) Pedido: /forget <Lx> <key> → HITL Escalate (nunca apagar direto).
+                        let a = arg.trim();
+                        let mut tok = a.split_whitespace();
+                        let layer_s = tok.next().unwrap_or("").trim();
+                        let key = a.trim_start_matches(layer_s).trim();
+                        if layer_s.is_empty() || key.is_empty() {
+                            String::from(
+                                "[FORGET] usage: /forget <L2..L5> <key> | /forget approve|deny <request-id>\n")
+                        } else {
+                            let layer = match layer_s.to_ascii_uppercase().as_str() {
+                                "L2" => Some(k_ai::sgdb::MemoryLayer::L2EpisodicShort),
+                                "L3" => Some(k_ai::sgdb::MemoryLayer::L3EpisodicLong),
+                                "L4" => Some(k_ai::sgdb::MemoryLayer::L4Semantic),
+                                "L5" => Some(k_ai::sgdb::MemoryLayer::L5Procedural),
+                                // L0/L1 voláteis locais; L6/L7 identidade — forget negado por política.
+                                _ => None,
+                            };
+                            match layer {
+                                None => alloc::format!("[FORGET] camada '{}' não esquecível (L0/L1 voláteis, L6/L7 identidade). Use L2..L5.", layer_s),
+                                Some(layer) => {
+                                    // Hitl Escalate + registra alvo para a resolução.
+                                    let id = APPROVAL_GATE.lock().request(
+                                        "sgdb_forget",
+                                        "hermes",
+                                        &alloc::format!("apagar memória {} '{}'", layer.as_str(), key),
+                                        crate::approval::ApprovalLevel::Escalate,
+                                    );
+                                    crate::forget::register_pending(&id.to_string(), layer, key);
+                                    alloc::format!(
+                                        "[FORGET] HITL Escalate #{} — apagar {} '{}'? /forget approve {} ou /forget deny {}",
+                                        id, layer.as_str(), key, id, id
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                hermes::Command::Conflicts(ref arg) => {
+                    let lower = arg.trim().to_ascii_lowercase();
+                    let mut parts = lower.split_whitespace();
+                    let sub = parts.next().unwrap_or("");
+                    if sub == "resolve" {
+                        // /conflicts resolve <conflict_id> <winner_vid>
+                        let cid = parts.next().unwrap_or("");
+                        let winner = arg.trim()
+                            .split_whitespace()
+                            .nth(2)
+                            .unwrap_or("");
+                        if cid.is_empty() || winner.is_empty() {
+                            String::from("[CONFLICT] usage: /conflicts resolve <conflict_id> <winner_version_id>")
+                        } else {
+                            // HITL Escalate: a resolução é decisão da camada cognitiva com approval.
+                            // A execução real acontece no Approve/Deny genérico (skill "conflict_resolve"
+                            // → resolve_conflict_nsgdb + AUDIT_TRAIL).
+                            let id = APPROVAL_GATE.lock().request(
+                                "conflict_resolve",
+                                "hermes",
+                                &alloc::format!("resolver conflito {} vencedor {}", cid, winner),
+                                crate::approval::ApprovalLevel::Escalate,
+                            );
+                            crate::forget::register_conflict_pending(&id.to_string(), cid, winner);
+                            alloc::format!(
+                                "[CONFLICT] HITL Escalate #{} — resolver {} com vencedor {}? /approve {} ou /deny {}",
+                                id, cid, winner, id, id
+                            )
+                        }
+                    } else {
+                        // Lista: abertos primeiro, com candidatos e status.
+                        let all = k_ai::sgdb::nsgdb_bridge::conflicts_nsgdb();
+                        if all.is_empty() {
+                            String::from("[CONFLICT] nenhum conflito registrado.")
+                        } else {
+                            let (open, resolved): (alloc::vec::Vec<_>, alloc::vec::Vec<_>) =
+                                all.into_iter().partition(|c| c.open);
+                            let mut s = alloc::format!(
+                                "[CONFLICT] {} abertos, {} resolvidos\n",
+                                open.len(),
+                                resolved.len()
+                            );
+                            for c in &open {
+                                s.push_str(&alloc::format!(
+                                    "  OPEN {} subject='{}' candidatos={:?} nós={:?}\n",
+                                    c.conflict_id, c.subject, c.candidates, c.nodes
+                                ));
+                            }
+                            for c in resolved.iter().take(8) {
+                                s.push_str(&alloc::format!(
+                                    "  RESOLVED {} vencedor={:?}\n",
+                                    c.conflict_id,
+                                    c.resolved_winner.as_deref().unwrap_or("?")
+                                ));
+                            }
+                            s.push_str("resolver: /conflicts resolve <id> <winner_version_id> (HITL)");
+                            s
+                        }
                     }
                 }
                 hermes::Command::AddSkill(ref name, ref desc) => {

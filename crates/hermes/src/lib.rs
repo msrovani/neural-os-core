@@ -11,6 +11,10 @@ extern crate alloc;
 
 pub mod agents;
 pub mod approval;
+// s410m: forget cognitivo HITL — registry de alvos pendentes do approval gate.
+pub mod forget;
+#[cfg(test)]
+mod forget_tests;
 pub mod hitl_ui;
 pub mod apps;
 pub mod browser_agent;

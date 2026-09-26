@@ -90,6 +90,10 @@ pub fn slash_catalog() -> &'static str {
   /approve <id>         HITL sim\n\
   /deny <id>            HITL não\n\
   /pending              listar aprovações\n\
+  /forget <L2..L5> <k>  esquecer memória (HITL Escalate)\n\
+  /forget approve|deny <id>\n\
+  /conflicts            conflitos CRDT abertos (s410m)\n\
+  /conflicts resolve <id> <vid>  HITL\n\
   /ring3 status|approve Onda 6 Ring3 (ADR-0102 HITL)\n\
   /mcp tools/list | /mcp {json-rpc}\n\
   /add_skill /learn /rm_skill /reload_skills\n\
