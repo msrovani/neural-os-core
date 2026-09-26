@@ -101,7 +101,21 @@ Os 4 ganhos residuais da 1.2.1 identificados no adendo s410b foram wired:
 ## Adendo s410g — versão real no slog do nsgdb_init
 - `neural_sgdb::pub const VERSION` = `env!("CARGO_PKG_VERSION")` (upstream 7c9bbb2); `nsgdb_init` loga `OK — neural-sgdb v{VERSION} via TickvStorageAdapter (records=N)` (kernel c7462b26). Fecho do item "ideia: slog reportar a versão compilada" do adendo s410b — logs sempre reportam a versão REAL, não a de doc/comentário (lição SESSION_329/401).
 
+## Adendo s410h — CONSOLIDAÇÃO: motor único NSGDB (AiosDatabaseEngine eliminado)
+
+Fecho do dual-truth identificado no adendo s410b: **o `AiosDatabaseEngine` interno de `k_ai::sgdb::engine` foi deletado** — toda escrita/leitura de MemoryDoc passa pelo motor externo `neural-sgdb` via `nsgdb_bridge`/`store`. Uma verdade só (ADR-0063 §cut; regra "emagrecer": lógica de domínio nas crates, nunca segunda implementação).
+
+- **layers.rs reescrito:** `ensure_ready` = no-op de compat (lifecycle no `store::boot_init`/`boot_init_deferred`); `recall_semantic` delega 100% a `recall_semantic_nsgdb` (fallback interno `bq+fp32` eliminado — era a segunda verdade de recall); `rag_context` usa `rag_context_nsgdb` + formatação de hits via `get_doc_nsgdb`; `prompt_slice` via `get_doc_nsgdb`; `remember_exchange_full` agora usa `put_doc` para o L2 timestamped (antes chamava `engine::remember_text` → dual path); `index_skill` via `put_doc`; `art_prefix` delega ao ART do NSGDB (`scan_prefix_nsgdb`).
+- **store.rs honesty no boot:** `put_doc`/`get_doc` com fallback NMD1 cru no Tickv quando NSGDB deferred (janela K33[28] em backend file/nvme) — put cru não indexa, mas o rebuild/`nsgdb_init` (fast-mount IDX2) cobre depois; **nunca descartar memória silenciosamente**. `checkpoint_working`/`prune_working_ram` honestos sem motor (no-op Ok(0), não erro fantasma).
+- **e2e_smoke.rs reescrito no motor único:** put tipado → `checkpoint_working` (flush RAM L0/L1 → Tickv do NSGDB) → prune → remount Tickv + `nsgdb_reset()` (novo no bridge) → get — valida sobrevivência L1 no motor EXTERNO, não no interno que morreu.
+- **demo() Q4 reescrito:** put/get L1 + top_k L4 via `put_doc_nsgdb`/`recall_semantic` (era `with_engine`).
+- **boot_observe test:** `init_global(1)` removido (só `nsgdb_init`).
+- **art.rs/bq.rs permanecem:** consumers = `bench.rs` (Q7/D-series), `hamming_dispatch` (quantize_f32), demo Q2/Q3 — são util de índice/bench, não segunda implementação de storage.
+- **Verificação:** check 0 erros (6 crates, rebuild real após touch lib.rs/main.rs); testes: k-nano 210, hermes 229 (test-threads=1; crash paralelo STATUS_PRIVILEGED_INSTRUCTION = flaky conhecido, re-confirmado), k_ai 57, k-hal 56, cortex 90, jarbas 107. Golden NMD1 (`memory_doc::golden_nmd1`) + golden Tickv (`tickv::golden_record`) verdes — codec NMD1 intocado.
+
 ## Lições
+- **Dual-truth de storage é dual-truth de verdade:** enquanto o engine interno existiu, `recall_semantic` tinha dois motores (externo + fallback interno) com índices ART/BQ duplicados que podiam divergir; consolidar para um motor único eliminou ~270 LOC + a classe inteira de bugs "qual índice é a verdade?". Consolidação > mais um fallback.
+- **Fallback honesto no boot:** motor deferred ≠ put perdido — put cru NMD1 no Tickv (fonte da verdade) + rebuild depois; e checkpoint/prune sem motor retornam no-op honesto, não sucesso/erro fantasma.
 - **Dedup com nonce auto-incrementado não dedupa:** qualquer dedupe cuja chave inclui estado que muda a cada emissão (clock.tick(), timestamp, seq) é um filtro morto — fingerprint de CONTEÚDO (hash) é a condição de dedupe válida; memória replicada em mesh precisa dedupe TX+RX.
 - **Estruturas "aprendizes" sem cap = OOM a médio prazo:** observations/requests/marketplace crescem com o runtime; cap + evicção FIFO é o mínimo para hot-path de agente.
 - **Warn repetido por tick também é ruído de dínamo:** além de mentir, o warn constante alimenta loops de observação (I4→LLM) — sev honesta (`trace` para cache) + cortar o loop de feedback resolve os dois.

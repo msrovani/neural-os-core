@@ -1,23 +1,26 @@
 //! ADR-0063 F6/E2 — ponte Hermes/Cortex ↔ camadas MemoryDoc L0–L7.
 //! Não substitui TF-IDF (0064) nem BGE; acrescenta working/episodic + recall BQ L4.
+//!
+//! **s410h — motor único:** toda escrita/leitura passa pelo NSGDB externo
+//! (`neural-sgdb` via `nsgdb_bridge`/`store`). O `AiosDatabaseEngine` interno
+//! (ART/BQ/RAM arena duplicada) foi eliminado — uma verdade só (ADR-0063 §cut).
+//! `ensure_ready` é no-op de compat: o lifecycle do motor fica em
+//! `store::boot_init` / `boot_init_deferred` (K33[28] soft-hang honesty).
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::bq::quantize_f32;
-use super::engine::{with_engine, ENGINE};
 use super::memory_doc::{MemoryDoc, MemoryLayer};
 
-pub fn ensure_ready() {
-    let mut g = ENGINE.lock();
-    if g.is_none() {
-        *g = Some(super::engine::AiosDatabaseEngine::new(1));
-    }
-}
+/// Compat: era "cria o engine interno se ausente". Motor único → lifecycle
+/// no boot (`store::boot_init`); nada a fazer aqui. Mantida para não tocar
+/// todos os callers (store.rs, e2e, tests).
+pub fn ensure_ready() {}
 
 /// Pós-turno: L1 working (user) + L2 episódico curto (assistant).
-/// s385b: via `put_doc` (sync NSGDB + CRDT) — não contornar store.
+/// s385b/s410h: via `put_doc` (NSGDB motor único + CRDT) — não contornar store.
 pub fn remember_exchange(user: &str, response: &str) {
     ensure_ready();
     let u = MemoryDoc::new(
@@ -51,91 +54,10 @@ pub fn remember_semantic(key: &str, text: &str, emb: &[f32]) {
     let _ = text;
 }
 
-fn payload_f32(payload: &[u8]) -> Vec<f32> {
-    let n = payload.len() / 4;
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        let o = i * 4;
-        out.push(f32::from_le_bytes([
-            payload[o],
-            payload[o + 1],
-            payload[o + 2],
-            payload[o + 3],
-        ]));
-    }
-    out
-}
-
-/// Distância 1−cos em escala u32 (0 = idêntico). Sem floats no payload → None.
-fn fp32_dist_u32(query: &[f32], payload: &[u8]) -> Option<u32> {
-    let doc = payload_f32(payload);
-    if doc.is_empty() || query.is_empty() {
-        return None;
-    }
-    let n = query.len().min(doc.len());
-    let mut dot = 0.0f32;
-    let mut nq = 0.0f32;
-    let mut nd = 0.0f32;
-    for i in 0..n {
-        dot += query[i] * doc[i];
-        nq += query[i] * query[i];
-        nd += doc[i] * doc[i];
-    }
-    let denom = libm::sqrtf(nq) * libm::sqrtf(nd) + 1e-8;
-    let cos = (dot / denom).clamp(-1.0, 1.0);
-    let dist = 1.0 - cos;
-    Some((dist * 10_000.0) as u32)
-}
-
-/// Recall L4: BQ top-k, depois rescore FP32 nos candidatos (padrão Qdrant).
-/// path = `bq+fp32` | `bq` | `empty`.
+/// Recall L4: NSGDB externo (BQ + BM25/ART do neural-sgdb).
+/// path = `nsgdb-bq` | `empty` (motor único — sem fallback interno dual-truth).
 pub fn recall_semantic(query: &[f32], k: usize) -> (Vec<(String, u32)>, &'static str) {
-    // Externo primeiro (neural-sgdb ART/BQ); vazio → fallback engine interno
-    let (ext_hits, ext_path) = super::nsgdb_bridge::recall_semantic_nsgdb(query, k);
-    if !ext_hits.is_empty() {
-        return (ext_hits, ext_path);
-    }
-    // Fallback: engine interno
-    ensure_ready();
-    if query.is_empty() {
-        return (Vec::new(), "empty");
-    }
-    let k = k.max(1);
-    let cand = (k * 4).max(k);
-    let Some((hits, n_bq, rescored)) = with_engine(|e| {
-        let n = e.bq_len();
-        let raw = e.bq_top_k_f32(query, cand);
-        let mut out: Vec<(String, u32)> = Vec::new();
-        let mut any_fp = false;
-        for (id, ham) in raw {
-            let Some(sk) = e.storage_key_of(id).map(String::from) else {
-                continue;
-            };
-            let score = match e.get_by_storage_key(&sk) {
-                Ok(Some(doc)) => match fp32_dist_u32(query, &doc.payload) {
-                    Some(d) => {
-                        any_fp = true;
-                        d
-                    }
-                    None => ham,
-                },
-                _ => ham,
-            };
-            out.push((sk, score));
-        }
-        out.sort_by_key(|(_, d)| *d);
-        out.truncate(k);
-        (out, n, any_fp)
-    }) else {
-        return (Vec::new(), "empty");
-    };
-    if n_bq == 0 || hits.is_empty() {
-        (hits, "empty")
-    } else if rescored {
-        (hits, "bq+fp32")
-    } else {
-        (hits, "bq")
-    }
+    super::nsgdb_bridge::recall_semantic_nsgdb(query, k)
 }
 
 /// Fato L3 (ART) — usado por memory_store::remember.
@@ -152,7 +74,7 @@ pub fn remember_fact(fact: &str) {
     super::nsgdb_bridge::sync_fact_to_nsgdb(fact, ts);
 }
 
-/// Prefixo de prompt a partir de docs L1/L2 recentes.
+/// Prefixo de prompt a partir de docs L1/L2 recentes (get via NSGDB).
 pub fn prompt_slice(max_chars: usize) -> String {
     ensure_ready();
     let mut out = String::from("[SGDB-L1/L2]\n");
@@ -162,13 +84,12 @@ pub fn prompt_slice(max_chars: usize) -> String {
         (MemoryLayer::L2EpisodicShort, "last_asst"),
     ];
     for (layer, key) in layers {
-        let text = with_engine(|e| match e.get(layer, key) {
+        let text = match super::nsgdb_bridge::get_doc_nsgdb(layer, key) {
             Ok(Some(doc)) => core::str::from_utf8(&doc.payload)
                 .map(|s| String::from(s))
                 .unwrap_or_default(),
             _ => String::new(),
-        })
-        .unwrap_or_default();
+        };
         if text.is_empty() {
             continue;
         }
@@ -187,7 +108,7 @@ pub fn prompt_slice(max_chars: usize) -> String {
 }
 
 /// Pós-turno completo: texto L1/L2 constantes + L2 timestamped + L4 BQ temporal.
-/// s385b: todos os puts via `put_doc` / `remember_text` (sync+CRDT); exchange NSGDB no fim.
+/// s385b/s410h: todos os puts via `put_doc` (motor único NSGDB + CRDT).
 pub fn remember_exchange_full(
     user: &str,
     response: &str,
@@ -200,7 +121,7 @@ pub fn remember_exchange_full(
     let ts_u = alloc::format!("{}/u", ts);
     let ts_a = alloc::format!("{}/a", ts);
 
-    // L1/L2 constant keys (prompt_slice compat) — via put_doc
+    // L1/L2 constant keys (prompt_slice compat)
     let _ = super::store::put_doc(MemoryDoc::new(
         MemoryLayer::L1Working,
         "last_user",
@@ -213,27 +134,33 @@ pub fn remember_exchange_full(
     ));
 
     // L2 timestamped text (acumula para recall RAG)
-    let _ = super::engine::remember_text(MemoryLayer::L2EpisodicShort, &ts_u, user);
-    let _ = super::engine::remember_text(MemoryLayer::L2EpisodicShort, &ts_a, response);
+    let _ = super::store::put_doc(MemoryDoc::new(
+        MemoryLayer::L2EpisodicShort,
+        &ts_u,
+        user.as_bytes().to_vec(),
+    ));
+    let _ = super::store::put_doc(MemoryDoc::new(
+        MemoryLayer::L2EpisodicShort,
+        &ts_a,
+        response.as_bytes().to_vec(),
+    ));
 
     // L4 timestamped embeddings
     remember_semantic(&ts_u, user, emb_u);
     remember_semantic(&ts_a, response, emb_a);
 
-    // NSGDB remember_exchange (episódico tipado / lexical) — além do sync_write genérico
+    // NSGDB remember_exchange (episódico tipado / lexical)
     super::nsgdb_bridge::sync_exchange_to_nsgdb(user, response);
 }
 
-/// RAG context: BQ recall + fetch payload + formato string pro prompt.
+/// RAG context: NSGDB (content_type aware); vazio → formata hits do recall
+/// buscando o texto L2 irmão por storage key.
 /// path = `recall_semantic`.
 pub fn rag_context(query: &[f32], k: usize) -> String {
-    // Externo primeiro (neural-sgdb, content_type aware); vazio → fallback interno
     let ext_ctx = super::nsgdb_bridge::rag_context_nsgdb(query, k);
     if !ext_ctx.is_empty() {
         return ext_ctx;
     }
-    // Fallback: engine interno
-    ensure_ready();
     let (hits, _path) = recall_semantic(query, k);
     if hits.is_empty() {
         return String::new();
@@ -241,18 +168,11 @@ pub fn rag_context(query: &[f32], k: usize) -> String {
     let header = alloc::format!("[SGDB-RAG top-{}]\n", hits.len());
     let mut out = String::new();
     for (i, (sk, dist)) in hits.iter().enumerate() {
-        let text_sk = sk.replace("/L4/", "/L2/");
-        let text = with_engine(|e| match e.get_by_storage_key(&text_sk) {
-            Ok(Some(doc)) => core::str::from_utf8(&doc.payload)
-                .map(String::from)
-                .unwrap_or_default(),
-            _ => String::new(),
-        })
-        .unwrap_or_default();
-        if text.is_empty() {
-            continue;
-        }
-        let line = alloc::format!("  #{}) d={} {}\n", i + 1, dist, clamp_public(&text, 200));
+        let text = match text_for_storage_key(sk) {
+            Some(t) if !t.is_empty() => t,
+            _ => continue,
+        };
+        let line = alloc::format!("  #{}) d={} {}\n", i + 1, dist, clamp(&text, 200));
         out.push_str(&line);
     }
     if out.is_empty() {
@@ -261,13 +181,34 @@ pub fn rag_context(query: &[f32], k: usize) -> String {
     alloc::format!("{}{}", header, out)
 }
 
-fn clamp_public(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        String::from(s)
-    } else {
-        let mut t = String::from(&s[..max]);
-        t.push('…');
-        t
+/// Busca payload-texto para um storage key de hit (`md/L4/x` → doc por (layer,key)).
+fn text_for_storage_key(sk: &str) -> Option<String> {
+    // Formato canônico `md/Lx/<key>` → parse layer + key e fetch no motor único.
+    let rest = sk.strip_prefix("md/")?;
+    if rest.len() < 3 {
+        return None;
+    }
+    let b = rest.as_bytes();
+    if b[0] != b'L' || b.get(2) != Some(&b'/') {
+        return None;
+    }
+    let layer_num = (b[1] as char).to_digit(10)?;
+    let key = &rest[3..];
+    let layer = match layer_num {
+        0 => MemoryLayer::L0Sensory,
+        1 => MemoryLayer::L1Working,
+        2 => MemoryLayer::L2EpisodicShort,
+        3 => MemoryLayer::L3EpisodicLong,
+        4 => MemoryLayer::L4Semantic,
+        5 => MemoryLayer::L5Procedural,
+        6 => MemoryLayer::L6Reserved,
+        _ => MemoryLayer::L7Identity,
+    };
+    // Texto irmão: mesmo key na camada L2 (hits L4 guardam embedding;
+    // o texto do exchange vive em L2 com o mesmo key timestamped).
+    match super::nsgdb_bridge::get_doc_nsgdb(layer, key) {
+        Ok(Some(doc)) => core::str::from_utf8(&doc.payload).map(String::from).ok(),
+        _ => None,
     }
 }
 
@@ -281,22 +222,20 @@ fn clamp(s: &str, max: usize) -> String {
     }
 }
 
-/// Indexa descrição de skill em L3 (ART).
+/// Indexa descrição de skill em L3 (motor único — via put_doc NSGDB).
 pub fn index_skill(name: &str, description: &str) {
     ensure_ready();
-    let _ = with_engine(|e| {
-        let key = format!("skill:{}", name);
-        let doc = MemoryDoc::new(
-            MemoryLayer::L3EpisodicLong,
-            &key,
-            description.as_bytes().to_vec(),
-        );
-        e.put(doc)
-    });
+    let key = format!("skill:{}", name);
+    let doc = MemoryDoc::new(
+        MemoryLayer::L3EpisodicLong,
+        &key,
+        description.as_bytes().to_vec(),
+    );
+    let _ = super::store::put_doc(doc);
 }
 
-/// Lookup ART por prefixo de storage key.
+/// Lookup ART por prefixo de storage key — delega ao ART do NSGDB externo.
 pub fn art_prefix(prefix: &str) -> Vec<(String, u64)> {
     ensure_ready();
-    with_engine(|e| e.art.scan_prefix(prefix)).unwrap_or_default()
+    super::nsgdb_bridge::scan_prefix_nsgdb(prefix)
 }

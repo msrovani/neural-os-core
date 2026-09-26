@@ -82,6 +82,13 @@ pub fn nsgdb_is_ready() -> bool {
     NSGDB.lock().is_some()
 }
 
+/// Reabre o motor do zero (fast-mount via snapshot ou full rebuild) — usado
+/// pelo e2e smoke para simular reboot parcial (remount Tickv + remount NSGDB).
+pub fn nsgdb_reset() -> usize {
+    *NSGDB.lock() = None;
+    nsgdb_init()
+}
+
 // ─── Fase 2.5-A: Recall Tipado (Hits completos) ─────────────────────────────
 
 /// Recall semântico tipado — devolve `Vec<Hit>` com TODOS os 12 campos.
@@ -544,7 +551,116 @@ pub fn sync_exchange_to_nsgdb(user: &str, response: &str) {
     });
 }
 
-// ─── #538: Embedder Seam — set_embedder bridge ──────────────────────────────
+// ─── s410h: CONSOLIDAÇÃO — NSGDB é o motor único ───────────────────────────
+
+/// Converte MemoryDoc interno (NMD1) → tipo externo do neural-sgdb.
+/// O NMD1 é byte-idêntico (golden tests); só o tipo Rust difere.
+pub fn doc_to_ext(doc: crate::sgdb::MemoryDoc) -> neural_sgdb::MemoryDoc {
+    use neural_sgdb::MemoryLayer as ExtLayer;
+    let ext_layer = match doc.layer {
+        crate::sgdb::MemoryLayer::L0Sensory => ExtLayer::L0Sensory,
+        crate::sgdb::MemoryLayer::L1Working => ExtLayer::L1Working,
+        crate::sgdb::MemoryLayer::L2EpisodicShort => ExtLayer::L2EpisodicShort,
+        crate::sgdb::MemoryLayer::L3EpisodicLong => ExtLayer::L3EpisodicLong,
+        crate::sgdb::MemoryLayer::L4Semantic => ExtLayer::L4Semantic,
+        crate::sgdb::MemoryLayer::L5Procedural => ExtLayer::L5Procedural,
+        crate::sgdb::MemoryLayer::L6Reserved => ExtLayer::L6Reserved,
+        crate::sgdb::MemoryLayer::L7Identity => ExtLayer::L7Identity,
+    };
+    let ext_clock = neural_sgdb::VectorClock {
+        nodes: doc.clock.nodes,
+        counts: doc.clock.counts,
+        overflow: alloc::vec::Vec::new(),
+    };
+    neural_sgdb::MemoryDoc {
+        layer: ext_layer,
+        key: doc.key,
+        clock: ext_clock,
+        payload: doc.payload,
+        bitvec: doc.bitvec,
+        meta: None,
+    }
+}
+
+/// Converte tipo externo → MemoryDoc interno (perde overflow do clock
+/// dinâmico — nós >8 não existem no NMD1 do kernel; meta side-table não
+/// viaja nesta direção).
+pub fn doc_from_ext(doc: neural_sgdb::MemoryDoc) -> Option<crate::sgdb::MemoryDoc> {
+    use neural_sgdb::MemoryLayer as ExtLayer;
+    let layer = match doc.layer {
+        ExtLayer::L0Sensory => crate::sgdb::MemoryLayer::L0Sensory,
+        ExtLayer::L1Working => crate::sgdb::MemoryLayer::L1Working,
+        ExtLayer::L2EpisodicShort => crate::sgdb::MemoryLayer::L2EpisodicShort,
+        ExtLayer::L3EpisodicLong => crate::sgdb::MemoryLayer::L3EpisodicLong,
+        ExtLayer::L4Semantic => crate::sgdb::MemoryLayer::L4Semantic,
+        ExtLayer::L5Procedural => crate::sgdb::MemoryLayer::L5Procedural,
+        ExtLayer::L6Reserved => crate::sgdb::MemoryLayer::L6Reserved,
+        ExtLayer::L7Identity => crate::sgdb::MemoryLayer::L7Identity,
+    };
+    let mut clock = crate::sgdb::VectorClock::new();
+    for i in 0..8 {
+        clock.nodes[i] = doc.clock.nodes[i];
+        clock.counts[i] = doc.clock.counts[i];
+    }
+    Some(crate::sgdb::MemoryDoc {
+        layer,
+        key: doc.key,
+        clock,
+        payload: doc.payload,
+        bitvec: doc.bitvec,
+    })
+}
+
+/// Put tipado no NSGDB (motor único): converte e grava via `Sgdb::put` —
+/// valida, ticka o clock do node local, grava L0/L1 na RAM do engine ou
+/// L2+ no storage, indexa ART/BQ/lexical e persiste meta.
+pub fn put_doc_nsgdb(doc: crate::sgdb::MemoryDoc) -> Result<(), &'static str> {
+    let mut ext = doc_to_ext(doc);
+    ext.clock.tick(mesh_node_id());
+    with_nsgdb(|db| db.put(ext).map(|_| ()).map_err(|_| "nsgdb put fail"))
+        .unwrap_or(Err("nsgdb unavailable"))
+}
+
+/// Get tipado do NSGDB (motor único) — inclui RAM L0/L1 do engine externo.
+pub fn get_doc_nsgdb(
+    layer: crate::sgdb::MemoryLayer,
+    key: &str,
+) -> Result<Option<crate::sgdb::MemoryDoc>, &'static str> {
+    use neural_sgdb::MemoryLayer as ExtLayer;
+    let ext_layer = match layer {
+        crate::sgdb::MemoryLayer::L0Sensory => ExtLayer::L0Sensory,
+        crate::sgdb::MemoryLayer::L1Working => ExtLayer::L1Working,
+        crate::sgdb::MemoryLayer::L2EpisodicShort => ExtLayer::L2EpisodicShort,
+        crate::sgdb::MemoryLayer::L3EpisodicLong => ExtLayer::L3EpisodicLong,
+        crate::sgdb::MemoryLayer::L4Semantic => ExtLayer::L4Semantic,
+        crate::sgdb::MemoryLayer::L5Procedural => ExtLayer::L5Procedural,
+        crate::sgdb::MemoryLayer::L6Reserved => ExtLayer::L6Reserved,
+        crate::sgdb::MemoryLayer::L7Identity => ExtLayer::L7Identity,
+    };
+    match with_nsgdb(|db| db.get(ext_layer, key).ok().flatten().and_then(doc_from_ext)) {
+        Some(Some(d)) => Ok(Some(d)),
+        // missing OK (None) ou NSGDB down (None do with) → None honesto
+        _ => Ok(None),
+    }
+}
+
+/// Checkpoint L0/L1 (flush RAM → storage) no motor único.
+pub fn checkpoint_working_nsgdb() -> Result<usize, &'static str> {
+    with_nsgdb(|db| db.checkpoint().map_err(|_| "nsgdb checkpoint fail"))
+        .unwrap_or(Err("nsgdb unavailable"))
+}
+
+/// Prune da arena RAM L0/L1 (pós-checkpoint) no motor único.
+pub fn prune_working_ram_nsgdb() -> usize {
+    with_nsgdb(|db| db.prune_working_ram().unwrap_or(0)).unwrap_or(0)
+}
+
+/// Tamanho da arena RAM L0/L1 do motor único.
+pub fn ram_len_nsgdb() -> usize {
+    with_nsgdb(|db| db.ram_len()).unwrap_or(0)
+}
+
+/// #538: Embedder Seam — set_embedder bridge ──────────────────────────────
 
 /// Conecta o OsEmbedder ao NSGDB.
 /// Nota: neural-sgdb não tem set_embedder() — o Embedder é usado pelo caller.

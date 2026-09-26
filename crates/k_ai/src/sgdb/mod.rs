@@ -6,7 +6,6 @@ pub mod bq;
 pub mod crdt_merge;
 pub mod crdt_sync;
 pub mod e2e_smoke;
-pub mod engine;
 pub mod hamming_dispatch;
 pub mod layers;
 pub mod memory_doc;
@@ -19,9 +18,6 @@ pub mod nsgdb_bridge;
 
 pub use art::ArtIndex;
 pub use bq::{hamming, hamming_path, quantize_f32, BqFlatIndex};
-pub use engine::{
-    init_global, remember_text, with_engine, AiosDatabaseEngine, ENGINE,
-};
 pub use hamming_dispatch::{path_name as hamming_kernel_name, select_best_hamming_kernel};
 pub use layers::{
     art_prefix, ensure_ready, index_skill, prompt_slice, rag_context, recall_semantic,
@@ -96,38 +92,38 @@ pub fn demo() -> bool {
     }
     k_nano::slog_kai!("SGDB", "ok", "Q3 PASS: BQ smoke");
 
-    // Q4: Engine L1 put/get + L4/BQ top_k
-    init_global(1);
-    let ok = with_engine(|e| {
-        let d = MemoryDoc::new(MemoryLayer::L1Working, "smoke", b"sgdb".to_vec());
-        if e.put(d).is_err() {
-            return false;
-        }
-        // D2: L1 RAM-only — get sem exigir Tickv
-        match e.get(MemoryLayer::L1Working, "smoke") {
-            Ok(Some(doc)) if doc.payload.as_slice() == b"sgdb" => {}
-            _ => return false,
-        }
-        if e.ram_l0l1_len() == 0 {
-            return false;
-        }
-        let mut floats = Vec::new();
-        for x in [1.0f32, -1.0, 1.0, -1.0] {
-            floats.extend_from_slice(&x.to_le_bytes());
-        }
-        let mut d4 = MemoryDoc::new(MemoryLayer::L4Semantic, "emb1", floats);
-        d4.bitvec = Some(quantize_f32(&[1.0, -1.0, 1.0, -1.0]));
-        if e.put(d4).is_err() {
-            return false;
-        }
-        let hits = e.bq_top_k_f32(&[1.0, -1.0, 1.0, -1.0], 1);
-        hits.len() == 1 && hits[0].1 == 0
-    });
-    if ok != Some(true) {
-        k_nano::slog_kai!("SGDB", "fail", "Q4 FAIL: engine put/get or L4 top_k");
+    // Q4: motor único NSGDB — put/get L1 + L4 BQ top_k
+    if !nsgdb_bridge::nsgdb_is_ready() {
+        nsgdb_bridge::nsgdb_init();
+    }
+    let d = MemoryDoc::new(MemoryLayer::L1Working, "smoke", b"sgdb".to_vec());
+    let put_ok = nsgdb_bridge::put_doc_nsgdb(d).is_ok();
+    let got = nsgdb_bridge::get_doc_nsgdb(MemoryLayer::L1Working, "smoke")
+        .ok()
+        .flatten();
+    let l1_ok = put_ok
+        && got.map(|doc| doc.payload.as_slice() == b"sgdb").unwrap_or(false)
+        && nsgdb_bridge::ram_len_nsgdb() > 0;
+    if !l1_ok {
+        k_nano::slog_kai!("SGDB", "fail", "Q4 FAIL: NSGDB put/get L1");
         return false;
     }
-    k_nano::slog_kai!("SGDB", "ok", "Q4 PASS: engine + BQ");
+    let mut floats = Vec::new();
+    for x in [1.0f32, -1.0, 1.0, -1.0] {
+        floats.extend_from_slice(&x.to_le_bytes());
+    }
+    let mut d4 = MemoryDoc::new(MemoryLayer::L4Semantic, "emb1", floats);
+    d4.bitvec = Some(quantize_f32(&[1.0, -1.0, 1.0, -1.0]));
+    if nsgdb_bridge::put_doc_nsgdb(d4).is_err() {
+        k_nano::slog_kai!("SGDB", "fail", "Q4 FAIL: NSGDB put L4");
+        return false;
+    }
+    let (hits, _path) = layers::recall_semantic(&[1.0, -1.0, 1.0, -1.0], 1);
+    if hits.len() != 1 {
+        k_nano::slog_kai!("SGDB", "fail", "Q4 FAIL: L4 top_k via NSGDB");
+        return false;
+    }
+    k_nano::slog_kai!("SGDB", "ok", "Q4 PASS: NSGDB motor único + BQ");
 
     // Q5: remember_exchange + prompt_slice
     layers::remember_exchange("ping", "pong");

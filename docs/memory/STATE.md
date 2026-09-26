@@ -1,7 +1,7 @@
 # STATE — neural-os-core v1.9.99-s410 — Mesh 6 OOM bughunt + sev fecho
 
-#   PISTA ATIVA: s410 — mesh 6 lab: dedup fnv1a64 TX/RX (RX MEM 648→2), workers 2G estáveis T+122k+;
-#     Master anti-bloat (loop I4 cortado + caps obs/req/mkt); I3 note_trust_entries; sev s409+s410 mapeadas
+#   PISTA ATIVA: s410h — motor único SGDB: AiosDatabaseEngine interno ELIMINADO; tudo via
+#     neural-sgdb (nsgdb_bridge) com fallback NMD1 cru honesto na janela deferred do boot
 #   PISTA ANTERIOR: s406 heap auto-fracionado advisory (commit 2b650c56)
 #   Não declarar v2.0.0
 
@@ -17,6 +17,7 @@
 | sev audit Sev::from_sub | ✅ s409+s410 fecho (23 subs → Ok, dbg→Trace; 2 emissores corrigidos) |
 | I3 fantasma | ✅ fix note_trust_entries (push pattern hermes→k_ai) |
 | Runtime hygiene (`docs/architecture/runtime-hygiene-checklist.md`) | ✅ s410d: 7 estruturas corrigidas + ~19 auditadas com cap |
+| Motor único SGDB (sem dual-truth engine) | ✅ s410h: AiosDatabaseEngine deletado; layers/store/e2e via NSGDB externo |
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
 

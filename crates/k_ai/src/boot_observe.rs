@@ -393,7 +393,6 @@ mod tests {
                 .mount()
                 .expect("mount");
         }
-        crate::sgdb::init_global(1);
         crate::sgdb::nsgdb_bridge::nsgdb_init();
 
         // Boot N (anterior): PANIC no fim

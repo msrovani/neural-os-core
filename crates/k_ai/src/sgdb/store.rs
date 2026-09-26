@@ -7,7 +7,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
-use super::engine::{with_engine, AiosDatabaseEngine};
+use super::nsgdb_bridge::{
+    checkpoint_working_nsgdb, get_doc_nsgdb, put_doc_nsgdb, prune_working_ram_nsgdb,
+};
 use super::layers::ensure_ready;
 use super::memory_doc::{MemoryDoc, MemoryLayer};
 
@@ -97,8 +99,10 @@ pub fn boot_init() {
 
 fn run_heavy_index_boot(backend: &str, md_keys: usize) {
     let t0 = k_nano::tsc::now_us();
-    boot_ckpt("rebuild_k_ai");
-    let n = with_engine(|e| e.rebuild_indices_from_tickv()).unwrap_or(0);
+    // s410h: motor único — o rebuild dos índices é do NSGDB externo
+    // (open_with_snapshot faz fast-mount ou rebuild internamente no init).
+    boot_ckpt("rebuild_nsgdb");
+    let n = super::nsgdb_bridge::nsgdb_init();
     let t1 = k_nano::tsc::now_us();
     k_nano::slog_kai!(
         "SGDB",
@@ -110,14 +114,12 @@ fn run_heavy_index_boot(backend: &str, md_keys: usize) {
         t1.saturating_sub(t0)
     );
     boot_ckpt("nsgdb_open");
-    let nsgdb_n = super::nsgdb_bridge::nsgdb_init();
-    let t2 = k_nano::tsc::now_us();
     k_nano::slog_kai!(
         "SGDB",
         "ok",
         "nsgdb_init records≈{} us={}",
-        nsgdb_n,
-        t2.saturating_sub(t1)
+        n,
+        t1.saturating_sub(t0)
     );
     HEAVY_DONE.store(true, Ordering::Release);
     HEAVY_DEFERRED.store(false, Ordering::Release);
@@ -368,30 +370,60 @@ pub fn get_kv(key: &str) -> Result<Option<Vec<u8>>, &'static str> {
     }
 }
 
-/// MemoryDoc via engine (também indexa ART/BQ).
+/// MemoryDoc via NSGDB (motor único, s410h): valida, ticka clock, grava
+/// L0/L1 RAM ou L2+ storage, indexa ART/BQ/lexical + meta side-table.
+/// Elimina o dual-write put_doc→engine + sync_write (dual-truth de índices).
+/// Honesty: NSGDB deferred (janela K33[28], backend file/nvme) → NMD1 cru no
+/// Tickv (fonte da verdade); `run_heavy_index_boot` (rebuild/fast-mount do
+/// NSGDB) indexa depois. Nunca descartar memória silenciosamente.
 pub fn put_doc(doc: MemoryDoc) -> Result<u64, &'static str> {
     ensure_ready();
-    let sk = doc.storage_key();
-    let layer = doc.layer as u8;
-    let payload = doc.payload.clone();
-    let result = with_engine(|e| e.put(doc)).unwrap_or(Err("engine down"));
-    // #537 + s385: sync índices NSGDB + versão CRDT após write de doc
-    if result.is_ok() {
-        super::nsgdb_bridge::sync_write_to_nsgdb(&sk, &payload, layer);
-        super::crdt_sync::crdt_record_change_global();
+    if super::nsgdb_bridge::nsgdb_is_ready() {
+        put_doc_nsgdb(doc)?;
+    } else {
+        put_doc_raw_tickv(&doc)?;
     }
-    result
+    super::crdt_sync::crdt_record_change_global();
+    Ok(0)
+}
+
+/// Fallback cru (NSGDB indisponível): NMD1 encoded direto no Tickv, SEM
+/// índices (ART/BQ/lexical) — o rebuild no boot_init_deferred cobre.
+fn put_doc_raw_tickv(doc: &MemoryDoc) -> Result<(), &'static str> {
+    if !k_nano::storage::is_ready() {
+        return Err("tickv not ready");
+    }
+    let sk = doc.storage_key();
+    let blob = doc.encode();
+    k_nano::storage::put_blob(&sk, &blob).map_err(|_| "tickv put")
 }
 
 pub fn get_doc(layer: MemoryLayer, key: &str) -> Result<Option<MemoryDoc>, &'static str> {
     ensure_ready();
-    with_engine(|e| e.get(layer, key)).unwrap_or(Err("engine down"))
+    if super::nsgdb_bridge::nsgdb_is_ready() {
+        return get_doc_nsgdb(layer, key);
+    }
+    // Fallback cru: leitura direta do NMD1 no Tickv (fonte da verdade).
+    if !k_nano::storage::is_ready() {
+        return Ok(None);
+    }
+    let sk = format!("md/{}/{}", layer.as_str(), key);
+    match k_nano::storage::get_blob(&sk) {
+        Ok(bytes) => Ok(MemoryDoc::decode(&bytes).ok()),
+        Err("missing") => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// SleepCycle CONSOLIDATE: flush L0/L1 RAM → Tickv (+ compact best-effort só em RAM).
 pub fn checkpoint_working() -> Result<usize, &'static str> {
     ensure_ready();
-    let n = with_engine(|e| e.checkpoint_l0l1()).unwrap_or(Err("engine down"))?;
+    if !super::nsgdb_bridge::nsgdb_is_ready() {
+        // Honesty: sem motor (NSGDB deferred) não há arena L0/L1 para flush —
+        // put_doc caiu no Tickv cru (put_doc_raw_tickv). Checkpoint = no-op.
+        return Ok(0);
+    }
+    let n = checkpoint_working_nsgdb()?;
     if ready() {
         let backend = k_nano::storage::backend_name();
         // Honesty: compact em file/nvme = wipe+rewrite PIO — nunca no SleepCycle hot path.
@@ -419,7 +451,10 @@ pub fn checkpoint_working() -> Result<usize, &'static str> {
 /// SleepCycle PRUNE: limpa arena L0/L1 já persistida (get cai no Tickv).
 pub fn prune_working_ram() -> usize {
     ensure_ready();
-    with_engine(|e| e.prune_ram_l0l1()).unwrap_or(0)
+    if !super::nsgdb_bridge::nsgdb_is_ready() {
+        return 0; // sem arena (NSGDB deferred) — nada a podar
+    }
+    prune_working_ram_nsgdb()
 }
 
 /// Texto HANR L7 (identity): keys lógicas user|memory|soul|persona → `hanr/{name}` + md/L7.
@@ -489,9 +524,9 @@ pub fn put_skill_blob(name: &str, description: &str) -> Result<(), &'static str>
     )
 }
 
-pub fn with_store<R>(f: impl FnOnce(&mut AiosDatabaseEngine) -> R) -> Option<R> {
+pub fn with_store<R>(f: impl FnOnce(&mut neural_sgdb::Sgdb) -> R) -> Option<R> {
     ensure_ready();
-    with_engine(f)
+    super::nsgdb_bridge::with_nsgdb(f)
 }
 
 pub fn status() -> String {

@@ -4,7 +4,7 @@
 
 **Key symbols:**
 - `store.rs` — facade `put_kv/get_kv/put_doc/get_doc/put_hanr/get_hanr/put_pkg_meta/put_pkg_body/put_skill_blob/ready/boot_init/checkpoint_working/prune_working_ram/predict_all_pci`; `ns` namespace consts (`hanr/ md/ pkg/ skill/ audit/ vdb/ sys/`); gates on `k_nano::storage::is_ready`.
-- `engine.rs` — `AiosDatabaseEngine` (static `ENGINE`): L0/L1 → RAM arena (indexed ART/BQ, `id_to_sk`), L2+ → TickvLite `md/Lx/key`; `bq_top_k_f32` recall; `init_global`/`with_engine`.
+- ~~`engine.rs`~~ **REMOVIDO (s410h)** — motor único: tudo via `nsgdb_bridge` (neural-sgdb externo). ART/BQ internos (`art.rs`/`bq.rs`) permanecem só como micro-bench/util de hamming.
 - `memory_doc.rs` — `MemoryDoc`/`MemoryDocView` binary encode (L0–L7, `VectorClock`).
 - `layers.rs` — cognitive API: `remember_fact`, `remember_semantic`, `remember_exchange(_full)`, `recall_semantic`, `rag_context`, `prompt_slice`, `index_skill`, `ensure_ready`.
 - `art.rs` / `bq.rs` / `hamming_dispatch.rs` — Node4/16/48/256 radix index (leaf tombstones); BQ flat index + `hamming`/`quantize_f32`; scalar/AVX2/AVX-512 hamming dispatcher (`select_best_hamming_kernel`).
