@@ -352,6 +352,8 @@ impl Agent for SecurityAgent {
         if tick % 64 == 0 {
             let mut status = self.runtime_inv.check_all(tick);
             let trust_n = crate::globals::TRUST_CACHE.lock().entry_count();
+            // Push pro proxy k_ai (parity com SafetyAgent — note_trust_entries).
+            k_ai::safety_invariants::note_trust_entries(trust_n);
             status.i3_trust = if trust_n > 0 {
                 k_ai::safety_invariants::InvariantResult::Pass
             } else {

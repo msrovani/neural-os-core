@@ -31,6 +31,16 @@ static MEMORY_DOCS_SYNCED: AtomicU64 = AtomicU64::new(0);
 /// Syncs de persona (SOUL/PERSONA) aplicadas do mesh — diagnóstico.
 static PERSONA_SYNCS: AtomicU64 = AtomicU64::new(0);
 
+/// FNV-1a 64 — dedup por conteúdo (anti-bloat TX/RX do learner/mesh).
+fn fnv1a64(data: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in data {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
 /// `true` quando o mesh de conhecimento está ativo (gate dos hooks TX).
 pub fn is_active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
@@ -131,11 +141,30 @@ pub fn broadcast_learner_memory() -> bool {
         .map(|a| a.collector.snapshot())
         .unwrap_or_default();
     let mut n = 0usize;
+    // Anti-bloat TX: só difunde o par quando o CONTEÚDO muda. O clock.tick()
+    // por TX fazia o doc recebido sempre dominar o local no dedup RX
+    // (clock_dominates) e o put_doc repetido do mesmo payload crescia o Tickv
+    // linear (GC suspenso no mount — K33[28]) até OOM fatal do intent_router
+    // nos workers do mesh 6 (SESSION 407/408: T+56k com 1G, T+111k com 2G).
+    static LAST_TX_HASH: [AtomicU64; 8] = [
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+    ];
     for (i, pair) in pairs.iter().rev().take(8).enumerate() {
         let mut payload = Vec::with_capacity(pair.input.len() + pair.output.len() + 1);
         payload.extend_from_slice(pair.input.as_bytes());
         payload.push(0);
         payload.extend_from_slice(pair.output.as_bytes());
+        let h = fnv1a64(&payload);
+        if LAST_TX_HASH[i].load(Ordering::Relaxed) == h {
+            continue;
+        }
         let mut doc = MemoryDoc::new(
             MemoryLayer::L4Semantic,
             &alloc::format!("learner/mesh/{}", i),
@@ -143,6 +172,7 @@ pub fn broadcast_learner_memory() -> bool {
         );
         doc.clock.tick(mesh::node_id());
         if broadcast_memory_doc(&doc) {
+            LAST_TX_HASH[i].store(h, Ordering::Relaxed);
             n += 1;
         }
     }
@@ -228,6 +258,29 @@ fn on_memory_doc(pkt: &AiosTaskPacket, body: &[u8]) {
             return;
         }
     };
+    // Anti-bloat RX: re-broadcast periódico do MESMO payload não re-entra no
+    // Tickv — put repetido da mesma (key, payload) era o vazamento linear que
+    // OOM'd os workers do mesh 6 (188x 'RX MEM aplicada' da mesma key em T+111k).
+    static LAST_RX_HASH: [AtomicU64; 8] = [
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+    ];
+    let h = fnv1a64(&doc.payload);
+    let slot = (fnv1a64(doc.key.as_bytes()) % 8) as usize;
+    if LAST_RX_HASH[slot].load(Ordering::Relaxed) == h {
+        slog_hermes!(
+            "MeshKnowledge", "info",
+            "RX MEM skip (conteudo igual — anti-bloat) layer={} key='{}' node={}",
+            doc.layer.as_str(), doc.key, pkt.source_id
+        );
+        return;
+    }
     let apply = match k_ai::sgdb::get_doc(doc.layer, &doc.key) {
         Ok(None) => true, // key inexistente → aplica
         Ok(Some(local)) => clock_dominates(&doc.clock, &local.clock, pkt.source_id),
@@ -246,6 +299,7 @@ fn on_memory_doc(pkt: &AiosTaskPacket, body: &[u8]) {
     match k_ai::sgdb::put_doc(doc) {
         Ok(_) => {
             MEMORY_DOCS_SYNCED.fetch_add(1, Ordering::Relaxed);
+            LAST_RX_HASH[slot].store(h, Ordering::Relaxed);
             slog_hermes!(
                 "MeshKnowledge", "info",
                 "RX MEM aplicada layer={} key='{}' node={}",

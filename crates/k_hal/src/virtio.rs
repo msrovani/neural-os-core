@@ -60,7 +60,9 @@ pub unsafe fn try_queue_notify(mmio_bar: u64, queue_idx: u32) -> VirtioStage {
         return VirtioStage::NotifySkipped;
     }
     if mmio_bar == 0 {
-        k_nano::slog_hal!("VirtIO", "notify", "Absent — sem BAR");
+        // s410: "Absent — sem BAR" é degradação real → "absent" (Warn),
+        // não "notify" (agora Ok após mapeamento Sev::from_sub).
+        k_nano::slog_hal!("VirtIO", "absent", "Absent — sem BAR");
         LAST_STAGE = VirtioStage::Absent;
         return VirtioStage::Absent;
     }

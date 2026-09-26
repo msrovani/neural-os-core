@@ -211,6 +211,41 @@ pub fn invalidate_skill_index() {
     SKILLS_INDEXED.store(false, Ordering::Relaxed);
 }
 
+/// Estado do reload boot→Runtime (Q2): o boot chama `reload_persisted_wasm_skills`
+/// antes de existir mount `/skills` → SKIP armado; o retry tenta 1× quando o
+/// VFS aparece e marca DONE mesmo se 0 skills (nunca busy-loop, sem log/tick).
+static RELOAD_DONE: AtomicBool = AtomicBool::new(false);
+static RELOAD_SKIPPED: AtomicBool = AtomicBool::new(false);
+
+/// Garante o mount `/skills` → ramfs (idempotente, silencioso). Root cause Q2:
+/// `init_standard_mounts` monta /mnt/* mas nunca /skills → `resolve("/skills")`
+/// caía no fallback sem agente e o reload SKIPava em TODO boot (não só cedo).
+/// Mesma montagem que os testes já faziam; RamFsAgent vem do `init_fs_agents`.
+fn ensure_skills_mount() {
+    let mut guard = crate::vfs::VFS.lock();
+    if let Some(ref mut v) = *guard {
+        if !v.mount_table().iter().any(|m| m.mount_point == "/skills") {
+            v.mount("/skills", "ramfs");
+        }
+    }
+}
+
+/// Retry 1× do reload quando o boot SKIPou (Q2). Engancha num tick Runtime já
+/// existente (SelfEvolveAgent — dono do ciclo de vida das skills): no-op após
+/// DONE ou sem SKIP armado; se o VFS ainda não está pronto segue armado e
+/// silencioso (sem log por tick). O resumo sai do reload normal.
+pub fn retry_reload_if_skipped() {
+    if RELOAD_DONE.load(Ordering::Relaxed) || !RELOAD_SKIPPED.load(Ordering::Relaxed) {
+        return;
+    }
+    if !crate::fs::vfs_ready_for_wasm() {
+        return;
+    }
+    RELOAD_SKIPPED.store(false, Ordering::Relaxed);
+    RELOAD_DONE.store(true, Ordering::Relaxed); // 1× só — mesmo se 0 skills/SKIP.
+    reload_persisted_wasm_skills();
+}
+
 /// Boot hook (in-hermes): re-registra `/skills/*.wasm` persistidos no VFS
 /// como WasmSkill no sandbox wasmi (Caminho A) — recarregadas EXECUTAM
 /// (unifica com o promote; DynamicSkill com `wasm` sem bridge era stub).
@@ -218,9 +253,12 @@ pub fn invalidate_skill_index() {
 /// são pulados com log (nunca panic). B3: o sidecar `/skills/{name}.prov`
 /// devolve a proveniência ORIGINAL; ausente (skill antiga) = `Reloaded` + warn.
 pub fn reload_persisted_wasm_skills() -> u32 {
+    // ponytail: mount tardio — sem ele o list falha em todo boot (Q2).
+    ensure_skills_mount();
     let items = match crate::fs::list_vfs("/skills") {
         Ok(v) => v,
         Err(_) => {
+            RELOAD_SKIPPED.store(true, Ordering::Relaxed);
             k_nano::slog_hermes!("SKILL", "warn", "reload SKIP (VFS absent)");
             return 0;
         }
@@ -282,6 +320,8 @@ pub fn reload_persisted_wasm_skills() -> u32 {
         }
     }
     k_nano::slog_hermes!("SKILL", "ok", "[skills][ok] reload n={} model-born={} template={} dummy={} imported={} reloaded={}", n, c_born, c_tmpl, c_dummy, c_imp, c_rel);
+    RELOAD_DONE.store(true, Ordering::Relaxed);
+    RELOAD_SKIPPED.store(false, Ordering::Relaxed);
     n
 }
 
@@ -394,6 +434,35 @@ mod lane_b_tests {
             Some(crate::wasmi_rt::SkillProvenance::Reloaded)
         );
         crate::globals::SKILL_REGISTRY.lock().unregister("lb_old_skill");
+    }
+
+    #[test]
+    fn skipped_boot_reload_retries_once_in_runtime() {
+        use core::sync::atomic::Ordering;
+        setup_test_vfs();
+        let name = "lb_retry_skill";
+        // Arrange: skill persistida (wasm + sidecar) mas registry limpo,
+        // com flags simulando o boot que SKIPou antes do VFS existir.
+        assert!(crate::evolve::promote_model_text_to_wasm(name, "retry-desc", "a*2+1").is_ok());
+        assert!(crate::globals::SKILL_REGISTRY.lock().unregister(name));
+        assert!(!crate::globals::SKILL_REGISTRY.lock().has_skill(name));
+        super::RELOAD_DONE.store(false, Ordering::Relaxed);
+        super::RELOAD_SKIPPED.store(true, Ordering::Relaxed);
+        // Act: tick Runtime engancha o retry → recarrega 1× com prov original.
+        let rel_before = crate::wasmi_rt::metrics_reload_ok();
+        super::retry_reload_if_skipped();
+        assert!(crate::globals::SKILL_REGISTRY.lock().has_skill(name));
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance(name),
+            Some(crate::wasmi_rt::SkillProvenance::ModelBorn)
+        );
+        assert!(crate::wasmi_rt::metrics_reload_ok() >= rel_before + 1);
+        // 2ª chamada = no-op (DONE): sem re-reload, sem log extra.
+        let rel_after = crate::wasmi_rt::metrics_reload_ok();
+        super::retry_reload_if_skipped();
+        assert_eq!(crate::wasmi_rt::metrics_reload_ok(), rel_after);
+        crate::globals::SKILL_REGISTRY.lock().unregister(name);
+        // Estado pós-boot canônico p/ os demais testes (DONE, sem SKIP armado).
     }
 }
 

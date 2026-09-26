@@ -184,7 +184,9 @@ impl SafetyAgent {
     fn log_violation(&mut self, layer: u8, input: &str, reason: &str) {
         let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         self.violations.push((layer, String::from(input), tick as u64));
-        k_nano::slog_hermes!("Log", "msg", "⚠️  SAFETY VIOLATION — Layer {} ⚠️", layer);
+        // s410: linha de VIOLATION não pode usar slot "msg" (agora Ok) —
+        // mentira de dmesg (SESSION_360: sev = contrato de visibilidade).
+        k_nano::slog_hermes!("Log", "fail", "⚠️  SAFETY VIOLATION — Layer {} ⚠️", layer);
         k_nano::slog_hermes!("Input", "info", "\"{}\"", input);
         k_nano::slog_hermes!("Reason", "info", "{}", reason);
         k_nano::slog_hermes!("Tick", "info", "{}", tick);
@@ -220,6 +222,9 @@ impl Agent for SafetyAgent {
         let mut status = self.runtime_inv.check_all(tick);
         // I3 real: TrustCache entry_count (hermes owns TRUST_CACHE).
         let trust_n = TRUST_CACHE.lock().entry_count();
+        // Push pro proxy k_ai (note_trust_entries) — mata o [fail] fantasma
+        // "I3 VIOLATION" do T+121: o proxy agora vê o dado real do dono.
+        k_ai::safety_invariants::note_trust_entries(trust_n);
         status.i3_trust = if trust_n > 0 {
             k_ai::safety_invariants::InvariantResult::Pass
         } else {

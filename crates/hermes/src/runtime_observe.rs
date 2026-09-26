@@ -7,11 +7,19 @@ use event_bus::{CapabilityToken, Event};
 use k_nano::EVENT_BUS;
 
 /// I5 SLIP e HITL recipe não viram chat LLM (spam + bypass HITL).
+/// Mesh 6 (vazamento ~11KB/tick): I4 sched=Violation é lag do scheduler
+/// CAUSADO pela carga — publicar "diagnostique e corrija" ao LLM amplifica a
+/// carga (loop de feedback: lag→intento→LLM/Hermes/EventBus→mais lag). No
+/// boot mesh o Master recebeu 233 intents vs ~35 nos workers = 7×. Observe-only.
 pub fn should_escalate_health_to_llm(payload: &str) -> bool {
     if payload.contains("degraded_slip") || payload.contains(":I5:net:") {
         return false;
     }
     if payload.contains("recipe_escalate") || payload.contains("HITL:recipe") {
+        return false;
+    }
+    // I4 scheduler-lag: sintoma de carga, não tarefa de diagnóstico.
+    if payload.contains("sched=Violation") || payload.contains("sched=Warning") {
         return false;
     }
     true

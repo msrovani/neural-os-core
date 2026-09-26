@@ -528,6 +528,13 @@ impl Agent for CortexAgent {
                 agent_core::tick_stage(8);
                 return AgentTickResult::Pending;
             }
+            // Q7: prova A2 (1/boot) na frente — pula o submit deste tick,
+            // silencioso (sem log/TOAST/budget), até a prova terminar.
+            // Fila intacta: sem evict, sem CAP change, sem reordenar.
+            if cortex::infer_queue::a2_proof_pending() {
+                agent_core::tick_stage(8);
+                return AgentTickResult::Pending;
+            }
             match cortex::infer_queue::submit(
                 submit_prompt,
                 cortex::infer_queue::InferMode::Plain,
@@ -3728,6 +3735,9 @@ impl Agent for SelfEvolveAgent {
     fn manifest(&self) -> &AgentManifest { &SELF_EVOLVE_MANIFEST }
 
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
+        // Q2: boot SKIPou o reload de /skills (VFS ainda sem mount) → 1 retry
+        // quando o VFS aparece; no-op após DONE, sem log por tick.
+        crate::skill_loader::retry_reload_if_skipped();
         while let Some(ev) = self.receiver.try_receive() {
             let msg = core::str::from_utf8(&ev.payload).unwrap_or("");
             k_nano::slog_hermes!("S108", "info", "event: {}", msg);

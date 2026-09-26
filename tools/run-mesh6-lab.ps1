@@ -1,5 +1,8 @@
 # Lab mesh 6-node (SESSION_360 / ADR-0081): hub L2 + STATIC 10.0.3.2..7
-# Topologia: A=3G/3c - B=2G/1c - C-F=1G/1c  |  Accel default WHPX+Haswell
+# Topologia: A=3G/3c - B=2G/1c - C-F=2G/1c  |  Accel default WHPX+Haswell
+# C-F 2G (pos-analise logs): com 1G, heap_budget_mb = min(75%RAM, RAM-384) ~ 601MB
+# e o footprint mesh (peers + MeshKnowledge/Tickv + rings P2P) estourou -> OOM fatal
+# [OOM/TALC] agente=intent_router em T+~56k em TODOS os workers. Com 2G, budget=1536MB.
 # Uso: .\tools\run-mesh6-lab.ps1 [-Accel whpx|tcg] [-NoDisplay]
 param(
     [ValidateSet("whpx", "tcg")]
@@ -27,7 +30,7 @@ if (-not $KeepRunning) {
 }
 
 $free = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 1)
-Write-Host "freeGB=$free (guest sum ~9G - overcommit esperado)" -ForegroundColor Yellow
+Write-Host "freeGB=$free (guest sum ~13G - overcommit esperado)" -ForegroundColor Yellow
 
 $qemu = "C:\Program Files\qemu\qemu-system-x86_64.exe"
 if (-not (Test-Path $qemu)) {
@@ -41,14 +44,14 @@ if (-not (Test-Path $uefi)) { $uefi = Join-Path $Root "target1\uefi.img" }
 if (-not (Test-Path $uefi)) { Write-Host "[ERRO] uefi.img ausente" -ForegroundColor Red; exit 1 }
 $disk = Join-Path $Root "target\disk_qemu.raw"
 
-# A Master 3G/3c; B 2G/1c; C-F 1G/1c - IPs 10.0.3.2..7
+# A Master 3G/3c; B 2G/1c; C-F 2G/1c - IPs 10.0.3.2..7
 $nodes = @(
     @{ Name = "a"; Octet = 2; Mem = "3G"; Smp = 3; Port = 19001 },
     @{ Name = "b"; Octet = 3; Mem = "2G"; Smp = 1; Port = 19002 },
-    @{ Name = "c"; Octet = 4; Mem = "1G"; Smp = 1; Port = 19003 },
-    @{ Name = "d"; Octet = 5; Mem = "1G"; Smp = 1; Port = 19004 },
-    @{ Name = "e"; Octet = 6; Mem = "1G"; Smp = 1; Port = 19005 },
-    @{ Name = "f"; Octet = 7; Mem = "1G"; Smp = 1; Port = 19006 }
+    @{ Name = "c"; Octet = 4; Mem = "2G"; Smp = 1; Port = 19003 },
+    @{ Name = "d"; Octet = 5; Mem = "2G"; Smp = 1; Port = 19004 },
+    @{ Name = "e"; Octet = 6; Mem = "2G"; Smp = 1; Port = 19005 },
+    @{ Name = "f"; Octet = 7; Mem = "2G"; Smp = 1; Port = 19006 }
 )
 
 foreach ($n in $nodes) {
@@ -89,9 +92,9 @@ $macs = @{
 }
 
 if (Test-Path $disk) {
-    Write-Host ("disk=YES {0} ({1:N0} MB) — anexado snapshot nos 6 nos" -f $disk, ((Get-Item $disk).Length / 1MB)) -ForegroundColor Green
+    Write-Host ("disk=YES {0} ({1:N0} MB) - anexado snapshot nos 6 nos" -f $disk, ((Get-Item $disk).Length / 1MB)) -ForegroundColor Green
 } else {
-    Write-Host "disk=NO target\disk_qemu.raw ausente — Model ABSENT esperado" -ForegroundColor Yellow
+    Write-Host "disk=NO target\disk_qemu.raw ausente - Model ABSENT esperado" -ForegroundColor Yellow
 }
 
 $procs = @()

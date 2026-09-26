@@ -125,6 +125,8 @@ const A2_SLICE_BUDGET_US: u64 = 500_000;
 static A2_SLOW_SLICES: AtomicU64 = AtomicU64::new(0);
 /// Log `resident_too_big` emitido 1×/boot (maybe_submit roda todo slice).
 static A2_ABSENT_LOGGED: AtomicBool = AtomicBool::new(false);
+/// Log `waiting for slot` emitido 1×/boot (retry Full é silencioso).
+static A2_SLOT_WAIT_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Lane D: aborta antes do 4º slice lento (4 overruns → Paused global) ou com
 /// UI rendida (ui_yield). Só decisão local sobre a prova — fila real intacta,
@@ -328,13 +330,11 @@ fn a2_refuse(st: &ActiveState, reason: &str) {
 }
 
 /// Lane A2: submete 1 job de prova por boot. Chamado do topo de `poll_slice`
-/// (fora do tick). Não compete: com fila real ou job ativo, adia para o
-/// próximo slice. Silencioso sem modelo (CortexAgent já loga ABSENT).
+/// (fora do tick). Entra ATRÁS da fila real (sem prioridade/evict): o
+/// backpressure honesto vive dentro de submit() (Full CAP=8 / HeapPressure),
+/// com retry silencioso no próximo slice. Silencioso sem modelo.
 pub fn maybe_submit_a2_proof() -> bool {
     if A2_PROOF_DONE.load(Ordering::Acquire) || A2_PROOF_SUBMITTED.load(Ordering::Acquire) {
-        return false;
-    }
-    if ACTIVE.lock().is_some() || PENDING_COUNT.load(Ordering::Relaxed) > 0 {
         return false;
     }
     if !model_is_loaded() {
@@ -359,10 +359,35 @@ pub fn maybe_submit_a2_proof() -> bool {
             A2_PROOF_ID.store(id, Ordering::Release);
             A2_PROOF_SUBMITTED.store(true, Ordering::Release);
             k_nano::slog_cortex!("InferQ", "ok", "a2_proof submit id={}", id);
+            // Lane Q6: evidência loss-proof (serial é racy sob SMP) — BOOT.LOG
+            // via API existente, best-effort, sem eco serial. Só is_proof.
+            k_nano::boot_logger::log_quiet(&alloc::format!("a2_proof submit id={}", id));
             true
         }
         // Fila cheia / HeapPressure — tenta de novo no próximo slice.
+        Err(SubmitErr::Full) => {
+            // Q1: 1× warn (fila real nunca esvazia no boot — prova espera a vez).
+            if !A2_SLOT_WAIT_LOGGED.swap(true, Ordering::Relaxed) {
+                k_nano::slog_cortex!("InferQ", "warn", "a2_proof waiting for slot (queue full)");
+            }
+            false
+        }
         Err(_) => false,
+    }
+}
+
+/// Q7: gate do CortexAgent — true só com prova submetida e inacabada.
+/// Antes do submit ou após qualquer terminal → false (nunca bloqueia o LLM).
+pub fn a2_proof_pending() -> bool {
+    A2_PROOF_SUBMITTED.load(Ordering::Acquire) && !A2_PROOF_DONE.load(Ordering::Acquire)
+}
+
+/// Q7: todo caminho terminal da prova seta DONE (drop no claim incluído) —
+/// sem isso o gate `a2_proof_pending` travaria o LLM para sempre (DoS 1/boot).
+#[inline]
+fn a2_note_terminal(id: u64) {
+    if id == A2_PROOF_ID.load(Ordering::Acquire) {
+        A2_PROOF_DONE.store(true, Ordering::Release);
     }
 }
 
@@ -528,6 +553,7 @@ fn try_claim_into_active() -> bool {
             .unwrap_or_else(|| String::from(TOPIC_LLM_RESPONSE));
         if cancelled || prompt.is_empty() {
             emit_reply(&reply_topic, "[cancelled]");
+            a2_note_terminal(id);
             continue;
         }
         // Re-check na claim: headroom pode ter caído desde o submit.
@@ -541,6 +567,7 @@ fn try_claim_into_active() -> bool {
                 obs.headroom_mb
             );
             emit_reply(&reply_topic, crate::heap_aios::ESCALATE_STATIC_MSG);
+            a2_note_terminal(id);
             continue;
         }
         ACTIVE_ID.store(id, Ordering::Release);
@@ -657,6 +684,16 @@ fn finish_job(st: &mut ActiveState, text: &str) {
             job_toks,
             out.len()
         );
+        // Lane Q6: mesma evidência no BOOT.LOG (sobrevive ao serial racy).
+        k_nano::boot_logger::log_quiet(&alloc::format!(
+            "a2_proof done id={} toks={} prefill_us={} decode_us={} total_us={} out_len={}",
+            st.job_id,
+            job_toks,
+            st.prefill_us,
+            us,
+            total_us,
+            out.len()
+        ));
         A2_PROOF_DONE.store(true, Ordering::Release);
     }
     k_nano::slog_cortex!(
@@ -918,10 +955,16 @@ fn run_prefill_step(st: &mut ActiveState) {
         finish_job(st, "[cancelled]");
         return;
     }
-    // Lane D-cortex: fail-closed ANTES do slice pesado (só a prova; a fila
-    // real nunca aborta aqui). No BSP cada slice >500ms = 1 overrun do
-    // infer_worker; o 4º pausa o agente e o ACTIVE ficaria preso até Crashed.
+    // Lane D-cortex/Q4: fail-closed ANTES do slice pesado (só a prova; a
+    // fila real nunca aborta aqui). Só sob risco real: com ap_pollable o
+    // slice corre no AP idle (fora do BUSY/budget — lenta é inofensiva);
+    // sem APs (fallback BSP) cada slice >500ms = 1 overrun do infer_worker
+    // e o 4º pausa o agente, com o ACTIVE preso até Crashed.
+    // Q4: ap_pollable() ao vivo — roteador fiel (hermes pula poll_slice no
+    // BSP com APs vivos; try_infer_poll_slice exige ap_pollable no AP).
+    let ap_live = k_nano::smp::ap_pollable();
     if st.is_proof
+        && !ap_live
         && a2_should_abort_slice(
             A2_SLOW_SLICES.load(Ordering::Relaxed),
             k_nano::smp::ui_yield_infer(),
@@ -930,10 +973,11 @@ fn run_prefill_step(st: &mut ActiveState) {
         k_nano::slog_cortex!(
             "InferQ",
             "warn",
-            "a2_proof refuse watchdog_would_pause id={} slow={} ui_yield={}",
+            "a2_proof refuse watchdog_would_pause id={} slow={} ui_yield={} ap={}",
             st.job_id,
             A2_SLOW_SLICES.load(Ordering::Relaxed),
-            k_nano::smp::ui_yield_infer() as u8
+            k_nano::smp::ui_yield_infer() as u8,
+            ap_live as u8
         );
         finish_job(
             st,
@@ -1333,6 +1377,7 @@ mod tests {
         A2_PROOF_ID.store(0, Ordering::Release);
         A2_SLOW_SLICES.store(0, Ordering::Release);
         A2_ABSENT_LOGGED.store(false, Ordering::Release);
+        A2_SLOT_WAIT_LOGGED.store(false, Ordering::Release);
         for i in 0..QUEUE_CAP {
             slots()[i].occupied.store(false, Ordering::Release);
         }
@@ -1407,6 +1452,78 @@ mod tests {
         assert_eq!(A2_PROOF_MAX_GEN, 1);
         assert!(!A2_PROOF_PROMPT.is_empty() && A2_PROOF_PROMPT.len() <= 16);
         assert!(A2_PROOF_CTX_CAP >= 8 && A2_PROOF_CTX_CAP <= 64);
+    }
+
+    #[test]
+    fn a2_proof_happy_path_host() {
+        // Lane Q6 host-repro: submit→claim(is_proof)→slices→finish com modelo
+        // demo minúsculo (TransformerModel::new, 64 hidden/4 layers — nunca o
+        // 3B). Se FALHAR, o bug é na função (não no serial).
+        let _g = TEST_LOCK.lock();
+        drain_infer_queue_statics();
+        // AP-path simulado (abort jamais armado): restaura ao fim.
+        let prev_ap = k_nano::smp::ap_pollable();
+        k_nano::smp::set_ap_pollable(true);
+        crate::cortex::set_model(alloc::boxed::Box::new(crate::cortex::TransformerModel::new()));
+        let rx = k_nano::EVENT_BUS.subscribe(TOPIC_LLM_RESPONSE);
+        while rx.try_receive().is_some() {}
+        assert!(maybe_submit_a2_proof(), "submit da prova com modelo demo");
+        assert!(A2_PROOF_SUBMITTED.load(Ordering::Relaxed));
+        let pid = A2_PROOF_ID.load(Ordering::Relaxed);
+        assert!(pid != 0, "id da prova");
+        assert!(try_claim_into_active(), "claim acha o job");
+        {
+            let g = ACTIVE.lock();
+            let st = g.as_ref().expect("active após claim");
+            assert!(st.is_proof, "claim marca is_proof pelo id");
+            assert_eq!(st.job_id, pid);
+        }
+        let mut n = 0u32;
+        while !A2_PROOF_DONE.load(Ordering::Acquire) && n < 500 {
+            poll_slice();
+            n += 1;
+        }
+        assert!(A2_PROOF_DONE.load(Ordering::Acquire), "prova termina no host");
+        // Abort jamais armado no path AP (slices de µs, sem slow).
+        assert_eq!(
+            A2_SLOW_SLICES.load(Ordering::Relaxed),
+            0,
+            "sem slow_slice no host"
+        );
+        // Reply final existe e NÃO é abort/refuse.
+        let mut last: Vec<u8> = Vec::new();
+        while let Some(evt) = rx.try_receive() {
+            last = evt.payload;
+        }
+        let text = String::from_utf8_lossy(&last);
+        assert!(!text.contains("watchdog_would_pause"), "abort não disparou: {}", text);
+        assert!(!text.contains("heap escalate"), "sem escalate no host: {}", text);
+        // Limpa globals (outros testes esperam defaults).
+        crate::cortex::clear_model();
+        crate::cortex::GENERATION_GAPS_RESOLVED
+            .store(false, core::sync::atomic::Ordering::Release);
+        k_nano::smp::set_ap_pollable(prev_ap);
+        drain_infer_queue_statics();
+    }
+
+    #[test]
+    fn a2_proof_pending_gate_never_sticks() {
+        // Q7: gate só true com prova submetida e inacabada; todo terminal libera.
+        let _g = TEST_LOCK.lock();
+        drain_infer_queue_statics();
+        assert!(!a2_proof_pending(), "antes do submit nunca bloqueia");
+        A2_PROOF_SUBMITTED.store(true, Ordering::Release);
+        A2_PROOF_ID.store(42, Ordering::Release);
+        assert!(a2_proof_pending(), "submetida e inacabada bloqueia");
+        a2_note_terminal(999);
+        assert!(a2_proof_pending(), "id estranho nao libera");
+        a2_note_terminal(42);
+        assert!(!a2_proof_pending(), "drop terminal libera");
+        A2_PROOF_DONE.store(false, Ordering::Release);
+        assert!(a2_proof_pending(), "re-armado bloqueia de novo");
+        A2_PROOF_DONE.store(true, Ordering::Release);
+        assert!(!a2_proof_pending(), "DONE libera");
+        drain_infer_queue_statics();
     }
 
     #[test]

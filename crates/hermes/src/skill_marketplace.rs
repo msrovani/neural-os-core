@@ -76,8 +76,15 @@ impl MarketplaceAgent {
     pub fn deactivate(&mut self) { self.active = false; }
     pub fn is_active(&self) -> bool { self.active }
 
-    /// Registra uma skill local para anunciar.
+    /// Registra uma skill local para anunciar (dedupe por nome — mesh 6:
+    /// re-registro crescia o Vec e multiplicava os broadcasts MKTP por tick).
     pub fn register_local_skill(&mut self, name: &str, version: &str) {
+        if self.local_skills.iter().any(|(n, _)| n == name) {
+            return;
+        }
+        if self.local_skills.len() >= 32 {
+            return; // cap honesto — 32 skills anunciadas é suficiente por nó
+        }
         self.local_skills.push((String::from(name), String::from(version)));
     }
 

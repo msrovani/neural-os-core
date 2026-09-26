@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s410] - 2026-09-26 — Mesh 6 OOM bughunt + sev fecho
+
+- High: mesh_knowledge dedup morto (VectorClock.tick() por TX → RX MEM 648×, heap ~11KB/tick OOM) → fingerprint FNV-1a TX+RX (RX 648→2, workers 2G estáveis T+122k+); run-mesh6-lab workers 1G→2G; Master: loop I4→LLM cortado (233 intents, 7× amplificação) + caps (skill_observer 128, approval 64, marketplace 32 + dedupe); I3 fantasma → note_trust_entries (push hermes→k_ai)
+- Med: hal_offer AbsentCached→trace; sev s410 fecho: 23 subs mapeadas → Ok (msg/master/worker/await/life/mode/map/observe/pcie/populate/Learn/CONSOLIDATE/REFLECT/h4/h5_demo/p3/0040/0047-*), dbg→Trace; 2 emissores corrigidos (SAFETY VIOLATION msg→fail; virtio Absent notify→absent)
+- Low: tools/goal1-6c-5min.ps1 (GOAL1 6c/5min PASS); 2 em-dashes corrigidos em run-mesh6-lab.ps1 (parser PS5)
+- Gates: check release workspace+bin 0 erros; k-nano lib 205 pass (slog s410_subs_are_ok ✅)
+- Session: SESSION_410; Master mesh pós-fix aguarda re-test
+
 ## [1.9.99-s394] - 2026-09-22 — BEI bughunt ADR-0060 (High→Low)
 
 - High: MPMC CAS bounded (anti-stall); merge_pair real; feed_plasticity liga observe(); lifecycle gate; pressure() via heap_observe; L0 TTL + auto_promote + L7 cap; anti-spam ProceedWithBudget (LAST_BUDGET); sev ADR-0092 (hal_offer/memory_store); facade MPMC dedup; agents.rs:905 path fix.

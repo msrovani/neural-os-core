@@ -30,11 +30,16 @@ pub enum ObsStatus { Open, Actioned, Declined }
 
 static OBSERVATIONS: Mutex<Vec<Observation>> = Mutex::new(Vec::new());
 static NEXT_NUMBER: AtomicU32 = AtomicU32::new(1);
+/// Cap anti-bloat (mesh 6): sem teto, intents recorrentes acumulavam Vec p/ sempre.
+const OBSERVATIONS_CAP: usize = 128;
 
 /// Registra uma observação de execução de tarefa (padrão que pode virar skill)
 pub fn watch_task(name: &str, steps: &[&str], tick: u64) {
     let num = NEXT_NUMBER.fetch_add(1, Ordering::Relaxed);
     let mut obs = OBSERVATIONS.lock();
+    if obs.len() >= OBSERVATIONS_CAP {
+        obs.remove(0);
+    }
     obs.push(Observation {
         number: num,
         tick,
@@ -53,6 +58,9 @@ pub fn watch_task(name: &str, steps: &[&str], tick: u64) {
 pub fn watch_correction(skill: &str, issue: &str, suggestion: &str, principle: &str, tick: u64) {
     let num = NEXT_NUMBER.fetch_add(1, Ordering::Relaxed);
     let mut obs = OBSERVATIONS.lock();
+    if obs.len() >= OBSERVATIONS_CAP {
+        obs.remove(0);
+    }
     obs.push(Observation {
         number: num,
         tick,

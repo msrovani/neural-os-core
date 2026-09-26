@@ -32,13 +32,19 @@ pub fn request_device(class: DeviceClass, agent_name: &str) -> DeviceRequestResu
     let st = offer::query(class);
     match st {
         OfferStatus::Absent | OfferStatus::AbsentCached => {
+            let cached = st == OfferStatus::AbsentCached;
             let ack = format!(
                 "HalOffer Absent class={} agent={}{}",
                 class.as_str(),
                 agent_name,
-                if st == OfferStatus::AbsentCached { " (cached)" } else { "" }
+                if cached { " (cached)" } else { "" }
             );
-            k_nano::slog_hermes!("HalOffer", "warn", "{}", ack);
+            // SESSION_299 (sev = contrato de visibilidade): a 1ª ocorrência
+            // responde "por que o HW está ausente?" e fica em warn; a repetição
+            // em cache (AbsentCached, backoff do k_hal) era ~50% do log de boot
+            // (16k+ linhas por no no mesh 6) — rebaixada p/ trace (muda nada
+            // na decisão, só ruído).
+            k_nano::slog_hermes!("HalOffer", if cached { "trace" } else { "warn" }, "{}", ack);
             publish(
                 offer::TOPIC_HW_OFFER,
                 format!("status=Absent;class={};agent={}", class.as_str(), agent_name),

@@ -56,6 +56,8 @@ pub enum TaskType {
     Error = 6,
     /// Shutdown
     Shutdown = 7,
+    /// Laya intent (code-safe protocol slot; ignored-by-default, no wire behavior change)
+    LayaIntent = 8,
 }
 
 /// Packet flags bitfield
@@ -287,5 +289,17 @@ impl NoProtoParser {
                 Some(p) => buffer.len() >= p.total_size(),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn laya_intent_discriminant_and_header_size() {
+        assert_eq!(TaskType::Shutdown as u8, 7);
+        assert_eq!(TaskType::LayaIntent as u8, 8);
+        assert_eq!(core::mem::size_of::<AiosTaskPacket>(), 37);
     }
 }

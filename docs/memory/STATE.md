@@ -1,8 +1,19 @@
-# STATE — neural-os-core v1.9.99-s406 — Heap auto-fracionado advisory
+# STATE — neural-os-core v1.9.99-s410 — Mesh 6 OOM bughunt + sev fecho
 
-#   PISTA ATIVA: s406 — carve por core + quota por ScheduleKind + grow-gate (commit 2b650c56)
-#   PISTA ANTERIOR: s405 memmap sem teto (commit 191d6b78)
+#   PISTA ATIVA: s410 — mesh 6 lab: dedup fnv1a64 TX/RX (RX MEM 648→2), workers 2G estáveis T+122k+;
+#     Master anti-bloat (loop I4 cortado + caps obs/req/mkt); I3 note_trust_entries; sev s409+s410 mapeadas
+#   PISTA ANTERIOR: s406 heap auto-fracionado advisory (commit 2b650c56)
 #   Não declarar v2.0.0
+
+## Lab vivo (s410)
+
+| Item | Estado |
+|------|--------|
+| GOAL1 6c/5min (`tools/goal1-6c-5min.ps1`) | ✅ PASS (5115 ok / 236 warn / 2 fail conhecidos) |
+| Mesh 6 workers c–f (2G) | ✅ estáveis T+122k+ pós-fix (RX MEM 648→2) |
+| Mesh 6 Master (a) pós-fix | 🟡 re-test pendente (rodada anterior usou imagem pré-fix; OOM T+141k pré-fix) |
+| sev audit Sev::from_sub | ✅ s409+s410 fecho (23 subs → Ok, dbg→Trace; 2 emissores corrigidos) |
+| I3 fantasma | ✅ fix note_trust_entries (push pattern hermes→k_ai) |
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
 
@@ -44,5 +55,7 @@
 | B2 | Mesh peer B | AWAITING operador |
 | #607 | Efeito Matrix mmap expert residual | ⏳ |
 | #608 | slog info restante → canónico | 🟡 parcial s391 (UI slog) |
+| s410 | Mesh 6 OOM bughunt (worker+Master anti-bloat) + sev fecho + GOAL1 6c/5min | ✅ SESSION_410 (Master re-test pendente) |
+| s409 | Docs/Governança estudo ternário+GPU HAL; sev s409 (reg/query/select/state/revoke) | ✅ SESSION_409 |
 | s392 | Boot/Limine bughunt H1–H5/M1–M5/L1–L3 + canvas | ✅ SESSION_392 |
 | s393 | MHI bughunt docs-only (fix-1/2/3 + canvas + pins talc/x86_64) | ✅ SESSION_393 + IDEA #609; código = outros lanes |

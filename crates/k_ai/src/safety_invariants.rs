@@ -11,6 +11,18 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+/// Snapshot do dado de Trust publicado pelo DONO do cache (hermes
+/// `TRUST_CACHE.entry_count()` — dep direction hermes→k_ai impede leitura
+/// direta). SafetyAgent/SecurityAgent hermes fazem push a cada tick; o proxy
+/// I3 usa o snapshot: >0 = dado real (Pass). Sem push com fleet up = o hermes
+/// não está tickando (aí sim é violação real, não fantasma).
+static TRUST_PUSHED_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Push do dono do cache (hermes) — chamar a cada tick com `entry_count()`.
+pub fn note_trust_entries(n: usize) {
+    TRUST_PUSHED_COUNT.store(n as u64, Ordering::Relaxed);
+}
+
 /// Resultado da verificação de invariantes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvariantResult {
@@ -132,13 +144,23 @@ impl SafetyInvariants {
     /// Hermes SafetyAgent faz o check real (entry_count).
     fn check_trust_intact(&self) -> InvariantResult {
         let fleet_up = crate::agent_stats::current_agent_count() > 0;
+        // Push do dono (hermes SafetyAgent/SecurityAgent) chega ANTES da fleet
+        // subir — T+108 trust_entries=4 no boot 6c. Com push, o proxy reflete
+        // dado real e o [fail] "I3 VIOLATION" em T+121 (fleet up, proxy cego)
+        // desaparece: era fantasma — o hermes já tinha corrigido para Pass.
+        if TRUST_PUSHED_COUNT.load(Ordering::Relaxed) > 0 {
+            return InvariantResult::Pass;
+        }
         if fleet_up {
+            // Fleet up mas ZERO push até agora = hermes não está tickando
+            // (SafetyAgent/SecurityAgent mortos) — violação REAL de observação,
+            // não a ausência cosmética de antes (que sempre existia por design).
             static WARNED_V: AtomicBool = AtomicBool::new(false);
             if !WARNED_V.swap(true, Ordering::Relaxed) {
                 k_nano::slog_kai!(
                     "Safety",
                     "fail",
-                    "I3 VIOLATION: fleet up mas sem dado de Trust neste anel"
+                    "I3 VIOLATION: fleet up e NENHUM push de Trust do hermes (SafetyAgent não tickou?)"
                 );
             }
             InvariantResult::Violation

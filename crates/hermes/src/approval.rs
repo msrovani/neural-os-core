@@ -36,6 +36,9 @@ pub struct ApprovalGate {
     next_id: u64,
 }
 
+/// Cap anti-bloat (mesh 6): requests não resolvidos não devem acumular sem teto.
+const REQUESTS_CAP: usize = 64;
+
 impl ApprovalGate {
     pub fn new() -> Self { ApprovalGate { requests: Vec::new(), next_id: 1 } }
 
@@ -43,6 +46,9 @@ impl ApprovalGate {
     /// Se Confirm/Escalate: pede ao Jarbas (ou terminal HANR conforme /ui).
     pub fn request(&mut self, skill: &str, agent: &str, reason: &str, level: ApprovalLevel) -> u64 {
         let id = self.next_id; self.next_id += 1;
+        if self.requests.len() >= REQUESTS_CAP {
+            self.requests.remove(0);
+        }
         self.requests.push(ApprovalRequest {
             id, skill: String::from(skill), agent: String::from(agent),
             reason: String::from(reason), required_level: level,

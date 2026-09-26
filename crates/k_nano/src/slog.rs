@@ -83,7 +83,44 @@ impl Sev {
             | "BAR" | "bar" | "BACKEND" | "GEN9" | "GUC" | "D2" | "D3" | "D4"
             | "CE" | "KIQ" | "MES" | "GGTT" | "gtt" | "BCS" | "bench" | "XQUEUE"
             | "VRAM" | "SASOS" | "ACR" | "WIFI" | "Wifi" | "DB" | "vga" | "XPU"
-            | "SZ" | "RING" | "ring" | "nvidia" | "COMPUTE" | "Cap" => Sev::Ok,
+            | "SZ" | "RING" | "ring" | "nvidia" | "COMPUTE" | "Cap"
+            // s409 (audit sev desconhecida — mesh 6 / boot 6c): verbos de evento
+            // novo/consulta/estado = Ok (SESSION_360: sucesso → ok, nunca warn/fail;
+            // TRACE mudo = dmesg cego, ADR-0092).
+            //   reg   = storage_bus register_probe (novo device no barramento)
+            //   query = k_hal offer/virtio query (consulta de oferta — sucesso)
+            //   select= k_hal virtio backend select (decisão tomada com sucesso)
+            //   state = k_ai self_state write (SELF.STATE atualizado)
+            //   revoke= k_hal cap_gate revoke (ação executada com sucesso)
+            | "reg" | "query" | "select" | "state" | "revoke" => Sev::Ok,
+            //   smoke = storage_bus MBR read smoke test — diagnóstico de
+            //     bring-up (passo de validação, não evento de produção) → TRACE.
+            | "smoke" => Sev::Trace,
+            // s410 (fecho do audit sev — mesh 6 + boot 6c): emissores mapeados
+            // por grep nos crates; padrão SESSION_299 (responde pergunta de
+            // diagnóstico → visível = Ok) + SESSION_360 (sucesso → ok).
+            //   msg        = linha de report/display (LogAnalyst, optimizer,
+            //     package_hub, network_agent, jarvis greeting) — relatório ok.
+            //     Emissor de VIOLATION em safety.rs foi corrigido p/ slot "fail".
+            //   master/worker = FL trainer aggregate + CRDT publish (sucesso)
+            //   await      = HW-GATE status report (estado esperado, não falha)
+            //   life       = k_ai self_state event (SELF.STATE lifecycle)
+            //   mode       = boot_mode report
+            //   map        = k_hal virtio BAR map
+            //   observe    = k_ai boot_observe (plano da IA no silício)
+            //   pcie       = GPU PCIe report (bin)
+            //   populate   = k_hal DeviceTree populate
+            //   Learn      = Trinity learn (FAT32 load + R3 replay)
+            //   CONSOLIDATE/REFLECT = SleepCycle/self_evolve fase concluída
+            //   h4/h5_demo/p3 = demos PoC CapGate/VirtIO (SESSION_360: ok)
+            //   0040/0047-* = gates ADR-0040/0047 (status report de boot)
+            //   dbg        = debug de boot (bin) → TRACE
+            | "msg" | "master" | "worker" | "await" | "life" | "mode" | "map"
+            | "observe" | "pcie" | "populate" | "Learn" | "CONSOLIDATE" | "REFLECT"
+            | "h4" | "h5_demo" | "p3"
+            | "0040" | "0047-G3" | "0047-G4" | "0047-G5" | "0047-H" | "0047-L3"
+            | "0047-NGRAM" => Sev::Ok,
+            | "dbg" => Sev::Trace,
             "warn" | "WARN" | "warning" | "degraded" | "skip" | "absent" | "msc" => Sev::Warn,
             "fail" | "FAIL" | "error" | "panic" | "err" => Sev::Fail,
             "trace" | "TRACE" | "debug" | "ckpt" | "mmIO" | "mmio" => Sev::Trace,
@@ -291,8 +328,22 @@ mod tests {
     #[test]
     fn unknown_sub_is_trace() {
         assert_eq!(Sev::from_sub("ckpt"), Sev::Trace);
-        assert_eq!(Sev::from_sub("msg"), Sev::Trace);
+        assert_eq!(Sev::from_sub("algo_novo_aleatorio"), Sev::Trace);
+        assert_eq!(Sev::from_sub("dbg"), Sev::Trace);
         assert!(!file_allows(Sev::Trace) || cfg!(feature = "boot-trace"));
+    }
+
+    /// s410: subs mapeadas do audit mesh/boot — visíveis, não TRACE mudo.
+    #[test]
+    fn s410_subs_are_ok() {
+        for sub in [
+            "msg", "master", "worker", "await", "life", "mode", "map", "observe",
+            "pcie", "populate", "Learn", "CONSOLIDATE", "REFLECT", "h4", "h5_demo",
+            "p3", "0040", "0047-G3", "0047-G4", "0047-G5", "0047-H", "0047-L3",
+            "0047-NGRAM",
+        ] {
+            assert_eq!(Sev::from_sub(sub), Sev::Ok, "sub '{sub}' deveria ser Ok");
+        }
     }
 
     #[test]
