@@ -61,6 +61,19 @@
 - **Gates ADR-0105 preservados:** default do script = **CpuOnly** (`-GpuReal` é opt-in); `x-vga=on` + romfile opcional; `-vga none -display none` (guest tem a GPU de verdade, sem VGA fantasma). Ready continua decisão do GUEST: `canary::run_vector_add_canary_nv` (vector_add PASS = has_compute=true) + `pack_present_on_fat` (`NKP_W2A8_SM61.BIN`/`NKP_SM61.BIN` já no mkfat32). NKP unsigned (`pack_nkp_lab.ps1 -IncludeSm61`) = "nunca Ready" mesmo com GPU real — assinatura é item separado (ed25519-compact no workspace).
 - **Residual AWAITING_HW:** rodar em host Linux com IOMMU isolado (grupo próprio p/ GPU+audio) + ROM extraída; aceite = slog canário no log serial `boot_kvm_vfio_*.txt`.
 
+## Adendo s410d — runtime hygiene: auditoria completa dos agentes nativos
+- **Checklist canônico:** `docs/architecture/runtime-hygiene-checklist.md` (5 perguntas + tabela auditada + processo p/ agente novo).
+- **7 estruturas sem teto corrigidas:**
+  1. `k_ai::memory_systems::EMBED_INDEX` — alimentado a cada exchange + rebuild do skill_loader, **sem dedup e sem cap** (o mais grave; mesmo padrão do bug mesh). Fix: dedupe por label (replace) + cap 128 FIFO.
+  2. `k_ai::trust::escalation_log` — record_violation em loop empilhava sem teto. Fix: cap 64 FIFO.
+  3. `k_nano::fts_search::IDX` — index_put re-empilhava o mesmo path. Fix: dedupe por path + cap 256 FIFO.
+  4. `hermes::skill_gen::TASK_PATTERNS` — cada task nova = entrada nova. Fix: cap 64 + evicção 1ª chave.
+  5. `hermes::skill_opt::EVOLVING` — cada skill efêmera nova = entrada com source. Fix: cap 64 + evicção 1ª chave.
+  6. `hermes::wasmi_rt::SKILL_PROVENANCE` — unregister deixava órfãos. Fix: cap 64 + evicção 1ª chave.
+  7. `k_hal::gpu::backend::JOB_RINGS` — re-init empilhava ring por GPU (push puro). Fix: replace-by-vendor (1 ring por vendor).
+- **~19 estruturas auditadas OK** (caps pré-existentes): self_learning 256, audit ring 4096, training/ephemeral bufs 100, chat_history 50, SESSION 48, NUDGE_QUEUE 16, TOASTS 8+TTL, PIN_CACHE 24, OFFERS ≤32, DEVICE_TREE dedupe, UCAST_STASH 8, FED_DELTAS keep-latest, infer_queue 8 slots, event-bus bounded (S375), L0/L1 lifecycle.
+- **Verificação:** check 0 erros (k-hal/k_ai/hermes/k-nano); testes: k_ai 56, hermes 205, k-nano 56, k-hal 56, cortex 89 — 0 fail.
+
 ## Lições
 - **Dedup com nonce auto-incrementado não dedupa:** qualquer dedupe cuja chave inclui estado que muda a cada emissão (clock.tick(), timestamp, seq) é um filtro morto — fingerprint de CONTEÚDO (hash) é a condição de dedupe válida; memória replicada em mesh precisa dedupe TX+RX.
 - **Estruturas "aprendizes" sem cap = OOM a médio prazo:** observations/requests/marketplace crescem com o runtime; cap + evicção FIFO é o mínimo para hot-path de agente.

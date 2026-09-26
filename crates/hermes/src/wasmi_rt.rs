@@ -609,9 +609,20 @@ impl SkillProvenance {
 static SKILL_PROVENANCE: spin::Mutex<BTreeMap<String, SkillProvenance>> =
     spin::Mutex::new(BTreeMap::new());
 
+/// Runtime hygiene (s410d): provenance map é 1:1 com o registro de skills
+/// (re-register sobrescreve), mas skills unregistered deixavam entrada órfã.
+/// Cap espelha o cap do registro de skills (32 no skill_marketplace, s410).
+const SKILL_PROVENANCE_CAP: usize = 64;
+
 /// Carimba proveniência no registro (sobrescreve em re-registro).
 pub fn record_skill_provenance(name: &str, provenance: SkillProvenance) {
-    SKILL_PROVENANCE.lock().insert(String::from(name), provenance);
+    let mut map = SKILL_PROVENANCE.lock();
+    if !map.contains_key(name) && map.len() >= SKILL_PROVENANCE_CAP {
+        if let Some(first) = map.keys().next().cloned() {
+            map.remove(&first);
+        }
+    }
+    map.insert(String::from(name), provenance);
 }
 
 /// Lê o carimbo de proveniência (`None` = registrada pelo caminho legado).

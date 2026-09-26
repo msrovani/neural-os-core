@@ -28,6 +28,10 @@ pub struct EvolvingSkill {
 
 pub static EVOLVING: Mutex<BTreeMap<String, EvolvingSkill>> = Mutex::new(BTreeMap::new());
 
+/// Runtime hygiene (s410d): mapa de skills em evolução com cap — cada skill
+/// efêmera nova criava entrada com source String; cap + evicção da 1ª chave.
+const EVOLVING_CAP: usize = 64;
+
 /// Serializa os testes que tocam `EVOLVING` (mapa global) — sem isto, dois
 /// testes em paralelo resetam/gravam no mesmo mapa e corrompem as asserções
 /// (ex.: um skill elegível de outro teste aparece no `check_skill_promotion`).
@@ -37,6 +41,11 @@ pub static EVOLVING_TEST_LOCK: Mutex<()> = Mutex::new(());
 /// Registra execução Python efêmera (primeiro uso).
 pub fn record_python_run(name: &str, source: &str, success: bool) {
     let mut map = EVOLVING.lock();
+    if !map.contains_key(name) && map.len() >= EVOLVING_CAP {
+        if let Some(first) = map.keys().next().cloned() {
+            map.remove(&first);
+        }
+    }
     let entry = map.entry(String::from(name)).or_insert(EvolvingSkill {
         name: String::from(name),
         stage: SkillStage::EphemeralPython,

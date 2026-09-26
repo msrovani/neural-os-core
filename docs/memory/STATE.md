@@ -15,8 +15,8 @@
 | KVM+VFIO GTX 1050 (`tools/run-qemu-kvm-vfio.ps1`) | 🟡 script pronto (canários ADR-0105 preservados); AWAITING host Linux IOMMU |
 | GPU compute NVIDIA (ADR-0105 B1.3/B2.4) | ▶️ AWAITING_HW (CpuOnly default; VFIO lab s410c) |
 | sev audit Sev::from_sub | ✅ s409+s410 fecho (23 subs → Ok, dbg→Trace; 2 emissores corrigidos) |
-| KVM+VFIO GTX 1050 (`tools/run-qemu-kvm-vfio.ps1`) | 🟡 script pronto (canários ADR-0105 preservados); AWAITING host Linux IOMMU |
 | I3 fantasma | ✅ fix note_trust_entries (push pattern hermes→k_ai) |
+| Runtime hygiene (`docs/architecture/runtime-hygiene-checklist.md`) | ✅ s410d: 7 estruturas corrigidas + ~19 auditadas com cap |
 
 ## Gate ADR-0100 (Trilho A) — checklist vivo
 

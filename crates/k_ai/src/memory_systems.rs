@@ -175,6 +175,12 @@ pub struct EmbeddingEntry {
 
 pub static EMBED_INDEX: spin::Mutex<Vec<EmbeddingEntry>> = spin::Mutex::new(Vec::new());
 
+/// Runtime hygiene (s410d): o índice é alimentado a CADA exchange de chat
+/// ("user"+"assistant") e a cada rebuild do skill_loader — sem dedup/cap,
+/// crescia linear com o runtime (mesmo padrão do bug mesh_knowledge s410).
+/// Dedup por label (re-index = replace) + cap com evicção FIFO.
+const EMBED_INDEX_CAP: usize = 128;
+
 /// Indexa um texto para busca semântica futura
 pub fn index_embedding(label: &str, text: &str) {
     let (emb, path) = embed_or_pseudo(text);
@@ -182,7 +188,16 @@ pub fn index_embedding(label: &str, text: &str) {
         return;
     }
     let _ = path;
-    EMBED_INDEX.lock().push(EmbeddingEntry {
+    let mut idx = EMBED_INDEX.lock();
+    // Dedup: label repetido = replace (re-index de skill / novo turno)
+    if let Some(slot) = idx.iter_mut().find(|e| e.label == label) {
+        slot.embedding = emb;
+        return;
+    }
+    if idx.len() >= EMBED_INDEX_CAP {
+        idx.remove(0); // evicção FIFO
+    }
+    idx.push(EmbeddingEntry {
         label: String::from(label),
         embedding: emb,
     });

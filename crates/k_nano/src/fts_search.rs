@@ -11,8 +11,20 @@ struct Entry {
 
 static IDX: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
 
+/// Runtime hygiene (s410d): índice FTS crescia sem teto — cada index_put
+/// empilhava outra entrada do MESMO path (re-index duplicava). Dedup por
+/// path (replace) + cap com evicção FIFO.
+const FTS_IDX_CAP: usize = 256;
+
 pub fn index_put(path: &str, text: &str) {
     let mut g = IDX.lock();
+    if let Some(slot) = g.iter_mut().find(|e| e.path == path) {
+        slot.blob = String::from(text);
+        return;
+    }
+    if g.len() >= FTS_IDX_CAP {
+        g.remove(0); // evicção FIFO
+    }
     g.push(Entry {
         path: String::from(path),
         blob: String::from(text),

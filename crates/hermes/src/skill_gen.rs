@@ -19,12 +19,22 @@ pub struct TaskPattern {
 
 static TASK_PATTERNS: Mutex<BTreeMap<String, TaskPattern>> = Mutex::new(BTreeMap::new());
 
+/// Runtime hygiene (s410d): padrões observados pelo AutoLearn com cap —
+/// cada task nova criava entrada com triggers+steps; sem cap, cresce com a
+/// diversidade de intents do runtime. BTreeMap ordenado → evicção = 1ª chave.
+const TASK_PATTERNS_CAP: usize = 64;
+
 /// Registra um padrão de task observado
 pub fn record_task(name: &str, description: &str, steps: &[&str]) {
     let mut patterns = TASK_PATTERNS.lock();
     if let Some(p) = patterns.get_mut(name) {
         p.uses += 1;
         return;
+    }
+    if patterns.len() >= TASK_PATTERNS_CAP {
+        if let Some(first) = patterns.keys().next().cloned() {
+            patterns.remove(&first); // evicção: padrão mais antigo (ordem de inserção aproximada)
+        }
     }
     patterns.insert(String::from(name), TaskPattern {
         name: String::from(name),

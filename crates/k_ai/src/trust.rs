@@ -229,6 +229,12 @@ impl TrustCache {
         let key = (token, String::from(skill));
         if let Some(entry) = self.entries.get_mut(&key) {
             entry.state = entry.state.escalate();
+            // Runtime hygiene (s410d): log de escalada com cap — violação
+            // repetida em loop (agente bugado) crescia sem teto.
+            const ESCALATION_LOG_CAP: usize = 64;
+            if self.escalation_log.len() >= ESCALATION_LOG_CAP {
+                self.escalation_log.remove(0);
+            }
             self.escalation_log.push(
                 alloc::format!("token={} skill={} escalated to {:?}", token, skill, entry.state)
             );

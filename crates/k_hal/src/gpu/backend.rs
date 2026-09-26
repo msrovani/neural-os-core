@@ -264,7 +264,16 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
 
     let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
     if let Some(job_ring) = GpuJobRing::new(gpu, pmoff) {
-        JOB_RINGS.lock().push(job_ring);
+        // Runtime hygiene (s410d): um ring por vendor — re-init (rescan/
+        // respawn de agente) substitui o ring existente em vez de empilhar
+        // (JOB_RINGS só fazia push; boots múltiplos = rings órfãos). Dual
+        // GPU mesmo-vendor = residual raro (ring antigo é substituído).
+        let mut rings = JOB_RINGS.lock();
+        if let Some(slot) = rings.iter_mut().find(|r| r.gpu_vendor == job_ring.gpu_vendor) {
+            *slot = job_ring;
+        } else {
+            rings.push(job_ring);
+        }
     }
 
     crate::gpu::firmware::test_load_firmware();
