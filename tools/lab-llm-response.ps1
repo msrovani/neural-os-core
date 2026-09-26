@@ -30,7 +30,7 @@ Set-Content $Result ("started {0}" -f (Get-Date -Format o)) -Encoding utf8
 
 $freeGB = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 2)
 W ("host freeGB={0} RamGB={1} Phrase={2}" -f $freeGB, $RamGB, $Phrase)
-if ($RamGB -lt 6) { $RamGB = 6 }  # STT pin + Falcon1B
+if ($RamGB -lt 5) { $RamGB = 5 }  # piso 5G: falcon1B+BPE+PIPER cabem abaixo de 0x163000000 (STT cai OOB — ok p/ prova de token); 6G estoura host com <5GB livres
 
 if (-not $SkipBuild) {
     $env:CARGO_TARGET_DIR = 'target/agent-lab-clima'
@@ -74,6 +74,12 @@ function Add-Loader([string]$fp, [uint64]$addr) {
     return $true
 }
 [void](Add-Loader $falcon ([uint64]0x100000000))
+# BPE tokenizer (BPB1) — sem ele o decode cai no char-vocab 99 = ruído.
+# 0x126000000: FALCON3_1B (570MB) termina em 0x12204A238 e PIPER (63MB) em
+# ~0x125DD0000 — BPE vai DEPOIS deles, dentro do scan [0x100000000..0x180000000).
+$bpe = Join-Path $Root 'target1\bpe_vocab.bin'
+if (-not (Test-Path $bpe)) { $bpe = Join-Path $Root 'models\bpe_vocab.bin' }
+if (Test-Path $bpe) { [void](Add-Loader $bpe ([uint64]0x126000000)) } else { Write-Host 'BPE AUSENTE — decode sera char-vocab (lixo)' -ForegroundColor Red }
 $piper = Join-Path $Root 'target1\PIPER_PT_BR.BIN'
 if (Test-Path $piper) {
     $addr = [uint64]0x122200000
