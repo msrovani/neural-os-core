@@ -62,9 +62,122 @@ fn repack_col_major(w: &PackedTernaryTensor) -> Vec<i8> {
     out
 }
 
+/// LUT byte→4 pesos ternários (0b01=+1, 0b10=-1, 0b00/0b11=0).
+/// `const` = .rodata: troca 4× (shift+mask+sub) por 1 load no hot path.
+const fn w2a8_lut() -> [f32; 1024] {
+    let mut l = [0f32; 1024];
+    let mut b = 0usize;
+    while b < 256 {
+        let mut lane = 0usize;
+        while lane < 4 {
+            let pair = (b >> (lane * 2)) & 3;
+            l[b * 4 + lane] = ((pair & 1) as i8 - (pair >> 1) as i8) as f32;
+            lane += 1;
+        }
+        b += 1;
+    }
+    l
+}
+static W2A8_LUT: [f32; 1024] = w2a8_lut();
+
+/// Kernel SSE2: t-externo/j-interno (acesso SEQUENCIAL a packed_data) + LUT.
+/// `out` (len == m*n) alocado FORA do `#[target_feature]` — sret soft-float #GP
+/// (SESSION_336/362). Requer `n % 4 == 0`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+unsafe fn w2a8_fill_lut_sse2(
+    w: &PackedTernaryTensor,
+    xq: &[i32],
+    si: &[f32],
+    m: usize,
+    k: usize,
+    n: usize,
+    out: &mut [f32],
+) {
+    use core::arch::x86_64::*;
+    let nq = n / 4;
+    for i in 0..m {
+        let xrow = &xq[i * k..(i + 1) * k];
+        let orow = &mut out[i * n..(i + 1) * n];
+        for v in orow.iter_mut() {
+            *v = 0.0;
+        }
+        for t in 0..k {
+            let xv = _mm_set1_ps(xrow[t] as f32);
+            let base_b = t * nq;
+            for jb in 0..nq {
+                let byte = w.packed_data[base_b + jb] as usize;
+                let wv = _mm_loadu_ps(W2A8_LUT.as_ptr().add(byte * 4));
+                let o = jb * 4;
+                let prev = _mm_loadu_ps(orow.as_ptr().add(o));
+                _mm_storeu_ps(orow.as_mut_ptr().add(o), _mm_add_ps(prev, _mm_mul_ps(xv, wv)));
+            }
+        }
+        let sv = _mm_set1_ps(si[i]);
+        let mut j = 0usize;
+        while j < n {
+            let p = _mm_loadu_ps(orow.as_ptr().add(j));
+            _mm_storeu_ps(orow.as_mut_ptr().add(j), _mm_mul_ps(p, sv));
+            j += 4;
+        }
+    }
+}
+
+/// Quantiza ativações (i32 + escala/linha) e roda o kernel SSE2. `None` em OOM.
+#[cfg(target_arch = "x86_64")]
+fn w2a8_scalar_lut(w: &PackedTernaryTensor, x: &Tensor, m: usize, k: usize, n: usize) -> Option<Tensor> {
+    let mut out = Tensor::new((m, n));
+    if !out.is_valid() {
+        return None;
+    }
+    let mut xq = alloc::vec::Vec::new();
+    if xq.try_reserve_exact(m * k).is_err() {
+        return None;
+    }
+    xq.resize(m * k, 0i32);
+    let mut si = alloc::vec::Vec::new();
+    if si.try_reserve_exact(m).is_err() {
+        return None;
+    }
+    si.resize(m, 1.0f32);
+    for i in 0..m {
+        let mut max_abs = 0.0f32;
+        for &v in &x.data[i * k..(i + 1) * k] {
+            let a = v.abs();
+            if a > max_abs {
+                max_abs = a;
+            }
+        }
+        let s = if max_abs > 1e-9 { max_abs / 127.0 } else { 1.0 };
+        si[i] = s;
+        let inv = 1.0 / s;
+        let base = i * k;
+        for t in 0..k {
+            xq[base + t] = unsafe { libm::roundf(x.data[base + t] * inv) } as i32;
+        }
+    }
+    unsafe {
+        w2a8_fill_lut_sse2(w, &xq, &si, m, k, n, &mut out.data);
+    }
+    Some(out)
+}
+
 /// Path escalar quantizado — funciona em soft-float bare-metal (ADR-0105 B3).
-/// Mesma matemática do epílogo W2A8 (si · Σ q·w); sem intrins XMM/YMM.
+/// t-externo/j-interno (memória sequencial) + LUT byte→4 pesos + SSE2 (4 lanes).
+/// `n % 4 != 0` cai na referência (o byte LUT não alinha com a linha `t`).
 pub fn w2a8_ternary_matmul_scalar(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
+    let (k, n) = w.shape;
+    let (m, k2) = x.shape;
+    if k != k2 || k == 0 || n == 0 || m == 0 {
+        return None;
+    }
+    #[cfg(target_arch = "x86_64")]
+    if n % 4 == 0 {
+        if let Some(r) = w2a8_scalar_lut(w, x, m, k, n) {
+            return Some(r);
+        }
+    }
+    let _ = (m, k);
     w2a8_reference_quantized(w, x)
 }
 
