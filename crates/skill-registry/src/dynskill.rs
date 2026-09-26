@@ -5,11 +5,36 @@
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use crate::mcp::McpManifest;
 use crate::skill::Skill;
 
 /// Token CapGate para DynamicSkill / mesh promote (≠ Legacy(1) do EventBus de sistema).
 pub const DYNSKILL_TOKEN: u64 = 0xD1;
+
+/// Lane B: ponte de execução WASM (sem dependência circular).
+/// `skill-registry` é folha (só depende de `event-bus`) e não pode chamar o
+/// wasmi do hermes. O hermes instala aqui o executor real via
+/// `install_wasm_exec_bridge` (lazy, no `register_wasm_skill*`); sem bridge,
+/// `execute` com `wasm` continua fail-closed (`wasm_runtime_unwired`).
+pub type WasmExecFn = fn(wasm: &[u8], payload: &[u8]) -> Result<Vec<u8>, &'static str>;
+
+static WASM_EXEC_BRIDGE: AtomicUsize = AtomicUsize::new(0);
+
+/// Instala o executor WASM real (hermes wasmi). Idempotente.
+pub fn install_wasm_exec_bridge(f: WasmExecFn) {
+    WASM_EXEC_BRIDGE.store(f as usize, Ordering::SeqCst);
+}
+
+fn wasm_exec_bridge() -> Option<WasmExecFn> {
+    let v = WASM_EXEC_BRIDGE.load(Ordering::SeqCst);
+    if v == 0 {
+        None
+    } else {
+        // SAFETY: só armazenado via install_wasm_exec_bridge (WasmExecFn).
+        Some(unsafe { core::mem::transmute::<usize, WasmExecFn>(v) })
+    }
+}
 
 /// ADR-0059 F5: DynamicSkill com campo `wasm` opcional para hot-promote.
 pub struct DynamicSkill {
@@ -72,7 +97,12 @@ impl Skill for DynamicSkill {
     }
 
     fn execute(&self, payload: &[u8]) -> Result<Vec<u8>, &'static str> {
-        if self.wasm.is_some() {
+        if let Some(wasm) = self.wasm.as_ref() {
+            // Lane B: com bridge instalado (hermes wasmi) executa de verdade;
+            // sem bridge, fail-closed honesto (SESSION_377 / ADR-0059 F5).
+            if let Some(run) = wasm_exec_bridge() {
+                return run(wasm, payload);
+            }
             // Never fake wasmi success — AIOS honesty (SESSION_377 / ADR-0059 F5).
             return Err("wasm_runtime_unwired");
         }
@@ -91,10 +121,16 @@ mod tests {
     use crate::Skill;
 
     #[test]
-    fn wasm_skill_fails_closed() {
-        let s = DynamicSkill::with_wasm("x", "d", "i", vec![0, 0x61, 0x73, 0x6d]);
-        assert!(s.wasm.is_some());
-        assert_eq!(s.execute(b"hi"), Err("wasm_runtime_unwired"));
+    fn wasm_exec_bridge_delegates_when_installed() {
+        fn fake_exec(_wasm: &[u8], payload: &[u8]) -> Result<Vec<u8>, &'static str> {
+            Ok(alloc::format!("fake:{}", payload.len()).into_bytes())
+        }
+        install_wasm_exec_bridge(fake_exec);
+        let s = DynamicSkill::with_wasm("y", "d", "i", vec![0, 0x61, 0x73, 0x6d]);
+        let out = s.execute(b"hi").expect("bridge deve delegar");
+        assert_eq!(out, b"fake:2");
+        // ponytail: bridge é monotônico (sem uninstall) — demais testes neste
+        // binário não instalam bridge nem dependem de fail-closed após este.
     }
 
     #[test]

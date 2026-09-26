@@ -13,6 +13,7 @@
 
 use crate::tensor::{PackedTernaryTensor, Tensor};
 use alloc::vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // ─── Tiling Constants (ADR-0084 F5, tuning por HW) ───────────────────────
 // ponytail: defaults para cache L2 256KB; ajustar por target (faixas:
@@ -29,6 +30,115 @@ fn avx2_available() -> bool {
 
 // ─── Main Dispatch ──────────────────────────────────────────────────────
 
+/// Lane D-accel: shape de prova 3B (só a prova faz k,n ≥ 1024 — self-test
+/// mesh 64×64 e HWExpert 128 ficam de fora do log).
+fn is_proof_shaped(k: usize, n: usize) -> bool {
+    k >= 1024 && n >= 1024
+}
+
+/// Rota logada 1×/boot (sem spam por layer).
+static A2_ROUTE_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// Mesh seria tentado? Espelho barato do gate de dispatch_ternary (p2p only).
+#[cfg(feature = "p2p")]
+fn mesh_route_attempted() -> bool {
+    let role = k_nano::net::mesh::local_role();
+    let can_send = matches!(
+        role,
+        k_nano::net::mesh::NodeRole::Worker
+            | k_nano::net::mesh::NodeRole::Memory
+            | k_nano::net::mesh::NodeRole::Compute
+    );
+    if !can_send {
+        return false;
+    }
+    let peers = k_nano::net::mesh::MESH_ENGINE
+        .lock()
+        .as_ref()
+        .map_or(0, |eng| eng.node_count());
+    peers >= 1 && !k_nano::memory::refuse_heavy_frag()
+}
+
+/// Lane D-accel: rótulo da rota que o dispatch TENTARIA (inspeção pura dos
+/// mesmos gates, na mesma ordem — manter em sync com `ternary_matmul` abaixo
+/// + `bitnet_sse::ternary_matmul`). Não executa nada, nunca aloca.
+pub fn cpu_route_label(w: &PackedTernaryTensor, x: &Tensor) -> &'static str {
+    let (k, n) = w.shape;
+    let (m, k2) = x.shape;
+    if k != k2 || m == 0 || n == 0 || k == 0 {
+        return "refuse-guard";
+    }
+    let big = n >= 64 && k >= 64;
+    #[cfg(feature = "p2p")]
+    if mesh_route_attempted() {
+        return "mesh";
+    }
+    if crate::compute::npu_registered() {
+        return "npu";
+    }
+    if big && crate::compute::gpu_registered() {
+        return "gpu";
+    }
+    if big
+        && k_nano::platform_probe::allow_smp()
+        && k_nano::smp::ap_pollable()
+        && k_nano::smp::ap_entry_count() > 0
+    {
+        return "smp";
+    }
+    if big && k_nano::platform_probe::allow_avx512() {
+        return "avx512";
+    }
+    if crate::bitnet_w2a8::w2a8_enabled() && (m == 1 || m >= 8) {
+        return "w2a8";
+    }
+    if m >= 8 && k_nano::platform_probe::allow_avx2() {
+        // Impl só existe no host; no metal cai no SSE abaixo.
+        #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
+        return "bitwise-avx2";
+    }
+    // bitnet_sse::ternary_matmul, ordem interna:
+    if k_nano::platform_probe::allow_avx512() {
+        return "avx512";
+    }
+    #[cfg(all(target_arch = "x86_64", target_os = "none"))]
+    if n >= 4 {
+        return "sse";
+    }
+    if k_nano::platform_probe::allow_avx2() && k >= 8 && n >= 8 && n % 4 == 0 {
+        return "avx2-host";
+    }
+    #[cfg(target_arch = "x86_64")]
+    if n >= 4 {
+        return "sse-fill";
+    }
+    if n >= 4 {
+        return "sse-unrolled";
+    }
+    "scalar"
+}
+
+/// Log 1×/boot da rota da prova (shape 3B). Chamado no topo do dispatch.
+fn maybe_log_a2_route_once(w: &PackedTernaryTensor, x: &Tensor) {
+    let (k, n) = w.shape;
+    if !is_proof_shaped(k, n) {
+        return;
+    }
+    if A2_ROUTE_LOGGED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let (m, _) = x.shape;
+    k_nano::slog_cortex!(
+        "InferQ",
+        "ok",
+        "a2_proof matmul={} shape={}x{}x{}",
+        cpu_route_label(w, x),
+        m,
+        k,
+        n
+    );
+}
+
 pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Tensor> {
     let (k, n) = weight.shape;
     let (m, k2) = input.shape;
@@ -36,6 +146,8 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
         crate::matmul_diag::note_guard_fail();
         return None;
     }
+    // Lane D-accel: rota visível 1×/boot (fora do hot path por shape+once).
+    maybe_log_a2_route_once(weight, input);
 
     // ADR-0057 WS-C: NPU/GPU/parallel dispatch
     if let Some(r) = crate::compute::dispatch_ternary(weight, input) {

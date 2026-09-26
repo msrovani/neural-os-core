@@ -17,7 +17,7 @@ use spin::Mutex;
 use crate::cortex::{
     infer_guard_begin, infer_guard_end, infer_in_flight, KvCache,
     CURRENT_MODEL, CURRENT_STREAMING_MODEL, global_kv_cache_take, global_kv_cache_store,
-    NO_MODEL_MSG, TOPIC_LLM_RESPONSE,
+    NO_MODEL_MSG, TOPIC_LLM_RESPONSE, model_is_loaded,
 };
 use crate::tensor::Tensor;
 
@@ -108,6 +108,30 @@ static TELEM_LAST_DECODE_US: AtomicU64 = AtomicU64::new(0);
 /// Início do decode do job ativo (0 = idle / ainda em prefill).
 static DECODE_T0_US: AtomicU64 = AtomicU64::new(0);
 static DECODE_JOB_TOKS: AtomicU64 = AtomicU64::new(0);
+
+/// Lane A2 — MVP 1 token real FALCON3.V6 (prova, 1 inferência por boot).
+/// Escopo fechado: prompt curto fixo, max 1 token, stride 1 local, ctx mínimo.
+/// Sem Medusa/draft. Defaults globais intactos (override só no job de prova).
+pub const A2_PROOF_PROMPT: &str = "oi";
+pub const A2_PROOF_MAX_GEN: usize = 1;
+pub const A2_PROOF_CTX_CAP: usize = 32;
+static A2_PROOF_SUBMITTED: AtomicBool = AtomicBool::new(false);
+static A2_PROOF_DONE: AtomicBool = AtomicBool::new(false);
+static A2_PROOF_ID: AtomicU64 = AtomicU64::new(0);
+/// Lane D-cortex: orçamento de slice espelho do watchdog (agent-core
+/// TICK_WATCHDOG_MS=500, read-only). Só medição local — nunca altera o watchdog.
+const A2_SLICE_BUDGET_US: u64 = 500_000;
+/// Slices lentas da prova neste boot (cada uma = 1 overrun do infer_worker no BSP).
+static A2_SLOW_SLICES: AtomicU64 = AtomicU64::new(0);
+/// Log `resident_too_big` emitido 1×/boot (maybe_submit roda todo slice).
+static A2_ABSENT_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// Lane D: aborta antes do 4º slice lento (4 overruns → Paused global) ou com
+/// UI rendida (ui_yield). Só decisão local sobre a prova — fila real intacta,
+/// TICK_WATCHDOG_MS/budget intocados.
+fn a2_should_abort_slice(slow_slices: u64, ui_yield: bool) -> bool {
+    ui_yield || slow_slices >= 3
+}
 
 /// Snapshot: (prefill_slices, prefill_us_total, last_prefill_us, decode_tokens).
 pub fn telemetry() -> (u64, u64, u64, u64) {
@@ -247,6 +271,12 @@ struct ActiveState {
     prefill_start_pos: usize,
     prefill_total_seq: usize,
     prefill_t0_us: u64,
+    /// Lane A2: job de prova (stride 1 local, ctx mínimo, 1 token).
+    is_proof: bool,
+    /// Wall inicial do job (total_us no finish_job).
+    job_t0_us: u64,
+    /// prefill wall do job (set no finalize do prefill).
+    prefill_us: u64,
     /// SESSION_350: plano heap AIOS (escalate → resposta HITL sem forward).
     heap_escalate: bool,
 }
@@ -287,6 +317,53 @@ fn emit_stop() {
 
 fn emit_reply(topic: &str, text: &str) {
     publish_bytes(topic, text.as_bytes().to_vec());
+}
+
+/// Lane A2: refuse honesto com log explícito (nunca panic/unwrap).
+#[inline]
+fn a2_refuse(st: &ActiveState, reason: &str) {
+    if st.is_proof {
+        k_nano::slog_cortex!("InferQ", "warn", "a2_proof refuse {} id={}", reason, st.job_id);
+    }
+}
+
+/// Lane A2: submete 1 job de prova por boot. Chamado do topo de `poll_slice`
+/// (fora do tick). Não compete: com fila real ou job ativo, adia para o
+/// próximo slice. Silencioso sem modelo (CortexAgent já loga ABSENT).
+pub fn maybe_submit_a2_proof() -> bool {
+    if A2_PROOF_DONE.load(Ordering::Acquire) || A2_PROOF_SUBMITTED.load(Ordering::Acquire) {
+        return false;
+    }
+    if ACTIVE.lock().is_some() || PENDING_COUNT.load(Ordering::Relaxed) > 0 {
+        return false;
+    }
+    if !model_is_loaded() {
+        // Lane D: refuse de residente com log acionável (1×/boot; segue
+        // tentando em silêncio — modelo pode carregar tarde via ATA).
+        if !A2_ABSENT_LOGGED.load(Ordering::Acquire) {
+            if let Some((need, head)) = crate::cortex::last_resident_refuse() {
+                A2_ABSENT_LOGGED.store(true, Ordering::Release);
+                k_nano::slog_cortex!(
+                    "InferQ",
+                    "warn",
+                    "a2_proof refuse resident_too_big need={}MB headroom={}MB (3B sem janela bump; SKU menor ou AirLLM; HITL)",
+                    need,
+                    head
+                );
+            }
+        }
+        return false;
+    }
+    match submit(String::from(A2_PROOF_PROMPT), InferMode::Plain, TOPIC_LLM_RESPONSE) {
+        Ok(id) => {
+            A2_PROOF_ID.store(id, Ordering::Release);
+            A2_PROOF_SUBMITTED.store(true, Ordering::Release);
+            k_nano::slog_cortex!("InferQ", "ok", "a2_proof submit id={}", id);
+            true
+        }
+        // Fila cheia / HeapPressure — tenta de novo no próximo slice.
+        Err(_) => false,
+    }
 }
 
 /// Enfileira job. Acorda APs via monitor flag.
@@ -469,6 +546,7 @@ fn try_claim_into_active() -> bool {
         ACTIVE_ID.store(id, Ordering::Release);
         ACTIVE_CANCEL.store(false, Ordering::Release);
         let coarse = CURRENT_STREAMING_MODEL.lock().is_some();
+        let is_proof = id == A2_PROOF_ID.load(Ordering::Acquire);
         *ACTIVE.lock() = Some(ActiveState {
             phase: if coarse {
                 Phase::CoarseFallback
@@ -502,11 +580,21 @@ fn try_claim_into_active() -> bool {
             prefill_start_pos: 0,
             prefill_total_seq: 0,
             prefill_t0_us: 0,
+            is_proof,
+            job_t0_us: k_nano::tsc::now_us(),
+            prefill_us: 0,
             heap_escalate: false,
         });
         infer_guard_begin();
         emit_msg_start();
         k_nano::slog_cortex!("InferQ", "ok", "claim id={} coarse={}", id, coarse as u8);
+        if is_proof {
+            // Roteador fiel: InferWorker::tick pula poll_slice com ap_pollable
+            // (hermes) e try_infer_poll_slice exige ap_pollable (k_nano) →
+            // true = AP idle (fora do BUSY/budget), false = fallback BSP (sob BUSY).
+            let by = if k_nano::smp::ap_pollable() { "ap" } else { "bsp" };
+            k_nano::slog_cortex!("InferQ", "ok", "a2_proof claimed_by={} id={}", by, id);
+        }
         return true;
     }
 }
@@ -555,6 +643,22 @@ fn finish_job(st: &mut ActiveState, text: &str) {
     ACTIVE_CANCEL.store(false, Ordering::Release);
     infer_guard_end();
     st.phase = Phase::Idle;
+    // Lane A2: total_us/prefill_us/decode_us no serial (prova 1 token).
+    if st.is_proof {
+        let total_us = k_nano::tsc::now_us().saturating_sub(st.job_t0_us.max(1));
+        k_nano::slog_cortex!(
+            "InferQ",
+            "ok",
+            "a2_proof done id={} total_us={} prefill_us={} decode_us={} toks={} out_len={}",
+            st.job_id,
+            total_us,
+            st.prefill_us,
+            us,
+            job_toks,
+            out.len()
+        );
+        A2_PROOF_DONE.store(true, Ordering::Release);
+    }
     k_nano::slog_cortex!(
         "InferQ",
         "ok",
@@ -609,13 +713,19 @@ fn push_delta(st: &mut ActiveState, piece: &str) {
 }
 
 fn run_prefill_setup(st: &mut ActiveState) {
+    let t_setup0 = k_nano::tsc::now_us();
+    if st.job_t0_us == 0 {
+        st.job_t0_us = t_setup0;
+    }
     if ACTIVE_CANCEL.load(Ordering::Acquire) {
+        a2_refuse(st, "cancelled");
         finish_job(st, "[cancelled]");
         return;
     }
     let guard = CURRENT_MODEL.lock();
     let Some(model_box) = guard.as_ref() else {
         drop(guard);
+        a2_refuse(st, "model_absent");
         finish_job(st, NO_MODEL_MSG);
         return;
     };
@@ -642,12 +752,23 @@ fn run_prefill_setup(st: &mut ActiveState) {
     // SESSION_350/366: Observe→Plan→Act ANTES do encode BPE.
     // Encode sob headroom=4MB estoura a janela bump → #UD/#PF (mesh A).
     let base = crate::difficulty_gate::classify(&st.prompt, st.is_greeting, model.hidden);
-    let plan = crate::heap_aios::plan_for(base, model.hidden, st.use_bpe, st.is_greeting);
+    let mut plan = crate::heap_aios::plan_for(base, model.hidden, st.use_bpe, st.is_greeting);
+    // Lane A2: override LOCAL só no job de prova (defaults globais intactos).
+    if st.is_proof {
+        plan.tier = crate::difficulty_gate::ComputeTier::Full;
+        plan.soft_stride = 1;
+        if plan.ctx_cap > A2_PROOF_CTX_CAP {
+            plan.ctx_cap = A2_PROOF_CTX_CAP;
+        }
+        plan.max_gen = A2_PROOF_MAX_GEN.min(8).max(1);
+        plan.force_slim = true;
+    }
     crate::heap_aios::apply_plan(plan, model.hidden);
     if plan.kind == crate::heap_aios::HeapPlanKind::Escalate {
         st.heap_escalate = true;
         drop(guard);
         // Mensagem estática — format! sob 4MB headroom também aloca.
+        a2_refuse(st, "heap_escalate");
         finish_job(st, crate::heap_aios::ESCALATE_STATIC_MSG);
         return;
     }
@@ -703,6 +824,35 @@ fn run_prefill_setup(st: &mut ActiveState) {
             crate::heap_aios::HeapPlanKind::Escalate => "escalate",
         }
     );
+    // Lane A2: prefill_us base (setup) no serial; BPE ausente explícito.
+    if st.is_proof {
+        k_nano::slog_cortex!(
+            "InferQ",
+            "ok",
+            "a2_proof setup id={} bpe={} prompt_len={} setup_us={}",
+            st.job_id,
+            st.use_bpe as u8,
+            st.prompt_len,
+            k_nano::tsc::now_us().saturating_sub(t_setup0)
+        );
+        if !st.use_bpe {
+            k_nano::slog_cortex!(
+                "InferQ",
+                "warn",
+                "a2_proof bpe_absent fallback=char99 id={}",
+                st.job_id
+            );
+        }
+        // Lane D: Medusa OFF na prova — InferQueue nunca faz draft/speculative
+        // (só generate_speculative usa medusa_heads); header só informa.
+        k_nano::slog_cortex!(
+            "InferQ",
+            "ok",
+            "a2_proof medusa_off heads={} id={}",
+            model.medusa_heads.len(),
+            st.job_id
+        );
+    }
 
     let kv_dim = model.kv_dim;
     let k_dim = if model.layers.is_empty() {
@@ -738,6 +888,7 @@ fn run_prefill_setup(st: &mut ActiveState) {
             mask.shape
         );
         drop(guard);
+        a2_refuse(st, "embed_mask");
         finish_job(st, "[heap: embed/mask refuse — HITL escalate]");
         return;
     }
@@ -760,46 +911,78 @@ fn run_prefill_setup(st: &mut ActiveState) {
         model.layers.len()
     );
     drop(guard);
-}
-
-/// Uma slice de prefill: aplica até `layers_per_slice` layers ativas (soft_stride).
+}/// Uma slice de prefill: aplica até `layers_per_slice` layers ativas (soft_stride).
 fn run_prefill_step(st: &mut ActiveState) {
     if ACTIVE_CANCEL.load(Ordering::Acquire) {
+        a2_refuse(st, "cancelled");
         finish_job(st, "[cancelled]");
+        return;
+    }
+    // Lane D-cortex: fail-closed ANTES do slice pesado (só a prova; a fila
+    // real nunca aborta aqui). No BSP cada slice >500ms = 1 overrun do
+    // infer_worker; o 4º pausa o agente e o ACTIVE ficaria preso até Crashed.
+    if st.is_proof
+        && a2_should_abort_slice(
+            A2_SLOW_SLICES.load(Ordering::Relaxed),
+            k_nano::smp::ui_yield_infer(),
+        )
+    {
+        k_nano::slog_cortex!(
+            "InferQ",
+            "warn",
+            "a2_proof refuse watchdog_would_pause id={} slow={} ui_yield={}",
+            st.job_id,
+            A2_SLOW_SLICES.load(Ordering::Relaxed),
+            k_nano::smp::ui_yield_infer() as u8
+        );
+        finish_job(
+            st,
+            "[a2_proof abort watchdog_would_pause — BSP sem AP-IDT, slice>500ms pausaria infer_worker; HITL]",
+        );
         return;
     }
     let t_slice0 = k_nano::tsc::now_us();
     let guard = CURRENT_MODEL.lock();
     let Some(model_box) = guard.as_ref() else {
         drop(guard);
+        a2_refuse(st, "model_absent");
         finish_job(st, NO_MODEL_MSG);
         return;
     };
     let Some(model) = model_box.as_transformer() else {
         drop(guard);
+        a2_refuse(st, "model_absent");
         finish_job(st, NO_MODEL_MSG);
         return;
     };
 
     let Some(ref mut x) = st.prefill_x else {
         drop(guard);
+        a2_refuse(st, "model_absent");
         finish_job(st, NO_MODEL_MSG);
         return;
     };
     let Some(ref mask) = st.prefill_mask else {
         drop(guard);
+        a2_refuse(st, "model_absent");
         finish_job(st, NO_MODEL_MSG);
         return;
     };
     let Some(ref mut cache) = st.cache else {
         drop(guard);
+        a2_refuse(st, "model_absent");
         finish_job(st, NO_MODEL_MSG);
         return;
     };
 
     let n_layers = model.layers.len();
     // ADR-0101 Onda 2: soft_stride via difficulty_gate.
-    let soft_stride: usize = crate::difficulty_gate::effective_soft_stride(model.hidden);
+    // Lane A2: stride 1 LOCAL na prova (sem pular layers; global intacto).
+    let soft_stride: usize = if st.is_proof {
+        1
+    } else {
+        crate::difficulty_gate::effective_soft_stride(model.hidden)
+    };
     let layers_per_slice: usize = if model.hidden >= 2048 { 1 } else { 2 };
     let mut applied = 0usize;
     let mut pad_oom = false;
@@ -834,16 +1017,27 @@ fn run_prefill_step(st: &mut ActiveState) {
         );
         if !x.is_valid() || x.shape != x_before {
             drop(guard);
+            a2_refuse(st, "apply_layer");
             finish_job(st, "[heap: apply_one_layer refuse — HITL escalate]");
             return;
         }
         applied += 1;
     }
 
-    let slice_us = k_nano::tsc::now_us().saturating_sub(t_slice0);
+    let now1 = k_nano::tsc::now_us();
+    let slice_us = now1.saturating_sub(t_slice0);
     TELEM_PREFILL_SLICES.fetch_add(1, Ordering::Relaxed);
     TELEM_PREFILL_US.fetch_add(slice_us, Ordering::Relaxed);
     TELEM_LAST_PREFILL_US.store(slice_us, Ordering::Relaxed);
+    // Lane D: conta slice lenta da prova (TSC morto + layer aplicada = lenta,
+    // fail-closed). O próximo slice aborta antes do 4º overrun (→Paused).
+    if st.is_proof && applied > 0 {
+        let slow = slice_us > A2_SLICE_BUDGET_US || (t_slice0 == 0 && now1 == 0);
+        if slow {
+            let n = A2_SLOW_SLICES.fetch_add(1, Ordering::Relaxed) + 1;
+            k_nano::slog_cortex!("InferQ", "warn", "a2_proof slow_slice n={} us={}", n, slice_us);
+        }
+    }
     // Budget honesto: layer >100ms em soft-float é esperado; só warn se >2s.
     if slice_us > 2_000_000 {
         k_nano::slog_cortex!(
@@ -860,6 +1054,7 @@ fn run_prefill_step(st: &mut ActiveState) {
     if pad_oom {
         k_nano::slog_cortex!("InferQ", "fail", "soft_stride pad OOM — abort prefill");
         drop(guard);
+        a2_refuse(st, "pad_oom");
         finish_job(st, "[oom]");
         return;
     }
@@ -875,6 +1070,7 @@ fn run_prefill_step(st: &mut ActiveState) {
     let new_len = st.prefill_new_len;
     let (last_hidden, last_logits) = model.finalize_logits(x, new_len);
     let total_us = k_nano::tsc::now_us().saturating_sub(st.prefill_t0_us);
+    st.prefill_us = total_us;
     k_nano::slog_cortex!(
         "InferQ",
         "ok",
@@ -885,6 +1081,17 @@ fn run_prefill_step(st: &mut ActiveState) {
         TELEM_PREFILL_SLICES.load(Ordering::Relaxed),
         total_us
     );
+    // Lane A2: prefill_us explícito da prova.
+    if st.is_proof {
+        k_nano::slog_cortex!(
+            "InferQ",
+            "ok",
+            "a2_proof prefill_us={} id={} layers={}",
+            total_us,
+            st.job_id,
+            n_layers
+        );
+    }
 
     st.recent_u16.clear();
     if !st.is_greeting {
@@ -913,6 +1120,7 @@ fn run_prefill(st: &mut ActiveState) {
 fn run_decode_one(st: &mut ActiveState) {
     if ACTIVE_CANCEL.load(Ordering::Acquire) {
         let acc = st.acc_text.clone();
+        a2_refuse(st, "cancelled");
         finish_job(st, if acc.is_empty() { "[cancelled]" } else { &acc });
         return;
     }
@@ -921,26 +1129,32 @@ fn run_decode_one(st: &mut ActiveState) {
         finish_job(st, &acc);
         return;
     }
+    // Lane A2: decode_us por token da prova.
+    let t_d0 = k_nano::tsc::now_us();
 
     let guard = CURRENT_MODEL.lock();
     let Some(model_box) = guard.as_ref() else {
         drop(guard);
+        a2_refuse(st, "model_absent");
         finish_job(st, NO_MODEL_MSG);
         return;
     };
     let Some(model) = model_box.as_transformer() else {
         drop(guard);
+        a2_refuse(st, "model_absent");
         finish_job(st, NO_MODEL_MSG);
         return;
     };
 
     let Some(ref mut cache) = st.cache else {
         drop(guard);
+        a2_refuse(st, "model_absent");
         finish_job(st, NO_MODEL_MSG);
         return;
     };
     let Some(ref mut last_logits) = st.last_logits else {
         drop(guard);
+        a2_refuse(st, "model_absent");
         finish_job(st, NO_MODEL_MSG);
         return;
     };
@@ -1003,6 +1217,19 @@ fn run_decode_one(st: &mut ActiveState) {
     drop(guard);
 
     push_delta(st, &piece_clone);
+    // Lane A2: decode_us explícito (1 forward do prefill + argmax/decode aqui).
+    if st.is_proof {
+        k_nano::slog_cortex!(
+            "InferQ",
+            "ok",
+            "a2_proof decode_one id={} step={} tok={} decode_us={} piece_len={}",
+            st.job_id,
+            st.step,
+            next,
+            k_nano::tsc::now_us().saturating_sub(t_d0),
+            piece_clone.len()
+        );
+    }
 
     if st.use_bpe && st.is_greeting && crate::bpe::text_is_greetingish(&st.acc_text) {
         let acc = st.acc_text.clone();
@@ -1050,6 +1277,8 @@ pub fn poll_slice() -> bool {
     if SLICE_BUSY.swap(true, Ordering::AcqRel) {
         return false;
     }
+    // Lane A2: 1 inferência de prova por boot (fora do tick; não compete).
+    let _ = maybe_submit_a2_proof();
 
     if ACTIVE.lock().is_none() {
         let _ = try_claim_into_active();
@@ -1099,6 +1328,11 @@ mod tests {
         ACTIVE_CANCEL.store(false, Ordering::Release);
         HEAD.store(TAIL.load(Ordering::Relaxed), Ordering::Release);
         PENDING_COUNT.store(0, Ordering::Release);
+        A2_PROOF_SUBMITTED.store(false, Ordering::Release);
+        A2_PROOF_DONE.store(false, Ordering::Release);
+        A2_PROOF_ID.store(0, Ordering::Release);
+        A2_SLOW_SLICES.store(0, Ordering::Release);
+        A2_ABSENT_LOGGED.store(false, Ordering::Release);
         for i in 0..QUEUE_CAP {
             slots()[i].occupied.store(false, Ordering::Release);
         }
@@ -1164,5 +1398,26 @@ mod tests {
         ] {
             assert!(p.len() <= 240);
         }
+    }
+
+    #[test]
+    fn a2_proof_limits_are_minimal() {
+        // Lane A2: prova = prompt curto fixo, 1..=8 tokens, ctx mínimo, sem statics.
+        let _g = TEST_LOCK.lock();
+        assert_eq!(A2_PROOF_MAX_GEN, 1);
+        assert!(!A2_PROOF_PROMPT.is_empty() && A2_PROOF_PROMPT.len() <= 16);
+        assert!(A2_PROOF_CTX_CAP >= 8 && A2_PROOF_CTX_CAP <= 64);
+    }
+
+    #[test]
+    fn a2_watchdog_abort_predicate() {
+        // Lane D: só a prova aborta, antes do 4º overrun (Paused global) ou com UI rendida.
+        let _g = TEST_LOCK.lock();
+        assert_eq!(A2_SLICE_BUDGET_US, 500_000);
+        assert!(!a2_should_abort_slice(0, false));
+        assert!(!a2_should_abort_slice(2, false));
+        assert!(a2_should_abort_slice(3, false));
+        assert!(a2_should_abort_slice(0, true));
+        assert!(a2_should_abort_slice(9, true));
     }
 }

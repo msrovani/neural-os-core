@@ -62,6 +62,33 @@ impl SkillOptimizer {
     }
 }
 
+/// Lane B: `OutputGrammar::Skill` → Free (sem FSM nova, sem nova gramática).
+/// A constrição op-IR acontece via prompt: este helper anexa o schema hint
+/// (`wasm_build::op_ir_schema_hint`) pedindo ao modelo SOMENTE expressão/DSL
+/// parseável por `model_text_to_ops`. O caller usa com
+/// `cortex::cortex::generate_structured(prompt, OutputGrammar::Free)`.
+pub fn model_skill_prompt(task: &str) -> String {
+    alloc::format!(
+        "{}\n\n{} Responda SOMENTE com a expressão (ex: a*b+7) ou DSL (return ...).",
+        task,
+        crate::wasm_build::op_ir_schema_hint()
+    )
+}
+
+#[cfg(test)]
+mod lane_b_tests {
+    use super::model_skill_prompt;
+
+    #[test]
+    fn prompt_carries_task_and_schema_hint() {
+        let p = model_skill_prompt("some dois números");
+        assert!(p.contains("some dois números"));
+        assert!(p.contains("I32Const"));
+        // O hint canônico é o mesmo do wasm_build (fonte única).
+        assert!(p.contains(crate::wasm_build::op_ir_schema_hint()));
+    }
+}
+
 
 
 

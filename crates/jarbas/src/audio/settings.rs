@@ -65,10 +65,40 @@ pub fn enable_open_mic() {
 }
 
 /// Forca wake window aberta (chamado por barge-in para voltar a escutar).
+/// Lane D: abre o mic SEM cancelar inferência — interromper fala ≠ abortar
+/// raciocínio (sem AEC o eco do assistente não deve matar o job).
 pub fn force_wake_open() {
     enable_open_mic();
-    // Full Infer D+B+C: cancela generate em andamento no próximo yield.
+}
+
+/// Cancela a inferência em voo SOMENTE com gate explícito de duplexidade
+/// (wake-word confirmado / mic explícito). Energia do VAD sozinha nunca cancela.
+pub fn cancel_infer_gated(wake_confirmed: bool) -> bool {
+    if !wake_confirmed {
+        return false;
+    }
     cortex::infer_queue::cancel_active();
+    k_nano::slog_jarbas!("Jarbas", "ok", "barge-in cancel infer (gate duplex confirmado)");
+    true
+}
+
+/// Abre mic + cancela infer com gate explícito. Retorna true se cancelou.
+pub fn force_wake_open_with_cancel(wake_confirmed: bool) -> bool {
+    enable_open_mic();
+    cancel_infer_gated(wake_confirmed)
+}
+
+// --- Lane D seam (host-testável; ramo false sem efeitos colaterais) ---
+#[cfg(test)]
+mod dstream_tests {
+    use super::*;
+
+    #[test]
+    fn cancel_gated_sem_gate_nunca_cancela() {
+        // Energia sozinha: sem efeito, sem tocar na InferQueue.
+        assert!(!cancel_infer_gated(false));
+        // Ramo true exige boot (InferQueue real) — coberto no QEMU/prova A2.
+    }
 }
 
 pub struct AudioGetSettingsSkill;

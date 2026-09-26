@@ -67,6 +67,39 @@ pub fn generate_skill(name: &str) -> Option<String> {
     Some(skill)
 }
 
+/// Lane B: skill model-born — texto bruto do modelo → op-IR → WasmSkill+VFS.
+/// Thin wrapper sobre `evolve::promote_model_text_to_wasm` (carimbo
+/// `model-born`; dummy/fora-da-gramática = refuse honesto, sem registry).
+pub fn generate_wasm_from_model_text(
+    skill_name: &str,
+    description: &str,
+    model_text: &str,
+) -> Result<(), &'static str> {
+    crate::evolve::promote_model_text_to_wasm(skill_name, description, model_text)
+}
+
+#[cfg(test)]
+mod lane_b_tests {
+    use super::generate_wasm_from_model_text;
+
+    #[test]
+    fn model_text_ok_registers_model_born() {
+        assert!(generate_wasm_from_model_text("lb_gen_a", "test", "a+b").is_ok());
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance("lb_gen_a"),
+            Some(crate::wasmi_rt::SkillProvenance::ModelBorn)
+        );
+        crate::globals::SKILL_REGISTRY.lock().unregister("lb_gen_a");
+    }
+
+    #[test]
+    fn model_text_dummy_refuses() {
+        assert!(generate_wasm_from_model_text("lb_gen_dummy", "test", "0").is_err());
+        assert!(crate::wasmi_rt::skill_provenance("lb_gen_dummy").is_none());
+        assert!(!crate::globals::SKILL_REGISTRY.lock().has_skill("lb_gen_dummy"));
+    }
+}
+
 /// Auto-skill: após N usos, gera skill automaticamente
 pub fn maybe_auto_skill(name: &str) -> Option<String> {
     let patterns = TASK_PATTERNS.lock();

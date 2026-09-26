@@ -212,15 +212,25 @@ pub fn invalidate_skill_index() {
 }
 
 /// Boot hook (in-hermes): re-registra `/skills/*.wasm` persistidos no VFS
-/// no sandbox wasmi (Caminho A). Best-effort: VFS ausente → 0, sem erro.
-/// NOTA: o call-site no boot (neural-kernel) é residual — esta função só
-/// expõe o hook; ninguém a chama ainda.
+/// como WasmSkill no sandbox wasmi (Caminho A) — recarregadas EXECUTAM
+/// (unifica com o promote; DynamicSkill com `wasm` sem bridge era stub).
+/// Best-effort: VFS ausente → 0 + log; bytes que falham no sandbox/register
+/// são pulados com log (nunca panic). B3: o sidecar `/skills/{name}.prov`
+/// devolve a proveniência ORIGINAL; ausente (skill antiga) = `Reloaded` + warn.
 pub fn reload_persisted_wasm_skills() -> u32 {
     let items = match crate::fs::list_vfs("/skills") {
         Ok(v) => v,
-        Err(_) => return 0,
+        Err(_) => {
+            k_nano::slog_hermes!("SKILL", "warn", "reload SKIP (VFS absent)");
+            return 0;
+        }
     };
     let mut n = 0u32;
+    let mut c_born = 0u32;
+    let mut c_tmpl = 0u32;
+    let mut c_dummy = 0u32;
+    let mut c_imp = 0u32;
+    let mut c_rel = 0u32;
     for item in &items {
         if !item.ends_with(".wasm") {
             continue;
@@ -228,25 +238,50 @@ pub fn reload_persisted_wasm_skills() -> u32 {
         let path = alloc::format!("/skills/{}", item.trim_start_matches('/'));
         let bytes = match crate::fs::read_vfs(&path) {
             Ok(b) => b,
-            Err(_) => continue,
+            Err(_) => {
+                k_nano::slog_hermes!("SKILL", "warn", "reload SKIP {} (read fail)", path);
+                continue;
+            }
         };
         if !crate::wasmi_rt::sandbox_validate_and_run(&bytes) {
+            k_nano::slog_hermes!("SKILL", "warn", "reload SKIP {} (sandbox fail)", path);
             continue;
         }
         let name = item
             .trim_start_matches('/')
             .strip_suffix(".wasm")
             .unwrap_or(item);
-        let skill = crate::dynskill::DynamicSkill::with_wasm(
+        let prov = match crate::wasmi_rt::read_provenance_sidecar(name) {
+            Some(p) => p,
+            None => {
+                k_nano::slog_hermes!("SKILL", "warn", "reload {} sem sidecar .prov → prov=reloaded", path);
+                crate::wasmi_rt::SkillProvenance::Reloaded
+            }
+        };
+        match crate::wasmi_rt::register_wasm_skill_with_provenance(
+            &bytes,
             name,
             "reloaded /skills/*.wasm",
-            "",
-            bytes,
-        );
-        crate::dynskill::register_dynskill(skill);
-        n = n.saturating_add(1);
+            prov,
+        ) {
+            Ok(()) => {
+                n = n.saturating_add(1);
+                crate::wasmi_rt::note_reload_ok();
+                match prov {
+                    crate::wasmi_rt::SkillProvenance::ModelBorn => c_born += 1,
+                    crate::wasmi_rt::SkillProvenance::Template => c_tmpl += 1,
+                    crate::wasmi_rt::SkillProvenance::Dummy => c_dummy += 1,
+                    crate::wasmi_rt::SkillProvenance::Imported => c_imp += 1,
+                    crate::wasmi_rt::SkillProvenance::Reloaded => c_rel += 1,
+                }
+            }
+            Err(e) => {
+                k_nano::slog_hermes!("SKILL", "warn", "reload SKIP {} (register: {})", path, e);
+                continue;
+            }
+        }
     }
-    k_nano::slog_hermes!("SKILL", "info", "reloaded {} persisted wasm skill(s)", n);
+    k_nano::slog_hermes!("SKILL", "ok", "[skills][ok] reload n={} model-born={} template={} dummy={} imported={} reloaded={}", n, c_born, c_tmpl, c_dummy, c_imp, c_rel);
     n
 }
 
@@ -271,6 +306,95 @@ pub fn load_embedded_skills() -> SkillLoader {
     let system = loader.build_system_prompt();
     k_nano::slog_hermes!("SKILL", "info", "{} skill(s) carregadas, prompt de {} bytes", count, system.len());
     loader
+}
+
+#[cfg(test)]
+mod lane_b_tests {
+    use super::*;
+
+    /// VFS de teste: mount `/skills` → ramfs (idempotente, compartilha o
+    /// STORE global do RamFsAgent — nomes únicos por teste, sem teardown).
+    fn setup_test_vfs() {
+        {
+            let mut guard = crate::vfs::VFS.lock();
+            if guard.is_none() {
+                *guard = Some(crate::vfs::VfsRegistry::new());
+            }
+            if let Some(ref mut v) = *guard {
+                if !v.mount_table().iter().any(|m| m.mount_point == "/skills") {
+                    v.mount("/skills", "ramfs");
+                }
+            }
+        }
+        if crate::fs::FS_AGENTS.lock().is_empty() {
+            crate::fs::register_fs_agent(alloc::boxed::Box::new(
+                crate::fs::ram_fs_agent::RamFsAgent::new(),
+            ));
+        }
+    }
+
+    #[test]
+    fn model_born_round_trip_persist_reload_executes() {
+        setup_test_vfs();
+        let name = "lb_rt_skill";
+        // 1. promote model-born persiste /skills/{name}.wasm + .prov no VFS.
+        assert!(crate::evolve::promote_model_text_to_wasm(name, "round-trip", "a*2+1").is_ok());
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance(name),
+            Some(crate::wasmi_rt::SkillProvenance::ModelBorn)
+        );
+        let persisted =
+            crate::fs::read_vfs("/skills/lb_rt_skill.wasm").expect("wasm persistido");
+        assert_eq!(&persisted[0..4], &[0x00, 0x61, 0x73, 0x6D]);
+        let sidecar =
+            crate::fs::read_vfs("/skills/lb_rt_skill.prov").expect("sidecar persistido");
+        assert_eq!(&sidecar, b"model-born");
+        // 2. drop do registry simula reboot; reload recupera o carimbo ORIGINAL.
+        assert!(crate::globals::SKILL_REGISTRY.lock().unregister(name));
+        assert!(!crate::globals::SKILL_REGISTRY.lock().has_skill(name));
+        let rel_before = crate::wasmi_rt::metrics_reload_ok();
+        let n = reload_persisted_wasm_skills();
+        assert!(n >= 1);
+        assert!(crate::wasmi_rt::metrics_reload_ok() >= rel_before + 1);
+        assert!(crate::globals::SKILL_REGISTRY.lock().has_skill(name));
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance(name),
+            Some(crate::wasmi_rt::SkillProvenance::ModelBorn)
+        );
+        // 3. recarregada executa no wasmi: a*2+1 com payload "6" → 13.
+        {
+            let mut reg = crate::globals::SKILL_REGISTRY.lock();
+            reg.set_policy(
+                name,
+                skill_registry::ToolPolicy { enabled: true, auto_approve: true },
+            );
+        }
+        let out = crate::globals::SKILL_REGISTRY
+            .lock()
+            .execute_skill_unchecked(name, b"6")
+            .expect("reload deve executar no wasmi");
+        let text = core::str::from_utf8(&out).expect("utf8");
+        assert!(text.contains("13"), "esperava a*2+1=13, veio {}", text);
+        crate::globals::SKILL_REGISTRY.lock().unregister(name);
+    }
+
+    #[test]
+    fn reload_without_sidecar_falls_back_to_reloaded() {
+        setup_test_vfs();
+        // Skill antiga: .wasm direto no VFS, sem .prov.
+        let (n_params, ops) = crate::wasm_build::model_text_to_ops("a+1").expect("ops");
+        let wasm = crate::wasm_build::build_run_module(n_params, &ops).expect("build");
+        crate::fs::write_vfs("/skills/lb_old_skill.wasm", &wasm).expect("write");
+        let _ = crate::globals::SKILL_REGISTRY.lock().unregister("lb_old_skill");
+        let n = reload_persisted_wasm_skills();
+        assert!(n >= 1);
+        assert!(crate::globals::SKILL_REGISTRY.lock().has_skill("lb_old_skill"));
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance("lb_old_skill"),
+            Some(crate::wasmi_rt::SkillProvenance::Reloaded)
+        );
+        crate::globals::SKILL_REGISTRY.lock().unregister("lb_old_skill");
+    }
 }
 
 

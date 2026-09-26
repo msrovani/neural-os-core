@@ -90,6 +90,32 @@ pub fn decode_and_generate(
     Ok(wasm)
 }
 
+/// Lane B: texto bruto do modelo → op-IR (expression/DSL, sem nova gramática)
+/// → wasm → sandbox wasmi. Dummy recusa; fora-da-gramática recusa; tudo com
+/// `Err` honesto, sem panic/unwrap. O registro/persistência é do `evolve`
+/// (`promote_model_text_to_wasm`) — aqui só bytes validados.
+pub fn decode_model_text_to_wasm(model_text: &str) -> Result<Vec<u8>, &'static str> {
+    let (n_params, ops) = match crate::wasm_build::model_text_to_ops(model_text) {
+        Ok(parsed) => {
+            wasmi_rt::note_model_text_parse(true);
+            parsed
+        }
+        Err(_) => {
+            wasmi_rt::note_model_text_parse(false);
+            return Err("harness: model-text fora da gramática");
+        }
+    };
+    if crate::wasm_build::is_dummy_ops(&ops) {
+        return Err("harness: dummy nunca é skill");
+    }
+    let wasm = crate::wasm_build::build_run_module(n_params, &ops)
+        .map_err(|_| "harness: build-fail")?;
+    if !wasmi_rt::sandbox_validate_and_run(&wasm) {
+        return Err("harness: sandbox-fail");
+    }
+    Ok(wasm)
+}
+
 /// Self-test: reconhece "add 3 5" → gera WASM → executa → 8.
 pub fn self_test() -> bool {
     let mut decoder = StructuredDecoder::new(DecodeMode::Alpha);
@@ -136,5 +162,19 @@ mod tests {
             generate_from_pattern(SkillPattern::Card, "card"),
             Err("card_ir_pending")
         );
+    }
+
+    #[test]
+    fn model_text_to_wasm_round_trip() {
+        let wasm = decode_model_text_to_wasm("a*b+7").expect("decode");
+        assert_eq!(wasmi_rt::run_wasm(&wasm, "run", &[6, 7], 0).unwrap(), 49);
+    }
+
+    #[test]
+    fn model_text_refuses_dummy_and_garbage() {
+        assert!(decode_model_text_to_wasm("0").is_err());
+        assert!(decode_model_text_to_wasm("42").is_err());
+        assert!(decode_model_text_to_wasm("").is_err());
+        assert!(decode_model_text_to_wasm("def foo():").is_err());
     }
 }

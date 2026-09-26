@@ -166,6 +166,16 @@ pub fn accel_registered() -> bool {
     GPU_TERNARY.load(Ordering::Acquire) != 0 || NPU_TERNARY.load(Ordering::Acquire) != 0
 }
 
+/// Lane D-accel: leitores p/ rótulo de rota (sem expor fn-pointers).
+pub(crate) fn npu_registered() -> bool {
+    NPU_TERNARY.load(Ordering::Acquire) != 0
+}
+
+/// Lane D-accel: leitores p/ rótulo de rota (sem expor fn-pointers).
+pub(crate) fn gpu_registered() -> bool {
+    GPU_TERNARY.load(Ordering::Acquire) != 0
+}
+
 // ─── ADR-0081 item 4: matmul ternário distribuído Worker→Master ────────────
 // Protocolo binário (sem dep de serialização externa), porta P2P 42069:
 //

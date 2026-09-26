@@ -112,11 +112,12 @@ fn publish_state(next: VoiceState) {
 pub fn request_interrupt() -> bool {
     let had = PLAYBACK_RING.available() > 0;
     PLAYBACK_RING.clear();
-    TTS_GENERATION.fetch_add(1, Ordering::AcqRel);
+    let gen = TTS_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     k_nano::slog_jarbas!(
         "Jarbas",
         "ok",
-        "barge-in: TTS invalidada (havia playback={}; infer intacta)",
+        "barge-in gen={}: TTS invalidada (havia playback={}; infer intacta)",
+        gen,
         had
     );
     BARGE_IN_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -125,6 +126,13 @@ pub fn request_interrupt() -> bool {
 
 pub fn tts_generation() -> u64 {
     TTS_GENERATION.load(Ordering::Acquire)
+}
+
+/// Gate explícito de duplexidade p/ cancelar inferência (Lane D, puro/testável).
+/// Só wake-word confirmado (janela aberta), mic explícito ou bypass e2e
+/// autorizam o cancel — energia do VAD sozinha NUNCA.
+pub fn barge_in_cancel_allowed(wake_window: u32, mic_active: bool, bypass: bool) -> bool {
+    bypass || mic_active || wake_window > 0
 }
 
 /// A fala ainda é válida? (o JarbasAgent consulta antes de cada chunk)
@@ -401,21 +409,27 @@ impl Agent for JarbasVoiceAgent {
                 continue;
             }
             if tag.starts_with("start") {
-                // SESSION_352 / s361: sem AEC, VAD durante playback = eco do
-                // greeting → barge-in cancela TTS+infer e congela o UI.
-                // Só interrompe se já estávamos em Listening (turno real).
+                // Lane D / SESSION_352 / s361: sem AEC, VAD durante playback pode ser
+                // o eco do próprio greeting — então VAD start SEMPRE interrompe a
+                // FALA (request_interrupt: clear + gen++), mas só cancela a
+                // INFERÊNCIA com gate explícito (wake confirmado/mic explícito).
                 if PLAYBACK_RING.available() > 0 {
-                    if self.listening {
-                        publish_state(VoiceState::BargeIn);
-                        request_interrupt();
-                        settings::force_wake_open();
+                    publish_state(VoiceState::BargeIn);
+                    request_interrupt();
+                    let wake_confirmed = barge_in_cancel_allowed(
+                        self.wake_window,
+                        crate::display::chat_window::MIC_ACTIVE.load(Ordering::Relaxed),
+                        settings::wake_gate_bypassed(),
+                    );
+                    if wake_confirmed {
+                        settings::force_wake_open_with_cancel(true);
                     } else {
                         k_nano::slog_jarbas!(
                             "Jarbas",
                             "ok",
-                            "VAD start ignorado durante SPEAKING (sem AEC)"
+                            "barge-in gen={} fala interrompida, infer preservada (sem gate duplex)",
+                            tts_generation()
                         );
-                        continue;
                     }
                 }
                 self.listening = true;
@@ -490,3 +504,29 @@ impl Agent for JarbasVoiceAgent {
 /// Frames de MFCC/LSTM processados por tick no job de STT (~64 frames ≈ 1 s de áudio).
 /// Mantém o orb/mouse vivos durante a transcrição.
 const SLICE_BUDGET_FRAMES: usize = 64;
+
+// --- Lane D seams (host-testáveis; lógica pura, sem HW) ---
+#[cfg(test)]
+mod dstream_tests {
+    use super::*;
+
+    #[test]
+    fn gate_duplex_exige_confirmacao_explicita() {
+        // Energia do VAD sozinha NUNCA cancela a prova/inferência.
+        assert!(!barge_in_cancel_allowed(0, false, false));
+        // Wake-word confirmado (janela aberta) autoriza.
+        assert!(barge_in_cancel_allowed(1, false, false));
+        // Mic explícito autoriza.
+        assert!(barge_in_cancel_allowed(0, true, false));
+        // Bypass e2e autoriza.
+        assert!(barge_in_cancel_allowed(0, false, true));
+    }
+
+    #[test]
+    fn generation_id_invalida_fala_antiga() {
+        // Leitura pura: gen atual válida, qualquer outra não.
+        let g = tts_generation();
+        assert!(tts_generation_valid(g));
+        assert!(!tts_generation_valid(g.wrapping_add(1)));
+    }
+}

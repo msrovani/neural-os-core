@@ -401,4 +401,38 @@ mod ternary_native_contract {
             "tiny canary must pass on host (ABI nativo ≠ prova soft-float)"
         );
     }
+
+    /// Lane D-accel: tail n%4 (lanes=min(4,n-j)) — ADD/SUB/SKIP exato vs scalar.
+    #[test]
+    fn sse_tail_n10_parity_vs_scalar() {
+        let k = 48usize;
+        let n = 10usize;
+        let m = 2usize;
+        let weights: alloc::vec::Vec<i8> = (0..k * n)
+            .map(|i| match i % 3 {
+                0 => 1i8,
+                1 => 0,
+                _ => -1,
+            })
+            .collect();
+        let w = PackedTernaryTensor {
+            shape: (k, n),
+            packed_data: PackedTernaryTensor::pack_weights(&weights),
+        };
+        let x = Tensor::from_row_major(
+            (m, k),
+            (0..m * k).map(|i| (i as f32 + 1.0) * 0.125).collect(),
+        )
+        .expect("x");
+        let scalar = super::scalar_ternary_matmul(&w, &x, m, k, n);
+        #[cfg(target_arch = "x86_64")]
+        let simd = unsafe { super::sse2_ternary_matmul_add_sub_skip(&w, &x, m, k, n) };
+        #[cfg(not(target_arch = "x86_64"))]
+        let simd = scalar.clone();
+        assert_eq!(scalar.shape, (m, n));
+        assert_eq!(simd.shape, (m, n));
+        for (a, b) in scalar.data.iter().zip(simd.data.iter()) {
+            assert!((a - b).abs() < 1e-5, "tail parity {a} vs {b}");
+        }
+    }
 }

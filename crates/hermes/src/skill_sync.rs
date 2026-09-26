@@ -298,6 +298,8 @@ pub fn register_mesh_g3_probe_on_master() {
         DESC,
         "mesh_g3_probe body — smoke SkillSync apply",
     ));
+    // Lane B3: mesh-import carimba Imported (nunca Template implícito).
+    crate::wasmi_rt::record_skill_provenance(NAME, crate::wasmi_rt::SkillProvenance::Imported);
     // Garante push no próximo sync_skills (e no re-push pós clear_synced).
     register_skill_for_sync(NAME);
     slog_hermes!(
@@ -358,6 +360,8 @@ pub fn on_packet_received(pkt: &AiosTaskPacket, data: &[u8]) {
         crate::dynskill::register_dynskill(skill_registry::DynamicSkill::new(
             name, desc, body,
         ));
+        // Lane B3: mesh-import carimba Imported (nunca Template implícito).
+        crate::wasmi_rt::record_skill_provenance(name, crate::wasmi_rt::SkillProvenance::Imported);
         crate::self_evolve::publish_change("mesh", name);
         slog_hermes!(
             "SkillSync", "info",
@@ -391,6 +395,8 @@ pub fn on_packet_received(pkt: &AiosTaskPacket, data: &[u8]) {
         crate::dynskill::register_dynskill(
             skill_registry::DynamicSkill::new(name, desc, "promoted from mesh worker"),
         );
+        // Lane B3: mesh-import carimba Imported (nunca Template implícito).
+        crate::wasmi_rt::record_skill_provenance(name, crate::wasmi_rt::SkillProvenance::Imported);
         slog_hermes!(
             "SkillSync", "info",
             "Master: skill '{}' promovida do Worker node={}", name, pkt.source_id
@@ -421,6 +427,8 @@ pub fn on_packet_received(pkt: &AiosTaskPacket, data: &[u8]) {
     crate::dynskill::register_dynskill(
         skill_registry::DynamicSkill::new(name, desc, "synced from mesh master"),
     );
+    // Lane B3: mesh-import carimba Imported (nunca Template implícito).
+    crate::wasmi_rt::record_skill_provenance(name, crate::wasmi_rt::SkillProvenance::Imported);
     slog_hermes!("SkillSync", "info", "Worker: skill '{}' aplicada do Master", name);
 }
 
@@ -466,4 +474,42 @@ pub fn poll_p2p() {
     // Cada módulo tem subscribe próprio (EventBus = fila por assinante); o bin
     // só chama `skill_sync::poll_p2p()` por tick — repassa sem editar o bin.
     crate::mesh_knowledge::poll_p2p();
+}
+
+#[cfg(test)]
+mod lane_b3_tests {
+    use super::*;
+
+    fn sync_pkt() -> AiosTaskPacket {
+        AiosTaskPacket {
+            magic: 0x41494F53,
+            clock: 1,
+            source_id: 2,
+            dest_id: 0xFF,
+            task_type: TaskType::Sync,
+            priority: 1,
+            tensor_len: 0,
+            param_len: 0,
+            flags: PacketFlags::new(),
+            reserved: [0; 8],
+        }
+    }
+
+    #[test]
+    fn mesh_push_stamps_imported() {
+        // Push normal do Master: "name\0desc" (sem check de role).
+        let pkt = sync_pkt();
+        let mut data = Vec::new();
+        data.extend_from_slice(b"lb_mesh_skill");
+        data.push(0);
+        data.extend_from_slice(b"mesh desc");
+        on_packet_received(&pkt, &data);
+        assert!(k_nano::SKILL_REGISTRY.lock().has_skill("lb_mesh_skill"));
+        // Lane B3: Imported, nunca Template implícito.
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance("lb_mesh_skill"),
+            Some(crate::wasmi_rt::SkillProvenance::Imported)
+        );
+        crate::globals::SKILL_REGISTRY.lock().unregister("lb_mesh_skill");
+    }
 }

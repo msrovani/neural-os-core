@@ -50,7 +50,7 @@ impl EvolveLedger {
         &mut self,
         name: &str,
         wasm: &[u8],
-        _origin: WasmOrigin,
+        origin: WasmOrigin,
     ) -> Result<(), &'static str> {
         let gen = self.bump_gen(name);
         if gen > MAX_GEN_PER_GAP {
@@ -88,12 +88,18 @@ impl EvolveLedger {
         }
 
         self.live.insert(String::from(name), wasm.to_vec());
-        let skill =
-            crate::dynskill::DynamicSkill::with_wasm(name, "hot-swap skill", "", wasm.to_vec());
-        crate::dynskill::register_dynskill(skill);
+        // Lane B: WasmSkill (executa no wasmi) + proveniência da origem.
+        let prov = match origin {
+            WasmOrigin::Generated => crate::wasmi_rt::SkillProvenance::ModelBorn,
+            WasmOrigin::Compiled | WasmOrigin::External => {
+                crate::wasmi_rt::SkillProvenance::Template
+            }
+        };
+        crate::wasmi_rt::register_wasm_skill_with_provenance(wasm, name, "hot-swap skill", prov)
+            .map_err(|_| "hot_swap register failed")?;
         crate::self_evolve::publish_change("skill", name);
         self.swaps_ok = self.swaps_ok.saturating_add(1);
-        k_nano::slog_hermes!("EVOLVE", "ok", "hot_swap OK skill={} gen={}", name, gen);
+        k_nano::slog_hermes!("EVOLVE", "ok", "hot_swap OK skill={} gen={} prov={}", name, gen, prov.as_str());
         Ok(())
     }
 
@@ -102,8 +108,12 @@ impl EvolveLedger {
         let entry = self.prev.get(name).ok_or("no previous version")?;
         let bytes = entry.bytecode.clone();
         let gens = entry.generations;
-        let roll = crate::dynskill::DynamicSkill::with_wasm(name, "rollback", "", bytes.clone());
-        crate::dynskill::register_dynskill(roll);
+        // Lane B: preserva o carimbo de proveniência (rollback não rebaixa
+        // model-born para template); WasmSkill executa no wasmi.
+        let prov = crate::wasmi_rt::skill_provenance(name)
+            .unwrap_or(crate::wasmi_rt::SkillProvenance::Template);
+        crate::wasmi_rt::register_wasm_skill_with_provenance(&bytes, name, "rollback", prov)
+            .map_err(|_| "rollback register failed")?;
         self.live.insert(String::from(name), bytes);
         crate::self_evolve::publish_change("skill", name);
         self.rollbacks = self.rollbacks.saturating_add(1);
@@ -117,13 +127,12 @@ lazy_static::lazy_static! {
 }
 
 /// Promove skill efêmera (SkillOpt) → wasmi_rt (ADR-0059 F5).
-/// Caminho real (sandbox A only): op-IR mínima sintetizada
-/// (`I32Const(0)` — skill ainda sem corpo gerado pelo Cortex #412)
-/// → `wasm_build::validate` → `wasm_build::build_run_module`
-/// → sandbox wasmi (`sandbox_validate_and_run`, CAP_NONE) → registro via
-/// `dynskill::DynamicSkill::with_wasm` + `register_dynskill` → persistência
-/// best-effort dos bytes .wasm via `fs::write_vfs` em `/skills/{name}.wasm`
-/// (package_hub AgentWasm exige approval plumbing → write_vfs direto).
+/// Caminho legacy SEM op-IR real: `I32Const(0)` dummy carimbado como `dummy`
+/// (nunca conta como model-born) → `wasm_build::validate` →
+/// `wasm_build::build_run_module` → sandbox wasmi (`sandbox_validate_and_run`,
+/// CAP_NONE) → registro via `wasmi_rt::register_wasm_skill_with_provenance`
+/// (WasmSkill — executa de verdade) → persistência best-effort dos bytes
+/// .wasm via `fs::write_vfs` em `/skills/{name}.wasm` (VFS ausente = skip).
 /// wasmi (caminho A) ONLY — nunca toca gates B/C de execução nativa.
 pub fn promote_ephemeral_to_wasm(name: &str, description: &str) -> Result<(), &'static str> {
     if name.is_empty() || name.len() > 64 {
@@ -131,11 +140,20 @@ pub fn promote_ephemeral_to_wasm(name: &str, description: &str) -> Result<(), &'
     }
     // Corpo mínimo honesto até o Cortex #412 gerar op-IR real por skill.
     let ops = [crate::wasm_build::Op::I32Const(0)];
-    promote_ephemeral_ops_to_wasm(name, description, 0, &ops)
+    promote_ops_with_provenance(
+        name,
+        description,
+        0,
+        &ops,
+        crate::wasmi_rt::SkillProvenance::Dummy,
+    )
 }
 
 /// Variante com op-IR do caller (Cortex/Trinity/LLM, constrangida por #412).
 /// `n_params` = aridade da função `run`; `ops` deve deixar 1×i32 na stack.
+/// Proveniência inferida: sentinela dummy → `dummy`, senão `template`
+/// (op-IR crua não prova origem no modelo — só o caminho `model-text` carimba
+/// `model-born`). Registro via WasmSkill (executa no wasmi).
 pub fn promote_ephemeral_ops_to_wasm(
     name: &str,
     description: &str,
@@ -145,23 +163,125 @@ pub fn promote_ephemeral_ops_to_wasm(
     if name.is_empty() || name.len() > 64 {
         return Err("bad_name");
     }
-    // 1. op-IR → bytes wasm (build_run_module já revalida a op-IR).
-    crate::wasm_build::validate(n_params, ops).map_err(|_| "bad-op-ir")?;
-    let wasm = crate::wasm_build::build_run_module(n_params, ops).map_err(|_| "build-fail")?;
-    // 2. Sandbox wasmi FIRST (Caminho A, CAP_NONE) — sem tocar registry antes.
-    if !crate::wasmi_rt::sandbox_validate_and_run(&wasm) {
+    let prov = if crate::wasm_build::is_dummy_ops(ops) {
+        crate::wasmi_rt::SkillProvenance::Dummy
+    } else {
+        crate::wasmi_rt::SkillProvenance::Template
+    };
+    promote_ops_with_provenance(name, description, n_params, ops, prov)
+}
+
+/// Lane B: wire model-born — texto bruto do modelo
+/// (`cortex::cortex::generate_structured`) → `model_text_to_ops` (expression /
+/// DSL, sem nova gramática) → promote com carimbo `model-born` → WasmSkill +
+/// persistência VFS. Dummy (`I32Const(0)`/`I32Const(42)`) é recusado e nunca
+/// conta como model-born. Refuse honesto com log, sem panic/unwrap.
+pub fn promote_model_text_to_wasm(
+    name: &str,
+    description: &str,
+    model_text: &str,
+) -> Result<(), &'static str> {
+    if name.is_empty() || name.len() > 64 {
+        return Err("bad_name");
+    }
+    let (n_params, ops) =
+        match crate::wasm_build::model_text_to_ops(model_text) {
+            Ok(parsed) => {
+                crate::wasmi_rt::note_model_text_parse(true);
+                parsed
+            }
+            Err(e) => {
+                crate::wasmi_rt::note_model_text_parse(false);
+                k_nano::slog_hermes!(
+                    "EVOLVE",
+                    "warn",
+                    "model-born skill={} REFUSE model-text fora da gramática (registry untouched)",
+                    name
+                );
+                return Err(e);
+            }
+        };
+    if crate::wasm_build::is_dummy_ops(&ops) {
+        crate::wasmi_rt::note_promote(false);
         k_nano::slog_hermes!(
             "EVOLVE",
             "warn",
-            "ephemeral→WASM skill={} SKIP sandbox fail (registry untouched)",
+            "model-born skill={} REFUSE dummy nunca é model-born (registry untouched)",
             name
+        );
+        return Err("dummy-never-model-born");
+    }
+    promote_ops_with_provenance(
+        name,
+        description,
+        n_params,
+        &ops,
+        crate::wasmi_rt::SkillProvenance::ModelBorn,
+    )
+}
+
+fn promote_ops_with_provenance(
+    name: &str,
+    description: &str,
+    n_params: u32,
+    ops: &[crate::wasm_build::Op],
+    provenance: crate::wasmi_rt::SkillProvenance,
+) -> Result<(), &'static str> {
+    // 1. op-IR → bytes wasm (build_run_module já revalida a op-IR).
+    if let Err(e) = crate::wasm_build::validate(n_params, ops) {
+        crate::wasmi_rt::note_promote(false);
+        k_nano::slog_hermes!(
+            "EVOLVE",
+            "warn",
+            "ephemeral→WASM skill={} REFUSE bad-op-ir ({}) prov={} (registry untouched)",
+            name,
+            e,
+            provenance.as_str()
+        );
+        return Err("bad-op-ir");
+    }
+    let wasm = match crate::wasm_build::build_run_module(n_params, ops) {
+        Ok(w) => w,
+        Err(e) => {
+            crate::wasmi_rt::note_promote(false);
+            k_nano::slog_hermes!(
+                "EVOLVE",
+                "warn",
+                "ephemeral→WASM skill={} REFUSE build-fail ({}) prov={} (registry untouched)",
+                name,
+                e,
+                provenance.as_str()
+            );
+            return Err("build-fail");
+        }
+    };
+    // 2. Sandbox wasmi FIRST (Caminho A, CAP_NONE) — sem tocar registry antes.
+    if !crate::wasmi_rt::sandbox_validate_and_run(&wasm) {
+        crate::wasmi_rt::note_promote(false);
+        k_nano::slog_hermes!(
+            "EVOLVE",
+            "warn",
+            "ephemeral→WASM skill={} SKIP sandbox fail prov={} (registry untouched)",
+            name,
+            provenance.as_str()
         );
         return Err("sandbox-fail");
     }
-    // 3. Registro (DynamicSkill::with_wasm + trust via register_dynskill).
-    let skill =
-        crate::dynskill::DynamicSkill::with_wasm(name, description, "", wasm.clone());
-    crate::dynskill::register_dynskill(skill);
+    // 3. Registro WasmSkill (executa no wasmi) + carimbo de proveniência.
+    if let Err(e) =
+        crate::wasmi_rt::register_wasm_skill_with_provenance(&wasm, name, description, provenance)
+    {
+        crate::wasmi_rt::note_promote(false);
+        k_nano::slog_hermes!(
+            "EVOLVE",
+            "warn",
+            "ephemeral→WASM skill={} REFUSE register ({}) prov={}",
+            name,
+            e,
+            provenance.as_str()
+        );
+        return Err(e);
+    }
     crate::self_evolve::publish_change("skill", name);
     // 4. Persistência best-effort: VFS pode não existir no boot cedo/host.
     let path = alloc::format!("/skills/{}.wasm", name);
@@ -169,16 +289,32 @@ pub fn promote_ephemeral_ops_to_wasm(
         k_nano::slog_hermes!(
             "EVOLVE",
             "warn",
-            "ephemeral→WASM skill={} registered, persist SKIP (VFS absent)",
-            name
+            "ephemeral→WASM skill={} registered prov={}, persist SKIP (VFS absent)",
+            name,
+            provenance.as_str()
         );
     }
+    // 4b. Sidecar de proveniência (B3): reload recupera o carimbo ORIGINAL.
+    if crate::wasmi_rt::write_provenance_sidecar(name, provenance).is_err() {
+        k_nano::slog_hermes!(
+            "EVOLVE",
+            "warn",
+            "ephemeral→WASM skill={} prov={} sidecar SKIP (VFS absent)",
+            name,
+            provenance.as_str()
+        );
+    }
+    // 5. Efeito Matrix best-effort (B3 ≤20 linhas: 1 call; nunca falha o
+    // promote — erros viram log dentro do `try_inject_on_promote`).
+    let _ = crate::trinity_inject::try_inject_on_promote(name, &wasm);
+    crate::wasmi_rt::note_promote(true);
     k_nano::slog_hermes!(
         "EVOLVE",
         "ok",
-        "ephemeral→WASM skill={} OK bytes={} (wasmi A)",
+        "ephemeral→WASM skill={} OK bytes={} prov={} (wasmi A)",
         name,
-        wasm.len()
+        wasm.len(),
+        provenance.as_str()
     );
     Ok(())
 }
@@ -274,9 +410,51 @@ mod tests {
         );
         // Promoção real registra (persist VFS é best-effort no host).
         assert!(promote_ephemeral_ops_to_wasm("evolve_test_skill", "test", 2, &ops).is_ok());
+        // op-IR crua (não model-text) carimba template, não model-born.
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance("evolve_test_skill"),
+            Some(crate::wasmi_rt::SkillProvenance::Template)
+        );
+        crate::globals::SKILL_REGISTRY.lock().unregister("evolve_test_skill");
         // op-IR inválida é rejeitada antes de tocar o registry.
         let bad = [crate::wasm_build::Op::I32Add];
         assert!(promote_ephemeral_ops_to_wasm("evolve_bad", "test", 2, &bad).is_err());
+    }
+
+    #[test]
+    fn model_text_wire_registers_model_born_and_executes() {
+        // Lane B fim-a-fim (sem VFS): texto do modelo → WasmSkill executável.
+        assert!(promote_model_text_to_wasm("lb_evolve_a", "test", "a*b+7").is_ok());
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance("lb_evolve_a"),
+            Some(crate::wasmi_rt::SkillProvenance::ModelBorn)
+        );
+        assert!(crate::globals::SKILL_REGISTRY.lock().has_skill("lb_evolve_a"));
+        crate::globals::SKILL_REGISTRY.lock().unregister("lb_evolve_a");
+    }
+
+    #[test]
+    fn model_text_dummy_never_counts_as_model_born() {
+        assert_eq!(
+            promote_model_text_to_wasm("lb_evolve_dummy", "test", "0"),
+            Err("dummy-never-model-born")
+        );
+        assert_eq!(
+            promote_model_text_to_wasm("lb_evolve_dummy", "test", "42"),
+            Err("dummy-never-model-born")
+        );
+        assert!(crate::wasmi_rt::skill_provenance("lb_evolve_dummy").is_none());
+        assert!(!crate::globals::SKILL_REGISTRY.lock().has_skill("lb_evolve_dummy"));
+        // Fora da gramática também recusa sem tocar o registry.
+        assert!(promote_model_text_to_wasm("lb_evolve_dummy", "test", "def foo():").is_err());
+        assert!(!crate::globals::SKILL_REGISTRY.lock().has_skill("lb_evolve_dummy"));
+        // Dummy legacy carimba dummy (não model-born).
+        assert!(promote_ephemeral_to_wasm("lb_evolve_legacy", "test").is_ok());
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance("lb_evolve_legacy"),
+            Some(crate::wasmi_rt::SkillProvenance::Dummy)
+        );
+        crate::globals::SKILL_REGISTRY.lock().unregister("lb_evolve_legacy");
     }
 
     #[test]

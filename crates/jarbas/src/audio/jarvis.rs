@@ -480,6 +480,7 @@ impl Agent for JarbasAgent {
                 // (Antes o `pipeline` limpava o PLAYBACK_RING mas este buffer voltava
                 // no tick seguinte — interromper não interrompia.)
                 if !crate::audio::voice::tts_generation_valid(gen) {
+                    clear_spoken(); // ledger era da fala morta — o finish fala o full novo
                     k_nano::slog_jarbas!(
                         "Jarbas",
                         "ok",
@@ -572,6 +573,12 @@ impl Agent for JarbasAgent {
         }
 
         // --- INFER_TTS_PARTIAL: frases fechadas durante generate fatiado ---
+        // Lane D / prova A2: 1 token parcial (mesmo sem frase fechada) fala sem
+        // travar — split_into_sentences devolve o resto incompleto como sentença.
+        // O ledger (SPOKEN_PARTIAL) garante que o finish fale só o restante, sem
+        // perder a frase final que nunca fechou durante o generate.
+        // Parciais que chegam com Streaming ativo aguardam no EventBus (bounded
+        // drop_oldest) — o finish via HERMES_RESPONSE cobre qualquer perda.
         if matches!(self.stream_tts, StreamingTtsState::Idle) {
             while let Some(ev) = self.infer_tts_partial.try_receive() {
                 let text = core::str::from_utf8(&ev.payload).unwrap_or("");
@@ -581,16 +588,16 @@ impl Agent for JarbasAgent {
                 let clean = text
                     .trim_start_matches("[JARBAS] ")
                     .trim_start_matches("JARVIS: ");
-                // Ledger: o que já foi falado não deve ser repetido no final.
-                note_spoken(clean);
                 let sentences = split_into_sentences(clean);
                 if sentences.is_empty() {
                     continue;
                 }
+                let gen0 = crate::audio::voice::tts_generation();
                 k_nano::slog_jarbas!(
                     "Jarbas",
                     "ok",
-                    "TTS partial (InferQ): {}",
+                    "TTS partial recebido gen={}: {}",
+                    gen0,
                     clean.chars().take(48).collect::<alloc::string::String>()
                 );
                 let first = &sentences[0];
@@ -599,6 +606,27 @@ impl Agent for JarbasAgent {
                     .map(|s| alloc::string::String::from(s.as_str()))
                     .collect();
                 let pcm = crate::audio::skills::synthesize_tts(first);
+                if pcm.is_empty() {
+                    continue; // sem ledger: o finish fala o full, nada se perde
+                }
+                if !crate::audio::voice::tts_generation_valid(gen0) {
+                    k_nano::slog_jarbas!(
+                        "Jarbas",
+                        "ok",
+                        "TTS partial descartado por barge-in gen={}",
+                        gen0
+                    );
+                    continue;
+                }
+                // Ledger só após síntese ok: = de fato falado/enfileirado.
+                note_spoken(clean);
+                k_nano::slog_jarbas!(
+                    "Jarbas",
+                    "ok",
+                    "TTS sentence falada gen={}: {}",
+                    gen0,
+                    clean.chars().take(48).collect::<alloc::string::String>()
+                );
                 let total = pcm.len();
                 if total > 0 {
                     const CHUNK: usize = 2560;
@@ -642,8 +670,8 @@ impl Agent for JarbasAgent {
 
                 // Já falado via INFER_TTS_PARTIAL → fala só o RESTANTE da resposta.
                 let to_say = unsaid_remainder(body);
-                clear_spoken();
                 if to_say.trim().is_empty() {
+                    clear_spoken();
                     k_nano::slog_jarbas!(
                         "Jarbas",
                         "ok",
@@ -678,7 +706,22 @@ impl Agent for JarbasAgent {
                     .iter()
                     .map(|s| alloc::string::String::from(s.as_str()))
                     .collect();
+                let gen0 = crate::audio::voice::tts_generation();
                 let pcm = crate::audio::skills::synthesize_tts(first);
+                if pcm.is_empty() {
+                    break; // ledger intacto; nada se perde do já-falado
+                }
+                if !crate::audio::voice::tts_generation_valid(gen0) {
+                    clear_spoken();
+                    k_nano::slog_jarbas!(
+                        "Jarbas",
+                        "ok",
+                        "TTS full descartado por barge-in gen={}",
+                        gen0
+                    );
+                    break;
+                }
+                clear_spoken(); // ledger consumido: to_say vira a fala em curso
                 let total = pcm.len();
                 if total > 0 {
                     const CHUNK: usize = 2560;
@@ -751,5 +794,38 @@ impl Agent for JarbasAgent {
 
         self.engine.tick(tick);
         AgentTickResult::Pending
+    }
+}
+
+// --- Lane D seams (host-testáveis; lógica pura, sem HW) ---
+#[cfg(test)]
+mod dstream_tests {
+    use super::*;
+
+    #[test]
+    fn single_token_partial_sem_frase_fechada_vira_sentenca() {
+        // Prova A2: 1 token parcial sem pontuação fala sem travar.
+        let s = split_into_sentences("Olá");
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0], "Olá");
+        let s2 = split_into_sentences("Olá mundo. Como vai?");
+        assert_eq!(s2.len(), 2);
+    }
+
+    #[test]
+    fn ledger_remainder_e_mismatch_em_sequencia() {
+        // Um único teste p/ o ledger global (paralelismo do harness).
+        clear_spoken();
+        note_spoken("Olá mundo. ");
+        assert_eq!(unsaid_remainder("Olá mundo. Como vai?"), "Como vai?");
+        // Frase final que nunca fechou no generate: resto fala no finish.
+        note_spoken("Como vai?");
+        assert_eq!(unsaid_remainder("Olá mundo. Como vai?").trim(), "");
+        clear_spoken();
+        // Prefixo divergiu (LLM reformulou) → fala o full, nunca perde.
+        note_spoken("coisa antiga. ");
+        assert_eq!(unsaid_remainder("resposta nova total."), "resposta nova total.");
+        clear_spoken();
+        assert_eq!(unsaid_remainder("qualquer coisa"), "qualquer coisa");
     }
 }

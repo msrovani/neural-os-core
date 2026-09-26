@@ -9,11 +9,12 @@
 //! (`wasm.rs`) — aposentados pela ADR-0059.
 
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicU64, Ordering};
 use wasmi::{Config, Engine, Linker, Module, Store};
 
 // ─── Capability bitmask constants ───
@@ -443,7 +444,29 @@ struct WasmModule {
     pub exports: Vec<WasmExport>,
 }
 
-/// Parseia cabeçalho WASM e tabela de exports
+/// Parseia cabeçalho WASM e tabela de exports (LEB128 real).
+/// O parser anterior lia `section_len` como u32 LE fixo — em módulos válidos
+/// o 1º byte de conteúdo virava parte do len, `section_end` estourava e o
+/// loop quebrava com `exports` vazio: TODA WasmSkill registrada ficava muda
+/// (`execute` → "nenhuma função exportada"). Lane B conserta a leitura.
+fn read_uleb32(data: &[u8], off: &mut usize) -> Option<u32> {
+    let mut res: u32 = 0;
+    let mut shift = 0;
+    for _ in 0..5 {
+        if *off >= data.len() {
+            return None;
+        }
+        let b = data[*off];
+        *off += 1;
+        res |= ((b & 0x7F) as u32).checked_shl(shift)?;
+        shift += 7;
+        if b & 0x80 == 0 {
+            return Some(res);
+        }
+    }
+    None
+}
+
 fn parse_wasm(bytecode: &[u8]) -> Result<WasmModule, &'static str> {
     if bytecode.len() < 8 {
         return Err("Wasm too short");
@@ -455,54 +478,61 @@ fn parse_wasm(bytecode: &[u8]) -> Result<WasmModule, &'static str> {
         return Err("Unsupported WASM version");
     }
 
-    let mut off = 8u32;
+    let mut off = 8usize;
     let mut functions = 0u32;
     let mut exports = Vec::new();
 
-    while (off as usize) < bytecode.len() {
-        let section_id = bytecode[off as usize];
+    while off < bytecode.len() {
+        let section_id = bytecode[off];
         off += 1;
-        if off as usize + 4 > bytecode.len() { break; }
-        let section_len = u32::from_le_bytes([
-            bytecode[off as usize],
-            bytecode[off as usize + 1],
-            bytecode[off as usize + 2],
-            bytecode[off as usize + 3],
-        ]);
-        off += 4;
-
-        let section_end = off + section_len;
-        if section_end as usize > bytecode.len() { break; }
+        let section_len = match read_uleb32(bytecode, &mut off) {
+            Some(n) => n as usize,
+            None => break, // fail-soft: registra parcial (verify valida depois)
+        };
+        let section_end = match off.checked_add(section_len) {
+            Some(e) if e <= bytecode.len() => e,
+            _ => break, // fail-soft (idem)
+        };
 
         match section_id {
-            1 => { /* Type section */ }
-            3 => { // Function section
-                if (off as usize) < bytecode.len() {
-                    functions = bytecode[off as usize] as u32;
+            3 => {
+                // Function section: count + type indices
+                let mut p = off;
+                if let Some(count) = read_uleb32(bytecode, &mut p) {
+                    functions = count;
                 }
             }
-            7 => { // Export section
-                if off as usize >= bytecode.len() { break; }
-                let count = bytecode[off as usize] as usize;
-                off += 1;
+            7 => {
+                // Export section: count + (name_len, name, kind, index)
+                let mut p = off;
+                let count = match read_uleb32(bytecode, &mut p) {
+                    Some(n) => n,
+                    None => {
+                        off = section_end;
+                        continue;
+                    }
+                };
                 for _ in 0..count {
-                    if off as usize + 1 > bytecode.len() { break; }
-                    let name_len = bytecode[off as usize] as usize;
-                    off += 1;
-                    if off as usize + name_len > bytecode.len() { break; }
-                    let name = core::str::from_utf8(&bytecode[off as usize..off as usize + name_len])
+                    let name_len = match read_uleb32(bytecode, &mut p) {
+                        Some(n) => n as usize,
+                        None => break,
+                    };
+                    if p + name_len > section_end {
+                        break;
+                    }
+                    let name = core::str::from_utf8(&bytecode[p..p + name_len])
                         .unwrap_or("?")
                         .to_string();
-                    off += name_len as u32;
-                    if off as usize + 2 > bytecode.len() { break; }
-                    let kind = bytecode[off as usize];
-                    let index = u32::from_le_bytes([
-                        bytecode[off as usize],
-                        bytecode[off as usize + 1],
-                        bytecode[off as usize + 2],
-                        bytecode[off as usize + 3],
-                    ]);
-                    off += 2;
+                    p += name_len;
+                    if p + 1 > section_end {
+                        break;
+                    }
+                    let kind = bytecode[p];
+                    p += 1;
+                    let index = match read_uleb32(bytecode, &mut p) {
+                        Some(n) => n,
+                        None => break,
+                    };
                     if kind == 0 {
                         exports.push(WasmExport { name, kind, index });
                     }
@@ -528,11 +558,165 @@ static WASM_SKILL_BRIDGE: spin::Mutex<WasmSkillBridge> = spin::Mutex::new(WasmSk
     registered: false,
 });
 
-/// Registra uma skill WASM no SkillRegistry
+/// Registra uma skill WASM no SkillRegistry.
+/// Proveniência default = `Template` (chamadores legados não declaram origem;
+/// o wire model-born usa `register_wasm_skill_with_provenance`).
 pub fn register_wasm_skill(bytecode: &[u8], name: &str, desc: &str) -> Result<(), &'static str> {
-    let module = parse_wasm(bytecode)?;
-    k_nano::slog_hermes!("Wasm", "info", "Registrando '{}' ({} exports)...", name, module.exports.len());
+    register_wasm_skill_inner(bytecode, name, desc, None)
+}
 
+/// Lane B: registra skill WASM com proveniência carimbada + log serial.
+/// `model-born` = op-IR veio de texto do modelo (via `model_text_to_ops`);
+/// `template`/`dummy` = bytes de teste/placeholders — nunca contam como
+/// model-born; `reloaded` = sidecar `.prov` ausente no reload (skill antiga);
+/// `imported` = mesh SkillSync. Sidecar gravado pelo promote (evolve).
+pub fn register_wasm_skill_with_provenance(
+    bytecode: &[u8],
+    name: &str,
+    desc: &str,
+    provenance: SkillProvenance,
+) -> Result<(), &'static str> {
+    register_wasm_skill_inner(bytecode, name, desc, Some(provenance))
+}
+
+/// Proveniência da skill WASM (Lane B — carimbo no registro, log no serial).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillProvenance {
+    /// op-IR convertida de texto bruto do modelo (`model_text_to_ops`).
+    ModelBorn,
+    /// Bytes de template/placeholders conhecidos (ex.: `generate_add_wasm`).
+    Template,
+    /// Sentinelas `I32Const(0)`/`I32Const(42)` — nunca contam como model-born.
+    Dummy,
+    /// Sidecar `.prov` ausente no reload (skill antiga, origem desconhecida).
+    Reloaded,
+    /// Importada via mesh SkillSync (`skill_sync.rs`, outro nó).
+    Imported,
+}
+
+impl SkillProvenance {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SkillProvenance::ModelBorn => "model-born",
+            SkillProvenance::Template => "template",
+            SkillProvenance::Dummy => "dummy",
+            SkillProvenance::Reloaded => "reloaded",
+            SkillProvenance::Imported => "imported",
+        }
+    }
+}
+
+static SKILL_PROVENANCE: spin::Mutex<BTreeMap<String, SkillProvenance>> =
+    spin::Mutex::new(BTreeMap::new());
+
+/// Carimba proveniência no registro (sobrescreve em re-registro).
+pub fn record_skill_provenance(name: &str, provenance: SkillProvenance) {
+    SKILL_PROVENANCE.lock().insert(String::from(name), provenance);
+}
+
+/// Lê o carimbo de proveniência (`None` = registrada pelo caminho legado).
+pub fn skill_provenance(name: &str) -> Option<SkillProvenance> {
+    SKILL_PROVENANCE.lock().get(name).copied()
+}
+
+// ─── Lane B3+C: métricas mínimas (AtomicU64, sem tópico/evento) ─────────────
+// Parse/promote/reload contam aqui; leitura via getters (futuro HUD lê sem
+// EventBus — sem consumidor novo, sem tópico novo).
+static METER_MODEL_TEXT_OK: AtomicU64 = AtomicU64::new(0);
+static METER_MODEL_TEXT_FAIL: AtomicU64 = AtomicU64::new(0);
+static METER_PROMOTE_OK: AtomicU64 = AtomicU64::new(0);
+static METER_PROMOTE_DENY: AtomicU64 = AtomicU64::new(0);
+static METER_RELOAD_OK: AtomicU64 = AtomicU64::new(0);
+
+/// `model_text_to_ops` converteu (evolve + decode_harness anotam).
+pub fn note_model_text_parse(ok: bool) {
+    if ok {
+        METER_MODEL_TEXT_OK.fetch_add(1, Ordering::Relaxed);
+    } else {
+        METER_MODEL_TEXT_FAIL.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Promote terminou registrado (ok) ou recusado em qualquer gate (deny).
+pub fn note_promote(ok: bool) {
+    if ok {
+        METER_PROMOTE_OK.fetch_add(1, Ordering::Relaxed);
+    } else {
+        METER_PROMOTE_DENY.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Reload re-registrou 1 skill do VFS.
+pub fn note_reload_ok() {
+    METER_RELOAD_OK.fetch_add(1, Ordering::Relaxed);
+}
+
+/// (parse_ok, parse_fail) do model-text.
+pub fn metrics_model_text() -> (u64, u64) {
+    (
+        METER_MODEL_TEXT_OK.load(Ordering::Relaxed),
+        METER_MODEL_TEXT_FAIL.load(Ordering::Relaxed),
+    )
+}
+
+/// (promote_ok, promote_deny).
+pub fn metrics_promote() -> (u64, u64) {
+    (
+        METER_PROMOTE_OK.load(Ordering::Relaxed),
+        METER_PROMOTE_DENY.load(Ordering::Relaxed),
+    )
+}
+
+/// reload_ok acumulado.
+pub fn metrics_reload_ok() -> u64 {
+    METER_RELOAD_OK.load(Ordering::Relaxed)
+}
+
+// ─── Lane B3: sidecar de proveniência `/skills/{name}.prov` ─────────────────
+// Formato: ASCII exato `model-born|template|dummy|reloaded|imported`.
+// Escolhido sobre seção custom WASM: `build_run_module` vive em wasm_build.rs
+// (fora do escopo B3) e o sidecar é legível pelo reload sem re-parse do
+// módulo; skills antigas (sem sidecar) caem em `Reloaded` + warn.
+pub fn provenance_sidecar_path(name: &str) -> String {
+    alloc::format!("/skills/{}.prov", name)
+}
+
+/// Parse estrito dos bytes do sidecar (`None` = ausente/corrompido).
+pub fn parse_provenance_bytes(bytes: &[u8]) -> Option<SkillProvenance> {
+    match bytes {
+        b"model-born" => Some(SkillProvenance::ModelBorn),
+        b"template" => Some(SkillProvenance::Template),
+        b"dummy" => Some(SkillProvenance::Dummy),
+        b"reloaded" => Some(SkillProvenance::Reloaded),
+        b"imported" => Some(SkillProvenance::Imported),
+        _ => None,
+    }
+}
+
+/// Grava o sidecar (best-effort pelo caller; VFS ausente = `Err`).
+pub fn write_provenance_sidecar(name: &str, prov: SkillProvenance) -> Result<(), &'static str> {
+    let path = provenance_sidecar_path(name);
+    crate::fs::write_vfs(&path, prov.as_str().as_bytes())
+}
+
+/// Lê o sidecar (`None` = ausente/ilegível → caller usa `Reloaded` + warn).
+pub fn read_provenance_sidecar(name: &str) -> Option<SkillProvenance> {
+    let path = provenance_sidecar_path(name);
+    let bytes = crate::fs::read_vfs(&path).ok()?;
+    parse_provenance_bytes(&bytes)
+}
+
+fn register_wasm_skill_inner(
+    bytecode: &[u8],
+    name: &str,
+    desc: &str,
+    provenance: Option<SkillProvenance>,
+) -> Result<(), &'static str> {
+    let module = parse_wasm(bytecode)?;
+    // Lane B: todo registro WASM instala o executor no DynamicSkill —
+    // unifica execução (mesh/promote/reload executam no wasmi; sem bridge
+    // o DynamicSkill segue fail-closed).
+    ensure_dynskill_bridge();
     let skill = WasmSkill::new(bytecode, name, desc, module.exports.clone());
     crate::globals::SKILL_REGISTRY.lock().register(Box::new(skill));
     crate::self_evolve::publish_change("wasm", name);
@@ -541,8 +725,56 @@ pub fn register_wasm_skill(bytecode: &[u8], name: &str, desc: &str) -> Result<()
         bridge.skill_name = String::from(name);
         bridge.registered = true;
     }
-    k_nano::slog_hermes!("Wasm", "info", "Skill '{}' registrada com {} exports.", name, module.exports.len());
+    if let Some(prov) = provenance {
+        record_skill_provenance(name, prov);
+        k_nano::slog_hermes!("Wasm", "ok", "Skill '{}' registrada ({} exports, prov={}).", name, module.exports.len(), prov.as_str());
+    } else {
+        k_nano::slog_hermes!("Wasm", "info", "Skill '{}' registrada com {} exports.", name, module.exports.len());
+    }
     Ok(())
+}
+
+/// Executor real do DynamicSkill com `wasm` (ponte hermes→skill-registry).
+/// Mesma política do `WasmSkill::execute`: `main`/`_start`/1º export + args
+/// derivados do payload; refuse honesto, sem panic/unwrap.
+pub fn dynskill_wasm_exec(wasm: &[u8], payload: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let module = parse_wasm(wasm)?;
+    let func_name = module
+        .exports
+        .iter()
+        .find(|e| e.name == "main" || e.name == "_start")
+        .or_else(|| module.exports.first())
+        .map(|e| e.name.clone())
+        .unwrap_or_default();
+    if func_name.is_empty() {
+        return Err("WASM: nenhuma função exportada");
+    }
+    run_wasm_export(wasm, &func_name, payload)
+}
+
+/// Instala o executor wasmi no DynamicSkill (idempotente).
+fn ensure_dynskill_bridge() {
+    skill_registry::dynskill::install_wasm_exec_bridge(dynskill_wasm_exec);
+}
+
+fn run_wasm_export(
+    bytecode: &[u8],
+    func_name: &str,
+    payload: &[u8],
+) -> Result<Vec<u8>, &'static str> {
+    let args = payload_to_args(payload);
+    match run_wasm(bytecode, func_name, &args, CAP_LOG) {
+        Ok(result) => Ok(alloc::format!("[WASM] {} → {}", func_name, result).into_bytes()),
+        Err(e) => {
+            if func_name == "main" || func_name == "_start" {
+                run_wasm(bytecode, func_name, &[], CAP_LOG)
+                    .map(|r| alloc::format!("[WASM] {} → {}", func_name, r).into_bytes())
+                    .map_err(|_| e)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 /// Skill que executa WASM bytecode via wasmi real.
@@ -606,26 +838,90 @@ impl skill_registry::Skill for WasmSkill {
         // Tenta "main" primeiro, depois "_start", depois primeira export
         let func_name = self.exports.iter().find(|e| e.name == "main" || e.name == "_start")
             .or_else(|| self.exports.first())
-            .map(|e| &e.name[..])
-            .unwrap_or("");
+            .map(|e| e.name.clone())
+            .unwrap_or_default();
 
         if func_name.is_empty() {
             return Err("WASM: nenhuma função exportada");
         }
+        run_wasm_export(&self.bytecode, &func_name, payload)
+    }
+}
 
-        let args = payload_to_args(payload);
-        match run_wasm(&self.bytecode, func_name, &args, 1) {
-            Ok(result) => Ok(alloc::format!("[WASM] {} → {}", func_name, result).into_bytes()),
-            Err(e) => {
-                if func_name == "main" || func_name == "_start" {
-                    run_wasm(&self.bytecode, func_name, &[], 1)
-                        .map(|r| alloc::format!("[WASM] {} → {}", func_name, r).into_bytes())
-                        .map_err(|_| e)
-                } else {
-                    Err(e)
-                }
-            }
-        }
+#[cfg(test)]
+mod lane_b_tests {
+    use super::*;
+
+    fn build_test_module() -> Vec<u8> {
+        let ops = [
+            crate::wasm_build::Op::LocalGet(0),
+            crate::wasm_build::Op::I32Const(2),
+            crate::wasm_build::Op::I32Mul,
+            crate::wasm_build::Op::I32Const(1),
+            crate::wasm_build::Op::I32Add,
+        ];
+        crate::wasm_build::build_run_module(1, &ops).expect("build")
+    }
+
+    #[test]
+    fn parse_finds_run_export_of_built_module() {
+        let wasm = build_test_module();
+        let module = parse_wasm(&wasm).expect("parse");
+        assert!(module.exports.iter().any(|e| e.name == "run" && e.kind == 0));
+        assert_eq!(run_wasm(&wasm, "run", &[6], CAP_NONE).expect("run"), 13);
+    }
+
+    #[test]
+    fn register_records_model_born_provenance() {
+        let wasm = build_test_module();
+        register_wasm_skill_with_provenance(&wasm, "lb_prov_a", "test", SkillProvenance::ModelBorn)
+            .expect("register");
+        assert_eq!(skill_provenance("lb_prov_a"), Some(SkillProvenance::ModelBorn));
+        assert!(crate::globals::SKILL_REGISTRY.lock().has_skill("lb_prov_a"));
+        crate::globals::SKILL_REGISTRY.lock().unregister("lb_prov_a");
+    }
+
+    #[test]
+    fn dynskill_with_wasm_executes_via_bridge_after_register() {
+        // O registro instala o bridge; DynamicSkill com wasm passa a executar.
+        let wasm = build_test_module();
+        register_wasm_skill_with_provenance(&wasm, "lb_bridge_a", "test", SkillProvenance::Template)
+            .expect("register");
+        let dyn_skill =
+            skill_registry::DynamicSkill::with_wasm("lb_bridge_a", "d", "i", wasm);
+        let out = skill_registry::Skill::execute(&dyn_skill, b"6").expect("bridge exec");
+        let text = core::str::from_utf8(&out).expect("utf8");
+        assert!(text.contains("13"), "esperava a*2+1 com a=6 → 13, veio {}", text);
+        crate::globals::SKILL_REGISTRY.lock().unregister("lb_bridge_a");
+    }
+
+    #[test]
+    fn sidecar_parse_covers_all_variants() {
+        assert_eq!(parse_provenance_bytes(b"model-born"), Some(SkillProvenance::ModelBorn));
+        assert_eq!(parse_provenance_bytes(b"template"), Some(SkillProvenance::Template));
+        assert_eq!(parse_provenance_bytes(b"dummy"), Some(SkillProvenance::Dummy));
+        assert_eq!(parse_provenance_bytes(b"reloaded"), Some(SkillProvenance::Reloaded));
+        assert_eq!(parse_provenance_bytes(b"imported"), Some(SkillProvenance::Imported));
+        assert_eq!(parse_provenance_bytes(b""), None);
+        assert_eq!(parse_provenance_bytes(b"MODEL-BORN"), None);
+        assert_eq!(parse_provenance_bytes(b"model-born\n"), None);
+        assert_eq!(SkillProvenance::Imported.as_str(), "imported");
+    }
+
+    #[test]
+    fn metrics_counters_are_monotonic() {
+        let (ok0, fail0) = metrics_model_text();
+        let (pok0, pden0) = metrics_promote();
+        note_model_text_parse(true);
+        note_model_text_parse(false);
+        note_promote(true);
+        note_promote(false);
+        note_reload_ok();
+        let (ok1, fail1) = metrics_model_text();
+        let (pok1, pden1) = metrics_promote();
+        assert!(ok1 >= ok0 + 1 && fail1 >= fail0 + 1);
+        assert!(pok1 >= pok0 + 1 && pden1 >= pden0 + 1);
+        assert!(metrics_reload_ok() >= 1);
     }
 }
 

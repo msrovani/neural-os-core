@@ -2493,6 +2493,26 @@ pub fn estimate_resident_bytes(
     body.saturating_add(tied_zeros).saturating_add(rope)
 }
 
+/// Lane D-cortex: último refuse de residente p/ log acionável da prova A2.
+/// (need_mb, headroom_mb); 0 = nenhum refuse neste boot. Escrita só no path
+/// fail (nunca no hot path) — sem novo alocador, sem eager mapping.
+static RESIDENT_REFUSE_NEED_MB: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+static RESIDENT_REFUSE_HEADROOM_MB: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+/// (need_mb, headroom_mb) do último refuse de residente, ou None se nunca recusou.
+pub(crate) fn last_resident_refuse() -> Option<(u64, u64)> {
+    let need = RESIDENT_REFUSE_NEED_MB.load(core::sync::atomic::Ordering::Acquire);
+    if need == 0 {
+        return None;
+    }
+    Some((
+        need,
+        RESIDENT_REFUSE_HEADROOM_MB.load(core::sync::atomic::Ordering::Acquire),
+    ))
+}
+
 /// Gate de fit do residente contra o headroom REAL do bump heap (window − used),
 /// com `RESIDENT_RUNTIME_RESERVE_MB` de margem. false ⇒ slog `fail` + o caller
 /// devolve None (recusa honesta; nunca copia até 99% e morre depois).
@@ -2512,6 +2532,15 @@ fn resident_fits_bump_heap(
         return true;
     }
     let headroom_mb = k_nano::allocator::heap_headroom_bytes() / (1024 * 1024);
+    // Lane D: sticky p/ `a2_proof refuse resident_too_big` (1×/boot, sem spam).
+    RESIDENT_REFUSE_NEED_MB.store(
+        (need / (1024 * 1024)) as u64,
+        core::sync::atomic::Ordering::Release,
+    );
+    RESIDENT_REFUSE_HEADROOM_MB.store(
+        headroom_mb as u64,
+        core::sync::atomic::Ordering::Release,
+    );
     k_nano::slog_cortex!(
         "LLM",
         "fail",

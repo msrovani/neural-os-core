@@ -309,4 +309,70 @@ mod tests {
             assert!((a.data[i] - b.data[i]).abs() < 1e-5);
         }
     }
+
+    /// Lane D-accel: tail n%4 (heads reais 17/9/10) — desconto do viés
+    /// xq=q+128 exato vs ref quantizada; erro vs f32 puro ≤5% documentado.
+    #[test]
+    fn w2a8_tail_n9_matches_quantized_ref() {
+        let k = 64usize;
+        let n = 9usize;
+        let m = 2usize;
+        let w = tern(k, n, 4242);
+        let mut xdata = Vec::with_capacity(m * k);
+        for i in 0..m {
+            for t in 0..k {
+                xdata.push(((i * 31 + t * 7) % 11) as f32 * 0.25 - 1.25);
+            }
+        }
+        let x = Tensor::from_row_major((m, k), xdata).unwrap();
+        let got = w2a8_ternary_matmul_scalar(&w, &x).expect("scalar");
+        let want = w2a8_reference_quantized(&w, &x).expect("ref");
+        assert_eq!(got.shape, (m, n));
+        for i in 0..m * n {
+            assert!(
+                (got.data[i] - want.data[i]).abs() < 1e-5,
+                "tail bias idx={} got={} want={}",
+                i,
+                got.data[i],
+                want.data[i]
+            );
+        }
+        let pure = w2a8_reference_scalar(&w, &x).expect("pure");
+        let mut qerr = 0.0f32;
+        for i in 0..m * n {
+            let denom = pure.data[i].abs().max(1e-3);
+            let rel = ((got.data[i] - pure.data[i]).abs() / denom).min(1.0);
+            if rel > qerr {
+                qerr = rel;
+            }
+        }
+        assert!(qerr < 0.05, "w2a8 tail quant err: {:.4}", qerr);
+    }
+
+    /// Lane D-accel: kernel maddubs host com tail k%32/n%4 — paridade vs ref
+    /// quantizada (folga 1%: ordem de acumulação i64 vs f32 difere no ulp).
+    /// Sem AVX2 no host o dispatch cai no scalar (mesma ref) — passa igual.
+    #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
+    #[test]
+    fn w2a8_maddubs_tail_parity_host() {
+        let k = 64usize;
+        let n = 9usize;
+        let m = 2usize;
+        let w = tern(k, n, 777);
+        let mut xdata = Vec::with_capacity(m * k);
+        for i in 0..m {
+            for t in 0..k {
+                xdata.push(((i * 17 + t * 5) % 13) as f32 * 0.2 - 1.2);
+            }
+        }
+        let x = Tensor::from_row_major((m, k), xdata).unwrap();
+        let got = unsafe { w2a8_ternary_matmul(&w, &x) }.expect("w2a8");
+        let want = w2a8_reference_quantized(&w, &x).expect("ref");
+        assert_eq!(got.shape, (m, n));
+        for i in 0..m * n {
+            let denom = want.data[i].abs().max(1e-3);
+            let rel = ((got.data[i] - want.data[i]).abs() / denom).min(1.0);
+            assert!(rel < 0.01, "maddubs tail idx={} rel={:.4}", i, rel);
+        }
+    }
 }

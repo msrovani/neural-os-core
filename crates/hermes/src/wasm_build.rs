@@ -1010,6 +1010,47 @@ pub fn compile_python_dsl(source: &str) -> Result<(u32, Vec<Op>), &'static str> 
     Ok((n, ops))
 }
 
+// ─── Lane B: texto bruto do modelo → op-IR (sem nova gramática) ─────────────
+// Reusa `compile_expression` (1ª tentativa) e `compile_python_dsl` (2ª).
+// Entrada típica: saída de `cortex::cortex::generate_structured` com hint
+// op-IR. Refuse honesto (`Err`) em vazio/cercado/fora-da-gramática — o caller
+// (evolve) loga e nunca promove.
+
+/// Converte texto do modelo em `(n_params, ops)`.
+pub fn model_text_to_ops(text: &str) -> Result<(u32, Vec<Op>), &'static str> {
+    let mut t = text.trim();
+    if t.is_empty() {
+        return Err("model-text: vazio");
+    }
+    // Modelo costuma cercar com ```fences``` — descasca sem inventar conteúdo.
+    if t.starts_with("```") {
+        match t.find('\n') {
+            Some(nl) => t = t[nl + 1..].trim(),
+            None => return Err("model-text: fence sem conteúdo"),
+        }
+        match t.rfind("```") {
+            Some(end) => t = t[..end].trim(),
+            None => return Err("model-text: fence não fechado"),
+        }
+        if t.is_empty() {
+            return Err("model-text: vazio após fence");
+        }
+    }
+    if let Ok(parsed) = compile_expression(t) {
+        return Ok(parsed);
+    }
+    if let Ok(parsed) = compile_python_dsl(t) {
+        return Ok(parsed);
+    }
+    Err("model-text: fora da gramática op-IR (expression/DSL)")
+}
+
+/// Sentinelas dummy (`evolve::promote_ephemeral_to_wasm`, `jarvis` legacy):
+/// `I32Const(0)`/`I32Const(42)` sozinhos nunca contam como model-born.
+pub fn is_dummy_ops(ops: &[Op]) -> bool {
+    ops.len() == 1 && matches!(ops[0], Op::I32Const(0) | Op::I32Const(42))
+}
+
 pub fn op_ir_schema_hint() -> &'static str {
     concat!(
         "Gere ops i32 (op-IR): LocalGet|I32Const|I32Add|I32Sub|I32Mul|",
@@ -1650,7 +1691,7 @@ mod tests {
 
     #[test]
     fn and_in_false_branch() {
-        // a > 0 ? a : b > 0 && a + b > 0 ? a + b : 0
+        // a > 0 ? a : b > 0 ? a + b : 0
         let (n, ops) = compile_expression(
             "a > 0 ? a : b > 0 ? a + b : 0"
         ).expect("parse");
@@ -1659,6 +1700,48 @@ mod tests {
         assert_eq!(wasmi_rt::run_i32_2(&wasm, "run", 3, 5, 0).unwrap(), 3);
         assert_eq!(wasmi_rt::run_i32_2(&wasm, "run", 0, 5, 0).unwrap(), 5);
         assert_eq!(wasmi_rt::run_i32_2(&wasm, "run", 0, 0, 0).unwrap(), 0);
+    }
+
+    // ─── Lane B: model_text_to_ops + is_dummy_ops ───
+
+    #[test]
+    fn model_text_expression_parses() {
+        let (n, ops) = model_text_to_ops("a*b+7").expect("expr");
+        assert_eq!(n, 2);
+        let wasm = build_run_module(n, &ops).unwrap();
+        assert_eq!(wasmi_rt::run_i32_2(&wasm, "run", 6, 7, 0).unwrap(), 49);
+        assert!(!is_dummy_ops(&ops));
+    }
+
+    #[test]
+    fn model_text_dsl_fallback_parses() {
+        let (n, ops) = model_text_to_ops("return a * 2 + 1").expect("dsl");
+        let wasm = build_run_module(n, &ops).unwrap();
+        assert_eq!(wasmi_rt::run_wasm(&wasm, "run", &[6], 0).unwrap(), 13);
+    }
+
+    #[test]
+    fn model_text_strips_code_fence() {
+        let (n, ops) = model_text_to_ops("```\na*b+7\n```").expect("fence");
+        let wasm = build_run_module(n, &ops).unwrap();
+        assert_eq!(wasmi_rt::run_i32_2(&wasm, "run", 6, 7, 0).unwrap(), 49);
+    }
+
+    #[test]
+    fn model_text_refuses_honestly() {
+        assert!(model_text_to_ops("").is_err());
+        assert!(model_text_to_ops("   ").is_err());
+        assert!(model_text_to_ops("def foo():").is_err());
+        assert!(model_text_to_ops("```\n```").is_err());
+    }
+
+    #[test]
+    fn dummy_ops_are_single_const_sentinels() {
+        assert!(is_dummy_ops(&[Op::I32Const(0)]));
+        assert!(is_dummy_ops(&[Op::I32Const(42)]));
+        assert!(!is_dummy_ops(&[Op::I32Const(7)]));
+        assert!(!is_dummy_ops(&[Op::LocalGet(0), Op::I32Const(0)]));
+        assert!(!is_dummy_ops(&[]));
     }
 
 }

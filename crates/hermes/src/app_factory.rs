@@ -221,6 +221,42 @@ pub fn generate_and_run(ops: &[crate::wasm_build::Op], a: i32, b: i32) -> Factor
     execute(&rec, &wasm, "run", a, b)
 }
 
+/// Lane B: model-text → persiste (WasmSkill model-born + `/skills/*.wasm`)
+/// + executa (A wasmi). Fecha o gap "generate_and_run é efêmero".
+/// Refuse honesto (`Denied`) em texto fora-da-gramática/dummy/falha de
+/// promote — sem panic/unwrap. `args` alimenta `run` (arity probing do
+/// `run_wasm` completa com zeros).
+/// ponytail: `model_text_to_ops`+`build` rodam 2× (aqui e no promote) —
+/// determinístico e barato (~50 bytes); evita mudar assinatura do promote.
+pub fn generate_persist_and_run(
+    name: &str,
+    desc: &str,
+    model_text: &str,
+    args: &[i32],
+) -> FactoryOutcome {
+    let (n_params, ops) = match crate::wasm_build::model_text_to_ops(model_text) {
+        Ok(parsed) => parsed,
+        Err(e) => return FactoryOutcome::Denied(e),
+    };
+    if crate::wasm_build::is_dummy_ops(&ops) {
+        return FactoryOutcome::Denied("dummy-never-model-born");
+    }
+    let wasm = match crate::wasm_build::build_run_module(n_params, &ops) {
+        Ok(w) => w,
+        Err(e) => return FactoryOutcome::Denied(e),
+    };
+    if let Err(e) = crate::evolve::promote_model_text_to_wasm(name, desc, model_text) {
+        return FactoryOutcome::Denied(e);
+    }
+    match crate::wasmi_rt::run_wasm(&wasm, "run", args, crate::wasmi_rt::CAP_NONE) {
+        Ok(v) => {
+            k_nano::slog_hermes!("APPFACTORY", "ok", "persist+run skill={} prov=model-born ret={}", name, v);
+            FactoryOutcome::RanWasm(v)
+        }
+        Err(e) => FactoryOutcome::Denied(e),
+    }
+}
+
 /// HW-gate: ring de isolamento para código nativo (ADR-0060 / Ring3). Reflete
 /// se um ring nativo **validado** foi registrado (`register_native_ring`).
 /// Hoje `false` até o F6 (ADR-0060) passar o gate — B/C nativo fica gated.
@@ -260,6 +296,35 @@ pub fn self_test() -> bool {
         k_nano::slog_hermes!("APPFACTORY", "warn", "path-selector self-test FAIL");
     }
     ok
+}
+
+#[cfg(test)]
+mod lane_b_tests {
+    use super::*;
+
+    #[test]
+    fn persist_and_run_model_text() {
+        match generate_persist_and_run("lb_app_a", "test", "a*b+7", &[6, 7]) {
+            FactoryOutcome::RanWasm(49) => {}
+            FactoryOutcome::RanWasm(v) => panic!("esperava RanWasm(49), veio {}", v),
+            FactoryOutcome::Denied(e) => panic!("esperava RanWasm(49), veio Denied({})", e),
+            _ => panic!("esperava RanWasm(49)"),
+        }
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance("lb_app_a"),
+            Some(crate::wasmi_rt::SkillProvenance::ModelBorn)
+        );
+        crate::globals::SKILL_REGISTRY.lock().unregister("lb_app_a");
+    }
+
+    #[test]
+    fn persist_and_run_refuses_dummy() {
+        match generate_persist_and_run("lb_app_dummy", "test", "0", &[]) {
+            FactoryOutcome::Denied(_) => {}
+            _ => panic!("dummy deveria ser Denied"),
+        }
+        assert!(!crate::globals::SKILL_REGISTRY.lock().has_skill("lb_app_dummy"));
+    }
 }
 
 
