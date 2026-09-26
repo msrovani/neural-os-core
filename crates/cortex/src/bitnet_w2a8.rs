@@ -194,6 +194,14 @@ pub fn w2a8_reference_quantized(w: &PackedTernaryTensor, x: &Tensor) -> Option<T
     if !out.is_valid() {
         return None;
     }
+    // ponytail: q(i,t) é invariante em j — quantiza a linha UMA vez.
+    // Antes era O(m·n·k) chamadas a libm::roundf (soft-float) dentro do laço j;
+    // agora é O(m·k). Mesma matemática do path AVX2 (bitnet_w2a8.rs:119-127).
+    let mut xq = alloc::vec::Vec::new();
+    if xq.try_reserve_exact(k).is_err() {
+        return None;
+    }
+    xq.resize(k, 0i32);
     for i in 0..m {
         let mut max_abs = 0.0f32;
         for &v in &x.data[i * k..(i + 1) * k] {
@@ -204,6 +212,9 @@ pub fn w2a8_reference_quantized(w: &PackedTernaryTensor, x: &Tensor) -> Option<T
         }
         let si = if max_abs > 1e-9 { max_abs / 127.0 } else { 1.0 };
         let inv_si = 1.0 / si;
+        for t in 0..k {
+            xq[t] = unsafe { libm::roundf(x.data[i * k + t] * inv_si) } as i32;
+        }
         for j in 0..n {
             let mut acc = 0.0f32;
             for t in 0..k {
@@ -211,8 +222,7 @@ pub fn w2a8_reference_quantized(w: &PackedTernaryTensor, x: &Tensor) -> Option<T
                 let byte = w.packed_data[idx >> 2];
                 let pair = (byte >> ((idx & 3) << 1)) & 3;
                 let v = ((pair & 1) as i8) - ((pair >> 1) as i8);
-                let q = unsafe { libm::roundf(x.data[i * k + t] * inv_si) } as i32;
-                acc += q as f32 * v as f32;
+                acc += xq[t] as f32 * v as f32;
             }
             out.data[i * n + j] = acc * si;
         }
