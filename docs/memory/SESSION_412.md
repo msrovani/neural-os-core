@@ -27,6 +27,8 @@ Hipotese herdada da s411: depois do bulk u8 o gargalo seria a ALU escalar de des
 **Causa-raiz:** `bitnet_avx2.rs:8-12` ja documentava — AVX2 e **host-only** (`not(target_os="none")`); bare-metal delega ao SSE2. `#[target_feature(enable="avx2")]` no alvo soft-float **nao emite AVX2**: o `rustc-LLVM ERROR: Do not know how to split the result of this operator!` (vpermd) era a pista — 256-bit cai em escalar e cada `f32` vira **libcall**. **Nao reintroduzir.** (Patch do codigo em `%TEMP%\avx2-unpack.patch`.)
 
 ## Sync SMP e custo FIXO (~4,2 ms por dispatch)
+
+> **CORRECAO (SESSION_413):** o "4,2 ms" NAO era o sync — era o **log de entrada**. O `t_mm0` ficava antes do `slog` e o split so loga quando `log_it` (1/20), entao toda amostra pagava o serial (~1,4 ms). Com o TSC DEPOIS do log, o dispatch real e **~60 us** (`setup` = clear+enq+IPI, constante) e o que sobra e a **cauda do AP** (`bar` = 1 us a 7,4 ms). A decisao de nao fazer bypass segue valida (e mais forte: o dispatch e barato). Ver SESSION_413.
 Nos DOIS caminhos — ternario (`workers=4 ... sync_us=42xx`) e f32 (`matmul exit ok=true us=42xx`) — o `sync_us` fica em **4,1-4,3 ms** de `k=2048 n=1024` a `n=131072` (onde e 0,4%). No decode (`m=1 k=2048 n=1024`: worker 2,2 ms) o sync e **2x o trabalho**. 14x `m=8 k=8 n=256` a ~4,2 ms = ~60 ms de dispatch puro para 16K MACs. O tile fix ja atacou esse custo no prefill (sync 4,2 -> 1,4 ms).
 
 **Decisao (ponytail):** NAO implementar "SMP Threshold Bypass" no ternario medio. Os workers dividem **colunas**, entao BSP-solo ~ **4x `worker_max_us`** — em `k=2048 n=1024` isso da ~8,8 ms solo vs 6,4 ms total = **regressao**. Se o sync incomodar, o alvo e um **threshold** nos shapes tiny do f32 (onde o solo e microssegundos), medido — nao um bypass generico.

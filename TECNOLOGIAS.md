@@ -1,8 +1,8 @@
 # CATÁLOGO DE TECNOLOGIAS — AIOS K³CHJ (neural-os-core)
 ## Registro de Propriedade Intelectual e Inovação
 
-**~148.000 LOC, ~671 arquivos Rust (12 crates do workspace), 41 agentes nativos**
-**Versão release:** v1.9.99-s360 TEST / NÃO ESTÁVEL (2026-09-19)
+**~169.000 LOC, ~672 arquivos Rust (12 crates do workspace), 41 agentes nativos**
+**Versão release:** v1.9.99-s412 TEST / NÃO ESTÁVEL (2026-09-26)
 **Marco:** UI Jarbas funcional + mesh + compute distribuído em **6 QEMU** (WHPX / hub L2 / FRAG)
 **Build:** `cargo clean -p neural-kernel && cargo nk` = 0 erros (warnings dead-code = política conhecida)
 **Licença:** MIT (código próprio) / MIT, GPL, Apache 2.0 (componentes inspirados/portados)
@@ -330,16 +330,16 @@ $ cargo clean -p neural-kernel && cargo nk
     0 errors
 ```
 
-**Métricas (v1.9.99-s328 TEST):**
+**Métricas (v1.9.99-s412 TEST):**
 
 | Métrica | Valor |
 |---------|-------|
-| Linhas de código (Rust, 12 crates do workspace) | ~148.000 |
-| Arquivos Rust (workspace) | ~671 |
+| Linhas de código (Rust, 12 crates do workspace) | ~169.000 |
+| Arquivos Rust (workspace) | ~672 |
 | Agentes nativos (seeds `skills/agents/`) | 41 |
 | The Agency | data-driven (AGENT.md assinados via PackageHub) |
 | ADRs (`docs/architecture/`) | ~100 |
-| Firmware blobs | 116 (~12.5 MB) |
+| Firmware blobs | 92 (~13.7 MB) |
 | HWIDs HW Expert v3 (treino) | **61.453 VID/DID** |
 | Tags release | v1.0.0 → **v1.9.99-s315** (dev atual v1.9.99-s328; gate v2.0.0 = review + `por_fazer` + OK humano) |
 | Crates K³CHJ wired | k_nano, k_hal, k_ai, cortex, hermes, jarbas |
@@ -370,8 +370,8 @@ $ cargo clean -p neural-kernel && cargo nk
 
 ---
 
-> **AIOS K³CHJ — Neural OS Hermes v1.9.99-s328 TEST / NÃO ESTÁVEL**
-> *~148.000 LOC, ~671 arquivos Rust (12 crates do workspace), 41 agentes nativos, 6 crates K³CHJ wired, cargo nk = 0 erros.*
+> **AIOS K³CHJ — Neural OS Hermes v1.9.99-s412 TEST / NÃO ESTÁVEL**
+> *~169.000 LOC, ~672 arquivos Rust (12 crates do workspace), 41 agentes nativos, 6 crates K³CHJ wired, cargo nk = 0 erros.*
 > *"O hardware real não perdoa. O silício obedece."*
 > [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)
 > [huggingface.co/aios-k2chj](https://huggingface.co/aios-k2chj)

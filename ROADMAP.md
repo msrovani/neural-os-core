@@ -1,10 +1,10 @@
 # Roadmap — neural-os-core
 
-**Última atualização:** 2026-09-19
-**Versão release:** **v1.9.99-s360 TEST / NÃO ESTÁVEL**
-**Estado:** ~148K LOC, ~671 arquivos Rust (12 crates do workspace), 41 agentes nativos, 0 erros (`cargo nk`)
+**Última atualização:** 2026-09-26
+**Versão release:** **v1.9.99-s412 TEST / NÃO ESTÁVEL**
+**Estado:** ~169K LOC, ~672 arquivos Rust (12 crates do workspace), 41 agentes nativos, 0 erros (`cargo nk`)
 **Marco s360:** interface Jarbas **funcional** + rede mesh + computação distribuída em **6 QEMU** (WHPX, hub L2, FRAG matmul, orb/`MESH_HEALTH` por role).
-**Pista ativa:** s360 mesh lab + fail/warn honesty; s359 bin emagreçer Bei/MoE; s358 cortex GGUF; s328 InferQueue. **Aberto:** aceite metal USB/MSC; peer B estável no mesh 6-node; gate v2.0.0.
+**Pista ativa:** s412 ternary_worker tile de colunas (1,9x, SESSION_412); s410m forget cognitivo HITL; s411 A2 proof (1 token real).
 
 ---
 

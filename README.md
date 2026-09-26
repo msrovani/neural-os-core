@@ -20,7 +20,7 @@ Linux, no cloud dependency.
 ## What this is
 
 An experimental OS kernel and its application layer, organized as a Rust workspace
-of six crates plus a boot binary:
+of twelve crates plus a boot binary:
 
 ```
 k_nano (R0, foundation) ← k_hal (R1, hardware abstraction) ← cortex (R2, inference)
@@ -44,7 +44,7 @@ Sentence-level TTS streaming provides sub-200ms first-phrase latency via Piper.
 
 ## Status
 
-**v1.9.99-s360 TEST** — Jarbas UI live on the framebuffer, P2P mesh across **six QEMU VMs**, and distributed matmul over FRAG — a working AIOS desktop talking to a small cluster, not a slide deck.
+**v1.9.99-s412 TEST** — Jarbas UI live on the framebuffer, P2P mesh across **six QEMU VMs**, and distributed matmul over FRAG — a working AIOS desktop talking to a small cluster, not a slide deck.
 
 The project is honest about what is done and what is not. Anything marked
 "gated" or "pending" below will fail or is disabled at runtime — we prefer an
@@ -242,7 +242,7 @@ FFT driving the orb visualization.
 
 ### GPU compute
 
-NVIDIA PUSH_BUFFER/GPFIFO (validated HW-real on Pascal), VRAM buddy allocator,
+NVIDIA PUSH_BUFFER/GPFIFO (submit validated HW-real on Pascal; ternary W2A8 compute kernels pending), VRAM buddy allocator,
 Intel GEN ring (canary), VirtIO-GPU for QEMU, GPU work queues with CPU fallback.
 
 ### Security & safety
@@ -257,7 +257,7 @@ self-healing firmware pipeline (missing blob → diagnose → download → hot-l
 
 Everything in the system is an agent. The kernel ships 41 native agent seeds
 (`skills/agents/*/SKILL.md`, embedded at compile time); the 25 classic core agents
-are wired as A-001–A-025:
+run as A-001–A-025 (A-019 SafetyAgent, A-020 OptimizerAgent and A-023 WifiAgent are ORPHAN, not in the fleet):
 
 | Code | Agent | Type | Schedule | Function |
 |------|-------|------|----------|----------|
@@ -322,7 +322,7 @@ list. A recent boot reported ~259 agents at runtime.
 | VirtIO-blk driver (QEMU disk) | Done |
 | neural-sgdb extraction (standalone crate) | Done |
 | v1.9.99 dev line (s328): Full Infer D+B+C — `InferQueue` worker off the BSP | Done |
-| Ring 3 isolation (ADR-0077/0082/0102) | Onda 6 wired in QEMU; native registration gated to metal |
+| Ring 3 isolation (ADR-0077/0102) | Onda 6 wired in QEMU; native registration gated to metal |
 | WiFi/TLS hardware validation | Pending hardware |
 | v2.0.0 gate (formal review + zero backlog + maintainer OK) | Not passed |
 
@@ -358,7 +358,7 @@ list. A recent boot reported ~259 agents at runtime.
 
 Key ADRs: [0041 capability rings](docs/architecture/0041-k2chj-capability-rings.md),
 [0042 K³CHJ adequacy](docs/architecture/0042-*.md),
-[0057 compute dispatch](docs/architecture/0057-compute-dispatch.md),
+[0057 compute dispatch](docs/architecture/0057-compute-dispatch-smp-gpu-npu.md),
 [0058 card desktop](docs/architecture/0058-generative-card-desktop.md),
 [0059 app factory](docs/architecture/0059-runtime-app-factory.md),
 [0079 self-installer](docs/architecture/0079-neural-auto-installer.md),

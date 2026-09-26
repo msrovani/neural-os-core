@@ -71,9 +71,9 @@ Todas as famílias abaixo são **"Redistributable" (proprietárias, binário-for
 
 | Arquivo | Origem | Licença | Notas |
 |---|---|---|---|
-| `models/tokenizer/PIPER_PT_BR.BIN` | [Piper TTS](https://github.com/rhasspy/piper) — voz `pt_BR-cadu-medium` ([piper-voices](https://huggingface.co/rhasspy/piper-voices)) | **MIT** (repo-level) | Modelo ONNX ~63 MB convertido; `MODEL_CARD`: dataset CC0, fine-tune de `lessac`. ⚠️ A cadeia de dados do `lessac` (Blizzard 2013) tem licença **research-only** — caveat a documentar em auditoria |
-| `models/tokenizer/E5_MULTI.BIN` | [intfloat/multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small) | **MIT** | Atribuição requerida |
-| `models/tokenizer/BGE_M3.BIN` (não versionado, gerado por `convert_bgem3.py`) | [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) | **MIT** | — |
+| `models/PIPER_PT_BR.BIN` | [Piper TTS](https://github.com/rhasspy/piper) — voz `pt_BR-cadu-medium` ([piper-voices](https://huggingface.co/rhasspy/piper-voices)) | **MIT** (repo-level) | Modelo ONNX ~63 MB convertido; `MODEL_CARD`: dataset CC0, fine-tune de `lessac`. ⚠️ A cadeia de dados do `lessac` (Blizzard 2013) tem licença **research-only** — caveat a documentar em auditoria |
+| `models/E5_MULTI.BIN` | [intfloat/multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small) | **MIT** | Atribuição requerida |
+| `models/BGE_M3.BIN` (não versionado, gerado por `convert_bgem3.py`) | [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) | **MIT** | — |
 
 **Download:** `python tools/download_models.py` — manifesto com SHA-256 fail-closed; pins pendentes (None) imprimem instruções de conversão em vez de baixar.
 
@@ -84,9 +84,9 @@ Todas as famílias abaixo são **"Redistributable" (proprietárias, binário-for
 | `models/pci_usb/pci_usb_hwids.json`, `hw_all_unified.csv` | [pci.ids](https://pci-ids.ucw.cz/) + [usb.ids](http://www.linux-usb.org/usb-ids.html) | Dual: **GPL-2+ OU BSD-3-Clause** (escolher BSD-3, manter aviso) — OK |
 | `models/pci_usb/sdio_hwids.json`, `models/WDM/hwids.json` + `stats.json` | Extraído de DriverPacks SDIO + Windows DriverStore `.inf` (Microsoft/fabricantes) | ⚠️ **Sem licença limpa.** `driverpacks.net/LICENSE`: proíbe redistribuição como parte de pacote comercial sem permissão escrita de Wim Leers; `.inf` do DriverStore cobertos por EULA da Microsoft. HWIDs numéricos (`PCI\VEN_...&DEV_...`) são fatos (precedente pci.ids: "copyright cobre só agregação"), mas **o conjunto derivado de DriverPacks não pode ser vendido como está** |
 | `models/pci_usb/regulatory.db` | [wireless-regdb](https://kernel.org/pub/software/network/wireless-regdb/) | Base de dados regulatória (regras de RF por país); redistribuível, ver projeto |
-| `models/hw_expert/v4/dataset.json`, `models/hw_expert/*.bitnet`, `models/pci_usb/hw_expert_tf.bitnet` | Treinado pelo projeto a partir das fontes acima | Pesos de modelo treinados (saída de treino), dados de treino têm as ressalvas das linhas acima |
+| `models/hw_expert/v4/dataset.json`, `models/hw_expert/*.bitnet`, `models/pci_usb/pci_usb_hwids.json` | Treinado pelo projeto a partir das fontes acima | Pesos de modelo treinados (saída de treino), dados de treino têm as ressalvas das linhas acima |
 
-**Recomendação (SDIO/WDM):** para a exceção comercial, manter apenas tuplas VID/DID numéricas (fatos) citando pci.ids/usb.ids como fonte licenciada, e obter permissão escrita do DriverPacks.net (ou scrubbing de proveniência) para o restante. Ver `docs/memory/SESSION_102`/`SESSION_238` para o pipeline de extração.
+**Recomendação (SDIO/WDM):** para a exceção comercial, manter apenas tuplas VID/DID numéricas (fatos) citando pci.ids/usb.ids como fonte licenciada, e obter permissão escrita do DriverPacks.net (ou scrubbing de proveniência) para o restante. Ver `docs/memory/SESSION_238` para o pipeline de extração.
 
 ## Ferramentas de extração
 

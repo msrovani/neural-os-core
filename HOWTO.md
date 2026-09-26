@@ -404,7 +404,7 @@ neural-os-core/
 │   ├── skill-registry/    # Skills, MCP
 │   ├── event-bus/         # IPC pub/sub
 │   ├── ticket-lock/       # Lock FIFO
-│   └── boot/              # Bootloader 0.11 UEFI/BIOS
+│   └── boot/              # Limine UEFI (bootloader 0.11 removido SESSION_232)
 │
 ├── firmware/              # Blobs git-tracked (GPU/WiFi/NIC)
 ├── tools/                 # Scripts Python (build, treino, bridge)
@@ -601,5 +601,5 @@ Código: **AGPL-3.0**. Matriz FW/datasets/recipes: [docs/community/LICENSES.md](
 
 ---
 
-> **AIOS K³CHJ — Neural OS Hermes v1.9.0 TEST / NÃO ESTÁVEL**
+> **AIOS K³CHJ — Neural OS Hermes v1.9.99-s412 TEST / NÃO ESTÁVEL**
 > *"O hardware real não perdoa. O silício obedece."*

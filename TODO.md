@@ -1,8 +1,8 @@
 # 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s367 TEST
-**Data:** 2026-09-19
-**Fonte:** SESSION_367 (LLM response gate) + ADRs 0081/0089–0106 + SESSION_360/366
+**Versão:** v1.9.99-s412 TEST
+**Data:** 2026-09-26
+**Fonte:** SESSION_412 / SESSION_411 / STATE.md (LLM response gate) + ADRs 0081/0089–0106 + SESSION_360/366
 **Legenda:** ✅ feito | 🟡 em andamento | `[~]` parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | `[ ]` pendente
 
 ---
@@ -242,7 +242,7 @@ ADR + evidência: `docs/architecture/0106-decisoes-calibradas-confianca-abstenca
 ## 🧾 DÍVIDA DE DOC/CONSISTÊNCIA
 
 - [ ] Licença: `LICENSE` = **AGPL-3.0**, mas `TECNOLOGIAS.md` declara "código próprio MIT" — decidir a correta e alinhar
-- [x] Métricas alinhadas ao **medido** em `AGENTS.md`, `SUMMARY.md`, `ROADMAP.md`, `codemap.md`, `HOWTO.md` (+ `TECNOLOGIAS.md`/`README.md`): ~148K LOC / ~671 `.rs` (12 crates do workspace) / 41 nativos / v1.9.99-s332 / 829 testes host
+- [x] Métricas alinhadas ao **medido** em `AGENTS.md`, `SUMMARY.md`, `ROADMAP.md`, `codemap.md`, `HOWTO.md` (+ `TECNOLOGIAS.md`/`README.md`): ~169K LOC / ~672 `.rs` (12 crates do workspace) / 41 nativos / v1.9.99-s412 / 829 testes host
 
 ---
 

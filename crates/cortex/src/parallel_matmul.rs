@@ -103,10 +103,11 @@ pub fn parallel_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     let aps = k_nano::smp::ap_entry_count() as usize;
     let n_workers = aps + 1;
     let log_it = MATMUL_LOG_CALLS.fetch_add(1, Ordering::Relaxed) % 20 == 0;
-    let t_mm0 = k_nano::tsc::now_us();
     if log_it {
         k_nano::slog_cortex!("cortex", "warn", "matmul enter m={} k={} n={} aps={}", m, k, n, aps);
     }
+    // T1 (s413): TSC DEPOIS do log (mesmo artefato do caminho ternario).
+    let t_mm0 = k_nano::tsc::now_us();
     k_nano::smp::ap_work::clear_queue();
     // Barreira = só APs (BSP sincroniza localmente após seu próprio trabalho)
     k_nano::smp::ap_work::reset_barrier(aps.min(n_workers.saturating_sub(1)) as u32);
@@ -293,20 +294,32 @@ pub fn parallel_ternary_matmul(
     let aps = k_nano::smp::ap_entry_count() as usize;
     let n_workers = aps + 1;
     let log_it = TERNARY_LOG_CALLS.fetch_add(1, Ordering::Relaxed) % 20 == 0;
-    let t_mm0 = k_nano::tsc::now_us();
     if log_it {
         k_nano::slog_cortex!("cortex", "warn", "matmul enter m={} k={} n={} aps={}", m, k, n, aps);
     }
+    // T1 (s413): TSC DEPOIS do log de entrada. Antes, `setup`/`us`/`sync_us`
+    // incluiam o custo do serial do proprio log (~1,4 ms medido, constante em
+    // todos os shapes) -> media o instrumento, nao o sync.
+    let t_mm0 = k_nano::tsc::now_us();
     k_nano::smp::ap_work::clear_queue();
     k_nano::smp::ap_work::reset_barrier(aps.min(n_workers.saturating_sub(1)) as u32);
     for jid in 0..aps.min(n_workers.saturating_sub(1)) {
         let _ = k_nano::smp::ap_work::enqueue(ternary_worker, jid);
     }
+    let (t_ipi, t_bsp);
     unsafe {
         k_nano::apic::send_ipi_reschedule();
+        t_ipi = k_nano::tsc::now_us();
         ternary_worker(0, 0);
+        t_bsp = k_nano::tsc::now_us();
     }
-    if aps > 0 && !k_nano::smp::ap_work::wait_barrier_timeout(MATMUL_BARRIER_TIMEOUT_US) {
+    // T1 (s413): split do sync por fase — setup (clear+enq+IPI), trabalho do BSP
+    // e espera da barreira. E razao interna, entao robusta a carga do host
+    // (diferente do `sync_us` absoluto, que e termometro de host).
+    let bar_ok =
+        aps == 0 || k_nano::smp::ap_work::wait_barrier_timeout(MATMUL_BARRIER_TIMEOUT_US);
+    let t_bar = k_nano::tsc::now_us();
+    if !bar_ok {
         T_CTX.store(core::ptr::null_mut(), Ordering::Release);
         k_nano::slog_cortex!(
             "cortex",
@@ -337,14 +350,17 @@ pub fn parallel_ternary_matmul(
         k_nano::slog_cortex!(
             "cortex",
             "warn",
-            "matmul exit m={} k={} n={} us={} workers={} worker_max_us={} sync_us={}",
+            "matmul exit m={} k={} n={} us={} workers={} worker_max_us={} sync_us={} split=[setup={} bsp={} bar={}]",
             m,
             k,
             n,
             t_total,
             wdone,
             wmax,
-            t_total.saturating_sub(wmax)
+            t_total.saturating_sub(wmax),
+            t_ipi.saturating_sub(t_mm0),
+            t_bsp.saturating_sub(t_ipi),
+            t_bar.saturating_sub(t_bsp)
         );
     }
     Some(result)

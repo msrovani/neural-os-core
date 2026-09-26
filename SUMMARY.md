@@ -2,9 +2,9 @@
 
 **O que é:** Sistema operacional bare-metal (`no_std` Rust) onde **tudo é Agente ou Skill**. 41 agentes nativos, Trinity MoE no kernel (VOCAB=256, routing telemetry), BitNet ternário para HW e inferência.
 
-**Versão release:** **v1.9.99-s360 TEST / NÃO ESTÁVEL** (2026-09-19)
+**Versão release:** **v1.9.99-s412 TEST / NÃO ESTÁVEL** (2026-09-26)
 **Marco vivo:** interface Jarbas **funcional** no framebuffer + **rede mesh** + **computação distribuída** em **6 máquinas QEMU** (WHPX, hub L2, FRAG matmul, orb por role/`MESH_HEALTH`).
-**Estado:** ~148K LOC, ~671 arquivos (12 crates do workspace), `cargo nk` = 0 erros.
+**Estado:** ~169K LOC, ~672 arquivos (12 crates do workspace), `cargo nk` = 0 erros.
 
 **Base v1.8.0:**
 - ADR-0042 N1–N5 ✅ — cadeia funcional K³CHJ
@@ -34,7 +34,7 @@
 | `jarbas` | Display FE, persona, **orb + Hub Health** (GPU BE em k_hal) |
 | `neural-kernel` | Bin de boot (integração + residuals) |
 
-**Pista ativa (s360):** UI desktop viva; mesh 6-node WHPX (Master/Memory/Compute/Worker); FRAG matmul; Hub Health = SystemInfo; honesty TLSPINS/Trust/CapGate. Residual: peer B estável / BEI spam. Gate v2.0.0 review pendente.
+**Pista ativa (s412 / s410m):** ternary_worker tile de colunas (1,9x, SESSION_412) + forget cognitivo HITL (s410m). Residual: threshold tiny f32; prefill 3B ~7 s/layer. Gate v2.0.0 review pendente.
 
 **Para agentes de IA:**
 1. `AGENTS.md` — regras operacionais
@@ -42,6 +42,6 @@
 3. `TECNOLOGIAS.md` — catálogo de PI
 4. `TODO.md` — backlog
 
-**Stack:** Rust nightly · `x86_64-unknown-none` · Limine UEFI · smoltcp 0.13 · QEMU/WHPX lab · HW real validação final.
+**Stack:** Rust nightly · `x86_64-unknown-none` · Limine UEFI · smoltcp 0.14 · QEMU/WHPX lab · HW real validação final.
 
 > "We don't need an OS that runs AI. We need an OS that IS AI."

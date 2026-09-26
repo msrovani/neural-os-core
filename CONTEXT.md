@@ -8,7 +8,7 @@ Linguagem compartilhada entre humanos e agentes. Este arquivo só fixa **vocabul
 - **Premisa Máxima** — 5 regras irrevogáveis (ADR-0088): AIOS-first; auto-tudo (adaptar/curar/upgrade/gerar/pesquisar); toda decisão tratada com inferência/adaptação/memorização/versionamento; nada bypassado sem análise (IDEA → ADR → SESSION); busca incessante dos 10% de melhoria. Primeira coisa a analisar em toda decisão.
 - **HITL** — human-in-the-loop: a IA decide e age, o humano valida nos gates. Sempre.
 - **Tudo é Agent ou Skill** — sem tasks, sem serviços, sem drivers standalone. Todo agente tem manifesto, capabilities e lifecycle.
-- **Anéis (R0–R3)** — organização **lógica** de dependência (R0 fundação → R3 aplicação), NÃO privilégio do processador: todo o código roda em Ring 0 real (CPL=0). Isolamento efetivo hoje = wasmi (Caminho A) + Ring3 gated (ADR-0060).
+- **Anéis (R0–R3)** — organização **lógica** de dependência (R0 fundação → R3 aplicação), NÃO privilégio do processador: todo o código roda em Ring 0 real (CPL=0). Isolamento efetivo hoje = wasmi (Caminho A) + Ring3 gated (ADR-0077).
 
 ## Arquitetura
 
@@ -19,7 +19,7 @@ Linguagem compartilhada entre humanos e agentes. Este arquivo só fixa **vocabul
 - **Gate** — checkpoint formal (net gate canônico = e1000 + smoltcp; gate v2.0.0 = N1–N5 + wire + review). SLIP/COM2 é debug congelado, não é path de gate.
 - **Trinity MoE** — LLM + router treinável + experts. **AutoLearn**: detecta necessidade → treina → registra expert.
 - **CapGate** — gate de capabilities nos host-imports (`aios::*`).
-- **Agency** — frota de agentes (~50 nativos + HW) com schedule (Oneshot/Continuous/EventDriven/PollEvery) e trust por (token, agent, skill).
+- **Agency** — frota de agentes (41 nativos + HW) com schedule (Oneshot/Continuous/EventDriven/PollEvery) e trust por (token, agent, skill).
 
 ## Boot
 

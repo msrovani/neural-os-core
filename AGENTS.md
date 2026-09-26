@@ -1,6 +1,6 @@
 # ════════════════════════════════════════════════════════
 #   PLANO DIRETOR — neural-os-core v2.0 "K³CHJ Core" 🏆
-#   ~218K LOC, ~738 arquivos Rust (12 crates do workspace), 41 agentes nativos, 0 erros
+#   ~169K LOC, ~672 arquivos Rust (12 crates do workspace), 41 agentes nativos, 0 erros
 #   **s360 MARCO:** UI Jarbas funcional + mesh P2P + compute distribuído em **6 QEMU** (WHPX)
 #   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício ✅
 #   Sprint 100: Code Freeze — 07/2026
@@ -66,7 +66,7 @@ You are a Senior Systems and AI Engineer building "neural-os-core", an AI-native
 
 # Core Architecture & Constraints
 1. **Bare-Metal Rust:** `no_std` + `no_main`. No std, no POSIX, no Linux legacy.
-2. **Agent/Skill-First:** Every entity is an Agent. ~50 native agents with manifests, plus variable HW agents at runtime.
+2. **Agent/Skill-First:** Every entity is an Agent. 41 native agents with manifests, plus variable HW agents at runtime.
 3. **Hardware Rings:** Ring 0 (NPU — intent routing), Ring 1 (GPU — tensor), Ring 2 (CPU — agents/skills). ⚠️ **Anéis são organização de código, NÃO fronteira de segurança imposta pelo processador** — tudo executa em Ring 0 real; isolamento efetivo hoje = wasmi (Caminho A) + Ring3 gated (ADR-0077, não registrado).
 4. **HW Real First:** QEMU/VirtualBox são apenas **desenvolvimento e debug**. Validação final sempre em HW real.
 5. **Trinity MoE:** LLM + router treinável (VOCAB=256 PT-BR, routing telemetry neural/keyword/fallback) + 7 experts (3 com pesos: HWEXPRT, RUSTCDR, PIPER). Expert on-demand load via `get_or_mmap_expert` na Cortex Arena. AutoLearn: detecta necessidade → treina → registra.
@@ -194,7 +194,8 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: **v1.9.99-s411 TEST** - A2 proof 1 token real (lost wakeup AP) + mesh node_id + BPE Falcon3;
+# Current Sprint: **v1.9.99-s412 TEST** - ternary_worker tile de colunas (1,9x, SESSION_412) + AVX2 refutado;
+# s411 - A2 proof 1 token real (lost wakeup AP) + mesh node_id + BPE Falcon3;
 # s392 — Boot/Limine bughunt (GUID ESP/stack RSP/OVMF/ELF/FAT) + canvas;
 # s391 Desktop/UI/Orb theme/hover/dock/mesh honesty;
 # s390b SelfHeal residual KERNEL_ERROR/Safety/checkpoint;
@@ -363,7 +364,7 @@ ID=9001) retry periódico até FAT_READY=true.
 
 - **AVX2 nao emite no alvo soft-float; `#[target_feature(enable="avx2")]` compila mas nao vetoriza (SESSION_412):** `bitnet_avx2.rs:8-12` ja dizia que AVX2 e host-only (`not(target_os="none")`) e que bare-metal delega ao SSE2 — ignorar isso custou **12x** (worker 2536 ms vs 105; prefill 191 s vs 12,7). Pista: `rustc-LLVM ERROR: Do not know how to split the result of this operator!` num 256-bit (vpermd) = o legalizer quebra 256->128/escalar, e cada `f32` vira **libcall** no soft-float. Regra: "compila no alvo" != "emite no alvo" — so o numero no alvo decide; SIMD bare-metal = SSE2 (128-bit).
 
-- **`sync_us` do SMP e custo FIXO (~4,2 ms por dispatch) (SESSION_412):** constante de `k=2048 n=1024` a `n=131072` (onde e 0,4%), nos caminhos ternario (`workers=4 ... sync_us=`) e f32 (`matmul exit ok=true us=`). No decode o sync chega a 2x o trabalho (worker 2,2 ms). Corolario: "bypass SMP para matmul pequeno" nao e ganho automatico — os workers dividem COLUNAS, entao BSP-solo ~ **4x `worker_max_us`**; so compensa se o fallback for vetorizado (SSE2) ou se o shape for tiny (dispatch puro). Medir antes.
+- **`sync_us` do SMP NAO era 4,2 ms — era o log (SESSION_413, corrige s412):** o `t_mm0` ficava ANTES do `slog` de entrada e o split so loga quando `log_it` (1/20) — toda amostra pagava o serial do proprio log (~1,4 ms) e o "sync" medido era o **instrumento**. Com o TSC DEPOIS do log, o split real (s413): `setup` (clear+enq+IPI) = **~60 us**, constante de `k=2048 n=1024` a `n=8192`; `sync_us` = **~60-214 us**; o resto e a **cauda do AP** (`bar` = 1 us a 7,4 ms, shape-dependente — imbalanco/wake, so pesa nos matmuls curtos). Corolario: o dispatch SMP e **barato**; "bypass SMP" fica ainda menos justificado. **Regra: TSC sempre DEPOIS de qualquer log** — instrumento no caminho de medida mede o instrumento (o `sync_us` de 4,2 ms era ~95% log).
 
 - **Lost wakeup: gate transitório + `hlt` sem wake = stall silencioso (SESSION_411):** slice de prefill de ~4,2 s atrasa a UI → `present_overdue` liga `UI_YIELD_INFER` → `try_infer_poll_slice` devolve false → `ap_idle_loop` faz `hlt`. Quando o display recupera e o flag limpa, **ninguém envia IPI** (o job já está ACTIVE ⇒ sem submit ⇒ sem `wake_aps`) → o AP dorme para sempre e o job ativo nunca retoma. Sintoma: 1 slice e silêncio eterno, scheduler/UI saudáveis, guest ~43% de 1 core. Regra: quem cede por flag transitório re-checa bounded (`sleep_us`) antes de dormir, e fecha o TOCTOU com um 2º poll depois da checagem do gate. Corolário: latch global (`SLICE_BUSY`) precisa de RAII — early-return/panic contido não pode deixá-lo preso.
 - **Serial sob contenção SMP perde linhas inteiras (SESSION_411):** o `slog` serial trunca/entrelaça sob 4 cores (viu-se `a2_proof submit id[=R764]...` e uma linha ausente). A evidência canônica é o `BOOT.LOG` em disco (LBA 2048), não o serial; `log_quiet` é o canal certo para provas de boot.
