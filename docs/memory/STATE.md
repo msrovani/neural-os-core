@@ -1,10 +1,23 @@
-# STATE — neural-os-core v1.9.99-s410 — Mesh 6 OOM bughunt + sev fecho
+# STATE - neural-os-core v1.9.99-s411 - A2 proof 1 token real (lost wakeup AP) + mesh node_id + BPE Falcon3
 
 #   PISTA ATIVA: s410l — política CRDT unificada: crdt_sync RX também via merge_remote
 #     (blob CRDT\0 = frames NMD1; master aplica conteúdo; fallback LWW p/ wire legado);
 #     s410k mesh RX batch; s410j compact batch+guard; s410i CI interop TKLV; s410h motor único
 #   PISTA ANTERIOR: s406 heap auto-fracionado advisory (commit 2b650c56)
 #   Não declarar v2.0.0
+
+## A2 proof - marco zero (s411) [OK]
+
+| Item | Estado |
+|------|--------|
+| FALCON3-3B 1 token real (QEMU 6G/4c WHPX) | OK - `a2_proof done id=2 toks=1 prefill_us=69042824` (BOOT.LOG em disco) |
+| Hang do prefill (travava em layer 1/22) | OK - lost wakeup do AP idle (`ui_yield` + `hlt` sem IPI); bounded retry + TOCTOU (`ap_work.rs`) |
+| Mesh 2 nos | OK - converge (node_id 2/3, Master/Memory, peers=1); netmode `0x16400000` |
+| Token legivel (BPE) | OK - BPB1 Falcon3 131072 @0x150000000 -> `JARBAS: quad` (era `)`) |
+| Barrier SMP sem deadline | OK - deadline 60 s + fallback single-core honesto |
+| posture FAIL de 1 amostra | OK - `POSTURE_MIN_SAMPLES=4` -> `n/a` |
+| 2o token (forward de decode) | residual (max_gen>1) |
+| prefill 3B ~7 s/layer (SMP) | alavanca: W2A8/GPU/AP-IDT |
 
 ## Lab vivo (s410)
 

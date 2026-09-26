@@ -1,5 +1,16 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s411] - 2026-09-26 - A2 proof: 1 token real + lost wakeup do AP + mesh node_id + BPE Falcon3
+
+- High: **a2_proof FECHADO (marco zero)** - FALCON3-3B gerou 1 token real num run QEMU 6G/4c WHPX (`a2_proof done id=2 toks=1 prefill_us=69042824`, evidencia no BOOT.LOG em disco). Causa-raiz do hang (3 runs travados em `layer=1/22`): **lost wakeup** - slice de 4,2 s liga `ui_yield` -> `ap_idle_loop` faz `hlt`; o flag limpa mas ninguem envia IPI (job ja ACTIVE, sem submit novo) -> stall eterno. Fix em `k_nano/smp/ap_work.rs`: AP so dorme sem gate + 2o re-check (fecha TOCTOU); sob gate faz espera bounded de 1 ms.
+- High: mesh 2 nos nao convergia (ambos `node_id=15`, `peers=0`, Master) - flag netmode em `0x100100000` era ignorado (`detect_qemu_net_mode` so le CANDIDATES baixas + guard `ram_end`); o IP default do slirp colapsava os ids. Fix: `0x16400000`. Convergencia validada (Master/Memory, peers=1, SkillSync 17, CRDT v=34).
+- Med: BPE Falcon3 - o tokenizer ja estava no repo (`target1/falcon3`); o gap era no gerador. `export_bpe_bin.py` ganha os especiais Falcon3 (`<|startoftext|>`/`<|endoftext|>`) + preview ASCII-safe (cp1252). BPB1 131072 @0x150000000 -> token legivel `quad` (era `)`).
+- Med: deadline de 60 s no barrier SMP + RAII no `SLICE_BUSY` (fail-closed: fallback single-core honesto, nunca hang silencioso).
+- Med: `hub_posture_sev` exige amostra minima (`POSTURE_MIN_SAMPLES=4` -> `n/a`); 1 escalate nao declara mais FAIL.
+- Low: instrumentacao enter/exit por slice + matmul + barrier (localizou o hang em 1 run); `run-qemu-p2p-mesh.ps1` netmode.
+- Gates: `cargo check --release` 0 erros; cortex lib 91/91; k-nano lib 210/210; hermes 229; jarbas 107; skill-registry 11.
+- Session: SESSION_411
+
 ## [1.9.99-s410] - 2026-09-26 — Mesh 6 OOM bughunt + sev fecho
 
 - High: mesh_knowledge dedup morto (VectorClock.tick() por TX → RX MEM 648×, heap ~11KB/tick OOM) → fingerprint FNV-1a TX+RX (RX 648→2, workers 2G estáveis T+122k+); run-mesh6-lab workers 1G→2G; Master: loop I4→LLM cortado (233 intents, 7× amplificação) + caps (skill_observer 128, approval 64, marketplace 32 + dedupe); I3 fantasma → note_trust_entries (push hermes→k_ai)

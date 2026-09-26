@@ -680,7 +680,8 @@ mod tests {
     }
 
     #[test]
-    fn q8_dist_sums_near_255() {        let w = [10u16, 20, 5];
+    fn q8_dist_sums_near_255() {
+        let w = [10u16, 20, 5];
         let d = Q8Dist::from_weights(&w);
         let s = d.sum();
         assert!(s >= 254 && s <= 255, "sum={}", s);
