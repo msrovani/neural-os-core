@@ -74,6 +74,14 @@
 - **~19 estruturas auditadas OK** (caps pré-existentes): self_learning 256, audit ring 4096, training/ephemeral bufs 100, chat_history 50, SESSION 48, NUDGE_QUEUE 16, TOASTS 8+TTL, PIN_CACHE 24, OFFERS ≤32, DEVICE_TREE dedupe, UCAST_STASH 8, FED_DELTAS keep-latest, infer_queue 8 slots, event-bus bounded (S375), L0/L1 lifecycle.
 - **Verificação:** check 0 erros (k-hal/k_ai/hermes/k-nano); testes: k_ai 56, hermes 205, k-nano 56, k-hal 56, cortex 89 — 0 fail.
 
+## Adendo s410e — put_many no TickvStorageAdapter (batch real do TickvLite)
+- **`TickvLite::put_batch(items)`** (k_nano/storage/tickv.rs): N records com UMA passada — invalidate dos antigos antes do append, append contíguo, **1× maybe_gc no fim** (antes: N× lock+mount-check+maybe_gc). Semântica idêntica ao put individual (last-wins, CRC, scan íntegro). Testes: roundtrip+overwrite no batch, empty=no-op.
+- **`k_nano::storage::put_batch(items)`**: wrapper global com 1 aquisição do lock TICKV (put_blob = 1 lock por put).
+- **`TickvStorageAdapter::put_many`** (Storage trait 1.2.1): sobrescrito — converte keys UTF-8 antes do lock único; falha aborta sem tocar flash.
+- **`engine::checkpoint_l0l1` migrado para o batch** — o maior beneficiário: flush do SleepCycle fazia N× put_blob (lock+GC-check por item); agora 1 lock + 1 GC-check.
+- **Medição (host, N=256, 3 runs):** individual 216–529µs vs batch 147–308µs = **speedup 1.47–1.76×** (~1.6× típico). No `nsgdb_init` em si o ganho é **pequeno** (init só faz scan_prefix + open; o put em massa fica no checkpoint do SleepCycle e no rebuild) — o beneficiário real do boot é `rebuild_indices_from_tickv`-adjacente (writes) e o CONSOLIDATE periódico. Ganho estrutural mais importante: 1 aquisição de lock por N writes elimina janela de reordenação entre agentes no SMP.
+- **Verificação:** check 0 erros (rebuild real ~11s); testes k-nano 210, k_ai 57 — 0 fail.
+
 ## Lições
 - **Dedup com nonce auto-incrementado não dedupa:** qualquer dedupe cuja chave inclui estado que muda a cada emissão (clock.tick(), timestamp, seq) é um filtro morto — fingerprint de CONTEÚDO (hash) é a condição de dedupe válida; memória replicada em mesh precisa dedupe TX+RX.
 - **Estruturas "aprendizes" sem cap = OOM a médio prazo:** observations/requests/marketplace crescem com o runtime; cap + evicção FIFO é o mínimo para hot-path de agente.

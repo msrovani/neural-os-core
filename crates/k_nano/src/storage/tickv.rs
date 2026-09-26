@@ -682,6 +682,31 @@ impl TickvLite {
         Ok(())
     }
 
+    /// Batch put (s410e): escreve N records com UMA aquisição de lock + GC
+    /// adiado para o fim (instead of N× maybe_gc). Semântica idêntica ao
+    /// `put` por item: invalidate in-place do antigo, append, índice.
+    /// Falha é atômica por item (retorna a 1ª posição que falhou).
+    pub fn put_batch(&mut self, items: &[(&str, &[u8])]) -> Result<(), &'static str> {
+        if !self.ready {
+            return Err("not mounted");
+        }
+        // 1) invalida todos os antigos ANTES de escrever (fail antes de tocar flash)
+        for (key, _) in items {
+            if *key != "sys/tickv_ckpt" && self.index.contains_key(*key) {
+                let _ = self.invalidate_key(key);
+            }
+        }
+        // 2) append contíguo
+        for (key, val) in items {
+            self.put_raw(key, val)?;
+        }
+        // 3) GC uma única vez no fim (hot path de N puts paga 1 verificação)
+        if items.iter().any(|(k, _)| *k != "__gc_lock") {
+            let _ = self.maybe_gc();
+        }
+        Ok(())
+    }
+
     /// Marca record inválido no flash (byte magic[3]=0) e remove do índice.
     pub fn invalidate_key(&mut self, key: &str) -> Result<(), &'static str> {
         if !self.ready {
@@ -1062,6 +1087,47 @@ mod interop_tests {
             scanned.map.get("hello").map(|v| v.as_slice()),
             Some(&b"world"[..])
         );
+        reset();
+    }
+
+    /// s410e: put_batch — roundtrip N items com 1 GC-check; overwrite no
+    /// batch invalida o antigo (mesma semântica do put individual).
+    #[test]
+    fn put_batch_roundtrip_and_overwrite() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        install_ram_flash(64 * 1024);
+        let mut kv = TickvLite::new();
+        kv.mount().expect("mount");
+        kv.put("pre/a", b"old").expect("put");
+        let items = [
+            ("md/L0/x", b"1".as_slice()),
+            ("md/L1/y", b"22".as_slice()),
+            ("pre/a", b"new".as_slice()), // overwrite no meio do batch
+        ];
+        kv.put_batch(&items).expect("batch");
+        assert_eq!(kv.get("md/L0/x").unwrap(), b"1");
+        assert_eq!(kv.get("md/L1/y").unwrap(), b"22");
+        assert_eq!(kv.get("pre/a").unwrap(), b"new"); // last-wins
+        // Volume continua escaneável (CRC/records íntegros).
+        let dump = dump_flash(64 * 1024).expect("dump");
+        let scanned = scan_volume(&dump);
+        assert_eq!(scanned.corrupt, 0);
+        assert_eq!(scanned.map.get("pre/a").map(|v| v.as_slice()), Some(&b"new"[..]));
+        reset();
+    }
+
+    /// s410e: put_batch vazio = no-op (não toca flash nem GC).
+    #[test]
+    fn put_batch_empty_is_noop() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        install_ram_flash(16 * 1024);
+        let mut kv = TickvLite::new();
+        kv.mount().expect("mount");
+        let before = kv.append_off;
+        kv.put_batch(&[]).expect("empty batch");
+        assert_eq!(kv.append_off(), before);
         reset();
     }
 

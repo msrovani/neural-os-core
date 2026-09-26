@@ -44,6 +44,20 @@ impl Storage for TickvStorageAdapter {
         k_nano::storage::put_blob(k, val).map_err(|e| SgdbError::Storage(e))
     }
 
+    /// Batch put (s410e): UMA aquisição do lock TICKV para N writes + GC
+    /// adiado ao fim. O default do trait fazia N× (lock + mount-check +
+    /// maybe_gc) — checkpoint L0/L1 do engine e import do Sgdb pagavam isso.
+    /// Falha é atômica por item (mesmo contrato do put individual).
+    fn put_many(&mut self, items: &[(&[u8], &[u8])]) -> Result<(), SgdbError> {
+        // Converte keys &[u8]→&str (UTF-8, contrato do TickvLite) ANTES do
+        // lock único; item inválido aborta sem tocar flash.
+        let mut converted: Vec<(&str, &[u8])> = Vec::with_capacity(items.len());
+        for (k, v) in items {
+            converted.push((Self::key_to_str(k)?, v));
+        }
+        k_nano::storage::put_batch(&converted).map_err(|e| SgdbError::Storage(e))
+    }
+
     fn get(&mut self, key: &[u8]) -> Result<Option<Vec<u8>>, SgdbError> {
         let k = Self::key_to_str(key)?;
         match k_nano::storage::get_blob(k) {
@@ -135,5 +149,53 @@ mod tests {
         // scan_prefix no ART
         let results = db.scan_prefix("md/L3/").unwrap();
         assert!(!results.is_empty(), "fact deveria ter sido indexado no ART");
+    }
+
+    /// s410e: benchmark put_many (batch) vs N× put — mede o ganho do lock
+    /// único + GC adiado. Roda no host com RAM flash; imprime µs no stdout.
+    #[test]
+    fn bench_put_many_vs_individual() {
+        use std::time::Instant;
+        const N: usize = 256; // ~ checkpoint L0/L1 típico
+
+        // ── baseline: N× put individual ──
+        let mut adapter_a = TickvStorageAdapter;
+        let t0 = Instant::now();
+        for i in 0..N {
+            let key = alloc::format!("md/L1/bench_a/{}", i);
+            adapter_a.put(key.as_bytes(), b"payload-de-64-bytes-para-ser-realista......".as_slice()).unwrap();
+        }
+        let individual_us = t0.elapsed().as_micros();
+
+        // ── batch: put_many (lock único + GC adiado) ──
+        let mut adapter_b = TickvStorageAdapter;
+        let mut items: Vec<(&[u8], &[u8])> = Vec::with_capacity(N);
+        // keys precisam viver até o put_many — materializa em Vec<(Vec<u8>, Vec<u8>)>
+        let owned: Vec<(Vec<u8>, Vec<u8>)> = (0..N)
+            .map(|i| {
+                (
+                    alloc::format!("md/L1/bench_b/{}", i).into_bytes(),
+                    b"payload-de-64-bytes-para-ser-realista......".to_vec(),
+                )
+            })
+            .collect();
+        for (k, v) in &owned {
+            items.push((k.as_slice(), v.as_slice()));
+        }
+        let t1 = Instant::now();
+        adapter_b.put_many(&items).unwrap();
+        let batch_us = t1.elapsed().as_micros();
+
+        // sanity: roundtrip batch
+        let got = adapter_b.get(owned[0].0.as_slice()).unwrap();
+        assert_eq!(got.as_deref(), Some(&b"payload-de-64-bytes-para-ser-realista......"[..]));
+
+        println!(
+            "BENCH put_many: individual(N={})={}us batch={}us speedup={:.2}x",
+            N,
+            individual_us,
+            batch_us,
+            individual_us as f64 / batch_us.max(1) as f64
+        );
     }
 }

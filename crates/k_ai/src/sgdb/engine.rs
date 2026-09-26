@@ -76,12 +76,15 @@ impl AiosDatabaseEngine {
         if !k_nano::storage::is_ready() {
             return Err("tickv not ready");
         }
-        let mut n = 0usize;
-        for (sk, blob) in self.ram_l0l1.iter() {
-            k_nano::storage::put_blob(sk, blob).map_err(|_| "tickv put")?;
-            n += 1;
-        }
-        Ok(n)
+        // s410e: batch — UMA aquisição do lock + GC adiado ao fim (antes:
+        // N× lock+maybe_gc por put_blob individual).
+        let items: Vec<(&str, &[u8])> = self
+            .ram_l0l1
+            .iter()
+            .map(|(sk, blob)| (sk.as_str(), blob.as_slice()))
+            .collect();
+        k_nano::storage::put_batch(&items).map_err(|_| "tickv put")?;
+        Ok(items.len())
     }
 
     /// Pós-checkpoint: drop arena RAM (docs já no Tickv sob `md/L0|L1/…`).
