@@ -369,6 +369,7 @@ pub fn delete_nsgdb(layer: crate::sgdb::MemoryLayer, key: &str) -> bool {
 pub fn forget_nsgdb(
     layer: crate::sgdb::MemoryLayer,
     key: &str,
+    reason: &str,
 ) -> Result<(bool, bool), &'static str> {
     use neural_sgdb::MemoryLayer as ExtLayer;
     let ext_layer = match layer {
@@ -388,9 +389,46 @@ pub fn forget_nsgdb(
         let tomb_ok = db.set_state(&logical, neural_sgdb::MemoryState::Superseded).is_ok();
         // (b) delete físico (O(1) + BQ reclaim proativo do crate).
         let phys = db.delete(&logical).unwrap_or(false);
+        // (c) auditoria no PRÓPRIO SGDB: elo AUDIT_OP_FORGET na hash-chain
+        // `sys/audit/` (v1.2.2) — a evidência do esquecimento sobrevive à
+        // memória apagada. Best-effort: auditoria falha não desfaz o
+        // delete (o audit trail do hermes já cobre o lado OS).
+        if phys {
+            let _ = db.audit_forget(&logical, forget_tick(), reason);
+        }
         Ok((phys, tomb_ok))
     })
     .unwrap_or(Err("nsgdb unavailable"))
+}
+
+/// Clock canônico para elos de auditoria do bridge (TICKS do OS; host
+/// tests = 0 — a ordem dos elos vem do seq da chain, não do ts).
+fn forget_tick() -> u64 {
+    k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64
+}
+
+/// Report da hash-chain de auditoria do SGDB (`audit_verify` upstream) —
+/// leitura cognitiva/HITL: a cadeia está íntegra e o estado bate com o
+/// último checkpoint?
+#[derive(Debug, Clone)]
+pub struct SgdbAuditReport {
+    pub entries: usize,
+    pub chain_intact: bool,
+    pub digest_matches_last: bool,
+    pub last_seq: Option<u64>,
+}
+
+/// Verifica a hash-chain de auditoria do SGDB (tamper-evidence).
+pub fn audit_verify_nsgdb() -> Option<SgdbAuditReport> {
+    with_nsgdb(|db| {
+        db.audit_verify().ok().map(|r| SgdbAuditReport {
+            entries: r.entries,
+            chain_intact: r.chain_intact,
+            digest_matches_last: r.digest_matches_last,
+            last_seq: r.last_seq,
+        })
+    })
+    .flatten()
 }
 
 // ─── s410m: ConflictRecords — leitura/resolução pela camada cognitiva ────

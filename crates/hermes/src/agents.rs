@@ -1461,7 +1461,7 @@ impl Agent for HermesAgent {
                             match target {
                                 None => alloc::format!("Requisicao #{} aprovada. [FORGET] alvo não registrado (bug) — nada apagado.", id),
                                 Some((layer, key)) => {
-                                match k_ai::sgdb::nsgdb_bridge::forget_nsgdb(layer, &key) {
+                                match k_ai::sgdb::nsgdb_bridge::forget_nsgdb(layer, &key, "hitl:approve") {
                                     Ok((phys, tomb)) => {
                                         let detail = alloc::format!(
                                             "forget {} {} phys={} tomb={}",
@@ -1930,7 +1930,7 @@ impl Agent for HermesAgent {
                                     None => alloc::format!("[FORGET] #{} aprovado mas alvo não registrado (bug) — nada apagado.", req_id),
                                     Some((layer, key)) => {
                                     // Gate aprovado → delete físico + tombstone lógico.
-                                    match k_ai::sgdb::nsgdb_bridge::forget_nsgdb(layer, &key) {
+                                    match k_ai::sgdb::nsgdb_bridge::forget_nsgdb(layer, &key, "hitl:/forget") {
                                         Ok((phys, tomb)) => {
                                             let tick = k_nano::interrupts::TIMER_TICKS
                                                 .load(core::sync::atomic::Ordering::Relaxed) as u64;

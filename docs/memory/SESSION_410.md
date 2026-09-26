@@ -174,6 +174,18 @@ O `crdt_sync` (path `CRDT\\0`, wire legado da Fase C) usava o merge LWW interno 
 
 **Verificação:** check 0 erros (7 crates); testes k-nano 213, k_ai 63, hermes 235, k-hal 56, cortex 91, jarbas 107 — 0 fail.
 
+## Adendo s410m-b — auditoria do forget no PRÓPRIO SGDB (hash-chain)
+
+**Upstream neural-sgdb (v1.2.1 + elo FORGET):** `AUDIT_OP_FORGET = 2` na `src/audit.rs` (decode aceita a op nova) + `Sgdb::audit_forget(sk, ts, reason)` em sgdb.rs — anexa elo `AUDIT_OP_FORGET` à hash-chain `sys/audit/` (seq monotônico + `prev_hash` FNV-1a do elo anterior), com snapshot de 1 item: sk alvo, state `Superseded`, meta = reason (não é checkpoint — `rollback_to` recusa, correto). Teste upstream `audit_forget_links_chain_and_survives_verify` (chain intacta com forgets no meio; evidência decode; seq monotônico). **401 testes** (400+1); no_std check limpo.
+
+**Bridge k_ai:** `forget_nsgdb(layer, key, reason)` agora em 3 passos — (a) tombstone `Superseded`, (b) delete físico O(1), (c) `db.audit_forget(...)` best-effort (falha de auditoria não desfaz o delete; o AUDIT_TRAIL do hermes cobre o lado OS). `forget_tick()` = TIMER_TICKS (host tests = 0; ordem vem do seq). Novo `audit_verify_nsgdb() -> Option<SgdbAuditReport>` (entries/chain_intact/digest_matches_last/last_seq) para leitura cognitiva/HITL.
+
+**hermes:** callers passam reason (`hitl:approve` no Approve genérico, `hitl:/forget` no handler /forget); teste `forget_nsgdb_deletes_and_tombstones` agora também valida `audit_verify_nsgdb` (chain intacta + entries ≥ 1 pós-forget).
+
+**Verificação:** upstream 401/0; k_ai 63/0; hermes 235/0 (forget 5/5); check 0 erros.
+
+**Licao s410m-b:** a evidência do esquecimento deve sobreviver à memória esquecida — audit trail só no lado OS se perde quando a storage do SGDB migra/replica; registrar o elo NA hash-chain da mesma storage que guarda a memória garante tamper-evidence co-localizado. E o elo FORGET é marcador (não checkpoint): rollback não ressuscita memória apagada sob decisão HITL — correto por desenho.
+
 ## Lições
 - **Formato de blob sem length prefix não é iterável (SESSION_410 s410l):** NMD1 não carrega tamanho total — para concatenar docs num blob, cada frame precisa de `[len u32le][payload]`; e a corrupção no MEIO (len absurdo) obriga a política do parser: fail-stop (aplica prefixo) vs resync (procura próximo magic). Fail-stop é honesto e simples, mas o teste deve exercitar o truncamento onde ele realmente acontece (fim do blob/corte de rede).
 - **Guard de recursão precisa de telemetria monotônica separada da janela de log (SESSION_410 s410j):** o contador de "GC skipado" era drenado (swap) pelo log do próprio compact antes do teste ler — total monotônico (fetch_add, nunca drenado) + janela efêmera são duas variáveis, não uma. E o guard de re-entrada deve checar ANTES de qualquer política global (GC_SUSPENDED) — guard é invariant, política é configuração.

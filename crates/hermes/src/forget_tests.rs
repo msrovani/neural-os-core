@@ -36,7 +36,7 @@ fn forget_nsgdb_deletes_and_tombstones() {
     reset_and_mount();
 
     // Doc inexistente: nada a apagar (honesto).
-    let r = nsgdb_bridge::forget_nsgdb(k_ai::sgdb::MemoryLayer::L3EpisodicLong, "nao/existe");
+    let r = nsgdb_bridge::forget_nsgdb(k_ai::sgdb::MemoryLayer::L3EpisodicLong, "nao/existe", "test:ghost");
     match r {
         Ok((phys, _)) => assert!(!phys, "doc inexistente não deve reportar delete"),
         Err(e) => panic!("forget de inexistente não deve falhar por bridge: {}", e),
@@ -47,9 +47,14 @@ fn forget_nsgdb_deletes_and_tombstones() {
     let got = nsgdb_bridge::get_doc_nsgdb(k_ai::sgdb::MemoryLayer::L3EpisodicLong, "forget/alvo");
     assert!(got.unwrap().is_some(), "doc deveria existir pós-seed");
 
-    let r = nsgdb_bridge::forget_nsgdb(k_ai::sgdb::MemoryLayer::L3EpisodicLong, "forget/alvo");
+    let r = nsgdb_bridge::forget_nsgdb(k_ai::sgdb::MemoryLayer::L3EpisodicLong, "forget/alvo", "test:hitl");
     let (phys, _tomb) = r.expect("forget do doc existente");
     assert!(phys, "delete físico esperado");
+
+    // Auditoria no PRÓPRIO SGDB: o forget anexou elo FORGET à hash-chain.
+    let audit = nsgdb_bridge::audit_verify_nsgdb().expect("hash-chain legível");
+    assert!(audit.chain_intact, "elo de forget não quebra a chain");
+    assert!(audit.entries >= 1, "evidência do esquecimento registrada no SGDB");
 
     let gone = nsgdb_bridge::get_doc_nsgdb(k_ai::sgdb::MemoryLayer::L3EpisodicLong, "forget/alvo");
     assert!(gone.unwrap().is_none(), "doc não deveria sobreviver ao forget");

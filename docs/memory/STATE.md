@@ -2,7 +2,9 @@
 
 #   PISTA ATIVA: s410m — forget cognitivo HITL (/forget) + leitura de conflitos (/conflicts)
 #     via ApprovalGate Escalate (skills sgdb_forget/conflict_resolve); tombstone Superseded
-#     antes do delete físico; fail-closed NSGDB down; registry pendente cap 32 FIFO
+#     antes do delete físico; fail-closed NSGDB down; registry pendente cap 32 FIFO;
+#     s410m-b: elo AUDIT_OP_FORGET na hash-chain sys/audit/ do SGDB (audit_forget upstream
+#     + audit_verify_nsgdb) — evidência do esquecimento sobrevive à memória apagada
 #     (s410l CRDT merge_remote; s410k mesh RX batch; s410j compact batch; s410i interop TKLV)
 #   PISTA ANTERIOR: s406 heap auto-fracionado advisory (commit 2b650c56)
 #   Não declarar v2.0.0
