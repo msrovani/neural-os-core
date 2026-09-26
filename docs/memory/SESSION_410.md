@@ -186,6 +186,21 @@ O `crdt_sync` (path `CRDT\\0`, wire legado da Fase C) usava o merge LWW interno 
 
 **Licao s410m-b:** a evidência do esquecimento deve sobreviver à memória esquecida — audit trail só no lado OS se perde quando a storage do SGDB migra/replica; registrar o elo NA hash-chain da mesma storage que guarda a memória garante tamper-evidence co-localizado. E o elo FORGET é marcador (não checkpoint): rollback não ressuscita memória apagada sob decisão HITL — correto por desenho.
 
+## Adendo s410m-c — put_kv sem dual-write: sync_write roteado pelo caminho tipado
+
+**Avaliação (antes de cortar):** `put_kv` (store.rs) chamava `sync_write_to_nsgdb` para TODO write, que fabricava um `MemoryDoc` sintético (`Sgdb::put`) com layer inferida de prefixo — dual-write: o blob real ficava no Tickv e um NMD1 paralelo entrava no engine/ART/storage do NSGDB (dual-truth de índices, a classe de bug que o s410h fechou para docs). Grep: nenhum caller de put_kv grava `md/` (path tipado certo = put_doc/put_doc_nsgdb). Consumidores de recall (RRF/lexical em cognitive_bridge/sgdb_agent) só se beneficiam de keys cognitivas tipadas — a cópia de `sys/net_config` no ART era ruído.
+
+**Implementação (`nsgdb_bridge::sync_write_to_nsgdb`):**
+- `md/…` → **no-op honesto** (domínio do put_doc; put_kv ali é bug do caller, não vira doc sintético).
+- demais namespaces (`sys/`, `hw/`, `hanr/`, `pkg/`, `skill/`, `audit/`) → **rota tipada**: `import_record` (grava SEM tick do relógio local — `put_inner(doc, tick_local=false)`; o KV cru não vira "escritor" no CRDT nem disputa LWW/merge) mas indexa ART/BQ/lexical como qualquer put. `db.put` tickaria o node local a cada write de config/HW = inflação causal.
+- NSGDB down → **sem fallback** (o write cru já está no Tickv — fonte da verdade; rebuild/reindex cobre).
+
+**Testes (k_ai 65 total, +2):** `sync_write_md_namespace_is_noop` + `sync_write_routes_kv_namespaces_via_typed_put` (visível no recall lexical + clock vazio 0xFF/0 — nenhum nó com contador > 0). `TEST_LOCK`/`reset_and_mount` locais (padrão interop/crdt).
+
+**Bughunt (2 lições):** (1) rota errada documentada no 1º cut — usei `db.put` e o teste do clock pegou (`counts > 0`): o put local ticka o node do engine, exatamente a inflação causal que a rota tinha que evitar; `import_record` é o contrato certo para conteúdo cuja autoria não é o motor. (2) `RamFlash` 256KB do teste novo quebrava `bench_put_many_vs_individual` (520 writes + compact wipe → `oob` no flash de 256KB) — o static FLASH é GLOBAL; teste que instala backend restaura o estado que os outros testes esperam (restauro RamFlash 1MB no fim, mesmo default do boot_observe). Ordinal dos runs de teste importa mesmo com `--test-threads=1`.
+
+**Verificação:** k-nano 213, k_ai 65, hermes 235 — 0 fail (3 runs); check 7 crates 0 erros.
+
 ## Lições
 - **Formato de blob sem length prefix não é iterável (SESSION_410 s410l):** NMD1 não carrega tamanho total — para concatenar docs num blob, cada frame precisa de `[len u32le][payload]`; e a corrupção no MEIO (len absurdo) obriga a política do parser: fail-stop (aplica prefixo) vs resync (procura próximo magic). Fail-stop é honesto e simples, mas o teste deve exercitar o truncamento onde ele realmente acontece (fim do blob/corte de rede).
 - **Guard de recursão precisa de telemetria monotônica separada da janela de log (SESSION_410 s410j):** o contador de "GC skipado" era drenado (swap) pelo log do próprio compact antes do teste ler — total monotônico (fetch_add, nunca drenado) + janela efêmera são duas variáveis, não uma. E o guard de re-entrada deve checar ANTES de qualquer política global (GC_SUSPENDED) — guard é invariant, política é configuração.

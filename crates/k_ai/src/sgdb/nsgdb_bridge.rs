@@ -630,29 +630,47 @@ fn logical_key_for_nsgdb(key: &str) -> &str {
 }
 
 pub fn sync_write_to_nsgdb(key: &str, val: &[u8], layer: u8) {
+    // s410m-c — eliminação do dual-write residual do put_kv:
+    //
+    // - `md/Lx/...`: DOMÍNIO do put_doc tipado (motor único s410h). Um put_kv
+    //   nesse namespace nunca deveria acontecer (nenhum caller grava md/ via
+    //   put_kv — grep 0) e o doc sintético antigo aqui criava NMD1 PARALELO
+    //   ao NMD1 cru do Tickv (dual-truth de índices). No-op honesto.
+    // - demais namespaces (`sys/`, `hw/`, `hanr/`, `pkg/`, `skill/`,
+    //   `audit/`): ROTA TIPADA — MemoryDoc real com layer mapeada por
+    //   namespace e clock VAZIO (0xFF/0 — nós ausentes; KV cru não é
+    //   decisão CRDT, não disputa LWW/merge).
+    // - NSGDB down: SEM fallback (o write cru já está no Tickv — fonte da
+    //   verdade; o rebuild/reindex do boot cobre).
+    if key.starts_with("md/") {
+        return;
+    }
     let logical = logical_key_for_nsgdb(key);
     if logical.is_empty() {
         return;
     }
+    let ml = match layer {
+        0 => neural_sgdb::MemoryLayer::L0Sensory,
+        1 => neural_sgdb::MemoryLayer::L1Working,
+        2 => neural_sgdb::MemoryLayer::L2EpisodicShort,
+        3 => neural_sgdb::MemoryLayer::L3EpisodicLong,
+        4 => neural_sgdb::MemoryLayer::L4Semantic,
+        5 => neural_sgdb::MemoryLayer::L5Procedural,
+        6 => neural_sgdb::MemoryLayer::L6Reserved,
+        _ => neural_sgdb::MemoryLayer::L7Identity,
+    };
+    let doc = neural_sgdb::MemoryDoc::new(ml, logical, val.to_vec());
+    // Rota: `import_record` (grava SEM tick do relógio local — put_inner
+    // tick_local=false; o KV cru não vira "escritor" no CRDT) mas indexa
+    // ART/BQ/lexical como qualquer put. `db.put` tickaria o node local a
+    // cada write de config/HW = inflação causal.
+    let rec = neural_sgdb::MemoryRecord::new(doc, neural_sgdb::MemoryState::Active, None);
     let _ = with_nsgdb(|db| {
-        use neural_sgdb::MemoryDoc as ExtDoc;
-        use neural_sgdb::MemoryLayer;
-        let ml = match layer {
-            0 => MemoryLayer::L0Sensory,
-            1 => MemoryLayer::L1Working,
-            2 => MemoryLayer::L2EpisodicShort,
-            3 => MemoryLayer::L3EpisodicLong,
-            4 => MemoryLayer::L4Semantic,
-            5 => MemoryLayer::L5Procedural,
-            6 => MemoryLayer::L6Reserved,
-            _ => MemoryLayer::L7Identity,
-        };
-        let doc = ExtDoc::new(ml, logical, val.to_vec());
-        if let Err(e) = db.put(doc) {
+        if let Err(e) = db.import_record(rec) {
             k_nano::slog_kai!(
                 "NSGDB",
                 "warn",
-                "sync_write put FAIL key={} err={}",
+                "sync_write import FAIL key={} err={}",
                 logical,
                 e
             );
@@ -919,6 +937,23 @@ mod tests {
     use super::*;
     use neural_sgdb::Embedder;
 
+    /// Statics TICKV/FLASH/NSGDB globais — serializa (padrão SESSION_346/368).
+    static TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
+    /// Storage limpa (RamFlash) + NSGDB — padrão dos testes de interop/crdt.
+    fn reset_and_mount() {
+        *k_nano::storage::TICKV.lock() = None;
+        *k_nano::storage::FLASH.lock() = None;
+        k_nano::storage::install_ram_flash(256 * 1024);
+        {
+            let mut g = k_nano::storage::TICKV.lock();
+            g.get_or_insert_with(k_nano::storage::TickvLite::new)
+                .mount()
+                .expect("mount");
+        }
+        nsgdb_init();
+    }
+
     #[test]
     fn nsgdb_bridge_init_and_health() {
         nsgdb_init();
@@ -958,6 +993,52 @@ mod tests {
         // Sync after write deve ser no-op gracioso sem NSGDB
         sync_write_to_nsgdb("test/key", b"value", 3);
         sync_write_to_nsgdb("md/L3/test_key", b"value", 3);
+    }
+
+    #[test]
+    fn sync_write_md_namespace_is_noop() {
+        // s410m-c: md/ é domínio do put_doc tipado — put_kv não gera NMD1
+        // paralelo (dual-truth de índices). No-op honesto, sem panic.
+        sync_write_to_nsgdb("md/L3/test_key", b"value", 3);
+    }
+
+    #[test]
+    fn sync_write_routes_kv_namespaces_via_typed_put() {
+        // s410m-c: namespaces não-md entram no NSGDB pela rota tipada
+        // (import_record: indexa ART/BQ/lexical, SEM tick do relógio local).
+        let _g = TEST_LOCK.lock();
+        reset_and_mount();
+
+        sync_write_to_nsgdb("sys/net_config", b"mode=slirp net_config", 3);
+        sync_write_to_nsgdb("hanr/user", b"perfil de teste user", 7);
+
+        // Visível pelo recall lexical do motor (o objetivo do sync).
+        let hits = recall_lexical_bridge("net_config", 5);
+        assert!(!hits.is_empty(), "sys/net_config deveria ser indexado");
+
+        // Clock vazio (0xFF/0 = nós ausentes): o KV cru não vira "escritor"
+        // no CRDT — nenhum nó tem contador > 0.
+        let b = with_nsgdb(|db| {
+            db.get(neural_sgdb::MemoryLayer::L3EpisodicLong, "sys/net_config")
+                .ok()
+                .flatten()
+                .map(|d| d.clock.counts.iter().all(|&c| c == 0) && d.clock.overflow.is_empty())
+        });
+        assert_eq!(b, Some(Some(true)), "clock NMD1 deve nascer vazio no sync KV");
+
+        // Restaura o backend "default" dos testes k_ai (RamFlash 1MB, mesmo
+        // tamanho do boot_observe): o FLASH é um static GLOBAL e o bench de
+        // tickv_adapter assume ≥1MB (520 writes de 512B + compact wipe).
+        // Sem isto, o 256KB daqui quebrava o bench com `oob` (leção: teste
+        // que instala static global restaura o estado que os outros esperam).
+        *k_nano::storage::TICKV.lock() = None;
+        k_nano::storage::install_ram_flash(1024 * 1024);
+        {
+            let mut g = k_nano::storage::TICKV.lock();
+            g.get_or_insert_with(k_nano::storage::TickvLite::new)
+                .mount()
+                .expect("remount default");
+        }
     }
 
     #[test]

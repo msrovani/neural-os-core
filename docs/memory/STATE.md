@@ -5,6 +5,8 @@
 #     antes do delete físico; fail-closed NSGDB down; registry pendente cap 32 FIFO;
 #     s410m-b: elo AUDIT_OP_FORGET na hash-chain sys/audit/ do SGDB (audit_forget upstream
 #     + audit_verify_nsgdb) — evidência do esquecimento sobrevive à memória apagada
+#     s410m-c: put_kv sem dual-write — sync_write roteado: md/ no-op (domínio put_doc);
+#     não-md via import_record (sem tick do clock local, indexa ART/BQ/lexical)
 #     (s410l CRDT merge_remote; s410k mesh RX batch; s410j compact batch; s410i interop TKLV)
 #   PISTA ANTERIOR: s406 heap auto-fracionado advisory (commit 2b650c56)
 #   Não declarar v2.0.0
