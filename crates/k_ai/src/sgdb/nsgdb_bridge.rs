@@ -59,7 +59,8 @@ pub fn nsgdb_init() -> usize {
     k_nano::slog_kai!(
         "NSGDB",
         "ok",
-        "OK — neural-sgdb via TickvStorageAdapter (records={})",
+        "OK — neural-sgdb v{} via TickvStorageAdapter (records={})",
+        neural_sgdb::VERSION,
         n
     );
     n
