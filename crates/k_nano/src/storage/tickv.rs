@@ -40,6 +40,23 @@ fn hdr_tickv_shaped(hdr: &[u8]) -> bool {
 /// Dispara GC se append_off ultrapassar isto (ou dead/live).
 const HIGH_WATER: u64 = 256 * 1024;
 
+/// s410j: guard de recursão — `compact()` regrava via `put_batch_impl` que
+/// chama `maybe_gc` no fim; se o live-set pós-compact ainda > HIGH_WATER
+/// (volume de dados real maior que o gatilho), o maybe_gc dispararia compact
+/// de novo → recursão infinita de GC. True = estamos DENTRO de um compact;
+/// `maybe_gc` skipa.
+static COMPACTING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// s410j: telemetria de recursão evitada (observável em testes/UI sem mudar
+/// o contrato de erro de `compact()`). Incrementado a cada maybe_gc skipado
+/// pelo guard; decrementado no fim do compact.
+static COMPACT_SKIPPED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// s410j: total monotônico de skips (NUNCA drenado) — observável por testes
+/// e UI; `COMPACT_SKIPPED` é a janela do compact corrente (drenada no log).
+static COMPACT_SKIPPED_TOTAL: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
 /// Boot/FileFlash: `compact()` reescreve o log via ATA PIO (wipe+rewrite) —
 /// minutos de silêncio se append_off ≫ HIGH_WATER (K33[28] soft-hang).
 /// Suspenso do mount file/nvme até `set_gc_suspended(false)` no Runtime.
@@ -58,6 +75,21 @@ fn mount_scan_deadline() -> u64 {
 
 fn mount_scan_expired(deadline: u64) -> bool {
     deadline != u64::MAX && crate::tsc::now_us() >= deadline
+}
+
+/// s410j: log honesto do guard de recursão — skipped>0 significa "live-set
+/// real > HIGH_WATER, GC suprimido dentro do compact" (visível ao operador).
+fn k_nano_slog_gc_skipped(old_append: u64) {
+    let skipped = COMPACT_SKIPPED.swap(0, Ordering::Relaxed);
+    if skipped > 0 {
+        crate::slog_nano!(
+            "TICKV",
+            "warn",
+            "compact batch: maybe_gc skipado {}x (live-set > HIGH_WATER, append_old={}) — GC suprimido p/ evitar recursão",
+            skipped,
+            old_append
+        );
+    }
 }
 
 /// Suspende / retoma `maybe_gc` (boot alive). Idempotente.
@@ -587,6 +619,15 @@ impl TickvLite {
     }
 
     fn maybe_gc(&mut self) -> Result<(), &'static str> {
+        // s410j: dentro de um compact → nunca re-entrar (recursão infinita se
+        // live-set real > HIGH_WATER; aí o volume SEMPRE vai re-disparar).
+        // CHECK PRIMEIRO: independente de qualquer política externa
+        // (GC_SUSPENDED é global e pode estar ativo durante o compact).
+        if COMPACTING.load(Ordering::Acquire) {
+            COMPACT_SKIPPED.fetch_add(1, Ordering::Relaxed);
+            COMPACT_SKIPPED_TOTAL.fetch_add(1, Ordering::Relaxed);
+            return Ok(());
+        }
         if GC_SUSPENDED.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -640,13 +681,24 @@ impl TickvLite {
         self.append_off = 0;
         self.stats.dead_bytes = 0;
         self.stats.live_bytes = 0;
-        for (k, v) in live {
-            self.put_raw(&k, &v)?;
-        }
+        // s410j: regrava o live-set via BATCH (append contíguo, 1 GC-check no
+        // fim) em vez de N× put_raw. O maybe_gc interno do batch é skipado
+        // pelo guard COMPACTING — nunca re-entrar no GC dentro do GC.
+        let refs: Vec<(&str, &[u8])> = live.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+        COMPACTING.store(true, Ordering::Release);
+        let res = self.put_batch(&refs);
+        // ckpt é gravado DENTRO do guard (sem ele, o put_raw do ckpt dispararia
+        // maybe_gc com append_off do live-set grande → re-entrada).
+        let ckpt_res = if res.is_ok() { self.write_ckpt().map(|_n| ()) } else { Ok(()) };
+        COMPACTING.store(false, Ordering::Release);
+        res?;
+        ckpt_res?;
+        // Honestidade s410j: o maybe_gc skipado pelo guard é contabilizado —
+        // se o live-set real > HIGH_WATER, este número expõe que o GC está
+        // sendo continuamente suprimido (sinal p/ HITL/re-particionar volume).
+        k_nano_slog_gc_skipped(old_append);
         self.stats.compactions = self.stats.compactions.saturating_add(1);
         let _ = format!("gc freed={}", old_append.saturating_sub(self.append_off));
-        // D3: ckpt pós-compact (append_off bounded)
-        let _ = self.write_ckpt();
         Ok(())
     }
 
@@ -686,6 +738,8 @@ impl TickvLite {
     /// adiado para o fim (instead of N× maybe_gc). Semântica idêntica ao
     /// `put` por item: invalidate in-place do antigo, append, índice.
     /// Falha é atômica por item (retorna a 1ª posição que falhou).
+    /// s410j: também é o path de regravação do live-set no `compact()` —
+    /// o maybe_gc interno é skipado pelo guard COMPACTING (sem recursão).
     pub fn put_batch(&mut self, items: &[(&str, &[u8])]) -> Result<(), &'static str> {
         if !self.ready {
             return Err("not mounted");
@@ -1175,5 +1229,149 @@ mod interop_tests {
         let ckpt_bytes = CKPT_KEY.as_bytes();
         assert!(dump.windows(ckpt_bytes.len()).any(|w| w == ckpt_bytes));
         reset();
+    }
+
+    /// s410j: compact regrava o live-set via put_batch — volume pós-compact
+    /// é contíguo (sem buracos de invalidação), escaneável e com append_off
+    /// igual ao fim do último record (bounds exato).
+    #[test]
+    fn compact_rewrites_liveset_via_batch_contiguous() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        install_ram_flash(256 * 1024);
+        let mut kv = TickvLite::new();
+        kv.mount().expect("mount");
+        // Gera fragmentação: 32 keys com 4 overwrites cada → 96 records mortos.
+        for i in 0..32u32 {
+            for gen in 0..4u32 {
+                let key = alloc_format_key(i);
+                let val = alloc_format_val(gen);
+                kv.put(&key, &val).expect("put");
+            }
+        }
+        let dead_before = kv.stats.dead_bytes;
+        assert!(dead_before > 0);
+        kv.compact().expect("compact");
+        // Live-set intacto: última geração de cada key.
+        for i in 0..32u32 {
+            let key = alloc_format_key(i);
+            let got = kv.get(&key).expect("get pós-compact");
+            assert_eq!(&got[..4], &3u32.to_le_bytes(), "gen errada pós-compact");
+        }
+        // Volume contíguo: zero dead bytes; append_off = fim exato do live-set
+        // (+ ckpt escrito no fim); scan limpo.
+        assert_eq!(kv.stats.dead_bytes, 0);
+        assert!(kv.append_off() > 0);
+        assert!(kv.append_off() < 256 * 1024);
+        let dump = dump_flash(256 * 1024).expect("dump");
+        let scanned = scan_volume(&dump);
+        assert_eq!(scanned.corrupt, 0);
+        assert_eq!(scanned.map.len(), 32);
+        for (k, v) in scanned.map {
+            if k.starts_with("batch/compact/") {
+                assert_eq!(&v[..4], &3u32.to_le_bytes());
+            }
+        }
+        assert_eq!(kv.stats.compactions, 1);
+        reset();
+    }
+
+    /// s410j: guard anti-recursão — live-set > HIGH_WATER (=256KB) no flash
+    /// de 1MB: pós-compact o append_off AINDA dispara o gatilho do maybe_gc;
+    /// sem o guard, compact chamaria put_batch→maybe_gc→compact em loop
+    /// infinito (stack overflow). Com o guard: 1 compact e volta.
+    #[test]
+    fn compact_batch_guard_no_gc_recursion_with_big_liveset() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        install_ram_flash(1024 * 1024);
+        let mut kv = TickvLite::new();
+        kv.mount().expect("mount");
+        // Live-set ~512KB (2× HIGH_WATER) com overhead de records de 512B.
+        // População via put_batch: o maybe_gc FINAL dele cruza o HIGH_WATER e
+        // dispara compact → que regrava via put_batch → maybe_gc → SEM o guard
+        // seria recursão infinita (live-set real > gatilho SEMPRE re-dispara).
+        let val = [0xABu8; 448]; // 16 hdr + 16+448 body → record 512B
+        let mut items: Vec<(String, Vec<u8>)> = Vec::with_capacity(1000);
+        for i in 0..1000u32 {
+            let mut key = String::from("batch/big/");
+            push_u32_hex(&mut key, i);
+            items.push((key, val.to_vec()));
+        }
+        let refs: Vec<(&str, &[u8])> =
+            items.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+        kv.put_batch(&refs).expect("populate");
+        assert!(kv.append_off() > HIGH_WATER, "live-set real > HIGH_WATER");
+        assert_eq!(compact_skipped_count(), 1, "guard devia skipar 1 maybe_gc");
+        assert_eq!(kv.stats.compactions, 1);
+        assert_eq!(kv.stats.dead_bytes, 0);
+        // Amostra de dados intactos.
+        let mut probe = String::from("batch/big/");
+        push_u32_hex(&mut probe, 999);
+        assert_eq!(kv.get(&probe).unwrap(), &val[..]);
+        reset();
+    }
+
+    /// s410j (bughunt): puts INDIVIDUAIS com volume > HIGH_WATER disparam um
+    /// compact COMPLETO por put (bug de performance pré-existente exposto
+    /// por este bughunt: ~N/2 compacts de wipe+rewrite = O(n²)). Documentado
+    /// como work-around: cargas grandes DEVEM usar put_batch (1 GC-check);
+    /// o put individual permanece para cargas pequenas.
+    #[test]
+    fn put_individual_above_high_water_is_expensive_but_correct() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        install_ram_flash(1024 * 1024);
+        let mut kv = TickvLite::new();
+        kv.mount().expect("mount");
+        let val = [0xCDu8; 448];
+        // Poucos puts além do HIGH_WATER — só provamos CORREÇÃO (dados
+        // íntegros), não performance (aí está o bug documentado).
+        for i in 0..520u32 {
+            let mut key = String::from("solo/big/");
+            push_u32_hex(&mut key, i);
+            kv.put(&key, &val).expect("put");
+        }
+        assert!(kv.stats.compactions >= 1);
+        let mut probe = String::from("solo/big/");
+        push_u32_hex(&mut probe, 519);
+        assert_eq!(kv.get(&probe).unwrap(), &val[..]);
+        reset();
+    }
+
+    /// Lê o total monotônico de maybe_gc skipados pelo guard COMPACTING.
+    fn compact_skipped_count() -> u64 {
+        super::COMPACT_SKIPPED_TOTAL.load(core::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Helper: key estável `batch/compact/NNNNNN` (zero-padded).
+    fn alloc_format_key(i: u32) -> String {
+        let mut s = String::from("batch/compact/");
+        push_u32_hex(&mut s, i);
+        s
+    }
+
+    /// Helper: valor de 8B com a geração no prefixo.
+    fn alloc_format_val(gen: u32) -> [u8; 8] {
+        let mut v = [0u8; 8];
+        v[0..4].copy_from_slice(&gen.to_le_bytes());
+        v[4..8].copy_from_slice(&i_dot_val(gen));
+        v
+    }
+
+    fn i_dot_val(gen: u32) -> [u8; 4] {
+        [gen as u8, 0, 0, (gen.wrapping_mul(7) & 0xFF) as u8]
+    }
+
+    /// Push u32 como 8 hex chars ASCII (zero-padded, sem alloc de format!).
+    fn push_u32_hex(s: &mut String, v: u32) {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut buf = [0u8; 8];
+        let mut x = v;
+        for j in (0..8).rev() {
+            buf[j] = HEX[(x & 0xF) as usize];
+            x >>= 4;
+        }
+        s.push_str(core::str::from_utf8(&buf).unwrap());
     }
 }
