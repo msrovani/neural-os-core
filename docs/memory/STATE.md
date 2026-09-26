@@ -1,7 +1,7 @@
 # STATE — neural-os-core v1.9.99-s410 — Mesh 6 OOM bughunt + sev fecho
 
-#   PISTA ATIVA: s410h — motor único SGDB: AiosDatabaseEngine interno ELIMINADO; tudo via
-#     neural-sgdb (nsgdb_bridge) com fallback NMD1 cru honesto na janela deferred do boot
+#   PISTA ATIVA: s410i — CI gate interop TKLV bidirecional (k_nano ↔ neural-sgdb, byte-exato);
+#     s410h motor único SGDB (AiosDatabaseEngine eliminado); CI clona msrovani/neural-sgdb
 #   PISTA ANTERIOR: s406 heap auto-fracionado advisory (commit 2b650c56)
 #   Não declarar v2.0.0
 

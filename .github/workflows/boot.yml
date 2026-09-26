@@ -11,6 +11,12 @@ jobs:
       RUSTUP_TOOLCHAIN: nightly-2026-07-05
     steps:
       - uses: actions/checkout@v4
+      # k_ai tem path-dep para o repo comunitário (espelho gitignored local
+      # em crates/neural-sgdb) — o CI clona o upstream no lugar do espelho.
+      - uses: actions/checkout@v4
+        with:
+          repository: msrovani/neural-sgdb
+          path: crates/neural-sgdb
       - run: rustup toolchain install nightly-2026-07-05 -c rust-src -t x86_64-unknown-none
       - run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 ovmf
       # crates/boot/build.rs invoca `python mk_esp_fat.py`; Ubuntu só tem python3.

@@ -113,6 +113,15 @@ Fecho do dual-truth identificado no adendo s410b: **o `AiosDatabaseEngine` inter
 - **art.rs/bq.rs permanecem:** consumers = `bench.rs` (Q7/D-series), `hamming_dispatch` (quantize_f32), demo Q2/Q3 — são util de índice/bench, não segunda implementação de storage.
 - **Verificação:** check 0 erros (6 crates, rebuild real após touch lib.rs/main.rs); testes: k-nano 210, hermes 229 (test-threads=1; crash paralelo STATUS_PRIVILEGED_INSTRUCTION = flaky conhecido, re-confirmado), k_ai 57, k-hal 56, cortex 90, jarbas 107. Golden NMD1 (`memory_doc::golden_nmd1`) + golden Tickv (`tickv::golden_record`) verdes — codec NMD1 intocado.
 
+## Adendo s410i — CI gate de interop TKLV bidirecional (k_nano ↔ neural-sgdb)
+
+A interop TKLV (promessa do #522/SESSION_256 "byte-idênticos") virou **teste contínuo de CI**, não promessa de doc:
+
+- **`k_ai::sgdb::interop_tklv`** (4 testes host): (1) volume REAL gerado pelo `TickvLite` (RamFlash: puts, overwrite last-wins, TKCK sintético) → `neural_sgdb::tickv::scan_volume` reconstrói o mesmo map/offsets/append_off/corrupt/truncated — e o cross-check com o scanner do OS confirma paridade campo a campo; (2) direção reversa: records do `neural_sgdb::encode_record` → `k_nano::storage::scan_volume` (incl. record >512B e tombstone vlen=0); (3) golden cross de encoder: `encode_record` byte-EXATO nos dois codecs para o mesmo vetor de casos (incl. tombstone, CRC validado nos dois lados); (4) paridade de scan: tombstone in-place `TKL\0`, corrupt por CRC, TKCK fora do map.
+- **CI (`.github/workflows/ci.yml` + `boot.yml`):** o espelho `crates/neural-sgdb/` é gitignored — o CI agora clona `msrovani/neural-sgdb` (actions/checkout com `path: crates/neural-sgdb`) no lugar do espelho; job dedicado `cargo test --release -p k_ai --lib sgdb::interop_tklv`. Se qualquer lado mudar o formato sem o outro, o CI quebra — interop nunca degrada silenciosamente.
+- **Bughunt do próprio teste (honestidade):** o teste 4 falhou porque o TESTE setava magic[0]=0 (header quebrado → corrupt) em vez de magic[3]=0 (tombstone `TKL\0`); corrigido para a semântica real — e o assert documentou que tombstone in-place mata o RECORD (a versão anterior do mesmo key continua viva, paridade `invalidate_key`), não a key toda.
+- **Verificação:** check 0 erros (7 crates); testes k-nano 210, k_ai 61 (57+4 interop), hermes 229, k-hal 56, cortex 90, jarbas 107 (paralelo flaky STATUS_PRIVILEGED_INSTRUCTION conhecido — `--test-threads=1` verde).
+
 ## Lições
 - **Dual-truth de storage é dual-truth de verdade:** enquanto o engine interno existiu, `recall_semantic` tinha dois motores (externo + fallback interno) com índices ART/BQ duplicados que podiam divergir; consolidar para um motor único eliminou ~270 LOC + a classe inteira de bugs "qual índice é a verdade?". Consolidação > mais um fallback.
 - **Fallback honesto no boot:** motor deferred ≠ put perdido — put cru NMD1 no Tickv (fonte da verdade) + rebuild depois; e checkpoint/prune sem motor retornam no-op honesto, não sucesso/erro fantasma.

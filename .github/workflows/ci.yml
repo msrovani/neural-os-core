@@ -15,6 +15,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # k_ai tem path-dep para o repo comunitário (espelho gitignored local
+      # em crates/neural-sgdb) — o CI clona o upstream no lugar do espelho.
+      - name: Checkout neural-sgdb (path-dep do k_ai)
+        uses: actions/checkout@v4
+        with:
+          repository: msrovani/neural-sgdb
+          path: crates/neural-sgdb
+
       # rust-toolchain.toml pins nightly-2026-07-05 (cross-platform);
       # rustup auto-installs the toolchain + targets/components on first use.
       - name: Show active toolchain
@@ -25,6 +33,12 @@ jobs:
 
       - name: Host unit tests
         run: cargo test --workspace --exclude neural-kernel --exclude boot --quiet
+
+      # Interop TKLV contínua (s410i): volumes gerados pelo TickvLite do OS
+      # decodificados pelo neural-sgdb (scan_volume) e vice-versa — gate
+      # byte-exato bidirecional; quebra se qualquer lado mudar o formato.
+      - name: TKLV interop k_nano <-> neural-sgdb
+        run: cargo test --release -p k_ai --lib sgdb::interop_tklv
 
       # Default member (boot) builds the kernel via bindeps and emits target/uefi.img.
       - name: Build boot image

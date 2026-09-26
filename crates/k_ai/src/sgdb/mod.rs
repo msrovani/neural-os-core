@@ -7,6 +7,8 @@ pub mod crdt_merge;
 pub mod crdt_sync;
 pub mod e2e_smoke;
 pub mod hamming_dispatch;
+// CI gate de interop TKLV byte-exata contínua (k_nano ↔ neural-sgdb).
+pub mod interop_tklv;
 pub mod layers;
 pub mod memory_doc;
 pub mod metrics;
