@@ -548,12 +548,18 @@ pub fn labeled_count() -> usize {
     LABEL_RING.lock().n.min(LABEL_CAP)
 }
 
-/// Postura para HUD: 0=ok 1=warn 2=fail 3=n/a (mesmo código do pill Hub).
-pub fn hub_posture_sev() -> u8 {
-    let (auto, abs, esc) = counters();
+/// Amostras mínimas antes de julgar a postura. Com menos que isso a razão não
+/// é significativa — `n/a` (3) é mais honesto que declarar FAIL/WARN a partir
+/// de 1 observação (doutrina: painel de diagnóstico que mente derrota o
+/// propósito; `n/a ≠ 0`). Espelha o `n >= 8` de `trusted` em `note_outcome`.
+const POSTURE_MIN_SAMPLES: u64 = 4;
+
+/// Lógica pura da postura (testável sem tocar os contadores globais).
+/// 0=ok 1=warn 2=fail 3=n/a.
+fn posture_from_counts(auto: u64, abs: u64, esc: u64) -> u8 {
     let total = auto.saturating_add(abs).saturating_add(esc);
-    if total == 0 {
-        return 3; // n/a
+    if total < POSTURE_MIN_SAMPLES {
+        return 3; // n/a — amostra insuficiente para julgar
     }
     // escalate alto → fail; abstain dominante → warn; senão ok
     if esc * 2 > total {
@@ -563,6 +569,12 @@ pub fn hub_posture_sev() -> u8 {
     } else {
         0
     }
+}
+
+/// Postura para HUD: 0=ok 1=warn 2=fail 3=n/a (mesmo código do pill Hub).
+pub fn hub_posture_sev() -> u8 {
+    let (auto, abs, esc) = counters();
+    posture_from_counts(auto, abs, esc)
 }
 
 pub fn hub_posture_line() -> alloc::string::String {
@@ -654,8 +666,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn q8_dist_sums_near_255() {
-        let w = [10u16, 20, 5];
+    fn posture_needs_min_samples_and_ratios() {
+        // Amostra insuficiente → n/a (nunca FAIL de 1 observação).
+        assert_eq!(posture_from_counts(0, 0, 0), 3, "zero → n/a");
+        assert_eq!(posture_from_counts(0, 0, 1), 3, "1 escalate → n/a (era FAIL)");
+        assert_eq!(posture_from_counts(1, 0, 1), 3, "2 amostras → n/a");
+        assert_eq!(posture_from_counts(2, 0, 1), 3, "3 amostras → n/a");
+        // A partir do mínimo, as razões voltam a falar.
+        assert_eq!(posture_from_counts(3, 0, 1), 0, "4 amostras, 1 escalate → ok");
+        assert_eq!(posture_from_counts(2, 0, 6), 2, "6/8 escalate → fail");
+        assert_eq!(posture_from_counts(2, 6, 0), 1, "6/8 abstain → warn");
+        assert_eq!(posture_from_counts(4, 0, 0), 0, "só auto_ok → ok");
+    }
+
+    #[test]
+    fn q8_dist_sums_near_255() {        let w = [10u16, 20, 5];
         let d = Q8Dist::from_weights(&w);
         let s = d.sum();
         assert!(s >= 254 && s <= 255, "sum={}", s);
