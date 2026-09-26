@@ -98,6 +98,9 @@ Os 4 ganhos residuais da 1.2.1 identificados no adendo s410b foram wired:
 
 **Verificação:** neural-sgdb compila std E no-default-features (no_std); kernel check 0 erros (k-nano/k-hal/cortex/k_ai/hermes/jarbas); testes k-nano 210 / hermes 210 / k_ai 57 — 0 fail.
 
+## Adendo s410g — versão real no slog do nsgdb_init
+- `neural_sgdb::pub const VERSION` = `env!("CARGO_PKG_VERSION")` (upstream 7c9bbb2); `nsgdb_init` loga `OK — neural-sgdb v{VERSION} via TickvStorageAdapter (records=N)` (kernel c7462b26). Fecho do item "ideia: slog reportar a versão compilada" do adendo s410b — logs sempre reportam a versão REAL, não a de doc/comentário (lição SESSION_329/401).
+
 ## Lições
 - **Dedup com nonce auto-incrementado não dedupa:** qualquer dedupe cuja chave inclui estado que muda a cada emissão (clock.tick(), timestamp, seq) é um filtro morto — fingerprint de CONTEÚDO (hash) é a condição de dedupe válida; memória replicada em mesh precisa dedupe TX+RX.
 - **Estruturas "aprendizes" sem cap = OOM a médio prazo:** observations/requests/marketplace crescem com o runtime; cap + evicção FIFO é o mínimo para hot-path de agente.
