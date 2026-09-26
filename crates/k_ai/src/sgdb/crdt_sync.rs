@@ -4,27 +4,35 @@
 //! O estado do SGDB (memória episódica, semântica, procedural) é replicado
 //! entre nós do mesh via CRDT (Conflict-free Replicated Data Type).
 //! Cada nó tem uma cópia local. Alterações são propagadas assincronamente.
-//! Conflitos são resolvidos por "last-writer-wins" + merge semântico.
+//! Conflitos são resolvidos pela **política CRDT única** do neural-sgdb
+//! (`merge_remote_nsgdb`: MergePolicy::for_layer + happens-before + conflito
+//! preservado) — a MESMA política do RX de memória do `mesh_knowledge`
+//! (s410l: um só veredicto, um só código de merge nos dois caminhos).
 //!
 //! ## Depende de: P2P Transport (Fase A da ADR-0081)
 //! - `k_nano::net::mesh::local_role()` — indica se mesh/P2P está ativo
 //! - `k_nano::net::udp_broadcast` — transporte broadcast real (assinado)
 //! - `k_nano::EVENT_BUS` — consumo dos pacotes P2P não-heartbeat
 //!
-//! ## Estado (Fase C, ADR-0081 #315.26)
-//! Sync real de **VERSÃO** (LWW: maior version vence) provando o transporte:
-//! - Worker publica `CRDT\0` + local_version u64 LE (assinado) a cada
-//!   `SYNC_INTERVAL_TICKS`; se recebe version maior que a local, adota (merge
-//!   LWW).
-//! - Master publica sua versão e registra as versões dos Workers em
-//!   `peer_versions: Vec<(u8, u64)>`.
-//! O merge de **conteúdo** (ART/BQ do SGDB) fica ponytail — próximo passo.
+//! ## Estado (Fase C, ADR-0081 #315.26 + s410l)
+//! Sync de **VERSÃO** (LWW do envelope `CRDT\0` + u64 LE) provando o
+//! transporte + **blob de conteúdo com frames NMD1**:
+//! - Worker publica `CRDT\0` + local_version u64 LE + blob (assinado) a cada
+//!   `SYNC_INTERVAL_TICKS`.
+//! - Master registra as versões dos Workers em `peer_versions: Vec<(u8, u64)>`.
+//! - Blob: frames NMD1 concatenados (docs tipados do NSGDB — exportados do
+//!   motor). O RX decodifica cada frame e aplica via `merge_remote_nsgdb`
+//!   (política por camada; sem local = Applied; stale = ignorado).
+//!   Blob opaco legado (não-NMD1) = merge LWW do envelope (fallback s385) —
+//!   era o estado antes do s410l; nós velhos convergem para o novo formato
+//!   no próximo TX (o RX atualiza o blob local com o payload recebido).
 //!
 //! ## Fallback local (ativo enquanto P2P não estiver vivo)
 //! Sem P2P, o SGDB opera localmente — comportamento atual.
 //! `crdt_sync()` retorna imediatamente se P2P não estiver ativo.
 
 use alloc::vec::Vec;
+use super::memory_doc::MemoryDoc;
 use k_nano::net::mesh::{self, NodeRole};
 use k_nano::net::noproto::{AiosTaskPacket, PacketFlags, TaskType};
 use k_nano::net::udp_broadcast;
@@ -34,6 +42,10 @@ use spin::Mutex;
 const SYNC_INTERVAL_TICKS: u64 = 200;
 /// Porta P2P do mesh (transport k_nano, broadcast 42069).
 const P2P_PORT: u16 = 42069;
+/// s410l: teto de docs NMD1 exportados por TX (memória L2/L3/L4 mais
+/// recente do scan). Fragmentação do transporte (mesh_send_large/send_fragmented)
+/// paga o resto; o teto só limita o tamanho do envelope por sync.
+const TX_MAX_DOCS: usize = 32;
 
 /// Agente CRDT de sincronização de memória entre nós do mesh.
 ///
@@ -135,6 +147,15 @@ impl CrdtMemorySync {
         self.drain_crdt_events(role);
 
         // (2) TX: publica nossa versão local (assinada).
+        // s410l: blob de conteúdo = frames NMD1 do NSGDB (política única).
+        // O blob opaco legado (merge LWW do envelope) só é usado se o export
+        // vier vazio (NSGDB down) — nunca publicar vazio quebraria o fallback.
+        if self.local_blob.is_empty() {
+            let exported = super::nsgdb_bridge::export_nmd1_frames_nsgdb(TX_MAX_DOCS);
+            if !exported.is_empty() {
+                self.local_blob = exported;
+            }
+        }
         let my_id = mesh::node_id();
         // ADR-0081 follow-up: clock monotônico único por fonte (anti-replay).
         let pkt = AiosTaskPacket::new(mesh::next_data_clock(), my_id, 0xFF, TaskType::Inference, 1, 0, 0, PacketFlags::new());
@@ -191,6 +212,9 @@ impl CrdtMemorySync {
             match role {
                 NodeRole::Master => {
                     self.upsert_peer_version(pkt.source_id, v);
+                    // s410l: Master também APLICA conteúdo (antes só version —
+                    // o conteúdo só fluía Master→Worker). Mesma política única.
+                    self.apply_blob_to_sgdb(blob, pkt.source_id);
                     k_nano::slog_kai!(
                         "CRDT", "info",
                         "peer node={} v={} peers={}", pkt.source_id, v, self.node_versions.len()
@@ -223,9 +247,51 @@ impl CrdtMemorySync {
                             self.local_blob = m.payload;
                         }
                     }
+                    // s410l: política CRDT ÚNICA — os docs NMD1 do blob (do
+                    // lado remoto, que é o conteúdo novo adotado) passam pelo
+                    // merge policy-aware do neural-sgdb, o mesmo do
+                    // mesh_knowledge. Idempotente: Stale/Duplicate não regravam.
+                    self.apply_blob_to_sgdb(blob, pkt.source_id);
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// s410l: aplica frames NMD1 do blob via `merge_remote_nsgdb` — política
+    /// CRDT ÚNICA com o mesh_knowledge (MergePolicy::for_layer + happens-before
+    /// + conflito preservado). Blob opaco (não-NMD1, wire legado) = no-op aqui:
+    /// continua tratado pelo merge LWW do envelope acima (nós velhos convergem
+    /// para o novo formato no próximo TX).
+    fn apply_blob_to_sgdb(&mut self, blob: &[u8], source: u8) {
+        let mut applied = 0u64;
+        let mut skipped = 0u64;
+        for frame in super::nsgdb_bridge::iterate_nmd1_frames(blob) {
+            let Ok(doc) = MemoryDoc::decode(frame) else {
+                skipped += 1;
+                continue;
+            };
+            use super::nsgdb_bridge::NsMergeVerdict;
+            let verdict = super::nsgdb_bridge::merge_remote_nsgdb(
+                doc.layer,
+                &doc.key,
+                doc.payload.clone(),
+                doc.clock.clone(),
+            );
+            match verdict {
+                NsMergeVerdict::Applied => applied += 1,
+                NsMergeVerdict::Duplicate | NsMergeVerdict::Stale | NsMergeVerdict::Conflict => {
+                    skipped += 1
+                }
+                NsMergeVerdict::Rejected => {}
+            }
+        }
+        if applied > 0 {
+            k_nano::slog_kai!(
+                "CRDT", "ok",
+                "blob NMD1 aplicado via merge_remote: applied={} skipped={} node={}",
+                applied, skipped, source
+            );
         }
     }
 
@@ -282,6 +348,13 @@ pub fn crdt_stats_global() -> (u64, usize) {
     }
 }
 
+/// Lock de teste (statics TICKV/FLASH/NSGDB globais — padrão SESSION_346/368).
+#[cfg(test)]
+pub(crate) fn crdt_sync_tests_lock() -> spin::MutexGuard<'static, ()> {
+    static TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+    TEST_LOCK.lock()
+}
+
 // ─── Teste unitário (run-only, não espera para no_std) ───
 
 /// Self-test: criação, record, local fallback.
@@ -312,4 +385,91 @@ pub fn demo() -> bool {
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::crdt_sync_tests_lock;
+    use crate::sgdb::memory_doc::MemoryLayer::L2EpisodicShort as L2;
+
+    /// Storage limpa (RamFlash) + NSGDB — padrão dos testes de interop.
+    fn reset_and_mount() {
+        *k_nano::storage::TICKV.lock() = None;
+        *k_nano::storage::FLASH.lock() = None;
+        k_nano::storage::install_ram_flash(256 * 1024);
+        {
+            let mut g = k_nano::storage::TICKV.lock();
+            g.get_or_insert_with(k_nano::storage::TickvLite::new)
+                .mount()
+                .expect("mount");
+        }
+        k_nano::storage::set_gc_suspended(false);
+        super::super::nsgdb_bridge::nsgdb_init();
+    }
+
+    /// s410l: blob com frames NMD1 é aplicado via merge_remote (política
+    /// única) — sem local = Applied; re-aplicação = Duplicate (idempotente);
+    /// rejeita frame corrompido sem panic.
+    #[test]
+    fn crdt_rx_applies_nmd1_frames_via_merge_remote() {
+        let _g = crdt_sync_tests_lock();
+        reset_and_mount();
+        let mut sync = CrdtMemorySync::new();
+
+        // Monta blob: 2 docs L2 válidos (NMD1 com clock do nó remoto 9) +
+        // cauda de lixo truncado (simula corte do frame — o iterador é
+        // fail-stop: aplica o prefixo válido e para no lixo).
+        let mut blob = Vec::new();
+        for i in 0..2u32 {
+            let mut doc = MemoryDoc::new(
+                L2,
+                &alloc::format!("crdt/rx/{}", i),
+                alloc::format!("payload-{}", i).into_bytes(),
+            );
+            doc.clock.tick(9);
+            let nmd1 = doc.encode();
+            blob.extend_from_slice(&(nmd1.len() as u32).to_le_bytes());
+            blob.extend_from_slice(&nmd1);
+        }
+        blob.extend_from_slice(&[0xFF, 0x00, 0x12]); // lixo truncado no fim
+
+        sync.apply_blob_to_sgdb(&blob, 9);
+
+        // Docs aplicados na storage (fonte da verdade) com clock do remoto.
+        for i in 0..2u32 {
+            let sk = alloc::format!("md/L2/crdt/rx/{}", i);
+            let raw = k_nano::storage::get_blob(&sk).expect("doc no tickv");
+            let dec = MemoryDoc::decode(&raw).expect("NMD1 válido");
+            assert_eq!(dec.payload, alloc::format!("payload-{}", i).into_bytes());
+        }
+
+        // Idempotência da política única: re-aplicar o MESMO blob = nada novo
+        // (Duplicate/Stale) — a storage não cresce (anti-bloat do RX).
+        let len_before = {
+            let g = k_nano::storage::TICKV.lock();
+            g.as_ref().map(|kv| kv.append_off()).unwrap_or(0)
+        };
+        sync.apply_blob_to_sgdb(&blob, 9);
+        let len_after = {
+            let g = k_nano::storage::TICKV.lock();
+            g.as_ref().map(|kv| kv.append_off()).unwrap_or(0)
+        };
+        assert_eq!(len_before, len_after, "re-aplicação não deve crescer o volume");
+
+        *k_nano::storage::TICKV.lock() = None;
+        *k_nano::storage::FLASH.lock() = None;
+    }
+
+    /// s410l: blob opaco (não-NMD1, wire legado) não passa pelo merge policy —
+    /// é tratado só pelo merge LWW do envelope (compat s385).
+    #[test]
+    fn crdt_rx_opaque_blob_is_lww_envelope_only() {
+        let _g = crdt_sync_tests_lock();
+        let mut sync = CrdtMemorySync::new();
+        // apply_blob_to_sgdb com blob sem frames válidos = no-op silencioso.
+        sync.apply_blob_to_sgdb(b"blob-opaco-legado", 5);
+        sync.apply_blob_to_sgdb(&[], 5);
+        assert_eq!(sync.local_version, 0);
+    }
 }

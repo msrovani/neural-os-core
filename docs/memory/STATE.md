@@ -1,8 +1,8 @@
 # STATE — neural-os-core v1.9.99-s410 — Mesh 6 OOM bughunt + sev fecho
 
-#   PISTA ATIVA: s410k — mesh RX memória em batch (put_many_raw no fim do drain, 1 op storage);
-#     s410j compact via put_batch + guard GC (bug O(n²) exposto); s410i CI interop TKLV;
-#     s410h motor único SGDB; CI clona msrovani/neural-sgdb
+#   PISTA ATIVA: s410l — política CRDT unificada: crdt_sync RX também via merge_remote
+#     (blob CRDT\0 = frames NMD1; master aplica conteúdo; fallback LWW p/ wire legado);
+#     s410k mesh RX batch; s410j compact batch+guard; s410i CI interop TKLV; s410h motor único
 #   PISTA ANTERIOR: s406 heap auto-fracionado advisory (commit 2b650c56)
 #   Não declarar v2.0.0
 

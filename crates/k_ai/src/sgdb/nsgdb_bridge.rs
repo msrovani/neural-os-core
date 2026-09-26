@@ -681,6 +681,102 @@ pub fn put_many_raw_nsgdb(items: &[(&str, &[u8])]) -> Result<usize, &'static str
     .unwrap_or(Err("nsgdb unavailable"))
 }
 
+// ─── s410l: frames NMD1 no blob `CRDT\0` ──────────────────────────────────
+
+/// Magic dos frames NMD1 concatenados no blob do `crdt_sync` — o NMD1 começa
+/// com magic próprio; o frame do blob é o NMD1 puro, e a DELIMITAÇÃO usa o
+/// prefixo do magic + tamanho declarado no header. Como o NMD1 não carrega
+/// length total, o frame é prefixado com u32 LE = len do NMD1.
+const NMD1_FRAME_LEN: usize = 4;
+
+/// Itera frames `[len u32le][NMD1]` de um blob. Frames truncados/corrompidos
+/// param a iteração (o RX aplica o prefixo válido — partial-applies OK, o
+/// merge é idempotente).
+pub fn iterate_nmd1_frames(blob: &[u8]) -> Nmd1FrameIter<'_> {
+    Nmd1FrameIter { blob, off: 0 }
+}
+
+/// Iterador de frames NMD1 (ver `iterate_nmd1_frames`).
+pub struct Nmd1FrameIter<'a> {
+    blob: &'a [u8],
+    off: usize,
+}
+
+impl<'a> Iterator for Nmd1FrameIter<'a> {
+    type Item = &'a [u8];
+    fn next(&mut self) -> Option<&'a [u8]> {
+        if self.off + NMD1_FRAME_LEN > self.blob.len() {
+            return None;
+        }
+        let len = u32::from_le_bytes([
+            self.blob[self.off],
+            self.blob[self.off + 1],
+            self.blob[self.off + 2],
+            self.blob[self.off + 3],
+        ]) as usize;
+        // Sanity: len absurdo (0 ou > resto) = blob corrompido/truncado → para.
+        if len == 0 || self.off + NMD1_FRAME_LEN + len > self.blob.len() {
+            return None;
+        }
+        let frame = &self.blob[self.off + NMD1_FRAME_LEN..self.off + NMD1_FRAME_LEN + len];
+        self.off += NMD1_FRAME_LEN + len;
+        Some(frame)
+    }
+}
+
+/// Exporta até `max` docs do NSGDB como blob de frames `[len u32le][NMD1]`
+/// (ver `iterate_nmd1_frames`) — conteúdo do TX do `crdt_sync`. Seleção:
+/// scan do ART `md/L2/` + `md/L3/` + `md/L4/` (memória replicável; L0/L1 são
+/// RAM voláteis locais e L6/L7 identidade — nunca saem do nó).
+pub fn export_nmd1_frames_nsgdb(max: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    if max == 0 {
+        return out;
+    }
+    with_nsgdb(|db| {
+        for prefix in ["md/L2/", "md/L3/", "md/L4/"] {
+            let Ok(keys) = db.scan_prefix(prefix) else { continue };
+            for (sk, _id) in keys {
+                if out.len() >= max {
+                    return;
+                }
+                // sk do scan = `md/Lx/<key>`; extrai (layer, key) para o get.
+                let Some(doc) = (|| {
+                    let rest = sk.strip_prefix("md/")?;
+                    if rest.len() < 3 {
+                        return None;
+                    }
+                    let lb = rest.as_bytes();
+                    if lb[0] != b'L' || lb[2] != b'/' || !lb[1].is_ascii_digit() {
+                        return None;
+                    }
+                    let layer_int = crate::sgdb::MemoryLayer::from_u8(lb[1] - b'0')?;
+                    let ext_layer = match layer_int {
+                        crate::sgdb::MemoryLayer::L0Sensory => neural_sgdb::MemoryLayer::L0Sensory,
+                        crate::sgdb::MemoryLayer::L1Working => neural_sgdb::MemoryLayer::L1Working,
+                        crate::sgdb::MemoryLayer::L2EpisodicShort => neural_sgdb::MemoryLayer::L2EpisodicShort,
+                        crate::sgdb::MemoryLayer::L3EpisodicLong => neural_sgdb::MemoryLayer::L3EpisodicLong,
+                        crate::sgdb::MemoryLayer::L4Semantic => neural_sgdb::MemoryLayer::L4Semantic,
+                        crate::sgdb::MemoryLayer::L5Procedural => neural_sgdb::MemoryLayer::L5Procedural,
+                        crate::sgdb::MemoryLayer::L6Reserved => neural_sgdb::MemoryLayer::L6Reserved,
+                        crate::sgdb::MemoryLayer::L7Identity => neural_sgdb::MemoryLayer::L7Identity,
+                    };
+                    db.get(ext_layer, &rest[3..]).ok().flatten()
+                })() else {
+                    continue;
+                };
+                // Doc do motor → NMD1 interno → frame [len][nmd1].
+                if let Some(doc_int) = doc_from_ext(doc) {
+                    let nmd1 = doc_int.encode();
+                    out.extend_from_slice(&(nmd1.len() as u32).to_le_bytes());
+                    out.extend_from_slice(&nmd1);
+                }
+            }
+        }
+    });
+    out
+}
+
 /// #538: Embedder Seam — set_embedder bridge ──────────────────────────────
 
 /// Conecta o OsEmbedder ao NSGDB.
