@@ -660,6 +660,27 @@ pub fn ram_len_nsgdb() -> usize {
     with_nsgdb(|db| db.ram_len()).unwrap_or(0)
 }
 
+/// s410k: aplica N docs remotos em BATCH na storage do motor único
+/// (`Sgdb::put_many_raw` → adapter `put_many` → TickvLite `put_batch`: UMA
+/// aquisição do lock TICKV + GC adiado). Caminho de replicação em massa do
+/// mesh RX: os blobs vencedores do merge CRDT (L2+, fora da arena RAM) vão
+/// todos numa única operação de storage. Índices derivados (ART/BQ/lexical)
+/// dos docs Applied já foram atualizados pelo próprio merge; os blobs crus
+/// reforçam a fonte da verdade (fast-mount/rebuild os leem).
+/// Retorna `Ok(n)` com o número de items submetidos; erro se NSGDB down ou
+/// falha de storage.
+pub fn put_many_raw_nsgdb(items: &[(&str, &[u8])]) -> Result<usize, &'static str> {
+    if items.is_empty() {
+        return Ok(0);
+    }
+    with_nsgdb(|db| {
+        db.put_many_raw(items)
+            .map(|_| items.len())
+            .map_err(|_| "nsgdb put_many_raw fail")
+    })
+    .unwrap_or(Err("nsgdb unavailable"))
+}
+
 /// #538: Embedder Seam — set_embedder bridge ──────────────────────────────
 
 /// Conecta o OsEmbedder ao NSGDB.

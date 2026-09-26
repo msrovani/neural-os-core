@@ -1,8 +1,8 @@
 # STATE — neural-os-core v1.9.99-s410 — Mesh 6 OOM bughunt + sev fecho
 
-#   PISTA ATIVA: s410j — compact TickvLite via put_batch (1 lock) + guard anti-recursão GC
-#     (COMPACTING); bug O(n²) exposto: put individual > HIGH_WATER = 1 compact/put → batch;
-#     s410i CI interop TKLV; s410h motor único SGDB; CI clona msrovani/neural-sgdb
+#   PISTA ATIVA: s410k — mesh RX memória em batch (put_many_raw no fim do drain, 1 op storage);
+#     s410j compact via put_batch + guard GC (bug O(n²) exposto); s410i CI interop TKLV;
+#     s410h motor único SGDB; CI clona msrovani/neural-sgdb
 #   PISTA ANTERIOR: s406 heap auto-fracionado advisory (commit 2b650c56)
 #   Não declarar v2.0.0
 

@@ -212,8 +212,16 @@ pub fn subscribe_p2p() {
 /// Drena os pacotes P2P do EventBus e aplica conhecimento (memórias/persona).
 /// Self-activate no primeiro pacote válido. Chamado pelo bin via
 /// `skill_sync::poll_p2p()`.
+///
+/// **s410k — RX em batch:** os docs `MEM\0` do drain são coletados e os blobs
+/// vencedores do merge CRDT (L2+, fora da arena RAM) aplicados em UMA operação
+/// de storage (`put_many_raw` → TickvLite `put_batch` = 1 lock + GC adiado)
+/// no fim do drain — o re-broadcast de N docs não paga N× (lock + maybe_gc).
 pub fn poll_p2p() {
     subscribe_p2p();
+    // Batch do drain: (storage_key, NMD1 blob) para o put_many_raw final.
+    let mut pending_keys: alloc::vec::Vec<alloc::string::String> = Vec::new();
+    let mut pending_blobs: alloc::vec::Vec<Vec<u8>> = Vec::new();
     loop {
         let evt = RECV.lock().as_ref().and_then(|r| r.try_receive());
         let Some(evt) = evt else { break };
@@ -233,11 +241,46 @@ pub fn poll_p2p() {
             &[][..]
         };
         if payload.starts_with(PREFIX_MEM) {
-            on_memory_doc(&pkt, &payload[PREFIX_MEM.len()..]);
+            on_memory_doc(
+                &pkt,
+                &payload[PREFIX_MEM.len()..],
+                &mut pending_keys,
+                &mut pending_blobs,
+            );
         } else if payload.starts_with(PREFIX_SOUL) {
             on_persona("SOUL", &payload[PREFIX_SOUL.len()..], pkt.source_id);
         } else if payload.starts_with(PREFIX_PERS) {
             on_persona("PERSONA", &payload[PREFIX_PERS.len()..], pkt.source_id);
+        }
+    }
+    // s410k: flush do batch — UMA operação de storage para todos os blobs
+    // vencedores do drain (merge Applied preserva o wire NMD1 como recebido;
+    // é o mesmo byte que o put_doc individual gravaria).
+    if !pending_keys.is_empty() {
+        let refs: alloc::vec::Vec<(&str, &[u8])> = pending_keys
+            .iter()
+            .zip(pending_blobs.iter())
+            .map(|(k, v)| (k.as_str(), v.as_slice()))
+            .collect();
+        match k_ai::sgdb::nsgdb_bridge::put_many_raw_nsgdb(&refs) {
+            Ok(n) if n == refs.len() => {
+                slog_hermes!(
+                    "MeshKnowledge", "ok",
+                    "RX MEM batch aplicada n={} (1 op storage — s410k)",
+                    n
+                );
+            }
+            Ok(n) => {
+                slog_hermes!(
+                    "MeshKnowledge", "warn",
+                    "RX MEM batch parcial: {} de {} (storage fail no meio)",
+                    n,
+                    refs.len()
+                );
+            }
+            Err(e) => {
+                slog_hermes!("MeshKnowledge", "warn", "RX MEM batch FAIL: {}", e);
+            }
         }
     }
 }
@@ -246,11 +289,19 @@ pub fn poll_p2p() {
 /// doc recebido domina o local — count do node_id do remetente maior, ou key
 /// inexistente localmente.
 ///
-/// Aplica via API pública `k_ai::sgdb::put_doc` (store.rs) — o put público por
-/// MemoryDoc que persiste e indexa sob a storage_key canônica `md/{layer}/{key}`
-/// (a mesma que `get_doc` lê). Decisão documentada: como `put_doc` cobre todas
-/// as camadas L0–L7, NÃO foi preciso o fallback `remember_fact` só para L3.
-fn on_memory_doc(pkt: &AiosTaskPacket, body: &[u8]) {
+/// Aplica via merge CRDT policy-aware do neural-sgdb (`merge_remote_nsgdb`,
+/// s410f) — decisão por camada + happens-before + conflito preservado.
+/// **s410k:** o blob NMD1 vencedor (veredicto Applied) NÃO é gravado aqui
+/// individualmente: vai para o batch do drain (`pending_keys`/`pending_blobs`)
+/// e é aplicado em UMA operação de storage no fim do `poll_p2p`
+/// (`put_many_raw` — 1 lock TICKV + GC adiado). L0/L1 ficam na arena RAM do
+/// motor (o batch cru reforça a fonte da verdade para fast-mount/rebuild).
+fn on_memory_doc(
+    pkt: &AiosTaskPacket,
+    body: &[u8],
+    pending_keys: &mut alloc::vec::Vec<alloc::string::String>,
+    pending_blobs: &mut alloc::vec::Vec<Vec<u8>>,
+) {
     let mut doc = match MemoryDoc::decode(body) {
         Ok(d) => d,
         Err(e) => {
@@ -297,9 +348,13 @@ fn on_memory_doc(pkt: &AiosTaskPacket, body: &[u8]) {
         NsMergeVerdict::Applied => {
             MEMORY_DOCS_SYNCED.fetch_add(1, Ordering::Relaxed);
             LAST_RX_HASH[slot].store(h, Ordering::Relaxed);
+            // s410k: blob vencedor vai para o batch do drain (1 op de storage
+            // para todos; o merge já decidiu e atualizou os índices).
+            pending_keys.push(alloc::format!("md/{}/{}", layer, key));
+            pending_blobs.push(body.to_vec());
             slog_hermes!(
                 "MeshKnowledge", "info",
-                "RX MEM aplicada (merge) layer={} key='{}' node={}",
+                "RX MEM aceita (merge) layer={} key='{}' node={} (batch)",
                 layer, key, pkt.source_id
             );
         }
@@ -346,6 +401,87 @@ fn clock_count(vc: &VectorClock, node: u8) -> u64 {
         }
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// s410k: o batch do drain RX aplica N blobs vencedores com UMA operação
+    /// de storage (`put_many_raw` → TickvLite `put_batch`) — e a fonte da
+    /// verdade fica byte-exata com o wire NMD1 (get_blob = decode igual).
+    #[test]
+    fn mesh_rx_batch_applies_blobs_with_one_storage_op() {
+        // Storage limpa (RamFlash) + motor NSGDB.
+        *k_nano::storage::TICKV.lock() = None;
+        *k_nano::storage::FLASH.lock() = None;
+        k_nano::storage::install_ram_flash(256 * 1024);
+        {
+            let mut g = k_nano::storage::TICKV.lock();
+            g.get_or_insert_with(k_nano::storage::TickvLite::new)
+                .mount()
+                .expect("mount");
+        }
+        k_ai::sgdb::nsgdb_bridge::nsgdb_init();
+
+        // 4 docs remotos (L2 — MergePolicy multi-value; sem local = Applied).
+        let mut pending_keys: alloc::vec::Vec<alloc::string::String> = Vec::new();
+        let mut pending_blobs: alloc::vec::Vec<Vec<u8>> = Vec::new();
+        for i in 0..4u32 {
+            let mut doc = MemoryDoc::new(
+                MemoryLayer::L2EpisodicShort,
+                &alloc::format!("batch/rx/{}", i),
+                alloc::format!("payload-{}", i).into_bytes(),
+            );
+            doc.clock.tick(9); // nó remoto (≠ local)
+            let enc = doc.encode();
+            let mut body = Vec::with_capacity(PREFIX_MEM.len() + enc.len());
+            body.extend_from_slice(PREFIX_MEM);
+            body.extend_from_slice(&enc);
+            // pkt fake (só source_id é usado no path Applied)
+            let pkt = AiosTaskPacket::default();
+            on_memory_doc(&pkt, &body[PREFIX_MEM.len()..], &mut pending_keys, &mut pending_blobs);
+        }
+        assert_eq!(pending_keys.len(), 4, "4 Applied deviam entrar no batch");
+
+        // Flush do batch — 1 op de storage.
+        let refs: alloc::vec::Vec<(&str, &[u8])> = pending_keys
+            .iter()
+            .zip(pending_blobs.iter())
+            .map(|(k, v)| (k.as_str(), v.as_slice()))
+            .collect();
+        let n = k_ai::sgdb::nsgdb_bridge::put_many_raw_nsgdb(&refs).expect("batch");
+        assert_eq!(n, 4);
+
+        // Fonte da verdade byte-exata: get_blob do Tickv == NMD1 do wire.
+        for i in 0..4u32 {
+            let sk = alloc::format!("md/L2/batch/rx/{}", i);
+            let raw = k_nano::storage::get_blob(&sk).expect("blob no tickv");
+            let dec = MemoryDoc::decode(&raw).expect("NMD1 válido");
+            assert_eq!(dec.payload, alloc::format!("payload-{}", i).into_bytes());
+        }
+        // Índices derivados (merge) também enxergam.
+        let hits = k_ai::sgdb::nsgdb_bridge::scan_prefix_nsgdb("md/L2/batch/rx/");
+        assert!(hits.len() >= 4);
+
+        // Anti-bloat intacto: mesmo payload re-decodificado → skip (hash igual
+        // → não re-entra no batch).
+        let mut pending2: alloc::vec::Vec<alloc::string::String> = Vec::new();
+        let mut blobs2: alloc::vec::Vec<Vec<u8>> = Vec::new();
+        let mut doc = MemoryDoc::new(
+            MemoryLayer::L2EpisodicShort,
+            "batch/rx/0",
+            b"payload-0".to_vec(),
+        );
+        doc.clock.tick(9);
+        let enc = doc.encode();
+        let pkt = AiosTaskPacket::default();
+        on_memory_doc(&pkt, &enc, &mut pending2, &mut blobs2);
+        assert!(pending2.is_empty(), "duplicata não deve re-entrar no batch");
+
+        *k_nano::storage::TICKV.lock() = None;
+        *k_nano::storage::FLASH.lock() = None;
+    }
 }
 
 /// Persona coletiva (L8): aplica SOUL/PERSONA de qualquer peer (memória
