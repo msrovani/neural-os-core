@@ -64,6 +64,7 @@ Se T3-T7 derem 0% em sequencia, o worker escalar esta no otimo local **e** o gar
 |---|---|---|
 | T1 | **FECHADO** | premissa refutada: o "sync 4,2 ms" era o **log de entrada**; dispatch real **~60 us**. Fix do TSC mantido (metrica honesta). |
 | T2 | **FECHADO (revertido)** | neutro (< variancia do host); economia real ~0,5% do prefill. |
-| T3-T7 | **BLOQUEADOS na bancada** | todos sao micro-opt do worker com efeito esperado <10%; a variancia run-to-run medida e 7-8% -> 1 run nao decide. Precisam de **host controlado** (worker ternario estavel entre runs) ou **n repeticoes (media)**. |
+| T5 (fusao SwiGLU) | **EXECUTADO - inconclusivo (confundido)** | SwiGLU in-place no buffer do gate (`cortex.rs` MLP): evita o Vec `sw` + a copia p/ `sw_t` por posicao/camada. Run: worker **153 ms** (== controle 153), `mlp` **9,0 s** vs 10,6, `sum` **19,0** vs 22,6 — MAS `qkv` (7,3->5,9) e `o_proj` (4,2->3,7), que o T5 **nao** toca, tambem cairam -> o host variou. **Mantido**: e simplificacao (menos alloc/copia, matematica identica), nao um ganho medido. |
+| T3-T4, T6-T7 | **BLOQUEADOS na bancada** | micro-opts do worker com efeito esperado <10%; a variancia run-to-run medida e 7-8% -> 1 run nao decide. Precisam de **host controlado** (worker ternario estavel entre runs) ou **n repeticoes (media)**. |
 
 **Recomendacao:** nao gastar runs em T3-T7 enquanto a bancada nao tiver repeticao. Os dois levers de overhead morreram (T1: dispatch barato; T2: tiny ~0,5%). O proximo ganho **estrutural** nao e micro-opt: e o **KV-INT8/paginado (#613)** ou o **W2A8/GPU** (Layer S/HW, gated) — mudam ordem de grandeza, nao 3-5%.

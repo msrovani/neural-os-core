@@ -606,17 +606,24 @@ pub fn predict_hw_v4(model: &HwExpertV4Model, vid: u16, did: u16) -> crate::tens
                 continue;
             };
 
-            let Some(gate_t) = layer.gate.matmul_hybrid(&inp_t) else {
+            let Some(mut gate_t) = layer.gate.matmul_hybrid(&inp_t) else {
                 continue;
             };
             let Some(up_t) = layer.up.matmul_hybrid(&inp_t) else {
                 continue;
             };
-            let sw = swiglu(&gate_t.data, &up_t.data);
-            let Some(sw_t) = Tensor::from_row_major((1, layer.intermediate_size), sw) else {
-                continue;
-            };
-            let Some(down_t) = layer.down.matmul_hybrid(&sw_t) else {
+            // T5 (s413): SwiGLU IN-PLACE no buffer do gate — evita o Vec `sw` e a
+            // copia para um segundo Tensor por posicao/camada. (Exploratorio: o
+            // ganho esperado e <1% do prefill; a bancada atual resolve ~7-8%, e
+            // por isso o numero pode sair inconclusivo.)
+            let n_sw = gate_t.data.len().min(up_t.data.len());
+            for i in 0..n_sw {
+                let g = gate_t.data[i];
+                let sig = 1.0 / (1.0 + libm::expf(-g));
+                gate_t.data[i] = g * sig * up_t.data[i];
+            }
+            gate_t.shape = (1, n_sw);
+            let Some(down_t) = layer.down.matmul_hybrid(&gate_t) else {
                 continue;
             };
 

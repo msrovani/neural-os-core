@@ -1,5 +1,15 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s413] - 2026-09-26 - Perf SMP: T1/T2 fechados (overhead nao e o lever) + T5 SwiGLU in-place + ADR-0111 (KV-INT8)
+
+- High: **T1 - o "sync do SMP" de ~4,2 ms era o LOG de entrada, nao o sync.** O `t_mm0` ficava antes do `slog` e o split so loga 1/20 -> toda amostra pagava ~1,4 ms de serial. Com o TSC DEPOIS do log: `setup` (clear+enq+IPI) = **~60 us** (constante de k=2048 n=1024 a n=8192), `sync_us` = **~60-214 us**; o resto e a **cauda do AP** (`bar` 1 us-7,4 ms, imbalanco/wake, so pesa nos matmuls curtos). Fix do TSC mantido (metrica honesta); licao no AGENTS. Corrige a leitura da SESSION_412.
+- High: **ADR-0111 KV-INT8/paginado (PROPOSED, IDEA #613).** Evidencia: o KV do Falcon3-1B em ctx 4096 = **604 MB — maior que o modelo (544 MB)**; a atencao e **~2%** do prefill de hoje (`attn` 0,29-0,44 s vs `mlp` 9-11,7 s) -> o ganho e **memoria e contexto longo**, nao tok/s. Fases P0-P3; base ja existe (`kv_h2o.rs` `KvPages`/`h2o_evict`). Destrava #617 (Bonsai-8B 16K exige KV <= ~5,5 GiB).
+- Med: **T2 (threshold no `parallel_matmul` f32) — NEUTRO (< variancia do host)**, revertido. Economia real ~0,5% do prefill. A variancia run-to-run medida e 7-8% -> efeitos <10% NAO sao mediveis com 1 run (host controlado ou n repeticoes).
+- Med: **T5 (fusao SwiGLU in-place no MLP, `cortex.rs`)** — evita o Vec `sw` + a copia p/ `sw_t` por posicao/camada. Run **inconclusivo** (worker 153 ms == controle 153, mas `qkv`/`o_proj`, que o T5 nao toca, tambem cairam 11-20% -> host). Mantido por ser simplificacao (menos alloc/copia, matematica identica).
+- Low: `docs/memory/SESSION_413.md` (plano de testes T1-T7 + status). Revisao de honestidade dos `.md` da raiz (metricas/versoes/paths stale).
+- Gates: `cargo check --release` 0 erros; lab PASS (T2/T5).
+- Session: SESSION_413
+
 ## [1.9.99-s412] - 2026-09-26 - ternary_worker SMP: tile de colunas (1,9x) + AVX2 refutado
 
 - High: **tile de colunas do worker ternario SMP** - `matmul_tile_rows` e formula de tile de LINHAS aplicada a COLUNAS (devolvia 4; `clamp(8,..)` = 8 colunas = **2 B usados por linha de cache de 64 B**). Sweep do piso no lab (Falcon3-1B, prefill m=8, worker k=2048 n=8192): 8->204 ms, 16->154, **32->105**, 64->130, 128->127; prefill 20,9 -> **12,7 s**. Fix `clamp(32,256)` (1 linha) = **1,9x no worker / 1,65x no prefill** (32 e o fit: strip `k/4` B/col = 16 KB + `x` 8 KB cabe no L1).

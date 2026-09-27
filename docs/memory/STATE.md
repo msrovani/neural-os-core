@@ -1,4 +1,4 @@
-# STATE - neural-os-core v1.9.99-s412 - ternary_worker SMP: tile de colunas (1,9x) + AVX2 refutado
+# STATE - neural-os-core v1.9.99-s413 - Perf SMP: T1/T2 fechados + T5 SwiGLU in-place + ADR-0111 (KV-INT8)
 
 #   PISTA ATIVA: s410m — forget cognitivo HITL (/forget) + leitura de conflitos (/conflicts)
 #     via ApprovalGate Escalate (skills sgdb_forget/conflict_resolve); tombstone Superseded
@@ -10,6 +10,17 @@
 #     (s410l CRDT merge_remote; s410k mesh RX batch; s410j compact batch; s410i interop TKLV)
 #   PISTA ANTERIOR: s406 heap auto-fracionado advisory (commit 2b650c56)
 #   Não declarar v2.0.0
+
+## Perf SMP (s413) [OK]
+
+| Item | Estado |
+|------|--------|
+| T1 sync do SMP | REFUTADO - o "4,2 ms" era o **log de entrada**; dispatch real **~60 us** (TSC depois do log) |
+| T2 threshold tiny f32 | NEUTRO (< variancia do host); revertido; economia real ~0,5% do prefill |
+| T5 fusao SwiGLU in-place (`cortex.rs`) | inconclusivo (confundido pelo host); mantido por ser simplificacao (menos alloc/copia) |
+| Bancada de perf | variancia run-to-run 7-8% -> efeitos <10% precisam host controlado ou n repeticoes |
+| ADR-0111 KV-INT8/paginado | PROPOSED (IDEA #613) - KV do 1B (604 MB) **> modelo** (544 MB); atencao ~2% do prefill -> ganho e memoria/ctx longo; destrava #617 |
+| T3/T4/T6/T7 (worker) | bloqueados na bancada (efeito esperado <10%) |
 
 ## Perf SMP - tile do worker ternario (s412) [OK]
 
