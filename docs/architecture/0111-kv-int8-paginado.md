@@ -1,8 +1,8 @@
 # ADR-0111: KV-INT8 / paginado — cortar a memoria do KV e destravar contexto longo
 
 **Data:** 2026-09-26
-**Status:** PROPOSED (por_fazer)
-**Lifecycle (INDEX):** `por_fazer`
+**Status:** Implemented P0-P3 (codigo + testes host, SESSION_414); medicao no lab = residual
+**Lifecycle (INDEX):** `fazendo`
 **IDEA:** **#613**
 **Sprint / enquadramento:** s413 (aberto). Cadeia: ADR-0085 (formato v6) -> ADR-0101 (lab 3B) -> ADR-0057 WS-D/E (compute) -> #617 (Bonsai-8B como alvo Pro) -> este.
 **Evidencia (medida):**

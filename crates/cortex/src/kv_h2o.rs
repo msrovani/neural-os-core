@@ -2,7 +2,7 @@
 //! CPU-first: evict mid-context low-norm KV; keep recent window + top heavy hitters.
 
 use alloc::vec::Vec;
-use crate::cortex::KvCache;
+use crate::cortex::{kv_quantize, KvCache, KvPageList};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 static TELEM_EVICT_DROPS: AtomicU64 = AtomicU64::new(0);
@@ -36,9 +36,16 @@ pub fn h2o_evict(cache: &mut KvCache, recent: usize, heavy: usize) -> usize {
         return 0;
     }
 
-    // Score older positions by L2 of K on layer 0
+    // Score older positions by L2 of K on layer 0 (dequantized INT8)
+    let s0: &[f32] = match cache.k_scale.get(0) {
+        Some(s) => s.as_slice(),
+        None => return 0,
+    };
+    let layer0 = match cache.k.get(0) {
+        Some(list) => list.dequant(s0, list.len()),
+        None => return 0,
+    };
     let mut scores: Vec<(usize, f32)> = Vec::with_capacity(older);
-    let layer0 = &cache.k[0];
     for pos in 0..older {
         let base = pos * k_dim;
         if base + k_dim > layer0.len() {
@@ -76,29 +83,45 @@ pub fn h2o_evict(cache: &mut KvCache, recent: usize, heavy: usize) -> usize {
     for l in 0..num_layers {
         let old_k = core::mem::take(&mut cache.k[l]);
         let old_v = core::mem::take(&mut cache.v[l]);
+        let old_ks = core::mem::take(&mut cache.k_scale[l]);
+        let old_vs = core::mem::take(&mut cache.v_scale[l]);
+        let dk = old_k.dequant(&old_ks, old_k.len());
+        let dv = old_v.dequant(&old_vs, old_v.len());
         let Some(cap) = new_len.checked_mul(k_dim) else {
             cache.k[l] = old_k;
             cache.v[l] = old_v;
+            cache.k_scale[l] = old_ks;
+            cache.v_scale[l] = old_vs;
             continue;
         };
-        let mut nk = Vec::new();
-        let mut nv = Vec::new();
+        let mut nk: Vec<f32> = Vec::new();
+        let mut nv: Vec<f32> = Vec::new();
         if nk.try_reserve_exact(cap).is_err() || nv.try_reserve_exact(cap).is_err() {
             cache.k[l] = old_k;
             cache.v[l] = old_v;
+            cache.k_scale[l] = old_ks;
+            cache.v_scale[l] = old_vs;
             continue;
         }
         for &pos in &keep_idx {
             let base = pos * k_dim;
-            if base + k_dim <= old_k.len() {
-                nk.extend_from_slice(&old_k[base..base + k_dim]);
+            if base + k_dim <= dk.len() {
+                nk.extend_from_slice(&dk[base..base + k_dim]);
             }
-            if base + k_dim <= old_v.len() {
-                nv.extend_from_slice(&old_v[base..base + k_dim]);
+            if base + k_dim <= dv.len() {
+                nv.extend_from_slice(&dv[base..base + k_dim]);
             }
         }
-        cache.k[l] = nk;
-        cache.v[l] = nv;
+        let (kq, ksc) = kv_quantize(&nk);
+        let (vq, vsc) = kv_quantize(&nv);
+        let mut klist = KvPageList::new();
+        klist.push_i8(&kq);
+        let mut vlist = KvPageList::new();
+        vlist.push_i8(&vq);
+        cache.k[l] = klist;
+        cache.v[l] = vlist;
+        cache.k_scale[l] = ksc;
+        cache.v_scale[l] = vsc;
     }
     let dropped = len - new_len;
     cache.len = new_len;

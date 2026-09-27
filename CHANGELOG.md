@@ -1,5 +1,15 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s414] - 2026-09-26 - ADR-0111 P0-P3: KV-INT8/paginado (3,76x menos memoria)
+
+- High: **KV INT8** - `KvCache.k`/`v` de `Vec<Vec<f32>>` para `Vec<Vec<i8>>` + uma escala f32 por bloco de 64 (quant simetrica `scale = max|x|/127`, `q = round(x/scale).clamp(-127,127)`). `k_all`/`v_all` dequantizam com a **MESMA assinatura** e o **MESMO guard SESSION_351** (nunca unwrap). `h2o_evict` adaptado, assinatura intacta. **3,76x menor** (nao 4x: a escala f32 por 64 valores conta).
+- High: **storage paginado** - `KV_PAGE = 4096` valores i8 por pagina (`KvPageList { pages: Vec<Box<[i8; KV_PAGE]>>, used }`); o crescimento anexa pagina so quando a atual enche -> paginas existentes nunca realocam (evita `memcpy` de ate ~152 MB no crescimento do `Vec`).
+- Med: **evidencia (P0)** - `kv_size_1b_ctx4096_f32` asserta **603.979.776 B**: o KV do Falcon3-1B em ctx 4096 f32 e **MAIOR que o modelo** (544 MB); no 3B (22L) ~738 MB. A atencao e ~2% do prefill -> o ganho e memoria/contexto longo, nao tok/s.
+- Med: **P3** - `infer_queue` loga `KV kv_mem id=.. ctx=.. int8_used=..KB int8_alloc=..KB f32_would_be=..KB` no fim do prefill (1x/job).
+- Low: `bughunt_s353::kv_k_all_mismatch_no_panic_pads` corrigido (assertava exatidao f32; com INT8 a tolerancia e a do bloco - a intencao, sem panic/shape/pad, segue).
+- Gates: `cargo test -p cortex --lib kv` 6/6; `cargo check --release` 0 erros.
+- Session: SESSION_414
+
 ## [1.9.99-s413] - 2026-09-26 - Perf SMP: T1/T2 fechados (overhead nao e o lever) + T5 SwiGLU in-place + ADR-0111 (KV-INT8)
 
 - High: **T1 - o "sync do SMP" de ~4,2 ms era o LOG de entrada, nao o sync.** O `t_mm0` ficava antes do `slog` e o split so loga 1/20 -> toda amostra pagava ~1,4 ms de serial. Com o TSC DEPOIS do log: `setup` (clear+enq+IPI) = **~60 us** (constante de k=2048 n=1024 a n=8192), `sync_us` = **~60-214 us**; o resto e a **cauda do AP** (`bar` 1 us-7,4 ms, imbalanco/wake, so pesa nos matmuls curtos). Fix do TSC mantido (metrica honesta); licao no AGENTS. Corrige a leitura da SESSION_412.

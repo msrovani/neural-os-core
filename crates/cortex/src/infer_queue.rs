@@ -1172,6 +1172,19 @@ fn run_prefill_step(st: &mut ActiveState) {
         TELEM_PREFILL_SLICES.load(Ordering::Relaxed),
         total_us
     );
+    // P3 (ADR-0111): consumo REAL do KV INT8 vs o que seria em f32 (a evidencia
+    // do ADR: 604 MB no 1B ctx 4096). 1x/job, no fim do prefill.
+    let kv_f32 = crate::cortex::kv_bytes_f32(n_layers, new_len, cache.k_dim());
+    k_nano::slog_cortex!(
+        "KV",
+        "ok",
+        "kv_mem id={} ctx={} int8_used={}KB int8_alloc={}KB f32_would_be={}KB",
+        st.job_id,
+        new_len,
+        cache.bytes_used() / 1024,
+        cache.bytes_allocated() / 1024,
+        kv_f32 / 1024
+    );
     // Lane A2: prefill_us explícito da prova.
     if st.is_proof {
         k_nano::slog_cortex!(

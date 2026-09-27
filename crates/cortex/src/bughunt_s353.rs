@@ -76,7 +76,13 @@ fn kv_k_all_mismatch_no_panic_pads() {
     assert!(total.is_valid());
     assert_eq!(total.shape, (3, 4));
     assert_eq!(total.data.len(), 12);
-    assert!((total.data[0] - 1.0).abs() < 1e-5);
+    // ADR-0111: o KV e INT8 (bloco de 64, escala = max|x|/127) -> exatidao f32
+    // nao se aplica; a INTENCAO do teste (sem panic, shape, pad zero) segue.
+    assert!(
+        (total.data[0] - 1.0).abs() <= 4.0 / 127.0 + 1e-6,
+        "int8 kv err={}",
+        total.data[0]
+    );
     // padding zeros
     assert_eq!(total.data[4], 0.0);
 }

@@ -1,4 +1,4 @@
-# STATE - neural-os-core v1.9.99-s413 - Perf SMP: T1/T2 fechados + T5 SwiGLU in-place + ADR-0111 (KV-INT8)
+# STATE - neural-os-core v1.9.99-s414 - ADR-0111 P0-P3: KV-INT8/paginado (3,76x)
 
 #   PISTA ATIVA: s410m — forget cognitivo HITL (/forget) + leitura de conflitos (/conflicts)
 #     via ApprovalGate Escalate (skills sgdb_forget/conflict_resolve); tombstone Superseded
@@ -10,6 +10,18 @@
 #     (s410l CRDT merge_remote; s410k mesh RX batch; s410j compact batch; s410i interop TKLV)
 #   PISTA ANTERIOR: s406 heap auto-fracionado advisory (commit 2b650c56)
 #   Não declarar v2.0.0
+
+## KV-INT8/paginado (s414) [OK]
+
+| Item | Estado |
+|------|--------|
+| `KvCache` INT8 (bloco 64, escala f32) | OK - `k`/`v` -> `Vec<Vec<i8>>`; `k_all`/`v_all` dequantizam (assinatura + guard SESSION_351 intactos) |
+| Ganho de memoria | OK - **3,76x** (nao 4x: a escala f32 por 64 valores conta) |
+| Storage paginado | OK - `KV_PAGE=4096` i8; paginas nunca realocam (evita memcpy de ate ~152 MB) |
+| Evidencia (P0) | OK - KV do 1B ctx 4096 = **603.979.776 B > modelo (544 MB)**; atencao ~2% do prefill |
+| Runtime (P3) | OK - log `KV kv_mem ... int8_used=KB int8_alloc=KB f32_would_be=KB` no fim do prefill |
+| Medicao no lab (`attn` por ctx 1K/2K/4K) | residual |
+| Testes | OK - `cargo test -p cortex --lib kv` 6/6; `cargo check --release` 0 erros |
 
 ## Perf SMP (s413) [OK]
 

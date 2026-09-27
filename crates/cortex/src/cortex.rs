@@ -48,6 +48,8 @@ pub fn kv_cache_reset() {
         cache.len = 0;
         for layer in cache.k.iter_mut() { layer.clear(); }
         for layer in cache.v.iter_mut() { layer.clear(); }
+        for layer in cache.k_scale.iter_mut() { layer.clear(); }
+        for layer in cache.v_scale.iter_mut() { layer.clear(); }
     }
 }
 use crate::nn::{silu, relu2, rms_norm};
@@ -760,26 +762,196 @@ pub fn hwexpert_v4_predict(vid: u16, did: u16) -> Option<crate::tensor::HwPredic
 /// VirtMapped — sub-buffers individuais do KV complicariam o tracking sem
 /// ganho medido. Se o prefill “hiccup” virar gargalo (s328+), migrar para
 /// slabs no TensorArena com capacidade reservada.
+/// ADR-0111 P1: INT8 KV storage. Each layer keeps one f32 scale per
+/// `KV_BLOCK`-sized block of values.
+/// ADR-0111 P2: each layer's values are a `KvPageList` of fixed pages; a page
+/// is appended only when the current is full, so growth never reallocates the
+/// values already stored (no realloc+copy on every token).
 pub struct KvCache {
-    pub k: Vec<Vec<f32>>,
-    pub v: Vec<Vec<f32>>,
+    pub k: Vec<KvPageList>,
+    pub v: Vec<KvPageList>,
+    pub k_scale: Vec<Vec<f32>>,
+    pub v_scale: Vec<Vec<f32>>,
     pub len: usize,
     k_dim: usize,
     kv_dim: usize,
 }
 
+/// INT8 KV quantization block size (values per scale).
+pub const KV_BLOCK: usize = 64;
+
+/// ADR-0111 P2: i8 values per fixed KV page (= 64 `KV_BLOCK` blocks).
+pub const KV_PAGE: usize = 4096;
+
+/// ADR-0111 P2: one layer's INT8 KV values as fixed-size pages. The values
+/// live in `[i8; KV_PAGE]` pages; `push_i8` appends a page only when the
+/// current one is full, so existing pages are never reallocated. `used` is the
+/// number of valid values (the last page may be partially filled).
+#[derive(Default)]
+pub struct KvPageList {
+    pages: Vec<Box<[i8; KV_PAGE]>>,
+    used: usize,
+}
+
+impl KvPageList {
+    pub fn new() -> Self {
+        KvPageList { pages: Vec::new(), used: 0 }
+    }
+
+    /// Number of valid INT8 values stored (NOT the page count).
+    pub fn len(&self) -> usize { self.used }
+
+    pub fn is_empty(&self) -> bool { self.used == 0 }
+
+    /// Number of allocated pages (for `bytes_allocated`).
+    pub fn page_count(&self) -> usize { self.pages.len() }
+
+    pub fn clear(&mut self) {
+        self.pages.clear();
+        self.used = 0;
+    }
+
+    /// Read one stored value (0 outside the valid range; never panics).
+    fn get_value(&self, i: usize) -> i8 {
+        if i >= self.used { return 0; }
+        let page = i / KV_PAGE;
+        let off = i % KV_PAGE;
+        self.pages.get(page).map(|p| p[off]).unwrap_or(0)
+    }
+
+    /// Append raw INT8 values, allocating a new page only when the current one
+    /// is full. Existing pages are never reallocated.
+    pub fn push_i8(&mut self, src: &[i8]) {
+        let mut i = 0usize;
+        while i < src.len() {
+            let off = self.used % KV_PAGE;
+            if off == 0 {
+                self.pages.push(Box::new([0i8; KV_PAGE]));
+            }
+            let n = (KV_PAGE - off).min(src.len() - i);
+            if let Some(page) = self.pages.last_mut() {
+                page[off..off + n].copy_from_slice(&src[i..i + n]);
+            }
+            self.used += n;
+            i += n;
+        }
+    }
+
+    /// Drop values past `n` (used only to re-quantize a partial tail block).
+    fn truncate_values(&mut self, n: usize) {
+        if n >= self.used { return; }
+        self.used = n;
+        let keep = (n + KV_PAGE - 1) / KV_PAGE;
+        self.pages.truncate(keep);
+    }
+
+    /// Dequantize the valid values with one scale per `KV_BLOCK` block into
+    /// `out_len` f32 values. Missing scales -> 0.0 (never panics).
+    pub fn dequant(&self, scales: &[f32], out_len: usize) -> Vec<f32> {
+        let mut out = vec![0.0f32; out_len];
+        let n = self.used.min(out_len);
+        let mut idx = 0usize;
+        for page in &self.pages {
+            for &q in page.iter() {
+                if idx >= n { return out; }
+                let s = scales.get(idx / KV_BLOCK).copied().unwrap_or(0.0);
+                out[idx] = q as f32 * s;
+                idx += 1;
+            }
+            if idx >= n { break; }
+        }
+        out
+    }
+}
+
+/// ADR-0111 P0: KV bytes if stored in f32 (`num_layers * ctx * kv_dim * 2 * 4`).
+/// For Falcon3-1B ctx 4096 (18L, kv_dim 1024) this is 603_979_776 bytes.
+pub const fn kv_bytes_f32(num_layers: usize, ctx: usize, kv_dim: usize) -> usize {
+    num_layers * ctx * kv_dim * 2 * 4
+}
+
+/// Symmetric INT8 quantize `src` in `KV_BLOCK`-value blocks.
+/// Returns the quantized i8 values and one scale per block.
+/// A zero block gets scale 0.0 (all q = 0).
+pub(crate) fn kv_quantize(src: &[f32]) -> (Vec<i8>, Vec<f32>) {
+    let n = src.len();
+    let mut q = vec![0i8; n];
+    let mut scales: Vec<f32> = Vec::with_capacity((n + KV_BLOCK - 1) / KV_BLOCK);
+    let mut b = 0usize;
+    while b < n {
+        let end = (b + KV_BLOCK).min(n);
+        let mut max = 0.0f32;
+        for &x in &src[b..end] {
+            let a = x.abs();
+            if a > max { max = a; }
+        }
+        let scale = if max > 0.0 { max / 127.0 } else { 0.0 };
+        scales.push(scale);
+        if scale > 0.0 {
+            let inv = 1.0 / scale;
+            for i in b..end {
+                let r = unsafe { libm::roundf(src[i] * inv) };
+                q[i] = if r > 127.0 { 127 } else if r < -127.0 { -127 } else { r as i8 };
+            }
+        }
+        b = end;
+    }
+    (q, scales)
+}
+
+/// Dequantize `q` with per-block `scales` into `out_len` f32 values
+/// (`x = q as f32 * scale`). Missing scales dequantize to 0.0 (never panics).
+pub(crate) fn kv_dequantize(q: &[i8], scales: &[f32], out_len: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; out_len];
+    let n = q.len().min(out_len);
+    for i in 0..n {
+        let s = scales.get(i / KV_BLOCK).copied().unwrap_or(0.0);
+        out[i] = q[i] as f32 * s;
+    }
+    out
+}
+
 impl KvCache {
     pub fn new(num_layers: usize, k_dim: usize, kv_dim: usize) -> Self {
         KvCache {
-            k: (0..num_layers).map(|_| Vec::new()).collect(),
-            v: (0..num_layers).map(|_| Vec::new()).collect(),
+            k: (0..num_layers).map(|_| KvPageList::new()).collect(),
+            v: (0..num_layers).map(|_| KvPageList::new()).collect(),
+            k_scale: (0..num_layers).map(|_| Vec::new()).collect(),
+            v_scale: (0..num_layers).map(|_| Vec::new()).collect(),
             len: 0, k_dim, kv_dim,
         }
     }
 
+    /// Quantize and append one incoming K/V chunk, keeping the scale grid
+    /// aligned to the global `KV_BLOCK` boundary. If the stored value count is
+    /// not a multiple of `KV_BLOCK`, the partial tail block is re-quantized
+    /// together with the new values (bounded extra error, only on misaligned
+    /// appends; production `kv_dim` is a multiple of 64 so this is a no-op).
+    fn append_quant(store: &mut KvPageList, scales: &mut Vec<f32>, src: &[f32]) {
+        let base = store.len();
+        let rem = base % KV_BLOCK;
+        if rem == 0 {
+            let (q, s) = kv_quantize(src);
+            store.push_i8(&q);
+            scales.extend_from_slice(&s);
+            return;
+        }
+        let tail_start = base - rem;
+        let last_scale = scales.pop().unwrap_or(0.0);
+        let mut combined: Vec<f32> = Vec::with_capacity(rem + src.len());
+        for i in tail_start..base {
+            combined.push(store.get_value(i) as f32 * last_scale);
+        }
+        combined.extend_from_slice(src);
+        let (q, s) = kv_quantize(&combined);
+        store.truncate_values(tail_start);
+        store.push_i8(&q);
+        scales.extend_from_slice(&s);
+    }
+
     pub fn append(&mut self, layer: usize, k_new: &Tensor, v_new: &Tensor) {
-        self.k[layer].extend_from_slice(&k_new.data);
-        self.v[layer].extend_from_slice(&v_new.data);
+        Self::append_quant(&mut self.k[layer], &mut self.k_scale[layer], &k_new.data);
+        Self::append_quant(&mut self.v[layer], &mut self.v_scale[layer], &v_new.data);
     }
 
     pub fn k_dim(&self) -> usize { self.k_dim }
@@ -788,18 +960,32 @@ impl KvCache {
         self.len += n;
     }
 
-    pub fn k_all(&self, layer: usize, seq_len: usize) -> Tensor {
-        let data = self.k.get(layer).cloned().unwrap_or_default();
+    fn dequant_all(
+        &self,
+        store: &[KvPageList],
+        scales: &[Vec<f32>],
+        layer: usize,
+        seq_len: usize,
+        which: &str,
+    ) -> Tensor {
+        let data = match store.get(layer) {
+            Some(list) => {
+                let s: &[f32] = scales.get(layer).map(|v| v.as_slice()).unwrap_or(&[]);
+                list.dequant(s, list.len())
+            }
+            None => Vec::new(),
+        };
         let expected = seq_len.saturating_mul(self.k_dim);
         if data.len() == expected {
             return Tensor::from_row_major((seq_len, self.k_dim), data)
                 .unwrap_or_else(|| Tensor::zero((0, 0)));
         }
-        // SESSION_351: soft_stride / OOM → mismatch; NUNCA unwrap (panic).
+        // SESSION_351: soft_stride / OOM -> mismatch; NUNCA unwrap (panic).
         k_nano::slog_cortex!(
             "KV",
             "warn",
-            "k_all mismatch: layer={} data.len={} expected={} (seq={} k_dim={})",
+            "{} mismatch: layer={} data.len={} expected={} (seq={} k_dim={})",
+            which,
             layer,
             data.len(),
             expected,
@@ -813,35 +999,150 @@ impl KvCache {
         let copy = data.len().min(expected);
         padded[..copy].copy_from_slice(&data[..copy]);
         Tensor::from_row_major((seq_len, self.k_dim), padded).unwrap_or_else(|| Tensor::zero((0, 0)))
+    }
+
+    pub fn k_all(&self, layer: usize, seq_len: usize) -> Tensor {
+        self.dequant_all(&self.k, &self.k_scale, layer, seq_len, "k_all")
     }
 
     pub fn v_all(&self, layer: usize, seq_len: usize) -> Tensor {
-        let data = self.v.get(layer).cloned().unwrap_or_default();
-        let expected = seq_len.saturating_mul(self.k_dim);
-        if data.len() == expected {
-            return Tensor::from_row_major((seq_len, self.k_dim), data)
-                .unwrap_or_else(|| Tensor::zero((0, 0)));
+        self.dequant_all(&self.v, &self.v_scale, layer, seq_len, "v_all")
+    }
+
+    /// Bytes actually holding KV data (i8 values + f32 scales).
+    pub fn bytes_used(&self) -> usize {
+        let mut total = 0usize;
+        for l in 0..self.k.len() {
+            total += self.k[l].len() + self.v[l].len();
+            total += (self.k_scale[l].len() + self.v_scale[l].len()) * 4;
         }
-        k_nano::slog_cortex!(
-            "KV",
-            "warn",
-            "v_all mismatch: layer={} data.len={} expected={} (seq={} k_dim={})",
-            layer,
-            data.len(),
-            expected,
-            seq_len,
-            self.k_dim
-        );
-        let mut padded = crate::tensor::f32_zeros(expected);
-        if padded.len() != expected {
-            return Tensor::zero((0, 0));
+        total
+    }
+
+    /// Bytes actually allocated: every page is fully allocated
+    /// (`page_count * KV_PAGE`), plus the scales. No spare capacity counted.
+    pub fn bytes_allocated(&self) -> usize {
+        let mut total = 0usize;
+        for l in 0..self.k.len() {
+            total += (self.k[l].page_count() + self.v[l].page_count()) * KV_PAGE;
+            total += (self.k_scale[l].len() + self.v_scale[l].len()) * 4;
         }
-        let copy = data.len().min(expected);
-        padded[..copy].copy_from_slice(&data[..copy]);
-        Tensor::from_row_major((seq_len, self.k_dim), padded).unwrap_or_else(|| Tensor::zero((0, 0)))
+        total
     }
 
     pub fn len(&self) -> usize { self.len }
+}
+
+#[cfg(test)]
+#[test]
+fn kv_size_1b_ctx4096_f32() {
+    // 18 * 4096 * 1024 * 2 * 4 = 603_979_776 (~576 MiB) — KV maior que o modelo.
+    assert_eq!(kv_bytes_f32(18, 4096, 1024), 603_979_776);
+}
+
+#[cfg(test)]
+#[test]
+fn kv_int8_roundtrip_parity() {
+    // Known vector, > 1 block + partial tail; parity within max|x|/127 per block.
+    let mut x: Vec<f32> = Vec::new();
+    for i in 0..(KV_BLOCK * 2 + 5) {
+        x.push(((i as f32) - 70.0) * 0.37);
+    }
+    let (q, scales) = kv_quantize(&x);
+    let y = kv_dequantize(&q, &scales, x.len());
+    assert_eq!(y.len(), x.len());
+    for b in 0..scales.len() {
+        let start = b * KV_BLOCK;
+        let end = (start + KV_BLOCK).min(x.len());
+        let mut max = 0.0f32;
+        for &v in &x[start..end] {
+            let a = v.abs();
+            if a > max { max = a; }
+        }
+        let tol = max / 127.0 + 1e-6;
+        for i in start..end {
+            assert!(
+                (y[i] - x[i]).abs() <= tol,
+                "block {} idx {} err {} > {}",
+                b, i, (y[i] - x[i]).abs(), tol
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn kv_int8_bytes_4x_smaller() {
+    let kd = 64usize;
+    let n = 8usize;
+    let mut cache = KvCache::new(1, kd, kd);
+    let k = Tensor::from_row_major((1, kd), alloc::vec![0.5f32; kd]).unwrap();
+    let v = Tensor::from_row_major((1, kd), alloc::vec![0.25f32; kd]).unwrap();
+    for _ in 0..n {
+        cache.append(0, &k, &v);
+        cache.advance(1);
+    }
+    let int8_bytes = cache.bytes_used();
+    let f32_bytes = kv_bytes_f32(1, n, kd);
+    // 4x minus the 4B scale per 64 values -> >= 3.5x.
+    assert!(
+        int8_bytes * 7 <= f32_bytes * 2,
+        "int8 {} not >= 3.5x smaller than f32 {}",
+        int8_bytes, f32_bytes
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn kv_pages_cross_boundary_roundtrip() {
+    // ADR-0111 P2: append more than KV_PAGE values so the layer spans >1 page,
+    // then dequant must still match within the per-block INT8 tolerance.
+    let kd = 64usize;
+    let tokens = KV_PAGE / kd + 3; // KV_PAGE values + 3 tokens -> 2 pages
+    let mut src: Vec<f32> = Vec::with_capacity(tokens * kd);
+    for i in 0..(tokens * kd) {
+        src.push(((i as f32) - 1000.0) * 0.013);
+    }
+    let mut cache = KvCache::new(1, kd, kd);
+    for t in 0..tokens {
+        let row = src[t * kd..(t + 1) * kd].to_vec();
+        let k = Tensor::from_row_major((1, kd), row.clone()).unwrap();
+        let v = Tensor::from_row_major((1, kd), row).unwrap();
+        cache.append(0, &k, &v);
+        cache.advance(1);
+    }
+    // Values must span more than one fixed page.
+    assert!(
+        cache.k[0].page_count() >= 2,
+        "expected >1 page, got {}",
+        cache.k[0].page_count()
+    );
+    assert_eq!(cache.k[0].len(), tokens * kd);
+    // 2 pages each for K and V, plus one 4B scale per KV_BLOCK for both.
+    assert_eq!(
+        cache.bytes_allocated(),
+        4 * KV_PAGE + (tokens * kd / KV_BLOCK) * 2 * 4
+    );
+    let deq = cache.k_all(0, tokens);
+    assert!(deq.is_valid());
+    assert_eq!(deq.shape, (tokens, kd));
+    for b in 0..(tokens * kd / KV_BLOCK) {
+        let start = b * KV_BLOCK;
+        let end = start + KV_BLOCK;
+        let mut max = 0.0f32;
+        for &v in &src[start..end] {
+            let a = v.abs();
+            if a > max { max = a; }
+        }
+        let tol = max / 127.0 + 1e-6;
+        for i in start..end {
+            assert!(
+                (deq.data[i] - src[i]).abs() <= tol,
+                "block {} idx {} err {} > {}",
+                b, i, (deq.data[i] - src[i]).abs(), tol
+            );
+        }
+    }
 }
 
 const MEDUSA_HEADS: usize = 3;
@@ -954,6 +1255,27 @@ impl TransformerModel {
     /// Pub p/ vocab_shortlist (Onda 1) — tie-embeddings logit ≈ scale·⟨h, embed[t]⟩.
     pub fn embed_lookup_pub(&self, token: u32) -> Tensor {
         self.embed_lookup(token)
+    }
+
+    /// Pub p/ vocab_shortlist (Onda 1) — unembed logit ≈ scale·⟨h, unembed[t]⟩.
+    /// Espelha `embed_lookup` (coluna t escalada por `unembed_scale`) para que o
+    /// dot com `hidden` bata exatamente com `unembed_logits` untied.
+    pub fn unembed_lookup_pub(&self, token: u32) -> Tensor {
+        self.unembed_lookup(token)
+    }
+
+    fn unembed_lookup(&self, token: u32) -> Tensor {
+        let t = (token as usize).min(self.unembed.shape.1.saturating_sub(1));
+        let mut data = Vec::new();
+        if data.try_reserve_exact(self.hidden).is_err() {
+            k_nano::slog_cortex!("FWD", "fail", "unembed_lookup reserve refuse h={}", self.hidden);
+            return Tensor::zero((0, 0));
+        }
+        for row in 0..self.hidden {
+            let idx = row * self.unembed.shape.1 + t;
+            data.push((self.unembed.get_weight(idx) as f32) * self.unembed_scale);
+        }
+        Tensor::from_row_major((1, self.hidden), data).unwrap_or_else(|| Tensor::zero((0, 0)))
     }
 
     fn embed_lookup(&self, token: u32) -> Tensor {
@@ -5056,5 +5378,75 @@ impl Intent {
             Intent::AudioVolume => "audio_set_volume",
             Intent::Unknown => "unknown",
         }
+    }
+}
+
+/// ADR-0101 Onda 1 — paridade de shortlist: `score_candidates` deve devolver
+/// exatamente `unembed_logits(hidden)[id]`, tied E untied. O bug original lia a
+/// matriz `embed` mesmo untied e reaplicava a escala (double-scaling no tied).
+#[cfg(test)]
+#[test]
+fn vocab_shortlist_parity_unembed_logits() {
+    let hidden = 16usize;
+    let vocab_size = 32u32;
+
+    let tern = |rows: usize, cols: usize, seed: u64| -> PackedTernaryTensor {
+        let mut s = seed;
+        let mut vals = Vec::with_capacity(rows * cols);
+        for _ in 0..rows * cols {
+            s = s.wrapping_mul(1103515245).wrapping_add(12345) & 0x7FFF_FFFF;
+            vals.push(match s % 3 { 0 => 1i8, 1 => -1i8, _ => 0i8 });
+        }
+        PackedTernaryTensor { shape: (rows, cols), packed_data: PackedTernaryTensor::pack_weights(&vals) }
+    };
+    let mk = |tie: bool, seed_e: u64, seed_u: u64| -> TransformerModel {
+        TransformerModel {
+            embed: tern(hidden, vocab_size as usize, seed_e),
+            embed_scale: 1.5,
+            layers: Vec::new(),
+            rms_final: Vec::new(),
+            unembed: tern(hidden, vocab_size as usize, seed_u),
+            unembed_scale: 0.6,
+            medusa_heads: Vec::new(),
+            vocab_size,
+            hidden,
+            num_layers: 0,
+            max_seq: 8,
+            num_heads: 2,
+            num_kv_heads: 1,
+            head_dim: 8,
+            kv_dim: 8,
+            intermediate_size: 16,
+            ffn_group_size: 16,
+            tie_embeddings: tie,
+            act_type: 0,
+            embed_type: 0,
+            embed_q6k: None,
+            rope_theta: 10000.0,
+            rope_cos: Vec::new(),
+            rope_sin: Vec::new(),
+        }
+    };
+
+    let h: Vec<f32> = (0..hidden).map(|i| (i as f32 - 7.0) * 0.3).collect();
+    let hidden_t = Tensor::from_row_major((1, hidden), h).unwrap();
+    let ids = [0u32, 5, 17, 31];
+
+    // untied: embed e unembed com seeds distintos (força a matriz errada a divergir).
+    for (tie, se, su) in [(false, 7u64, 99u64), (true, 7u64, 99u64)] {
+        let m = mk(tie, se, su);
+        let sc = crate::vocab_shortlist::score_candidates(&m, &hidden_t, &ids);
+        let full = m.unembed_logits(&hidden_t, vocab_size as usize);
+        assert!(full.is_valid(), "unembed_logits inválido tie={tie}");
+        for &id in &ids {
+            let got = sc.data[id as usize];
+            let want = full.data[id as usize];
+            assert!(
+                (got - want).abs() <= 1e-4,
+                "parity tie={tie} id={id}: got={got} want={want}"
+            );
+        }
+        // Não-candidatos ficam -inf.
+        assert_eq!(sc.data[3], NEG_INFINITY);
     }
 }
