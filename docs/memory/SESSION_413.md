@@ -58,3 +58,12 @@ Se T3-T7 derem 0% em sequencia, o worker escalar esta no otimo local **e** o gar
 - **Absolutos da s412 (105 ms / 12,7 s) foram um momento de host leve.** Nao portar entre sessoes; so as **razoes intra-sessao** (tile 8/16/32/64/128 = 204/154/105/130/127 ms) sao validas.
 - **Hipotese "tiny f32 = microssegundos" refutada como ganho:** a economia e ~0,5% (nao os ~8% que a extrapolacao 20x dos logs sugeria). O dispatch tiny existe, mas e pequeno.
 - Nao guardar mudanca nao-medida: T2 revertido (3 linhas, re-aplicavel se um dia houver host controlado + n repeticoes).
+
+## Status do plano (2026-09-26)
+| ID | Estado | Nota |
+|---|---|---|
+| T1 | **FECHADO** | premissa refutada: o "sync 4,2 ms" era o **log de entrada**; dispatch real **~60 us**. Fix do TSC mantido (metrica honesta). |
+| T2 | **FECHADO (revertido)** | neutro (< variancia do host); economia real ~0,5% do prefill. |
+| T3-T7 | **BLOQUEADOS na bancada** | todos sao micro-opt do worker com efeito esperado <10%; a variancia run-to-run medida e 7-8% -> 1 run nao decide. Precisam de **host controlado** (worker ternario estavel entre runs) ou **n repeticoes (media)**. |
+
+**Recomendacao:** nao gastar runs em T3-T7 enquanto a bancada nao tiver repeticao. Os dois levers de overhead morreram (T1: dispatch barato; T2: tiny ~0,5%). O proximo ganho **estrutural** nao e micro-opt: e o **KV-INT8/paginado (#613)** ou o **W2A8/GPU** (Layer S/HW, gated) — mudam ordem de grandeza, nao 3-5%.
