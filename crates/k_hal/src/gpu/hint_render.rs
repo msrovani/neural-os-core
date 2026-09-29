@@ -271,6 +271,102 @@ pub fn render_hints() -> Option<[(u8, u8, u8); HINT_REGIONS]> {
     Some(hints)
 }
 
+/// Tenta carregar `HINT.BIN` do root do volume de dados (FAT32/exFAT via ATA)
+/// e sobe os pesos para a VRAM. Idempotente; fail-closed honesto (log + false)
+/// em qualquer divergência de contrato — sem HINT.BIN o estágio fica Ready
+/// (pass-through clássico), nunca erro.
+///
+/// Formato v1 (tools/train_hint_mlp.py — docstring canônica):
+/// magic b"HINT", version u16, flags u16, IN/HIDDEN/OUT/REGIONS u16×4,
+/// len_w1/len_w2 u32, w1 packed, w2 packed, b1 f32[128], b2 f32[16].
+/// Header = 24 bytes; total esperado = 24 + len_w1 + len_w2 + 4·(HIDDEN+OUT).
+pub fn try_load_from_fat() -> bool {
+    let Some(data) = crate::fat_assets::read_root_file("HINT.BIN") else {
+        k_nano::slog_hal!("HINT", "info", "HINT.BIN ausente no volume — hints ready (pass-through clássico)");
+        return false;
+    };
+    if !load_packed(&data) {
+        return false;
+    }
+    k_nano::slog_hal!("HINT", "ok", "HINT.BIN carregado bytes={} upload={}", data.len(), upload_hint_weights(&last_loaded_weights()));
+    true
+}
+
+/// Pesos do último `load_packed` (intermediário p/ o upload pós-validação).
+static LAST_LOADED: spin::Mutex<Option<HintWeights>> = spin::Mutex::new(None);
+
+fn last_loaded_weights() -> HintWeights {
+    let g = LAST_LOADED.lock();
+    match g.as_ref() {
+        Some(w) => HintWeights {
+            w1: w.w1.clone(),
+            b1: w.b1,
+            w2: w.w2.clone(),
+            b2: w.b2,
+        },
+        None => HintWeights::zeroed(),
+    }
+}
+
+/// Valida e aceita um HINT.BIN (bytes) — retorna false honesto se divergir.
+pub fn load_packed(data: &[u8]) -> bool {
+    let Some(w) = parse_hint_bin(data) else {
+        k_nano::slog_hal!("HINT", "fail", "HINT.BIN inválido (magic/dims/tamanho) — ignorado (fail-closed)");
+        return false;
+    };
+    *LAST_LOADED.lock() = Some(w);
+    true
+}
+
+/// Parser do formato v1. `None` = contrato violado (fail-closed).
+fn parse_hint_bin(data: &[u8]) -> Option<HintWeights> {
+    if data.len() < 24 || &data[0..4] != b"HINT" {
+        return None;
+    }
+    let ver = u16::from_le_bytes([data[4], data[5]]);
+    if ver != 1 {
+        return None;
+    }
+    let dims = u16x4(data, 8);
+    let (i_n, h_n, o_n, r_n) = dims;
+    if (i_n, h_n, o_n, r_n) != (HINT_IN as u16, HINT_HIDDEN as u16, HINT_OUT as u16, HINT_REGIONS as u16) {
+        return None;
+    }
+    let l1 = u32::from_le_bytes([data[16], data[17], data[18], data[19]]) as usize;
+    let l2 = u32::from_le_bytes([data[20], data[21], data[22], data[23]]) as usize;
+    if l1 != HINT_HIDDEN * HINT_IN / 4 || l2 != HINT_OUT * HINT_HIDDEN / 4 {
+        return None;
+    }
+    let w1_end = 24 + l1;
+    let w2_end = w1_end + l2;
+    let total = w2_end + 4 * (HINT_HIDDEN + HINT_OUT);
+    if data.len() != total {
+        return None;
+    }
+    let mut w = HintWeights::zeroed();
+    w.w1.copy_from_slice(&data[24..w1_end]);
+    w.w2.copy_from_slice(&data[w1_end..w2_end]);
+    for (n, chunk) in data[w2_end..].chunks_exact(4).enumerate() {
+        let v = i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        if n < HINT_HIDDEN {
+            w.b1[n] = v;
+        } else {
+            w.b2[n - HINT_HIDDEN] = v;
+        }
+    }
+    Some(w)
+}
+
+#[inline]
+fn u16x4(d: &[u8], off: usize) -> (u16, u16, u16, u16) {
+    (
+        u16::from_le_bytes([d[off], d[off + 1]]),
+        u16::from_le_bytes([d[off + 2], d[off + 3]]),
+        u16::from_le_bytes([d[off + 4], d[off + 5]]),
+        u16::from_le_bytes([d[off + 6], d[off + 7]]),
+    )
+}
+
 /// Linha de status para o HUD/serial (padrão honesto n/a).
 pub fn status_line() -> alloc::string::String {
     match hint_stage() {
@@ -320,6 +416,43 @@ mod tests {
             assert_eq!(status_line(), "hints off");
             assert!(render_hints().is_none());
         }
+    }
+
+    /// Réplica host do export do train_hint_mlp.py (contrato v1) — valida o
+    /// parser bit-a-bit contra o mesmo layout que o tool emite.
+    #[test]
+    fn parse_hint_bin_v1_roundtrip_tool() {
+        let mut d = alloc::vec::Vec::new();
+        d.extend_from_slice(b"HINT");
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&0u16.to_le_bytes());
+        d.extend_from_slice(&(HINT_IN as u16).to_le_bytes());
+        d.extend_from_slice(&(HINT_HIDDEN as u16).to_le_bytes());
+        d.extend_from_slice(&(HINT_OUT as u16).to_le_bytes());
+        d.extend_from_slice(&(HINT_REGIONS as u16).to_le_bytes());
+        d.extend_from_slice(&((HINT_HIDDEN * HINT_IN / 4) as u32).to_le_bytes());
+        d.extend_from_slice(&((HINT_OUT * HINT_HIDDEN / 4) as u32).to_le_bytes());
+        // Padrões dirigidos no pack (low→high): 0b00011000 = [0,-1,1,0].
+        let p1 = alloc::vec![0b00_01_10_00u8; HINT_HIDDEN * HINT_IN / 4];
+        let p2 = alloc::vec![0b01_01_10_10u8; HINT_OUT * HINT_HIDDEN / 4];
+        d.extend_from_slice(&p1);
+        d.extend_from_slice(&p2);
+        for n in 0..HINT_HIDDEN {
+            d.extend_from_slice(&(n as i32).to_le_bytes());
+        }
+        for n in 0..HINT_OUT {
+            d.extend_from_slice(&((n as i32) * 10).to_le_bytes());
+        }
+        assert!(load_packed(&d), "formato v1 do tool deve parsear");
+        let w = last_loaded_weights();
+        assert_eq!(w.w1, p1);
+        assert_eq!(w.w2, p2);
+        assert_eq!(w.b1[5], 5);
+        assert_eq!(w.b2[7], 70);
+        // Contrato violado (dims trocadas) → None/fail-closed.
+        let mut bad = d.clone();
+        bad[8] = 0xFF;
+        assert!(!load_packed(&bad), "dims erradas recusadas");
     }
 
     #[test]

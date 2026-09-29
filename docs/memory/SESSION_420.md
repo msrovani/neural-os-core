@@ -47,3 +47,37 @@ INÍCIO de cada slice pesado.
   ADR-0112 (pesos em VRAM via BAR) — o gate só garante que cruzar não vira #PF.
 - n-sgdb: SESSION_419/420, lições e IDEA #623 pendentes de registro (MCP fora
   desta thread).
+
+## Addendum s420b — train_hint_mlp.py + loader HINT.BIN
+
+**`tools/train_hint_mlp.py`** (novo): treina o MLP de hints 64→128→16 e exporta
+`target/HINT.BIN` no pack W2A8 do contrato `hint_render.rs`. Modos: `--self-check`
+(round-trip pack bit-a-bit vs hint_render.rs), treino padrão (professor sintético
++ QAT), `--validate <bin>` (acordo contra o professor).
+
+Pipeline do treino:
+1. **Professor sintético por regra** (lição SESSION_346: dataset tem que ser a
+   modalidade real — não existe dataset de "hints corretos"). Política HMI §6.4
+   como combinação LINEAR NÃO-NEGATIVA das 6 features vivas do ui_state —
+   restrição de representabilidade: o forward do kernel é h=ReLU(x·W1ᵀ); y=h·W2ᵀ
+   SEM bias e SEM termo constante → aluno não representa constantes/produtos
+   (matiz 200 fixo era irreproduzível). Idle = y=0 = modo clássico (§6.4 correto).
+2. **QAT (quantization-aware training, STE)** com escalas c1/c2 APRENDIDAS —
+   PTQ pós-treino teto em 87,6% de acordo (W2 ternário não reproduz pesos
+   precisos); QAT → **100% de acordo** (MAE energia 5,5/255, matiz 1,8/255,
+   holdout disjunto, densidade w1=22% w2=55%). Métrica de validação = acordo
+   perceptual (bucket OU erro relativo), não loss.
+3. **Export v1** (3160 B: header 24 + w1 2048 + w2 512 + b1/b2 informativos) —
+   pack 2 bits low→high idêntico ao bitnet_writer (round-trip provado).
+
+**Wire no kernel** (`hint_render.rs` + main.rs): `parse_hint_bin`/`load_packed`/
+`try_load_from_fat` — HINT.BIN lido do root do volume (FAT32/exFAT via
+`fat_assets::read_root_file`) logo após `init_bar_compute` no boot; fail-closed
+honesto (dims/magic/tamanho divergentes = log fail + Ready pass-through clássico,
+nunca erro). Teste host `parse_hint_bin_v1_roundtrip_tool` replica o export do
+tool byte-a-byte. `mkfat32.py` embute o HINT.BIN (se existir) na imagem.
+
+Validação: QEMU 8G/6c boot limpo (VirtIO-GPU sem aperture → loader não roda,
+honesto; zero #PF); k-hal 67 (66+1); check release 0 erros. No metal com
+aperture real (GTX 1050 lab), o caminho é: train → mkfat32 → boot →
+`HINT.BIN carregado bytes=3160 upload=true` → stage 2 (Resident).

@@ -158,6 +158,15 @@ def find_file(name):
         if os.path.exists(p): return p
     return None
 
+def find_bpe():
+    # export_bpe_bin.py escreve o canônico em target/bpe_vocab.bin (SESSION_411).
+    # target1/models podem ter cópias stale (ex.: vocab 32k) que find_file priorizaria.
+    p = os.path.join(ROOT, "target", "bpe_vocab.bin")
+    if os.path.exists(p):
+        return p
+    return find_file("bpe_vocab.bin") or find_file("BPE.BIN")
+
+
 def find_large(name, min_bytes=1_000_000):
     """Como find_file, mas exige tamanho mínimo (evita stub MICRO.BITNET ~13KB)."""
     p = find_file(name)
@@ -390,7 +399,7 @@ def populate(path):
         ("PIPER.BIN", find_file("PIPER_PT_BR.BIN") or find_file("PIPER.BIN") or find_file("PIPER_PT_BR_CADU_MEDIUM.bitnet")),
         ("PIPER_EN.BIN", find_file("PIPER_EN.BIN")),
         ("STT.BIN", find_file("STT.BIN")),
-        ("BPE.BIN", find_file("bpe_vocab.bin") or find_file("BPE.BIN")),
+        ("BPE.BIN", find_bpe()),
         # Progressivo: PACK_LLM=850 → 13 → 2b → 3b (AirLLM p/ GGUF grandes no boot)
         ("BITNET13.BIN", find_bitnet_13() if "13" in llm else None),
         ("BITNET850.BIN", find_bitnet_850() if "850" in llm else None),
@@ -587,6 +596,14 @@ def populate(path):
     # overwrite (zero find_free no hot path). Magic TLSP + zeros = empty store.
     tlspins = b"TLSP" + bytes([1, 0, 0, 0]) + (b"\x00" * (4 * 1024 - 8))
     files.append(("TLSPINS.BIN", tlspins[: 4 * 1024]))
+    # HINT.BIN (3160 B): MLP de hints W2A8 do hint_render (ADR-0047-HMI §6.4,
+    # ADR-0112) — gerado por tools/train_hint_mlp.py (QAT, 100% de acordo).
+    # Sem o arquivo o kernel fica em "hints ready" (pass-through clássico).
+    hint_bin = os.path.join(ROOT, "target", "HINT.BIN")
+    if os.path.isfile(hint_bin):
+        files.append(("HINT.BIN", hint_bin))
+    else:
+        print("  [--] HINT.BIN ausente (rode python tools/train_hint_mlp.py) — hints ready")
 
     with open(path, "r+b") as f:
         f.seek(2048 * 512)  # skip MBR + partition start

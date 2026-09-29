@@ -3,7 +3,9 @@
 #   PISTA ATIVA: s420 — gate proativo de headroom (heap_headroom_low, 128MB) no início de cada
 #     slice de prefill/decode — cruza-o-teto ~2030MB agora termina honesto (payload escalate/parcial)
 #     em vez de alloc NULL → #PF → hlt no AP; validado em produção QEMU 8G/6c (gate disparou
-#     headroom=117MB, zero #PF). Residual: cura estrutural do teto = ADR-0112 (pesos em VRAM via BAR)
+#     headroom=117MB, zero #PF). s420b: train_hint_mlp.py (QAT, 100% acordo) + loader HINT.BIN
+#     no kernel (fail-closed) — H3-revisit completo, falta só aperture real (GTX 1050 lab).
+#     Residual: cura estrutural do teto = ADR-0112 (pesos em VRAM via BAR)
 #   PISTA ANTERIOR: s418 — BAR Compute (pesos W2A8 residem na VRAM via BAR, GEMV host lê aperture,
 #     lane VRAM no dispatch; StreamsW2a8/ComputeDevice = upgrade; lab GTX 1050 = residual)
 #   PISTA ANTERIOR: s410m — forget cognitivo HITL (/forget) + leitura de conflitos (/conflicts)

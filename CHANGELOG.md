@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s420b] - 2026-09-29 - train_hint_mlp.py + loader HINT.BIN (H3-revisit completo)
+
+- High: **`tools/train_hint_mlp.py`** — treina o MLP de hints 64→128→16 e exporta `target/HINT.BIN` no pack W2A8 do contrato `hint_render.rs` (self-check bit-a-bit, treino, `--validate`). Professor sintético por regra COM restrição de representabilidade (forward do kernel = h=ReLU(x·W1ᵀ); y=h·W2ᵀ SEM bias/termo constante → política como combinação linear não-negativa das features; idle=0=modo clássico §6.4). **QAT com escalas aprendidas**: PTQ teto em 87,6% de acordo; QAT → **100%** (MAE 5,5/255, holdout disjunto).
+- Med: **loader HINT.BIN no kernel** (`hint_render::try_load_from_fat` + `parse_hint_bin` fail-closed) wire no boot após `init_bar_compute`; `mkfat32.py` embute o arquivo. Sem aperture (QEMU VirtIO-GPU) loader não roda — honesto Ready.
+- Gates: check release 0 erros; k-hal 67 (66+1 parser round-trip); QEMU 8G/6c boot limpo, zero #PF.
+- Session: SESSION_420 addendum s420b
+
 ## [1.9.99-s420] - 2026-09-29 - Gate fail-closed de headroom no prefill (fecho residual s419)
 
 - High: **piso proativo de headroom** (`heap_headroom_low()`, 128MB) no início de cada slice de prefill e decode — os gates críticos (64MB) só disparam ENTRE slices; o auto-grow acontece DENTRO do slice (KV/mask/logits) e cruzava o teto ~2030MB antes do re-check (alloc NULL no meio do slice → #PF → hlt no AP). Recusa honesta: slog warn + BOOT.LOG `prefill refuse headroom_low` + payload escalate/parcial (HITL) — recusa custa um job, OOM custa um core.

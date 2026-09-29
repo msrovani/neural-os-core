@@ -3239,6 +3239,11 @@ pub(crate) fn kernel_boot(
                             cortex_crate::cortex::register_vram_upload_hook(
                                 crate::gpu::bar_compute::on_model_loaded,
                             );
+                            // H3-revisit (ADR-0047-HMI §6.4): HINT.BIN do volume
+                            // de dados (gerado por tools/train_hint_mlp.py) →
+                            // upload_hint_weights. Sem o arquivo: Ready honesto
+                            // (pass-through clássico), nunca erro.
+                            k_hal::gpu::hint_render::try_load_from_fat();
                         }
                         crate::display::fb::boot_ckpt(43, "gpu vram ok");
                     } else {
