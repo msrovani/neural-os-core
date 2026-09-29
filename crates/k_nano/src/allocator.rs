@@ -432,6 +432,20 @@ pub fn heap_headroom_critical() -> bool {
     heap_headroom_bytes() < HEAP_CRITICAL_HEADROOM_MB * 1024 * 1024
 }
 
+/// SESSION_420 (residual s419): piso PROATIVO do prefill — ACIMA do crítico
+/// (64MB), dá 1 slice de margem. Os gates críticos só disparam ENTRE slices
+/// (topo do poll_slice); o auto-grow acontece DENTRO do slice (KV/mask/logits
+/// em apply_one_layer) e cruza o teto (~2030MB) antes do piso de 64MB ser
+/// re-checado → alloc NULL no meio do slice → #PF → hlt no AP. Checar o piso
+/// de 128MB no INÍCIO de cada slice pesado termina o job honesto (HITL) antes
+/// do heap esgotar — recusa custa um job, OOM custa um core.
+pub const HEAP_PREFILL_HEADROOM_MB: usize = 128;
+
+/// True se o headroom do bump está abaixo do piso proativo de prefill.
+pub fn heap_headroom_low() -> bool {
+    heap_headroom_bytes() < HEAP_PREFILL_HEADROOM_MB * 1024 * 1024
+}
+
 /// Publica HEAP_PRESSURE no EventBus (chamar fora de grow — pode alocar).
 pub fn publish_heap_pressure_if_due() {
     let obs = heap_observe();

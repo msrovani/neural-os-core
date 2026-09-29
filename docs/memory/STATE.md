@@ -1,10 +1,9 @@
-# STATE - neural-os-core v1.9.99-s419 - H3-revisit + fleet HUD + heartbeat BAR Compute (VRAM universal vendor-agnostic p/ W2A8)
+# STATE - neural-os-core v1.9.99-s420 - Gate fail-closed headroom prefill (fecho residual s419)
 
-#   PISTA ATIVA: s419 — H3-revisit (hint_render.rs: MLP de hints W2A8 com pesos em VRAM via BAR;
-#     linhas fleet/vram/hints no HUB HEALTH; orb com infer_intensity=tok/s REAL) + federation e2e
-#     dual-node OK (fleet_tick 1Hz wire que faltava) + stall pós-teto: barrier SMP fixed (SmpMmGuard)
-#     + heartbeat pós-tick no BOOT.LOG; RESIDUAL ABERTO: prefill a2_proof cruza o teto 2030MB
-#     (gate de headroom no prefill slice = próximo)
+#   PISTA ATIVA: s420 — gate proativo de headroom (heap_headroom_low, 128MB) no início de cada
+#     slice de prefill/decode — cruza-o-teto ~2030MB agora termina honesto (payload escalate/parcial)
+#     em vez de alloc NULL → #PF → hlt no AP; validado em produção QEMU 8G/6c (gate disparou
+#     headroom=117MB, zero #PF). Residual: cura estrutural do teto = ADR-0112 (pesos em VRAM via BAR)
 #   PISTA ANTERIOR: s418 — BAR Compute (pesos W2A8 residem na VRAM via BAR, GEMV host lê aperture,
 #     lane VRAM no dispatch; StreamsW2a8/ComputeDevice = upgrade; lab GTX 1050 = residual)
 #   PISTA ANTERIOR: s410m — forget cognitivo HITL (/forget) + leitura de conflitos (/conflicts)
@@ -45,7 +44,7 @@
 | Consolidação hermes | OK - MACHINE_HEALTH 1Hz + machine_prompt único + TX MCH\0 (cooldown 10s) |
 | Fleet no Master | OK - fleet_health RX MCH\0 (array 16 slots, evicção), FLEET_HEALTH + escala 1×/incidente (4/4) |
 | QEMU validação | OK - MCH TX 25 pubs, zero PF_DBG, a2_proof completo; boot passou do stall anterior |
-| Stall silencioso pós-teto | ABERTO - log para ~T+27-42s, CPU queimando, sem #PF (classe lost-wakeup/lock) |
+| Stall silencioso pós-teto | OK - SmpMmGuard (s419) + gate headroom_low 128MB no slice (s420); validado QEMU: a2_proof completo, grow máx = teto, zero #PF |
 | Federation e2e dual-node | ⏳ - RX de frota com MCH alheio real + FLEET_HEALTH no HUD |
 
 ## KV-INT8/paginado (s414) [OK]

@@ -1007,6 +1007,35 @@ fn run_prefill_step(st: &mut ActiveState) {
         finish_job(st, "[cancelled]");
         return;
     }
+    // SESSION_420 (residual s419): gate PROATIVO de headroom ANTES do slice.
+    // Os gates críticos (64MB, SESSION_415) só disparam ENTRE slices (topo do
+    // poll_slice); o auto-grow acontece DENTRO do slice (KV/mask/logits em
+    // apply_one_layer) e cruza o teto ~2030MB (wrap 2^64 do bump) antes do
+    // piso crítico ser re-checado → alloc NULL no meio do slice → #PF → hlt
+    // no AP (BOOT.LOG T+27121: auto-grow 1792→2030MB em prefill id=2).
+    // Piso 128MB = 1 slice de margem: termina o job honesto (HITL) antes do
+    // heap esgotar — recusa custa um job, OOM custa um core.
+    if k_nano::allocator::heap_headroom_low() {
+        let obs = k_nano::allocator::heap_observe();
+        k_nano::slog_cortex!(
+            "InferQ",
+            "warn",
+            "prefill refuse headroom_low id={} layer={} used={}MB headroom={}MB",
+            st.job_id,
+            st.prefill_layer,
+            obs.used_mb,
+            obs.headroom_mb
+        );
+        k_nano::boot_logger::log_quiet(&alloc::format!(
+            "prefill refuse headroom_low id={} layer={} headroom_mb={}",
+            st.job_id,
+            st.prefill_layer,
+            obs.headroom_mb
+        ));
+        a2_refuse(st, "headroom_low");
+        finish_job(st, "[heap: headroom baixo no prefill — fail-closed HITL]");
+        return;
+    }
     // Lane D-cortex/Q4: fail-closed ANTES do slice pesado (só a prova; a
     // fila real nunca aborta aqui). Só sob risco real: com ap_pollable o
     // slice corre no AP idle (fora do BUSY/budget — lenta é inofensiva);
@@ -1255,6 +1284,21 @@ fn run_decode_one(st: &mut ActiveState) {
         let acc = st.acc_text.clone();
         a2_refuse(st, "cancelled");
         finish_job(st, if acc.is_empty() { "[cancelled]" } else { &acc });
+        return;
+    }
+    // SESSION_420: mesma classe no decode — o forward_with_kv anexa KV (cresce
+    // o bump dentro do slice). Sob piso proativo, terminar honesto com o que
+    // já foi gerado (payload parcial) em vez de OOM no meio do forward.
+    if k_nano::allocator::heap_headroom_low() {
+        k_nano::boot_logger::log_quiet(&alloc::format!(
+            "decode refuse headroom_low id={} step={} headroom_mb={}",
+            st.job_id,
+            st.step,
+            k_nano::allocator::heap_observe().headroom_mb
+        ));
+        a2_refuse(st, "headroom_low");
+        let acc = st.acc_text.clone();
+        finish_job(st, if acc.is_empty() { "[heap: headroom baixo no decode — fail-closed HITL]" } else { &acc });
         return;
     }
     if st.step >= st.max_gen {
@@ -1705,6 +1749,19 @@ mod tests {
         assert!(!a2_proof_pending(), "deadline estourado libera o gate");
         assert!(A2_PROOF_DONE.load(Ordering::Acquire));
         drain_infer_queue_statics();
+    }
+
+    #[test]
+    fn headroom_low_gate_above_critical() {
+        // SESSION_420: piso proativo do prefill > piso crítico — o gate do
+        // slice dispara ANTES do crítico (margem de 1 slice), e low ⊇ critical.
+        assert!(
+            k_nano::allocator::HEAP_PREFILL_HEADROOM_MB
+                > k_nano::allocator::HEAP_CRITICAL_HEADROOM_MB
+        );
+        if k_nano::allocator::heap_headroom_critical() {
+            assert!(k_nano::allocator::heap_headroom_low());
+        }
     }
 
     #[test]

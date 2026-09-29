@@ -1,5 +1,12 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s420] - 2026-09-29 - Gate fail-closed de headroom no prefill (fecho residual s419)
+
+- High: **piso proativo de headroom** (`heap_headroom_low()`, 128MB) no início de cada slice de prefill e decode — os gates críticos (64MB) só disparam ENTRE slices; o auto-grow acontece DENTRO do slice (KV/mask/logits) e cruzava o teto ~2030MB antes do re-check (alloc NULL no meio do slice → #PF → hlt no AP). Recusa honesta: slog warn + BOOT.LOG `prefill refuse headroom_low` + payload escalate/parcial (HITL) — recusa custa um job, OOM custa um core.
+- Med: mesma classe no `run_decode_one` (forward_with_kv anexa KV dentro do slice) — termina com payload parcial.
+- Gates: check release 0 erros; cortex 106 (105+1 contrato low>critical), k-nano 232. QEMU 8G/6c: a2_proof completo, grow máx = teto (não cruza), gate disparou em produção (`headroom=117MB` → done honesto, zero #PF).
+- Session: SESSION_420
+
 ## [1.9.99-s418] - 2026-09-29 - ADR-0112 BAR Compute: VRAM universal vendor-agnostic p/ W2A8
 
 ## [1.9.99-s419] — 2026-09-29
