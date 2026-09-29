@@ -194,7 +194,8 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: **v1.9.99-s417 TEST** - federation de saúde (MACHINE/FLEET_HEALTH worst-of, prompt único, MCH\0) + OOM fail-closed (SESSION_417);
+# Current Sprint: **v1.9.99-s418 TEST** - BAR Compute ADR-0112 (VRAM universal vendor-agnostic p/ W2A8: pesos residem via BAR, GEMV host lê aperture, lane VRAM no dispatch);
+# s417 - federation de saúde (MACHINE/FLEET_HEALTH worst-of, prompt único, MCH\0) + OOM fail-closed (SESSION_417);
 # s415/s416 - health agents BSP + fail-closed infer_queue/MoE lifecycle + hybrid allocator bump-first;
 # s412 - ternary_worker tile de colunas (1,9x) + AVX2 refutado; s411 - A2 proof 1 token real (lost wakeup AP) + mesh node_id + BPE Falcon3;
 # s392 — Boot/Limine bughunt (GUID ESP/stack RSP/OVMF/ELF/FAT) + canvas;
@@ -360,6 +361,10 @@ ID=9001) retry periódico até FAT_READY=true.
 - **Skills a quente via LLM**: Nenhum skill é hardcoded. O LLM gera skills sob demanda e o SkillObserver registra. Ex: "grava video", "imprime formulario" viram skills gerados pelo LLM, não por enum Rust.
 
 # Lições Críticas Aprendidas
+
+- **A VRAM não precisa executar nada para servir o compute (SESSION_418, ADR-0112):** a muralha "GPU compute exige firmware/ISA por geração" (ADR-0048/49/50, AWAITING_HW há dezenas de sessões) tem um caminho por cima: a aperture BAR é memória PCIe comum — pesos residentes na VRAM liberam o heap bump (544MB-1.5GB fora da janela ~2030MB = OOM s415-417 resolvido estruturalmente) e a GEMV roda no host lendo via BAR com prefetcht0 ahead (latência PCIe ~1µs esconde atrás do compute ~50µs/tile). Regra de honestidade: stage Mapped NÃO chama note_gpu_compute (a GPU não fez a conta; ganho = RAM, não FLOPS) — SYS_HEALTH gpu segue UNKNOWN. O device path (CE/SDMA/BCS) pluga depois como upgrade com o MESMO contrato de buffers.
+
+- **Crash do harness de teste host ≠ regressão — provar com stash (SESSION_418):** `k_ai` STATUS_STACK_BUFFER_OVERRUN e `hermes` STATUS_PRIVILEGED_INSTRUCTION (0xc0000096) em `cargo test --lib` paralelo falham TAMBÉM com as mudanças stashed — crash do binário de teste no host Windows (pré-existente). Isolados: hermes 257/257 com `--test-threads=1` (statics). Antes de culpar o próprio diff: stash → roda → compara.
 
 - **Carimbo do AP ≠ culpado — 1 OOM, 3 carimbos (SESSION_415-417):** os freezes "intent-router", "sys_health_agent" e "network_agent" eram UM fenômeno: heap bump sem free satura a janela (~2030MB) → alloc devolve NULL → caller deref null+offset → #PF → handler falha em curar → `hlt` eterno no AP que faultou. O BSP segue vivo (painel 60Hz) e o stamp FB mostra o agente que estava em execução no AP — não o culpado. Crash site MIGRA de boot para boot conforme o fix (tick_advance → flush_merges): um OOM sem gate tem N vítimas; fail-closed tem que cobrir a CLASSE (`heap_headroom_critical()` nos consumidores pesados), não o site. Regra: #PF cr2=0x0/0x8/0x50 sob heap alto = OOM, procure o padrão, não o símbolo.
 

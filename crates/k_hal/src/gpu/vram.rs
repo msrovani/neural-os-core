@@ -274,6 +274,12 @@ pub fn msched_status() -> alloc::string::String {
     MSCHED.lock().as_ref().map(|m| m.status()).unwrap_or_default()
 }
 
+/// Tamanho da aperture gerida pelo buddy (0 = sem tier). ADR-0112.
+pub fn vram_status_aperture_bytes() -> Option<u64> {
+    let guard = VRAM_BUDDY.lock();
+    guard.as_ref().map(|b| b.size)
+}
+
 pub fn vram_status() -> alloc::string::String {
     let guard = VRAM_BUDDY.lock();
     if let Some(ref buddy) = *guard {

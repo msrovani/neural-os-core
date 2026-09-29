@@ -3221,6 +3221,13 @@ pub(crate) fn kernel_boot(
                     if crate::gpu::vram::init_vram_tier(g) {
                         // IDEA #67 — MHI AllocTier::Vram → buddy BAR
                         crate::mhi::register_vram_allocator(crate::gpu::vram::vram_alloc);
+                        // ADR-0112: BAR compute — stream ring + canário bandwidth;
+                        // registra o seam de upload pós-load no cortex.
+                        if crate::gpu::bar_compute::init_bar_compute(g) {
+                            cortex_crate::cortex::register_vram_upload_hook(
+                                crate::gpu::bar_compute::on_model_loaded,
+                            );
+                        }
                         crate::display::fb::boot_ckpt(43, "gpu vram ok");
                     } else {
                         crate::display::fb::boot_ckpt(43, "gpu vram fail");

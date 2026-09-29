@@ -4545,6 +4545,39 @@ pub fn set_model(model: Box<dyn Model>) {
     let dim = CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
     let name = loaded_model_name();
     k_nano::slog_cortex!("CORTEX", "ok", "model=AI_READY dim={} header={}", dim, name);
+    // ADR-0112: notifica o lane VRAM (k_hal registra o callback no boot) —
+    // pesos vão residir na VRAM via BAR (libera heap bump, janela ~2030MB).
+    let f = VRAM_UPLOAD_HOOK.load(core::sync::atomic::Ordering::Acquire);
+    if f != 0 {
+        let cb: fn() = unsafe { core::mem::transmute(f) };
+        cb();
+    }
+}
+
+/// ADR-0112: seam de upload pós-load (k_hal registra; cortex não depende de
+/// k_hal — mesmo padrão do `register_model_header_hook` de `model.rs`).
+static VRAM_UPLOAD_HOOK: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+/// k_hal registra `bar_compute::on_model_loaded` aqui no boot.
+pub fn register_vram_upload_hook(f: fn()) {
+    VRAM_UPLOAD_HOOK.store(f as usize, core::sync::atomic::Ordering::Release);
+}
+
+/// ADR-0112: snapshot das referências das layers do modelo carregado
+/// (sem clonar — o upload VRAM lê os packed direto do heap). None sem modelo
+/// transformer (PTRM/RRAM não têm layers ternárias).
+pub fn current_model_layers_snapshot() -> Option<alloc::vec::Vec<&'static crate::tensor::PackedTernaryTensor>> {
+    // Safety do lifetime: CURRENT_MODEL vive em static (Box leak no slot);
+    // o hook roda sincrono no set_model ANTES de qualquer clear_model.
+    let guard = CURRENT_MODEL.lock();
+    let t = guard.as_ref()?.as_transformer()?;
+    let ptr: &'static TransformerModel = unsafe { core::mem::transmute(t) };
+    let mut out = alloc::vec::Vec::new();
+    for l in &ptr.layers {
+        out.extend_from_slice(&[&l.q, &l.k, &l.v, &l.o, &l.gate, &l.up, &l.down]);
+    }
+    Some(out)
 }
 
 /// Drop do modelo ativo — invalida `MODEL_LOADED` (SESSION_359 sticky fix).

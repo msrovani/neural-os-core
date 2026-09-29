@@ -1,5 +1,15 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s418] - 2026-09-29 - ADR-0112 BAR Compute: VRAM universal vendor-agnostic p/ W2A8
+
+- High: **BAR Compute (ADR-0112)** — a VRAM não precisa executar nada para servir o compute: pesos W2A8 (544MB/1B..1.5GB/3B) residem na VRAM de QUALQUER GPU (NVIDIA BAR1 / AMD BAR0=VRAM / Intel iGPU honesto-Off) via aperture BAR mapeada UC — **sem driver, sem shader, sem firmware**. Resolve estruturalmente o OOM do heap bump (janela ~2030MB, s415-417): os pesos saem da RAM do kernel.
+- High: **GEMV via BAR + prefetch overlap** — `vram_ternary` (lane VRAM no dispatcher cortex::compute, antes do GPU device) quantiza o host e lê pesos residentes com `read_volatile` + `prefetcht0` do tile seguinte (latência PCIe ~1µs esconde atrás do compute); ring de ativações i8 em duplo buffer (4 slots × 8×9216).
+- Med: **canário round-trip golden com TSC** (pattern 64KB write+read-back → GB/s×10) gateia o lane — VRAM em D3/barramento morto/QEMU VGA falham cedo (nunca fake Ready); upload determinístico pós-load via seam `register_vram_upload_hook` no `set_model` (cortex não depende de k_hal).
+- Med: **honestidade de estágios** Off→Mapped→StreamsW2a8→ComputeDevice — stage Mapped NÃO chama `note_gpu_compute` (a GPU não fez a conta; ganho medido = RAM liberada, nunca tok/s inventado); SYS_HEALTH gpu segue UNKNOWN.
+- Low: fix asm `prefetcht0 [reg]` (sintaxe AT&T do LLVM no bare-metal); crash do harness host (k_ai/hermes) provado pré-existente via stash.
+- Gates: check bare-metal 0 erros; k-hal 232, cortex 105, k-nano 232, hermes 257 (--test-threads=1).
+- Session: SESSION_418 · ADR-0112
+
 ## [1.9.99-s417] - 2026-09-29 - Federation de saúde + OOM fail-closed (MACHINE/FLEET_HEALTH)
 
 - High: **federation de saúde** — veredito consolidado de máquina (`k_nano::sys_health::machine_verdict_json`: SYS+AUDIO worst-of NO_GO>UNKNOWN>GO, razões dedupe, JSON padrão MESH_HEALTH) publicado 1Hz em `MACHINE_HEALTH` + TX mesh `MCH\0` (cooldown 10s); Master agrega via `hermes::fleet_health` (RX array fixo 16 slots com evicção, `fleet_worst()` → `FLEET_HEALTH`) e escala ao LLM **num prompt só** por incidente (política EscalationState única, cooldown 600 ticks).

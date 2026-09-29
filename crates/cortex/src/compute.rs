@@ -22,10 +22,14 @@ pub type TernaryFn = fn(&PackedTernaryTensor, &Tensor) -> Option<Tensor>;
 // Slots de registro (0 = não registrado). fn-pointer cabe em usize no alvo.
 static GPU_TERNARY: AtomicUsize = AtomicUsize::new(0);
 static NPU_TERNARY: AtomicUsize = AtomicUsize::new(0);
+/// ADR-0112: lane VRAM — pesos residentes na VRAM via BAR (qualquer vendor);
+/// GEMV no host lendo pela aperture. Antes do GPU device (não exige firmware).
+static VRAM_TERNARY: AtomicUsize = AtomicUsize::new(0);
 
 // Telemetria (ADR-0057 + ADR-0061): quantas ops cada anel tratou.
 static N_NPU: AtomicU64 = AtomicU64::new(0);
 static N_GPU: AtomicU64 = AtomicU64::new(0);
+static N_VRAM: AtomicU64 = AtomicU64::new(0);
 static N_SMP: AtomicU64 = AtomicU64::new(0);
 static N_AVX512: AtomicU64 = AtomicU64::new(0);
 static N_CPU: AtomicU64 = AtomicU64::new(0);
@@ -56,6 +60,19 @@ pub fn register_npu_ternary(f: TernaryFn) {
 pub fn register_gpu_ternary(f: TernaryFn) {
     GPU_TERNARY.store(f as usize, Ordering::Release);
     k_nano::slog_nano!("COMPUTE", "ok", "GPU ternary backend registrado (Ring1)");
+}
+
+/// ADR-0112 — lane VRAM (BAR compute): registrado por `k_hal` quando o
+/// canário de round-trip da aperture passa (init_stream_ring). GEMV no host
+/// lendo pesos residentes na VRAM — libera RAM e prefetch overlap via PCIe.
+pub fn register_vram_ternary(f: TernaryFn) {
+    VRAM_TERNARY.store(f as usize, Ordering::Release);
+    k_nano::slog_nano!("COMPUTE", "ok", "VRAM ternary backend registrado (ADR-0112 BAR compute)");
+}
+
+/// Telemetria: ops tratadas pelo lane VRAM.
+pub fn vram_ops() -> u64 {
+    N_VRAM.load(Ordering::Relaxed)
 }
 
 #[inline]
@@ -114,6 +131,15 @@ pub fn dispatch_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     if let Some(r) = call_slot(NPU_TERNARY.load(Ordering::Acquire), w, x) {
         N_NPU.fetch_add(1, Ordering::Relaxed);
         return Some(r);
+    }
+
+    // Ring 1 — VRAM (ADR-0112 BAR compute): antes do GPU device porque não
+    // exige firmware/ISA — só aperture golden. Libera RAM + prefetch overlap.
+    if big {
+        if let Some(r) = call_slot(VRAM_TERNARY.load(Ordering::Acquire), w, x) {
+            N_VRAM.fetch_add(1, Ordering::Relaxed);
+            return Some(r);
+        }
     }
 
     // Ring 1 — GPU (matmul pesado). Só se registrado e op grande.

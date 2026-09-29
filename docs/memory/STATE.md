@@ -1,7 +1,8 @@
-# STATE - neural-os-core v1.9.99-s417 - Federation de saúde + OOM fail-closed (MACHINE/FLEET_HEALTH)
+# STATE - neural-os-core v1.9.99-s418 - ADR-0112 BAR Compute (VRAM universal vendor-agnostic p/ W2A8)
 
-#   PISTA ATIVA: s417 — federation de saúde (MCH\0 → fleet_worst → FLEET_HEALTH, prompt único ao LLM)
-#     + fail-closed por classe sob heap crítico (claim/job/MoE lifecycle); stall silencioso pós-teto ABERTO
+#   PISTA ATIVA: s418 — BAR Compute (pesos W2A8 residem na VRAM via BAR, GEMV host lê aperture,
+#     lane VRAM no dispatch; StreamsW2a8/ComputeDevice = upgrade; lab GTX 1050 = residual)
+#   PISTA ANTERIOR: s417 — federation de saúde (MCH\0 → fleet_worst → FLEET_HEALTH); stall silencioso pós-teto ABERTO
 #   PISTA ANTERIOR: s410m — forget cognitivo HITL (/forget) + leitura de conflitos (/conflicts)
 #     via ApprovalGate Escalate (skills sgdb_forget/conflict_resolve); tombstone Superseded
 #     antes do delete físico; fail-closed NSGDB down; registry pendente cap 32 FIFO;
@@ -12,6 +13,20 @@
 #     (s410l CRDT merge_remote; s410k mesh RX batch; s410j compact batch; s410i interop TKLV)
 #   PISTA ANTERIOR: s406 heap auto-fracionado advisory (commit 2b650c56)
 #   Não declarar v2.0.0
+
+## BAR Compute (s418, ADR-0112) [OK — stage Mapped]
+
+| Item | Estado |
+|------|--------|
+| vram_stream.rs (ring + canário golden TSC) | OK - 4 slots × 8×9216 i8; telemetria lock-free |
+| bar_compute.rs (upload + GEMV via BAR) | OK - upload determinístico, SHAPE_INDEX, read_volatile + prefetcht0 |
+| Lane VRAM no dispatcher (cortex::compute) | OK - antes do GPU device; N_VRAM telemetria |
+| Seam upload pós-load (set_model) | OK - register_vram_upload_hook + layers_snapshot |
+| Honestidade | OK - stage Mapped sem note_gpu_compute; iGPU=Off (DRAM compartilhada) |
+| Compat vendor | OK - NV BAR1 / AMD BAR0=VRAM / iGPU Off / D3 recusa (s260) / QEMU VGA fail-closed |
+| check bare-metal + testes | OK - 0 erros; k-hal 232, cortex 105, k-nano 232, hermes 257 (t=1) |
+| Lab: round-trip GTX 1050 + decode longo | residual (RAM/estabilidade, NÃO tok/s) |
+| StreamsW2a8 + ComputeDevice (CE/SDMA/BCS) | upgrade path ADR-0112 §7 |
 
 ## Federation de saúde + OOM fail-closed (s417) [OK parcial]
 

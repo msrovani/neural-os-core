@@ -46,6 +46,8 @@ pub mod display_coex;
 pub mod bench;
 pub mod work_queue;
 pub mod sasos;
+pub mod vram_stream; // ADR-0112: residência W2A8 na VRAM de qualquer vendor via BAR (sem driver/shader)
+pub mod bar_compute; // ADR-0112: GEMV W2A8 lendo pesos residentes na VRAM (vendor-agnostic)
 pub mod pipeline_g5;
 pub mod w2a8_device;
 

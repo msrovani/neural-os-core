@@ -173,4 +173,17 @@ pub fn register_compute_if_ready() {
             compute_state()
         );
     }
+    // ADR-0112: lane VRAM (BAR compute) — independe do canário vector_add:
+    // basta a aperture golden (round-trip) do init_vram_tier + stream ring.
+    // Libera RAM (pesos residentes) e prefetch overlap via PCIe, qualquer
+    // vendor (NVIDIA/AMD/Intel, iGPU/dGPU) — sem driver/shader/firmware.
+    if crate::gpu::bar_compute::bar_compute_enabled() {
+        cortex::compute::register_vram_ternary(crate::gpu::bar_compute::vram_ternary);
+        slog_hal!(
+            "COMPUTE",
+            "ok",
+            "VRAM lane registered (ADR-0112) — {}",
+            crate::gpu::vram_stream::status_line()
+        );
+    }
 }
