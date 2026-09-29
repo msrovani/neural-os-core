@@ -4,7 +4,7 @@
 **Status:** Accepted — **S1–S4 implementados** (QEMU: 3 cards + orb responsivo + HUD relógios; self-tests S1/S2 PASS; clique fecha card). S5 (widgets ricos/tema/TTF) e A/V real (mic/alto-falante/vídeo via HDA/UVC) = residual.
 **Lifecycle (INDEX):** `fazendo`
 **Unifica / supersede (parcial):**
-- **ADR-0047-HMI** (Neural Desktop) — absorve H1 (UI_SPEC/UiDeclaration), H2/H5 (embedding/splats como widgets), H4 (avatar telemetria). H3 (renderer neural/diffusion) permanece ❌ descartado.
+- **ADR-0047-HMI** (Neural Desktop) — absorve H1 (UI_SPEC/UiDeclaration), H2/H5 (embedding/splats como widgets), H4 (avatar telemetria). H3 (renderer neural/diffusion) permanece ❌ descartado. **Addendum s419:** H3 reaberto de forma AUMENTATIVA pela [ADR-0112](0112-bar-compute-vram-universal-w2a8.md) (hints com pesos em VRAM, `hint_render.rs`, IDEA #623) — diffusion puro segue descartado.
 - **ADR-0014 §UI/desktop seeds** — CorePools/SMP não; só as sementes de HMI/compositor.
 **Estende (não substitui):** ADR-0036 (JARVIS = persona do Hermes — inalterada; ADR-0058 é só a camada de render/UI).
 **Amarra:** ADR-0052 (contrato de artefato p/ skills WASM que emitem UI), ADR-0057 §WS-G #412 (structured decoding → card JSON válido), ADR-0056 (Install≠Ready p/ skills), ADR-0037 (UI = software FB, sem GPU compute).

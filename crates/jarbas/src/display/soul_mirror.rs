@@ -122,6 +122,10 @@ pub struct OrbSignals {
     pub local_role: u8,
     /// Contador cumulativo de eventos cognitivos (tokens LLM/TTS) — acende ticks.
     pub activity: u32,
+    /// s419 (H3-vivo): intensidade de inferência REAL 0..255 — tok/s live do
+    /// decode (InferQueue). Alimenta os anéis do orb com dado medido, não
+    /// sintético (H4: "avatar = telemetria viva").
+    pub infer_intensity: u8,
 }
 
 /// Paleta mesh por papel: (accent, body, inner, core).
@@ -461,6 +465,8 @@ pub struct SoulMirrorRenderer {
     lod_votes: u8,
     // Atividade cognitiva → ticks/ripples.
     activity_seen: u32,
+    /// s419: último tick que respondeu à inferência real (anti-spam de anéis).
+    last_infer_tick_us: u64,
     tick_lit: [u8; TICK_COUNT],
     flash_head: usize,
     ripple_start_us: u64,
@@ -494,6 +500,7 @@ impl SoulMirrorRenderer {
             lod: 2,
             lod_votes: 0,
             activity_seen: 0,
+            last_infer_tick_us: 0,
             tick_lit: [0u8; TICK_COUNT],
             flash_head: 0,
             ripple_start_us: 0,
@@ -605,6 +612,20 @@ impl SoulMirrorRenderer {
                 self.tick_lit[self.flash_head] = 240;
             }
             self.ripple_start_us = self.anim_us;
+        }
+        // s419: anéis externos respondem à intensidade de inferência REAL.
+        // Decaimento dos ticks existente + boost proporcional ao tok/s live:
+        // decode 0 tok/s = anéis apagados (honesto), 2 tok/s = acesos.
+        if sig.infer_intensity > 0 {
+            // Acende o próximo tick proporcionalmente à intensidade.
+            let bright = (sig.infer_intensity as u32).clamp(40, 240) as u8;
+            if self.anim_us.saturating_sub(self.last_infer_tick_us)
+                > (260_000 - (sig.infer_intensity as u64) * 700) as u64
+            {
+                self.last_infer_tick_us = self.anim_us;
+                self.flash_head = (self.flash_head + 1) % TICK_COUNT;
+                self.tick_lit[self.flash_head] = bright;
+            }
         }
         for l in self.tick_lit.iter_mut() {
             *l = l.saturating_sub(10);

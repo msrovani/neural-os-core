@@ -1009,6 +1009,18 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
             k_nano::slog_bin!("Sched", "warn", "tick lento: {} levou {} ms", name, ms);
         }),
     );
+    // s419 (stall pós-teto): heartbeat PÓS-tick no BOOT.LOG — o serial sob SMP
+    // perde linhas e o watchdog só reporta se o tick retorna. Heartbeat = última
+    // evidência de progresso; a LINHA SEGUINTE ausente localiza o agente travado.
+    // Só ticks ≥ 2 ms (limiar) — o volume normal (60Hz) não pode custar IO de disco.
+    agent_core::set_heartbeat_hook(
+        Some(|name, ms| {
+            k_nano::boot_logger::log_quiet(&alloc::format!(
+                "HB post-tick agent={} ms={}", name, ms
+            ));
+        }),
+        2,
+    );
     // UI freeze sob smp alto: mid-cycle boost do Display quando frame atrasa.
     agent_core::set_ui_overdue_hook(Some(crate::display::compositor::present_overdue));
     agent_core::set_ui_live_hook(Some(k_nano::boot_logger::ui_is_live));

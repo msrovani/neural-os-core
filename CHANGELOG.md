@@ -2,6 +2,23 @@
 
 ## [1.9.99-s418] - 2026-09-29 - ADR-0112 BAR Compute: VRAM universal vendor-agnostic p/ W2A8
 
+## [1.9.99-s419] — 2026-09-29
+
+### Added
+- **HUB HEALTH:** linhas `fleet` (worst-of da frota via FLEET_HEALTH, n/a honesto), `vram` (stage BAR Compute + MB residentes + GB/s canário) e `hints` (renderer neural de hints)
+- **heartbeat pós-tick do scheduler** (`agent-core::set_heartbeat_hook` → BOOT.LOG): última evidência de progresso em stall; marcadores `infer-claim`/`post-done`
+- **`k_hal/gpu/hint_render.rs`** (IDEA #623, H3-revisit): MLP de render hints W2A8 com pesos residentes em VRAM via BAR Compute — aumentativo, honesto (nunca "GPU renderiza")
+- **`OrbSignals.infer_intensity`**: anéis do orb respondem ao tok/s REAL do decode (H4 telemetria viva)
+- **`fleet_health::fleet_tick`** 1Hz: aggregate + publish FLEET_HEALTH (wire que faltava) + overall no slog
+
+### Fixed
+- **stall pós-teto de heap:** exclusão mútua (`SmpMmGuard` try_lock) nos dispatches SMP de matmul — statics (CTX/barrier) cruzados por BSP pós-done e AP em slice wedgavam o barrier (`pending=5 done=0` eterno, 60s de spin mudo); timeout 60s→5s
+- fleet: payload FLEET_HEALTH inválido nunca substitui o snapshot (validar antes de armazenar)
+
+### Docs
+- IDEA_BANK #623 + addendum s419 na ADR-0047-HMI e ADR-0058 (H3 reaberto de forma aumentativa pela ADR-0112); SESSION_419
+
+
 - High: **BAR Compute (ADR-0112)** — a VRAM não precisa executar nada para servir o compute: pesos W2A8 (544MB/1B..1.5GB/3B) residem na VRAM de QUALQUER GPU (NVIDIA BAR1 / AMD BAR0=VRAM / Intel iGPU honesto-Off) via aperture BAR mapeada UC — **sem driver, sem shader, sem firmware**. Resolve estruturalmente o OOM do heap bump (janela ~2030MB, s415-417): os pesos saem da RAM do kernel.
 - High: **GEMV via BAR + prefetch overlap** — `vram_ternary` (lane VRAM no dispatcher cortex::compute, antes do GPU device) quantiza o host e lê pesos residentes com `read_volatile` + `prefetcht0` do tile seguinte (latência PCIe ~1µs esconde atrás do compute); ring de ativações i8 em duplo buffer (4 slots × 8×9216).
 - Med: **canário round-trip golden com TSC** (pattern 64KB write+read-back → GB/s×10) gateia o lane — VRAM em D3/barramento morto/QEMU VGA falham cedo (nunca fake Ready); upload determinístico pós-load via seam `register_vram_upload_hook` no `set_model` (cortex não depende de k_hal).

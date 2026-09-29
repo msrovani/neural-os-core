@@ -350,7 +350,7 @@ pub fn core_bar_data() -> ([f32; 32], u8) {
 // Honestidade: dado ausente = `n/a`, nunca 0 inventado.
 // ══════════════════════════════════════════════════════════════════════════
 
-pub const HUB_ROWS: usize = 16;
+pub const HUB_ROWS: usize = 19;
 pub const HUB_ROW_LEN: usize = 36;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -770,6 +770,69 @@ pub fn refresh_hub_health() {
         _ => (HubState::Na, false),
     };
     hub_set(&mut hh.rows[15], "decide", st, pill, line);
+
+    // ── Fleet (SESSION_419) — worst-of da frota via FLEET_HEALTH (mesh MCH\0) ──
+    // n/a ≠ 0: single-node nunca publica FLEET_HEALTH (o nó não consome o
+    // próprio MCH via mesh) → linha honestamente sem dado, nunca fake.
+    // UNKNOWN de frota = sem evidência → WARN fora do pill (não puxa header),
+    // mesmo padrão do n/a ≠ 0 e do worst-of com UNKNOWN contaminante (s417).
+    let (st, val, pill) = match crate::display::agent::fleet_health_snapshot() {
+        None => (HubState::Na, alloc::string::String::from("n/a"), false),
+        Some((overall, reason)) => {
+            let nodes = hermes::fleet_health::tracked_nodes();
+            let verdict = k_nano::sys_health::Verdict::from_label(&overall);
+            let st = match verdict {
+                k_nano::sys_health::Verdict::Go => HubState::Ok,
+                k_nano::sys_health::Verdict::NoGo => HubState::Fail,
+                k_nano::sys_health::Verdict::Unknown => HubState::Warn,
+            };
+            let pill = matches!(verdict, k_nano::sys_health::Verdict::Go | k_nano::sys_health::Verdict::NoGo);
+            let val = match reason {
+                Some(r) => alloc::format!("{} {}n {}", verdict.label(), nodes, r),
+                None => alloc::format!("{} {}n", verdict.label(), nodes),
+            };
+            (st, val, pill)
+        }
+    };
+    hub_set(&mut hh.rows[16], "fleet", st, pill, val);
+
+    // ── VRAM / BAR Compute (ADR-0112) — stage honesto, n/a quando off ──
+    // Mapped = pesos residentes na VRAM + GEMV no host lendo via BAR.
+    // NUNCA "GPU compute": SYS_HEALTH gpu segue UNKNOWN (regra note_gpu_compute).
+    let vstage = k_hal::gpu::vram_stream::stage();
+    let (st, val, pill) = match vstage {
+        k_hal::gpu::vram_stream::StreamStage::Off => {
+            (HubState::Na, alloc::string::String::from("n/a"), false)
+        }
+        _ => {
+            let resident_mb = k_hal::gpu::vram_stream::BYTES_RESIDENT
+                .load(Ordering::Relaxed)
+                / (1024 * 1024);
+            let bw = k_hal::gpu::vram_stream::CANARY_GBPS_X10.load(Ordering::Relaxed);
+            (
+                HubState::Ok,
+                alloc::format!("{:?} {}MB {}.{}GB/s", vstage, resident_mb, bw / 10, bw % 10),
+                false,
+            )
+        }
+    };
+    hub_set(&mut hh.rows[17], "vram", st, pill, val);
+
+    // ── Hints (H3 reaberto) — renderer neural de hints, pesos em VRAM ──
+    let (st, val, pill) = match k_hal::gpu::hint_render::hint_stage() {
+        0 => (HubState::Na, alloc::string::String::from("n/a"), false),
+        1 => (HubState::Na, alloc::string::String::from("ready"), false),
+        s => (
+            HubState::Ok,
+            alloc::format!(
+                "on fwd={}us n={}",
+                k_hal::gpu::hint_render::HINT_FORWARD_US.load(Ordering::Relaxed),
+                k_hal::gpu::hint_render::HINTS_GENERATED.load(Ordering::Relaxed)
+            ),
+            s == 3,
+        ),
+    };
+    hub_set(&mut hh.rows[18], "hints", st, pill, val);
 
     // ── Live line + worst + checksum ──
     let wall = k_nano::interrupts::wall_ticks();

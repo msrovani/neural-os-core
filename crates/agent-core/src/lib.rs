@@ -721,6 +721,19 @@ impl AgentRegistry {
                     self.agents[i].agent.tick(tick_id, tc)
                 });
                 TICK_ENTERED_MS.store(0, core::sync::atomic::Ordering::Relaxed);
+                // s419: heartbeat pós-retorno do tick — evidência de progresso
+                // no canal persistente. Custo: 1 load + branch quando dt < min.
+                let hb_f = HEARTBEAT_HOOK.load(core::sync::atomic::Ordering::Relaxed);
+                if hb_f != 0 {
+                    let dt = wdt_clock
+                        .map(|c| c().saturating_sub(wdt_t0))
+                        .unwrap_or(0);
+                    if dt >= HEARTBEAT_MIN_MS.load(core::sync::atomic::Ordering::Relaxed) {
+                        // SAFETY: ponteiro registrado via set_heartbeat_hook.
+                        let g: fn(&str, u64) = unsafe { core::mem::transmute(hb_f as usize) };
+                        g(agent_name, dt);
+                    }
+                }
                 if let (Some(c), Some(report)) = (wdt_clock, wdt_slow) {
                     let dt = c().wrapping_sub(wdt_t0);
                     if dt > TICK_WATCHDOG_MS {
@@ -1067,6 +1080,32 @@ pub fn set_tick_watchdog_hooks(clock: Option<fn() -> u64>, slow: Option<fn(&str,
         TICK_CLOCK_HOOK = clock;
         SLOW_TICK_HOOK = slow;
     }
+}
+
+/// s419: heartbeat PÓS-tick — o `SLOW_TICK_HOOK` só reporta se o tick RETORNA;
+/// num stall "CPU queimando sem log" o tick morre dentro do agente e nada é
+/// emitido. O heartbeat emite (agente, dt_ms) a cada retorno de tick (limiar
+/// `HEARTBEAT_MIN_MS`) — se o scheduler para de emitir, o último carimbo é o
+/// agente em que o tick não voltou. Canal: BOOT.LOG/ramlog (sobrevive a
+/// power-cycle; o serial sob SMP perde linhas — SESSION_411). Bridge fn-ptr.
+static HEARTBEAT_HOOK: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+static HEARTBEAT_MIN_MS: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+pub fn set_heartbeat_hook(f: Option<fn(&str, u64)>, min_ms: u64) {
+    let v = match f {
+        Some(g) => g as usize as u64,
+        None => 0,
+    };
+    HEARTBEAT_HOOK.store(v, core::sync::atomic::Ordering::Relaxed);
+    HEARTBEAT_MIN_MS.store(min_ms, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Último (agente, entrada_ms) com tick NÃO retornado — "Stall agent=X".
+/// Tick não-retornado = TICK_ENTERED_MS ≠ 0 (o run() zera após o tick).
+pub fn stalled_agent() -> Option<(&'static str, u64)> {
+    tick_in_progress()
 }
 
 /// Predicado "compositor frame overdue" — força tick `display` no meio do ciclo.

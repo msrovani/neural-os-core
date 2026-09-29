@@ -157,6 +157,20 @@ pub fn mesh_role_label(role: u8) -> &'static str {
     }
 }
 
+/// Parse no_std do JSON de frota (contrato fixo de `machine_verdict_json`,
+/// reusa `k_nano::sys_health::parse_machine_json`) → (overall, 1ª razão).
+/// Payload inválido = nunca substitui o snapshot (validar antes de armazenar — s417).
+fn update_fleet_snapshot(json: &str) {
+    let Some((_, overall, _, reasons)) = k_nano::sys_health::parse_machine_json(json) else {
+        return;
+    };
+    let mut snap = FLEET_SNAPSHOT.lock();
+    *snap = Some((
+        alloc::string::String::from(overall.label()),
+        reasons.first().map(|r| alloc::string::String::from(r.as_str())),
+    ));
+}
+
 /// Cor do satélite por papel (além do tint por RTT).
 #[inline]
 pub fn mesh_role_rgb(role: u8) -> (u8, u8, u8) {
@@ -170,6 +184,17 @@ pub fn mesh_role_rgb(role: u8) -> (u8, u8, u8) {
 }
 pub(crate) static MESH_GRAPH: IrqSafeLock<alloc::vec::Vec<MeshPeerNode>> =
     IrqSafeLock::new(alloc::vec::Vec::new());
+
+/// Último agregado de frota (SESSION_419): (overall, 1ª razão) parseado de
+/// FLEET_HEALTH (hermes::fleet_health no Master, worst-of dos MCH\0 recebidos).
+/// None = nenhum agregado ainda (single-node nunca publica → HUD mostra n/a).
+pub(crate) static FLEET_SNAPSHOT: IrqSafeLock<Option<(alloc::string::String, Option<alloc::string::String>)>> =
+    IrqSafeLock::new(None);
+
+/// Snapshot do worst-of da frota p/ o painel HUB HEALTH (linha "fleet").
+pub fn fleet_health_snapshot() -> Option<(alloc::string::String, Option<alloc::string::String>)> {
+    FLEET_SNAPSHOT.lock().clone()
+}
 
 const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
     name: "display",
@@ -204,10 +229,16 @@ pub struct DisplayAgent {
     latent_receiver: Option<event_bus::LatentReceiver>,
     llm_stream_receiver: event_bus::Receiver,
     mesh_health_receiver: Option<event_bus::Receiver>,
+    /// SESSION_419: FLEET_HEALTH (worst-of da frota no Master) — lazy igual mesh.
+    fleet_health_receiver: Option<event_bus::Receiver>,
     phase_recv: event_bus::Receiver,
     /// ADR-0086 A5: receiver para solicitação de UI de seleção de disco.
     install_ui_receiver: Option<event_bus::Receiver>,
     hub_state_receiver: Option<event_bus::Receiver>,
+    /// Snapshot de inventário de HW (produtor: HwDetectAgent) → card de HW.
+    hw_inv_receiver: Option<event_bus::Receiver>,
+    /// Generation do snapshot já desenhado (evita re-spawn a cada tick).
+    hw_inv_spawned_gen: u64,
     // ── OrbState (s328): sinais reais → janelas temporais ──
     wake_receiver: event_bus::Receiver,
     audio_out_receiver: event_bus::Receiver,
@@ -268,9 +299,12 @@ impl DisplayAgent {
             render_window_receiver: EVENT_BUS.subscribe(crate::display::render_registry::TOPIC_RENDER_WINDOW),
             latent_receiver: None,
             mesh_health_receiver: None,
+            fleet_health_receiver: None,
             phase_recv: k_nano::EVENT_BUS.subscribe("LOOP_PHASE"),
             install_ui_receiver: None,
             hub_state_receiver: None,
+            hw_inv_receiver: None,
+            hw_inv_spawned_gen: 0,
             wake_receiver: EVENT_BUS.subscribe(crate::audio::TOPIC_WAKEWORD),
             audio_out_receiver: EVENT_BUS.subscribe(crate::audio::TOPIC_AUDIO_OUT),
             infer_tts_receiver: EVENT_BUS.subscribe("INFER_TTS_PARTIAL"),
@@ -566,6 +600,54 @@ enum OverlayMode {
 const DRAIN_CAP: usize = 16;
 const HITL_CARD_ID: u32 = 8001;
 
+#[cfg(test)]
+mod fleet_snapshot_tests {
+    use super::*;
+
+    /// Serializa statics globais compartilhados (lição SESSION_346/417:
+    /// testes paralelos sobrescrevem o snapshot uns dos outros).
+    static TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
+    #[test]
+    fn fleet_snapshot_parse_valido_e_razao() {
+        let _g = TEST_LOCK.lock();
+        FLEET_SNAPSHOT.lock().take();
+        update_fleet_snapshot(
+            "{\"node\":0,\"overall\":\"NO_GO\",\"sys\":{\"net\":\"NO_GO\",\"storage\":\"GO\",\"gpu\":\"UNKNOWN\"},\"audio\":{\"playback\":\"GO\",\"capture\":\"GO\"},\"reasons\":[\"NET_LINK_DOWN\"]}",
+        );
+        let snap = fleet_health_snapshot();
+        assert!(snap.is_some());
+        let (overall, reason) = snap.unwrap();
+        assert_eq!(overall, "NO_GO");
+        assert_eq!(reason.as_deref(), Some("NET_LINK_DOWN"));
+    }
+
+    #[test]
+    fn fleet_snapshot_payload_invalido_nao_armazena() {
+        let _g = TEST_LOCK.lock();
+        FLEET_SNAPSHOT.lock().take();
+        update_fleet_snapshot("lixo sem json");
+        assert!(fleet_health_snapshot().is_none());
+        // Payload parcial (sem node) também é recusado — validar ANTES de armazenar.
+        update_fleet_snapshot("{\"overall\":\"GO\",\"sys\":{}}");
+        assert!(fleet_health_snapshot().is_none());
+        FLEET_SNAPSHOT.lock().take();
+    }
+
+    #[test]
+    fn fleet_snapshot_unknown_sem_razao() {
+        let _g = TEST_LOCK.lock();
+        FLEET_SNAPSHOT.lock().take();
+        update_fleet_snapshot(
+            "{\"node\":0,\"overall\":\"UNKNOWN\",\"sys\":{\"net\":\"UNKNOWN\",\"storage\":\"UNKNOWN\",\"gpu\":\"UNKNOWN\"},\"audio\":{\"playback\":\"UNKNOWN\",\"capture\":\"UNKNOWN\"},\"reasons\":[]}",
+        );
+        let snap = fleet_health_snapshot().unwrap();
+        assert_eq!(snap.0, "UNKNOWN");
+        assert!(snap.1.is_none());
+        FLEET_SNAPSHOT.lock().take();
+    }
+}
+
 fn overlay_tag(mode: OverlayMode) -> &'static str {
     match mode {
         OverlayMode::HitlConfirm => "HITL",
@@ -601,7 +683,7 @@ fn spawn_or_update_hitl_card(desktop: &mut crate::display::compositor::JarbasDes
 // FIX 1: parse_input_to_keycombo era broken (shortcut_to_text retornava None sempre).
 // Substituído por dispatch direto via KEY_EVENT topic do InputAgent.
 // Payload: [scancode, ctrl, alt, shift, super_key, pressed]
-fn dispatch_key_event(payload: &[u8]) -> Option<WmAction> {
+fn dispatch_key_event(payload: &[u8], text_focused: bool) -> Option<WmAction> {
     if payload.len() < 6 { return None; }
     let scancode = payload[0];
     let ctrl = payload[1] != 0;
@@ -615,6 +697,12 @@ fn dispatch_key_event(payload: &[u8]) -> Option<WmAction> {
         modifiers: Modifiers { super_key, ctrl, alt, shift },
         key,
     };
+    // Campo de texto focado (chat): atalhos de 1 tecla sem modificador são
+    // digitação, não comando (bug: 'h' abria a ajuda). F12/Esc e combos com
+    // modificador seguem valendo.
+    if text_focused && WmAction::suppressed_when_typing(combo) {
+        return None;
+    }
     WmAction::from_keycombo(combo)
 }
 
@@ -895,25 +983,20 @@ impl Agent for DisplayAgent {
                     _ => {}
                 }
                 let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
-                if crate::display::chat_window::chat_ui_enabled() {
-                if cw.is_none() {
-                    *cw = Some(crate::display::chat_window::ChatWindow::new(0));
-                }
+                // Só alimenta o ChatWindow se ele existir (aberto pelo usuário).
+                // Não cria sozinho: o kill switch mantém os caminhos automáticos
+                // (HERMES_RESPONSE/HITL/STT) fora do overlay.
                 if let Some(ref mut chat) = *cw {
                     chat.process_packet(pkt);
-                }
                 }
             }
         }
 
-        // ── USER_INTENT: registra mensagem do usuário no ChatWindow ──
+        // ── USER_INTENT: registra mensagem do usuário no ChatWindow (se aberto) ──
         while let Some(ev) = self.user_intent_receiver.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
-            if !text.is_empty() && crate::display::chat_window::chat_ui_enabled() {
+            if !text.is_empty() {
                 let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
-                if cw.is_none() {
-                    *cw = Some(crate::display::chat_window::ChatWindow::new(0));
-                }
                 if let Some(ref mut chat) = *cw {
                     chat.process_packet(hermes::stream_packet::StreamPacket::UserMessage {
                         content: alloc::string::String::from(text),
@@ -1117,12 +1200,32 @@ impl Agent for DisplayAgent {
         }
         crate::display::fb::diag_mark(3);
 
+        // Fleet Health (SESSION_419): FLEET_HEALTH do Master (worst-of MCH\0).
+        // Lazy subscribe + pull imediato do último agregado (mesmo padrão mesh).
+        if self.fleet_health_receiver.is_none() {
+            self.fleet_health_receiver = Some(EVENT_BUS.subscribe(hermes::fleet_health::TOPIC_FLEET_HEALTH));
+            // Pull imediato: agregados publicados antes do subscribe evaporaram.
+            if let Some(json) = hermes::fleet_health::last_fleet_json() {
+                update_fleet_snapshot(&json);
+            }
+        }
+        if let Some(ref rx) = self.fleet_health_receiver {
+            let mut drained = 0;
+            while drained < DRAIN_CAP {
+                let Some(ev) = rx.try_receive() else { break; };
+                drained += 1;
+                let json_str = core::str::from_utf8(&ev.payload).unwrap_or("");
+                update_fleet_snapshot(json_str);
+            }
+        }
+
         // Process keyboard shortcuts via WmAction dispatch (ADR-0065 FASE 1.1 — FIX 1)
         // Drena KEY_EVENT do InputAgent (payload: [scancode, ctrl, alt, shift, super_key, pressed]).
         while let Some(ev) = self.key_event_receiver.try_receive() {
-            if let Some(action) = dispatch_key_event(&ev.payload) {
-                let mut comp = COMPOSITOR.lock();
-                if let Some(ref mut desktop) = *comp {
+            let mut comp = COMPOSITOR.lock();
+            if let Some(ref mut desktop) = *comp {
+                let text_focused = desktop.text_input_focused();
+                if let Some(action) = dispatch_key_event(&ev.payload, text_focused) {
                     match action {
                         WmAction::WorkspaceSwitch(idx) => { desktop.workspaces.switch(idx); }
                         WmAction::WorkspacePrev => { desktop.workspaces.prev(); }
@@ -1173,13 +1276,12 @@ impl Agent for DisplayAgent {
         while let Some(ev) = self.echo_receiver.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             self.input_buffer = alloc::string::String::from(text);
-            if crate::display::chat_window::chat_ui_enabled() {
+            // Sincroniza o input bar do chat aberto (se existir) — digitação.
             let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
             if let Some(ref mut chat) = *cw {
                 chat.input_buffer = alloc::string::String::from(text);
                 chat.input_cursor = text.len();
                 chat.dirty = true;
-            }
             }
         }
 
@@ -1240,6 +1342,24 @@ impl Agent for DisplayAgent {
                 if let Some(ref mut desktop) = *COMPOSITOR.lock() {
                     desktop.invalidate_panel();
                 }
+            }
+        }
+
+        // ── HW_INVENTORY_STATE: inventário de HW (produtor: HwDetectAgent) →
+        // card "Hardware Detectado". Assina o tópico (padrão produtor/consumidor)
+        // e spawna/atualiza pelo snapshot. `generation` guarda contra a corrida
+        // do compositor ainda não pronto no boot (o publish é 1×).
+        if self.hw_inv_receiver.is_none() {
+            self.hw_inv_receiver = Some(EVENT_BUS.subscribe(hermes::hw_inventory::TOPIC_HW_INVENTORY_STATE));
+        }
+        if let Some(ref rx) = self.hw_inv_receiver {
+            while rx.try_receive().is_some() {}
+        }
+        let hw_gen = hermes::hw_inventory::generation();
+        if hw_gen > self.hw_inv_spawned_gen {
+            if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                desktop.spawn_or_update_card(crate::cards::hw_inventory_card::hw_inventory_card());
+                self.hw_inv_spawned_gen = hw_gen;
             }
         }
 
@@ -1369,10 +1489,62 @@ impl Agent for DisplayAgent {
                 peers,
                 local_role: k_nano::net::mesh::local_role() as u8,
                 activity: self.orb_activity,
+                // s419 (H4 telemetria viva): tok/s REAL do decode — anéis do
+                // orb respondem à inferência medida, não a evento sintético.
+                infer_intensity: {
+                    let tps = cortex::infer_queue::live_decode_tok_s();
+                    ((tps.min(200) * 255) / 200) as u8
+                },
             }
         };
 
         crate::display::fb::diag_mark(4);
+
+        // ── H3-Mapped: alimenta o renderer de hints com telemetria REAL (2 Hz) ──
+        // Fora do paint (higiene s410); o forward só roda se BAR ok + pesos
+        // residentes. Sem isso, hints ficam OFF e o compositor segue clássico.
+        static HINT_FEED_TICK: core::sync::atomic::AtomicU64 =
+            core::sync::atomic::AtomicU64::new(0);
+        let ht = HINT_FEED_TICK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if ht % 30 == 0 {
+            let mut st = [0.0f32; k_hal::gpu::hint_render::HINT_IN];
+            let running = cortex::infer_queue::active_job_id() != 0;
+            st[0] = if running { 1.0 } else { 0.0 };
+            // tok/s normalizado (2.0 tok/s = 1.0) — telemetria real do decode.
+            let tps = cortex::infer_queue::live_decode_tok_s() as f32;
+            st[1] = (tps / 2.0).min(1.0);
+            st[2] = if k_hal::gpu::bar_compute::bar_compute_enabled() {
+                1.0
+            } else {
+                0.0
+            };
+            st[3] = {
+                let g = MESH_GRAPH.lock();
+                g.len() as f32 / 8.0
+            };
+            st[4] = if cortex::compute::mesh_matmul_busy() {
+                1.0
+            } else {
+                0.0
+            };
+            st[5] = self.orb_activity.min(1_000_000) as f32 / 1_000_000.0;
+            k_hal::gpu::hint_render::set_ui_state(st);
+            // Forward (se residente) — resultado publicado no EventBus p/ quem
+            // quiser consumir (orb, cards). Ninguém obrigado a consumir agora.
+            if let Some(hints) = k_hal::gpu::hint_render::render_hints() {
+                let mut payload = alloc::vec::Vec::with_capacity(hints.len() * 3);
+                for h in hints {
+                    payload.extend_from_slice(&[h.0, h.1, h.2]);
+                }
+                let _ = EVENT_BUS.publish(event_bus::Event {
+                    id: 0,
+                    topic: alloc::string::String::from("HINTS"),
+                    payload,
+                    token: event_bus::CapabilityToken::Legacy(1),
+                });
+            }
+        }
+
         // Render desktop: orb circular no compositor (SoulMirror time-driven).
         let mut comp = COMPOSITOR.lock();
         if let Some(ref mut desktop) = *comp {

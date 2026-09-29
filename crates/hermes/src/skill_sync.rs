@@ -476,7 +476,11 @@ pub fn poll_p2p() {
     crate::mesh_knowledge::poll_p2p();
     // SESSION_417: RX `MCH\0` (veredito de máquina) para a agregação de frota
     // no Master (publish FLEET_HEALTH + escala via USER_INTENT).
-    crate::fleet_health::poll_p2p(k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64);
+    let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    crate::fleet_health::poll_p2p(now);
+    // s419: aggregate 1 Hz — publica FLEET_HEALTH quando há ≥1 snapshot vivo
+    // (não é gated Master: quem tem snapshots é quem agrega).
+    crate::fleet_health::fleet_tick(now);
 }
 
 #[cfg(test)]

@@ -1,11 +1,41 @@
 //! Parallel Matmul — ADR-0055: chunks + barreira + IPI wake nos APs.
 
 use crate::tensor::Tensor;
-use core::sync::atomic::{AtomicPtr, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
-/// Deadline do barrier SMP de um matmul. Um matmul isolado levar >60s em
-/// soft-float já é wedge, não lentidão — o caller degrada para single-core.
-const MATMUL_BARRIER_TIMEOUT_US: u64 = 60_000_000;
+/// Deadline do barrier SMP de um matmul. Shapes reais do Falcon3-1B levam
+/// ≤150ms/workers=6 (logs s419); 5s já é margem ~30× — acima disso é wedge,
+/// não lentidão. (60s fazia o BSP queimar CPU num spin mudo: "CPU 100%, log
+/// morto, sem #PF" — o stall pós-teto da s418.)
+const MATMUL_BARRIER_TIMEOUT_US: u64 = 5_000_000;
+
+/// Exclusão mútua do dispatch SMP (SESSION_419, stall pós-teto).
+///
+/// CTX/ROWS_CLAIMED/COLS_CLAIMED e a barreira (PENDING/DONE em ap_work) são
+/// GLOBALS: dois dispatches concorrentes de cores distintos (BSP processa o
+/// reply pós-`done` enquanto o AP roda slice de prefill) cruzam
+/// `clear_queue`+`reset_barrier` no meio do matmul alheio → DONE zerado →
+/// `pending=5 done=0` eterno → spin silencioso de 60s → timeout → dump.
+///
+/// `try_lock`: quem chega 2º NÃO espera — cai no caminho single-core
+/// (correto e honesto, só mais lento). Nunca bloquear o scheduler.
+static SMP_MM_BUSY: AtomicBool = AtomicBool::new(false);
+
+struct SmpMmGuard;
+impl SmpMmGuard {
+    #[inline]
+    fn try_acquire() -> bool {
+        SMP_MM_BUSY
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+    }
+}
+impl Drop for SmpMmGuard {
+    #[inline]
+    fn drop(&mut self) {
+        SMP_MM_BUSY.store(false, Ordering::Release);
+    }
+}
 
 /// Instrumentação s-prefill: 1 log enter/exit a cada 20 chamadas de cada caminho.
 static MATMUL_LOG_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -71,7 +101,11 @@ pub fn parallel_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
 
     let smp_ok = k_nano::platform_probe::allow_smp()
         && k_nano::smp::ap_pollable()
-        && k_nano::smp::ap_entry_count() > 0;
+        && k_nano::smp::ap_entry_count() > 0
+        // SESSION_419: dispatch já em curso em outro core → single-core
+        // (não enfileira jobs num barrier que vai ser resetado pelo dono).
+        && SmpMmGuard::try_acquire();
+    let _smp_guard = if smp_ok { Some(SmpMmGuard) } else { None };
 
     if !smp_ok || m < 8 {
         // Single-core path
@@ -132,6 +166,13 @@ pub fn parallel_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
             k_nano::smp::ap_work::barrier_pending(),
             k_nano::smp::ap_work::barrier_done()
         );
+        // s419: evidência persistente (serial morre racy; BOOT.LOG sobrevive).
+        k_nano::boot_logger::log_quiet(&alloc::format!(
+            "matmul barrier timeout m={} k={} n={} pending={} done={}",
+            m, k, n,
+            k_nano::smp::ap_work::barrier_pending(),
+            k_nano::smp::ap_work::barrier_done()
+        ));
         if log_it {
             k_nano::slog_cortex!(
                 "cortex",
@@ -269,9 +310,13 @@ pub fn parallel_ternary_matmul(
         return None;
     }
     // ADR-0057 WS-F: só usa APs quando são workers vivos (`ap_pollable`).
+    // SESSION_419: dispatch já em curso em outro core → `None` (caller cai
+    // no caminho de CPU) — não cruzar barrier/statics do matmul alheio.
     let smp_ok = k_nano::platform_probe::allow_smp()
         && k_nano::smp::ap_pollable()
-        && k_nano::smp::ap_entry_count() > 0;
+        && k_nano::smp::ap_entry_count() > 0
+        && SmpMmGuard::try_acquire();
+    let _smp_guard = if smp_ok { Some(SmpMmGuard) } else { None };
     if !smp_ok || n < 16 {
         return None;
     }
@@ -328,6 +373,13 @@ pub fn parallel_ternary_matmul(
             k_nano::smp::ap_work::barrier_pending(),
             k_nano::smp::ap_work::barrier_done()
         );
+        // s419: evidência persistente (BOOT.LOG).
+        k_nano::boot_logger::log_quiet(&alloc::format!(
+            "ternary barrier timeout m={} k={} n={} pending={} done={}",
+            m, k, n,
+            k_nano::smp::ap_work::barrier_pending(),
+            k_nano::smp::ap_work::barrier_done()
+        ));
         if log_it {
             k_nano::slog_cortex!(
                 "cortex",

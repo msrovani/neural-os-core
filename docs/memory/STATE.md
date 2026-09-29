@@ -1,8 +1,12 @@
-# STATE - neural-os-core v1.9.99-s418 - ADR-0112 BAR Compute (VRAM universal vendor-agnostic p/ W2A8)
+# STATE - neural-os-core v1.9.99-s419 - H3-revisit + fleet HUD + heartbeat BAR Compute (VRAM universal vendor-agnostic p/ W2A8)
 
-#   PISTA ATIVA: s418 — BAR Compute (pesos W2A8 residem na VRAM via BAR, GEMV host lê aperture,
+#   PISTA ATIVA: s419 — H3-revisit (hint_render.rs: MLP de hints W2A8 com pesos em VRAM via BAR;
+#     linhas fleet/vram/hints no HUB HEALTH; orb com infer_intensity=tok/s REAL) + federation e2e
+#     dual-node OK (fleet_tick 1Hz wire que faltava) + stall pós-teto: barrier SMP fixed (SmpMmGuard)
+#     + heartbeat pós-tick no BOOT.LOG; RESIDUAL ABERTO: prefill a2_proof cruza o teto 2030MB
+#     (gate de headroom no prefill slice = próximo)
+#   PISTA ANTERIOR: s418 — BAR Compute (pesos W2A8 residem na VRAM via BAR, GEMV host lê aperture,
 #     lane VRAM no dispatch; StreamsW2a8/ComputeDevice = upgrade; lab GTX 1050 = residual)
-#   PISTA ANTERIOR: s417 — federation de saúde (MCH\0 → fleet_worst → FLEET_HEALTH); stall silencioso pós-teto ABERTO
 #   PISTA ANTERIOR: s410m — forget cognitivo HITL (/forget) + leitura de conflitos (/conflicts)
 #     via ApprovalGate Escalate (skills sgdb_forget/conflict_resolve); tombstone Superseded
 #     antes do delete físico; fail-closed NSGDB down; registry pendente cap 32 FIFO;

@@ -60,8 +60,44 @@ static NODES: spin::Mutex<[Option<NodeHealth>; FLEET_CAP]> = {
 };
 
 /// Tick do último aggregate (para o HUD saber a idade do agregado).
+pub static LAST_AGGREGATE_TICK: AtomicU64 = AtomicU64::new(0);
+/// Último nº de nós vivos no agregado (telemetria/HUD).
+pub static LAST_AGGREGATE_NODES: AtomicU64 = AtomicU64::new(0);
+/// Último JSON do agregado (HUD lê sem re-parse do bus).
 pub static LAST_FLEET_JSON: spin::Mutex<Option<alloc::string::String>> =
     spin::Mutex::new(None);
+
+/// Tick de agregação de frota (1 Hz — chamado do bei_tick pós `poll_p2p`).
+///
+/// s419: o `aggregate()` existia e era testado, mas não tinha chamador em
+/// runtime — os `MCH\0` eram armazenados e `FLEET_HEALTH` nunca publicado
+/// (classe "tópico novo sem consumidor/produtor wired"; lição: wire e2e antes
+/// de marcar done). Roda em qualquer nó que receba MCH alheio — na prática o
+/// Master (workers não recebem MCH próprio de volta em single-node; em frota,
+/// quem agrega é quem tem snapshots vivos).
+pub fn fleet_tick(now: u64) {
+    const PERIOD: u64 = 100; // 1 Hz @100 Hz tick
+    let last = LAST_AGGREGATE_TICK.load(Ordering::Relaxed);
+    if now.saturating_sub(last) < PERIOD {
+        return;
+    }
+    LAST_AGGREGATE_TICK.store(now, Ordering::Relaxed);
+    if let Some(json) = aggregate(now) {
+        let n = tracked_nodes();
+        LAST_AGGREGATE_NODES.store(n as u64, Ordering::Relaxed);
+        // Overall do agregado no log — evidência e2e da federation no serial
+        // (parse mínimo do próprio JSON, contrato fixo).
+        let overall = json
+            .find("\"overall\":\"")
+            .and_then(|i| json[i + 11..].find('"').map(|e| &json[i + 11..i + 11 + e]))
+            .unwrap_or("?");
+        slog_hermes!(
+            "FleetHealth", "ok",
+            "aggregate nodes={} overall={} aggregations={}",
+            n, overall, FLEET_AGGREGATIONS.load(Ordering::Relaxed)
+        );
+    }
+}
 
 /// Política de escala da frota (única — EscalationState de k_nano).
 static FLEET_ESCALATION: spin::Mutex<Option<k_nano::sys_health::EscalationState>> =

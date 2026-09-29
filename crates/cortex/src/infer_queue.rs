@@ -655,6 +655,10 @@ fn try_claim_into_active() -> bool {
         infer_guard_begin();
         emit_msg_start();
         k_nano::slog_cortex!("InferQ", "ok", "claim id={} coarse={}", id, coarse as u8);
+        // s419: marco persistente pós-claim (a2_proof stall pós-teto).
+        k_nano::boot_logger::log_quiet(&alloc::format!(
+            "infer-claim id={} proof={}", id, is_proof as u8
+        ));
         if is_proof {
             // Roteador fiel: InferWorker::tick pula poll_slice com ap_pollable
             // (hermes) e try_infer_poll_slice exige ap_pollable (k_nano) →
@@ -744,6 +748,14 @@ fn finish_job(st: &mut ActiveState, text: &str) {
         out.len(),
         infer_in_flight() as u8
     );
+    // s419 (stall pós-teto): marco persistente pós-`done` — se o boot morrer
+    // logo após, a próxima linha do BOOT.LOG (ou a ausência dela) localiza o
+    // caminho do stall (TTS/piper, mixer, reply, next tick).
+    k_nano::boot_logger::log_quiet(&alloc::format!(
+        "post-done id={} out_len={}",
+        st.job_id,
+        out.len()
+    ));
 }
 
 /// Fronteira de frase para TTS parcial — **whitelist** fechada: só `. ! ? ;`
