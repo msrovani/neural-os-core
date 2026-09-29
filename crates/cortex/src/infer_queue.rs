@@ -125,6 +125,8 @@ const A2_SLICE_BUDGET_US: u64 = 500_000;
 static A2_SLOW_SLICES: AtomicU64 = AtomicU64::new(0);
 /// Log `resident_too_big` emitido 1×/boot (maybe_submit roda todo slice).
 static A2_ABSENT_LOGGED: AtomicBool = AtomicBool::new(false);
+/// SESSION_415: log 1x do fail-closed por episódio de heap crítico.
+static HEAP_FULL_LOGGED: AtomicBool = AtomicBool::new(false);
 /// Log `waiting for slot` emitido 1×/boot (retry Full é silencioso).
 static A2_SLOT_WAIT_LOGGED: AtomicBool = AtomicBool::new(false);
 /// Deadline wall (TSC absoluto, µs) da prova. 0 = desarmado. Se estourar, o
@@ -136,7 +138,7 @@ const A2_PROOF_DEADLINE_US: u64 = 300_000_000;
 /// Diagnóstico decisivo rate-limited no topo de `poll_slice`.
 static SLICE_POLL_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Loga em n==1 (prova que `poll_slice` é chamado) e depois a cada N chamadas.
-const SLICE_DIAG_EVERY: u64 = 200;
+const SLICE_DIAG_EVERY: u64 = 100_000;
 /// Instrumentação s-prefill: enter/exit dos primeiros N steps (máx ~40/boot).
 static PREFILL_STEP_LOGGED: AtomicU64 = AtomicU64::new(0);
 const PREFILL_STEP_LOG_CAP: u64 = 40;
@@ -537,6 +539,21 @@ fn try_claim_into_active() -> bool {
     if ACTIVE.lock().is_some() {
         return false;
     }
+    // SESSION_415 fail-closed: heap bump sem free — no piso crítico, recusar
+    // claim novo é melhor que OOM no meio (alloc NULL → deref → #PF → AP hlt).
+    // Job fica no slot para retomada quando o heap degradar/liberar.
+    if k_nano::allocator::heap_headroom_critical() {
+        if !HEAP_FULL_LOGGED.swap(true, Ordering::AcqRel) {
+            k_nano::slog_cortex!(
+                "InferQ",
+                "warn",
+                "heap crítico (<{}MB headroom) — claims recusados (fail-closed, job retido)",
+                k_nano::allocator::HEAP_CRITICAL_HEADROOM_MB
+            );
+        }
+        return false;
+    }
+    HEAP_FULL_LOGGED.store(false, Ordering::Release);
     loop {
         let h = HEAD.load(Ordering::Relaxed);
         let t = TAIL.load(Ordering::Acquire);
@@ -1449,6 +1466,24 @@ pub fn poll_slice() -> bool {
         let mut guard = ACTIVE.lock();
         if let Some(ref mut st) = *guard {
             did = true;
+            // SESSION_415 fail-closed no job EM CURSO: bump heap sem free —
+            // decode/prefill sob headroom crítico termina o job honestamente
+            // (payload parcial) em vez de alocar NULL → deref → #PF → AP hlt
+            // (2 boots: cr2=0x50 em MemoryStore::tick_advance pós-teto).
+            if !matches!(st.phase, Phase::Finishing | Phase::Idle)
+                && k_nano::allocator::heap_headroom_critical()
+            {
+                if !HEAP_FULL_LOGGED.swap(true, Ordering::AcqRel) {
+                    k_nano::slog_cortex!(
+                        "InferQ",
+                        "warn",
+                        "heap crítico no job em curso — finalizando {} id={} (fail-closed, payload parcial)",
+                        "job",
+                        ACTIVE_ID.load(Ordering::Relaxed)
+                    );
+                }
+                st.phase = Phase::Finishing;
+            }
             match st.phase {
                 Phase::NeedPrefill => run_prefill(st),
                 Phase::Prefilling => run_prefill_step(st),

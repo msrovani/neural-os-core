@@ -593,13 +593,18 @@ impl AgentRegistry {
             if ui_live {
                 if let Some(di) = self.agents.iter().position(|a| a.name == "display") {
                     if self.agents[di].state == AgentState::Active {
-                        let result = with_agent_tick_lock(|| {
+                        // SESSION_415: budget de espera no lock global — se um AP
+                        // segura AGENT_TICK_BUSY >2 ms, o frame skip (degrada)
+                        // em vez de congelar o compositor girando para sempre.
+                        let result = try_with_agent_tick_lock_ms(2, || {
                             self.agents[di].tick_counter += 1;
                             let tc = self.agents[di].tick_counter;
                             self.agents[di].agent.tick(tick_id, tc)
                         });
-                        polled = polled.saturating_add(1);
-                        self.apply_tick_result(di, result, tick_id);
+                        if result.is_some() {
+                            polled = polled.saturating_add(1);
+                            self.apply_tick_result(di, result.unwrap(), tick_id);
+                        }
                     }
                 }
             }
@@ -737,13 +742,16 @@ impl AgentRegistry {
                     if overdue {
                         if let Some(di) = self.agents.iter().position(|a| a.name == "display") {
                             if self.agents[di].state == AgentState::Active {
-                                let d_result = with_agent_tick_lock(|| {
+                                // SESSION_415: idem boost mid-cycle — budget 2 ms, degrada.
+                                let d_result = try_with_agent_tick_lock_ms(2, || {
                                     self.agents[di].tick_counter += 1;
                                     let tc = self.agents[di].tick_counter;
                                     self.agents[di].agent.tick(tick_id, tc)
                                 });
-                                polled = polled.saturating_add(1);
-                                self.apply_tick_result(di, d_result, tick_id);
+                                if d_result.is_some() {
+                                    polled = polled.saturating_add(1);
+                                    self.apply_tick_result(di, d_result.unwrap(), tick_id);
+                                }
                             }
                         }
                     }
@@ -965,6 +973,34 @@ fn with_agent_tick_lock<R>(f: impl FnOnce() -> R) -> R {
     let r = f();
     AGENT_TICK_BUSY.store(false, core::sync::atomic::Ordering::Release);
     r
+}
+
+/// Tenta adquirir AGENT_TICK_BUSY com budget (ms monotônico via hook já
+/// registrado — agent-core é zero-dep, sem acesso direto ao TSC). False =
+/// ocupado além do budget — o caller DEGRADA (frame skip / pula o tick) em
+/// vez de girar. Sem hook de clock registrado, gira sem budget (comportamento
+/// pré-fix, só usado fora do boot de kernel).
+///
+/// SESSION_415 freeze: com smp-runqueue, o AP tickava intent_router/sys_health
+/// segurando o AGENT_TICK_BUSY GLOBAL; o BSP (display + scheduler) girava em
+/// `spin_loop` infinito → tela congelada com o stamp do agente do AP. O lock
+/// global é um spinlock SEM fairness: girar sem budget = freeze do UI.
+fn try_with_agent_tick_lock_ms<R>(budget_ms: u64, f: impl FnOnce() -> R) -> Option<R> {
+    let clock = unsafe { TICK_CLOCK_HOOK };
+    let t0 = clock.map(|c| c()).unwrap_or(0);
+    loop {
+        if !AGENT_TICK_BUSY.swap(true, core::sync::atomic::Ordering::AcqRel) {
+            let r = f();
+            AGENT_TICK_BUSY.store(false, core::sync::atomic::Ordering::Release);
+            return Some(r);
+        }
+        if let Some(c) = clock {
+            if c().wrapping_sub(t0) > budget_ms {
+                return None; // ocupado demais: frame skip, não freeze
+            }
+        }
+        core::hint::spin_loop();
+    }
 }
 
 /// Ponteiro do registry heap-pinned — AP tick via índice.

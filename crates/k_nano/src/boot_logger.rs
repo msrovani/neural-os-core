@@ -883,6 +883,13 @@ pub fn flush() -> bool {
     #[cfg(feature = "fat-boot-log")]
     {
         let ok = persist_now(None);
+        // SYS_HEALTH: evidência de persistência para o veredito de storage
+        // (SESSION_415 — contadores medidos, não flag derivada).
+        if ok {
+            crate::sys_health::STORAGE_FLUSH_OK.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        } else {
+            crate::sys_health::STORAGE_FLUSH_FAIL.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
         let sev = if ok { "ok" } else { "warn" };
         crate::slog_nano!(
             "LOG",

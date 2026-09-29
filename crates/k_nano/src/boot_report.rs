@@ -310,6 +310,8 @@ fn class_audio(qemu: bool) -> (&'static str, bool) {
 fn nic_label() -> (&'static str, bool) {
     if crate::nic_globals::E1000.lock().is_some() {
         ("e1000", true)
+    } else if crate::nic_globals::RTL8168.lock().is_some() {
+        ("rtl8168", true)
     } else if crate::nic_globals::RTL8139.lock().is_some() {
         ("rtl8139", true)
     } else if crate::nic_globals::VIRTIO_DEV.lock().is_some() {

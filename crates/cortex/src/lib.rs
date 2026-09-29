@@ -61,6 +61,7 @@ pub mod federated;
 pub mod speculative;
 pub mod infer_queue;
 pub mod vocab_shortlist;
+pub mod probe_logits;
 pub mod difficulty_gate;
 pub mod decision;
 pub mod intent_decide;

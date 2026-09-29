@@ -497,6 +497,10 @@ pub fn gpu_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     };
     // Telemetria honesta: só conta GPU quando o device fez a conta.
     let _ = crate::gpu::work_queue::drain(result.is_some());
+    // SYS_HEALTH: compute real executado (SESSION_415 — evidência positiva).
+    if result.is_some() {
+        k_nano::sys_health::note_gpu_compute(1);
+    }
     result
 }
 

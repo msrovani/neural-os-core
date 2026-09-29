@@ -90,6 +90,10 @@ pub mod async_io;
 pub mod theme_bridge;
 pub mod manpages;
 pub mod hub_health;
+pub mod audio_health; // AUDIO_HEALTH consumer — escala NO_GO persistente ao LLM (anti-loop SESSION_410)
+pub mod fleet_health; // FLEET_HEALTH RX MCH\0 + agregação worst-of da frota no Master (SESSION_417)
+pub mod sys_health; // SYS_HEALTH produtor+escalador (net/storage/gpu) — política única k_nano::sys_health (SESSION_415)
+pub mod hw_inventory; // snapshot do HW detectado (produtor: HwDetectAgent)
 // ADR-0041 H3: MMIO WiFi BE em k-hal; hermes = FE
 pub use k_hal::net::generic_wifi;
 pub use k_hal::net::wifi_compat;

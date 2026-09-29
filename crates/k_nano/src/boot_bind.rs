@@ -13,6 +13,7 @@ pub enum NicKind {
     Virtio = 2,
     E1000 = 3,
     Rtl8139 = 4,
+    Rtl8168 = 5,
 }
 
 impl NicKind {
@@ -23,22 +24,26 @@ impl NicKind {
             NicKind::Virtio => "virtio-net",
             NicKind::E1000 => "e1000",
             NicKind::Rtl8139 => "rtl8139",
+            NicKind::Rtl8168 => "rtl8168",
         }
     }
 }
 
-/// Prioridade quando vários NICs existem: I225 (HW real) > VirtIO (QEMU) > e1000 > RTL.
-const PRIORITY: [NicKind; 4] = [
+/// Prioridade quando vários NICs existem: I225 (HW real) > VirtIO (QEMU) >
+/// e1000 > RTL8168 (PCIe GbE) > RTL8139 (PCI legado).
+const PRIORITY: [NicKind; 5] = [
     NicKind::I225,
     NicKind::Virtio,
     NicKind::E1000,
+    NicKind::Rtl8168,
     NicKind::Rtl8139,
 ];
 
 /// Fallback se H1 não publicou DeviceTree (scan vazio / ainda não rodou).
-const LEGACY: [NicKind; 4] = [
+const LEGACY: [NicKind; 5] = [
     NicKind::E1000,
     NicKind::I225,
+    NicKind::Rtl8168,
     NicKind::Rtl8139,
     NicKind::None,
 ];
@@ -48,6 +53,7 @@ static SLOT0: AtomicUsize = AtomicUsize::new(0);
 static SLOT1: AtomicUsize = AtomicUsize::new(0);
 static SLOT2: AtomicUsize = AtomicUsize::new(0);
 static SLOT3: AtomicUsize = AtomicUsize::new(0);
+static SLOT4: AtomicUsize = AtomicUsize::new(0);
 static N: AtomicUsize = AtomicUsize::new(0);
 static TREE_N: AtomicUsize = AtomicUsize::new(0);
 
@@ -64,6 +70,9 @@ pub fn classify_nic(vid: u16, did: u16) -> NicKind {
     if crate::e1000::is_e1000_family(vid, did) {
         return NicKind::E1000;
     }
+    if crate::rtl8168::is_rtl8168_family(vid, did) {
+        return NicKind::Rtl8168;
+    }
     if vid == 0x10EC && did == 0x8139 {
         return NicKind::Rtl8139;
     }
@@ -71,8 +80,8 @@ pub fn classify_nic(vid: u16, did: u16) -> NicKind {
 }
 
 /// Rank estável a partir dos kinds observados (dedupe + PRIORITY).
-pub fn rank_present(present: &[NicKind]) -> ([NicKind; 4], usize) {
-    let mut out = [NicKind::None; 4];
+pub fn rank_present(present: &[NicKind]) -> ([NicKind; 5], usize) {
+    let mut out = [NicKind::None; 5];
     let mut n = 0usize;
     for want in PRIORITY {
         if present.iter().any(|k| *k == want) {
@@ -89,7 +98,7 @@ pub fn rank_present(present: &[NicKind]) -> ([NicKind; 4], usize) {
 pub fn install_plan(present: &[NicKind], tree_len: usize) {
     TREE_N.store(tree_len, Ordering::Relaxed);
     let (order, n) = if tree_len == 0 {
-        (LEGACY, 3usize)
+        (LEGACY, 4usize)
     } else {
         rank_present(present)
     };
@@ -97,6 +106,7 @@ pub fn install_plan(present: &[NicKind], tree_len: usize) {
     SLOT1.store(order[1] as usize, Ordering::Relaxed);
     SLOT2.store(order[2] as usize, Ordering::Relaxed);
     SLOT3.store(order[3] as usize, Ordering::Relaxed);
+    SLOT4.store(order[4] as usize, Ordering::Relaxed);
     N.store(n, Ordering::Relaxed);
     INSTALLED.store(true, Ordering::Relaxed);
 }
@@ -107,14 +117,15 @@ fn kind_from_slot(v: usize) -> NicKind {
         2 => NicKind::Virtio,
         3 => NicKind::E1000,
         4 => NicKind::Rtl8139,
+        5 => NicKind::Rtl8168,
         _ => NicKind::None,
     }
 }
 
 /// Ordem a executar no DriverInit. Se k_ai ainda não instalou, legado.
-pub fn nic_probe_order() -> ([NicKind; 4], usize) {
+pub fn nic_probe_order() -> ([NicKind; 5], usize) {
     if !INSTALLED.load(Ordering::Relaxed) {
-        return (LEGACY, 3);
+        return (LEGACY, 4);
     }
     (
         [
@@ -122,6 +133,7 @@ pub fn nic_probe_order() -> ([NicKind; 4], usize) {
             kind_from_slot(SLOT1.load(Ordering::Relaxed)),
             kind_from_slot(SLOT2.load(Ordering::Relaxed)),
             kind_from_slot(SLOT3.load(Ordering::Relaxed)),
+            kind_from_slot(SLOT4.load(Ordering::Relaxed)),
         ],
         N.load(Ordering::Relaxed),
     )
@@ -295,7 +307,24 @@ mod tests {
         assert_eq!(classify_nic(0x8086, 0x100E), NicKind::E1000);
         assert_eq!(classify_nic(0x1AF4, 0x1041), NicKind::Virtio);
         assert_eq!(classify_nic(0x10EC, 0x8139), NicKind::Rtl8139);
+        assert_eq!(classify_nic(0x10EC, 0x8168), NicKind::Rtl8168);
+        assert_eq!(classify_nic(0x10EC, 0x8161), NicKind::Rtl8168);
+        assert_eq!(classify_nic(0x10EC, 0x8125), NicKind::None); // 2.5G — fora
         assert_eq!(classify_nic(0x8086, 0x9A14), NicKind::None);
+    }
+
+    #[test]
+    fn rank_rtl8168_beats_rtl8139() {
+        let (o, n) = rank_present(&[NicKind::Rtl8139, NicKind::Rtl8168]);
+        assert_eq!(n, 2);
+        assert_eq!(o[0], NicKind::Rtl8168);
+        assert_eq!(o[1], NicKind::Rtl8139);
+    }
+
+    #[test]
+    fn nic_probe_order_has_5_slots() {
+        let (_o, n) = nic_probe_order();
+        assert!(n <= 5);
     }
 
     #[test]

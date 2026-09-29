@@ -2868,6 +2868,9 @@ impl Agent for HwDetectAgent {
         device_tree.push_str("Dispositivos (PnP cards):\n");
         let mut cards_n = 0u32;
 
+        // Inventário honesto para a UI (snapshot do produtor → card no jarbas).
+        crate::hw_inventory::reset();
+
         for agent in &hw.agents {
             let parts: Vec<&str> = agent.device_id.split(':').collect();
             device_tree.push_str(&alloc::format!("  {} — {}\n", agent.device_id, agent.description));
@@ -2942,10 +2945,12 @@ impl Agent for HwDetectAgent {
             });
 
             dispatch_pnp_action(&card);
+            crate::hw_inventory::record_card(&card);
             cards_n = cards_n.saturating_add(1);
         }
 
         k_nano::slog_hermes!("HW", "ok", "published {} capability cards", cards_n);
+        crate::hw_inventory::finalize_and_publish();
         k_nano::slog_hermes!("HW", "trace", "Arvore PnP:\n{}", device_tree);
 
         // EventBus HW only — não HERMES_RESPONSE (evita TTS/chat).

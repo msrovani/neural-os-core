@@ -58,12 +58,24 @@ const SDX_STS: u64 = 0x03;        // Stream Descriptor Status (1 byte)
 const SDX_LPIB: u64 = 0x04;       // Link Position in Buffer (4 bytes)
 const SDX_CBL: u64 = 0x08;        // Cyclic Buffer Length (4 bytes)
 const SDX_LVI: u64 = 0x0C;        // Last Valid Index (2 bytes)
-const SDX_FMT: u64 = 0x0E;        // Stream Format (2 bytes)
-const SDX_BDPL: u64 = 0x10;       // Buffer Descriptor List Pointer Lower (4 bytes)
-const SDX_BDPU: u64 = 0x14;       // Buffer Descriptor List Pointer Upper (4 bytes)
+const SDX_FIFOS: u64 = 0x10;      // FIFO Size (2 bytes, RO)
+const SDX_FMT: u64 = 0x12;        // Stream Format (2 bytes) — HDA spec §6.2
+const SDX_BDPL: u64 = 0x18;       // BDL Pointer Lower (4 bytes) — 0x18, NÃO 0x10!
+const SDX_BDPU: u64 = 0x1C;       // BDL Pointer Upper (4 bytes)
+// Layout canônico: 0x00 CTL/STS · 0x04 LPIB · 0x08 CBL · 0x0C LVI ·
+// 0x10 FIFOS · 0x12 FMT · 0x18 BDPL · 0x1C BDPU (stride 0x20).
+// O antigo BDPL=0x10/BDPU=0x14 gravava o BDL no FIFOS e o FMT em região
+// não mapeada — o QEMU lia a BDL do endereço 0 (SESSION fix SD4 DMA).
 
 // Stream Descriptor 1 (SD1) - Playback (Speaker)
+// ⚠️ TABELA, NÃO ANALOGIA (lição SESSION_346 do 0x21): no QEMU intel-hda.c
+// streams 0-3 = INPUT e 4-7 = OUTPUT (`bool output = reg->stream >= 4`);
+// `intel_hda_xfer` (o DMA que avança o LPIB) só busca streams 4-7 para output.
+// Um "playback" no SD1 @0xA0 (índice 1) é input para o QEMU → LPIB congela em 0
+// e `sts` fica FIFO_READY sem BCIS. Playback real = stream 4 @ 0x80+4*0x20=0x100.
 const SD1_BASE: u64 = 0xA0;
+/// Stream descriptor de OUTPUT (playback) — QEMU intel-hda: índice >= 4.
+const SD_PLAY_BASE: u64 = 0x80 + 4 * 0x20; // 0x100 = stream #4 (output)
 
 // ============================================================================
 // Register Bit Definitions
@@ -98,17 +110,25 @@ const RIRBSTS_OVERRUN: u8 = 1 << 2;
 const RING_ENTRIES: u32 = 256;
 
 // SDx_CTL
-const SD_CTL_RUN: u32 = 1 << 0;   // Run
-const SD_CTL_SRST: u32 = 1 << 1;  // Stream Reset
+// SDx_CTL — QEMU intel-hda.c/intel-hda-defs.h: SRST=bit0, RUN=bit1.
+// O driver antigo tinha os dois INVERTIDOS: escrevia "RUN"=bit0 (QEMU lê SRST
+// → stream preso em reset, LPIB=0 eterno) e "SRST"=bit1 (flip RUN espúrio).
+const SD_CTL_RUN: u32 = 1 << 1;   // Run
+const SD_CTL_SRST: u32 = 1 << 0;  // Stream Reset
 const SD_CTL_IOCE: u32 = 1 << 2;  // Interrupt on Completion Enable
 const SD_CTL_FEIE: u32 = 1 << 3;  // FIFO Error Interrupt Enable
 const SD_CTL_DEIE: u32 = 1 << 4;  // Descriptor Error Interrupt Enable
 /// Stream Number nos bits 19:16 do SDCTL (deve casar com Converter Stream Tag).
 const fn sd_ctl_strm(n: u32) -> u32 {
-    (n & 0xF) << 16
+    // HDA spec / QEMU intel-hda.c: stnr = (ctl >> 20) & 0x0f → bits 23:20.
+    // O << 16 antigo caía fora do campo e o tag nunca era aceito (readback
+    // strm=false) — SESSION fix SD4 DMA.
+    (n & 0xF) << 20
 }
 const CAPTURE_STREAM_TAG: u32 = 1;
-const PLAYBACK_STREAM_TAG: u32 = 2;
+/// Tag do stream de playback = 4 (QEMU intel-hda: output = streams 4-7).
+/// Precisa casar com sd_ctl_strm() no SD4 E com o verb 0x706 do DAC.
+const PLAYBACK_STREAM_TAG: u32 = 4;
 
 // Amp Gain/Mute payload (HDA §7.3.3.7) — bit7=Mute; L/R/In/Out nos bits altos.
 const AMP_SET_OUTPUT: u32 = 1 << 15;
@@ -264,6 +284,17 @@ pub static CAP_LPIB_STALE: AtomicU64 = AtomicU64::new(0);
 pub static CAP_ADC_SUPPORTED_FMT: AtomicU32 = AtomicU32::new(0);
 /// Amostras de playback descartadas por o anel SD1 estar cheio.
 pub static PLAY_SAMPLES_DROPPED: AtomicU64 = AtomicU64::new(0);
+/// Amostras mono aceitas no anel SD4 (o HW consumir é outro contador: LPIB).
+pub static PLAY_SAMPLES_WRITTEN: AtomicU64 = AtomicU64::new(0);
+/// Última leitura crua do LPIB do SD1 (posição de leitura do HW, bytes).
+pub static PLAY_LPIB_LAST: AtomicU32 = AtomicU32::new(0);
+/// Última leitura crua do CBL do SD1 (tamanho do buffer cíclico).
+pub static PLAY_CBL_LAST: AtomicU32 = AtomicU32::new(0);
+/// Contagem de observações LPIB_SD1 congeladas (mesma leitura entre ticks) —
+/// se crescer com WPI avançando, o stream SD1 não está consumindo (RUN bit
+/// claro, DMA parado ou codec não clockando) e o ring nunca drena →
+/// VOICE_STATE preso em SPEAKING. Diagnosticado por `playback_stall_diag`.
+pub static PLAY_LPIB_STUCK: AtomicU64 = AtomicU64::new(0);
 
 // DMA buffers (kept alive)
 static mut CORB_DMA: Option<DmaBuf> = None;
@@ -1069,8 +1100,8 @@ unsafe fn init_sd0_capture(bar: u64) -> bool {
     // Program Format (16-bit, 48kHz, stereo)
     w16(bar, sd0_fmt, FMT_16BIT_48KHZ_STEREO as u16);
     
-    // Clear status
-    w16(bar, sd0_sts, 0xFFFF); // Write 1 to clear
+    // Clear status — STS é 1 BYTE (offset 3); w16 aqui vazava 1 byte no LPIB!
+    w8(bar, sd0_sts, 0x1C); // Write 1 to clear (bits de erro, wclear QEMU)
     
     // Enable stream: STRM=1 (casa com ADC tag) + RUN + IOCE
     w32(
@@ -1123,36 +1154,62 @@ unsafe fn init_sd1_playback(bar: u64) -> bool {
         core::ptr::write_volatile(entry_base.add(12) as *mut u32, 1u32);
     }
 
-    let ctl = SD1_BASE + SDX_CTL;
-    let sts = SD1_BASE + SDX_STS;
-    let cbl = SD1_BASE + SDX_CBL;
-    let lvi = SD1_BASE + SDX_LVI;
-    let fmt = SD1_BASE + SDX_FMT;
-    let bdpl = SD1_BASE + SDX_BDPL;
-    let bdpu = SD1_BASE + SDX_BDPU;
+    // ⚠️ OUTPUT usa SD_PLAY_BASE (stream #4 @0x100 no QEMU) — ver nota em
+    // SD1_BASE. Todos os offsets de registrador relativos à base do stream.
+    let ctl = SD_PLAY_BASE + SDX_CTL;
+    let sts = SD_PLAY_BASE + SDX_STS;
+    let cbl = SD_PLAY_BASE + SDX_CBL;
+    let lvi = SD_PLAY_BASE + SDX_LVI;
+    let fmt = SD_PLAY_BASE + SDX_FMT;
+    let bdpl = SD_PLAY_BASE + SDX_BDPL;
+    let bdpu = SD_PLAY_BASE + SDX_BDPU;
 
+    // SRST com READBACK honesto (budget TSC ~2 ms): escreve 1, espera o HW
+    // assumir (bit lido = 1), escreve 0, espera limpar. Sem readback o reset
+    // podia não ter efetivado antes das escritas de BDP/CBL/FMT.
+    let deadline = crate::tsc::now_us() + 2_000;
     w8(bar, ctl, 0);
-    for _ in 0..1000 { core::hint::spin_loop(); }
+    while r8(bar, ctl) != 0 && crate::tsc::now_us() < deadline {}
     w8(bar, ctl, SD_CTL_SRST as u8);
-    for _ in 0..1000 { core::hint::spin_loop(); }
+    while r8(bar, ctl) & SD_CTL_SRST as u8 == 0 && crate::tsc::now_us() < deadline {}
+    let srst_taken = r8(bar, ctl) & SD_CTL_SRST as u8 != 0;
     w8(bar, ctl, 0);
-    for _ in 0..1000 { core::hint::spin_loop(); }
+    while r8(bar, ctl) & SD_CTL_SRST as u8 != 0 && crate::tsc::now_us() < deadline {}
+    if !srst_taken {
+        slog_nano!("HDA", "warn", "SD4 playback: SRST nao assumido pelo controlador (fallback sequencial)");
+    }
 
     w32(bar, bdpl, bdl_phys as u32);
     w32(bar, bdpu, (bdl_phys >> 32) as u32);
     w32(bar, cbl, audio_size as u32);
     w16(bar, lvi, 15);
     w16(bar, fmt, FMT_16BIT_48KHZ_STEREO as u16);
-    w16(bar, sts, 0xFFFF);
-    // STRM=2 casa com DAC Converter Stream Tag
+    w8(bar, sts, 0x1C); // STS 1 byte: wclear dos bits de erro (nunca 0xFFFF)
+    // STRM=4 casa com PLAYBACK_STREAM_TAG — e o QEMU só rota output para streams >= 4
     w32(
         bar,
         ctl,
         sd_ctl_strm(PLAYBACK_STREAM_TAG) | SD_CTL_RUN | SD_CTL_IOCE,
     );
 
-    slog_nano!("HDA", "ok", "SD1 playback: BDL @ 0x{:x} buf @ 0x{:x}", bdl_phys, audio_phys);
-    true
+    // Readback final de CTL/FMT: "compila" != "o HW aceitou" (SESSION_412).
+    let ctl_rb = r32(bar, ctl);
+    let fmt_rb = r16(bar, fmt);
+    let run_ok = ctl_rb & SD_CTL_RUN != 0;
+    let strm_ok = (ctl_rb >> 20) & 0xF == PLAYBACK_STREAM_TAG;
+    slog_nano!(
+        "HDA",
+        if run_ok && strm_ok { "ok" } else { "warn" },
+        "SD4 playback: BDL @ 0x{:x} buf @ 0x{:x} ctl=0x{:08x} fmt=0x{:04x} run={} strm={} srst={}",
+        bdl_phys,
+        audio_phys,
+        ctl_rb,
+        fmt_rb,
+        run_ok,
+        strm_ok,
+        srst_taken
+    );
+    run_ok && strm_ok
 }
 
 // ============================================================================
@@ -1175,18 +1232,20 @@ pub unsafe fn hda_irq_handler() {
     
     // Check SD0 interrupt status
     let sd0_sts_off = SD0_BASE + SDX_STS;
-    let sd0_sts = r16(bar, sd0_sts_off);
+    let sd0_sts = r8(bar, sd0_sts_off) as u16;
     
     // Clear interrupt (write 1 to clear BCIS)
+    // ⚠️ STS é 1 BYTE: w16 aqui vazava o byte alto no LPIB (offset 0x04) e
+    // CORROMPIA a posição de leitura do HW — causa dos CAP_LPIB_STALE espúrios.
     if sd0_sts & SD_STS_BCIS as u16 != 0 {
-        w16(bar, sd0_sts_off, sd0_sts | SD_STS_BCIS as u16);
+        w8(bar, sd0_sts_off, SD_STS_BCIS as u8);
     }
     
     // Check for FIFO error or descriptor error
     if sd0_sts & (SD_STS_FIFOE | SD_STS_DESE) as u16 != 0 {
         slog_nano!("HDA", "warn", "SD0 error: sts={:#06x}", sd0_sts);
         // Clear errors
-        w16(bar, sd0_sts_off, sd0_sts | SD_STS_FIFOE as u16 | SD_STS_DESE as u16);
+        w8(bar, sd0_sts_off, (SD_STS_FIFOE | SD_STS_DESE) as u8);
     }
     
     // Interrupção NÃO faz trabalho pesado: sem alloc, sem publish, sem walk do BDL
@@ -1235,13 +1294,13 @@ pub unsafe fn drain_sd0_completed() {
         return;
     }
     let sts_off = SD0_BASE + SDX_STS;
-    let sts = r16(bar, sts_off);
+    let sts = r8(bar, sts_off);
     let pending = HDA_SD0_PENDING.swap(false, Ordering::AcqRel);
-    if !pending && sts & SD_STS_BCIS as u16 == 0 {
+    if !pending && sts & SD_STS_BCIS as u8 == 0 {
         return;
     }
-    if sts & SD_STS_BCIS as u16 != 0 {
-        w16(bar, sts_off, sts | SD_STS_BCIS as u16);
+    if sts & SD_STS_BCIS as u8 != 0 {
+        w8(bar, sts_off, SD_STS_BCIS as u8);
     }
 
     let lpib = r32(bar, SD0_BASE + SDX_LPIB) as usize;
@@ -1252,23 +1311,17 @@ pub unsafe fn drain_sd0_completed() {
     // escrevendo AGORA — nunca a publicamos (ainda incompleta).
     let valid_lpib = cbl > 0 && lpib < cbl;
     let hw_entry = if valid_lpib { (lpib / ENTRY_BYTES) % BDL_ENTRIES } else { 0 };
+    // LPIB implausível = não sabemos o que o HW completou → fail-closed: NÃO
+    // publicar entrada derivada do RPI de software (poderia fabricar áudio
+    // incompleto). Conta e segue — sem nunca travar nem republicar.
     if !valid_lpib {
         CAP_LPIB_STALE.fetch_add(1, Ordering::Relaxed);
+        return;
     }
 
+    let to_drain = sd0_entries_pending(rpi as usize, hw_entry, BDL_ENTRIES);
     let mut drained = 0usize;
-    loop {
-        if drained >= BDL_ENTRIES {
-            break;
-        }
-        if valid_lpib {
-            // RPI alcançou a posição do hardware: nada novo completo. Não republica.
-            if rpi as usize == hw_entry {
-                break;
-            }
-        } else if drained >= 1 {
-            break; // LPIB implausível: degrada para 1 entrada por chamada
-        }
+    while drained < to_drain {
         publish_sd0_entry(rpi as usize);
         rpi = (rpi + 1) % BDL_ENTRIES as u32;
         drained += 1;
@@ -1277,6 +1330,17 @@ pub unsafe fn drain_sd0_completed() {
         HDA_SD0_RPI.store(rpi, Ordering::Release);
         CAP_ENTRIES_DRAINED.fetch_add(drained as u64, Ordering::Relaxed);
     }
+}
+
+/// Quantas entradas completas há entre o RPI (nosso consumo) e a entrada
+/// corrente do HW (derivada do LPIB real). Puro — host-testável.
+/// hw_entry é a entrada SENDO escrita agora (nunca publicada). Se rpi ==
+/// hw_entry, nada novo. Máximo BDL_ENTRIES-1 publicáveis de uma vez.
+pub fn sd0_entries_pending(rpi: usize, hw_entry: usize, entries: usize) -> usize {
+    if entries == 0 || rpi >= entries || hw_entry >= entries {
+        return 0;
+    }
+    (entries + hw_entry - rpi) % entries
 }
 
 // ============================================================================
@@ -1441,7 +1505,7 @@ pub fn init_hda() -> bool {
             slog_nano!("HDA", "warn", "playback path absent — TTS formant-only / no speaker");
         }
         if !init_sd1_playback(bar) {
-            slog_nano!("HDA", "warn", "SD1 playback not armed — write_hda_playback no-op");
+            slog_nano!("HDA", "warn", "SD4 playback not fully verified — write_hda_playback segue (run+strm readback no log)");
         }
         
         // Enable global interrupts
@@ -1479,10 +1543,10 @@ pub fn write_hda_playback(samples: &[i16]) {
         return;
     }
     unsafe {
-        let sts_off = SD1_BASE + SDX_STS;
-        let sts = r16(bar, sts_off);
-        if sts & SD_STS_BCIS as u16 != 0 {
-            w16(bar, sts_off, sts | SD_STS_BCIS as u16);
+        let sts_off = SD_PLAY_BASE + SDX_STS;
+        let sts = r8(bar, sts_off);
+        if sts & SD_STS_BCIS as u8 != 0 {
+            w8(bar, sts_off, SD_STS_BCIS as u8);
         }
 
         // FIX (WS1): o playback escrevia PCM MONO @16 kHz direto num stream
@@ -1495,7 +1559,7 @@ pub fn write_hda_playback(samples: &[i16]) {
         const TOTAL_FRAMES: usize = FRAMES_PER_ENTRY * BDL_ENTRIES; // 16384 (≈341 ms)
 
         // Posição de leitura do hardware, em frames estéreo.
-        let lpib = r32(bar, SD1_BASE + SDX_LPIB) as usize;
+        let lpib = r32(bar, SD_PLAY_BASE + SDX_LPIB) as usize;
         let rd = (lpib / 4) % TOTAL_FRAMES;
         let mut pos = HDA_SD1_WPI.load(Ordering::Acquire) as usize % TOTAL_FRAMES;
         let used = (pos + TOTAL_FRAMES - rd) % TOTAL_FRAMES;
@@ -1523,6 +1587,7 @@ pub fn write_hda_playback(samples: &[i16]) {
             }
         }
         HDA_SD1_WPI.store(pos as u32, Ordering::Release);
+        PLAY_SAMPLES_WRITTEN.fetch_add(frames as u64, Ordering::Relaxed);
     }
 }
 
@@ -1540,11 +1605,95 @@ pub fn playback_free_mono_samples() -> usize {
     unsafe {
         const FRAMES_PER_ENTRY: usize = ENTRY_BYTES / 4;
         const TOTAL_FRAMES: usize = FRAMES_PER_ENTRY * BDL_ENTRIES;
-        let lpib = r32(bar, SD1_BASE + SDX_LPIB) as usize;
+        let lpib = r32(bar, SD_PLAY_BASE + SDX_LPIB) as usize;
         let rd = (lpib / 4) % TOTAL_FRAMES;
         let pos = HDA_SD1_WPI.load(Ordering::Acquire) as usize % TOTAL_FRAMES;
         let used = (pos + TOTAL_FRAMES - rd) % TOTAL_FRAMES;
         let free_frames = TOTAL_FRAMES.saturating_sub(1).saturating_sub(used);
+        // Telemetria de stall: snapshot do LPIB cru; se não muda entre
+        // observações com o anel não vazio, o HW não está consumindo (RUN
+        // claro/DMA parado) e o ring nunca drena → SPEAKING eterno.
+        let prev_lpib = PLAY_LPIB_LAST.swap(lpib as u32, Ordering::Relaxed);
+        PLAY_CBL_LAST.store(r32(bar, SD_PLAY_BASE + SDX_CBL), Ordering::Relaxed);
+        if lpib as u32 == prev_lpib && prev_lpib != 0 && used > 0 {
+            PLAY_LPIB_STUCK.fetch_add(1, Ordering::Relaxed);
+        }
         free_frames / VOICE_DECIM.max(1)
+    }
+}
+
+/// Diagnóstico puro do stall de playback (host-testável): dados de duas
+/// observações separadas por `dt_us` → causa provável do ring não drenar.
+/// Retorna uma linha de telemetria sem alocar em caminho quente (caller loga).
+pub struct PlayStallDiag {
+    pub lpib0: u32,
+    pub lpib1: u32,
+    pub cbl: u32,
+    pub used_frames: u32,
+    pub wpi: u32,
+    pub sts: u16,
+}
+
+pub fn playback_stall_diag() -> Option<PlayStallDiag> {
+    if !is_ready() {
+        return None;
+    }
+    let bar = HDA_BAR.load(Ordering::Acquire);
+    let audio_phys = HDA_SD1_BUF.load(Ordering::Acquire);
+    if bar == 0 || audio_phys == 0 {
+        return None;
+    }
+    unsafe {
+        const FRAMES_PER_ENTRY: usize = ENTRY_BYTES / 4;
+        const TOTAL_FRAMES: usize = FRAMES_PER_ENTRY * BDL_ENTRIES;
+        let lpib = r32(bar, SD_PLAY_BASE + SDX_LPIB) as u32;
+        let cbl = r32(bar, SD_PLAY_BASE + SDX_CBL);
+        // Honestidade (SESSION_415): lpib0==lpib1 com 1 única leitura sempre
+        // imprimia "lpib_frozen" — mentia. Re-read após spin curto (~20 µs)
+        // decide o rótulo de verdade. Chamado ≤1×/s (STALL log), custo ok.
+        let t0 = crate::tsc::now_us();
+        while crate::tsc::now_us().saturating_sub(t0) < 20 {}
+        let lpib2 = r32(bar, SD_PLAY_BASE + SDX_LPIB) as u32;
+        let rd = (lpib as usize / 4) % TOTAL_FRAMES;
+        let pos = HDA_SD1_WPI.load(Ordering::Acquire) as usize % TOTAL_FRAMES;
+        let used = (pos + TOTAL_FRAMES - rd) % TOTAL_FRAMES;
+        let sts = r16(bar, SD_PLAY_BASE + SDX_STS);
+        Some(PlayStallDiag {
+            lpib0: lpib,
+            lpib1: lpib2,
+            cbl,
+            used_frames: used as u32,
+            wpi: HDA_SD1_WPI.load(Ordering::Relaxed),
+            sts,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sd0_pending_zero_quando_rpi_alcancou_hw() {
+        // HW escrevendo a entrada 3, já consumimos até a 3 → nada novo.
+        assert_eq!(sd0_entries_pending(3, 3, 16), 0);
+    }
+
+    #[test]
+    fn sd0_pending_conta_entradas_completas() {
+        // HW na entrada 5, consumimos até a 2 → entradas 2,3,4 completas.
+        assert_eq!(sd0_entries_pending(2, 5, 16), 3);
+        // Wrap: HW na 2, consumimos até a 14 → 14,15,0,1 (4 entradas).
+        assert_eq!(sd0_entries_pending(14, 2, 16), 4);
+        // HW uma entrada à frente = 1 completa (a que o HW acabou de passar).
+        assert_eq!(sd0_entries_pending(7, 8, 16), 1);
+    }
+
+    #[test]
+    fn sd0_pending_fail_closed_em_indices_invalidos() {
+        // Índices fora da tabela → 0 (nunca publica por índice fabricado).
+        assert_eq!(sd0_entries_pending(16, 0, 16), 0);
+        assert_eq!(sd0_entries_pending(0, 16, 16), 0);
+        assert_eq!(sd0_entries_pending(0, 0, 0), 0);
     }
 }

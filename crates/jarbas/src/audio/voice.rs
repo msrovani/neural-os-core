@@ -83,6 +83,41 @@ impl VoiceState {
 
 static VOICE_STATE: AtomicU8 = AtomicU8::new(VoiceState::Sleeping as u8);
 static BARGE_IN_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Última vez (µs TSC) que a telemetria periódica de voz foi logada (1 Hz).
+static LAST_VOICE_TELEMETRY_US: AtomicU64 = AtomicU64::new(0);
+
+/// Guard de SPEAKING preso (HW morto → ring nunca drena): ticks sem progresso
+/// antes de degradar para ERROR. ~10 s a 100 Hz — abaixo disso um stall
+/// transitório de scheduler dispara falso positivo.
+pub const SPEAK_STUCK_TICKS: u32 = 1000;
+
+/// Passo puro do guard de SPEAKING (host-testável). Recebe o estado derivado,
+/// a ocupação do playback ring e o contador de stall corrente; devolve
+/// (estado a publicar, novo contador, ring deve ser invalidado).
+///
+/// Sem progresso do ring por SPEAK_STUCK_TICKS durante SPEAKING → ERROR
+/// + invalidação da geração de TTS (request_interrupt) para que a sessão
+/// recupere para SLEEPING em vez de ficar presa para sempre (SD1 DMA morto).
+pub fn speak_stuck_step(
+    derived: VoiceState,
+    ring_avail: usize,
+    stall: u32,
+) -> (VoiceState, u32, bool) {
+    match derived {
+        VoiceState::Speaking if ring_avail > 0 => {
+            let next = stall.saturating_add(1);
+            if next >= SPEAK_STUCK_TICKS {
+                (VoiceState::Error, 0, true)
+            } else {
+                (VoiceState::Speaking, next, false)
+            }
+        }
+        // Speaking com ring vazio = drenou (ou nunca encheu) — reset honesto.
+        VoiceState::Speaking => (VoiceState::Speaking, 0, false),
+        // Qualquer outro estado não acumula stall.
+        _ => (derived, 0, false),
+    }
+}
 
 pub fn state() -> VoiceState {
     VoiceState::from_u8(VOICE_STATE.load(Ordering::Relaxed))
@@ -177,6 +212,8 @@ pub struct JarbasVoiceAgent {
     max_conversation: usize,
     /// Job de STT em slices (nunca dentro do tick inteiro — ver `stt::SttJob`).
     stt_busy: bool,
+    /// Ticks acumulados sem progresso do playback ring durante SPEAKING.
+    speak_stall: u32,
 }
 
 impl JarbasVoiceAgent {
@@ -193,6 +230,7 @@ impl JarbasVoiceAgent {
             conversation: Vec::new(),
             max_conversation: 10,
             stt_busy: false,
+            speak_stall: 0,
         }
     }
 
@@ -496,7 +534,64 @@ impl Agent for JarbasVoiceAgent {
             }
         }
 
-        publish_state(self.derive_state());
+        let derived = self.derive_state();
+        // Guard: SPEAKING com ring não-drenado por SPEAK_STUCK_TICKS → ERROR
+        // + invalidação da geração (limpa o ring) para a sessão recuperar.
+        let (publish, stall, invalidate) = speak_stuck_step(derived, PLAYBACK_RING.available(), self.speak_stall);
+        self.speak_stall = stall;
+        if invalidate {
+            k_nano::slog_jarbas!(
+                "Jarbas",
+                "warn",
+                "SPEAKING preso: ring sem progresso por {} ticks — degradando para ERROR (gen invalidada)",
+                SPEAK_STUCK_TICKS
+            );
+            request_interrupt();
+        }
+        publish_state(publish);
+
+        // AUDIO_HEALTH: veredito GO/NO-GO do pipeline para a IA (ADR-0088).
+        // Usa o estado derivado + flags da sessão; contadores HW vêm do hda.
+        let hda_ready = k_nano::audio::hda::is_ready();
+        let _ = hda_ready; // consumido dentro de publish_audio_health via contadores
+        crate::audio::health::publish_audio_health(
+            &crate::audio::health::AudioHealthInputs {
+                hda_ready,
+                playback_path: hda_ready, // path configurado junto do init SD4
+                capture_path: hda_ready,
+                // Demanda = ring com dados OU estado Speaking — sem demanda,
+                // playback sem progresso é idle (UNKNOWN), não NO_GO (SESSION_415).
+                playback_demand: PLAYBACK_RING.available() > 0
+                    || state() == VoiceState::Speaking,
+                voice_error: state() == VoiceState::Error,
+                voice_agents_up: true, // este tick roda = agentes no ar
+                stt_loaded: crate::audio::stt::available(),
+                ..Default::default()
+            },
+            _tick,
+        );
+
+        // Telemetria 1 Hz do pipeline de voz (SESSION instrumentação VOICE_STATE):
+        // estado derivado + inputs que o produzem. Barato (sem alocação) e
+        // com sub=trace para não poluir o dmesg; o stall real já é coberto
+        // pelo warn STALL do mixer.
+        let now_us = k_nano::tsc::now_us();
+        if now_us.saturating_sub(LAST_VOICE_TELEMETRY_US.load(Ordering::Relaxed)) >= 1_000_000 {
+            LAST_VOICE_TELEMETRY_US.store(now_us, Ordering::Relaxed);
+            k_nano::slog_jarbas!(
+                "Voice",
+                "trace",
+                "tele state={} ring_play={} mic_ring={} listen={} wake_win={} stt_busy={} pend_text={} barges={}",
+                state().label(),
+                PLAYBACK_RING.available(),
+                VOICE_MIC_RING.len(),
+                self.listening as u8,
+                self.wake_window,
+                self.stt_busy as u8,
+                self.pending_user_text.is_some() as u8,
+                BARGE_IN_COUNT.load(Ordering::Relaxed)
+            );
+        }
         AgentTickResult::Pending
     }
 }
@@ -528,5 +623,34 @@ mod dstream_tests {
         let g = tts_generation();
         assert!(tts_generation_valid(g));
         assert!(!tts_generation_valid(g.wrapping_add(1)));
+    }
+
+    #[test]
+    fn speak_stuck_degrada_para_error_e_invalida() {
+        // Falando com ring cheio: acumula stall até SPEAK_STUCK_TICKS.
+        let (st, stall, inv) = speak_stuck_step(VoiceState::Speaking, 1000, 0);
+        assert_eq!(st, VoiceState::Speaking);
+        assert_eq!(stall, 1);
+        assert!(!inv);
+        // No limite: ERROR + invalidação + contador zerado.
+        let (st, stall, inv) =
+            speak_stuck_step(VoiceState::Speaking, 1000, SPEAK_STUCK_TICKS - 1);
+        assert_eq!(st, VoiceState::Error);
+        assert_eq!(stall, 0);
+        assert!(inv);
+    }
+
+    #[test]
+    fn speak_stuck_reseta_com_progresso() {
+        // Speaking com ring vazio = drenou: reset do contador, sem invalidar.
+        let (st, stall, inv) = speak_stuck_step(VoiceState::Speaking, 0, 500);
+        assert_eq!(st, VoiceState::Speaking);
+        assert_eq!(stall, 0);
+        assert!(!inv);
+        // Outros estados nunca acumulam nem invalidam.
+        let (st, stall, inv) = speak_stuck_step(VoiceState::Listening, 0, 999);
+        assert_eq!(st, VoiceState::Listening);
+        assert_eq!(stall, 0);
+        assert!(!inv);
     }
 }

@@ -84,6 +84,7 @@ pub mod platform_probe;
 // proof_gate: removido (dead code, 0 callers — audit k_nano 2026-08-24)
 pub mod rtc;
 pub mod rtl8139;
+pub mod rtl8168;
 pub mod scancode_to_ascii;
 pub mod serial;
 pub mod slog;
@@ -91,6 +92,7 @@ pub mod simd;
 pub mod slab;
 // slab_buddy: removido (dead code, 0 callers — audit k_nano 2026-08-24)
 pub mod slip;
+pub mod sys_health; // veredito unificado net/storage/gpu + política de escala (SESSION_415)
 pub mod sys_installer;
 pub mod installer_agent;
 pub mod smp;

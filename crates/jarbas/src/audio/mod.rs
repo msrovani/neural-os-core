@@ -16,6 +16,7 @@ pub mod ser;
 pub mod context;
 pub mod piper;
 pub mod voice;
+pub mod health;
 pub mod capture;
 pub mod skills;
 pub mod settings;

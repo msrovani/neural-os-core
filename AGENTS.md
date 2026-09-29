@@ -194,8 +194,9 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: **v1.9.99-s412 TEST** - ternary_worker tile de colunas (1,9x, SESSION_412) + AVX2 refutado;
-# s411 - A2 proof 1 token real (lost wakeup AP) + mesh node_id + BPE Falcon3;
+# Current Sprint: **v1.9.99-s417 TEST** - federation de saúde (MACHINE/FLEET_HEALTH worst-of, prompt único, MCH\0) + OOM fail-closed (SESSION_417);
+# s415/s416 - health agents BSP + fail-closed infer_queue/MoE lifecycle + hybrid allocator bump-first;
+# s412 - ternary_worker tile de colunas (1,9x) + AVX2 refutado; s411 - A2 proof 1 token real (lost wakeup AP) + mesh node_id + BPE Falcon3;
 # s392 — Boot/Limine bughunt (GUID ESP/stack RSP/OVMF/ELF/FAT) + canvas;
 # s391 Desktop/UI/Orb theme/hover/dock/mesh honesty;
 # s390b SelfHeal residual KERNEL_ERROR/Safety/checkpoint;
@@ -359,6 +360,16 @@ ID=9001) retry periódico até FAT_READY=true.
 - **Skills a quente via LLM**: Nenhum skill é hardcoded. O LLM gera skills sob demanda e o SkillObserver registra. Ex: "grava video", "imprime formulario" viram skills gerados pelo LLM, não por enum Rust.
 
 # Lições Críticas Aprendidas
+
+- **Carimbo do AP ≠ culpado — 1 OOM, 3 carimbos (SESSION_415-417):** os freezes "intent-router", "sys_health_agent" e "network_agent" eram UM fenômeno: heap bump sem free satura a janela (~2030MB) → alloc devolve NULL → caller deref null+offset → #PF → handler falha em curar → `hlt` eterno no AP que faultou. O BSP segue vivo (painel 60Hz) e o stamp FB mostra o agente que estava em execução no AP — não o culpado. Crash site MIGRA de boot para boot conforme o fix (tick_advance → flush_merges): um OOM sem gate tem N vítimas; fail-closed tem que cobrir a CLASSE (`heap_headroom_critical()` nos consumidores pesados), não o site. Regra: #PF cr2=0x0/0x8/0x50 sob heap alto = OOM, procure o padrão, não o símbolo.
+
+- **Consolidação de saúde: worst-of com UNKNOWN contaminante (SESSION_417):** `DomainVerdicts::worst()` = NO_GO > UNKNOWN > GO — UNKNOWN contamina (sem evidência não se afirma saúde, mesmo padrão do `n/a ≠ 0`). Veredito de máquina (`machine_verdict_json`) consolida SYS+AUDIO num JSON padrão MESH_HEALTH; frota = `fleet_worst()` campo a campo com razões dedupe. Parse no_std com contrato fixo (campos estáticos conhecidos) — validar ANTES de armazenar (não guarda lixo). Política de escala única (`EscalationState`): GO fecha incidente, UNKNOWN não conta, 1 escala por incidente; frota com cooldown maior (600 ticks) — LLM do Master é o recurso mais caro.
+
+- **Estado global de mesh RX em array fixo de slots `Option<T>` (SESSION_417):** CAP 16 (mesmo teto do PEER_KEYS) + evicção do mais velho por `last_seen` — sem heapless (evita nova dep), sem Vec ilimitado (runtime hygiene SESSION_410). Testes de statics compartilhados: TEST_LOCK serializa + reset_state() — lição SESSION_346 (boot_observe falha em run paralelo).
+
+- **Prefixo mesh é contrato: testes precisam do wire format completo (SESSION_417):** testes de `on_machine_health` passavam JSON cru sem o prefixo `MCH\0` → slicing cortava 4 bytes do JSON → parse None → snapshot vazio. Helper `mch(json)` monta o payload de wire real nos testes. Regra: quem testa handler de RX tem que construir o mesmo byte que o TX emite.
+
+- **`cargo check --workspace` SEM `--target` checa o bin no host — erros fantasma de lang item (SESSION_417):** `#[alloc_error_handler]`/`panic_impl` "conflito com std" e `neural_sgdb` puxando std só aparecem no check host-toolchain; o build canônico (`cargo build --release -p boot` com o target bare-metal do .cargo/config) passa 0 erros. O `touch main.rs` antes do check continua obrigatório (lição s346).
 
 - **Tile de colunas nao aceita formula de tile de linhas (SESSION_412):** o `ternary_worker` SMP e tileado por COLUNAS mas usava `matmul_tile_rows(k,n)` (formula de LINHAS) — devolvia 4 e o `clamp(8,..)` fixava **8 colunas = 2 B usados por linha de cache (64 B)**. Sweep do piso (Falcon3-1B, prefill m=8, worker k=2048 n=8192): 8->204 ms, 16->154, **32->105**, 64->130, 128->127; prefill 20,9 -> 12,7 s. `clamp(32,256)` = **1,9x**. 32 e o **fit** (strip `k/4` B/col = 16 KB + `x` 8 KB = 24 KB de L1); 64 ja estoura. Regra: constante de tiling vale para o eixo que ela descreve — medir o fit, nao reusar a do outro eixo.
 

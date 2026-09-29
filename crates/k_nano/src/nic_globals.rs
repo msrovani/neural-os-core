@@ -20,6 +20,8 @@ pub fn wall_pause_us(us: u64) {
 #[link_section = ".data"]
 pub static RTL8139: Mutex<Option<crate::rtl8139::Rtl8139Driver>> = Mutex::new(None);
 #[link_section = ".data"]
+pub static RTL8168: Mutex<Option<crate::rtl8168::Rtl8168Driver>> = Mutex::new(None);
+#[link_section = ".data"]
 pub static E1000: Mutex<Option<crate::e1000::E1000Driver>> = Mutex::new(None);
 #[link_section = ".data"]
 pub static I225: Mutex<Option<crate::i225::I225Driver>> = Mutex::new(None);

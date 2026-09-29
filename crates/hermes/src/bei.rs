@@ -355,11 +355,23 @@ impl BeiState {
         
         // 7. DynamicMoE lifecycle (birth/merge/split)
         // H4: sem experts registrados o lifecycle é morto — gate cedo.
-        if current_tick % 100 == 0 && !self.dynamic_moe.lock().base.experts.is_empty() {
+        // SESSION_416 fail-closed: merge/split/birth clonam experts (merge_pair,
+        // clone_with_noise) → sob heap crítico o alloc devolve null → deref →
+        // #PF no AP (evidência: flush_merges cr2=0x8, T+27.8s pós teto 2030MB).
+        // Lifecycle MoE é trabalho não-essencial: pula o ciclo inteiro.
+        if current_tick % 100 == 0
+            && !k_nano::allocator::heap_headroom_critical()
+            && !self.dynamic_moe.lock().base.experts.is_empty()
+        {
             let mut dmoe = self.dynamic_moe.lock();
             let mut lifecycle = self.expert_lifecycle.lock();
             let _budget = self.budget_manager.lock();
             
+            // Re-check bounded (padrão lost-wakeup SESSION_411): o headroom pode
+            // ter caído entre o gate externo e o lock.
+            if k_nano::allocator::heap_headroom_critical() {
+                k_nano::slog_bin!("BEI", "warn", "lifecycle MoE pulado: heap crítico");
+            } else {
             // Check for expert births (high entropy regions)
             let high_entropy = dmoe.high_entropy_indices(0.8);
             for idx in high_entropy {
@@ -385,6 +397,7 @@ impl BeiState {
             
             // Flush all pending changes
             dmoe.flush_all();
+            } // else (heap crítico — lifecycle pulado)
         }
         
         // 8. Budget pressure check

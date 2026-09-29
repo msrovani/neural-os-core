@@ -959,6 +959,8 @@ fn can_spawn_respawn(name: &str) -> bool {
             | "memory"
             | "memory_budget"
             | "hub_health_agent"
+            | "audio_health_agent"
+            | "sys_health_agent"
             | "vision"
             | "browser"
             | "auto-installer"
@@ -1109,6 +1111,8 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
                 "memory" => Some(Box::new(agents::MemoryAgent::new())),
                 "memory_budget" => Some(Box::new(crate::memory_agent::MemoryAgent::new())),
                 "hub_health_agent" => Some(Box::new(hermes_crate::hub_health::HubHealthAgent::new())),
+                "audio_health_agent" => Some(Box::new(hermes_crate::audio_health::AudioHealthAgent::new())),
+                "sys_health_agent" => Some(Box::new(hermes_crate::sys_health::SysHealthAgent::new())),
                 "vision" => Some(Box::new(vision_agent::VisionAgent::new())),
                 "browser" => Some(Box::new(browser_agent::BrowserAgent::new())),
                 "auto-installer" => Some(Box::new(k_nano::installer_agent::AutoInstallerAgent::new())),
@@ -3639,6 +3643,17 @@ pub(crate) fn kernel_boot(
     let _ = registry.set_affinity_ring("intent_router", 2);
     // Hub Health: política do painel F12 (EventDriven) — compositor só renderiza.
     registry.register(Box::new(hermes_crate::hub_health::HubHealthAgent::new()));
+    // AUDIO_HEALTH consumer: assina AUDIO_HEALTH (jarbas 1 Hz) e escala NO_GO
+    // persistente ao LLM via USER_INTENT (1x por incidente, anti-loop SESSION_410).
+    registry.register(Box::new(hermes_crate::audio_health::AudioHealthAgent::new()));
+    // SYS_HEALTH produtor+escalador: net/storage/gpu 1 Hz + NO_GO persistente → LLM
+    // (mesma política única k_nano::sys_health::EscalationState, SESSION_415).
+    registry.register(Box::new(hermes_crate::sys_health::SysHealthAgent::new()));
+    // SESSION_415 freeze: EventDriven 1 Hz não justifica offload para AP — tick
+    // no AP segura o AGENT_TICK_BUSY global (freeze do compositor, stamp no FB).
+    // Ring 0 = BSP: publicação 1 Hz é imperceptível no scheduler.
+    let _ = registry.set_affinity_ring("audio_health_agent", 0);
+    let _ = registry.set_affinity_ring("sys_health_agent", 0);
 
     // The Agency: 30+ agentes especialistas
 

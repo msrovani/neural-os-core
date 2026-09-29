@@ -234,6 +234,16 @@ impl DynamicMoE {
     }
 
     pub fn flush_merges(&mut self) {
+        // SESSION_416 fail-closed (bare-metal only — self-test host tem BUMP_MAX_OFFSET=0):
+        // merge_pair clona o expert → sob heap crítico o alloc devolve null →
+        // deref → #PF (evidência: cr2=0x8 em flush_merges pós teto 2030MB).
+        // Pular o ciclo é honesto: pending_merges permanece para o próximo tick
+        // com headroom; melhor pular do que derrubar o AP.
+        #[cfg(target_os = "none")]
+        if k_nano::allocator::heap_headroom_critical() {
+            self.pending_merges.clear();
+            return;
+        }
         for &(i, j) in &self.pending_merges {
             if i >= self.base.experts.len() || j >= self.base.experts.len() { continue; }
             let merged = Self::merge_pair(&self.base.experts[i], &self.base.experts[j]);
@@ -259,6 +269,13 @@ impl DynamicMoE {
     }
 
     pub fn flush_splits(&mut self) {
+        // SESSION_416 fail-closed: clone_with_noise aloca 2 clones do expert —
+        // mesmo racional do flush_merges (bare-metal only; host self-test).
+        #[cfg(target_os = "none")]
+        if k_nano::allocator::heap_headroom_critical() {
+            self.pending_splits.clear();
+            return;
+        }
         for &idx in &self.pending_splits {
             if idx >= self.base.experts.len() { continue; }
             let original = &self.base.experts[idx];
@@ -281,6 +298,14 @@ impl DynamicMoE {
         // não são afetados pelos shifts de merge/split).
         self.flush_merges();
         self.flush_splits();
+        // births: push de expert novo (alloc grande) — mesmo gate.
+        #[cfg(target_os = "none")]
+        if k_nano::allocator::heap_headroom_critical() {
+            self.pending_births.clear();
+        } else {
+            self.flush_births();
+        }
+        #[cfg(not(target_os = "none"))]
         self.flush_births();
     }
 

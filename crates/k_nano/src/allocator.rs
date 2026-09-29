@@ -5,7 +5,7 @@
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::fmt::Write;
-use core::sync::atomic::{AtomicIsize, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, AtomicUsize, Ordering};
 use agent_core::{AgentKind, ScheduleKind};
 use spin::Mutex;
 use talc::{Span, Talc, Talck, ErrOnOom};
@@ -243,16 +243,113 @@ fn grow_bump_auto(need: usize) -> bool {
 /// Tamanho mínimo do bloco de auto-crescimento do heap.
 const HEAP_GROW_STEP: usize = 256 * 1024 * 1024; // 256MB por passo
 
-#[cfg(feature = "global-alloc")]
-#[global_allocator]
-static HEAP_ALLOC: LazyBumpAllocator = LazyBumpAllocator::new();
+// ─── SESSION_415: Hybrid TALC-first allocator ───────────────────────────────
+// O bump sem free ("dealloc = no-op") satura a janela de ~2GB com o runtime
+// vivo (decode LLM + TTS + bus + memória) → alloc NULL → caller deref → #PF →
+// AP hlt (evidência 2 boots: teto 2030MB + heap-fail). O TALC (heap canônico
+// por AGENTS.md) tem free real e já é inicializado pós-boot
+// (talc_init_post_memory) com demand-page cobrindo o range in_talc.
+// Política: pós-init, TALC é primário; bump continua cobrindo allocs de boot
+// (antes do claim) e é fallback honesto se TALC ainda não foi claimado.
+struct HybridAllocator;
 
-#[cfg(not(feature = "global-alloc"))]
-static HEAP_ALLOC: LazyBumpAllocator = LazyBumpAllocator::new();
+static TALC_READY: AtomicBool = AtomicBool::new(false);
+
+/// SESSION_416 diagnóstico: quantas vezes bump recusou E o TALC overflow
+/// também devolveu null (o caller recebe null → deref → #PF). Se crescer
+/// com heap crítico, o span TALC não tem espaço/páginas — investigar.
+static TALC_OVERFLOW_NULL: AtomicU64 = AtomicU64::new(0);
+
+pub fn talc_overflow_null_count() -> u64 {
+    TALC_OVERFLOW_NULL.load(Ordering::Relaxed)
+}
+
+const TALC_RANGE_START: usize = HEAP_START;
+const TALC_RANGE_END: usize = HEAP_START + HEAP_SIZE;
+
+impl HybridAllocator {
+    #[inline]
+    fn ptr_in_talc(ptr: *mut u8) -> bool {
+        let p = ptr as usize;
+        p >= TALC_RANGE_START && p < TALC_RANGE_END
+    }
+}
+
+unsafe impl GlobalAlloc for HybridAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // Bump PRIMEIRO (comportamento de boot intacto — TALC-first stallou o
+        // boot no SMP bring-up: claim demanda páginas do span antes do IDT/
+        // demand-page prontos). TALC é OVERFLOW: só entra quando o bump recusa
+        // (janela esgotada) e o claim já existe — aí dealloc do TALC é real.
+        let p = LazyBumpAllocator::alloc(&BUMP_ALLOC, layout);
+        if !p.is_null() {
+            return p;
+        }
+        if TALC_READY.load(Ordering::Acquire) {
+            let q = TALC_ALLOC.alloc(layout);
+            if !q.is_null() {
+                return q;
+            }
+            let n = TALC_OVERFLOW_NULL.fetch_add(1, Ordering::Relaxed);
+            // 3 primeiras ocorrências: serial direto, zero-alloc (path de OOM).
+            if n < 3 {
+                let mut buf = [0u8; 96];
+                let mut n2 = 0usize;
+                for &b in b"ALLOC null bump+TALC size=" { if n2 < buf.len() { buf[n2] = b; n2 += 1; } }
+                let mut v = layout.size();
+                let mut digits = [0u8; 20];
+                let mut d = 0usize;
+                if v == 0 { digits[0] = b'0'; d = 1; }
+                while v > 0 && d < 20 { digits[d] = b'0' + (v % 10) as u8; v /= 10; d += 1; }
+                while d > 0 { d -= 1; if n2 < buf.len() { buf[n2] = digits[d]; n2 += 1; } }
+                for &b in b" agente=" { if n2 < buf.len() { buf[n2] = b; n2 += 1; } }
+                let agent = agent_core::oom_agent_label();
+                for &b in agent.as_bytes() { if n2 < buf.len() { buf[n2] = b; n2 += 1; } }
+                crate::interrupts::exception_fb_stamp(&buf[..n2]);
+            }
+        }
+        core::ptr::null_mut()
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        if Self::ptr_in_talc(ptr) {
+            TALC_ALLOC.dealloc(ptr, layout);
+            return;
+        }
+        // Bump: no-op (sempre foi) — ponteiros de boot vivem e morrem.
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if Self::ptr_in_talc(ptr) && TALC_READY.load(Ordering::Acquire) {
+            return TALC_ALLOC.realloc(ptr, layout, new_size);
+        }
+        GlobalAlloc::realloc(&BUMP_ALLOC, ptr, layout, new_size)
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        let p = LazyBumpAllocator::alloc_zeroed(&BUMP_ALLOC, layout);
+        if !p.is_null() {
+            return p;
+        }
+        if TALC_READY.load(Ordering::Acquire) {
+            let q = TALC_ALLOC.alloc_zeroed(layout);
+            if !q.is_null() {
+                return q;
+            }
+        }
+        core::ptr::null_mut()
+    }
+}
+
+/// Instância bump usada como fallback/boot do híbrido.
+static BUMP_ALLOC: LazyBumpAllocator = LazyBumpAllocator::new();
+
+#[global_allocator]
+static GLOBAL_ALLOC: HybridAllocator = HybridAllocator;
 
 /// Returns the actual heap usage in bytes from the LazyBumpAllocator.
 pub fn heap_used_bytes() -> usize {
-    let offset = HEAP_ALLOC.offset.load(Ordering::Relaxed);
+    let offset = BUMP_ALLOC.offset.load(Ordering::Relaxed);
     if offset < 0 { 0 } else { offset as usize }
 }
 
@@ -323,6 +420,16 @@ pub fn can_alloc_bytes(size: usize, margin_mb: usize) -> bool {
     let headroom = heap_headroom_bytes();
     let margin = margin_mb.saturating_mul(1024 * 1024);
     size.saturating_add(margin) <= headroom
+}
+
+/// Headroom crítico (SESSION_415): abaixo disso, novos jobs de inferência são
+/// RECUSADOS na entrada (fail-closed) — melhor recusar um claim do que OOM
+/// no meio do prefill (alloc NULL → caller deref → #PF → AP hlt com stamp).
+pub const HEAP_CRITICAL_HEADROOM_MB: usize = 64;
+
+/// True se o headroom do bump está abaixo do piso crítico.
+pub fn heap_headroom_critical() -> bool {
+    heap_headroom_bytes() < HEAP_CRITICAL_HEADROOM_MB * 1024 * 1024
 }
 
 /// Publica HEAP_PRESSURE no EventBus (chamar fora de grow — pode alocar).
@@ -929,7 +1036,10 @@ pub fn talc_init_post_memory() -> Result<(), &'static str> {
         TALC_ALLOC.lock().claim(span).map_err(|_| "talc claim failed")?
     };
     *CLAIMED_HEAP.lock() = Some(claimed);
-    crate::slog_nano!("HEAP", "TALC", "Tier 1 ready: virt={:#x} size={} MB",
+    // SESSION_415: ativa o TALC como primário do allocator híbrido. A partir
+    // daqui dealloc é REAL — o bump (sem free) só cobre allocs de boot.
+    TALC_READY.store(true, Ordering::Release);
+    crate::slog_nano!("HEAP", "TALC", "Tier 1 ready (hybrid PRIMARY): virt={:#x} size={} MB",
         LARGE_HEAP_START,
         LARGE_HEAP_SIZE / (1024 * 1024));
     Ok(())

@@ -1,17 +1,19 @@
 use k_nano::rtl8139::Rtl8139Driver;
+use k_nano::rtl8168::Rtl8168Driver;
 use k_nano::e1000::{E1000Driver, REG_STATUS};
 use k_nano::i225::I225Driver;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 pub const TOPIC_HW_NET_RTL8139: &str = "HW_NET_RTL8139";
+pub const TOPIC_HW_NET_RTL8168: &str = "HW_NET_RTL8168";
 pub const TOPIC_NETWORK_CONFIGURED: &str = "NETWORK_CONFIGURED";
 pub const TOPIC_NET_READY: &str = "NET_READY";
 pub const TOPIC_NETWORK_DEGRADED: &str = "NETWORK_DEGRADED";
 pub const TOPIC_NETWORK_HEALTH: &str = "NETWORK_HEALTH";
 
 // Low-level NIC statics live in k_nano (R0 transport). Re-export for single source.
-pub use k_nano::nic_globals::{RTL8139, E1000, I225, VIRTIO_DEV};
+pub use k_nano::nic_globals::{RTL8139, RTL8168, E1000, I225, VIRTIO_DEV};
 pub use k_nano::nic_globals::NET_CONFIG as KNANO_NET_CONFIG;
 
 pub static NETSTACK: spin::Mutex<Option<crate::netstack::NetStack>> = spin::Mutex::new(None);
@@ -135,6 +137,41 @@ pub unsafe fn init_driver_rtl8139() -> bool {
     true
 }
 
+/// RTL8168/8111 PCIe GbE (família r8169) — MMIO BAR2, polled.
+pub unsafe fn init_driver_rtl8168() -> bool {
+    if RTL8168.lock().is_some() { return true; }
+    let pci_devices = k_nano::pci::scan_pci();
+    let mut dev_opt = None;
+    for dev in &pci_devices {
+        if k_nano::rtl8168::is_rtl8168_family(dev.vendor_id, dev.device_id) {
+            k_nano::slog_hermes!("Net", "info", "RTL8168 detectado: {:02x}:{:02x}.{:02x} DID={:#06x}", dev.bus, dev.device, dev.function, dev.device_id);
+            let mut driver = match Rtl8168Driver::new(dev) { Some(d) => d, None => { k_nano::slog_hermes!("Net", "info", "RTL8168 new() falhou"); return false; } };
+            if driver.init() {
+                dev_opt = Some(driver);
+            }
+            break;
+        }
+    }
+    let driver = match dev_opt {
+        Some(d) => d,
+        None => {
+            k_nano::slog_hermes!("Net", "info", "RTL8168 nao encontrado.");
+            return false;
+        }
+    };
+    let mac = driver.mac();
+    NET_CONFIG.lock().mac = mac;
+    *RTL8168.lock() = Some(driver);
+    k_nano::slog_hermes!("Net", "info", "RTL8168 iniciado. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+        id: 0,
+        topic: alloc::string::String::from(TOPIC_HW_NET_RTL8168),
+        payload: alloc::vec![mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]],
+        token: event_bus::CapabilityToken::Legacy(1),
+    });
+    true
+}
+
 pub unsafe fn init_driver_e1000() -> bool {
     if E1000.lock().is_some() { return true; }
     let pci_devices = k_nano::pci::scan_pci();
@@ -228,6 +265,7 @@ pub unsafe fn probe_nics_from_bind_plan() -> bool {
             NicKind::Virtio => k_nano::virtio_net::init_driver_virtio(),
             NicKind::E1000 => init_driver_e1000(),
             NicKind::Rtl8139 => init_driver_rtl8139(),
+            NicKind::Rtl8168 => init_driver_rtl8168(),
             NicKind::None => false,
         };
         k_nano::slog_hermes!("Net", "bind", "probe {} ok={}", kind.as_str(), ok);

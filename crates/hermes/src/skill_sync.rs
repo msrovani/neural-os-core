@@ -474,6 +474,9 @@ pub fn poll_p2p() {
     // Cada módulo tem subscribe próprio (EventBus = fila por assinante); o bin
     // só chama `skill_sync::poll_p2p()` por tick — repassa sem editar o bin.
     crate::mesh_knowledge::poll_p2p();
+    // SESSION_417: RX `MCH\0` (veredito de máquina) para a agregação de frota
+    // no Master (publish FLEET_HEALTH + escala via USER_INTENT).
+    crate::fleet_health::poll_p2p(k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64);
 }
 
 #[cfg(test)]

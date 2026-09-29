@@ -203,6 +203,9 @@ unsafe fn nic_send(data: Vec<u8>) {
     if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
         nic.send(&data); return;
     }
+    if let Some(ref mut nic) = *crate::net::RTL8168.lock() {
+        nic.send(&data); return;
+    }
     crate::generic_wifi::ACTIVE_DRIVER.lock(|driver| {
         if let Some(wifi) = driver { let _ = wifi.send_packet(&data); }
     });
@@ -224,6 +227,9 @@ unsafe fn nic_recv() -> Option<Vec<u8>> {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
     if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
+        if let Some(pkt) = nic.recv() { return Some(pkt); }
+    }
+    if let Some(ref mut nic) = *crate::net::RTL8168.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
     let mut wifi_pkt: Option<Vec<u8>> = None;

@@ -1,5 +1,15 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s417] - 2026-09-29 - Federation de saúde + OOM fail-closed (MACHINE/FLEET_HEALTH)
+
+- High: **federation de saúde** — veredito consolidado de máquina (`k_nano::sys_health::machine_verdict_json`: SYS+AUDIO worst-of NO_GO>UNKNOWN>GO, razões dedupe, JSON padrão MESH_HEALTH) publicado 1Hz em `MACHINE_HEALTH` + TX mesh `MCH\0` (cooldown 10s); Master agrega via `hermes::fleet_health` (RX array fixo 16 slots com evicção, `fleet_worst()` → `FLEET_HEALTH`) e escala ao LLM **num prompt só** por incidente (política EscalationState única, cooldown 600 ticks).
+- High: **OOM fail-closed por classe** — freeze de UI (stamps intent-router/sys_health/network_agent) era 1 fenômeno: heap bump sem free satura (~2030MB) → alloc NULL → #PF → hlt no AP (carimbo = agente em execução, não culpado). Gates `heap_headroom_critical()` (64MB) no claim de inferência, no job em curso (Finishing honesto) e no MoE lifecycle (bei_tick + flush_merges/splits/births).
+- Med: **freeze UI** — `try_with_agent_tick_lock_ms(2)` no display (always-first + boost): frame skip em vez de spin eterno no lock global do tick; SCHED gap 10761 → ~3351.
+- Med: **hybrid allocator** — bump-first + TALC overflow (TALC-first stallava o boot no SMP bring-up) + diagnóstico `ALLOC null bump+TALC` (stamp FB) para a dívida estrutural do heap.
+- Low: honestidade de saúde — playback idle = UNKNOWN (nunca NO_GO), stall_diag re-lê LPIB (moving vs frozen real), agents de saúde pinados no BSP.
+- Gates: k-nano sys_health 10/10; hermes fleet_health 4/4, sys_health 6/6; infer_queue 10/10; check release 0 erros; QEMU: MCH TX fluindo, zero PF_DBG, a2_proof completo.
+- Session: SESSION_417
+
 ## [1.9.99-s414] - 2026-09-26 - ADR-0111 P0-P3: KV-INT8/paginado (3,76x menos memoria)
 
 - High: **KV INT8** - `KvCache.k`/`v` de `Vec<Vec<f32>>` para `Vec<Vec<i8>>` + uma escala f32 por bloco de 64 (quant simetrica `scale = max|x|/127`, `q = round(x/scale).clamp(-127,127)`). `k_all`/`v_all` dequantizam com a **MESMA assinatura** e o **MESMO guard SESSION_351** (nunca unwrap). `h2o_evict` adaptado, assinatura intacta. **3,76x menor** (nao 4x: a escala f32 por 64 valores conta).

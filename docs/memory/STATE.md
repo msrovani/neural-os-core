@@ -1,6 +1,8 @@
-# STATE - neural-os-core v1.9.99-s414 - ADR-0111 P0-P3: KV-INT8/paginado (3,76x)
+# STATE - neural-os-core v1.9.99-s417 - Federation de saúde + OOM fail-closed (MACHINE/FLEET_HEALTH)
 
-#   PISTA ATIVA: s410m — forget cognitivo HITL (/forget) + leitura de conflitos (/conflicts)
+#   PISTA ATIVA: s417 — federation de saúde (MCH\0 → fleet_worst → FLEET_HEALTH, prompt único ao LLM)
+#     + fail-closed por classe sob heap crítico (claim/job/MoE lifecycle); stall silencioso pós-teto ABERTO
+#   PISTA ANTERIOR: s410m — forget cognitivo HITL (/forget) + leitura de conflitos (/conflicts)
 #     via ApprovalGate Escalate (skills sgdb_forget/conflict_resolve); tombstone Superseded
 #     antes do delete físico; fail-closed NSGDB down; registry pendente cap 32 FIFO;
 #     s410m-b: elo AUDIT_OP_FORGET na hash-chain sys/audit/ do SGDB (audit_forget upstream
@@ -10,6 +12,22 @@
 #     (s410l CRDT merge_remote; s410k mesh RX batch; s410j compact batch; s410i interop TKLV)
 #   PISTA ANTERIOR: s406 heap auto-fracionado advisory (commit 2b650c56)
 #   Não declarar v2.0.0
+
+## Federation de saúde + OOM fail-closed (s417) [OK parcial]
+
+| Item | Estado |
+|------|--------|
+| Diagnóstico freeze/#PF | OK - 1 OOM (bump sem free → NULL → #PF → hlt no AP); carimbo ≠ culpado; crash site migra com fix |
+| Fail-closed infer_queue | OK - claim recusado sob headroom crítico (64MB) + job em curso → Finishing honesto (10/10) |
+| Fail-closed MoE lifecycle | OK - gate `heap_headroom_critical()` em bei_tick + flush_merges/splits/births |
+| Freeze UI (tick lock) | OK - `try_with_agent_tick_lock_ms(2)` display first+boost; SCHED gap 10761→3351 |
+| Hybrid allocator | PARCIAL - bump-first+TALC overflow; TALC-first stallou boot; diagnóstico `ALLOC null` pronto |
+| Modelo puro máquina/frota | OK - worst-of NO_GO>UNKNOWN>GO, machine_verdict_json, parse no_std, fleet_worst (10/10) |
+| Consolidação hermes | OK - MACHINE_HEALTH 1Hz + machine_prompt único + TX MCH\0 (cooldown 10s) |
+| Fleet no Master | OK - fleet_health RX MCH\0 (array 16 slots, evicção), FLEET_HEALTH + escala 1×/incidente (4/4) |
+| QEMU validação | OK - MCH TX 25 pubs, zero PF_DBG, a2_proof completo; boot passou do stall anterior |
+| Stall silencioso pós-teto | ABERTO - log para ~T+27-42s, CPU queimando, sem #PF (classe lost-wakeup/lock) |
+| Federation e2e dual-node | ⏳ - RX de frota com MCH alheio real + FLEET_HEALTH no HUD |
 
 ## KV-INT8/paginado (s414) [OK]
 

@@ -44,6 +44,7 @@ fn has_ethernet_nic() -> bool {
     crate::net::E1000.lock().is_some() || crate::net::I225.lock().is_some()
         || crate::net::VIRTIO_DEV.lock().is_some()
         || crate::net::RTL8139.lock().is_some()
+        || crate::net::RTL8168.lock().is_some()
 }
 
 fn apply_static_qemu(ns: &mut crate::netstack::NetStack, tick: u64) {
