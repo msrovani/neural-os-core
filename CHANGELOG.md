@@ -1,5 +1,14 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s421] - 2026-09-30 - Lane VRAM ADR-0112: dispatch por sequência + correções de corretude
+
+- High: **lane VRAM POR SEQUÊNCIA (layer-major)** — o SHAPE_INDEX do s418 servia TODAS as layers com a matriz da layer 0 (shape não resolve q/k/v/o — mesma (h,h); colidiria com experts do MoE): pesos errados corromperiam logits silenciosamente. Novo `dispatch_vram_seq(slot=layer*7+[q,k,v,o,gate,up,down], w, x)` no `cortex::compute` + `vram_ternary_seq` no `bar_compute` com **proteção de identidade** (shape divergente = None honesto → CPU ladder). Upload sem dedupe com **pré-checagem de capacidade INTEIRA** (1B ≈ 369MB, 3B ≈ 675MB; BAR1 sem ReBAR ≈ 256MB → lane off honesto, nunca parcial). Cursor persistente de weights: hint (boot) e LLM (set_model) dividem a aperture sem colidir; `SEQ_MATS` é só do LLM.
+- Fix: **GEMV do bar_compute** — layout row-major do pack (peso (t,j) no flat `t*n+j`, casado com `get_weight` do heap/bitnet_sse; o s418 lia coluna trocada); **escala de quantização POR LINHA** (`si_row[8]`; a única era sobrescrita por linha — errada para m>1); prefetch por coluna de linhas.
+- Fix: `dispatch_ternary` NÃO mais chama o slot VRAM (ABI antigo TernaryFn — o lane é seq-only via apply_one_layer).
+- Honestidade: **heap não encolhe com o lane ativo** — bump não tem free e os pesos já foram alocados no boot; a liberação REAL de heap exige loader-VRAM (residual ADR-0112). O ganho do lane corrigido é o caminho de leitura via BAR correto (e o upgrade estrutural no lab).
+- Gates: check release 0 erros; cortex 107 (106+1 seq fechado), k-hal 68 (67+1), k-nano 232. QEMU 8G/6c: boot limpo zero #PF real, grow máx 1536MB (abaixo do teto), prefill id=1 completo 91s, a2_proof id=2 timeout honesto 300s (fail-closed, sistema vivo matmulando depois), lane off honesto no VirtIO-GPU (sem aperture → CPU ladder intacta).
+- Session: SESSION_420 addendum s421
+
 ## [1.9.99-s420c] - 2026-09-29 - Consumidor do tópico HINTS: tint neural em orb/dock/cards
 
 - High: **`jarbas::display::hint_tint`** — consumidor canônico do tópico `HINTS` (regra s352: tópico novo só está feito quando tem consumidor). Snapshot 8 regiões × (energia, matiz) + freshness com decaimento linear (stale 2.5 s = 5 feeds perdidos → modo clássico) + `hue_to_rgb` glass sem f32. Zero alloc no hot path (leitura de static + idade TSC).

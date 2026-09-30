@@ -1,12 +1,14 @@
-# STATE - neural-os-core v1.9.99-s420c - Consumidor HINTS: tint neural orb/dock/cards
+# STATE - neural-os-core v1.9.99-s421 - Lane VRAM ADR-0112 por sequência + corretude
 
-#   PISTA ATIVA: s420c — consumidor do tópico HINTS (hint_tint.rs): snapshot 8 regiões +
-#     freshness decaimento (stale 2.5s = clássico) + tint aumentativo §6.4 (orb accent,
-#     dock borda/running, cards título por id%4). Em QEMU produtor não publica (sem aperture)
-#     → UI clássica honesta; caminho completo só no lab GTX 1050. s420b: train_hint_mlp.py
-#     (QAT, 100% acordo) + loader HINT.BIN no kernel (fail-closed) — H3-revisit completo.
-#     s420: gate fail-closed headroom_low 128MB no prefill/decode slice (validado em produção,
-#     zero #PF). Residual: cura estrutural do teto = ADR-0112 (pesos em VRAM via BAR)
+#   PISTA ATIVA: s421 — lane VRAM POR SEQUÊNCIA (layer*7+slot) corrige os 3 bugs de
+#     corretude do s418 (SHAPE_INDEX servia layer 0 p/ todas; GEMV coluna trocada;
+#     escala única p/ m>1). Upload sem dedupe + pré-checagem INTEIRA (parcial = off
+#     honesto). Dispatch seq no apply_one_layer (7 matmuls) + proteção de shape.
+#     HONESTIDADE: heap NÃO encolhe (bump sem free; pesos já no boot) — liberação
+#     real exige loader-VRAM (residual, lab). QEMU 8G/6c: lane off honesto (sem
+#     aperture), CPU ladder intacta, zero #PF, grow máx 1536MB. s420c: consumidor
+#     HINTS (tint orb/dock/cards); s420b: train_hint_mlp + loader HINT.BIN;
+#     s420: gate fail-closed headroom_low 128MB no slice (zero #PF em produção)
 #   PISTA ANTERIOR: s418 — BAR Compute (pesos W2A8 residem na VRAM via BAR, GEMV host lê aperture,
 #     lane VRAM no dispatch; StreamsW2a8/ComputeDevice = upgrade; lab GTX 1050 = residual)
 #   PISTA ANTERIOR: s410m — forget cognitivo HITL (/forget) + leitura de conflitos (/conflicts)

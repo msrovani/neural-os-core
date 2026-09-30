@@ -38,10 +38,19 @@ pub struct ResidentWeights {
 static RESIDENT: spin::Mutex<Option<ResidentWeights>> = spin::Mutex::new(None);
 static UPLOADED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
-/// Mapa (k,n) → índice de matriz residente (dispatch O(1) por shape —
-/// Falcon3 tem q/k/v/o/up/down com shapes distintos por camada).
-static SHAPE_INDEX: spin::Mutex<alloc::vec::Vec<(usize, usize, usize)>> =
+/// ADR-0112 s421 — lane por SEQUÊNCIA (layer-major): o cortex chama com o
+/// índice absoluto da matriz na ordem canônica (layer*7 + [q,k,v,o,gate,up,
+/// down]). Shape NÃO resolve q/k/v/o (mesma (h,h)) e colidiria com experts
+/// do MoE — só a sequência é chave confiável. O upload sobe TODAS as
+/// matrizes na MESMA ordem do snapshot; se a aperture não comporta o total
+/// (1B ≈ 369MB, 3B ≈ 675MB; BAR1 sem ReBAR ≈ 256MB), o lane fica off
+/// honesto (CPU ladder) — nunca parcial/ambíguo.
+static SEQ_MATS: spin::Mutex<alloc::vec::Vec<(u64, usize, usize)>> =
     spin::Mutex::new(alloc::vec::Vec::new());
+
+/// Nº de matrizes por layer na sequência canônica do TransformerModel.
+/// Deve casar com os call sites de `dispatch_vram_seq` em cortex.rs.
+pub const SEQ_SLOTS_PER_LAYER: usize = 7;
 
 /// Copia a matriz de pesos packed (k,n) para a VRAM no offset dado.
 /// Retorna bytes escritos. Fail-closed sem aperture.
@@ -76,7 +85,18 @@ pub fn upload_layer_weights(layers: &[&PackedTernaryTensor], ring_plan: &RingPla
     }
     // Aperture size do buddy (limite de segurança).
     let aperture = crate::gpu::vram::vram_status_aperture_bytes()?;
-    let mut next_off = ring_plan.ring_bytes().max(2 * 1024 * 1024); // após ring, alinhado 2MB
+    // s421: cursor PERSISTENTE de pesos — o hint (boot, antes do LLM) e o LLM
+    // (set_model, depois) dividem a aperture SEM colidir: cada upload começa
+    // onde o anterior terminou (alinhado 4KB).
+    static NEXT_WEIGHT_OFF: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let mut next_off = {
+        let cur = NEXT_WEIGHT_OFF.load(core::sync::atomic::Ordering::Acquire);
+        if cur == 0 {
+            ring_plan.ring_bytes().max(2 * 1024 * 1024)
+        } else {
+            cur
+        }
+    };
     let mut mats = alloc::vec::Vec::new();
     let mut total = 0u64;
     for w in layers {
@@ -88,39 +108,31 @@ pub fn upload_layer_weights(layers: &[&PackedTernaryTensor], ring_plan: &RingPla
         next_off += written as u64;
         total += written as u64;
     }
+    NEXT_WEIGHT_OFF.store(next_off, core::sync::atomic::Ordering::Release);
     note_weights_resident(total);
-    // Reconstrói o índice de shapes (1ª camada registrada vence — as layers
-    // compartilham shapes: dispatch pega a matriz da família certa).
-    {
-        let mut idx = SHAPE_INDEX.lock();
-        idx.clear();
-        for (i, (_, k, n)) in mats.iter().enumerate() {
-            if !idx.iter().any(|(_, k2, n2)| k2 == k && n2 == n) {
-                idx.push((i, *k, *n));
-            }
-        }
-    }
+    // s421: SEQ_MATS é do LLM (setado só no on_model_loaded) — upload de
+    // hints NÃO toca o índice do lane (ordem boot: hint antes do LLM).
     *RESIDENT.lock() = Some(ResidentWeights { mats: mats.clone(), total_bytes: total });
     Some(ResidentWeights { mats, total_bytes: total })
 }
 
-/// Índice da 1ª matriz residente com shape (k,n) — None se não residente.
-fn mat_index_for(k: usize, n: usize) -> Option<usize> {
-    SHAPE_INDEX
-        .lock()
-        .iter()
-        .find(|(_, k2, n2)| *k2 == k && *n2 == n)
-        .map(|(i, _, _)| *i)
-}
-
-/// Entry point do lane VRAM (TernaryFn — mesmo contrato do GPU device).
-/// Chamado pelo dispatcher do cortex quando o canário de aperture passou.
-pub fn vram_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
+/// Entry point do lane VRAM POR SEQUÊNCIA (s421). `seq` = índice absoluto
+/// layer*7+slot na ordem canônica; `w` tem que bater com a matriz residente
+/// daquele índice (proteção contra dessincronia de sequência — divergiu →
+/// None honesto → CPU ladder, nunca peso errado).
+pub fn vram_ternary_seq(seq: usize, w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     if !bar_compute_enabled() {
         return None;
     }
-    let (k, n) = w.shape;
-    let mat = mat_index_for(k, n)?;
+    let (vram_off, k, n) = {
+        let g = SEQ_MATS.lock();
+        let (off, k, n) = *g.get(seq)?;
+        (off, k, n)
+    };
+    // Proteção de identidade: shape divergente = sequência dessincronizada.
+    if w.shape != (k, n) {
+        return None;
+    }
     let resident_guard = RESIDENT.lock();
     let resident = resident_guard.as_ref()?;
     let plan = RingPlan::falcon3_default();
@@ -129,7 +141,7 @@ pub fn vram_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     let slot = NEXT_SLOT.fetch_add(1, core::sync::atomic::Ordering::Relaxed) % plan.slots;
     // Safety: canário de round-trip passou (bar_compute_enabled) e offsets
     // vêm do upload determinístico.
-    unsafe { gemv_from_vram(x, resident, mat, &plan, slot) }
+    unsafe { gemv_from_vram(x, resident, seq, &plan, slot) }
 }
 
 /// Marca o upload completo (uma vez por boot de modelo).
@@ -170,11 +182,16 @@ pub unsafe fn gemv_from_vram(
     let (vram_off, _, _) = *resident.mats.get(mat_idx)?;
     let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
 
-    // 1. Quantiza x (mesma matemática do reference: si = max|x|/127).
+    // 1. Quantiza x (mesma matemática do reference: si = max|x|/127) —
+    // ESCALA POR LINHA (fix s421: a escala era única sobrescrita por linha,
+    // errada para m>1).
     let mut xq = Vec::new();
     xq.try_reserve_exact(k).ok()?;
     xq.resize(k, 0i32);
-    let mut si_acc = 0.0f32;
+    let mut si_row = [1.0f32; 8]; // m ≤ 8 (RingPlan 8×K)
+    if m > si_row.len() {
+        return None;
+    }
     for i in 0..m {
         let mut max_abs = 0.0f32;
         for &v in &x.data[i * k..(i + 1) * k] {
@@ -184,7 +201,7 @@ pub unsafe fn gemv_from_vram(
             }
         }
         let si = if max_abs > 1e-9 { max_abs / 127.0 } else { 1.0 };
-        si_acc = si;
+        si_row[i] = si;
         let inv = 1.0 / si;
         for (t, xd) in x.data[i * k..(i + 1) * k].iter().enumerate() {
             // round-half-away (mesma regra do reference quantized)
@@ -206,27 +223,36 @@ pub unsafe fn gemv_from_vram(
         return None;
     }
     for i in 0..m {
-        let si = si_acc;
+        let si = si_row[i];
         for j_block in (0..n).step_by(8) {
             let j_end = (j_block + 8).min(n);
-            // Prefetch do próximo bloco j (cache line ahead — o barramento
-            // busca enquanto computamos: overlap duplo-buffer na prática).
-            if j_end < n {
-                let pf = w_base.add((j_end * k) >> 2);
-                core::arch::asm!("prefetcht0 [{}]", in(reg) pf, options(nostack, preserves_flags));
-            }
-            for j in j_block..j_end {
-                let wj = w_base.add(j * k);
-                let mut acc = 0i32;
-                for t in 0..k {
-                    let idx = t + j * k; // coluna-major i8 (n,k) — upload repacked
-                    let _ = idx;
-                    let byte = core::ptr::read_volatile(wj.add(t >> 2));
-                    let pair = (byte >> ((t & 3) << 1)) & 3;
-                    let v = ((pair & 1) as i32) - ((pair >> 1) as i32);
-                    acc += xq[t] * v;
+            // Bytes em VRAM = MESMO pack row-major do heap: peso (t,j) no
+            // offset flat t*n+j (fix s421 — o heap usa get_weight(t*n+j) e o
+            // bitnet_sse lê w_idx = t*n+j; qualquer outro layout corrompe).
+            let mut acc = [0i32; 8];
+            for t in 0..k {
+                let inp = xq[t];
+                if inp == 0 {
+                    continue; // peso × 0 = 0 (skip honesto, economiza BAR reads)
                 }
-                out.data[i * n + j] = acc as f32 * si;
+                // Prefetch do bloco seguinte de linhas (mesmo t, j+8) —
+                // o barramento busca enquanto computamos.
+                if j_end < n && (t & 63) == 63 {
+                    let pf = w_base.add(((t * n + j_end) >> 2) as usize);
+                    core::arch::asm!("prefetcht0 [{}]", in(reg) pf, options(nostack, preserves_flags));
+                }
+                for (jj, j) in (j_block..j_end).enumerate() {
+                    // Bytes em VRAM = MESMO pack row-major do heap: peso
+                    // (t,j) no offset flat t*n+j (get_weight(t*n+j) do heap).
+                    let idx = t * n + j;
+                    let byte = core::ptr::read_volatile(w_base.add(idx >> 2));
+                    let pair = (byte >> ((idx & 3) << 1)) & 3;
+                    let v = ((pair & 1) as i32) - ((pair >> 1) as i32);
+                    acc[jj] += inp * v;
+                }
+            }
+            for (jj, j) in (j_block..j_end).enumerate() {
+                out.data[i * n + j] = acc[jj] as f32 * si;
             }
         }
     }
@@ -246,8 +272,9 @@ pub fn init_bar_compute(gpu: &GpuInfo) -> bool {
 
 /// Callback pós-load de modelo (seam `cortex::register_vram_upload_hook`):
 /// sobe TODAS as matrizes ternárias das layers para a VRAM (stage Mapped).
-/// Determinístico: ordem q,k,v,o,gate,up,down por layer → offsets fixos →
-/// o `SHAPE_INDEX` permite dispatch por shape nas chamadas seguintes.
+/// Determinístico: ordem canônica layer*7+[q,k,v,o,gate,up,down] → offsets
+/// sequenciais → o SEQ_MATS permite dispatch por sequência nas chamadas
+/// seguintes (mesma ordem do snapshot `current_model_layers_snapshot`).
 pub fn on_model_loaded() {
     if !bar_compute_enabled() {
         return;
@@ -256,23 +283,31 @@ pub fn on_model_loaded() {
     // lê direto do packed residente no heap).
     let model = cortex::cortex::current_model_layers_snapshot();
     let Some(layers) = model else { return };
+    // s421: pré-checagem de capacidade — o total tem que caber INTEIRO
+    // (parcial/ambíguo não: peso errado corrompe logits silenciosamente).
+    let aperture = crate::gpu::vram::vram_status_aperture_bytes().unwrap_or(0);
     let plan = RingPlan::falcon3_default();
-    // Coleta ponteiros únicos por (shape, packed_data ptr) — mesmas matrizes
-    // entre layers compartilham shape; subimos UMA de cada família (1ª ocorrência)
-    // para caber na aperture honestamente (dGPU sem ReBAR ≈ 256MB).
-    let mut fams: alloc::vec::Vec<&PackedTernaryTensor> = alloc::vec::Vec::new();
-    for t in layers.iter() {
-        if !fams.iter().any(|f| (*f).shape == (**t).shape) {
-            fams.push(*t);
-        }
+    let need: u64 = layers.iter().map(|t| t.packed_data.len() as u64).sum();
+    // Disponível = aperture − ring − o que já residente (hint, etc.).
+    let used = crate::gpu::vram_stream::BYTES_RESIDENT.load(core::sync::atomic::Ordering::Relaxed);
+    let avail = aperture.saturating_sub(plan.ring_bytes()).saturating_sub(used);
+    if need > avail {
+        k_nano::slog_hal!(
+            "BARCOMPUTE", "warn",
+            "lane VRAM off honesto: need={}MB > aperture disponível={}MB (sem ReBAR) — CPU ladder",
+            need / (1024 * 1024), avail / (1024 * 1024)
+        );
+        return;
     }
-    let refs: alloc::vec::Vec<&PackedTernaryTensor> = fams;
-    match upload_layer_weights(&refs, &plan) {
+    match upload_layer_weights(&layers, &plan) {
         Some(r) => {
             mark_uploaded();
+            // s421: registra o índice sequencial (layer-major) do lane —
+            // SEM dedupe; shape não resolve q/k/v/o (mesma (h,h)).
+            *SEQ_MATS.lock() = r.mats.clone();
             k_nano::slog_hal!(
                 "BARCOMPUTE", "ok",
-                "pesos residentes: {} famílias ({}MB) — heap liberado; GEMV lê via BAR",
+                "pesos residentes POR SEQUÊNCIA: {} matrizes ({}MB) — GEMV host lê via BAR (lane ativo)",
                 r.mats.len(),
                 r.total_bytes / (1024 * 1024)
             );
@@ -302,5 +337,15 @@ mod tests {
             let plan = RingPlan::falcon3_default();
             assert!(upload_layer_weights(&[&w], &plan).is_none());
         }
+    }
+
+    /// s421: lane por sequência SEM VRAM real (host) — vram_ternary_seq tem
+    /// que devolver None honesto (gate fechado / seq ausente / shape divergente).
+    #[test]
+    fn vram_seq_sem_residente_nunca_mente() {
+        let w = PackedTernaryTensor { packed_data: alloc::vec![0u8; 4096], shape: (128, 128) };
+        let x = Tensor::zero((1, 128));
+        // Sem SEQ_MATS preenchido (host) → None em qualquer slot.
+        assert!(vram_ternary_seq(0, &w, &x).is_none());
     }
 }

@@ -1643,8 +1643,12 @@ impl TransformerModel {
         let t1 = k_nano::tsc::now_us();
         crate::layer_diag::note(crate::layer_diag::S_ATTN_NORM, t1.saturating_sub(t0));
 
-        // SESSION_359: matmul fail → abort layer (não zero-fill fingindo OK)
-        let Some(mut q) = layer.q.matmul_hybrid(&norm) else {
+        // ADR-0112 s421: lane VRAM por sequência (layer-major). Slot =
+        // layer*7+[q,k,v,o,gate,up,down] — shape não resolve q/k/v/o (mesma
+        // (h,h)); a sequência é a chave. Falha/divergência → None → escada CPU.
+        let Some(mut q) = crate::compute::dispatch_vram_seq(layer_idx * 7, &layer.q, &norm)
+            .or_else(|| layer.q.matmul_hybrid(&norm))
+        else {
             k_nano::slog_cortex!("FWD", "fail", "L{} q matmul refuse", layer_idx);
             *x = Tensor::zero((0, 0));
             return;
@@ -1654,7 +1658,9 @@ impl TransformerModel {
             return;
         }
         q.mul_scalar(layer.q_scale);
-        let Some(mut k) = layer.k.matmul_hybrid(&norm) else {
+        let Some(mut k) = crate::compute::dispatch_vram_seq(layer_idx * 7 + 1, &layer.k, &norm)
+            .or_else(|| layer.k.matmul_hybrid(&norm))
+        else {
             k_nano::slog_cortex!("FWD", "fail", "L{} k matmul refuse", layer_idx);
             *x = Tensor::zero((0, 0));
             return;
@@ -1664,7 +1670,9 @@ impl TransformerModel {
             return;
         }
         k.mul_scalar(layer.k_scale);
-        let Some(mut v) = layer.v.matmul_hybrid(&norm) else {
+        let Some(mut v) = crate::compute::dispatch_vram_seq(layer_idx * 7 + 2, &layer.v, &norm)
+            .or_else(|| layer.v.matmul_hybrid(&norm))
+        else {
             k_nano::slog_cortex!("FWD", "fail", "L{} v matmul refuse", layer_idx);
             *x = Tensor::zero((0, 0));
             return;
@@ -1825,7 +1833,9 @@ impl TransformerModel {
             return;
         };
         let attn_out_norm = self.rms_norm_tensor(&attn_out, &layer.rms_inner_attn);
-        let Some(mut proj) = layer.o.matmul_hybrid(&attn_out_norm) else {
+        let Some(mut proj) = crate::compute::dispatch_vram_seq(layer_idx * 7 + 3, &layer.o, &attn_out_norm)
+            .or_else(|| layer.o.matmul_hybrid(&attn_out_norm))
+        else {
             k_nano::slog_cortex!("FWD", "fail", "L{} o matmul refuse", layer_idx);
             return;
         };
@@ -1842,7 +1852,9 @@ impl TransformerModel {
         let norm2 = self.rms_norm_tensor(x, &layer.rms_ffn);
         let t6 = k_nano::tsc::now_us();
         crate::layer_diag::note(crate::layer_diag::S_FFN_NORM, t6.saturating_sub(t5));
-        let Some(mut gate) = layer.gate.matmul_hybrid(&norm2) else {
+        let Some(mut gate) = crate::compute::dispatch_vram_seq(layer_idx * 7 + 4, &layer.gate, &norm2)
+            .or_else(|| layer.gate.matmul_hybrid(&norm2))
+        else {
             k_nano::slog_cortex!("FWD", "fail", "L{} gate matmul refuse", layer_idx);
             return;
         };
@@ -1850,7 +1862,9 @@ impl TransformerModel {
             return;
         }
         gate.mul_scalar(layer.gate_scale);
-        let Some(mut up) = layer.up.matmul_hybrid(&norm2) else {
+        let Some(mut up) = crate::compute::dispatch_vram_seq(layer_idx * 7 + 5, &layer.up, &norm2)
+            .or_else(|| layer.up.matmul_hybrid(&norm2))
+        else {
             k_nano::slog_cortex!("FWD", "fail", "L{} up matmul refuse", layer_idx);
             return;
         };
@@ -1883,7 +1897,9 @@ impl TransformerModel {
         }
 
         let gated_norm = self.rms_norm_tensor(&gated_full, &layer.rms_ffn_norm);
-        let Some(mut down) = layer.down.matmul_hybrid(&gated_norm) else {
+        let Some(mut down) = crate::compute::dispatch_vram_seq(layer_idx * 7 + 6, &layer.down, &gated_norm)
+            .or_else(|| layer.down.matmul_hybrid(&gated_norm))
+        else {
             k_nano::slog_cortex!("FWD", "fail", "L{} down matmul refuse", layer_idx);
             return;
         };

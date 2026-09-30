@@ -10,7 +10,7 @@
 //! cai direto no caminho CPU/SMP.
 
 use crate::tensor::{PackedTernaryTensor, Tensor};
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(feature = "p2p")]
 use alloc::vec::Vec;
 #[cfg(feature = "p2p")]
@@ -18,6 +18,9 @@ use spin::Mutex;
 
 /// Assinatura de um backend de matmul ternário (BitNet).
 pub type TernaryFn = fn(&PackedTernaryTensor, &Tensor) -> Option<Tensor>;
+/// ADR-0112 s421: lane VRAM por SEQUÊNCIA (layer-major) — o cortex informa o
+/// índice absoluto da matriz na ordem canônica layer*7+[q,k,v,o,gate,up,down].
+pub type VramSeqFn = fn(usize, &PackedTernaryTensor, &Tensor) -> Option<Tensor>;
 
 // Slots de registro (0 = não registrado). fn-pointer cabe em usize no alvo.
 static GPU_TERNARY: AtomicUsize = AtomicUsize::new(0);
@@ -25,6 +28,7 @@ static NPU_TERNARY: AtomicUsize = AtomicUsize::new(0);
 /// ADR-0112: lane VRAM — pesos residentes na VRAM via BAR (qualquer vendor);
 /// GEMV no host lendo pela aperture. Antes do GPU device (não exige firmware).
 static VRAM_TERNARY: AtomicUsize = AtomicUsize::new(0);
+static VRAM_ENABLED: AtomicBool = AtomicBool::new(false);
 
 // Telemetria (ADR-0057 + ADR-0061): quantas ops cada anel tratou.
 static N_NPU: AtomicU64 = AtomicU64::new(0);
@@ -65,9 +69,16 @@ pub fn register_gpu_ternary(f: TernaryFn) {
 /// ADR-0112 — lane VRAM (BAR compute): registrado por `k_hal` quando o
 /// canário de round-trip da aperture passa (init_stream_ring). GEMV no host
 /// lendo pesos residentes na VRAM — libera RAM e prefetch overlap via PCIe.
-pub fn register_vram_ternary(f: TernaryFn) {
+pub fn register_vram_ternary_seq(f: VramSeqFn) {
     VRAM_TERNARY.store(f as usize, Ordering::Release);
-    k_nano::slog_nano!("COMPUTE", "ok", "VRAM ternary backend registrado (ADR-0112 BAR compute)");
+    VRAM_ENABLED.store(true, Ordering::Release);
+    k_nano::slog_nano!("COMPUTE", "ok", "VRAM ternary backend registrado (ADR-0112 BAR compute, seq)");
+}
+
+/// Lane VRAM pronto p/ servir ( registrado + pesos uploaded). Callers
+/// usam isso p/ gate de rota honesto (HUD/logs) antes de tentar o lane.
+pub fn vram_served() -> bool {
+    VRAM_ENABLED.load(Ordering::Acquire)
 }
 
 /// Telemetria: ops tratadas pelo lane VRAM.
@@ -133,14 +144,11 @@ pub fn dispatch_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
         return Some(r);
     }
 
-    // Ring 1 — VRAM (ADR-0112 BAR compute): antes do GPU device porque não
-    // exige firmware/ISA — só aperture golden. Libera RAM + prefetch overlap.
-    if big {
-        if let Some(r) = call_slot(VRAM_TERNARY.load(Ordering::Acquire), w, x) {
-            N_VRAM.fetch_add(1, Ordering::Relaxed);
-            return Some(r);
-        }
-    }
+    // Ring 1 — VRAM (ADR-0112 BAR compute): MOVIDO p/ dispatch_vram_seq
+    // (s421) — o lane é POR SEQUÊNCIA (layer*7+slot) e só o apply_one_layer
+    // conhece a posição; shape não resolve q/k/v/o (mesma (h,h)). Aqui não
+    // há como identificar a matriz sem risco de peso errado.
+    let _ = big;
 
     // Ring 1 — GPU (matmul pesado). Só se registrado e op grande.
     if big {
@@ -176,6 +184,31 @@ pub fn dispatch_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     None
 }
 
+/// ADR-0112 s421 — tentativa do lane VRAM por sequência (layer-major).
+/// Chamado do apply_one_layer com slot = layer*7+[q,k,v,o,gate,up,down].
+/// Só entra se o lane está registrado (`vram_served`) e a op é big;
+/// `None` honesto → caller segue a escada CPU (nunca peso errado).
+pub fn dispatch_vram_seq(slot: usize, w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
+    if !vram_served() {
+        return None;
+    }
+    let (k, n) = w.shape;
+    if !(n >= 64 && k >= 64) {
+        return None;
+    }
+    let slot_fn = VRAM_TERNARY.load(Ordering::Acquire);
+    if slot_fn == 0 {
+        return None;
+    }
+    // Safety: só armazenamos fn-pointers válidos via register_*.
+    let f: VramSeqFn = unsafe { core::mem::transmute::<usize, VramSeqFn>(slot_fn) };
+    let r = f(slot, w, x);
+    if r.is_some() {
+        N_VRAM.fetch_add(1, Ordering::Relaxed);
+    }
+    r
+}
+
 /// (npu, gpu, smp, avx512, cpu) — contadores de dispatch para telemetria/serial.
 pub fn dispatch_summary() -> (u64, u64, u64, u64, u64) {
     (
@@ -190,6 +223,25 @@ pub fn dispatch_summary() -> (u64, u64, u64, u64, u64) {
 /// True se algum acelerador (NPU/GPU) está registrado.
 pub fn accel_registered() -> bool {
     GPU_TERNARY.load(Ordering::Acquire) != 0 || NPU_TERNARY.load(Ordering::Acquire) != 0
+}
+
+#[cfg(test)]
+mod vram_seq_tests {
+    use super::*;
+
+    /// Contrato: sem registro do k_hal, o lane seq está fechado e devolve
+    /// None em qualquer slot — e NÃO conta N_VRAM (op não foi servida).
+    #[test]
+    fn vram_seq_fechado_sem_registro() {
+        assert!(!vram_served());
+        let w = PackedTernaryTensor { shape: (128, 128), packed_data: alloc::vec![0u8; 4096] };
+        let x = Tensor::zero((1, 128));
+        let before = vram_ops();
+        for slot in 0..7 {
+            assert!(dispatch_vram_seq(slot, &w, &x).is_none(), "slot {slot}");
+        }
+        assert_eq!(vram_ops(), before, "op não servida não conta");
+    }
 }
 
 /// Lane D-accel: leitores p/ rótulo de rota (sem expor fn-pointers).

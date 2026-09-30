@@ -113,3 +113,48 @@ aperture → stage 0/1) e a UI segue 100% clássica (honesto). O caminho complet
 
 Residual: visual é perceptual (matiz/energia não têm ground truth) — validar no
 lab que o tint é visível e agradável; ajustar `STALE_US`/mix se necessário.
+
+## Addendum s421 — Lane VRAM ADR-0112 por sequência + correções de corretude
+
+**Auditoria do s418 (pré-requisito da ativação) achou 3 problemas de corretude
+que impediam o lane de servir compute sem corromper logits:**
+1. **SHAPE_INDEX por família**: sobia 1 matriz por shape (layer 0) e servia
+   TODAS as layers por shape — q/k/v/o têm a MESMA shape (h,h) e não são
+   distinguíveis por shape (e colidiria com experts do MoE).
+2. **Layout do GEMV**: `gemv_from_vram` lia `idx=j*k+t` (coluna-major) mas o
+   upload copia o pack row-major do heap — bits do peso errado no unpack.
+3. **Escala única**: `si_acc` sobrescrito por linha e usado para todas —
+   quantização errada para m>1.
+
+**Correções (k_hal/bar_compute.rs + cortex/compute.rs + cortex.rs):**
+- **Dispatch POR SEQUÊNCIA (layer-major)**: `dispatch_vram_seq(slot=layer*7+
+  [q,k,v,o,gate,up,down], w, x)` — o apply_one_layer conhece a posição da
+  matriz; `vram_ternary_seq` valida shape contra o residente do slot
+  (divergiu = sequência dessincronizada = None honesto → CPU ladder).
+- **Upload sem dedupe + pré-checagem de capacidade INTEIRA**: need total
+  (1B≈369MB, 3B≈675MB) ≤ aperture − ring − já-residente (hint) ou lane off
+  honesto — parcial é proibido (peso errado é silencioso).
+- **Cursor persistente de weights**: hint (boot, antes do LLM) e LLM
+  (set_model, depois) dividem a aperture; `SEQ_MATS` só no on_model_loaded.
+- **GEMV**: row-major `idx=t*n+j` (mesmo pack do heap), `si_row[8]` por linha
+  (m ≤ 8 do RingPlan), prefetch por coluna de linhas.
+- `dispatch_ternary` genérico NÃO mais toca o slot VRAM (ABI seq-only).
+
+**Honestidade estrutural:** o heap NÃO encolhe com o lane ativo — o bump não
+tem free e os pesos já foram alocados no boot pelo loader. A liberação REAL de
+heap exige loader-VRAM (pesos jamais passam pelo bump — residual da ADR-0112,
+lab). O lane corrigido entrega o caminho de leitura via BAR correto e o
+contrato para o upgrade; o ganho de RAM hoje é só quando o loader muda.
+
+**Validação QEMU 8G/6c (VirtIO-GPU sem aperture → lane off honesto):** boot
+limpo, zero #PF real, grow máx 1536MB (abaixo do teto 2030), prefill id=1
+completo (22 slices, 91s), a2_proof id=2 timeout honesto 300s (fail-closed,
+sistema vivo matmulando depois — matmul exit ok pós-timeout). CPU ladder
+intacta: sem aperture, `vram_served=false` e todo matmul segue SMP.
+
+**Gates:** check release 0 erros; cortex 107 (106+1 vram_seq fechado sem
+registro), k-hal 68 (67+1 seq sem residente), k-nano 232.
+
+Residual: (1) loader-VRAM para liberar heap de verdade (exige skibiboot/Limine
+colocando o modelo na BAR — lab); (2) aperta do a2_proof timeout 300s→~120s
+(idle us=160ms/slice × 22 layers ≈ 8s — o timeout pega stall real, não lento).

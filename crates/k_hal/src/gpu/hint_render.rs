@@ -154,7 +154,9 @@ static HINT_OFFSETS: spin::Mutex<Option<(u64, u64)>> = spin::Mutex::new(None);
 /// os hints não dependem do LLM, dependem só da aperture).
 ///
 /// Honesty: o upload usa o MESMO mecanismo do LLM (`upload_layer_weights`) e
-/// entra no MESMO índice de shapes — sem segunda implementação de BAR.
+/// entra no MESMO plano residente — sem segunda implementação de BAR.
+/// s421: o índice SEQ_MATS do bar_compute agora pertence ao LLM (por
+/// sequência); o hint guarda os PRÓPRIOS offsets aqui (não disputa índice).
 pub fn upload_hint_weights(w: &HintWeights) -> bool {
     if stage() == StreamStage::Off {
         return false;
