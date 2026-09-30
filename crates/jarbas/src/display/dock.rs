@@ -66,13 +66,33 @@ impl Dock {
     }
 
     pub fn render(&self, target: &mut super::fb::DoubleBuffer, theme: &super::theme::Theme) {
+        // s420c: hint neural da região 2 (dock) — tint aumentativo da borda
+        // superior e do indicador "running" (energia 0/stale = clássico).
+        let (he, hh) = super::hint_tint::sample(2);
+        let (br, bg_, bb) = if he > 0 {
+            super::hint_tint::hue_to_rgb(hh)
+        } else {
+            (theme.border.0, theme.border.1, theme.border.2)
+        };
+        let (ar, ag, ab) = if he > 0 {
+            let mix = |c: u8, b: u8| -> u8 { ((c as u16 * b as u16 * 2) / 256) as u8 };
+            let (hr, hg, hb) = super::hint_tint::hue_to_rgb(hh);
+            (
+                mix(theme.accent.0, hr),
+                mix(theme.accent.1, hg),
+                mix(theme.accent.2, hb),
+            )
+        } else {
+            (theme.accent.0, theme.accent.1, theme.accent.2)
+        };
+
         // Background (native fill_rect avoids FbTarget borrow conflict)
         target.fill_rect(self.rect.x as usize, self.rect.y as usize,
             self.rect.width as usize, self.height as usize,
             theme.bg_alt.0, theme.bg_alt.1, theme.bg_alt.2);
         target.fill_rect(self.rect.x as usize, self.rect.y as usize,
             self.rect.width as usize, 1,
-            theme.border.0, theme.border.1, theme.border.2);
+            br, bg_, bb);
 
         let item_width = self.rect.width / self.items.len().max(1) as u32;
         for (idx, item) in self.items.iter().enumerate() {
@@ -82,7 +102,7 @@ impl Dock {
             if item.running {
                 target.fill_rect((x + 8) as usize, (self.rect.y + self.height as i32 - 4) as usize,
                     (item_width - 16) as usize, 3,
-                    theme.accent.0, theme.accent.1, theme.accent.2);
+                    ar, ag, ab);
             }
 
             // Label

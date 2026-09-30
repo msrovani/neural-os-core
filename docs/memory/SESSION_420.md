@@ -81,3 +81,35 @@ Validação: QEMU 8G/6c boot limpo (VirtIO-GPU sem aperture → loader não roda
 honesto; zero #PF); k-hal 67 (66+1); check release 0 erros. No metal com
 aperture real (GTX 1050 lab), o caminho é: train → mkfat32 → boot →
 `HINT.BIN carregado bytes=3160 upload=true` → stage 2 (Resident).
+
+## Addendum s420c — Consumidor do tópico HINTS (tint neural em orb/dock/cards)
+
+**`jarbas::display::hint_tint`** (novo): consumidor canônico do tópico `HINTS` —
+fecha a regra s352 ("tópico novo só está feito quando tem consumidor").
+- **Snapshot:** 8 regiões × (energia, matiz) + idade TSC; `accept_payload`
+  valida 24 B exatos — payload torto NUNCA substitui o snapshot vigente.
+- **Freshness com decaimento:** energia decai linearmente até 0 na borda de
+  `STALE_US` (2.5 s = 5 feeds de 2 Hz perdidos) → modo clássico sem pulso.
+- **`hue_to_rgb` glass:** roda de cor 6 setores inteiros (zero f32) +
+  dessaturação 40% mix com base azulada — compatível com a paleta JARVIS.
+
+**Tint aumentativo (§6.4 — só soma, nunca substitui tema):**
+- **Orb (região 0):** lerp do accent na energia do hint (`soul_mirror.rs`) —
+  nunca entra no corpo; energia 0/stale = accent clássico (estado/papel mesh).
+- **Dock (região 2):** borda superior + indicador running tingidos
+  (`dock.rs`), mix na energia.
+- **Cards (regiões 3..6 por `id % 4`):** barra de título mix com C_TITLE_BG
+  (`card.rs`), teto de mix 200/256 (título sempre legível).
+
+**Wire:** DisplayAgent lazy subscribe + drain `HINTS` (mesmo padrão
+mesh/fleet_health). Zero alloc no hot path (`sample` = leitura de static +
+comparação de idade; cor computada 1× por paint, não por pixel).
+
+Validação: check release 0 erros; jarbas 130 (126+4: payload inválido, freshness,
+sem feed, hue determinístico — TEST_LOCK + reset_for_test, lição s346); k-hal 67.
+QEMU 8G: boot limpo, zero #PF, 60Hz — em QEMU o produtor não publica (sem
+aperture → stage 0/1) e a UI segue 100% clássica (honesto). O caminho completo
+(produtor + consumidor) só acorda no lab GTX 1050 com aperture real.
+
+Residual: visual é perceptual (matiz/energia não têm ground truth) — validar no
+lab que o tint é visível e agradável; ajustar `STALE_US`/mix se necessário.

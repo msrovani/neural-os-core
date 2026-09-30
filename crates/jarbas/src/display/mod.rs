@@ -18,6 +18,7 @@ pub mod ui_spec;
 pub mod embed_viz;
 pub mod gauges;
 pub mod metrics_agent;
+pub mod hint_tint;
 
 // FASE 1.1 — WM cosmic-like (ADR-0065)
 pub mod decorations;

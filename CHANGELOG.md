@@ -1,5 +1,13 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s420c] - 2026-09-29 - Consumidor do tópico HINTS: tint neural em orb/dock/cards
+
+- High: **`jarbas::display::hint_tint`** — consumidor canônico do tópico `HINTS` (regra s352: tópico novo só está feito quando tem consumidor). Snapshot 8 regiões × (energia, matiz) + freshness com decaimento linear (stale 2.5 s = 5 feeds perdidos → modo clássico) + `hue_to_rgb` glass sem f32. Zero alloc no hot path (leitura de static + idade TSC).
+- Med: **tint aumentativo (ADR-0047-HMI §6.4)**: orb = lerp do accent na energia do hint (região 0, nunca entra no corpo); dock = borda superior + indicador running (região 2); cards = barra de título na região `3+(id%4)` mix com C_TITLE_BG. Energia 0/stale = cor clássica intacta.
+- Med: DisplayAgent lazy subscribe + drain `HINTS` (mesmo padrão mesh/fleet).
+- Gates: check release 0 erros; jarbas 130 (126+4 hint_tint), k-hal 67. QEMU 8G: boot limpo zero #PF; em QEMU (VirtIO-GPU sem aperture) produtor não publica → tint clássico honesto (caminho completo só acorda no lab GTX 1050).
+- Session: SESSION_420 addendum s420c
+
 ## [1.9.99-s420b] - 2026-09-29 - train_hint_mlp.py + loader HINT.BIN (H3-revisit completo)
 
 - High: **`tools/train_hint_mlp.py`** — treina o MLP de hints 64→128→16 e exporta `target/HINT.BIN` no pack W2A8 do contrato `hint_render.rs` (self-check bit-a-bit, treino, `--validate`). Professor sintético por regra COM restrição de representabilidade (forward do kernel = h=ReLU(x·W1ᵀ); y=h·W2ᵀ SEM bias/termo constante → política como combinação linear não-negativa das features; idle=0=modo clássico §6.4). **QAT com escalas aprendidas**: PTQ teto em 87,6% de acordo; QAT → **100%** (MAE 5,5/255, holdout disjunto).

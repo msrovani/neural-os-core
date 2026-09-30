@@ -582,8 +582,30 @@ impl SoulMirrorRenderer {
         let st = self.machine.update(sig, now_us);
         let mesh_alive = sig.peers > 0;
         let [role_acc, role_body, role_inner, role_core] = mesh_role_colors(sig.local_role);
+        // s420c: hint neural da região 0 (orb) — tint aumentativo do accent
+        // pelo (energia, matiz) do MLP (pesos em VRAM). Energia 0/stale =
+        // clássico intacto (ADR-0047-HMI §6.4). Tint nunca entra no corpo.
+        let (hint_e, hint_h) = crate::display::hint_tint::sample(0);
+        let hint_rgb = if hint_e > 0 {
+            Some(crate::display::hint_tint::hue_to_rgb(hint_h))
+        } else {
+            None
+        };
         // Baseline mesh = cor do papel; Thinking sobrescreve halo p/ laranja.
-        let accent_tgt = if st == OrbState::Thinking {
+        let accent_tgt = if let Some(hc) = hint_rgb {
+            // Lerpa na energia do hint: energia 255 = tint dominante.
+            lerp_rgb(
+                if st == OrbState::Thinking {
+                    OrbState::Thinking.accent()
+                } else if mesh_alive {
+                    role_acc
+                } else {
+                    st.accent()
+                },
+                hc,
+                (hint_e as u16 * 2).min(256),
+            )
+        } else if st == OrbState::Thinking {
             OrbState::Thinking.accent()
         } else if mesh_alive {
             role_acc

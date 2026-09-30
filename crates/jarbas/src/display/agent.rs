@@ -231,6 +231,8 @@ pub struct DisplayAgent {
     mesh_health_receiver: Option<event_bus::Receiver>,
     /// SESSION_419: FLEET_HEALTH (worst-of da frota no Master) — lazy igual mesh.
     fleet_health_receiver: Option<event_bus::Receiver>,
+    /// s420c: HINTS (produtor: render_hints 2 Hz, pesos na VRAM) — lazy.
+    hints_receiver: Option<event_bus::Receiver>,
     phase_recv: event_bus::Receiver,
     /// ADR-0086 A5: receiver para solicitação de UI de seleção de disco.
     install_ui_receiver: Option<event_bus::Receiver>,
@@ -300,6 +302,7 @@ impl DisplayAgent {
             latent_receiver: None,
             mesh_health_receiver: None,
             fleet_health_receiver: None,
+            hints_receiver: None,
             phase_recv: k_nano::EVENT_BUS.subscribe("LOOP_PHASE"),
             install_ui_receiver: None,
             hub_state_receiver: None,
@@ -1216,6 +1219,21 @@ impl Agent for DisplayAgent {
                 drained += 1;
                 let json_str = core::str::from_utf8(&ev.payload).unwrap_or("");
                 update_fleet_snapshot(json_str);
+            }
+        }
+
+        // Hints neurais (s420c): HINTS do renderer (24 B = 8 regiões × res,ene,
+        // hue) → snapshot de tint consumido por orb/dock/cards no paint. Regra
+        // s352: tópico novo só está "feito" quando tem consumidor.
+        if self.hints_receiver.is_none() {
+            self.hints_receiver = Some(EVENT_BUS.subscribe("HINTS"));
+        }
+        if let Some(ref rx) = self.hints_receiver {
+            let mut drained = 0;
+            while drained < DRAIN_CAP {
+                let Some(ev) = rx.try_receive() else { break; };
+                drained += 1;
+                crate::display::hint_tint::accept_payload(&ev.payload);
             }
         }
 

@@ -155,7 +155,26 @@ pub fn render_card(fb: &mut DoubleBuffer, d: &UiDeclaration) -> Vec<ButtonHit> {
                 .build(),
         )
         .draw(&mut t);
-    fill(&mut t, d.x, d.y, d.w, 20, C_TITLE_BG);
+    // s420c: hint neural da região de card (3..6 por id % 4) — tint
+    // aumentativo da barra de título (energia 0/stale = C_TITLE_BG clássico).
+    const TITLE_BG: (u8, u8, u8) = (0, 40, 78);
+    let title_bg = {
+        let (he, hh) = crate::display::hint_tint::sample(3 + (d.id % 4) as usize);
+        if he > 0 {
+            let (hr, hg, hb) = crate::display::hint_tint::hue_to_rgb(hh);
+            // Mix com o clássico na energia: fade suave, nunca substitui.
+            let m = (he as u16).min(200);
+            let n = 256 - m;
+            Rgb888::new(
+                ((TITLE_BG.0 as u16 * n + hr as u16 * m) / 256) as u8,
+                ((TITLE_BG.1 as u16 * n + hg as u16 * m) / 256) as u8,
+                ((TITLE_BG.2 as u16 * n + hb as u16 * m) / 256) as u8,
+            )
+        } else {
+            C_TITLE_BG
+        }
+    };
+    fill(&mut t, d.x, d.y, d.w, 20, title_bg);
 
     // Título + botão fechar.
     let tstyle = MonoTextStyle::new(&FONT_9X15_BOLD, C_ACCENT);

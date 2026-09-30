@@ -1,11 +1,12 @@
-# STATE - neural-os-core v1.9.99-s420 - Gate fail-closed headroom prefill (fecho residual s419)
+# STATE - neural-os-core v1.9.99-s420c - Consumidor HINTS: tint neural orb/dock/cards
 
-#   PISTA ATIVA: s420 — gate proativo de headroom (heap_headroom_low, 128MB) no início de cada
-#     slice de prefill/decode — cruza-o-teto ~2030MB agora termina honesto (payload escalate/parcial)
-#     em vez de alloc NULL → #PF → hlt no AP; validado em produção QEMU 8G/6c (gate disparou
-#     headroom=117MB, zero #PF). s420b: train_hint_mlp.py (QAT, 100% acordo) + loader HINT.BIN
-#     no kernel (fail-closed) — H3-revisit completo, falta só aperture real (GTX 1050 lab).
-#     Residual: cura estrutural do teto = ADR-0112 (pesos em VRAM via BAR)
+#   PISTA ATIVA: s420c — consumidor do tópico HINTS (hint_tint.rs): snapshot 8 regiões +
+#     freshness decaimento (stale 2.5s = clássico) + tint aumentativo §6.4 (orb accent,
+#     dock borda/running, cards título por id%4). Em QEMU produtor não publica (sem aperture)
+#     → UI clássica honesta; caminho completo só no lab GTX 1050. s420b: train_hint_mlp.py
+#     (QAT, 100% acordo) + loader HINT.BIN no kernel (fail-closed) — H3-revisit completo.
+#     s420: gate fail-closed headroom_low 128MB no prefill/decode slice (validado em produção,
+#     zero #PF). Residual: cura estrutural do teto = ADR-0112 (pesos em VRAM via BAR)
 #   PISTA ANTERIOR: s418 — BAR Compute (pesos W2A8 residem na VRAM via BAR, GEMV host lê aperture,
 #     lane VRAM no dispatch; StreamsW2a8/ComputeDevice = upgrade; lab GTX 1050 = residual)
 #   PISTA ANTERIOR: s410m — forget cognitivo HITL (/forget) + leitura de conflitos (/conflicts)
