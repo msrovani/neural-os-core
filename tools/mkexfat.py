@@ -81,6 +81,15 @@ def find_file(name: str):
     return None
 
 
+def find_bpe():
+    # export_bpe_bin.py escreve o canônico em target/bpe_vocab.bin (SESSION_411).
+    # target1/models podem ter cópias stale (ex.: vocab 32k) que find_file priorizaria.
+    p = os.path.join(ROOT, "target", "bpe_vocab.bin")
+    if os.path.exists(p):
+        return p
+    return find_file("bpe_vocab.bin") or find_file("BPE.BIN")
+
+
 def find_large(name: str, min_bytes: int = 1_000_000):
     p = find_file(name)
     if p and os.path.getsize(p) >= min_bytes:
@@ -121,7 +130,7 @@ def collect_files() -> list[tuple[str, bytes | str | None]]:
         ("PIPER.BIN", find_file("PIPER_PT_BR.BIN") or find_file("PIPER.BIN")),
         ("PIPER_EN.BIN", find_file("PIPER_EN.BIN")),
         ("STT.BIN", find_file("STT.BIN")),
-        ("BPE.BIN", find_file("bpe_vocab.bin") or find_file("BPE.BIN")),
+        ("BPE.BIN", find_bpe()),
         ("BITNET13.BIN", find_bitnet_13() if "13" in llm else None),
         ("BITNET850.BIN", find_bitnet_850() if "850" in llm else None),
         (

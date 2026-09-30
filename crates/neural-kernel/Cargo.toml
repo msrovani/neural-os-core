@@ -9,6 +9,10 @@ lazy_static = { version = "1.4", features = ["spin_no_std"] }
 x86_64 = "0.14.11"
 talc = "4.4.3"
 libm = "0.2"
+# s429-lab: crate `log` entra na árvore via virtio-drivers (k_nano) e wasmi/cranelift
+# (hermes) — macros de third-party deref LOGGER (NULL em BSS) quando passam do gate
+# de nível -> #PF cr2=0x18. Logger no-op registrado em kernel_boot neutraliza.
+log = { version = "0.4", default-features = false, features = ["max_level_info"] }
 event-bus = { path = "../event-bus" }
 skill-registry = { path = "../skill-registry" }
 ticket-lock = { path = "../ticket-lock" }

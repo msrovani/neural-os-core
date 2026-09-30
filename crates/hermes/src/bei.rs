@@ -197,8 +197,11 @@ impl BeiState {
         drop(tick);
         
         // M12: BEI state tick (cognição local) — bloco distinto do mesh abaixo.
+        // s429-lab rodada 8: 48→128MB — wasmi/cranelift allocam GRANDE no PromoteSkill
+        // (bypassam o grow; janela ~2030MB com headroom 48-127MB ainda falha).
+        // Mesmo piso dos gates submit/claim do InferQueue (s429-lab).
         let obs = k_nano::allocator::heap_observe();
-        let low_mem = obs.headroom_mb < 48;
+        let low_mem = obs.headroom_mb < 128;
         // M20: sob headroom crítico só o snapshot (AFFECT) roda; o resto espera.
 
         // 1. Advance CellNetwork scheduler (skip sob heap critico — MPMC #PF)
@@ -265,6 +268,13 @@ impl BeiState {
         // mantendo o último phase p/ o snapshot (M20).
         if !low_mem {
         {
+            // s429-lab rodada 9: re-check bounded (padrão lost-wakeup SESSION_411) —
+            // o prefill concorrente come o headroom ENTRE o snapshot do início do
+            // tick e aqui; iterar BTreeMap do supervisor com nós demand-paged sob
+            // teto = #PF (evidência: LazyLeafRange cr2=0x702a00a8, T+28k).
+            if k_nano::allocator::heap_headroom_low() {
+                k_nano::slog_bin!("BEI", "warn", "supervisor tick pulado: heap caiu no meio do tick (headroom low)");
+            } else {
             let mut supervisor = self.executive_supervisor.lock();
             let verdict = supervisor.tick_supervise(10); // base budget = 10
             
@@ -319,7 +329,13 @@ impl BeiState {
                     // ADR-0059 F5: age, não só loga — promove a skill efêmera
                     // comprovada (≥3 runs, ≥70%) para WASM via sandbox wasmi
                     // (mesmo fluxo do hw_pnp). Falha → log (não derruba o boot).
-                    match crate::evolve::promote_ephemeral_to_wasm(&skill_name, "") {
+                    // s429-lab rodada 8: re-check bounded (padrão SESSION_411) —
+                    // o heap cai ENTRE o gate externo e o wasmi (cmpxchg em obj NULL
+                    // = #PF cr2=0x10; evidência rodada 8 T+25k pós teto 2030MB).
+                    if k_nano::allocator::heap_headroom_low() {
+                        k_nano::slog_bin!("BEI", "warn", "PromoteSkill pulado: heap crítico (wasmi alloc)");
+                    } else {
+                        match crate::evolve::promote_ephemeral_to_wasm(&skill_name, "") {
                         Ok(()) => k_nano::slog_bin!(
                             "BEI",
                             "ok",
@@ -333,6 +349,7 @@ impl BeiState {
                             skill_name,
                             e
                         ),
+                        }
                     }
                 }
             }
@@ -342,6 +359,7 @@ impl BeiState {
             // Gap: wire quando o tick observar latency/domínio reais.
             // Capture phase before supervisor lock is dropped
             LAST_PHASE_DEG.store(supervisor.phase.rotation_deg(), core::sync::atomic::Ordering::Relaxed);
+            } // else (re-check bounded — supervisor pulado)
         }
         }
 

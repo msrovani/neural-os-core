@@ -121,6 +121,8 @@ unsafe impl Send for NvmeDriver {}
 unsafe impl Sync for NvmeDriver {}
 
 impl NvmeDriver {
+    /// Probe canônico: acha NVMe class 01:08 no domínio 0 (scan CF8/CFC).
+    /// Domínios VMD (s422) usam `crate::vmd::probe_vmd_nvme` → `probe_at_mmio`.
     pub unsafe fn probe() -> Option<Self> {
         let devs = crate::pci::scan_pci();
         let dev = devs.iter().find(|d| d.class == 0x01 && d.subclass == 0x08)?;
@@ -129,8 +131,29 @@ impl NvmeDriver {
         crate::apic::map_page_uc(bar0, pmoff);
         crate::apic::map_page_uc(bar0 + 0x1000, pmoff);
         crate::pci::enable_pci_bus_master(dev);
+        Self::probe_at_mmio(bar0)
+    }
 
-        let mmio = (bar0 + pmoff) as *mut u32;
+    /// Bring-up do controlador sobre um BAR0 MMIO JÁ resolvido (nativo ou
+    /// filho VMD — s422). Mapeia 2 páginas UC e roda o init até as queues.
+    /// Caller (ou o probe() nativo) faz enable de MEM/BUSMASTER no device.
+    ///
+    /// s429 (visão guest VMD): o caller (vmd::probe_vmd_nvme) já resolve BAR
+    /// BUS → phys CPU (via MEMBAR, cpu = bus + offset SHDW) e passa o VA
+    /// direto — ver `probe_at_mmio_va`.
+    pub unsafe fn probe_at_mmio(bar0: u64) -> Option<Self> {
+        let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+        crate::apic::map_page_uc(bar0, pmoff);
+        crate::apic::map_page_uc(bar0 + 0x1000, pmoff);
+        Self::probe_at_mmio_va((bar0 + pmoff) as *mut u32)
+    }
+
+    /// Bring-up sobre um VA de MMIO JÁ mapeado (s429: guest VMD passa o VA da
+    /// MEMBAR UC; nativo passa via `probe_at_mmio`, que mapeia UC aqui).
+    /// DMA de RAM do controlador é UNTRANSLATED/identidade em ambos os modos
+    /// (vmd.c aplica offset SHDW só a recursos, nunca a DMA de RAM).
+    pub unsafe fn probe_at_mmio_va(mmio: *mut u32) -> Option<Self> {
+        let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
         let cap_lo = mmio.add((NVME_CAP / 4) as usize).read_volatile() as u64;
         let cap_hi = mmio.add((NVME_CAP / 4 + 1) as usize).read_volatile() as u64;
         let cap = cap_lo | (cap_hi << 32);

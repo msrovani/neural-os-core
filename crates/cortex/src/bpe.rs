@@ -4,10 +4,12 @@
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
 const SP_SPACE: char = '\u{2581}'; // ▁ SentencePiece
+const BYTELEVEL_SPACE: char = '\u{0120}'; // Ġ ByteLevel (GPT-2/Falcon3)
 
 /// Tabla carregada do QEMU-loader (`target/bpe_vocab.bin` ou `bpe_vocab_sp32.bin`).
 pub struct BpeVocab {
@@ -61,9 +63,9 @@ impl BpeVocab {
                 if s == "<s>" || s == "</s>" || s == "<unk>" || s == "<pad>" || s == "</line>" {
                     continue;
                 }
-                // SentencePiece: ▁ = espaço
+                // SentencePiece ▁ / ByteLevel Ġ = espaço (mapa no decode, não no armazenamento)
                 for ch in s.chars() {
-                    if ch == SP_SPACE {
+                    if ch == SP_SPACE || ch == BYTELEVEL_SPACE {
                         out.push(' ');
                     } else {
                         out.push(ch);
@@ -197,6 +199,24 @@ impl BpeVocab {
             s
         }).collect();
         // Iteratively apply the highest priority merge until no more merges apply
+        self.apply_bpe_merges(&mut word);
+        // Convert pieces to token IDs
+        for piece in word.iter() {
+            if let Some(&id) = self.rev.get(piece) {
+                out.push(id);
+            } else {
+                // Fallback: try to find sub-piece encoding
+                out.push(0); // <unk>
+            }
+        }
+        out
+    }
+
+    /// Aplica merges BPE (rank = ordem em `self.merges`) até estabilizar.
+    /// Menor rank aplicável vence; reinicia após cada merge (BPE canónico).
+    /// ponytail: varre `self.merges` (128k) por merge — O(merges·len) por peça;
+    /// aceitável p/ prompts curtos; um rank-map trocaria por O(len).
+    fn apply_bpe_merges(&self, word: &mut Vec<String>) {
         loop {
             let mut merged = false;
             // Try merges in priority order (list order = rank)
@@ -220,13 +240,35 @@ impl BpeVocab {
             }
             if !merged { break; }
         }
-        // Convert pieces to token IDs
-        for piece in word.iter() {
-            if let Some(&id) = self.rev.get(piece) {
-                out.push(id);
-            } else {
-                // Fallback: try to find sub-piece encoding
-                out.push(0); // <unk>
+    }
+
+    /// ByteLevel BPE encode (GPT-2/Falcon3, vocab 131k): texto → token IDs.
+    ///
+    /// Pipeline: pretokenizer GPT-2 (ASCII) → byte→unicode (mapa GPT-2) →
+    /// merges por rank → `rev` lookup. Desconhecido → 0 (`<unk>`).
+    ///
+    /// FIDELIDADE: o tokenizer Falcon3 real usa
+    /// `Sequence[Punctuation(Contiguous), ByteLevel, Digits(individual_digits)]`.
+    /// Para ASCII, a regex GPT-2 + split individual de dígitos reproduz a
+    /// referência (`tokenizers` 0.23.2, `target1/falcon3/tokenizer.json`) —
+    /// verificado 0/430 em corpus ASCII (ver `tests::bytelevel_matches_falcon3_reference`).
+    /// LIMITAÇÃO: NÃO-ASCII é aproximado (`char::is_alphabetic`/`is_numeric` no
+    /// lugar de `\p{L}`/`\p{N}` estritos) e não é coberto pelos testes.
+    pub fn encode_bytelevel(&self, text: &str) -> Vec<u32> {
+        let mut out = Vec::new();
+        for pretoken in pretokenize_bytelevel(text) {
+            // Cada BYTE vira uma peça (mapa GPT-2), não cada char.
+            let mut word: Vec<String> = pretoken
+                .bytes()
+                .map(|b| {
+                    let mut s = String::new();
+                    s.push(byte_to_char(b));
+                    s
+                })
+                .collect();
+            self.apply_bpe_merges(&mut word);
+            for piece in &word {
+                out.push(self.rev.get(piece).copied().unwrap_or(0));
             }
         }
         out
@@ -398,8 +440,9 @@ pub fn init_from_bpb1(data: &[u8]) -> Result<(), &'static str> {
     let heap = data[o..o + heap_len].to_vec();
     o += heap_len;
     let mut rev = BTreeMap::new();
-    // Índice inverso só para SP32 (encode); Llama 128k usa cues hardcoded.
-    if vocab_n > 0 && vocab_n <= 33_000 {
+    // Índice inverso p/ encode (SP32 32k e ByteLevel 131k Falcon3).
+    // O gate antigo `<= 33_000` deixava o Falcon3 131k sem text→id.
+    if vocab_n > 0 {
         for id in 0..vocab_n {
             let i = id as usize;
             let a = offsets[i] as usize;
@@ -983,4 +1026,406 @@ pub fn is_special_id(id: u32) -> bool {
         }
     }
     false
+}
+
+// ── ByteLevel BPE (GPT-2/Falcon3) ───────────────────────────────────────────
+
+/// GPT-2 `bytes_to_unicode`: imprimíveis mapeiam p/ si; o resto → 256+n
+/// (n = nº de bytes não-imprimíveis anteriores). Tabela de 256 entradas.
+fn byte_to_char(b: u8) -> char {
+    let printable = |x: u8| matches!(x, 0x21..=0x7E | 0xA1..=0xAC | 0xAE..=0xFF);
+    if printable(b) {
+        b as char
+    } else {
+        let n = (0u16..b as u16).filter(|&x| !printable(x as u8)).count() as u32;
+        char::from_u32(256 + n).unwrap_or('\u{FFFD}')
+    }
+}
+
+fn is_letter(c: char) -> bool { c.is_alphabetic() }
+fn is_number(c: char) -> bool { c.is_numeric() }
+fn is_space(c: char) -> bool { c.is_whitespace() }
+fn is_punct(c: char) -> bool { !is_space(c) && !is_letter(c) && !is_number(c) }
+
+/// Contração GPT-2 (`'s|'t|'re|'ve|'m|'ll|'d`), em ordem.
+const CONTRACTIONS: [&str; 7] = ["'s", "'t", "'re", "'ve", "'m", "'ll", "'d"];
+
+/// Pretokenizer GPT-2 hand-rolled (ASCII) + `Digits(individual_digits)` Falcon3.
+/// Sem regex (no_std). Ver `BpeVocab::encode_bytelevel` p/ fidelidade/limitações.
+fn pretokenize_bytelevel(text: &str) -> Vec<String> {
+    let ch: Vec<char> = text.chars().collect();
+    let n = ch.len();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i < n {
+        let c = ch[i];
+        // `'s|'t|'re|'ve|'m|'ll|'d`
+        if c == '\'' {
+            let mut hit = 0usize;
+            for pat in CONTRACTIONS {
+                let pc: Vec<char> = pat.chars().collect();
+                if i + pc.len() <= n && ch[i..i + pc.len()] == pc[..] {
+                    hit = pc.len();
+                    break;
+                }
+            }
+            if hit > 0 {
+                out.push(ch[i..i + hit].iter().collect());
+                i += hit;
+                continue;
+            }
+        }
+        // ` ?\p{L}+`
+        let j = if c == ' ' { i + 1 } else { i };
+        if j < n && is_letter(ch[j]) {
+            let mut k = j;
+            while k < n && is_letter(ch[k]) { k += 1; }
+            out.push(ch[i..k].iter().collect());
+            i = k;
+            continue;
+        }
+        // ` ?\p{N}+`
+        if j < n && is_number(ch[j]) {
+            let mut k = j;
+            while k < n && is_number(ch[k]) { k += 1; }
+            out.push(ch[i..k].iter().collect());
+            i = k;
+            continue;
+        }
+        // ` ?[^\s\p{L}\p{N}]+`
+        if j < n && is_punct(ch[j]) {
+            let mut k = j;
+            while k < n && is_punct(ch[k]) { k += 1; }
+            out.push(ch[i..k].iter().collect());
+            i = k;
+            continue;
+        }
+        // `\s+(?!\S)|\s+`: agrupa corrida de espaços; recua 1 se seguida de não-espaço
+        if is_space(c) {
+            let mut k = i;
+            while k < n && is_space(ch[k]) { k += 1; }
+            if k == n {
+                out.push(ch[i..k].iter().collect());
+                i = k;
+            } else if k - i >= 2 {
+                out.push(ch[i..k - 1].iter().collect());
+                i = k - 1;
+            } else {
+                out.push(c.to_string());
+                i += 1;
+            }
+            continue;
+        }
+        out.push(c.to_string());
+        i += 1;
+    }
+    // Falcon3 `Digits(individual_digits=true)`: cada dígito vira pretoken próprio
+    let mut out2 = Vec::with_capacity(out.len());
+    for seg in out {
+        let mut cur = String::new();
+        for c in seg.chars() {
+            if is_number(c) {
+                if !cur.is_empty() {
+                    out2.push(core::mem::take(&mut cur));
+                }
+                out2.push(c.to_string());
+            } else {
+                cur.push(c);
+            }
+        }
+        if !cur.is_empty() {
+            out2.push(cur);
+        }
+    }
+    out2
+}
+
+/// Entry point explícito: ByteLevel BPE (Falcon3 131k). NÃO altera `encode`.
+pub fn encode_bytelevel(text: &str) -> Vec<u32> {
+    let guard = BPE.lock();
+    match guard.as_ref() {
+        Some(tok) => tok.encode_bytelevel(text),
+        None => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Fixture REAL do vocab Falcon3 131k (target1/falcon3/tokenizer.json).
+    // PIECES = peças usadas (id real); MERGES = subconjunto aplicado, ordenado
+    // por rank (dos 128810 reais); GROUND_TRUTH = saída de `tokenizers` 0.23.2.
+    const PIECES: &[(u32, &str)] = &[
+        (2024, "!"),
+        (2030, "'"),
+        (2035, ","),
+        (2039, "0"),
+        (2040, "1"),
+        (2041, "2"),
+        (2042, "3"),
+        (2043, "4"),
+        (2044, "5"),
+        (2049, ":"),
+        (2054, "?"),
+        (2058, "C"),
+        (2070, "O"),
+        (2106, "s"),
+        (2107, "t"),
+        (2226, "\u{0120}"),
+        (2287, "it"),
+        (2343, "\u{0120}you"),
+        (2401, "\u{0120}we"),
+        (2402, "\u{0120}are"),
+        (2455, "all"),
+        (2609, "ll"),
+        (2932, "\u{0120}don"),
+        (3139, "\u{0120}world"),
+        (3236, "the"),
+        (3490, "\u{0120}How"),
+        (4184, "\u{0120}quick"),
+        (5119, "\u{0120}systems"),
+        (9307, "\u{0120}brown"),
+        (10544, "\u{0120}esta"),
+        (13955, "Hello"),
+        (14800, "\u{0120}operational"),
+        (15086, "\u{0120}bom"),
+        (17035, "\u{0120}Safe"),
+        (18938, "\u{0120}tempo"),
+        (22112, "Safe"),
+        (29840, "\u{0120}fox"),
+        (49815, "temperature"),
+        (116026, "Dangerous"),
+    ];
+    const MERGES: &[(&str, &str)] = &[
+        ("\u{0120}", "t"),
+        ("\u{0120}", "a"),
+        ("h", "e"),
+        ("r", "e"),
+        ("o", "n"),
+        ("e", "r"),
+        ("\u{0120}", "s"),
+        ("a", "t"),
+        ("o", "r"),
+        ("\u{0120}", "w"),
+        ("e", "s"),
+        ("o", "u"),
+        ("i", "t"),
+        ("a", "n"),
+        ("\u{0120}", "f"),
+        ("\u{0120}", "b"),
+        ("\u{0120}", "o"),
+        ("a", "l"),
+        ("\u{0120}", "d"),
+        ("i", "c"),
+        ("i", "on"),
+        ("o", "m"),
+        ("s", "t"),
+        ("r", "o"),
+        ("e", "l"),
+        ("\u{0120}", "y"),
+        ("\u{0120}", "S"),
+        ("\u{0120}y", "ou"),
+        ("o", "w"),
+        ("at", "ion"),
+        ("q", "u"),
+        ("es", "t"),
+        ("e", "m"),
+        ("\u{0120}w", "e"),
+        ("\u{0120}a", "re"),
+        ("\u{0120}", "H"),
+        ("l", "d"),
+        ("al", "l"),
+        ("el", "l"),
+        ("p", "er"),
+        ("\u{0120}w", "or"),
+        ("u", "re"),
+        ("\u{0120}", "qu"),
+        ("ou", "s"),
+        ("l", "l"),
+        ("f", "e"),
+        ("an", "g"),
+        ("ic", "k"),
+        ("ro", "w"),
+        ("y", "st"),
+        ("yst", "em"),
+        ("\u{0120}d", "on"),
+        ("ation", "al"),
+        ("\u{0120}", "est"),
+        ("\u{0120}wor", "ld"),
+        ("\u{0120}s", "ystem"),
+        ("o", "x"),
+        ("t", "he"),
+        ("at", "ure"),
+        ("\u{0120}H", "ow"),
+        ("\u{0120}o", "per"),
+        ("\u{0120}t", "em"),
+        ("\u{0120}qu", "ick"),
+        ("row", "n"),
+        ("\u{0120}system", "s"),
+        ("ang", "er"),
+        ("p", "o"),
+        ("\u{0120}S", "a"),
+        ("ell", "o"),
+        ("\u{0120}b", "rown"),
+        ("\u{0120}est", "a"),
+        ("H", "ello"),
+        ("\u{0120}oper", "ational"),
+        ("\u{0120}b", "om"),
+        ("S", "a"),
+        ("\u{0120}Sa", "fe"),
+        ("\u{0120}tem", "po"),
+        ("t", "em"),
+        ("Sa", "fe"),
+        ("per", "ature"),
+        ("\u{0120}f", "ox"),
+        ("tem", "perature"),
+        ("D", "anger"),
+        ("Danger", "ous"),
+    ];
+    const GROUND_TRUTH: &[(&str, &[u32])] = &[
+        ("Safe", &[22112]),
+        ("Dangerous", &[116026]),
+        ("Hello, world! How are you?", &[13955, 2035, 3139, 2024, 3490, 2402, 2343, 2054]),
+        ("it's don't we'll", &[2287, 2030, 2106, 2932, 2030, 2107, 2401, 2030, 2609]),
+        (" Safe", &[17035]),
+        ("O tempo esta bom", &[2070, 18938, 10544, 15086]),
+        ("all systems operational", &[2455, 5119, 14800]),
+        ("the quick brown fox", &[3236, 4184, 9307, 29840]),
+        ("12345", &[2040, 2041, 2042, 2043, 2044]),
+        ("temperature: 20C", &[49815, 2049, 2226, 2041, 2039, 2058]),
+    ];
+
+    /// Monta um `BpeVocab` a partir da fixture (mesmo layout de offsets/heap do loader).
+    fn fixture_vocab() -> BpeVocab {
+        let vocab_n = PIECES.iter().map(|(i, _)| *i).max().unwrap() + 1;
+        let mut heap: Vec<u8> = Vec::new();
+        let mut offsets = Vec::new();
+        offsets.resize((vocab_n + 1) as usize, 0u32);
+        let mut by_id: Vec<(u32, &str)> = PIECES.to_vec();
+        by_id.sort_by_key(|(i, _)| *i);
+        let mut pi = 0usize;
+        let mut cur = 0usize;
+        for id in 0..vocab_n {
+            while pi < by_id.len() && by_id[pi].0 < id {
+                pi += 1;
+            }
+            offsets[id as usize] = cur as u32;
+            if pi < by_id.len() && by_id[pi].0 == id {
+                heap.extend_from_slice(by_id[pi].1.as_bytes());
+                cur += by_id[pi].1.len();
+            }
+        }
+        offsets[vocab_n as usize] = cur as u32;
+        let mut rev = BTreeMap::new();
+        for (id, s) in PIECES {
+            if s.is_empty() || (s.starts_with('<') && s.ends_with('>')) {
+                continue;
+            }
+            rev.entry(String::from(*s)).or_insert(*id);
+        }
+        BpeVocab {
+            bos: 0,
+            eos: 1,
+            eot: 2,
+            vocab_n,
+            offsets,
+            heap,
+            rev,
+            merges: MERGES
+                .iter()
+                .map(|(a, b)| (String::from(*a), String::from(*b)))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn bytelevel_matches_falcon3_reference() {
+        let v = fixture_vocab();
+        for (text, want) in GROUND_TRUTH {
+            assert_eq!(v.encode_bytelevel(text).as_slice(), *want, "text={:?}", text);
+        }
+    }
+
+    #[test]
+    fn bytelevel_decode_maps_bytelevel_space() {
+        let v = fixture_vocab();
+        assert_eq!(v.decode(&[17035]), " Safe"); // "ĠSafe"
+        assert_eq!(v.decode(&[22112]), "Safe");
+    }
+
+    #[test]
+    fn byte_to_char_matches_gpt2_table() {
+        assert_eq!(byte_to_char(b'!'), '!');
+        assert_eq!(byte_to_char(b'~'), '~');
+        assert_eq!(byte_to_char(b' '), '\u{0120}');
+        assert_eq!(byte_to_char(0), '\u{0100}');
+        assert_eq!(byte_to_char(127), '\u{0121}');
+        assert_eq!(byte_to_char(160), '\u{0142}');
+        assert_eq!(byte_to_char(173), '\u{0143}');
+        assert_eq!(byte_to_char(255), '\u{00FF}');
+        let mut seen = [false; 512];
+        for b in 0u16..256 {
+            let c = byte_to_char(b as u8) as u32 as usize;
+            assert!(!seen[c], "byte {} colide", b);
+            seen[c] = true;
+        }
+    }
+
+    #[test]
+    fn bytelevel_pretokenizer_digits_and_contractions() {
+        let v = fixture_vocab();
+        // `Digits(individual_digits)`: cada dígito vira token próprio
+        assert_eq!(v.encode_bytelevel("12345").as_slice(), &[2040, 2041, 2042, 2043, 2044]);
+        // `Punctuation` separa o apóstrofo: `'s` NÃO funde
+        assert_eq!(v.encode_bytelevel("it's").as_slice(), &[2287, 2030, 2106]);
+    }
+
+    /// Monta um BPB1 sintético (só o header + heap; sem MRG1).
+    fn synthetic_bpb1(vocab_n: u32, pieces: &[(u32, &str)]) -> Vec<u8> {
+        let mut offs = Vec::new();
+        offs.resize(vocab_n as usize + 1, 0u32);
+        let mut heap: Vec<u8> = Vec::new();
+        let mut sorted: Vec<(u32, &str)> = pieces.to_vec();
+        sorted.sort_by_key(|(i, _)| *i);
+        let mut pi = 0usize;
+        let mut cur = 0u32;
+        for id in 0..vocab_n {
+            while pi < sorted.len() && sorted[pi].0 < id {
+                pi += 1;
+            }
+            offs[id as usize] = cur;
+            if pi < sorted.len() && sorted[pi].0 == id {
+                heap.extend_from_slice(sorted[pi].1.as_bytes());
+                cur += sorted[pi].1.len() as u32;
+            }
+        }
+        offs[vocab_n as usize] = cur;
+        let mut d = Vec::new();
+        d.extend_from_slice(b"BPB1");
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&0u32.to_le_bytes()); // bos
+        d.extend_from_slice(&1u32.to_le_bytes()); // eos
+        d.extend_from_slice(&2u32.to_le_bytes()); // eot
+        d.extend_from_slice(&vocab_n.to_le_bytes());
+        for o in &offs {
+            d.extend_from_slice(&o.to_le_bytes());
+        }
+        d.extend_from_slice(&heap);
+        d
+    }
+
+    #[test]
+    fn rev_map_built_for_bytelevel_vocab_over_33k() {
+        // Task 1: o gate antigo `vocab_n <= 33_000` deixava o Falcon3 131k sem `rev`.
+        let data = synthetic_bpb1(40_000, &[(39_999, "Zzz"), (0, "A")]);
+        init_from_bpb1(&data).expect("BPB1 parse");
+        {
+            let g = BPE.lock();
+            let v = g.as_ref().expect("vocab carregado");
+            assert_eq!(v.rev.get("Zzz"), Some(&39_999u32));
+            assert_eq!(v.rev.get("A"), Some(&0u32));
+        }
+        *BPE.lock() = None; // não vaza estado p/ outros testes
+    }
 }

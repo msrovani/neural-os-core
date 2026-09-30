@@ -890,6 +890,7 @@ dependencies = [
  "k_ai",
  "lazy_static",
  "libm",
+ "log",
  "skill-registry",
  "smoltcp",
  "spin 0.12.3",

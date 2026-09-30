@@ -133,8 +133,31 @@ static A2_SLOT_WAIT_LOGGED: AtomicBool = AtomicBool::new(false);
 /// gate `a2_proof_pending` é liberado — a prova nunca muta o CortexAgent para sempre.
 static A2_PROOF_DEADLINE_AT_US: AtomicU64 = AtomicU64::new(0);
 static A2_PROOF_TIMEOUT_LOGGED: AtomicBool = AtomicBool::new(false);
-/// Deadline da prova: 300s. Bem além do esperado (1 token) — só dispara em wedge.
-const A2_PROOF_DEADLINE_US: u64 = 300_000_000;
+/// Deadline da prova: 120s **NO-PROGRESS** (s429-lab). Cada slice concluído
+/// re-arma o deadline (`A2_PROOF_DEADLINE_AT_US` refresh no fim do
+/// poll_slice) — só NENHUM slice em 120s (wedge total) declara timeout.
+/// Wall-clock puro gerou FALSO POSITIVO no 8c/WHPX: prova legítima de 58s
+/// + espera de fila > 120s ⇒ "timeout" com matmuls progredindo e done
+/// depois. Piso de progresso: idle real ~160ms/slice × 22 layers ≈ 8s;
+/// host sob carga ~2×; 120s = 15× o pior caso POR SLICE.
+const A2_PROOF_DEADLINE_US: u64 = 120_000_000;
+/// s428: watchdog POR SLICE — stall real vs slice lento. Um slice DEVE
+/// retornar em `SLICE_STALL_US` (30s: s429-lab, piso de 10s — decode m=1 em
+/// 8c/WHPX demora ~11s LEGITIMAMENTE; 30s = 2,7× pior caso medido — nenhum slice
+/// legítimo demora isso; camadas + OOM interno abortam antes). Estourou =
+/// wedge (o poll_slice não voltou) → terminal honesto da prova SEM esperar
+/// o deadline de 120s. Detectado no topo do `poll_slice` (roda mesmo com o
+/// latch SLICE_BUSY preso noutro core).
+/// s429-lab: piso 10s→**30s** — QEMU 8c/WHPX mediu slice LEGÍTIMO de decode
+/// do Falcon3-1B em ~11s wall-clock (22 matmuls de ~0,5s num único slice;
+/// T+4526→T+5183 a 60Hz = 11,0s = o elapsed do watchdog que disparou FALSO
+/// progredindo depois — done id=2 e id=3 vieram na sequência). Premissa da
+/// s428 ("nenhum slice legítimo >10s") não vale para decode m=1 em 8 cores.
+/// 30s = 2,7× o pior caso medido, ainda 4× abaixo do deadline 120s.
+const A2_SLICE_STALL_US: u64 = 30_000_000;
+/// TSC do início do slice EM CURSO (0 = nenhum) + contador p/ telemetria.
+static A2_SLICE_T0_US: AtomicU64 = AtomicU64::new(0);
+static A2_SLICE_N: AtomicU64 = AtomicU64::new(0);
 /// Diagnóstico decisivo rate-limited no topo de `poll_slice`.
 static SLICE_POLL_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Loga em n==1 (prova que `poll_slice` é chamado) e depois a cada N chamadas.
@@ -423,7 +446,11 @@ pub fn submit(prompt: String, mode: InferMode, reply_topic: &str) -> Result<u64,
     }
     // Fail-closed ANTES de claim/encode: headroom=4MB + encode BPE = #UD/#PF (mesh A).
     let obs = k_nano::allocator::heap_observe();
-    if obs.headroom_mb < 48 {
+    // s429-lab: janela ~2030MB é o TETO do bump — perto do teto, os allocs
+    // internos (BPE/String/topic) podem estourar e devolver NULL → deref →
+    // #PF no AP (heap-fail cr2 baixo pós-grow 2030MB). 48MB não cobre o
+    // estado "janela quase cheia"; piso sobe para 128MB (= heap_headroom_low).
+    if obs.headroom_mb < 128 {
         k_nano::slog_cortex!(
             "InferQ",
             "warn",
@@ -597,8 +624,10 @@ fn try_claim_into_active() -> bool {
             continue;
         }
         // Re-check na claim: headroom pode ter caído desde o submit.
+        // s429-lab: 128MB (mesmo piso do submit — janela ~2030MB quase cheia =
+        // alloc NULL → #PF no AP durante prefill; 48MB era insuficiente).
         let obs = k_nano::allocator::heap_observe();
-        if obs.headroom_mb < 48 {
+        if obs.headroom_mb < 128 {
             k_nano::slog_cortex!(
                 "InferQ",
                 "warn",
@@ -1469,6 +1498,33 @@ fn slice_diag_and_proof_deadline() {
                 );
             }
             a2_note_terminal(id);
+            return; // terminal já fecha tudo — watchdog não precisa rodar
+        }
+        // s428: watchdog POR SLICE — stall real vs slice lento. O T0 do slice
+        // em curso foi marcado ANTES do latch; se `poll_slice` não voltou em
+        // >STALL (30s), é wedge (lost wakeup/lock preso/#PF silencioso),
+        // não slice lento. Terminal honesto imediato — não espera os 120s.
+        let t0 = A2_SLICE_T0_US.load(Ordering::Acquire);
+        if t0 != 0 && now != 0 {
+            let slice_elapsed = now.saturating_sub(t0);
+            if slice_elapsed > A2_SLICE_STALL_US {
+                let id = A2_PROOF_ID.load(Ordering::Acquire);
+                let n = A2_SLICE_N.load(Ordering::Relaxed);
+                if !A2_PROOF_TIMEOUT_LOGGED.swap(true, Ordering::Relaxed) {
+                    k_nano::slog_cortex!(
+                        "InferQ",
+                        "fail",
+                        "a2_proof slice_stall id={} slice_n={} elapsed_us={} (budget={}us) — wedge, terminal",
+                        id,
+                        n,
+                        slice_elapsed,
+                        A2_SLICE_BUDGET_US
+                    );
+                }
+                A2_SLICE_T0_US.store(0, Ordering::Release);
+                a2_note_terminal(id);
+                return;
+            }
         }
     }
     // Diagnóstico: prova qual gate travou no próximo run. n==1 sempre.
@@ -1508,6 +1564,12 @@ pub fn poll_slice() -> bool {
         }
     }
     let _busy = SliceGuard;
+
+    // s428: marca o T0 do slice em curso — o watchdog (no topo do próximo
+    // poll_slice) mede contra ISTO. Limpo no fim do poll_slice (retorno =
+    // slice terminou; slice lento é contabilizado no budget, não aqui).
+    A2_SLICE_T0_US.store(k_nano::tsc::now_us(), Ordering::Release);
+    A2_SLICE_N.fetch_add(1, Ordering::Relaxed);
 
     // Lane A2: 1 inferência de prova por boot (fora do tick; não compete).
     let _ = maybe_submit_a2_proof();
@@ -1558,6 +1620,20 @@ pub fn poll_slice() -> bool {
         }
     }
 
+    // s428: slice terminou — limpa o T0 (stall = só existe com slice EM CURSO).
+    A2_SLICE_T0_US.store(0, Ordering::Release);
+
+    // s429-lab: o deadline da prova é NO-PROGRESS, não wall-clock — cada slice
+    // concluído é progresso e re-arma o deadline (QEMU 8c/WHPX mediu prova
+    // LEGÍTIMA de 58s+fila > 120s wall-clock: "a2_proof timeout id=2" com    // matmuls progredindo e `a2_proof done id=2` depois). Só NENHUM slice em    // 120s (wedge total, nem poll roda) é falha real.
+    if did && a2_proof_pending() {
+        let now = k_nano::tsc::now_us();
+        if now != 0 {
+            A2_PROOF_DEADLINE_AT_US
+                .store(now.saturating_add(A2_PROOF_DEADLINE_US), Ordering::Release);
+        }
+    }
+
     did
 }
 
@@ -1585,6 +1661,8 @@ mod tests {
         A2_SLOT_WAIT_LOGGED.store(false, Ordering::Release);
         A2_PROOF_DEADLINE_AT_US.store(0, Ordering::Release);
         A2_PROOF_TIMEOUT_LOGGED.store(false, Ordering::Release);
+        A2_SLICE_T0_US.store(0, Ordering::Release);
+        A2_SLICE_N.store(0, Ordering::Release);
         SLICE_POLL_CALLS.store(0, Ordering::Release);
         for i in 0..QUEUE_CAP {
             slots()[i].occupied.store(false, Ordering::Release);
@@ -1774,5 +1852,60 @@ mod tests {
         assert!(a2_should_abort_slice(3, false));
         assert!(a2_should_abort_slice(0, true));
         assert!(a2_should_abort_slice(9, true));
+    }
+
+    #[test]
+    fn s428_deadline_120s_e_stall_10s() {
+        // Piso documentado: idle ~160ms/slice × 22 layers ≈ 8s (SESSION_420);
+        // s429-lab: stall 30s — slice LEGÍTIMO de decode m=1 em 8c/WHPX mediu
+        // ~11s (falso positivo em 10s); 30s = 2,7× pior caso. Deadline 120s
+        // virou NO-PROGRESS (re-armado a cada slice concluído).
+        assert_eq!(A2_PROOF_DEADLINE_US, 120_000_000);
+        assert_eq!(A2_SLICE_STALL_US, 30_000_000);
+        // Ordem: stall dispara ANTES do deadline (por slice, não global).
+        assert!(A2_SLICE_STALL_US < A2_PROOF_DEADLINE_US);
+    }
+
+    #[test]
+    fn s428_slice_stall_terminal_no_host() {
+        // Wedge simulado: prova pendente, T0 de slice no passado remoto →
+        // o watchdog do topo do poll_slice termina a prova IMEDIATAMENTE
+        // (antes dos 120s), sem precisar de deadline global.
+        let _g = TEST_LOCK.lock();
+        drain_infer_queue_statics();
+        assert!(k_nano::tsc::now_us() != 0, "host TSC calibrada");
+        A2_PROOF_SUBMITTED.store(true, Ordering::Release);
+        A2_PROOF_DONE.store(false, Ordering::Release);
+        A2_PROOF_ID.store(9, Ordering::Release);
+        // deadline no FUTURO (prova NÃO estourou o prazo global)
+        let now = k_nano::tsc::now_us();
+        A2_PROOF_DEADLINE_AT_US.store(now + A2_PROOF_DEADLINE_US, Ordering::Release);
+        // slice "em curso" desde 20s atrás (> stall 10s)
+        A2_SLICE_T0_US.store(now.saturating_sub(A2_SLICE_STALL_US + 10_000_000), Ordering::Release);
+        assert!(a2_proof_pending(), "armado antes do watchdog");
+        slice_diag_and_proof_deadline();
+        assert!(!a2_proof_pending(), "stall por slice termina a prova (wedge)");
+        assert!(A2_PROOF_DONE.load(Ordering::Acquire));
+        assert_eq!(A2_SLICE_T0_US.load(Ordering::Acquire), 0, "T0 limpo pós-terminal");
+        drain_infer_queue_statics();
+    }
+
+    #[test]
+    fn s428_slice_lento_nao_dispara_stall() {
+        // Distinguir os dois fenômenos: slice EM CURSO dentro do stall (mesmo
+        // que lento) NÃO terminal a prova — o deadline global cuida do resto.
+        let _g = TEST_LOCK.lock();
+        drain_infer_queue_statics();
+        A2_PROOF_SUBMITTED.store(true, Ordering::Release);
+        A2_PROOF_DONE.store(false, Ordering::Release);
+        A2_PROOF_ID.store(11, Ordering::Release);
+        let now = k_nano::tsc::now_us();
+        A2_PROOF_DEADLINE_AT_US.store(now + A2_PROOF_DEADLINE_US, Ordering::Release);
+        // slice em curso há 1s (> budget 500ms = lento, < stall 10s = não wedge)
+        A2_SLICE_T0_US.store(now - 1_000_000, Ordering::Release);
+        slice_diag_and_proof_deadline();
+        assert!(a2_proof_pending(), "slice lento ≠ wedge — prova continua");
+        assert!(!A2_PROOF_DONE.load(Ordering::Acquire));
+        drain_infer_queue_statics();
     }
 }

@@ -93,6 +93,96 @@ static FAIL_STREAK: AtomicUsize = AtomicUsize::new(0);
 /// Já publicou HEALTH_ISSUE + diagnóstico nesta sessão de falha.
 static HEAL_FIRED: AtomicBool = AtomicBool::new(false);
 
+/// s425: código da última falha de persistência (0=nenhuma) + backend que
+/// tentou. Alimenta a linha `bootlog` do HUB HEALTH (honestidade na UI em vez
+/// de silêncio): MSC/VMD/ATA/AHCI/NVMe + razão tipada.
+static LAST_FAIL_KIND: AtomicU8 = AtomicU8::new(0);
+static LAST_TRY_BACKEND: AtomicU8 = AtomicU8::new(0);
+
+const BK_NONE: u8 = 0;
+const BK_USB: u8 = 1;
+const BK_VIRTIO: u8 = 2;
+const BK_ATA: u8 = 3;
+const BK_AHCI: u8 = 4;
+const BK_NVME: u8 = 5;
+
+fn backend_name(b: u8) -> &'static str {
+    match b {
+        BK_USB => "usb-msc",
+        BK_VIRTIO => "virtio-blk",
+        BK_ATA => "ata-pio",
+        BK_AHCI => "ahci",
+        BK_NVME => "nvme",
+        _ => "nenhum",
+    }
+}
+
+/// Nenhum backend sequer tentável (todos ausentes ou skipados).
+const FK_NO_BACKEND: u8 = 1;
+const FK_NO_FAT: u8 = 2;
+const FK_MISSING: u8 = 3;
+const FK_IO: u8 = 4;
+
+fn fail_kind_name(k: u8) -> &'static str {
+    match k {
+        FK_NO_BACKEND => "sem backend",
+        FK_NO_FAT => "sem FAT",
+        FK_MISSING => "BOOT.LOG ausente",
+        FK_IO => "io",
+        _ => "",
+    }
+}
+
+/// Nota a falha corrente (chamado pelos paths de falha do persist_now).
+fn note_fail(kind: u8, backend: u8) {
+    LAST_FAIL_KIND.store(kind, Ordering::Relaxed);
+    LAST_TRY_BACKEND.store(backend, Ordering::Relaxed);
+}
+
+/// Linha do Hub Health p/ persistência do BOOT.LOG (≤36 chars, honesta).
+/// Estados: ok=N flushes · pending=razão da falha + backend tentado ·
+/// pre-fat=antes do 1º flush (buffer em RAM). n/a = feature fat-boot-log off.
+pub fn hub_log_line() -> alloc::string::String {
+    #[cfg(not(feature = "fat-boot-log"))]
+    {
+        return alloc::string::String::from("n/a");
+    }
+    #[cfg(feature = "fat-boot-log")]
+    {
+        let writes = DISK_WRITES.load(Ordering::Relaxed) as u64;
+        if writes > 0 {
+            return alloc::format!("ok n{}", writes);
+        }
+        let streak = FAIL_STREAK.load(Ordering::Relaxed) as u64;
+        let kind = LAST_FAIL_KIND.load(Ordering::Relaxed);
+        let bk = LAST_TRY_BACKEND.load(Ordering::Relaxed);
+        if kind == 0 && streak == 0 {
+            return alloc::string::String::from("pre-fat (buffer)");
+        }
+        if kind == FK_NO_BACKEND {
+            let skip = BACKEND_SKIP.load(Ordering::Relaxed);
+            return alloc::format!(
+                "fail sem-backend msc={} ata={}",
+                crate::globals::USB_MSC.try_lock().map(|g| g.is_some()).unwrap_or(false) as u8,
+                if skip & SKIP_USB == 0 { 1 } else { 0 }
+            );
+        }
+        let sk = BACKEND_SKIP.load(Ordering::Relaxed);
+        let sk_str = if sk != 0 {
+            alloc::format!(" sk{}", sk)
+        } else {
+            alloc::string::String::from("")
+        };
+        alloc::format!(
+            "fail {} {}{} x{}",
+            backend_name(bk),
+            fail_kind_name(kind),
+            sk_str,
+            streak
+        )
+    }
+}
+
 /// Resultado tipado — self-heal distingue arquivo ausente (skip) de I/O (backoff).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverwriteResult {
@@ -356,7 +446,10 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> Overwrit
             for s in 0..spc {
                 let off = (s * bps) as usize;
                 if !dev.read_sectors((clba + s) as u64, &mut dir[off..off + bps as usize]) {
-                    return OverwriteResult::IoFail;
+                    // s424: IoFail nesta partição NÃO aborta a varredura — a ESP
+                    // (próxima na ordem) pode estar viva. Retorno decidido no fim.
+                    saw_io = true;
+                    break;
                 }
             }
             for entry in (0..dir.len()).step_by(32) {
@@ -392,6 +485,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> Overwrit
 
                 while fc >= 2 && fc < 0x0FFF_FFF8 && written < write_len {
                     let fc_lba = data_lba + (fc - 2) * spc;
+                    let mut data_io = false;
                     for s in 0..spc {
                         if written >= write_len {
                             break;
@@ -400,15 +494,23 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> Overwrit
                         let take = (write_len - written).min(512);
                         sector[..take].copy_from_slice(&data[written..written + take]);
                         if !dev.write_sectors((fc_lba + s) as u64, &sector) {
-                            return OverwriteResult::IoFail;
+                            // s424: write parcial — segue p/ próxima partição
+                            // (ESP) em vez de abortar a varredura.
+                            saw_io = true;
+                            data_io = true;
+                            break;
                         }
                         written += take;
+                    }
+                    if data_io {
+                        break;
                     }
                     let fat_off = fc as usize * 4;
                     let fat_sec = fat_lba + (fat_off as u32 / bps);
                     let mut fsec = [0u8; 512];
                     if !dev.read_sectors(fat_sec as u64, &mut fsec) {
-                        return OverwriteResult::IoFail;
+                        saw_io = true;
+                        break;
                     }
                     let boff = fat_off % bps as usize;
                     fc = u32::from_le_bytes([
@@ -422,13 +524,16 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> Overwrit
                 if alloc_size < 512 || alloc_size > BOOT_LOG_CAP {
                     let target = (capacity as u32).to_le_bytes();
                     dir[entry + 28..entry + 32].copy_from_slice(&target);
-                    let sector_idx = (entry as u32) / bps;
-                    let off = (sector_idx * bps) as usize;
+                    // O dirent vive no setor `entry/bps` do cluster do dir;
+                    // o slice a gravar é exatamente esse setor do buffer `dir`.
+                    let sec_in_cluster = entry / bps as usize;
+                    let off = sec_in_cluster * bps as usize;
                     if !dev.write_sectors(
-                        (clba + sector_idx) as u64,
+                        (clba + sec_in_cluster as u32) as u64,
                         &dir[off..off + bps as usize],
                     ) {
-                        return OverwriteResult::IoFail;
+                        saw_io = true;
+                        break;
                     }
                 }
                 log_no_flush(&alloc::format!(
@@ -440,7 +545,9 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> Overwrit
                 if written > 0 || write_len == 0 {
                     return OverwriteResult::Ok;
                 }
-                return OverwriteResult::IoFail;
+                // Tudo pronto mas 0 bytes gravados = falha de I/O — segue p/ ESP.
+                saw_io = true;
+                break;
             }
             let fat_off = cluster as usize * 4;
             let fat_sec = fat_lba + (fat_off as u32 / bps);
@@ -581,6 +688,7 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
             drain_pre_fat_buf();
             clear_breaker_on_success();
         } else {
+            note_fail(FK_IO, BK_NONE); // produto: persist timestamped falhou (VFS)
             let first = !HEAL_FIRED.load(Ordering::Relaxed);
             if first {
                 HEAL_FIRED.store(true, Ordering::Relaxed);
@@ -691,6 +799,25 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
         }
 
         if !ok {
+            // s425: telemetria da falha p/ a linha `bootlog` do HUB HEALTH.
+            if !any_tried {
+                note_fail(FK_NO_BACKEND, BK_NONE);
+            } else {
+                let kind = match last {
+                    OverwriteResult::NoFatParts => FK_NO_FAT,
+                    OverwriteResult::BootLogMissing => FK_MISSING,
+                    _ => FK_IO,
+                };
+                let bk = match last_name {
+                    "USB-MSC" => BK_USB,
+                    "virtio-blk" => BK_VIRTIO,
+                    "ATA-PIO" => BK_ATA,
+                    "AHCI" => BK_AHCI,
+                    "NVMe" => BK_NVME,
+                    _ => BK_NONE,
+                };
+                note_fail(kind, bk);
+            }
             let detail = if !any_tried {
                 alloc::format!(
                     "nenhum backend tentavel (skip=0x{:02x} usb={} ata={} ahci={})",

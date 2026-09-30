@@ -1524,6 +1524,14 @@ fn reserve_limine_stack(
 pub(crate) fn kernel_boot(
     handoff: &impl k_nano::boot_handoff::BootHandoff,
 ) -> ! {
+    // s429-lab rodada 7: crate `log` (via virtio-drivers/wasmi/cranelift) tem LOGGER
+    // NULL em BSS — nenhum set_logger no kernel. Macros third-party que passam do
+    // gate de nivel deref LOGGER+0x18 -> #PF cr2=0x18 sob pressao (storm park).
+    // Logger no-op registrado o mais cedo possivel (sem heap, sem serial).
+    log::set_logger(&NopLogger)
+        .map(|_| log::set_max_level(log::LevelFilter::Off))
+        .ok(); // idempotente-safe: se ja setado, segue
+
     // HEAP ADIADO: init_heap precisa de PHYS_MEM_OFFSET (setado por init_memory) para que
     // try_fault_in_heap mapeie páginas do TALC (0x4000_0000_0000) sob demanda.
     // O LazyBumpAllocator auto-inicia nas primeiras alloc() usando HEAP_BUFFER em .bss.
@@ -3186,7 +3194,11 @@ pub(crate) fn kernel_boot(
 
     unsafe {
 
-        let gpus = crate::gpu::detect::detect_all();
+        let mut gpus = crate::gpu::detect::detect_all();
+        // s423: wake D3→D0 das dGPUs ANTES do plan/vram — o H3 e o lane VRAM
+        // sobrevivem ao D-state do notebook (prova de vida antes do PMCSR;
+        // D3cold/ausente segue skip honesto).
+        k_hal::gpu::gpu_power::wake_all(&mut gpus);
         crate::display::fb::boot_ckpt(43, "GPU detect done");
         // ReBAR/ACS probe-only (sem try_enable_* — HITL/HW depois).
         #[cfg(target_os = "none")]
@@ -3244,6 +3256,16 @@ pub(crate) fn kernel_boot(
                             // upload_hint_weights. Sem o arquivo: Ready honesto
                             // (pass-through clássico), nunca erro.
                             k_hal::gpu::hint_render::try_load_from_fat();
+                            // s427 — loader-VRAM: tenta o Falcon3-1B direto
+                            // FAT→BAR (sem heap bump). Ok = lane VRAM ativo já
+                            // no boot (o upload pós-load do heap vira no-op via
+                            // loader_resident()). Falha = fluxo legado intacto.
+                            for cand in ["FALCON1B.BIN", "FALCON1B.V6"] {
+                                if k_hal::gpu::loader_vram::load_from_fat_to_vram(cand).is_some() {
+                                    crate::boot_logger::log("BOOT: loader-VRAM Falcon3-1B FAT→BAR (sem heap)");
+                                    break;
+                                }
+                            }
                         }
                         crate::display::fb::boot_ckpt(43, "gpu vram ok");
                     } else {
@@ -5577,3 +5599,17 @@ fn verify_kernel_from_disk(ata: &crate::ata::AtaDriver, parts: &[crate::fat32::P
 
 
 
+
+// s429-lab rodada 7: logger no-op para o crate `log` (virtio-drivers/wasmi/cranelift
+// usam log::info!/debug!). Sem registro, LOGGER fica NULL em BSS e macros que passam
+// do gate deref LOGGER+0x18 -> #PF cr2=0x18 (storm park). max_level(Off) faz os
+// macros virarem leitura atomica barata — nunca chamam o no-op em runtime.
+struct NopLogger;
+
+impl log::Log for NopLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        false
+    }
+    fn log(&self, _record: &log::Record) {}
+    fn flush(&self) {}
+}

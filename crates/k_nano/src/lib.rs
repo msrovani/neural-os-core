@@ -80,6 +80,7 @@ pub mod dbc;
 pub mod neural_fs;
 pub mod pci;
 pub mod pci_aer;
+pub mod vmd; // Intel VMD binder (s422) — NVMe atrás do domínio RST (notebooks Alder Lake+)
 pub mod platform_probe;
 // proof_gate: removido (dead code, 0 callers — audit k_nano 2026-08-24)
 pub mod rtc;

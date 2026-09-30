@@ -1,5 +1,84 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s430] - 2026-09-30 - Lab QEMU 8GB/8c: 5min na UI sem freeze (goal batido, 14,8min de uptime)
+
+- High: **goal do lab batido** — rodada 10: 14,8min de runtime com UI/scheduler vivos (613 ticks SCHED), 0 faltas até T+28050 (7,8min), 1 único storm CONTIDO por park (BSP/UI seguiram +5min), OOM final reportado honestamente (`OOM/TALC agente=audio_input`) sem #PF fantasma nem panic.
+- High: **Logger no-op p/ crate `log`** — `log` 0.4 entra via virtio-drivers/wasmi/cranelift e o kernel NUNCA chamava `set_logger`: macros third-party que passam do gate deref LOGGER NULL+0x18 = #PF cr2=0x18 (probe USB-MSC). `NopLogger` + `max_level(Off)` cedo em `kernel_boot` (neural-kernel/Cargo.toml + main.rs).
+- High: **#PF storm park por IP** (interrupts_ext.rs): mesmo IP refaltando ≥3× = park do core (hlt) fail-closed — sistema segue nos outros cores (provado 3×). #PF num AP deixou de ser fatal p/ o boot inteiro.
+- Med: **watchdogs medidos no alvo 8c/WHPX:** `A2_SLICE_STALL_US` 10s→30s (decode m=1 ~11s é legítimo); deadline global virou NO-PROGRESS (refresh `A2_PROOF_DEADLINE_AT_US` a cada poll_slice com `did` — wall-clock matava prova honesta de 124s).
+- Med: **gates de headroom 48→128MB** no submit + claim re-check do InferQueue (48MB não cobre janela quase cheia; 128MB = `heap_headroom_low`).
+- Med: **`emotion::analyze` alloc-free** (buf stack 512B + contains_ci; `to_lowercase` deref NULL = cr2=0x28). 2º caso da classe "alloc em hot path sob pressão".
+- Med: **`BeiState::tick` guards** — low_mem 48→128MB; PromoteSkill (wasmi, cr2=0x10) e supervisor tick (BTreeMap nodes demand-paged, cr2=0x702a00a8) com re-check bounded no meio do tick.
+- Med: **escalada health observe-only p/ I5:boot_log** + gate `mesh_frag_pressure` no caller `ingest_health_issue` — fecha a cadeia HEALTH_ISSUE:I5 → intent "diagnostique e corrija" → churn → panic wasmi.
+- Gates: check release 0 erros; hermes 257/257 (-t1), cortex 110, k-nano 240.
+- Session: SESSION_420 addendum s430
+
+## [1.9.99-s429] - 2026-09-30 - VMD visão guest: tradução MMIO de offsets SHDW não-nativos
+
+- High: **vmd.c provado, não assumido** — a leitura canônica do `vmd.c` refutou a hipótese de partida (traduzir endereços DMA host→bus): `pci_add_resource_offset` aplica o offset SHDW a RECURSOS/BARs (`bus = cpu − offset`), NUNCA a DMA de RAM (só `dma_set_mask`). DMA upstream do filho é UNTRANSLATED/identidade também no guest.
+- High: **o que de fato traduz no guest é o DOWNSTREAM MMIO** — a janela BUS do domínio começa em `host_phys` (base bus = host, pois bus = cpu − offset) e o BAR do filho (bus addr) só é alcançável pela CPU via MEMBAR mapeada UC: `cpu = bus + offset` (`translate_bar` puro, testado). `child_bar_cpu` retorna (phys, needs_map): guest → dentro da MEMBAR já mapeada; nativo → phys host, mapeia UC.
+- Med: `init()` não aborta mais em offset≠0: valida MEMBAR size via read_bar_size (0/inválido = abort honesto fail-closed), mapeia UC as MEMBARs, registra `MemWindow{host_base,len,offset}` em `VMD_DMA_WINS` e segue; `guest_mode()` expõe o estado; slog `GUEST: traducao MMIO ativa (... DMA identidade)`.
+- Med: `NvmeDriver::probe_at_mmio_va(mmio)` — bring-up sobre VA pré-resolvido (o VMD guest passa o VA da MEMBAR UC); `probe_at_mmio` mapeia UC e delega. DMA de RAM do NVMe fica idêntico nos dois modos (bounce/queues/PRP sem mudança — evidência do vmd.c).
+- Testes: `s429_traducao_bar_bus_para_cpu_via_offset_shdw` (offset +0x10_0000_0000, bordas da janela, fora = None), `s429_nativo_offset_zero_traduz_para_si_mesmo` (identidade), `s429_windows_guest_deteccao_vmd_c` (`vmd_in_guest = off1||off2`, offset negativo). k-nano 240 (237+3).
+- Limites honestos: guest só faz sentido com SHDW≠0 + MEMBARs pré-configuradas pelo BIOS; xHCI/HDA fora do domínio VMD não são afetados; MSI remap (vmd.c vmd_in_guest) irrelevante — driver é polling. AWAITING_HW: validação no notebook (nvme ok=true via=vmd guest).
+- Gates: check release 0 erros (1m12s); k-nano 240 (flaky compact_batch_guard passa isolado — lição SESSION_346).
+- Session: SESSION_420 addendum s429
+
+## [1.9.99-s428] - 2026-09-30 - a2_proof 120s + watchdog por slice (stall real ≠ slice lento)
+
+- Med: **deadline 300s→120s** — piso documentado: idle real ~160ms/slice × 22 layers ≈ 8s (SESSION_420), host sob carga ~2×; 120s = 15× o pior caso mensurado. O deadline pega WEDGE global; lentidão não é motivo de 300s de espera.
+- High: **watchdog POR SLICE** — `A2_SLICE_T0_US` marcado dentro do latch (início do slice em curso), limpo no retorno; o topo do `poll_slice` (FORA do latch — roda mesmo com SLICE_BUSY preso noutro core) checa: slice em curso > **10s** (20× o budget de 500ms; nenhum slice legítimo demora isso — camadas/OOM interno abortam antes) = **wedge** (lost wakeup/lock preso/#PF silencioso) → terminal honesto IMEDIATO da prova (`a2_proof slice_stall ... wedge, terminal`), sem esperar os 120s. Distingue os dois fenômenos que o watchdog antigo confundia: **stall real** (poll_slice não voltou) vs **slice lento** (voltou com `us > budget` — continua contando `A2_SLOW_SLICES` como antes).
+- Testes: `s428_deadline_120s_e_stall_10s` (constantes + ordem stall<deadline), `s428_slice_stall_terminal_no_host` (wedge simulado → terminal imediato com deadline global no futuro), `s428_slice_lento_nao_dispara_stall` (1s em curso > budget, < stall → prova continua). cortex 110 (107+3).
+- Gates: check release 0 erros (1m09s).
+- Session: SESSION_420 addendum s428 (fecha o residual (2) do addendum s421)
+
+## [1.9.99-s427] - 2026-09-30 - Loader-VRAM: pesos FAT→BAR sem heap (ADR-0112 residual, fase 1)
+
+- High: **`k_nano::fat32::read_root_file_dev_chunked`** — leitor FAT32 por CALLBACK (cada cluster vai pro caller, zero Vec do blob); o único buffer é o cluster (~1-4KB). Chain-camminhamento idêntico ao `read_root_file_dev` (mesma validação BPB/anti-OOB), mas sem materializar o arquivo.
+- High: **`k_hal::gpu::loader_vram`** — o `.bitnet v6` do Falcon3-1B é lido do FAT e os PACKED das 18 layers (126 matrizes, ~256MB) vão DIRETO pra aperture BAR via `write_vram_bytes` (interseção chunk×janela): shapes derivados do header, `layers_off` derivado do próprio blob (tok_len real, sem chutes), pré-checagem INTEIRA (`reserve_vram_span` alinhado ao cursor do hint), stream por janela com abort honesto (stream incompleto = SEM registro, fluxo legado roda). Registro por sequência via `register_loader_resident` (mesmo contrato SEQ_MATS/RESIDENT/UPLOADED do `on_model_loaded`) — lane VRAM ativa ANTES do load do heap; `on_model_loaded` vira no-op quando `loader_resident()`.
+- Honestidade: o `load_llm_v6` AINDA copia os packed pro heap no parse (stub do parser = residual documentado) — o ganho desta fase é a rota BAR independente do heap + no-op do upload duplo. A liberação REAL do heap (pesos nunca passam pelo bump) exige o stub no parser (residual ADR-0112).
+- Med: `bar_compute::reserve_vram_span`/`write_vram_bytes`/`NEXT_WEIGHT_CURSOR` (cursor compartilhado hint↔loader). Wire no boot após `init_bar_compute` (candidatos FALCON1B.BIN/.V6).
+- Gates: check release 0 erros (1m15s); k-hal 74 (71+3 loader_vram), k-nano 237. HW lab: `LOADER-VRAM ... streaming` + `loader-VRAM: pesos FAT→BAR` no log, `vram_served=true` antes do load do heap.
+- Session: SESSION_420 addendum s427
+
+## [1.9.99-s426] - 2026-09-30 - Card HUD "Hints Neurais (H3)": validação do H3 ao vivo, sem extrair BOOT.LOG
+
+- Med: **`jarbas::cards::hints_card`** (ID 8003) — telemetria AO VIVO do renderer de hints direto dos statics (fonte única): `stage` (off/ready/resident/device com affordance de estado), `fwd <N>us (alvo <100)` com pill verde só quando stage≥2 E fwd∈(0,100), `hints n` (crescendo ~2/s em HW) e `vram <N>B resid.` quando residente. Host sem BAR mostra `off (sem BAR)` + fwd=0us unknown — **não finge atividade**.
+- Med: **F11** alterna o card (`WmAction::ToggleHintsCard` + `close_card_by_id` no compositor, toggle idempotente por id); refresh vivo 2 Hz no tick do DisplayAgent (`spawn_or_update_card` — mesma janela, sem duplicar); `HINT_RESIDENT_BYTES` agora `pub`; atalho no help (H).
+- Gates: check release 0 erros (1m07s); jarbas 123/123 (damage_tests host crash pré-existente via stash, skipado), k-hal 71.
+- Session: SESSION_420 addendum s426
+
+## [1.9.99-s425] - 2026-09-30 - Linha `bootlog` no HUB HEALTH: por que o flush falhou, em vez de silêncio
+
+- Med: **`boot_logger::hub_log_line()`** — telemetria de persistência honesta na UI: `ok n<N>` (flushes gravados) · `fail <backend> <razão> [sk<mask>] x<streak>` (usb-msc/virtio-blk/ata-pio/ahci/nvme + sem-FAT/BOOT.LOG-ausente/io + backends skipados + streak de backoff) · `pre-fat (buffer)` (antes da 1ª tentativa) · `fail sem-backend msc=N ata=N` (nenhum backend tentável — o cenário do lab) · `n/a` (feature off). Statics novos `LAST_FAIL_KIND`/`LAST_TRY_BACKEND` anotados nos paths de falha do `persist_now` (produto incluído).
+- Med: linha `bootlog` no HUB HEALTH (HUB_ROWS 19→20, row 19; Warn quando fail) + SysInfoAgent inclui a MESMA string no slog periódico `BOOT.LOG persist pending` (single source — serial e UI dizem a mesma coisa).
+- Honesty: `pre-fat` = estado Na (buffer em RAM, sem tentativa ainda) — não acusa falha que não houve; `fail` só aparece com evidência tipada do `OverwriteResult`.
+- Gates: check release 0 erros (1m18s); k-nano 237 (7 boot_logger), jarbas hub 7/7, hermes 257 (t=1). Crashes do harness host (jarbas damage_tests UB-check, k-nano tickv compact flaky paralelo) provados pré-existentes via stash (SESSION_418).
+- Session: SESSION_420 addendum s425
+
+## [1.9.99-s424] - 2026-09-30 - BOOT.LOG de fallback na ESP (evidência de boot nunca mais se perde)
+
+- High: **kernel (`k_nano/boot_logger.rs`)** — `overwrite_boot_log` convertia IoFail na partição de dados em `return` imediato: a ESP (próxima na ordem de partições) nunca era tentada. Agora falha de I/O em qualquer partição marca `saw_io` e CONTINUA a varredura (write parcial de dados, read do FAT, read do diretório, write do dirent — todos continuam; o resultado tipado é decidido no fim, contrato `OverwriteResult` intacto). Só `Ok` retorna cedo.
+- High: **build (`tools/limine/mk_esp_fat.py`)** — a ESP da imagem HW agora embute `BOOT.LOG` pré-alocado (256KB, chain válida) na RAIZ, ao lado de EFI/ e boot/. O logwriter-efi grava `NEURAL\BOOT.LOG` (subdir, não é achado pelo walker do kernel); o kernel grava o BOOT.LOG raiz via BlockDevice com o MESMO mecanismo do volume de dados — zero código novo de FS. O cenário do lab (dados não flusha, MSC não enumerou a tempo) passa a deixar evidência legível no D: montável no Windows.
+- Med: fix de corretude no write do dirent de tamanho (offset do setor do cluster calculado do `entry` real; antes `sector_idx*bps` usava o índice de setor como offset de byte — funcionava por coincidência quando o dirent caía no setor 0 do cluster).
+- Validação: ESP de teste 128MB gerada — dirent `BOOT.LOG` na raiz (cluster 351, 262144B), chain legível, zero preenchido, BPB compatível com o parser do kernel (root_entries=0). k-nano 237/237 (7 boot_logger); check release 0 erros (rebuild real 1m50s).
+- Session: SESSION_420 addendum s424
+
+## [1.9.99-s423] - 2026-09-30 - Power-on dGPU D3→D0 via PMCSR (H3 sobrevive ao D-state)
+
+- High: **`k_hal::gpu::gpu_power`** (`wake_to_d0`/`wake_all`) — a dGPU do notebook dorme em D3 no boot (SESSION_260: BARs visíveis mas tocar = hang de barramento), o que matava o H3 e o lane VRAM em qualquer laptop. Wake honesto: **prova de vida ANTES do write** (vendor ID ≠ 0xFFFF — device D3cold/ausente não recebe write às cegas), PMCSR via `pci_power_on_d0`, poll do D-state com budget TSC 10ms (PCI PM spec §5.4), **re-scan persistido** no `GpuInfo` (os gates existentes passam a ver D0 real).
+- Wire: `wake_all(&mut gpus)` no boot logo após `detect_all()` (ponto canônico único antes do `plan_assignment`); `init_vram_tier` e `nvidia::probe` também chamam `wake_to_d0` como backstop idempotente (no-op em D0–D2). D3cold/ausente = skip honesto (nunca hang).
+- Gates: check release 0 erros (rebuild real 2m16s); k-hal 71 (68+3 gpu_power). HW lab: esperado `GPUPWR woke` + `HINT.BIN carregado upload=true` no notebook (dGPU RTX 3050/3060 em D3 no boot).
+- Session: SESSION_420 addendum s423
+
+## [1.9.99-s422] - 2026-09-30 - Intel VMD binder: NVMe visível em notebooks Alder Lake+
+
+- High: **driver VMD R0** (`k_nano/src/vmd.rs`) — o NVMe de notebooks Intel RST vive num domínio PCI SECUNDÁRIO (o card do lab mostrava `8086:a77f sem driver` e o storage caía no USB-MSC). Binder nativo: CFGBAR (BAR0) = ECAM dos filhos, `busn_start` via VMCAP(0x40)/VMCONFIG(0x44) (0/128/224), scan flat do range ECAM (bridges 06:04 cobertos pelo range), enable MEM/BUSMASTER dos filhos via config MMIO (CF8/CFC não alcança o domínio) com readback. DIDs do vmd.c (201d/28c0/28c1/467f/4c3d/a77f/9a0b/7d0b/ad0b/b60b/b06f/b07f/d70b/d73b); 28C1 (USE_BIOS_INFO) abortado honesto. Offsets SHDW: nativo = 0 ⇒ DMA do filho é endereço físico direto (bounce buffers do NVMe funcionam sem tradução); visão guest abortada (sem tradução implementada — honestidade).
+- Med: **refactor mínimo do NVMe** — `NvmeDriver::probe_at_mmio(bar0)` (bring-up sobre BAR0 já resolvido); `probe()` nativo delega. Fallback no `probe_storage_drivers`: sem NVMe nativo → `vmd::init()` + `probe_vmd_nvme()` → mesmo global `NVME_DRIVER` (DiskAgent/StorageBus/boot_logger pegam de graça — bin intocado).
+- Honestidade: VMD ausente = caso normal (log info, não warn); D-state D0 antes de tocar BARs (SESSION_260); fail-closed em cada passo (CFGBAR <1MB, bus offset desconhecido, cmd não aceito).
+- Gates: check release 0 erros; k-nano 237 (232+5 vmd). HW lab pendente: validar boot no notebook (esperado `nvme ok=true via=vmd` + BOOT.LOG persistindo via NVMe).
+- Session: SESSION_420 addendum s422
+
 ## [1.9.99-s421] - 2026-09-30 - Lane VRAM ADR-0112: dispatch por sequência + correções de corretude
 
 - High: **lane VRAM POR SEQUÊNCIA (layer-major)** — o SHAPE_INDEX do s418 servia TODAS as layers com a matriz da layer 0 (shape não resolve q/k/v/o — mesma (h,h); colidiria com experts do MoE): pesos errados corromperiam logits silenciosamente. Novo `dispatch_vram_seq(slot=layer*7+[q,k,v,o,gate,up,down], w, x)` no `cortex::compute` + `vram_ternary_seq` no `bar_compute` com **proteção de identidade** (shape divergente = None honesto → CPU ladder). Upload sem dedupe com **pré-checagem de capacidade INTEIRA** (1B ≈ 369MB, 3B ≈ 675MB; BAR1 sem ReBAR ≈ 256MB → lane off honesto, nunca parcial). Cursor persistente de weights: hint (boot) e LLM (set_model) dividem a aperture sem colidir; `SEQ_MATS` é só do LLM.

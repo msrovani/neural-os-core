@@ -15,6 +15,13 @@ pub fn should_escalate_health_to_llm(payload: &str) -> bool {
     if payload.contains("degraded_slip") || payload.contains(":I5:net:") {
         return false;
     }
+    // s429-lab: boot_log sem backend é AMBIENTAL (QEMU sem stick MSC; HW real
+    // sem enum a tempo) — o LLM não conserteia: só re-custo e re-intento
+    // (posture FAIL x2 → churn de council/learner/wasm sob pressão = caminho
+    // do panic wasmi "store owner mismatch" no 8c). Observe-only como I5:net.
+    if payload.contains(":I5:boot_log:") {
+        return false;
+    }
     if payload.contains("recipe_escalate") || payload.contains("HITL:recipe") {
         return false;
     }
@@ -26,8 +33,20 @@ pub fn should_escalate_health_to_llm(payload: &str) -> bool {
 }
 
 /// HEALTH_ISSUE: memoriza; só firmware/skill ausente vira USER_INTENT.
+/// s429-lab: gate de CLASSE no CALLER — sob pressão de memória (mesh frag)
+/// NENHUM health escala (SESSION_410 (2): escalada amplifica a própria carga;
+/// e o wasmi panica sob heap pressionado — o intent não é confiável aí).
+/// A função de classificação continua PURA (testável sem estado global).
 pub fn ingest_health_issue(payload: &str) {
     k_nano::slog_hermes!("Health", "info", "{}", payload);
+    if k_nano::memory::mesh_frag_pressure() {
+        k_nano::slog_hermes!(
+            "Health",
+            "info",
+            "observe-only (frag pressure) — nao encaminha ao LLM"
+        );
+        return;
+    }
     if !should_escalate_health_to_llm(payload) {
         k_nano::slog_hermes!(
             "Health",

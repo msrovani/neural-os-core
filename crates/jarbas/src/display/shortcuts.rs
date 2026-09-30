@@ -59,11 +59,12 @@ pub enum WmAction {
     ToggleDock,                  // Super+D
     ToggleTiling,                // Super+T
     ShowLauncher,                // Super+Space
-    OpenChat,                    // Space — abre/foca o chat do Jarbas
+    OpenChat,                    // Ctrl+Space — abre/foca o chat do Jarbas
     PowerMenu,                   // Ctrl+Alt+Del — mostra menu de desligar
     ShowHelp,                    // H — mostra card de atalhos do teclado
     ToggleHubHealth,             // F12 — painel Hub Health (glass, fora do WM)
     CloseHubHealth,              // Esc — fecha o Hub Health
+    ToggleHintsCard,             // F11 (s426) — card H3 ao vivo (fwd/n/stage)
 }
 
 impl WmAction {
@@ -102,8 +103,8 @@ impl WmAction {
             (Modifiers::SUPER, N) => Some(MinimizeWindow),
             (Modifiers::SUPER_SHIFT, Space) => Some(ToggleFloating),
 
-            // Bare Space (no modifiers) → OpenChat
-            (Modifiers::NONE, Space) => Some(OpenChat),
+            // Ctrl+Space → OpenChat (bare Space é tecla de digitação — NÃO abrir)
+            (Modifiers::CTRL, Space) => Some(OpenChat),
             // Ctrl+Alt+Delete → PowerMenu
             (Modifiers { ctrl: true, alt: true, .. }, Delete) => Some(PowerMenu),
             // Bare H (no modifiers) → ShowHelp
@@ -121,10 +122,45 @@ impl WmAction {
             // Hub Health (fora do WM): F12 alterna, Esc fecha.
             (Modifiers::NONE, F12) => Some(ToggleHubHealth),
             (Modifiers::NONE, Escape) => Some(CloseHubHealth),
+            // Card H3 ao vivo (s426): F11 alterna spawn/update do card de hints.
+            (Modifiers::NONE, F11) => Some(ToggleHintsCard),
 
             _ => None,
         }
     }
+
+    /// Um atalho de 1 tecla (sem modificador) que NÃO deve disparar enquanto um
+    /// campo de texto está focado: qualquer tecla que o usuário digita (letras,
+    /// dígitos, espaço, pontuação) seria engolida do texto. Teclas de controle
+    /// globais (F1-F12, Esc) ficam de fora — ver `is_global_control_key`.
+    ///
+    /// Regra GERAL, não special-case de 'H': um binding de letra/pontuação futuro
+    /// já nasce protegido. Combos com qualquer modificador (Super/Alt/Ctrl/Shift)
+    /// continuam disparando normalmente.
+    pub fn suppressed_when_typing(combo: KeyCombo) -> bool {
+        combo.modifiers == Modifiers::NONE && !is_global_control_key(combo.key)
+    }
+}
+
+/// Teclas de controle que seguem disparando com 1 tecla mesmo com texto focado
+/// (ex.: F12 Hub Health, Esc fechar). Não produzem texto, então não roubam digitação.
+fn is_global_control_key(k: KeyCode) -> bool {
+    matches!(
+        k,
+        KeyCode::F1
+            | KeyCode::F2
+            | KeyCode::F3
+            | KeyCode::F4
+            | KeyCode::F5
+            | KeyCode::F6
+            | KeyCode::F7
+            | KeyCode::F8
+            | KeyCode::F9
+            | KeyCode::F10
+            | KeyCode::F11
+            | KeyCode::F12
+            | KeyCode::Escape
+    )
 }
 
 // Tabela estática (não no SkillRegistry — WM é core)
@@ -160,7 +196,7 @@ pub static SHORTCUTS: &[(KeyCombo, WmAction)] = &[
     (KeyCombo { modifiers: Modifiers::SUPER_SHIFT, key: KeyCode::Space }, WmAction::ToggleFloating),
 
     // System
-    (KeyCombo { modifiers: Modifiers::NONE, key: KeyCode::Space }, WmAction::OpenChat),
+    (KeyCombo { modifiers: Modifiers::CTRL, key: KeyCode::Space }, WmAction::OpenChat),
     (KeyCombo { modifiers: Modifiers { ctrl: true, alt: true, ..Modifiers::NONE }, key: KeyCode::Delete }, WmAction::PowerMenu),
     (KeyCombo { modifiers: Modifiers::NONE, key: KeyCode::H }, WmAction::ShowHelp),
     (KeyCombo { modifiers: Modifiers::ALT, key: KeyCode::F4 }, WmAction::CloseWindow),
@@ -170,6 +206,7 @@ pub static SHORTCUTS: &[(KeyCombo, WmAction)] = &[
     (KeyCombo { modifiers: Modifiers::SUPER, key: KeyCode::T }, WmAction::ToggleTiling),
     (KeyCombo { modifiers: Modifiers::SUPER, key: KeyCode::Space }, WmAction::ShowLauncher),
     (KeyCombo { modifiers: Modifiers::NONE, key: KeyCode::F12 }, WmAction::ToggleHubHealth),
+    (KeyCombo { modifiers: Modifiers::NONE, key: KeyCode::F11 }, WmAction::ToggleHintsCard),
     (KeyCombo { modifiers: Modifiers::NONE, key: KeyCode::Escape }, WmAction::CloseHubHealth),
 ];
 
@@ -242,28 +279,108 @@ pub fn help_text() -> &'static str {
     "ATALHOS DO TECLADO\n\
      \n\
      [Workspace]\n\
-     Super+1-9     — Trocar workspace\n\
-     Super+Left    — Workspace anterior\n\
-     Super+Right   — Workspace seguinte\n\
+     Super+1-9     - Trocar workspace\n\
+     Super+Left    - Workspace anterior\n\
+     Super+Right   - Workspace seguinte\n\
      \n\
      [Janelas]\n\
-     Alt+Tab       — Ciclar janelas\n\
-     Super+Q       — Fechar janela\n\
-     Alt+F4        — Fechar janela\n\
-     Ctrl+Q        — Fechar janela\n\
-     Super+M       — Maximizar\n\
-     Super+N       — Minimizar\n\
+     Alt+Tab       - Ciclar janelas\n\
+     Super+Q       - Fechar janela\n\
+     Alt+F4        - Fechar janela\n\
+     Ctrl+Q        - Fechar janela\n\
+     Super+M       - Maximizar\n\
+     Super+N       - Minimizar\n\
      \n\
      [Sistema]\n\
-     Espaco        — Abrir Chat Jarbas\n\
-     H             — Ajuda (esta tela)\n\
-     Ctrl+Alt+Del  — Menu de energia\n\
+     Ctrl+Space    - Abrir Chat Jarbas\n\
+     H             - Ajuda (esta tela)\n\
+     F11           - Card Hints H3 (ao vivo)\n\
+     Ctrl+Alt+Del  - Menu de energia\n\
      \n\
      [Layout]\n\
-     Super+H       — Tile horizontal\n\
-     Super+V       — Tile vertical\n\
-     Super+Shift+Seta  — Redimensionar tile\n\
-     Super+Shift+Space — Alternar flutuante\n\
-     Super+D       — Alternar dock\n\
-     Super+T       — Alternar tiling"
+     Super+H       - Tile horizontal\n\
+     Super+V       - Tile vertical\n\
+     Super+Shift+Seta  - Redimensionar tile\n\
+     Super+Shift+Space - Alternar flutuante\n\
+     Super+D       - Alternar dock\n\
+     Super+T       - Alternar tiling"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn combo(mods: Modifiers, key: KeyCode) -> KeyCombo {
+        KeyCombo { modifiers: mods, key }
+    }
+
+    /// Bug real: digitar 'h' no chat abria o card de ajuda. Com texto focado,
+    /// tecla de 1 letra sem modificador é digitação, não comando.
+    #[test]
+    fn bare_letter_shortcut_is_suppressed_while_typing() {
+        assert!(WmAction::suppressed_when_typing(combo(Modifiers::NONE, KeyCode::H)));
+        assert!(WmAction::suppressed_when_typing(combo(Modifiers::NONE, KeyCode::A)));
+        assert!(WmAction::suppressed_when_typing(combo(Modifiers::NONE, KeyCode::Key1)));
+        assert!(WmAction::suppressed_when_typing(combo(Modifiers::NONE, KeyCode::Space)));
+    }
+
+    /// F12/Esc e qualquer combo com modificador continuam valendo com texto focado.
+    #[test]
+    fn global_control_and_modified_shortcuts_still_fire_while_typing() {
+        assert!(!WmAction::suppressed_when_typing(combo(Modifiers::NONE, KeyCode::F12)));
+        assert!(!WmAction::suppressed_when_typing(combo(Modifiers::NONE, KeyCode::Escape)));
+        assert!(!WmAction::suppressed_when_typing(combo(Modifiers::CTRL, KeyCode::Space)));
+        assert!(!WmAction::suppressed_when_typing(combo(Modifiers::SUPER, KeyCode::H)));
+        assert!(!WmAction::suppressed_when_typing(combo(Modifiers::ALT, KeyCode::Tab)));
+    }
+
+    /// Sem texto focado os atalhos de 1 tecla seguem normais (H abre ajuda).
+    #[test]
+    fn bare_h_and_ctrl_space_still_map() {
+        assert_eq!(
+            WmAction::from_keycombo(combo(Modifiers::NONE, KeyCode::H)),
+            Some(WmAction::ShowHelp)
+        );
+        assert_eq!(
+            WmAction::from_keycombo(combo(Modifiers::CTRL, KeyCode::Space)),
+            Some(WmAction::OpenChat)
+        );
+    }
+
+    /// Cenário do bug: digitar uma frase com 'h' no chat. Com texto focado,
+    /// NENHUMA dessas teclas dispara atalho (o gate corta antes do mapeamento);
+    /// sem foco, 'h' ainda mapeia para ShowHelp — o gate é a diferença.
+    #[test]
+    fn typing_sentence_with_h_triggers_nothing() {
+        // "hello how are you"
+        let sentence = [
+            KeyCode::H, KeyCode::E, KeyCode::L, KeyCode::L, KeyCode::O,
+            KeyCode::Space,
+            KeyCode::H, KeyCode::O, KeyCode::W,
+            KeyCode::Space,
+            KeyCode::A, KeyCode::R, KeyCode::E,
+            KeyCode::Space,
+            KeyCode::Y, KeyCode::O, KeyCode::U,
+        ];
+        for key in sentence {
+            let c = combo(Modifiers::NONE, key);
+            assert!(
+                WmAction::suppressed_when_typing(c),
+                "tecla {:?} não deveria disparar atalho com texto focado",
+                key
+            );
+            // Modela o dispatch: com foco o gate retorna None antes do mapeamento.
+            let dispatched = if WmAction::suppressed_when_typing(c) {
+                None
+            } else {
+                WmAction::from_keycombo(c)
+            };
+            assert_eq!(dispatched, None, "tecla {:?} disparou atalho no chat", key);
+        }
+        // Prova que o gate (e não a ausência de binding) é o que muda: sem foco 'h' abre ajuda.
+        assert_eq!(
+            WmAction::from_keycombo(combo(Modifiers::NONE, KeyCode::H)),
+            Some(WmAction::ShowHelp)
+        );
+    }
 }

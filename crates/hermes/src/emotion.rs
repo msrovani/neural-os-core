@@ -34,45 +34,66 @@ pub struct EmotionResult {
 pub struct EmotionAnalyzer;
 
 impl EmotionAnalyzer {
+    /// Busca case-insensitive ASCII em buffer de bytes (sem alloc).
+    fn contains_ci(hay: &[u8], needle: &[u8]) -> bool {
+        if needle.is_empty() || hay.len() < needle.len() {
+            return false;
+        }
+        hay.windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle))
+    }
+
     /// Analisa o texto e retorna a emoção detectada.
+    ///
+    /// s429-lab: ALOC-FREE — o `text.to_lowercase()` antigo alocava String no
+    /// bump heap e, sob pressão de memória (HeapAIOS pressure=1 pós-prova), o
+    /// alloc devolvia NULL → deref → #PF em loop no AP (heap-fail cr2=0x28,
+    /// ip em `analyze`). Heurística keyword NÃO precisa de alocação: copia
+    /// até 512 bytes para buffer de stack e compara case-insensitive ASCII.
+    /// Limitação honesta: keywords com acento em MAIÚSCULO no input (ex.
+    /// "ÓTIMO") não casam — heurística, não pipeline canônico.
     pub fn analyze(text: &str) -> EmotionResult {
-        let lower = text.to_lowercase();
+        let mut buf = [0u8; 512];
+        let bytes = text.as_bytes();
+        let n = bytes.len().min(512);
+        buf[..n].copy_from_slice(&bytes[..n]);
+        let lower = &buf[..n];
         let mut scores = [0.0f32; 7]; // Joy, Sadness, Anger, Fear, Surprise, Disgust, Neutral
 
         // Joy keywords
         for w in &["feliz", "alegre", "ótimo", "maravilha", "obrigado", "amei", "adoro",
                     "happy", "great", "wonderful", "thanks", "love", "amazing", "excellent"] {
-            if lower.contains(w) { scores[0] += 1.0; }
+            if Self::contains_ci(lower, w.as_bytes()) { scores[0] += 1.0; }
         }
 
         // Sadness keywords
         for w in &["triste", "chateado", "deprê", "sinto falta", "que pena",
                     "sad", "unhappy", "miss", "unfortunate", "sorry"] {
-            if lower.contains(w) { scores[1] += 1.0; }
+            if Self::contains_ci(lower, w.as_bytes()) { scores[1] += 1.0; }
         }
 
         // Anger keywords
         for w in &["raiva", "nervoso", "puto", "ódio", "inaceitável", "frustrado",
                     "angry", "mad", "hate", "unacceptable", "furious", "rage"] {
-            if lower.contains(w) { scores[2] += 1.0; }
+            if Self::contains_ci(lower, w.as_bytes()) { scores[2] += 1.0; }
         }
 
         // Fear keywords
         for w in &["medo", "assustado", "preocupado", "ansioso", "perigo",
                     "scared", "afraid", "worried", "anxious", "danger", "fear"] {
-            if lower.contains(w) { scores[3] += 1.0; }
+            if Self::contains_ci(lower, w.as_bytes()) { scores[3] += 1.0; }
         }
 
         // Surprise keywords
         for w in &["nossa", "caramba", "uau", "sério", "incrível", "não acredito",
                     "wow", "really", "amazing", "unbelievable", "surprise", "no way"] {
-            if lower.contains(w) { scores[4] += 1.0; }
+            if Self::contains_ci(lower, w.as_bytes()) { scores[4] += 1.0; }
         }
 
         // Disgust keywords
         for w in &["nojento", "repugnante", "que nojo", "horrível", "asqueroso",
                     "disgusting", "gross", "horrible", "awful", "yuck"] {
-            if lower.contains(w) { scores[5] += 1.0; }
+            if Self::contains_ci(lower, w.as_bytes()) { scores[5] += 1.0; }
         }
 
         // Neutral boost (default)

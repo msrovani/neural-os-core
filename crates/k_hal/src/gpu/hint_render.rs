@@ -136,7 +136,7 @@ pub fn hint_stage() -> u8 {
 
 static HINT_RESIDENT: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
-static HINT_RESIDENT_BYTES: core::sync::atomic::AtomicU64 =
+pub static HINT_RESIDENT_BYTES: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(0);
 /// Telemetria de hints gerados (observabilidade sem custo no paint).
 pub static HINTS_GENERATED: core::sync::atomic::AtomicU64 =

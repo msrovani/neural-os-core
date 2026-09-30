@@ -47,6 +47,8 @@ pub mod bench;
 pub mod work_queue;
 pub mod sasos;
 pub mod vram_stream; // ADR-0112: residência W2A8 na VRAM de qualquer vendor via BAR (sem driver/shader)
+pub mod gpu_power; // s423: wake D3→D0 via PMCSR (H3/lane VRAM sobrevivem ao D-state de notebooks)
+pub mod loader_vram; // s427: pesos FAT→BAR sem heap (loader chunked, ADR-0112 residual)
 pub mod bar_compute; // ADR-0112: GEMV W2A8 lendo pesos residentes na VRAM (vendor-agnostic)
 pub mod hint_render; // ADR-0047-HMI H3 reaberto: render hints W2A8 com pesos em VRAM (honestidade Mapped)
 pub mod pipeline_g5;

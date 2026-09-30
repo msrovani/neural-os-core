@@ -350,7 +350,7 @@ pub fn core_bar_data() -> ([f32; 32], u8) {
 // Honestidade: dado ausente = `n/a`, nunca 0 inventado.
 // ══════════════════════════════════════════════════════════════════════════
 
-pub const HUB_ROWS: usize = 19;
+pub const HUB_ROWS: usize = 20;
 pub const HUB_ROW_LEN: usize = 36;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -833,6 +833,17 @@ pub fn refresh_hub_health() {
         ),
     };
     hub_set(&mut hh.rows[18], "hints", st, pill, val);
+
+    // ── BOOT.LOG (s425) — por que o flush persistente falhou, em vez de silêncio ──
+    let log_line = k_nano::boot_logger::hub_log_line();
+    let (st, pill) = if log_line.starts_with("ok") {
+        (HubState::Ok, true)
+    } else if log_line.starts_with("fail") || log_line.starts_with("n/a") {
+        (HubState::Warn, true)
+    } else {
+        (HubState::Na, false) // pre-fat: buffer em RAM, ainda sem tentativa
+    };
+    hub_set(&mut hh.rows[19], "bootlog", st, pill, log_line);
 
     // ── Live line + worst + checksum ──
     let wall = k_nano::interrupts::wall_ticks();

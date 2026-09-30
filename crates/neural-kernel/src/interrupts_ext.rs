@@ -217,6 +217,29 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     }
     dump_exception("#PF", &f, Some(code.bits() as u64));
     puts(b" CR2="); puthex(cr2.as_u64()); putc(b'\n');
+    // s429-lab: contenção de STORM — o mesmo IP refaltando (return do handler
+    // = retry da instrução; deref de NULL volta a falhar) inunda o serial e
+    // trava o core em loop. 3 falhas idênticas no mesmo IP = park honesto do
+    // core (o resto da frota/UI segue nos outros cores — melhor que storm).
+    {
+        use core::sync::atomic::AtomicU64;
+        static LAST_PF_IP: AtomicU64 = AtomicU64::new(0);
+        static LAST_PF_STREAK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+        let ip = f.instruction_pointer.as_u64();
+        let streak = if LAST_PF_IP.load(Ordering::Relaxed) == ip {
+            LAST_PF_STREAK.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            LAST_PF_IP.store(ip, Ordering::Relaxed);
+            LAST_PF_STREAK.store(1, Ordering::Relaxed);
+            1
+        };
+        if streak >= 3 {
+            puts(b"[EXC] #PF storm ip=");
+            puthex(ip);
+            puts(b" streak=3+ park core (fail-closed)\n");
+            loop { x86_64::instructions::hlt(); }
+        }
+    }
     let count = PAGE_FAULT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if count <= 10 {
         return;

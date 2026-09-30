@@ -24,6 +24,7 @@ impl NetworkInterface for EthInterface {
     }
     fn check_health(&mut self) -> LinkStatus {
         let ok = crate::net::RTL8139.lock().is_some()
+            || crate::net::RTL8168.lock().is_some()
             || crate::net::E1000.lock().is_some()
             || crate::net::VIRTIO_DEV.lock().is_some()
             || matches!(

@@ -755,6 +755,21 @@ impl JarbasDesktop {
         Self::publish_hub_cmd("close");
     }
 
+    /// s426: fecha um card pelo id da UiDeclaration (toggle F11).
+    pub fn close_card_by_id(&mut self, id: u32) {
+        let Some(pos) = self
+            .windows
+            .iter()
+            .position(|w| matches!(&w.content, WindowContent::Card(d) if d.id == id))
+        else {
+            return;
+        };
+        let win_id = self.windows[pos].id;
+        self.workspaces.active_mut().remove_window(win_id);
+        self.windows.remove(pos);
+        self.invalidate_windows();
+    }
+
     /// Sincroniza com o estado publicado pelo HubHealthAgent (por render, barato):
     /// gen mudou → repaint; visível subiu → slide-in; caiu → prepara restore.
     fn sync_hub_policy(&mut self, now_us: u64) {
@@ -1778,10 +1793,10 @@ impl JarbasDesktop {
     }
 
     /// Garante janela no que `render()` itera (floating da workspace).
+    /// Abertura EXPLÍCITA (Ctrl+Space / dock) funciona sempre; o kill switch
+    /// `chat_ui_enabled()` só governa os caminhos automáticos (HERMES_RESPONSE,
+    /// HITL, STT) — ver `ensure_hermes_overlay`.
     pub fn show_app(&mut self, app_id: AppId) {
-        if app_id == AppId::HermesChat && !crate::display::chat_window::chat_ui_enabled() {
-            return;
-        }
         self.invalidate_windows();
         if !self.windows.iter().any(|w| w.app_id == Some(app_id)) {
             let title = match app_id {
@@ -1875,6 +1890,16 @@ impl JarbasDesktop {
         self.show_app(AppId::HermesChat);
     }
 
+    /// Um campo de texto está visível e recebendo digitação? (chat do Jarbas).
+    /// Fonte de verdade = janela HermesChat visível: o buffer de input é global
+    /// e só o chat o exibe; enquanto ele está na tela, teclas de 1 letra são texto.
+    /// Usado pelo WM para não engolir digitação com atalhos sem modificador.
+    pub fn text_input_focused(&self) -> bool {
+        self.windows
+            .iter()
+            .any(|w| w.app_id == Some(AppId::HermesChat) && w.visible && !w.minimized)
+    }
+
     pub fn spawn_card(&mut self, decl: crate::display::card::UiDeclaration) {
         let id = WindowId(self.next_window_id);
         self.next_window_id += 1;
@@ -1903,6 +1928,27 @@ impl JarbasDesktop {
             crate::display::window::FloatingWindow::new(id, rect, content)
         );
         self.invalidate_windows();
+    }
+
+    /// Spawn ou atualiza um card pelo `decl.id` — snapshot mudou, mesmo card
+    /// (sem duplicar janela). Espelha a geometria para a floating window do render.
+    pub fn spawn_or_update_card(&mut self, decl: crate::display::card::UiDeclaration) {
+        let id = decl.id;
+        let rect = Rect { x: decl.x, y: decl.y, width: decl.w as u32, height: decl.h as u32 };
+        if let Some(win) = self
+            .windows
+            .iter_mut()
+            .find(|w| matches!(&w.content, WindowContent::Card(d) if d.id == id))
+        {
+            let wid = win.id;
+            win.rect = rect;
+            win.content = WindowContent::Card(decl);
+            win.visible = true;
+            self.sync_floating_rect(wid, rect);
+            self.invalidate_windows();
+            return;
+        }
+        self.spawn_card(decl);
     }
 
     pub fn card_click(&mut self, cx: i32, cy: i32) -> &'static str {

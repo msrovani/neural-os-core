@@ -1,6 +1,55 @@
-# STATE - neural-os-core v1.9.99-s421 - Lane VRAM ADR-0112 por sequência + corretude
+# STATE - neural-os-core v1.9.99-s430 - Lab QEMU 8GB/8c: 5min na UI sem freeze
 
-#   PISTA ATIVA: s421 — lane VRAM POR SEQUÊNCIA (layer*7+slot) corrige os 3 bugs de
+#   PISTA ATIVA: s430 — Lab QEMU 8GB/8c: goal 5min na UI batido (rodada 10:
+#     14,8min runtime, UI viva, 1 storm contido por park, OOM final honesto).
+#     Fixes: logger no-op p/ crate `log` (LOGGER NULL deref cr2=0x18); storm
+#     park por IP (fail-closed de core); watchdog slice 30s medido no alvo;
+#     deadline no-progress; gates headroom 48→128MB; emotion alloc-free; BEI
+#     guards c/ re-check bounded; escalada I5:boot_log observe-only. 0 erros.
+#   PISTA ANTERIOR: s429 — VMD visão guest: offsets SHDW não-nativos NÃO abortam
+#     mais. vmd.c provado: offset aplica-se a RECURSOS (bus = cpu − offset ⇒
+#     janela BUS começa em host_phys), NUNCA a DMA de RAM (upstream identidade
+#     no guest). Tradução real = DOWNSTREAM MMIO: BAR do filho (bus addr) →
+#     cpu = bus + offset via MEMBAR mapeada UC (translate_bar puro;
+#     child_bar_cpu; probe_at_mmio_va no NVMe). k-nano 240; 0 erros.
+#     AWAITING_HW: nvme ok=true via=vmd guest no notebook.
+#   PISTA ANTERIOR: s427 — loader-VRAM (`k_hal/src/gpu/loader_vram.rs`): .bitnet v6
+#     do Falcon3-1B lido do FAT por CLUSTERS (callback, zero Vec do blob) e os
+#     packed das layers (126 matrizes, ~256MB) vão DIRETO pra BAR. Lane VRAM
+#     ativa ANTES do load do heap; `on_model_loaded` vira no-op quando
+#     `loader_resident()`. HONESTO: `load_llm_v6` ainda copia os packed pro
+#     heap no parse — liberação REAL do heap = stub no parser (residual
+#     ADR-0112). k-hal 74, k-nano 237; 0 erros.
+#   PISTA ANTERIOR: s426 — card `hints_card` (ID 8003, F11): telemetria H3 ao vivo
+#     direto dos statics (stage/fwd/n/vram resid) com affordance do critério de
+#     aceite (fwd<100µs, n crescendo); refresh 2 Hz idempotente por id; host sem
+#     BAR = off + unknown (não finge). jarbas 123/123, k-hal 71; 0 erros.
+#   PISTA ANTERIOR: s425 — persistência do BOOT.LOG visível na UI: linha `bootlog`
+#     no HUB HEALTH (HUB_ROWS 20) via `boot_logger::hub_log_line()` — ok n<N>
+#     / fail <backend> <razão> x<streak> / fail sem-backend / pre-fat / n/a.
+#     Statics LAST_FAIL_KIND/LAST_TRY_BACKEND anotados nos paths de falha;
+#     SysInfoAgent usa a MESMA string no slog (sem dual-truth). k-nano 237,
+#     jarbas hub 7/7, hermes 257; 0 erros.
+#   PISTA ANTERIOR: s424 — evidência de boot nunca mais se perde: (1) kernel
+#     `overwrite_boot_log` não aborta em IoFail de UMA partição — continua p/ a
+#     ESP (contrato OverwriteResult intacto); (2) build embute BOOT.LOG raiz
+#     pré-alocado 256KB na ESP (mesmo mecanismo do volume de dados, zero FS
+#     novo); (3) fix de corretude do write do dirent (setor real do entry).
+#     Validação: ESP de teste com dirent BOOT.LOG 256KB na raiz. k-nano 237.
+#   PISTA ANTERIOR: s423 — wake honesto `wake_to_d0` (`k_hal/src/gpu/gpu_power.rs`):
+#     a dGPU dorme em D3 no boot (SESSION_260) e os gates do vram/nvidia matavam
+#     o H3 e o lane VRAM em TODO notebook. Prova de vida ANTES do write PMCSR
+#     (D3cold não recebe write às cegas), budget TSC 10ms, re-scan persistido no
+#     GpuInfo; `wake_all` pós detect_all + backstop idempotente nos gates.
+#     Gates: 0 erros; k-hal 71. HW lab pendente: GPUPWR woke + hints Resident.
+#   PISTA ANTERIOR: s422 — Intel VMD binder (`k_nano/src/vmd.rs`): o NVMe de notebooks
+#     Intel RST vive num domínio PCI SECUNDÁRIO (8086:a77f sem driver no lab; NVMe
+#     invisível ao CF8/CFC). CFGBAR=ECAM dos filhos + busn_start VMCAP/VMCONFIG +
+#     scan flat + enable via config MMIO; SHDW nativo ⇒ DMA físico direto;
+#     `NvmeDriver::probe_at_mmio` extraído; fallback no probe storage → MESMO
+#     global NVME_DRIVER (bin intocado). Gates: 0 erros, k-nano 237. HW lab
+#     pendente: `nvme ok=true via=vmd` + BOOT.LOG persistindo no NVMe.
+#   PISTA ANTERIOR: s421 — lane VRAM POR SEQUÊNCIA (layer*7+slot) corrige os 3 bugs de
 #     corretude do s418 (SHAPE_INDEX servia layer 0 p/ todas; GEMV coluna trocada;
 #     escala única p/ m>1). Upload sem dedupe + pré-checagem INTEIRA (parcial = off
 #     honesto). Dispatch seq no apply_one_layer (7 matmuls) + proteção de shape.

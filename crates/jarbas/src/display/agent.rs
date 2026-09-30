@@ -241,6 +241,8 @@ pub struct DisplayAgent {
     hw_inv_receiver: Option<event_bus::Receiver>,
     /// Generation do snapshot já desenhado (evita re-spawn a cada tick).
     hw_inv_spawned_gen: u64,
+    /// s426: card H3 aberto (F11) — refresh vivo 2 Hz enquanto aberto.
+    hints_card_open: bool,
     // ── OrbState (s328): sinais reais → janelas temporais ──
     wake_receiver: event_bus::Receiver,
     audio_out_receiver: event_bus::Receiver,
@@ -308,6 +310,7 @@ impl DisplayAgent {
             hub_state_receiver: None,
             hw_inv_receiver: None,
             hw_inv_spawned_gen: 0,
+            hints_card_open: false,
             wake_receiver: EVENT_BUS.subscribe(crate::audio::TOPIC_WAKEWORD),
             audio_out_receiver: EVENT_BUS.subscribe(crate::audio::TOPIC_AUDIO_OUT),
             infer_tts_receiver: EVENT_BUS.subscribe("INFER_TTS_PARTIAL"),
@@ -1278,6 +1281,18 @@ impl Agent for DisplayAgent {
                         WmAction::ToggleHubHealth => {
                             desktop.toggle_hub_health(k_nano::tsc::now_us());
                         }
+                        WmAction::ToggleHintsCard => {
+                            // s426: alterna o card H3; spawn_or_update é idempotente
+                            // por id (não duplica). Estado guardado p/ refresh vivo.
+                            self.hints_card_open = !self.hints_card_open;
+                            if self.hints_card_open {
+                                desktop.spawn_or_update_card(
+                                    crate::cards::hints_card::hints_card(),
+                                );
+                            } else {
+                                desktop.close_card_by_id(crate::cards::hints_card::HINTS_CARD_ID);
+                            }
+                        }
                         WmAction::CloseHubHealth => {
                             desktop.close_hub_health();
                         }
@@ -1571,6 +1586,12 @@ impl Agent for DisplayAgent {
                 self.handle_card_button(card_id, btn_idx);
             }
             desktop.set_orb_signals(sig);
+            // s426: refresh vivo do card H3 (2 Hz — mesma cadência do forward;
+            // spawn_or_update é idempotente por id e só invalida quando o conteúdo
+            // muda de fato no render do card).
+            if self.hints_card_open && tick % 30 == 0 {
+                desktop.spawn_or_update_card(crate::cards::hints_card::hints_card());
+            }
             // Render/liveness não dependem do LAPIC/PIT; relógio do dock lê
             // TIMER_TICKS separadamente. Assim mouse/orb não congelam se o
             // timer de parede degradar, mas o scheduler continuar acordando.

@@ -26,6 +26,8 @@ const MAX_POP_PER_TICK: usize = 320;
 
 static LAST_POP_US: AtomicU64 = AtomicU64::new(0);
 static LAST_DROP_LOG: AtomicU64 = AtomicU64::new(0);
+/// Última vez (µs TSC) que um STALL ring>0/want=0 foi logado (1×/s).
+static LAST_STALL_LOG: AtomicU64 = AtomicU64::new(0);
 
 /// Quanto drenar neste tick (puro — testável no host).
 ///
@@ -111,8 +113,37 @@ impl Agent for AudioMixerAgent {
         let ring_avail = self.out_ring.available();
         let want = compute_mixer_want(hda_free, ring_avail, MAX_POP_PER_TICK, dt, VOICE_RATE_HZ);
         if want == 0 {
+            // Telemetria de stall (VOICE_STATE preso em SPEAKING): ring tem dados
+            // mas nada sai. Causas possíveis: hda_free=0 (SD1 LPIB congelado,
+            // HW não consome) ou throttled pelo clock (teto Δt×rate). Log 1×/s.
+            if ring_avail > 0 && now.saturating_sub(LAST_STALL_LOG.load(Ordering::Relaxed)) > 1_000_000 {
+                LAST_STALL_LOG.store(now, Ordering::Relaxed);
+                match k_nano::audio::hda::playback_stall_diag() {
+                    Some(d) => k_nano::slog_jarbas!(
+                        "MIXER",
+                        "warn",
+                        "STALL ring={} free={} lpib={} cbl={} used_frames={} wpi={} sts=0x{:04x} ({})",
+                        ring_avail,
+                        hda_free,
+                        d.lpib0,
+                        d.cbl,
+                        d.used_frames,
+                        d.wpi,
+                        d.sts,
+                        if d.lpib0 == d.lpib1 { "lpib_frozen" } else { "lpib_moving" }
+                    ),
+                    None => k_nano::slog_jarbas!(
+                        "MIXER",
+                        "warn",
+                        "STALL ring={} free={} (HDA not ready)",
+                        ring_avail,
+                        hda_free
+                    ),
+                }
+            }
             return AgentTickResult::Pending;
         }
+        LAST_STALL_LOG.store(0, Ordering::Relaxed);
         let mut buf = [0i16; MAX_POP_PER_TICK];
         let n = self.out_ring.pop(&mut buf[..want]);
         if n > 0 {

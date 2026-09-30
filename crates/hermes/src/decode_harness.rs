@@ -26,21 +26,39 @@ pub enum SkillPattern {
 
 /// Analisa uma descrição textual e retorna o padrão reconhecido.
 pub fn recognize(description: &str) -> SkillPattern {
-    let trimmed = description.trim().to_lowercase();
-    if trimmed.starts_with("add") || trimmed.starts_with("sum") || trimmed.starts_with("+") {
+    // s429-lab: ALLOC-FREE — `to_lowercase()` aloca String; sob pressão de
+    // memória (HeapAIOS pressure=1) o alloc pode devolver NULL → deref → #PF
+    // no AP (cr2 baixo, ip em conversões unicode). Heurística ASCII-fold no
+    // stack: copia o prefixo (256B) baixando ASCII; UTF-8 multibyte passa
+    // intacto (comparação de keywords ASCII continua correta).
+    let src = description.as_bytes();
+    let n = src.len().min(256);
+    let mut buf = [0u8; 256];
+    for (i, b) in src[..n].iter().enumerate() {
+        buf[i] = b.to_ascii_lowercase();
+    }
+    // trim manually (leading) — leading whitespace não afeta starts_with após fold
+    let trimmed = &buf[..n];
+    let trimmed = &trimmed[trimmed.iter().take_while(|b| **b == b' ' || **b == b'\t' || **b == b'\n' || **b == b'\r').count()..];
+    if trimmed.starts_with(b"add") || trimmed.starts_with(b"sum") || trimmed.starts_with(b"+") {
         SkillPattern::Add
-    } else if trimmed.starts_with("echo") || trimmed.starts_with("print") || trimmed.starts_with("say") {
+    } else if trimmed.starts_with(b"echo") || trimmed.starts_with(b"print") || trimmed.starts_with(b"say") {
         SkillPattern::Echo
-    } else if trimmed.contains("card")
-        || trimmed.contains("display")
-        || trimmed.contains("render")
-        || trimmed.contains("mostrar")
-        || trimmed.contains("show")
+    } else if contains_sub(trimmed, b"card")
+        || contains_sub(trimmed, b"display")
+        || contains_sub(trimmed, b"render")
+        || contains_sub(trimmed, b"mostrar")
+        || contains_sub(trimmed, b"show")
     {
         SkillPattern::Card
     } else {
         SkillPattern::Default
     }
+}
+
+/// subsequência byte-a-byte (slice::contains só aceita &u8).
+fn contains_sub(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
 }
 
 /// Gera bytecode WASM a partir de um padrão — Card falha (sem IR).

@@ -109,6 +109,8 @@ pub fn upload_layer_weights(layers: &[&PackedTernaryTensor], ring_plan: &RingPla
         total += written as u64;
     }
     NEXT_WEIGHT_OFF.store(next_off, core::sync::atomic::Ordering::Release);
+    // s427: publica o cursor para o loader-VRAM continuar depois (sem colisão).
+    NEXT_WEIGHT_CURSOR.store(next_off, core::sync::atomic::Ordering::Release);
     note_weights_resident(total);
     // s421: SEQ_MATS é do LLM (setado só no on_model_loaded) — upload de
     // hints NÃO toca o índice do lane (ordem boot: hint antes do LLM).
@@ -150,6 +152,87 @@ pub fn mark_uploaded() {
 }
 
 pub fn weights_uploaded() -> bool {
+    UPLOADED.load(core::sync::atomic::Ordering::Acquire)
+}
+
+// ── s427: loader-VRAM (FAT → BAR sem heap) ────────────────────────────────
+//
+// O `upload_layer_weights` copia do HEAP (os pesos já passaram pelo bump via
+// `load_llm_v6`). O loader-VRAM é o caminho onde os pesos NUNCA tocam o heap:
+// o FAT chunked lê o .bitnet v6 e cada tensor vai direto da RAM-de-disco para
+// a aperture BAR (bounce de cluster, zero Vec do blob). O heap passa a segurar
+// APENAS norms/embed/KV (o 1B cai de ~970MB → ~300MB; o 3B cabe onde não cabia).
+
+/// Reserva o próximo trecho alinhado da aperture (mesmo cursor do upload,
+/// sem copiar nada). Retorna (offset, bytes_disponíveis) — o caller compara
+/// com o tamanho esperado do tensor ANTES de escrever.
+pub fn reserve_vram_span(len: u64) -> Option<(u64, u64)> {
+    if !bar_compute_enabled() {
+        return None;
+    }
+    let aperture = crate::gpu::vram::vram_status_aperture_bytes()?;
+    static NEXT_LOADER_OFF: core::sync::atomic::AtomicU64 =
+        core::sync::atomic::AtomicU64::new(0);
+    let mut off = NEXT_LOADER_OFF.load(core::sync::atomic::Ordering::Acquire);
+    if off == 0 {
+        // Inicializa com o cursor do upload (hint já reservou o dele).
+        off = NEXT_WEIGHT_CURSOR.load(core::sync::atomic::Ordering::Acquire);
+        if off == 0 {
+            off = RingPlan::falcon3_default().ring_bytes().max(2 * 1024 * 1024);
+        }
+    }
+    let aligned = (off + 4095) & !4095;
+    if aligned.saturating_add(len) > aperture {
+        return None; // não cabe — recusa INTEIRA (parcial é proibido)
+    }
+    NEXT_LOADER_OFF.store(aligned + len, core::sync::atomic::Ordering::Release);
+    Some((aligned, aperture.saturating_sub(aligned)))
+}
+
+/// Cursor compartilhado: o `upload_layer_weights` publica o fim do último
+/// upload aqui para o loader começar DEPOIS do hint (evita colisão).
+pub static NEXT_WEIGHT_CURSOR: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+/// Copia um bloco de bytes do arquivo FAT direto para o offset da VRAM.
+/// `len` tem que caber (reserve_vram_span garantiu). Zero-alloc: src é o
+/// bounce buffer do leitor chunked.
+///
+/// # Safety
+/// Aperture UC mapeada; offset..offset+len dentro da aperture (reservado).
+pub unsafe fn write_vram_bytes(vram_off: u64, src: &[u8]) -> bool {
+    let aperture = crate::gpu::vram::vram_status_aperture_bytes().unwrap_or(0);
+    if aperture == 0 || vram_off.saturating_add(src.len() as u64) > aperture {
+        return false;
+    }
+    let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    let dst = (vram_off as *mut u8).wrapping_add(pmoff as usize);
+    core::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len());
+    true
+}
+
+/// Registro pós-loader: publica os offsets por sequência (MESMO contrato do
+/// `on_model_loaded`) e marca o lane ativo. `mats` = (off, k, n) na ordem
+/// canônica layer*7+slot.
+pub fn register_loader_resident(mats: alloc::vec::Vec<(u64, usize, usize)>, total_bytes: u64) {
+    *SEQ_MATS.lock() = mats;
+    *RESIDENT.lock() = Some(ResidentWeights {
+        mats: SEQ_MATS.lock().clone(),
+        total_bytes,
+    });
+    mark_uploaded();
+    note_weights_resident(total_bytes);
+    k_nano::slog_hal!(
+        "BARCOMPUTE", "ok",
+        "loader-VRAM: pesos FAT→BAR sem heap ({} matrizes, {}MB) — lane ativo",
+        SEQ_MATS.lock().len(),
+        total_bytes / (1024 * 1024)
+    );
+}
+
+/// True quando o loader-VRAM já registrou os pesos (o upload pós-load do heap
+/// vira no-op honesto — não copiar 2×).
+pub fn loader_resident() -> bool {
     UPLOADED.load(core::sync::atomic::Ordering::Acquire)
 }
 
@@ -277,6 +360,16 @@ pub fn init_bar_compute(gpu: &GpuInfo) -> bool {
 /// seguintes (mesma ordem do snapshot `current_model_layers_snapshot`).
 pub fn on_model_loaded() {
     if !bar_compute_enabled() {
+        return;
+    }
+    // s427: loader-VRAM já subiu os pesos (FAT→BAR sem heap) — o lane já está
+    // registrado (SEQ_MATS/UPLOADED); copiar do heap de novo seria desperdício
+    // e sobrescreveria com os MESMOS bytes via caminho mais caro. No-op honesto.
+    if loader_resident() {
+        k_nano::slog_hal!(
+            "BARCOMPUTE", "info",
+            "upload pós-load skip: loader-VRAM já residente (FAT→BAR sem heap)"
+        );
         return;
     }
     // Snapshot das matrizes do modelo carregado (sem clonar dados — upload

@@ -93,7 +93,9 @@ pub fn build_candidates(
     out
 }
 
-/// Score só candidatos; demais lanes = -inf. Usa embed tied (dot hidden·row).
+/// Score só candidatos; demais lanes = -inf. Bate com `unembed_logits` no id:
+/// tied → coluna do embed, untied → coluna do unembed (a escala já entra no
+/// lookup — NÃO multiplicar de novo).
 pub fn score_candidates(
     model: &TransformerModel,
     hidden: &Tensor,
@@ -106,23 +108,23 @@ pub fn score_candidates(
         logits.data[i] = NEG_INFINITY;
     }
     let h = hidden.shape.1.min(hidden.data.len());
-    let scale = if model.tie_embeddings {
-        model.embed_scale
-    } else {
-        model.unembed_scale
-    };
     for &id in candidates {
         let idx = id as usize;
         if idx >= vocab {
             continue;
         }
-        let emb = model.embed_lookup_pub(id);
-        let eh = emb.data.len().min(h);
+        // Lookup já aplica embed_scale (tied) / unembed_scale (untied) uma vez.
+        let row = if model.tie_embeddings {
+            model.embed_lookup_pub(id)
+        } else {
+            model.unembed_lookup_pub(id)
+        };
+        let rh = row.data.len().min(h);
         let mut s = 0.0f32;
-        for j in 0..eh {
-            s += hidden.data[j] * emb.data[j];
+        for j in 0..rh {
+            s += hidden.data[j] * row.data[j];
         }
-        logits.data[idx] = s * scale;
+        logits.data[idx] = s;
     }
     logits
 }

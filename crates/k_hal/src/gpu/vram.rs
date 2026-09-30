@@ -165,9 +165,16 @@ pub static VRAM_BUDDY: spin::Mutex<Option<VramBuddy>> = spin::Mutex::new(None);
 pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
     // SESSÃO_260 (AIOS, notebook dual-GPU): dGPU dorme em D3 no boot — BARs
     // visíveis mas a VRAM não responde; mapear/tocar gera hang de barramento
-    // PCIe = freeze real. Mede o D-state (PCI PMCSR) e só prossegue em D0.
-    if gpu.pci_dstate != 0 {
-        k_nano::slog_hal!("VRAM", "warn", "{}: D-state={} (D3) — VRAM dormindo, skip compute/map (power-on antes)", gpu.name, gpu.pci_dstate);
+    // PCIe = freeze real. s423: ANTES de recusar, tenta o wake D3→D0 via
+    // PMCSR (`gpu_power::wake_to_d0` — prova de vida antes do write, budget
+    // TSC, re-scan persistido). Só recusa se o wake falhar honestamente.
+    let mut gpu_wake = gpu.clone();
+    if crate::gpu::gpu_power::wake_to_d0(&mut gpu_wake) == crate::gpu::gpu_power::WakeResult::NoLife {
+        k_nano::slog_hal!("VRAM", "warn", "{}: D3cold/ausente (config morto) — VRAM skip compute/map (sem write às cegas)", gpu.name);
+        return false;
+    }
+    if gpu_wake.pci_dstate != 0 {
+        k_nano::slog_hal!("VRAM", "warn", "{}: D-state={} pós-wake — VRAM dormindo, skip compute/map (power-on falhou)", gpu.name, gpu_wake.pci_dstate);
         return false;
     }
     if gpu.bar2 == 0 || gpu.vram_size == 0 {

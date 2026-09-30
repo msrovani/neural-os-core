@@ -617,6 +617,11 @@ pub struct SttJob {
 
 static STT_JOB: spin::Mutex<Option<SttJob>> = spin::Mutex::new(None);
 
+/// STT tem modelo carregado? (p/ AUDIO_HEALTH — veredito da sessão de voz)
+pub fn available() -> bool {
+    STT_ENGINE.lock().is_some()
+}
+
 static STT_ENGINE: spin::Mutex<Option<SttEngine>> = spin::Mutex::new(None);
 
 /// Inicia um job. `false` se o STT não está carregado ou o áudio é curto demais.

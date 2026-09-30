@@ -10,11 +10,12 @@ Formato BPB1 (little-endian):
   vocab_n: u32
   offsets: (vocab_n+1) × u32
   heap: bytes UTF-8 concatenados
-  [opcional SP32] magic b"MRG1" + merge_n u32 + merges:
+  [opcional] magic b"MRG1" + merge_n u32 + merges:
       for each: len_a u16, a bytes, len_b u16, b bytes
 
 Modos:
-  default / --llama : BitNet 2B Llama-3 (Ġ→espaço; bos/eos/eot 128000+)
+  default / --llama : ByteLevel BPE (Llama-3/Falcon3; raw Ġ kept + MRG1;
+                      bos/eos/eot 128000+ fallback)
   --sp32            : BitNet 850/1.3/3B SentencePiece BPE 32k (mantém ▁ + MRG1)
 
 Uso:
@@ -77,8 +78,6 @@ def export(src: Path, dst: Path, *, sp32: bool) -> int:
     for i in range(vocab_n):
         offsets.append(off)
         raw = id2.get(i, "")
-        if not sp32:
-            raw = raw.replace("\u0120", " ")
         b = raw.encode("utf-8", errors="replace")
         if len(b) > 65535:
             b = b[:65535]
@@ -86,7 +85,7 @@ def export(src: Path, dst: Path, *, sp32: bool) -> int:
         off += len(b)
     offsets.append(off)  # sentinel
 
-    merges_raw = tok["model"].get("merges") or [] if sp32 else []
+    merges_raw = tok["model"].get("merges") or []
     merge_pairs: list[tuple[bytes, bytes]] = []
     for m in merges_raw:
         if isinstance(m, str):
@@ -111,7 +110,7 @@ def export(src: Path, dst: Path, *, sp32: bool) -> int:
             f.write(struct.pack("<I", o))
         for p in pieces:
             f.write(p)
-        if sp32 and merge_pairs:
+        if merge_pairs:
             f.write(b"MRG1")
             f.write(struct.pack("<I", len(merge_pairs)))
             for a, b in merge_pairs:

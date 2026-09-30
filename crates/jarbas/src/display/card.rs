@@ -43,6 +43,9 @@ pub enum Widget {
     List(Vec<String>),
     Divider,
     Button(String),
+    /// Linha de subsistema com estado tipado: `state` 0=absent 1=unknown 2=ok.
+    /// Cor = affordance (cinza/âmbar/verde); o texto carrega o detalhe honesto.
+    Status { label: String, value: String, state: u8 },
     /// Região retangular rotulada (placeholder p/ vídeo/câmera; ADR-0058 S4).
     Panel { label: String, height: i32 },
 }
@@ -106,6 +109,16 @@ fn text(t: &mut FbTarget, s: &str, x: i32, y: i32, c: Rgb888) {
     let _ = Text::with_baseline(s, Point::new(x, y), style, Baseline::Top).draw(t);
 }
 
+/// Cor do estado de uma linha `Status` (mesma semântica do Hub Health).
+/// 0=absent (cinza), 1=unknown (âmbar), 2=ok (verde).
+fn status_color(state: u8) -> (u8, u8, u8) {
+    match state {
+        2 => (0x30, 0xFF, 0x90),
+        1 => (0xFF, 0xB0, 0x20),
+        _ => (0x7A, 0x87, 0x94),
+    }
+}
+
 /// Hit-test puro: retorna os rects dos botões do card SEM renderizar.
 /// Mesma fórmula geométrica de `render_card` — use em handlers de clique
 /// para evitar side-effect visual.
@@ -123,7 +136,7 @@ pub fn hit_test_buttons(d: &UiDeclaration) -> Vec<ButtonHit> {
         } else {
             // Espelha o avanço de cy do render para manter alinhamento.
             match wg {
-                Widget::Text(_) | Widget::KeyValue(_, _) | Widget::List(_) => cy += 13,
+                Widget::Text(_) | Widget::KeyValue(_, _) | Widget::List(_) | Widget::Status { .. } => cy += 13,
                 Widget::Gauge { .. } => cy += 26,
                 Widget::Bars { .. } => cy += 56,
                 Widget::Divider => cy += 8,
@@ -234,6 +247,15 @@ pub fn render_card(fb: &mut DoubleBuffer, d: &UiDeclaration) -> Vec<ButtonHit> {
                     cy += 13;
                 }
             }
+            Widget::Status { label, value, state } => {
+                // Affordance: quadrado colorido (0=absent 1=unknown 2=ok).
+                let (sr, sg, sb) = status_color(*state);
+                fill(&mut t, d.x + pad, cy + 2, 8, 8, Rgb888::new(sr, sg, sb));
+                text(&mut t, label, d.x + pad + 14, cy, C_DIM);
+                let vx = d.x + d.w - pad - (value.len() as i32) * 6;
+                text(&mut t, value, vx, cy, C_TEXT);
+                cy += 13;
+            }
             Widget::Divider => {
                 fill(&mut t, d.x + pad, cy + 3, inner_w, 1, C_BORDER);
                 cy += 8;
@@ -279,6 +301,7 @@ pub fn render_card(fb: &mut DoubleBuffer, d: &UiDeclaration) -> Vec<ButtonHit> {
 //   {"t":"text","s":".."} | {"t":"kv","k":"..","v":".."}
 //   {"t":"gauge","label":"..","value":N,"max":N,"unit":".."}
 //   {"t":"bars","label":"..","v":[N,..]} | {"t":"list","items":["..",..]}
+//   {"t":"status","label":"..","v":"..","s":0|1|2}
 //   {"t":"div"} | {"t":"btn","label":".."} ]}
 
 pub fn parse_card(json: &str) -> Option<UiDeclaration> {
@@ -341,6 +364,11 @@ fn parse_widget(obj: &str) -> Option<Widget> {
             values: extract_int_array(obj, "v"),
         }),
         "list" => Some(Widget::List(extract_str_array(obj, "items"))),
+        "status" => Some(Widget::Status {
+            label: extract_str(obj, "label").unwrap_or_default(),
+            value: extract_str(obj, "v").unwrap_or_default(),
+            state: extract_i32(obj, "s").unwrap_or(0).clamp(0, 2) as u8,
+        }),
         "div" => Some(Widget::Divider),
         "btn" => Some(Widget::Button(extract_str(obj, "label").unwrap_or_default())),
         "panel" => Some(Widget::Panel {
@@ -359,6 +387,7 @@ pub fn card_json_schema_hint() -> &'static str {
         "{\"t\":\"text\",\"s\":\"..\"}|{\"t\":\"kv\",\"k\":\"..\",\"v\":\"..\"}|",
         "{\"t\":\"gauge\",\"label\":\"..\",\"value\":N,\"max\":N,\"unit\":\"..\"}|",
         "{\"t\":\"bars\",\"label\":\"..\",\"v\":[N,..]}|{\"t\":\"list\",\"items\":[\"..\"]}|",
+        "{\"t\":\"status\",\"label\":\"..\",\"v\":\"..\",\"s\":N}|",
         "{\"t\":\"panel\",\"label\":\"..\",\"h\":N}|{\"t\":\"btn\",\"label\":\"..\"}|{\"t\":\"div\"}]}"
     )
 }

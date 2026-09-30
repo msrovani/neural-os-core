@@ -65,13 +65,15 @@ impl Agent for SysInfoAgent {
                     k_nano::slog_bin!("LOG", "warn", "NSGDB remount skip/fail T+{}", tick);
                 }
             } else if !ok && n % 16 == 0 {
+                // s425: razão da falha na linha (mesma string da UI — single source).
                 k_nano::slog_bin!(
                     "LOG",
                     "warn",
-                    "BOOT.LOG persist pending T+{} msc={} ui={}",
+                    "BOOT.LOG persist pending T+{} msc={} ui={} hub={}",
                     tick,
                     has_msc as u8,
-                    ui_live as u8
+                    ui_live as u8,
+                    k_nano::boot_logger::hub_log_line().as_str()
                 );
             }
         } else if k_nano::storage::backend_name() != "file" && has_msc {

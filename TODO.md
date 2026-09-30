@@ -1,9 +1,85 @@
 # 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s412 TEST
-**Data:** 2026-09-26
+**Versão:** v1.9.99-s430 TEST
+**Data:** 2026-09-30
 **Fonte:** SESSION_412 / SESSION_411 / STATE.md (LLM response gate) + ADRs 0081/0089–0106 + SESSION_360/366
 **Legenda:** ✅ feito | 🟡 em andamento | `[~]` parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | `[ ]` pendente
+
+---
+
+## ✅ s430 — Lab QEMU 8GB/8c: 5min na UI sem freeze (goal batido)
+
+- [x] Watchdog slice 10s→30s (decode 8c ~11s legítimo — falso positivo rodada 1)
+- [x] Deadline global no-progress (refresh A2_PROOF_DEADLINE_AT_US a cada poll_slice com did)
+- [x] emotion::analyze alloc-free (buf stack 512B + contains_ci; cr2=0x28)
+- [x] #PF storm park por IP (interrupts_ext.rs; sistema segue nos outros cores, provado 3×)
+- [x] Gates headroom 48→128MB (InferQueue submit + claim re-check; BEI low_mem)
+- [x] BEI guards: PromoteSkill re-check headroom_low (wasmi cr2=0x10); supervisor tick re-check bounded (BTreeMap cr2=0x702a00a8)
+- [x] Logger no-op p/ crate `log` (LOGGER NULL+0x18; virtio-drivers/wasmi/cranelift)
+- [x] Escalada I5:boot_log observe-only + mesh_frag_pressure no caller (fecha cadeia panic wasmi)
+- [x] Rodada 10: 14,8min runtime, UI viva, 1 storm contido, OOM honesto final (logs 193855/195127/200959)
+
+## ✅ s429 — VMD visão guest: tradução MMIO de offsets SHDW não-nativos
+
+- [x] vmd.c provado antes de implementar: offset aplica-se a RECURSOS (bus = cpu − offset), NUNCA a DMA de RAM (upstream identidade no guest)
+- [x] Tradução DOWNSTREAM MMIO: translate_bar puro (cpu = bus + offset dentro da janela), child_bar_cpu (guest = MEMBAR UC; nativo = phys UC)
+- [x] init() sem abort em offset≠0: MEMBAR size validada (0 = abort honesto), janelas registradas, slog GUEST
+- [x] NvmeDriver::probe_at_mmio_va (VA pré-resolvido pelo VMD guest); DMA de RAM do NVMe inalterado
+- [x] Testes: tradução+bordas+None fora; nativo identidade; detecção guest off1\|\|off2 (k-nano 240); 0 erros
+- [ ] **HW lab:** `nvme ok=true via=vmd guest` no BOOT.LOG do notebook (SHDW≠0 + MEMBARs do BIOS)
+
+## ✅ s428 — a2_proof 120s + watchdog por slice
+
+- [x] Deadline 300→120s (15× o pior caso mensurado 8s — pega wedge global)
+- [x] Watchdog por slice: A2_SLICE_T0_US no latch; check no topo do poll_slice (fora do latch); >10s = wedge → terminal imediato
+- [x] Stall real (não voltou) ≠ slice lento (voltou, A2_SLOW_SLICES) — caminhos distintos
+- [x] Testes: constantes+ordem, wedge simulado terminal imediato, slice lento continua (cortex 110); 0 erros
+
+## ✅ s427 — Loader-VRAM FAT→BAR sem heap (fase 1)
+
+- [x] `read_root_file_dev_chunked` (k_nano): FAT32 por callback, zero Vec do blob
+- [x] `loader_vram` (k_hal): probe header → layout → janelas → stream BAR → registro SEQ_MATS (lane ativo pré-load)
+- [x] `on_model_loaded` no-op quando `loader_resident()` (sem upload duplo)
+- [x] Gates: 0 erros; k-hal 74, k-nano 237
+- [ ] **Residual:** stub dos packed no `load_llm_v6` quando `loader_resident()` — aí o heap NUNCA segura os pesos (liberação real)
+- [ ] **HW lab:** `LOADER-VRAM streaming` no BOOT.LOG + lane ativo antes do load
+
+## ✅ s426 — Card HUD Hints H3 (validação ao vivo)
+
+- [x] `jarbas::cards::hints_card` (ID 8003): stage/fwd/n/vram resid direto dos statics, affordance do critério de aceite (fwd<100µs)
+- [x] F11 toggle + `close_card_by_id` no compositor + refresh 2 Hz idempotente por id + help
+- [x] Gates: 0 erros; jarbas 123/123 (damage_tests host skipado, pré-existente via stash), k-hal 71
+- [ ] **HW lab:** F11 no notebook → `fwd` verde (<100µs) e `hints n` crescendo ~2/s = H3 fechado
+
+## ✅ s425 — Linha `bootlog` no HUB HEALTH (falha de flush visível)
+
+- [x] `boot_logger::hub_log_line()` — ok n<N> / fail backend+razão+streak / fail sem-backend / pre-fat / n/a (statics LAST_FAIL_KIND/LAST_TRY_BACKEND nos paths de falha)
+- [x] Linha `bootlog` no HUB HEALTH (row 19, HUB_ROWS 20) + SysInfoAgent com a mesma string no slog
+- [x] Gates: 0 erros; k-nano 237, jarbas hub 7/7, hermes 257 (t=1)
+- [ ] **HW lab:** ver `bootlog fail sem-backend` (ou ok) no painel no notebook
+
+## ✅ s424 — BOOT.LOG de fallback na ESP (evidência de boot)
+
+- [x] Kernel: `overwrite_boot_log` não aborta em IoFail de UMA partição — continua p/ ESP (contrato `OverwriteResult` intacto)
+- [x] Build: `mk_esp_fat.py` embute BOOT.LOG raiz pré-alocado 256KB na ESP (mesmo mecanismo, zero FS novo)
+- [x] Fix latente: write do dirent calcula o setor real do `entry` (antes `sector_idx*bps` como byte offset)
+- [x] Validação: ESP de teste 128MB — dirent BOOT.LOG 256KB na raiz, chain legível, BPB do parser OK; k-nano 237; check 0 erros
+- [ ] **HW lab:** flush na ESP visível no D: montável no Windows quando o volume de dados falhar
+
+## ✅ s423 — Power-on dGPU D3→D0 (H3 sobrevive ao D-state)
+
+- [x] `k_hal/src/gpu/gpu_power.rs`: `wake_to_d0` (prova de vida antes do write PMCSR, budget TSC 10ms, re-scan persistido) + `wake_all` — 3 testes
+- [x] Wire: `wake_all` no boot pós `detect_all()`; backstop idempotente em `init_vram_tier` + `nvidia::probe`
+- [x] Gates: check release 0 erros; k-hal 71 (68+3); CHANGELOG/STATE/SESSION/AGENTS
+- [ ] **HW lab:** boot no notebook → `GPUPWR woke` + HINT stage Resident (`hints on vram=3KB fwd<100µs`) + lane VRAM `vram_served=true`
+
+## ✅ s422 — Intel VMD binder (NVMe notebooks Alder Lake+)
+
+- [x] Driver VMD R0 `k_nano/src/vmd.rs` (CFGBAR=ECAM, busn_start VMCAP/VMCONFIG, scan flat, enable config MMIO, SHDW nativo ⇒ DMA direto, fail-closed honesto) — 5 testes
+- [x] Refactor NVMe mínimo: `NvmeDriver::probe_at_mmio(bar0)`; probe nativo delega
+- [x] Fallback no `probe_storage_drivers` → vmd::init + probe_vmd_nvme → global `NVME_DRIVER` (bin intocado)
+- [x] Gates: check release 0 erros; k-nano 237 (232+5); TECNOLOGIAS 6.9 + CHANGELOG + STATE + SESSION_420 addendum
+- [ ] **HW lab:** boot no notebook → `nvme ok=true via=vmd` + BOOT.LOG persistindo no NVMe + card sem `8086:a77f sem driver`
 
 ---
 

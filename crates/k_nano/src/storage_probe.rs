@@ -64,9 +64,20 @@ unsafe fn probe_nvme() {
     if let Some(nvme) = crate::disk_agent::nvme::NvmeDriver::probe() {
         *crate::disk_agent::nvme::NVME_DRIVER.lock() = Some(nvme);
         crate::slog_nano!("Disk", "bind", "nvme ok=true");
-    } else {
-        crate::slog_nano!("Disk", "bind", "nvme ok=false");
+        return;
     }
+    // s422: sem NVMe nativo, tenta o domínio VMD (notebooks Intel RST — NVMe
+    // invisível ao CF8/CFC). Enche o MESMO global: DiskAgent/StorageBus pegam
+    // de graça e o card de HW deixa de mostrar o VMD como `sem driver`.
+    if crate::vmd::init() {
+        if let Some(nvme) = crate::vmd::probe_vmd_nvme() {
+            *crate::disk_agent::nvme::NVME_DRIVER.lock() = Some(nvme);
+            crate::slog_nano!("Disk", "bind", "nvme ok=true via=vmd");
+            return;
+        }
+        crate::slog_nano!("Disk", "bind", "vmd ok=true nvme=false (sem NVMe 01:08 no dominio)");
+    }
+    crate::slog_nano!("Disk", "bind", "nvme ok=false");
 }
 
 unsafe fn probe_usb_msc() {

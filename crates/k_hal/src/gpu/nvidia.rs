@@ -36,13 +36,18 @@ impl NvidiaGpu {
         if version == 0xFFFFFFFF || version == 0 { return None; }
 
         if gpu.vram_size > 0 {
-            if gpu.pci_dstate != 0 {
+            // s423: tenta wake D3→D0 (prova de vida antes do write) — se o
+            // device continuar dormindo/morto, o guard de baixo recusa igual.
+            let mut gpu_wake = gpu.clone();
+            let woke = crate::gpu::gpu_power::wake_to_d0(&mut gpu_wake);
+            let _ = woke;
+            if gpu_wake.pci_dstate != 0 {
                 k_nano::slog_hal!(
                     "NVIDIA",
                     "warn",
                     "{}: D-state={} — skip VRAM map/poke (SESSION_260 hang)",
                     gpu.name,
-                    gpu.pci_dstate
+                    gpu_wake.pci_dstate
                 );
             } else {
                 let vram_aligned = gpu.vram_size.next_power_of_two().min(256 * 1024 * 1024);
