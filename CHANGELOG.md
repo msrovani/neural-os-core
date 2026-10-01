@@ -1,5 +1,16 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s433] - 2026-10-01 - HUB triage: proposta via LLM (heurística = fallback) + gates HITL
+
+- High: **lane LLM na triagem** — `Propose` submete o snapshot `HUB\0`+JSON ao LLM via InferQueue (`submit(..., TOPIC_HUB_TRIAGE_LLM)`, prompt único com instrução determinística: responda `{"title":..,"action":..}` ou `{}`), parse sem serde (scanner JSON minimalista com escapes + UTF-8 lossy, CAP 256B/campo), e publica a ação GERADA via HITL. Modelo ausente/submit recusado/timeout 60s/resposta inutilizável → **fallback heurístico** (comportamento s432) — a IA propõe quando pode, o kernel nunca fica sem proposta.
+- High: **declínio honesto `{}`** — o LLM pode ver o snapshot e decidir não agir (sem toast); alternativa à heurística que sempre propõe. Parse de `[cancelled]`/`[heap escalate]` = fallback (não são propostas).
+- High: **anti-loop preservado e estendido** — fp da heurística anotado NO SUBMIT (1 ciclo/min não re-submete job), fp da ação gerada anotado na publicação; dedupe cooldown 10min provado no log (T+33118/T+35110).
+- Med: **gates de headroom em toda publicação** — `publish_proposal_hitl` recusa com `heap_headroom_low` (fail-closed s430); gate duplo ANTES do submit (`should_try_llm` = modelo carregado + headroom ok — evita o slog de ruído do HeapPressure e mantém fallback imediato); snapshot fresco no momento da publicação.
+- Med: **agente drena replies em qualquer tick** — `llm_receiver` (`HUB_TRIAGE_LLM`) no `has_pending` (regra lost-wakeup s411: quem espera resposta re-checa bounded) + timeout `LLM_REPLY_TIMEOUT_TICKS=3600` (60s).
+- Gates: hermes 273/273 (-t1, 16 novos), `cargo nk` 0 erros; build boot + build_image; strings provadas no uefi.img (`HUB_TRIAGE_LLM`, `Voce e a IA de auto-diagnostico`).
+- **Validação QEMU 8GB/8c (log `20261001_132152`, T+33860 / ~9,4min):** triagem ok 5× → Observe → `proposta via LLM submitted id=4` (T+29433, headroom OK) → **fallback-timeout honesto T+33118** (job id=4 provavelmente atrás da cauda a2_proof 60s; timeout funcionou) → toast + intent HITL → Jarbas/Hermes/MoE/LLM (T+33860) com snapshot JSON completo. `dedupe (cooldown)` provado T+35110 (anti-loop pós-timeout). Modelo stub = gibberish (esperado). Residual agravado: **stall silencioso pós-`OOM/TALC size=146 agente=infer_worker`** (log congela T+33860+ com QEMU vivo; serial muda, 3ª sessão com esse residual — próximo alvo: instrumentar path de overflow do TALC).
+- Session: SESSION_433
+
 ## [1.9.99-s432] - 2026-10-01 - WHPX 6-lane hardening + HUB triage IA
 
 - Altas: hlt gate WHPX — `interrupts.rs:83-105`, pause-spin sob MicrosoftHv (hlt sem wake = stall).

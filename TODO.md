@@ -1,11 +1,22 @@
 # 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s432 TEST
+**Versão:** v1.9.99-s433 TEST
 **Data:** 2026-10-01
-**Fonte:** SESSION_432 / SESSION_420 (addenda s430-s431) / STATE.md (LLM response gate) + ADRs 0081/0088–0112
+**Fonte:** SESSION_433 / SESSION_432 / STATE.md (LLM response gate) + ADRs 0081/0088–0112
 **Legenda:** ✅ feito | 🟡 em andamento | `[~]` parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | `[ ]` pendente
 
 ---
+
+## ✅ s433 — HUB triage: proposta via LLM (heurística = fallback)
+
+- [x] Propose → job LLM via InferQueue (reply HUB_TRIAGE_LLM) com prompt único + snapshot JSON
+- [x] Parser sem serde (scanner JSON minimalista, escapes, UTF-8 lossy, CAP 256B/campo)
+- [x] Decisões: Publish (HITL) / Decline `{}` (observe) / Fallback (marcadores InferQueue, gibberish, timeout 60s)
+- [x] Gates headroom: should_try_llm no submit + publish_proposal_hitl recusa com heap_headroom_low
+- [x] Anti-loop: fp heurístico reservado NO SUBMIT; fp da ação gerada na publicação; cooldown 10min
+- [x] Agente drena replies em qualquer tick (has_pending inclui receiver + timeout — lost-wakeup s411)
+- [x] QEMU 8GB/8c (log 132152): submitted id=4 → fallback-timeout honesto → HITL → Jarbas → MoE → LLM; dedupe cooldown provado
+- [ ] Residual 🔴: stall silencioso pós-OOM/TALC infer_worker (3ª sessão; log congela T+33860, QEMU vivo) → idea #630 instrumentar path de overflow
 
 ## ✅ s432 — WHPX 6-lane hardening (log 213145) + triagem IA do HUB
 

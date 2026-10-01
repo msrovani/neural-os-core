@@ -1,6 +1,14 @@
-# STATE - neural-os-core v1.9.99-s432 - WHPX 6-lane hardening + triagem IA do HUB
+# STATE - neural-os-core v1.9.99-s433 - HUB triage: proposta via LLM (heurística = fallback)
 
-#   PISTA ATIVA: s432 (6 lanes + hub_triage) — TALC claim do BUDGET COMPLETO (6912MB em 8GB) em VA
+#   PISTA ATIVA: s433 — lane LLM no hub_triage: Propose submete o snapshot HUB\0+JSON ao
+#     LLM (InferQueue, reply HUB_TRIAGE_LLM, prompt com instrução determinística), parse
+#     sem serde, e publica a ação GERADA via HITL toast; modelo ausente/recusa/timeout 60s
+#     → fallback heurístico (s432); `{}` = declínio honesto (sem toast); gates headroom em
+#     publish (fail-closed s430) e submit (should_try_llm); anti-loop reserva fp no submit.
+#     QEMU 8GB/8c log 132152: submitted id=4 → fallback-timeout honesto → HITL → MoE → LLM;
+#     dedupe cooldown provado. RESIDUAL 🔴: stall silencioso pós-OOM/TALC infer_worker
+#     (3ª sessão; log congela T+33860, QEMU vivo em RAM) → idea #630 instrumentar.
+#   PISTA ANTERIOR: s432 (6 lanes + hub_triage) — TALC claim do BUDGET COMPLETO (6912MB em 8GB) em VA
 #     própria 0x400000080000 (fora da janela wrap do bump, demand-paged custo
 #     zero). Causa-raiz do OOM da foto: TALC span fixo 512MB estourava quando o
 #     bump chegava ao teto 2030MB, com RAM física 70% livre. Headroom combinado

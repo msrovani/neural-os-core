@@ -6,10 +6,17 @@
 //!    (não das 18 visuais — só as que a IA pode agir: heap, arena, posture,
 //!    sys/audio verdicts, I4 sched).
 //! 2. Classifica pior-estado com regras determinísticas PURAS (testáveis).
-//! 3. Em `Propose`, publica USER_INTENT (prompt único p/ LLM) + TOAST HITL,
-//!    com dedupe por fingerprint (FNV-1a) e cooldown 10min por fingerprint —
-//!    mesma lição do mesh_knowledge (s410d): sem dedupe, a escalada vira loop
-//!    de feedback (233 intents no boot mesh).
+//! 3. Em `Propose`, submete o snapshot ao LLM (InferQueue, reply em
+//!    `HUB_TRIAGE_LLM`) para GERAR a proposta acionável — premissa máxima
+//!    ADR-0088: a IA decide, a heurística é fallback. A resposta do modelo é
+//!    parseada (`{"title":..,"action":..}`); gibberish/marcador de
+//!    recusa/timeout → publica a proposta heurística (comportamento s432).
+//!    LLM responde `{}` = declínio honesto (observe, sem toast).
+//! 4. Toda publicação (intent + TOAST HITL) passa por gate de headroom
+//!    (`heap_headroom_low`) — fail-closed s430; dedupe por fingerprint
+//!    (FNV-1a) + cooldown 10min por fingerprint — mesma lição do
+//!    mesh_knowledge (s410d): sem dedupe, a escalada vira loop de feedback
+//!    (233 intents no boot mesh).
 //!
 //! Honestidade: `Observe` nunca escala (I5/sched = sintoma de carga, lição
 //! s429-lab); `mesh_frag_pressure` desliga tudo (caller gate, s429-lab); o
@@ -20,7 +27,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
-use event_bus::{CapabilityToken, Event};
+use event_bus::{CapabilityToken, Event, Receiver};
 use k_nano::EVENT_BUS;
 
 /// Tópico do snapshot (evidência de wire; HUD/LLM podem assinar).
@@ -32,8 +39,20 @@ pub const HUB_PREFIX: &[u8] = b"HUB\0";
 pub const TRIAGE_PERIOD_TICKS: u64 = 3600;
 /// Cooldown por fingerprint: 10 min (600 s).
 pub const PROPOSE_COOLDOWN_TICKS: u64 = 36000;
+/// Timeout da resposta LLM: 60 s (prefill 12s+ em 8c; além disso fallback).
+pub const LLM_REPLY_TIMEOUT_TICKS: u64 = 3600;
 /// CAP do dedupe (runtime hygiene s410d: CAP + evicção FIFO).
 const FP_CAP: usize = 8;
+
+/// Tópico de reply do job LLM de triagem (o InferWorker publica o texto aqui).
+pub const TOPIC_HUB_TRIAGE_LLM: &str = "HUB_TRIAGE_LLM";
+
+/// Instrução determinística do prompt de triagem (padrão machine_prompt s417).
+const TRIAGE_PROMPT_HEADER: &str = "Voce e a IA de auto-diagnostico do kernel AIOS. \
+Abaixo o snapshot HUB de saude (JSON). Se houver acao estrutural de otimizacao \
+clara e concreta, responda SOMENTE com: {\"title\":\"<titulo curto>\",\
+\"action\":\"<acao concreta>\"}. Se nada precisa de acao agora, responda \
+exatamente {}. Nao explique.\nSnapshot: ";
 
 /// Veredito da triagem de pior-estado.
 #[derive(Debug, PartialEq, Eq)]
@@ -155,6 +174,119 @@ pub fn triage_snapshot_json(i: &HubTriageInputs) -> String {
     )
 }
 
+/// true se vale submeter o snapshot ao LLM (modelo carregado + headroom).
+/// Gate DUPLO barato antes do submit — o submit recusaria de qualquer forma
+/// (HeapPressure no InferQueue), mas recusar aqui evita o slog de ruído e
+/// deixa o fallback heurístico imediato e explícito.
+pub fn should_try_llm(model_loaded: bool, headroom_ok: bool) -> bool {
+    model_loaded && headroom_ok
+}
+
+/// Prompt único p/ o LLM gerar a proposta (padrão machine_prompt s417).
+pub fn triage_llm_prompt(snapshot_json: &str) -> String {
+    format!("{}{}", TRIAGE_PROMPT_HEADER, snapshot_json)
+}
+
+/// Extrai o valor string de um campo JSON simples (sem serde; scanner
+/// minimalista com escape de `\\` e `\"`). CAP de tamanho por campo =
+/// runtime hygiene (resposta de modelo não-confiável não vira Vec infinito).
+fn json_string_field(text: &str, field: &str) -> Option<String> {
+    let needle = format!("\"{}\"", field);
+    let start = text.find(&needle)? + needle.len();
+    let rest = &text.as_bytes()[start..];
+    // Pula whitespace até ':' e depois até a '"' de abertura.
+    let mut idx = 0;
+    while idx < rest.len() && (rest[idx] == b' ' || rest[idx] == b'\t' || rest[idx] == b'\n' || rest[idx] == b'\r') {
+        idx += 1;
+    }
+    if idx >= rest.len() || rest[idx] != b':' {
+        return None;
+    }
+    idx += 1;
+    while idx < rest.len() && (rest[idx] == b' ' || rest[idx] == b'\t' || rest[idx] == b'\n' || rest[idx] == b'\r') {
+        idx += 1;
+    }
+    if idx >= rest.len() || rest[idx] != b'"' {
+        return None;
+    }
+    idx += 1;
+    let mut out: Vec<u8> = Vec::new();
+    while idx < rest.len() {
+        let b = rest[idx];
+        match b {
+            b'"' => {
+                // UTF-8 honesto: bytes crus do modelo → lossy (acentos PT-BR
+                // sobrevivem; sequência quebrada vira U+FFFD, nunca panic).
+                return Some(String::from_utf8_lossy(&out).into_owned());
+            }
+            b'\\' if idx + 1 < rest.len() => {
+                let next = rest[idx + 1];
+                if next == b'"' || next == b'\\' {
+                    out.push(next);
+                    idx += 2;
+                } else {
+                    // \n/\t/\uXXXX etc: descarta o escape (honesto e simples).
+                    idx += 2;
+                }
+            }
+            _ => {
+                out.push(b);
+                idx += 1;
+            }
+        }
+        if out.len() > 256 {
+            return None; // campo desproporcional = resposta malformada
+        }
+    }
+    None // string nunca fechada
+}
+
+/// Parseia a proposta do LLM: `{"title":"..","action":".."}`.
+/// Campos vazios/desproporcionais = None (fallback heurístico).
+pub fn parse_llm_proposal(text: &str) -> Option<(String, String)> {
+    let scan = &text[..text.len().min(4096)];
+    if !scan.contains('{') {
+        return None;
+    }
+    let title = json_string_field(scan, "title")?;
+    let action = json_string_field(scan, "action")?;
+    if title.is_empty() || action.is_empty() || title.len() > 64 || action.len() > 256 {
+        return None;
+    }
+    Some((title, action))
+}
+
+/// Decisão PURA sobre a resposta do LLM (testável sem statics/bus).
+#[derive(Debug, PartialEq, Eq)]
+pub enum LlmDecision {
+    /// LLM propôs ação concreta — publica HITL.
+    Publish { title: String, action: String },
+    /// LLM respondeu `{}` — declínio honesto: observe, sem toast.
+    Decline,
+    /// Resposta inutilizável (gibberish, marcador de controle, vazio,
+    /// JSON malformado) — fallback heurístico.
+    Fallback(&'static str),
+}
+
+pub fn decide_llm_reply(text: &str) -> LlmDecision {
+    let t = text.trim();
+    if t.is_empty() {
+        return LlmDecision::Fallback("resposta vazia");
+    }
+    if t.starts_with('[') {
+        // "[cancelled]" / "[heap escalate] ..." — marcadores de controle do
+        // InferQueue (fail-closed s430): não são proposta.
+        return LlmDecision::Fallback("marcador de controle do InferQueue");
+    }
+    if t == "{}" {
+        return LlmDecision::Decline;
+    }
+    match parse_llm_proposal(t) {
+        Some((title, action)) => LlmDecision::Publish { title, action },
+        None => LlmDecision::Fallback("sem JSON de proposta valida"),
+    }
+}
+
 /// FNV-1a 64-bit (fingerprint de conteúdo — dedupe válido, lição s410d).
 pub fn fnv1a(data: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
@@ -174,6 +306,18 @@ pub struct TriageState {
     /// Fingerprint -> tick da última proposta (paralelo aos fps).
     fp_tick: [u64; FP_CAP],
     next_tick: u64,
+    /// Job LLM em voo (reserva o fp no dedupe; resposta/timeout resolve).
+    pub pending: Option<PendingProposal>,
+}
+
+/// Proposta heurística aguardando o veredito do LLM (título/ação são
+/// `&'static str` do veredito — fallback pronto sem re-classificar).
+#[derive(Debug, Clone, Copy)]
+pub struct PendingProposal {
+    pub fp: u64,
+    pub submitted_tick: u64,
+    pub title: &'static str,
+    pub action: &'static str,
 }
 
 impl Default for TriageState {
@@ -184,6 +328,17 @@ impl Default for TriageState {
             fp_head: 0,
             fp_tick: [0; FP_CAP],
             next_tick: 0,
+            pending: None,
+        }
+    }
+}
+
+impl TriageState {
+    /// true quando o job LLM em voo estourou o timeout (fallback deve disparar).
+    pub fn llm_timeout_due(&self, now_tick: u64) -> bool {
+        match self.pending {
+            Some(p) => now_tick.saturating_sub(p.submitted_tick) >= LLM_REPLY_TIMEOUT_TICKS,
+            None => false,
         }
     }
 }
@@ -236,6 +391,91 @@ impl TriageState {
 pub static HUB_TRIAGE_SNAPSHOTS: AtomicU64 = AtomicU64::new(0);
 pub static HUB_TRIAGE_PROPOSALS: AtomicU64 = AtomicU64::new(0);
 pub static HUB_TRIAGE_DROPPED: AtomicU64 = AtomicU64::new(0);
+pub static HUB_TRIAGE_LLM_SUBMITTED: AtomicU64 = AtomicU64::new(0);
+pub static HUB_TRIAGE_LLM_FALLBACKS: AtomicU64 = AtomicU64::new(0);
+
+/// Publica a proposta HITL (USER_INTENT + TOAST) com gate de headroom.
+/// false = retida por headroom baixo (fail-closed s430: o snapshot já está
+/// no EventBus — o humano vê a foto; a IA não dispara work sob pressão).
+fn publish_proposal_hitl(source: &str, title: &str, action: &str) -> bool {
+    if k_nano::allocator::heap_headroom_low() {
+        HUB_TRIAGE_DROPPED.fetch_add(1, Ordering::Relaxed);
+        k_nano::slog_hermes!(
+            "HubTriage", "warn",
+            "proposta retida (headroom baixo): {} — {}", title, action
+        );
+        return false;
+    }
+    // Snapshot fresco no momento da publicação (contexto do intent p/ Hermes).
+    let json = triage_snapshot_json(&HubTriageInputs::gather());
+    let _ = EVENT_BUS.publish(Event {
+        id: 0,
+        topic: String::from(crate::hermes::TOPIC_USER_INTENT),
+        payload: format!(
+            "proposta de otimizacao (HUB triage via {}): {} — {}. Snapshot: {}",
+            source, title, action, json
+        )
+        .into_bytes(),
+        token: CapabilityToken::Legacy(1),
+    });
+    let _ = EVENT_BUS.publish(Event {
+        id: 0,
+        topic: String::from("TOAST"),
+        payload: format!("IA propoe: {} ({})", title, action).into_bytes(),
+        token: CapabilityToken::Legacy(1),
+    });
+    HUB_TRIAGE_PROPOSALS.fetch_add(1, Ordering::Relaxed);
+    k_nano::slog_hermes!(
+        "HubTriage", "ok",
+        "proposta HITL ({}): {} — {}", source, title, action
+    );
+    true
+}
+
+/// Consome UMA resposta do LLM (reply publicado pelo InferQueue em
+/// `HUB_TRIAGE_LLM`). Retorna a linha de slog (Option) — o agente loga.
+pub fn on_llm_reply(state: &mut TriageState, payload: &[u8], now_tick: u64) -> Option<String> {
+    // Sem job em voo = resposta tardia (pending já resolvido) — ignora.
+    let pending = state.pending.take()?;
+    let text = core::str::from_utf8(payload).unwrap_or("");
+    match decide_llm_reply(text) {
+        LlmDecision::Publish { title, action } => {
+            if publish_proposal_hitl("LLM", &title, &action) {
+                // Dedupe da ação GERADA (o fp da heurística já foi anotado
+                // no submit — evita re-submit enquanto esta ação está viva).
+                state.note_proposed(fnv1a(action.as_bytes()), now_tick);
+                Some(format!("proposta LLM→HITL: {}", title))
+            } else {
+                Some(format!("proposta LLM retida (headroom): {}", title))
+            }
+        }
+        LlmDecision::Decline => {
+            // O LLM viu o snapshot e decidiu não agir — HITL respeita a IA.
+            Some(String::from("LLM declinou proposta (observe-only)"))
+        }
+        LlmDecision::Fallback(reason) => {
+            HUB_TRIAGE_LLM_FALLBACKS.fetch_add(1, Ordering::Relaxed);
+            let _ = publish_proposal_hitl("fallback", pending.title, pending.action);
+            Some(format!(
+                "LLM {} — fallback heuristico: {}", reason, pending.title
+            ))
+        }
+    }
+}
+
+/// Timeout do job LLM em voo → fallback heurístico. Retorna linha de slog.
+pub fn llm_timeout_check(state: &mut TriageState, now_tick: u64) -> Option<String> {
+    if !state.llm_timeout_due(now_tick) {
+        return None;
+    }
+    let p = state.pending.take()?;
+    HUB_TRIAGE_LLM_FALLBACKS.fetch_add(1, Ordering::Relaxed);
+    let _ = publish_proposal_hitl("fallback-timeout", p.title, p.action);
+    Some(format!(
+        "LLM timeout ({} ticks) — fallback heuristico: {}",
+        LLM_REPLY_TIMEOUT_TICKS, p.title
+    ))
+}
 
 /// Ciclo completo (chamado pelo agente): snapshot + veredito + wire.
 /// Retorna a linha de slog (para o agente logar — teste via retorno).
@@ -271,27 +511,50 @@ pub fn triage_tick(state: &mut TriageState, now_tick: u64) -> String {
                 HUB_TRIAGE_DROPPED.fetch_add(1, Ordering::Relaxed);
                 return format!("propose dedupe (cooldown): {}", title);
             }
+            // Reserva o fp AGORA: enquanto o job LLM está em voo (ou o toast
+            // vivo), o próximo ciclo com o mesmo veredito cai no dedupe —
+            // sem isso, 1 ciclo/min re-submete o job (loop de feedback).
             state.note_proposed(fp, now_tick);
-            HUB_TRIAGE_PROPOSALS.fetch_add(1, Ordering::Relaxed);
-            // Prompt único p/ LLM (padrão machine_prompt s417).
-            let _ = EVENT_BUS.publish(Event {
-                id: 0,
-                topic: String::from(crate::hermes::TOPIC_USER_INTENT),
-                payload: format!(
-                    "proposta de otimizacao (HUB triage): {} — {}. Snapshot: {}",
-                    title, action, json
-                )
-                .into_bytes(),
-                token: CapabilityToken::Legacy(1),
-            });
-            // HITL toast: o humano vê e aprova/veta na UI (premissa: HITL forte).
-            let _ = EVENT_BUS.publish(Event {
-                id: 0,
-                topic: String::from("TOAST"),
-                payload: format!("IA propoe: {} ({})", title, action).into_bytes(),
-                token: CapabilityToken::Legacy(1),
-            });
-            k_nano::slog_hermes!("HubTriage", "ok", "proposta HITL: {} — {}", title, action);
+            // Gate duplo antes do LLM: modelo carregado + headroom ok.
+            // O InferQueue recusaria de qualquer forma, mas recusar aqui
+            // mantém o fallback heurístico imediato e o slog limpo.
+            let model_ok = cortex::cortex::model_is_loaded();
+            let headroom_ok = !k_nano::allocator::heap_headroom_low();
+            if should_try_llm(model_ok, headroom_ok) {
+                match cortex::infer_queue::submit(
+                    triage_llm_prompt(&json),
+                    cortex::infer_queue::InferMode::Plain,
+                    TOPIC_HUB_TRIAGE_LLM,
+                ) {
+                    Ok(id) => {
+                        state.pending = Some(PendingProposal {
+                            fp,
+                            submitted_tick: now_tick,
+                            title,
+                            action,
+                        });
+                        HUB_TRIAGE_LLM_SUBMITTED.fetch_add(1, Ordering::Relaxed);
+                        k_nano::slog_hermes!(
+                            "HubTriage", "ok",
+                            "proposta via LLM submitted id={} (heuristica de reserva: {} — {})",
+                            id, title, action
+                        );
+                        return format!("propose via LLM (pending id={})", id);
+                    }
+                    Err(e) => {
+                        k_nano::slog_hermes!(
+                            "HubTriage", "warn",
+                            "submit LLM falhou ({:?}) — fallback heuristico", e
+                        );
+                    }
+                }
+            } else if !model_ok {
+                k_nano::slog_hermes!(
+                    "HubTriage", "ok",
+                    "modelo ausente — proposta heurística direta"
+                );
+            }
+            publish_proposal_hitl("heuristica", title, action);
             format!("propose: {}", title)
         }
     }
@@ -301,6 +564,9 @@ pub fn triage_tick(state: &mut TriageState, now_tick: u64) -> String {
 pub struct HubTriageAgent {
     manifest: agent_core::AgentManifest,
     state: TriageState,
+    /// Respostas do LLM de triagem (o InferQueue publica o texto cru aqui;
+    /// podem chegar em QUALQUER tick — fora da cadência de 60s).
+    llm_receiver: Receiver,
 }
 
 impl HubTriageAgent {
@@ -314,6 +580,7 @@ impl HubTriageAgent {
                 persist: false,
             },
             state: TriageState::default(),
+            llm_receiver: EVENT_BUS.subscribe(TOPIC_HUB_TRIAGE_LLM),
         }
     }
 }
@@ -330,12 +597,28 @@ impl agent_core::Agent for HubTriageAgent {
     }
 
     fn has_pending(&self) -> bool {
-        self.state
-            .due(k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64)
+        let now = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+        // Cadência de 60s OU resposta LLM na fila OU timeout do job em voo —
+        // sem isso o reply chegaria e ninguém o drenaria até o próximo ciclo
+        // (lição lost-wakeup s411: quem espera resposta re-checa bounded).
+        self.state.due(now)
+            || self.state.llm_timeout_due(now)
+            || self.llm_receiver.has_pending()
     }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> agent_core::AgentTickResult {
         let now = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+        // 1. Drena respostas do LLM (qualquer tick; drena a fila inteira).
+        while let Some(ev) = self.llm_receiver.try_receive() {
+            if let Some(line) = on_llm_reply(&mut self.state, &ev.payload, now) {
+                k_nano::slog_hermes!("HubTriage", "info", "{}", line);
+            }
+        }
+        // 2. Timeout do job em voo → fallback heurístico.
+        if let Some(line) = llm_timeout_check(&mut self.state, now) {
+            k_nano::slog_hermes!("HubTriage", "info", "{}", line);
+        }
+        // 3. Ciclo de triagem (1/min).
         let line = triage_tick(&mut self.state, now);
         if !line.is_empty() {
             k_nano::slog_hermes!("HubTriage", "info", "{}", line);
@@ -453,5 +736,100 @@ mod tests {
         // Vetor de teste do FNV-1a 64 ("" e "a").
         assert_eq!(fnv1a(b""), 0xcbf29ce484222325);
         assert_eq!(fnv1a(b"a"), 0xaf63dc4c8601ec8c);
+    }
+
+    #[test]
+    fn parse_llm_proposal_valido() {
+        let (t, a) = parse_llm_proposal(
+            "{\"title\":\"Mover KV\",\"action\":\"mover context-window p/ arena\"}",
+        )
+        .expect("JSON valido deve parsear");
+        assert_eq!(t, "Mover KV");
+        assert_eq!(a, "mover context-window p/ arena");
+    }
+
+    #[test]
+    fn parse_llm_proposal_com_escapes_e_whitespace() {
+        let (t, a) = parse_llm_proposal(
+            "\n{ \"title\" : \"Mover \\\"KV\\\" agora\", \"action\": \"drenar \\\\heap\\\\ p/ arena\" }\n",
+        )
+        .expect("escapes devem ser tratados");
+        assert_eq!(t, "Mover \"KV\" agora");
+        assert_eq!(a, "drenar \\heap\\ p/ arena");
+    }
+
+    #[test]
+    fn parse_llm_proposal_invalido_e_none() {
+        // Gibberish de modelo stub.
+        assert!(parse_llm_proposal("xkcd blah 42").is_none());
+        // Falta o action.
+        assert!(parse_llm_proposal("{\"title\":\"so titulo\"}").is_none());
+        // Campo vazio.
+        assert!(parse_llm_proposal("{\"title\":\"\",\"action\":\"x\"}").is_none());
+        // String nunca fechada.
+        assert!(parse_llm_proposal("{\"title\":\"aberto").is_none());
+    }
+
+    #[test]
+    fn decide_llm_reply_roteia() {
+        match decide_llm_reply("{\"title\":\"T\",\"action\":\"A\"}") {
+            LlmDecision::Publish { title, action } => {
+                assert_eq!((title.as_str(), action.as_str()), ("T", "A"));
+            }
+            d => panic!("esperava Publish, veio {:?}", d),
+        }
+        // Declínio honesto.
+        assert_eq!(decide_llm_reply("  {}  "), LlmDecision::Decline);
+        // Marcadores de controle do InferQueue → fallback.
+        assert_eq!(
+            decide_llm_reply("[heap escalate] headroom critico - HITL."),
+            LlmDecision::Fallback("marcador de controle do InferQueue")
+        );
+        assert_eq!(
+            decide_llm_reply("[cancelled]"),
+            LlmDecision::Fallback("marcador de controle do InferQueue")
+        );
+        // Gibberish/vazio → fallback.
+        assert_eq!(
+            decide_llm_reply("gibberish do modelo stub"),
+            LlmDecision::Fallback("sem JSON de proposta valida")
+        );
+        assert_eq!(
+            decide_llm_reply("   "),
+            LlmDecision::Fallback("resposta vazia")
+        );
+    }
+
+    #[test]
+    fn prompt_tem_instrucao_e_snapshot() {
+        let p = triage_llm_prompt("{\"heap\":{\"pct\":99}}");
+        assert!(p.contains("responda SOMENTE"));
+        assert!(p.contains("{\"heap\":{\"pct\":99}}"));
+    }
+
+    #[test]
+    fn should_try_llm_gates() {
+        // Modelo carregado + headroom ok = tenta LLM.
+        assert!(should_try_llm(true, true));
+        // Modelo ausente = heurística direta.
+        assert!(!should_try_llm(false, true));
+        // Headroom baixo = fallback (o submit recusaria com HeapPressure).
+        assert!(!should_try_llm(true, false));
+    }
+
+    #[test]
+    fn pending_timeout_dispara() {
+        let mut st = TriageState::default();
+        st.pending = Some(PendingProposal {
+            fp: 42,
+            submitted_tick: 1000,
+            title: "Heap critico",
+            action: "reduzir carga",
+        });
+        assert!(!st.llm_timeout_due(1000 + LLM_REPLY_TIMEOUT_TICKS - 1));
+        assert!(st.llm_timeout_due(1000 + LLM_REPLY_TIMEOUT_TICKS));
+        // Sem pending: nunca timeout.
+        st.pending = None;
+        assert!(!st.llm_timeout_due(u64::MAX / 2));
     }
 }
