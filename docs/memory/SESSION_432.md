@@ -21,10 +21,23 @@
 6. `decision.rs:555` — posture MIN 4→8 + piso absoluto esc>=8 (`:559-575`); fim do
    FAIL/flap periódico com 1 escalate (`a2 x0 e6`).
 
-## s432 pré-existente (HUB triage IA, não commitado)
+## HUB triage IA (premissa máxima ADR-0088, ideia #629)
 - `hub_triage.rs` novo: snapshot `HUB\0` 60s, worst-state puro, propose HITL com dedupe
   FNV (10min) + `lib.rs` mod + `security.rs` LAST_SAFETY + `main.rs` registro x2.
 - Compila: check geral 0 erros com os arquivos.
+- **Validação QEMU 8GB/8c (log `logs/boot_whpx_20260930_224429.txt`, 13,9min / T+49937):**
+  `Tier 1 ready size=6911 MB` (claim s431); HubTriage `T+2338 ok`, 4× `observe: posture
+  FAIL (sintoma de carga)` (anti-loop); **proposta HITL real `T+36581`: Heap critico +
+  arena livre — mover conversao/context-window p/ arena Cortex**; `T+36923` Jarbas
+  processou o intent com snapshot JSON completo (heap 1834/2030, arena 0/256, decide
+  sev=2, machine UNKNOWN) → Hermes → MoE `disk_diag score=0.975` → **LLM invocado**
+  (Trust ok; output gibberish = modelo stub esperado em QEMU). `T+40901+` propose dedupe
+  (cooldown) — anti-loop s410d provado. Auto-grow 1792→2030MB sem OOM de bump.
+- **Residual aberto:** 2× `[OOM/TALC] ... agente=infer_worker` (size=10624 @T+48653,
+  size=73 @T+49937) com span de 6911MB — motivo do null do TALC desconhecido
+  (hipóteses: alloc_physical_frame None / estado interno / map_page_direct). 1× #PF
+  storm park (linha 3680, sistema seguiu). → instrumentar path de overflow
+  (`TALC_OVERFLOW_NULL` / `PF_DIAG_*`) antes da próxima sprint de heap.
 
 ## Verificação
 - `cargo check --release`: 0 erros (1m41s).

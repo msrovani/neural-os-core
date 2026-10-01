@@ -1,11 +1,23 @@
 # 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s431 TEST
-**Data:** 2026-09-30
-**Fonte:** SESSION_412 / SESSION_411 / STATE.md (LLM response gate) + ADRs 0081/0089–0106 + SESSION_360/366
+**Versão:** v1.9.99-s432 TEST
+**Data:** 2026-10-01
+**Fonte:** SESSION_432 / SESSION_420 (addenda s430-s431) / STATE.md (LLM response gate) + ADRs 0081/0088–0112
 **Legenda:** ✅ feito | 🟡 em andamento | `[~]` parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | `[ ]` pendente
 
 ---
+
+## ✅ s432 — WHPX 6-lane hardening (log 213145) + triagem IA do HUB
+
+- [x] Lane 1: hlt gate WHPX — pause-spin sob MicrosoftHv (`interrupts.rs:83-105`; hlt sem wake = stall silencioso)
+- [x] Lane 2: yields audio/HUB sob heap pressionado — capture caps 4ev/8fr + drains cap 8 (`hub_health.rs:144-161`)
+- [x] Lane 3: refuse-in-slice → TALC spill como serviço efetivo; huge-2MB gate OFF até validação tok/s (#626)
+- [x] Lane 4: HDA LPIB-frozen estimate (`dt×48000` quando o LPIB congela)
+- [x] Lane 5: submit-only proof + ps1 `-ModelKind 1b|3b`
+- [x] Lane 6: posture MIN 4→8 + piso absoluto esc>=8 (fim do FAIL com 1 escalate, 11× no log 213145)
+- [x] **Triagem IA do HUB (premissa máxima ADR-0088, #629):** `hub_triage.rs` — snapshot `HUB\0`+JSON 1/min, triagem worst-state pura, proposta HITL via toast + USER_INTENT, dedupe FNV + cooldown 10min
+- [x] Validação QEMU 8GB/8c (log 224429, 13,9min): proposta HITL real T+36581 → intent → MoE → LLM; 4 Observe anti-loop; dedupe provado
+- [ ] Residual: instrumentar OOM/TALC `infer_worker` (2× no log 224429, span 6911MB — causa do null desconhecida)
 
 ## ✅ s431 — TALC claim budget completo (cura OOM teto 2030MB)
 
