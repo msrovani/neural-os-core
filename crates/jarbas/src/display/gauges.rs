@@ -350,7 +350,7 @@ pub fn core_bar_data() -> ([f32; 32], u8) {
 // Honestidade: dado ausente = `n/a`, nunca 0 inventado.
 // ══════════════════════════════════════════════════════════════════════════
 
-pub const HUB_ROWS: usize = 20;
+pub const HUB_ROWS: usize = 21;
 pub const HUB_ROW_LEN: usize = 36;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -844,6 +844,38 @@ pub fn refresh_hub_health() {
         (HubState::Na, false) // pre-fat: buffer em RAM, ainda sem tentativa
     };
     hub_set(&mut hh.rows[19], "bootlog", st, pill, log_line);
+
+    // ── TALC (s435) — uso REAL do overflow (gap-nodes), fragmentação visível ──
+    // honestidade n/a ≠ 0: sem amostra (claim ausente ou HUD ainda não rodou
+    // o refresh), a linha é "n/a" — nunca 0/0M que pareceria OOM.
+    k_nano::allocator::talc_refresh_usage();
+    let tu = k_nano::allocator::talc_usage();
+    let talc_ready = tu.free_bytes > 0 || tu.used_bytes > 0;
+    let (st, val, pill) = if !talc_ready {
+        (HubState::Na, alloc::string::String::from("n/a"), false)
+    } else if tu.partial == 1 {
+        (
+            HubState::Warn,
+            alloc::format!("partial g{}", tu.gaps),
+            true,
+        )
+    } else {
+        // Fragmentação: free alto, maior gap pequeno (mesma regra do triage).
+        let frag = tu.free_bytes >= 256 * 1048576 && tu.largest_free * 4 < tu.free_bytes;
+        let st = if frag { HubState::Warn } else { HubState::Ok };
+        (
+            st,
+            alloc::format!(
+                "{}M/{}M lg{}M g{}",
+                tu.used_bytes / 1048576,
+                (tu.used_bytes + tu.free_bytes) / 1048576,
+                tu.largest_free / 1048576,
+                tu.gaps
+            ),
+            true,
+        )
+    };
+    hub_set(&mut hh.rows[20], "talc", st, pill, val);
 
     // ── Live line + worst + checksum ──
     let wall = k_nano::interrupts::wall_ticks();

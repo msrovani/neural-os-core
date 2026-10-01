@@ -78,6 +78,15 @@ pub struct HubTriageInputs {
     pub heap_pressure: u8,
     /// TALC capacity claimed (MB, 0 = não pronto) — overflow honesto s431.
     pub talc_cap_mb: u64,
+    /// s435: uso REAL do TALC medido nos gap-nodes (0/0/0 = nunca medido).
+    pub talc_used_mb: u64,
+    pub talc_free_mb: u64,
+    /// Maior gap contíguo — o que um alloc grande consegue de fato.
+    pub talc_largest_mb: u64,
+    /// Nº de fragmentos livres no span.
+    pub talc_gaps: u64,
+    /// 1 = última amostra parcial (walk abortado — metadados ilegíveis).
+    pub talc_partial: u8,
     /// Arena Cortex usada/capacidade (MB) — `cortex::global_arena::arena_stats`.
     pub arena_used_mb: u64,
     pub arena_cap_mb: u64,
@@ -101,6 +110,11 @@ impl HubTriageInputs {
             heap_window_mb: obs.window_mb as u64,
             heap_pressure: obs.pressure,
             talc_cap_mb: k_nano::allocator::talc_capacity_mb(),
+            talc_used_mb: obs.talc_used_mb as u64,
+            talc_free_mb: obs.talc_free_mb as u64,
+            talc_largest_mb: obs.talc_largest_mb as u64,
+            talc_gaps: obs.talc_gaps,
+            talc_partial: obs.talc_partial,
             arena_used_mb: (arena_used / (1024 * 1024)) as u64,
             arena_cap_mb: (arena_cap / (1024 * 1024)) as u64,
             posture_sev: cortex::decision::hub_posture_sev(),
@@ -134,7 +148,18 @@ pub fn triage_from_inputs(i: &HubTriageInputs) -> TriageVerdict {
             action: "reduzir carga LLM e revisar consumidores de heap",
         };
     }
-    // 3. Postura de decisão FAIL com escaladas dominantes = degradação real,
+    // 3. Fragmentação do TALC (s435, idea #630): free alto mas o maior gap
+    //    pequeno = memória viva em pedaços — allocs grandes vão falhar mesmo
+    //    com "espaço". Sintoma estrutural silencioso → observe-only (mesma
+    //    lição s429-lab: escalar sintoma = loop de feedback).
+    if i.talc_free_mb >= 256 && i.talc_largest_mb * 4 < i.talc_free_mb {
+        return TriageVerdict::Observe("talc fragmentado (largest/free baixo)");
+    }
+    // 3b. Amostra parcial do walk = metadados ilegíveis — nunca agir cego.
+    if i.talc_partial == 1 {
+        return TriageVerdict::Observe("talc metadata parcial (walk abortado)");
+    }
+    // 4. Postura de decisão FAIL com escaladas dominantes = degradação real,
     //    mas é SINTOMA (carga/recusa) — observe-only (lição s429-lab: escalar
     //    sintoma = loop de feedback).
     if i.posture_sev == 2 {
@@ -156,7 +181,7 @@ pub fn triage_snapshot_json(i: &HubTriageInputs) -> String {
     };
     let machine = i.machine_json.as_deref().unwrap_or("{}");
     format!(
-        "{{\"heap\":{{\"used\":{},\"window\":{},\"pct\":{},\"pressure\":{},\"talc\":{}}},\
+        "{{\"heap\":{{\"used\":{},\"window\":{},\"pct\":{},\"pressure\":{},\"talc\":{},\"talc_used\":{},\"talc_free\":{},\"talc_largest\":{},\"talc_gaps\":{},\"talc_partial\":{}}},\
 \"arena\":{{\"used\":{},\"cap\":{}}},\
 \"decide\":{{\"sev\":{},\"line\":\"{}\"}},\
 \"sched_violations\":{},\"machine\":{}}}",
@@ -165,6 +190,11 @@ pub fn triage_snapshot_json(i: &HubTriageInputs) -> String {
         heap_pct,
         i.heap_pressure,
         i.talc_cap_mb,
+        i.talc_used_mb,
+        i.talc_free_mb,
+        i.talc_largest_mb,
+        i.talc_gaps,
+        i.talc_partial,
         i.arena_used_mb,
         i.arena_cap_mb,
         i.posture_sev,
@@ -503,7 +533,20 @@ pub fn triage_tick(state: &mut TriageState, now_tick: u64) -> String {
     HUB_TRIAGE_SNAPSHOTS.fetch_add(1, Ordering::Relaxed);
 
     match triage_from_inputs(&inputs) {
-        TriageVerdict::Ok => String::from("ok"),
+        TriageVerdict::Ok => {
+            // s435: evidência da telemetria no slog (regra 419 — dado novo
+            // só está "feito" quando o slog prova em runtime). Zeros =
+            // claim ausente (n/a ≠ 0 é do HUD, aqui a linha é do triage).
+            if inputs.talc_cap_mb > 0 && inputs.talc_free_mb == 0 && inputs.talc_used_mb == 0 {
+                String::from("ok (talc sem amostra — aguardando HUD refresh)")
+            } else {
+                format!(
+                    "ok talc u{}M f{}M lg{}M g{}",
+                    inputs.talc_used_mb, inputs.talc_free_mb,
+                    inputs.talc_largest_mb, inputs.talc_gaps
+                )
+            }
+        }
         TriageVerdict::Observe(reason) => format!("observe: {}", reason),
         TriageVerdict::Propose { title, action } => {
             let fp = fnv1a(action.as_bytes());
@@ -638,6 +681,11 @@ mod tests {
             heap_window_mb: window,
             heap_pressure: if heap_pct >= 90 { 2 } else { 0 },
             talc_cap_mb: 6911,
+            talc_used_mb: 0,
+            talc_free_mb: 6911,
+            talc_largest_mb: 6911,
+            talc_gaps: 1,
+            talc_partial: 0,
             arena_used_mb: 0,
             arena_cap_mb: 256,
             posture_sev: sev,
@@ -656,6 +704,33 @@ mod tests {
             }
             _ => panic!("esperava Propose"),
         }
+    }
+
+    #[test]
+    fn talc_fragmentado_e_observe_only() {
+        // free 512MB, maior gap 100MB (largest*4 < free) = fragmentação real.
+        let mut i = inputs(50, 256, 0, 0);
+        i.talc_free_mb = 512;
+        i.talc_largest_mb = 100;
+        i.talc_gaps = 37;
+        assert_eq!(
+            triage_from_inputs(&i),
+            TriageVerdict::Observe("talc fragmentado (largest/free baixo)")
+        );
+        // Livre saudável (maior gap domina): nunca Observe por fragmentação.
+        i.talc_largest_mb = 480;
+        assert_eq!(triage_from_inputs(&i), TriageVerdict::Ok);
+    }
+
+    #[test]
+    fn talc_walk_parcial_nunca_propoe() {
+        // Amostra parcial (metadados ilegíveis) = observe, mesmo com heap ok.
+        let mut i = inputs(50, 256, 0, 0);
+        i.talc_partial = 1;
+        assert_eq!(
+            triage_from_inputs(&i),
+            TriageVerdict::Observe("talc metadata parcial (walk abortado)")
+        );
     }
 
     #[test]
@@ -688,6 +763,8 @@ mod tests {
         // pct sofre floor inteiro (2009/2030 = 98%) — o teste valida o campo, não o arredondamento.
         assert!(j.contains("\"pct\":98"));
         assert!(j.contains("\"talc\":6911"));
+        assert!(j.contains("\"talc_free\":6911"));
+        assert!(j.contains("\"talc_largest\":6911"));
         assert!(j.contains("\"sev\":2"));
         assert!(j.contains("a2 x0 e6 L0"));
         assert!(j.starts_with('{') && j.ends_with('}'));

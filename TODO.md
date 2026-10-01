@@ -1,11 +1,21 @@
 # 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s434 TEST
+**Versão:** v1.9.99-s435 TEST
 **Data:** 2026-10-01
-**Fonte:** SESSION_434 / SESSION_433 / STATE.md (LLM response gate) + ADRs 0081/0088–0112
+**Fonte:** SESSION_435 / SESSION_434 / STATE.md + ADRs 0081/0088–0112
 **Legenda:** ✅ feito | 🟡 em andamento | `[~]` parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | `[ ]` pendente
 
 ---
+
+## ✅ s435 — Telemetria de uso REAL do TALC (HUB HEALTH + hub_triage, idea #630 residual)
+
+- [x] `talc_walk_bins`: walk dos gap-nodes dos bins (layout confirmado no fonte talc 4.4.3; CAP 4096 + bounds-check → partial=1 honesto; zero alloc)
+- [x] Cache 2 Hz (`talc_refresh_usage`/`talc_usage`/`talc_usage_samples`) + seed pós-claim; walk nunca no caminho de alloc
+- [x] Headroom honesto: `heap_headroom_bytes`/`heap_observe` somam o FREE medido (span inteiro aposentado); HeapObserve +5 campos talc_*
+- [x] HUB HEALTH linha `talc` (21ª): `u{}M/{}M lg{}M g{}`, Warn de fragmentação (free≥256MB e largest×4<free), `partial g{}`, `n/a` sem amostra
+- [x] hub_triage: snapshot JSON com talc_used/free/largest/gaps/partial + vereditos Observe (fragmentado / metadata parcial) + slog `ok talc u...f...lg...g...`
+- [x] Validação: hermes 275/275, k-nano 244/244, jarbas 134/134 (-t1); QEMU 8GB/8c log 182016: `ok talc u0M f6911M lg6911M g1` telemetria viva, zero OOM
+- [ ] Residual: observação de longo prazo (runtime de horas) da linha `talc` p/ calibrar o limiar largest×4<free; consolidar `talc_capacity_mb`/`talc_capacity_bytes` se 3ª cópia surgir
 
 ## ✅ s434 — Overflow TALC: causa-raiz + fail-closed de classe (idea #630)
 
@@ -14,7 +24,8 @@
 - [x] Gap 1 (s434b): Talck::realloc chama malloc interno — NULL de chunk TALC-residente sem counter → snapshot + oom() no path
 - [x] Gap 2 = causa-raiz (s434c): realloc bump-residente usava default realloc (alloc puro do bump, sem overflow) → morte cega com TALC 6911MB livre → realloc bump passa pelo híbrido
 - [x] Validação QEMU 8GB/8c (log 144435): **0× OOM/TALC em ~16min (T+57771, recorde; morria em T+34k)**, bump no teto com scheduler/matmuls/HubTriage vivos, stall silencioso sumiu
-- [ ] Residual: fragmentação de longo prazo do TALC (monitorar bins_avail em runtime de horas); alloc_zeroed bump-residente verificar no próximo bughunt
+- [x] Residual: fragmentação de longo prazo do TALC → **s435 implementou a telemetria** (linha `talc` no HUB + veredito Observe no triage)
+- [ ] alloc_zeroed bump-residente verificar no próximo bughunt
 
 ## ✅ s433 — HUB triage: proposta via LLM (heurística = fallback)
 

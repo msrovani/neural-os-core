@@ -1,5 +1,15 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s435] - 2026-10-01 - Telemetria de uso REAL do TALC no HUB HEALTH + hub_triage (idea #630 residual)
+
+- High: **walk dos gap-nodes dos bins** (`allocator.rs::talc_walk_bins`) — o talc 4.4 não expõe free-bytes; layout confirmado no fonte (bins = array de 128 sentinelas `Option<NonNull<LlistNode>>` @16, gap-node com `next` @0 e `size` @16, listas terminadas em NULL). Soma dos gaps = free REAL; `used = span − free`; `largest_free` = maior gap contíguo (o que um alloc grande consegue de fato); `gaps` = nº de fragmentos. Zero alloc, CAP 4096 gaps + bounds-check no span → `partial=1` honesto (metadados ilegíveis) em vez de pendar ou mintir.
+- Med: **cache 2 Hz** (`talc_refresh_usage`/`talc_usage`/`talc_usage_samples`) — walk só no refresh do HUD/hub_triage sob o lock do Talck, NUNCA no caminho de alloc; seed pós-claim (stop-the-world ainda ativo).
+- High: **headroom honesto** — `heap_headroom_bytes()`/`heap_observe()` agora somam o FREE medido do TALC (não o span inteiro — a estimativa generosa s430b foi aposentada); `HeapObserve` ganhou `talc_used_mb/talc_free_mb/talc_largest_mb/talc_gaps/talc_partial`.
+- High: **HUB HEALTH linha `talc` (21ª)** — `u{}M/{}M lg{}M g{}` com fragmentação visível (Warn: free≥256MB e largest×4 < free), `partial g{n}` em amostra abortada, `n/a` honesto sem amostra (n/a ≠ 0). `HUB_ROWS` 20→21.
+- Med: **hub_triage s435** — inputs do TALC no snapshot JSON (`talc_used/talc_free/talc_largest/talc_gaps/talc_partial`), veredito **Observe** para fragmentação (`talc fragmentado (largest/free baixo)`) e para amostra parcial (`talc metadata parcial`) — sintoma estrutural observe-only (lição s429-lab); linha `ok` do slog agora carrega a evidência (`ok talc u{}M f{}M lg{}M g{}` — regra 419).
+- Gates: hermes 275/275 (-t1, 2 novos), k-nano 244/244 (-t1), jarbas 134/134 (-t1), `cargo nk` 0 erros; build boot + build_image; strings provadas no uefi.img (`ok talc u`, `partial g`, `talc fragmentado`). **Validação QEMU 8GB/8c (log 182016):** `ok talc u0M f6911M lg6911M g1` — span de 6911MB fresco com gap único, telemetria viva a cada ciclo de triagem, zero OOM, sistema vivo (matmuls 8 workers).
+- Session: SESSION_435
+
 ## [1.9.99-s434] - 2026-10-01 - Overflow TALC: causa-raiz (realloc bump-residente sem overflow) + fail-closed de classe — 0 OOM em 16min
 
 - High: **causa-raiz do `OOM/TALC infer_worker` (idea #630, 3 sessões)** — realloc de chunk **bump-residente** usava o default `GlobalAlloc::realloc` (alloc novo + copy + dealloc) cujo alloc novo era do **bump puro SEM overflow**: com a janela ~2030MB cheia, NULL direto sem tocar o TALC (6911MB disponíveis!) → `alloc_error_handler` sem diag. Qualquer `Vec`/`String` nascido no bump crescendo com bump cheio = morte cega. Fix: realloc bump→aloca pelo híbrido (TALC dá o espaço novo) + copy manual.

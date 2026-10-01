@@ -1,6 +1,17 @@
-# STATE - neural-os-core v1.9.99-s434 - Overflow TALC: causa-raiz (realloc) + fail-closed
+# STATE - neural-os-core v1.9.99-s435 - Telemetria de uso REAL do TALC (HUB + triage)
 
-#   PISTA ATIVA: s434 — causa-raiz do OOM/TALC infer_worker (idea #630, 3 sessões):
+#   PISTA ATIVA: s435 — telemetria de uso REAL do TALC (idea #630 residual, monitorar
+#     fragmentação em runtime de horas). talc_walk_bins percorre os gap-nodes dos 128
+#     bins do talc 4.4.3 (layout confirmado no fonte; free = soma dos gaps, used = span−free,
+#     largest_free = maior gap, gaps = nº fragmentos; CAP 4096 + bounds-check → partial=1
+#     honesto). Cache 2 Hz (HUD/hub_triage) sob o lock do Talck, seed pós-claim; headroom
+#     agora soma o FREE medido (span inteiro aposentado — HeapObserve +5 campos talc_*).
+#     HUB HEALTH linha `talc` (21ª): u{}/{}M lg{}M g{} com Warn de fragmentação
+#     (free≥256MB e largest×4<free). hub_triage: snapshot JSON + vereditos Observe
+#     (fragmentado / metadata parcial) + slog `ok talc u..f..lg..g..` (regra 419).
+#     Validação: hermes 275, k-nano 244, jarbas 134 (-t1); QEMU 8GB/8c log 182016:
+#     `ok talc u0M f6911M lg6911M g1` telemetria viva 1/min, zero OOM, sistema vivo.
+#   PISTA ANTERIOR: s434 — causa-raiz do OOM/TALC infer_worker (idea #630, 3 sessões):
 #     realloc de chunk BUMP-residente usava o default GlobalAlloc::realloc (alloc novo
 #     SEM overflow do TALC) → NULL com janela cheia sem tocar os 6911MB → oom() cego.
 #     Fix: realloc bump→híbrido (TALC dá o espaço novo). Gap 2: Talck::realloc chama

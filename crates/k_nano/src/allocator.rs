@@ -500,6 +500,122 @@ pub fn talc_null_avail_snapshot() -> (u64, u64) {
     )
 }
 
+// ─── s435: Telemetria de uso REAL do TALC (idea #630 residual) ─────────────
+// talc 4.4 não expõe free-bytes — até aqui o span INTEIRO contava como
+// headroom (estimativa generosa) e o HUB não via fragmentação. Caminho
+// honesto: percorrer os gap-nodes dos bins (memória LIVRE registrada) e
+// derivar used = span − free. Layout confirmado no fonte talc-4.4.3:
+//   bins: *mut Bin @16 — array de 128 sentinelas Option<NonNull<LlistNode>>;
+//   gap-node: next @0 (NULL = fim — register_gap insere com next=old head),
+//   size @16 (GAP_LOW_SIZE_OFFSET = NODE_SIZE = 2 ptr); MIN_CHUNK_SIZE=24B.
+// Custo O(128 + gaps), sem alloc. Chamado a 2 Hz (refresh_hub_health) sob o
+// lock do Talck — NUNCA no caminho de alloc (a exceção é o seed pós-claim,
+// boot single-core). read_volatile: escritor é o talc sob o mesmo lock.
+
+/// Uso real do span TALC (bytes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TalcUsage {
+    /// Bytes LIVRES registrados nos bins (soma dos gap-nodes).
+    pub free_bytes: u64,
+    /// Bytes ocupados = span − free (inclui overhead de chunk/tag do talc).
+    pub used_bytes: u64,
+    /// Maior gap contíguo (o que um alloc grande consegue served de fato).
+    pub largest_free: u64,
+    /// Número de gaps (fragmentos livres) no span.
+    pub gaps: u64,
+    /// 0 = walk completo; 1 = abortado (node fora do span / CAP) — dados
+    /// parciais: leitura de lixo ou corrupção de metadados. NUNCA mintir.
+    pub partial: u8,
+}
+
+static TALC_USAGE: Mutex<TalcUsage> = Mutex::new(TalcUsage {
+    free_bytes: 0,
+    used_bytes: 0,
+    largest_free: 0,
+    gaps: 0,
+    partial: 0,
+});
+static TALC_USAGE_SAMPLES: AtomicU64 = AtomicU64::new(0);
+
+/// CAP do walk: um span sã tem dezenas de gaps; milhares = lista corrompida
+/// (node lixo encadeado em loop) — aborta com partial=1 em vez de pender.
+const TALC_WALK_MAX_GAPS: u64 = 4096;
+
+/// Percorre os bins do talc somando os gap-nodes. `talc` deve estar sob
+/// lock (chamador). Zero alloc, nunca panica.
+fn talc_walk_bins(talc: &Talc<ErrOnOom>, span: Span) -> TalcUsage {
+    let (base, acme) = match span.get_base_acme() {
+        Some((b, a)) => (b as usize, a as usize),
+        None => {
+            return TalcUsage { free_bytes: 0, used_bytes: span.size() as u64, largest_free: 0, gaps: 0, partial: 1 }
+        }
+    };
+    let mut free = 0u64;
+    let mut largest = 0u64;
+    let mut gaps = 0u64;
+    unsafe {
+        // Layout de Talc<O> (sem feature counters): avail_low @0, avail_high
+        // @8, bins @16 (mesmo padrão do snapshot_talc_bins).
+        let bins = (talc as *const _ as *const u64).add(2).read_volatile() as *const usize;
+        if bins.is_null() {
+            // Nunca claimado: span vazio.
+            return TalcUsage { free_bytes: 0, used_bytes: span.size() as u64, largest_free: 0, gaps: 0, partial: 1 };
+        }
+        'bins: for b in 0..128usize {
+            let mut node = bins.add(b).read_volatile() as usize;
+            while node != 0 {
+                gaps += 1;
+                if gaps > TALC_WALK_MAX_GAPS {
+                    return TalcUsage { free_bytes: free, used_bytes: 0, largest_free: largest, gaps, partial: 1 };
+                }
+                if node < base || node >= acme {
+                    return TalcUsage { free_bytes: free, used_bytes: 0, largest_free: largest, gaps, partial: 1 };
+                }
+                let size = ((node + 16) as *const usize).read_volatile();
+                if size == 0 || node.saturating_add(size) > acme {
+                    return TalcUsage { free_bytes: free, used_bytes: 0, largest_free: largest, gaps, partial: 1 };
+                }
+                free += size as u64;
+                if size as u64 > largest {
+                    largest = size as u64;
+                }
+                node = (node as *const usize).read_volatile();
+            }
+        }
+    }
+    let span_bytes = span.size() as u64;
+    TalcUsage {
+        free_bytes: free,
+        used_bytes: span_bytes.saturating_sub(free),
+        largest_free: largest,
+        gaps,
+        partial: 0,
+    }
+}
+
+/// Re-amostra o uso real do TALC (chamador de baixa cadência: HUD 2 Hz,
+/// hub_triage 1/min). Sem claim → devolve o cache (zeros no boot).
+pub fn talc_refresh_usage() -> TalcUsage {
+    let span = match *CLAIMED_HEAP.lock() {
+        Some(s) => s,
+        None => return *TALC_USAGE.lock(),
+    };
+    let usage = talc_walk_bins(&TALC_ALLOC.lock(), span);
+    *TALC_USAGE.lock() = usage;
+    TALC_USAGE_SAMPLES.fetch_add(1, Ordering::Relaxed);
+    usage
+}
+
+/// Última amostra em cache (barata, lock-free de fato — Mutex só do snapshot).
+pub fn talc_usage() -> TalcUsage {
+    *TALC_USAGE.lock()
+}
+
+/// Nº de amostras desde o boot (0 = nunca medido — honestidade n/a ≠ 0).
+pub fn talc_usage_samples() -> u64 {
+    TALC_USAGE_SAMPLES.load(Ordering::Relaxed)
+}
+
 /// SESSION_416 diagnóstico: quantas vezes bump recusou E o TALC overflow
 /// também devolveu null (o caller recebe null → deref → #PF). Se crescer
 /// com heap crítico, o span TALC não tem espaço/páginas — investigar.
@@ -679,20 +795,30 @@ pub fn talc_capacity_mb() -> u64 {
         / (1024 * 1024)) as u64
 }
 
-/// Headroom real: window − used do bump + capacidade TALC livre (s430b).
+/// Headroom real: window − used do bump + TALC LIVRE de verdade (s435).
 /// O TALC claim cobre o budget em VA própria (demand-paged) — overflow do
-/// bump cai lá com free real; contar só o bump era pessimismo estrutural
-/// (headroom 6MB com RAM 70% livre). Nunca o HUD “RAM guest”.
+/// bump cai lá com free real. s435: a capacidade INTEIRA contava como
+/// livre (estimativa generosa); agora o headroom do TALC = free medido nos
+/// gap-nodes (talc_refresh_usage a 2 Hz no HUD). Snapshot via cache — o
+/// walk real nunca roda no caminho de alloc.
 pub fn heap_headroom_bytes() -> usize {
     let bump = bump_max_offset().saturating_sub(heap_used_bytes());
     let talc_cap = if TALC_READY.load(Ordering::Acquire) {
-        TALC_SPAN_END.load(Ordering::Acquire)
-            .saturating_sub(LARGE_HEAP_START)
-            .saturating_sub(SLAB_SIZE)
+        (talc_usage().free_bytes as usize).min(talc_capacity_bytes())
     } else {
         0
     };
     bump.saturating_add(talc_cap)
+}
+
+/// Capacidade do span TALC em bytes (0 = não pronto).
+pub fn talc_capacity_bytes() -> usize {
+    if !TALC_READY.load(Ordering::Acquire) {
+        return 0;
+    }
+    TALC_SPAN_END.load(Ordering::Acquire)
+        .saturating_sub(LARGE_HEAP_START)
+        .saturating_sub(SLAB_SIZE)
 }
 
 /// Tópicos EventBus (consumidor publica fora do grow — grow é alloc-free).
@@ -716,28 +842,34 @@ pub struct HeapObserve {
     pub last_refuse_need_mb: usize,
     pub refuse_count: u64,
     pub seq: u64,
+    /// s435: uso REAL do TALC (0s = nunca medido — honestidade n/a ≠ 0).
+    pub talc_used_mb: usize,
+    pub talc_free_mb: usize,
+    pub talc_largest_mb: usize,
+    pub talc_gaps: u64,
+    /// 1 = última amostra parcial (walk abortado — metadados ilegíveis).
+    pub talc_partial: u8,
 }
 
 pub fn heap_observe() -> HeapObserve {
     let used = heap_used_bytes();
     let window = bump_max_offset();
-    // s430b: headroom do bump é saturado na janela ~2030MB. O TALC (claim do
-    // budget completo, demand-paged) é memória real além disso — sem API de
-    // free-bytes no talc 4.4, telemetria honesta = span claimed inteiro conta
-    // como headroom DISPONÍVEL (estimativa generosa; os gates de 64/128MB
-    // continuam válidos como piso do bump, e o OOM/TALC real permanece
-    // fail-closed). window exibida segue a do bump (contrato do HUD).
+    // s430b→s435: headroom do bump é saturado na janela ~2030MB. O TALC
+    // (claim do budget completo, demand-paged) é memória real além disso —
+    // s435: o headroom do TALC é o FREE medido nos gap-nodes (cache 2 Hz),
+    // não o span inteiro (estimativa generosa aposentada). Gates de 64/128MB
+    // continuam válidos como piso do bump; OOM/TALC real segue fail-closed.
     let headroom_bump = window.saturating_sub(used);
-    let talc_cap = TALC_SPAN_END.load(Ordering::Acquire)
-        .saturating_sub(LARGE_HEAP_START)
-        .saturating_sub(SLAB_SIZE);
-    let talc_cap = if TALC_READY.load(Ordering::Acquire) { talc_cap } else { 0 };
-    let headroom = headroom_bump.saturating_add(talc_cap);
+    let talc_free = (talc_usage().free_bytes as usize).min(talc_capacity_bytes());
+    let talc_cap = talc_capacity_bytes();
+    let headroom = headroom_bump.saturating_add(talc_free);
     // Warn proativo: <256MB headroom COMBINADO com modelo heavy já carregado.
     let mut pressure = HEAP_PRESSURE_LEVEL.load(Ordering::Acquire) as u8;
     if pressure < 1 && headroom_bump < 256 * 1024 * 1024 && talc_cap == 0 {
         pressure = 1;
     }
+    // s435: telemetria real do TALC — cache (2 Hz no HUD), nunca walk aqui.
+    let tu = talc_usage();
     HeapObserve {
         used_mb: used / (1024 * 1024),
         window_mb: window / (1024 * 1024),
@@ -746,6 +878,11 @@ pub fn heap_observe() -> HeapObserve {
         last_refuse_need_mb: LAST_REFUSE_NEED.load(Ordering::Relaxed) / (1024 * 1024),
         refuse_count: REFUSE_COUNT.load(Ordering::Relaxed),
         seq: PRESSURE_SEQ.load(Ordering::Relaxed),
+        talc_used_mb: (tu.used_bytes / (1024 * 1024)) as usize,
+        talc_free_mb: (tu.free_bytes / (1024 * 1024)) as usize,
+        talc_largest_mb: (tu.largest_free / (1024 * 1024)) as usize,
+        talc_gaps: tu.gaps,
+        talc_partial: tu.partial,
     }
 }
 
@@ -1507,6 +1644,9 @@ pub fn talc_init_post_memory() -> Result<(), &'static str> {
     // SESSION_415: ativa o TALC como primário do allocator híbrido. A partir
     // daqui dealloc é REAL — o bump (sem free) só cobre allocs de boot.
     TALC_READY.store(true, Ordering::Release);
+    // s435: seed da telemetria pós-claim (stop-the-world ainda ativo —
+    // exclusivo). Pós-boot, o refresh é do HUD (2 Hz) sob lock do Talck.
+    let _seeded = talc_refresh_usage();
     crate::slog_nano!("HEAP", "TALC", "Tier 1 ready (hybrid PRIMARY): virt={:#x} size={} MB (budget claim, demand-paged)",
         LARGE_HEAP_START,
         (budget - SLAB_SIZE) / (1024 * 1024));
