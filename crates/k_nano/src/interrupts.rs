@@ -82,7 +82,25 @@ pub fn wall_ticks() -> u64 {
 /// Idle do scheduler: hlt se o timer avança; senão soft-tick ~18 Hz (UI viva).
 pub fn scheduler_idle_halt() {
     let before = TIMER_TICKS.load(Ordering::Relaxed);
-    x86_64::instructions::hlt();
+    // WHPX (MicrosoftHv, T+4710): `hlt` não devolve o LAPIC timer — IRQ para de
+    // avançar e o idle vira soft ~18Hz permanente. Pause-spin leve mantém as
+    // IRQs entregues; bare metal / outros hypervisors seguem com `hlt`.
+    let whpx_no_hlt = crate::platform_probe::probe_done()
+        && crate::platform_probe::hypervisor() == crate::platform_probe::HypervisorKind::MicrosoftHv;
+    if whpx_no_hlt {
+        // Espera limitada a ~1 período de tick, sondando TIMER_TICKS (sem dormir).
+        let hz = crate::apic::tick_hz().max(1);
+        let budget_us = (1_000_000 / hz).max(1).min(10_000);
+        let t0 = crate::tsc::now_us();
+        while crate::tsc::now_us().wrapping_sub(t0) < budget_us {
+            core::hint::spin_loop();
+            if TIMER_TICKS.load(Ordering::Relaxed) != before {
+                return;
+            }
+        }
+    } else {
+        x86_64::instructions::hlt();
+    }
     let after = TIMER_TICKS.load(Ordering::Relaxed);
     if after != before {
         return;

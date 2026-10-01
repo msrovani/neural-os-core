@@ -134,10 +134,174 @@ fn bump_max_offset() -> usize {
 /// página após o mapeamento (map_page_direct falha silenciosamente quando
 /// alloc_pt_frame retorna 0 — não deixar HEAP_LIMIT avançar sem páginas).
 /// Retorna true se `need` ficou coberto; false = OOM real.
+///
+/// Tick sob o qual TODO slice de inferência executa: manifest `infer_worker`
+/// (hermes::agents::INFER_WORKER_MANIFEST) + stamp `note_background_agent` em
+/// `poll_slice_stamped` (cobre BSP fallback e AP idle). Lido via agent_core
+/// (cortex::INFER_IN_FLIGHT seria dependência circular). Residual honesto:
+/// slice no AP enquanto o BSP ticka outro agente não carimba (stamp global,
+/// não per-CPU) → grow passa (status quo); cobertura total exigiria seam
+/// cortex→k_nano.
+const INFER_SLICE_TICK: &str = "infer_worker";
+
+/// Último HEAP_LIMIT já logado no refuse-in-slice (anti-spam: cada alloc além
+/// do LIMIT re-chamaria o grow; o TALC serve os spills no intervalo).
+static SLICE_GROW_REFUSED_AT: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// True se um slice de inferência está em curso (qualquer core). Só atomics +
+/// comparação de bytes — seguro no path de alloc (nunca aloca/publica).
+fn infer_slice_in_progress() -> bool {
+    match agent_core::tick_in_progress() {
+        Some((n, _)) => n.as_bytes() == INFER_SLICE_TICK.as_bytes(),
+        None => false,
+    }
+}
+
+/// Passo 2MB no grow (tarefa b): gate default-OFF. Viável onde a plataforma
+/// permite — PMM `allocate_huge_2mb` entrega runs 2MB-alinhados e
+/// `heap_pte_present`/`map_page_direct` já entendem PDE HUGE (SESSION_250).
+/// OFF porque: (1) HEAP_BUFFER 2MB-alinhado não garantido pelo limine.ld;
+/// (2) PDE ocupada aborta o chunk; (3) ganho (TLB reach) não medido no alvo.
+/// Fallback = loop 4KB intacto abaixo. Nunca no fast path (só aqui no grow).
+/// ponytail: sem teardown parcial — chunk falho cai inteiro no 4KB; PDE só é
+/// instalada em slot livre, nunca demolida. Upgrade: medir tok/s com gate ON.
+const HEAP_GROW_HUGE_2MB: bool = false;
+const HUGE_2MB: usize = 2 * 1024 * 1024;
+const FRAMES_PER_2MB: usize = HUGE_2MB / 4096; // 512
+
+/// Pré-condições puras p/ cobrir `len` bytes a partir de `virt` com PDEs 2MB:
+/// alinhamento do início (chunks seguintes herdam, passo 2MB) + ≥1 chunk.
+/// Pura e host-testável. Alinhamento físico vem de `allocate_huge_2mb`.
+fn huge2m_candidate(virt: usize, len: usize) -> bool {
+    len >= HUGE_2MB && virt % HUGE_2MB == 0
+}
+
+/// Leitura: PDE do `virt` livre p/ HUGE 2MB? PD ausente = criável no map;
+/// PDE presente (tabela 4K ou huge) = ocupada. Nunca aloca/mapeia aqui.
+unsafe fn huge2m_slot_free(base: VirtAddr, virt: VirtAddr) -> bool {
+    let (l4_frame, _) = x86_64::registers::control::Cr3::read();
+    let l4 = &*((base + l4_frame.start_address().as_u64()).as_ptr::<PageTable>());
+    let e3 = &l4[virt.p4_index()];
+    if e3.flags().contains(PageTableFlags::HUGE_PAGE) {
+        return false;
+    }
+    if !e3.flags().contains(PageTableFlags::PRESENT) {
+        return true;
+    }
+    let l3 = &*((base + e3.addr().as_u64()).as_ptr::<PageTable>());
+    let e2 = &l3[virt.p3_index()];
+    if e2.flags().contains(PageTableFlags::HUGE_PAGE) {
+        return false;
+    }
+    if !e2.flags().contains(PageTableFlags::PRESENT) {
+        return true;
+    }
+    let l2 = &*((base + e2.addr().as_u64()).as_ptr::<PageTable>());
+    !l2[virt.p2_index()].flags().contains(PageTableFlags::PRESENT)
+}
+
+/// Instala 1 PDE 2MB WB de heap (PRESENT|WRITABLE|HUGE_PAGE — SEM UC/WT do
+/// MMIO). Pré: slot livre + `phys` 2MB-alinhado. True se ficou PRESENT.
+/// Falha (slot corrido em SMP) = caller cai no 4KB; o run alocado vaza
+/// (mesma classe do leak 4K pré-existente em map concomitante).
+unsafe fn map_page_2mb(base: VirtAddr, virt: VirtAddr, phys: u64) -> bool {
+    let (l4_frame, _) = x86_64::registers::control::Cr3::read();
+    let l4_tbl = &mut *((base + l4_frame.start_address().as_u64()).as_mut_ptr::<PageTable>());
+    let e3 = &mut l4_tbl[virt.p4_index()];
+    if e3.flags().contains(PageTableFlags::HUGE_PAGE) {
+        return false;
+    }
+    if !e3.flags().contains(PageTableFlags::PRESENT) {
+        let f = alloc_pt_frame(base);
+        if f == 0 {
+            return false;
+        }
+        e3.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    }
+    let l3_tbl = &mut *((base + e3.addr().as_u64()).as_mut_ptr::<PageTable>());
+    let e2 = &mut l3_tbl[virt.p3_index()];
+    if e2.flags().contains(PageTableFlags::HUGE_PAGE) {
+        return false;
+    }
+    if !e2.flags().contains(PageTableFlags::PRESENT) {
+        let f = alloc_pt_frame(base);
+        if f == 0 {
+            return false;
+        }
+        e2.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    }
+    let l2_tbl = &mut *((base + e2.addr().as_u64()).as_mut_ptr::<PageTable>());
+    let pde = &mut l2_tbl[virt.p2_index()];
+    if pde.flags().contains(PageTableFlags::PRESENT) {
+        return false;
+    }
+    pde.set_addr(
+        PhysAddr::new(phys),
+        PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::HUGE_PAGE,
+    );
+    x86_64::instructions::tlb::flush(virt);
+    heap_pte_present(base, virt)
+}
+
+/// Cobre o head contíguo de `extra` com PDEs 2MB. Retorna frames-4K
+/// equivalentes (soma direto no `allocated` do grow — contabilidade intacta).
+/// Primeiro chunk falho (PDE ocupada, sem run contíguo, PT sem frame) = break:
+/// o loop 4KB cobre o restante contiguamente (sem buracos na contagem).
+unsafe fn grow_huge_2mb(base: VirtAddr, heap_start: usize, current_limit: usize, extra: usize) -> usize {
+    let start = match heap_start.checked_add(current_limit) {
+        Some(v) => v,
+        None => return 0,
+    };
+    if !huge2m_candidate(start, extra) {
+        return 0;
+    }
+    let mut mapped_4k = 0usize;
+    let mut off = 0usize;
+    while off + HUGE_2MB <= extra {
+        // `start` 2MB-alinhado + `off` múltiplo de 2MB: sem wrap (off < extra ≤ window).
+        let virt = VirtAddr::new((start + off) as u64);
+        if !huge2m_slot_free(base, virt) {
+            break;
+        }
+        // Lock só p/ alocar o run — solto ANTES do map (mesma disciplina do
+        // loop 4KB: TicketLock não é reentrante).
+        let phys = {
+            let mut g = crate::memory::GLOBAL_ALLOCATOR.lock();
+            match g.as_mut().and_then(|a| a.allocate_huge_2mb(FRAMES_PER_2MB)) {
+                Some(f) => f.start_address().as_u64(),
+                None => break,
+            }
+        };
+        if !map_page_2mb(base, virt, phys) {
+            break;
+        }
+        mapped_4k += FRAMES_PER_2MB;
+        off += HUGE_2MB;
+    }
+    mapped_4k
+}
+
 fn grow_bump_auto(need: usize) -> bool {
     let current_limit = HEAP_LIMIT.load(Ordering::Relaxed);
     if need <= current_limit {
         return true; // já coberto
+    }
+    // SESSION_432(a): nunca estender o bump de dentro de um slice de
+    // inferência — o auto-grow marchava 256MB/slice até o wrap (~2030MB)
+    // (boot_whpx_20260930: 8 grows 512→1536 + OOM/TALC). Recusa honesta no
+    // padrão existente: HybridAllocator cai no TALC (free real + demand-page).
+    // heap_headroom_low() barra a ENTRADA do slice; isto barra o MEIO.
+    if infer_slice_in_progress() {
+        // 1 slog por valor de HEAP_LIMIT (cada alloc além do LIMIT re-chamaria
+        // o grow; o TALC serve os spills no intervalo — sem o gate, spam/alloc).
+        if SLICE_GROW_REFUSED_AT.load(Ordering::Relaxed) != current_limit {
+            SLICE_GROW_REFUSED_AT.store(current_limit, Ordering::Relaxed);
+            note_alloc_refused(need, bump_max_offset(), INFER_SLICE_TICK);
+            crate::slog_nano!("HEAP", "warn",
+                "grow refused (infer in-flight) need={}MB limit={}MB — spill→TALC, HITL",
+                need / (1024 * 1024), current_limit / (1024 * 1024));
+        }
+        return false;
     }
     // (3) Grow-gate entry: quotas + observe via ATOMICS ONLY — nunca
     // BOOT_LOG/EVENT_BUS/MHI/GLOBAL_ALLOCATOR locks aqui, nunca publish
@@ -191,9 +355,15 @@ fn grow_bump_auto(need: usize) -> bool {
         return false;
     }
     let extra = want.saturating_sub(current_limit);
-    let diff_pages = extra.div_ceil(4096);
-
+    // (b) Caminho 2MB (default-OFF): cobre o head em PDEs; o loop 4KB cobre o
+    // restante. `allocated` em unidades 4K — o loop abaixo começa exatamente
+    // onde o huge parou (virt = heap_start + current_limit + allocated*4096).
     let mut allocated = 0usize;
+    if HEAP_GROW_HUGE_2MB {
+        allocated = unsafe { grow_huge_2mb(base, heap_start, current_limit, extra) };
+    }
+    let diff_pages = extra.saturating_sub(allocated * 4096).div_ceil(4096);
+
     for _i in 0..diff_pages {
         // Lock só para allocate_frame — solta ANTES de map_page_direct
         // (map_page_direct → alloc_pt_frame re-locka; TicketLock não é reentrante).
@@ -359,6 +529,18 @@ pub fn heap_used_bytes() -> usize {
 /// Janela endereçável do bump (~2GB) — Observe AIOS.
 pub fn heap_window_bytes() -> usize {
     bump_max_offset()
+}
+
+/// s432: capacidade do span TALC claimed (MB; 0 = não pronto) — telemetria
+/// honesta do overflow (HUD/hub_triage leem sem re-derivar do span).
+pub fn talc_capacity_mb() -> u64 {
+    if !TALC_READY.load(Ordering::Acquire) {
+        return 0;
+    }
+    (TALC_SPAN_END.load(Ordering::Acquire)
+        .saturating_sub(LARGE_HEAP_START)
+        .saturating_sub(SLAB_SIZE)
+        / (1024 * 1024)) as u64
 }
 
 /// Headroom real: window − used do bump + capacidade TALC livre (s430b).
@@ -1149,8 +1331,7 @@ mod auto_fractioning_tests {
     }
 
     #[test]
-    fn core_carve_split_math() {
-        let b = 1536 * 1024 * 1024;
+    fn core_carve_split_math() {        let b = 1536 * 1024 * 1024;
         // n=1: tudo no BSP
         assert_eq!(split_core_carve(b, 1, 0), b);
         // BSP = 40%
@@ -1165,5 +1346,23 @@ mod auto_fractioning_tests {
         // fora do range = 0
         assert_eq!(split_core_carve(b, 4, 9), 0);
         assert_eq!(split_core_carve(b, 0, 0), 0);
+    }
+
+    #[test]
+    fn huge2m_candidate_and_step_invariants() {
+        // HEAP_START 2MB-alinhado; passo 256MB = 128 PDEs exatas (sem sobra).
+        assert_eq!(super::HUGE_2MB, 2 * 1024 * 1024);
+        assert_eq!(super::FRAMES_PER_2MB, 512);
+        assert_eq!(super::HEAP_GROW_STEP % super::HUGE_2MB, 0);
+        assert!(super::huge2m_candidate(super::HEAP_START + 512 * 1024 * 1024, super::HEAP_GROW_STEP));
+        assert!(!super::huge2m_candidate(super::HEAP_START + 1, super::HEAP_GROW_STEP));
+        assert!(!super::huge2m_candidate(super::HEAP_START, 4096));
+        assert!(!super::huge2m_candidate(super::HEAP_START, 0));
+    }
+
+    #[test]
+    fn no_infer_slice_outside_tick() {
+        // Fora de tick (boot/test): o gate (a) nunca barra grow de boot.
+        assert!(!super::infer_slice_in_progress());
     }
 }

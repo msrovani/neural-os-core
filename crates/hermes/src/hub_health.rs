@@ -52,6 +52,11 @@ const HUB_MANIFEST: AgentManifest = AgentManifest {
     persist: true,
 };
 
+/// Bound por tick (watchdog 500 ms; alvo ~10 ms): cada fila drena no máximo N
+/// eventos/tick; o restante fica enfileirado para o próximo tick (o scheduler
+/// re-polla via `has_pending`). Sem spin/retry — early-return Pending.
+const MAX_DRAIN_PER_TOPIC_PER_TICK: usize = 8;
+
 /// Política do painel Hub Health (EventDriven).
 ///
 /// Modelo de decisão:
@@ -137,17 +142,23 @@ impl Agent for HubHealthAgent {
     }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        while let Some(ev) = self.cmd_receiver.try_receive() {
+        for _ in 0..MAX_DRAIN_PER_TOPIC_PER_TICK {
+            let Some(ev) = self.cmd_receiver.try_receive() else { break; };
             self.handle_cmd(&ev.payload);
         }
-        while let Some(ev) = self.health_receiver.try_receive() {
+        for _ in 0..MAX_DRAIN_PER_TOPIC_PER_TICK {
+            let Some(ev) = self.health_receiver.try_receive() else { break; };
             let _ = core::str::from_utf8(&ev.payload).unwrap_or("");
             // Mantém painel aberto — sem auto-close 8s (SystemInfo sempre à vista).
             self.auto_close_us = 0;
             self.apply(true, SAMPLE_PILL.load(Ordering::Relaxed), SAMPLE_WORST_ROW.load(Ordering::Relaxed));
         }
-        while self.mesh_receiver.try_receive().is_some() {}
-        while self.timer_receiver.try_receive().is_some() {}
+        for _ in 0..MAX_DRAIN_PER_TOPIC_PER_TICK {
+            if self.mesh_receiver.try_receive().is_none() { break; }
+        }
+        for _ in 0..MAX_DRAIN_PER_TOPIC_PER_TICK {
+            if self.timer_receiver.try_receive().is_none() { break; }
+        }
 
         // Amostragem ~2 Hz: pega pill/worst novos + auto-close expirado.
         let now = k_nano::tsc::now_us();

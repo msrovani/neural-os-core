@@ -550,9 +550,12 @@ pub fn labeled_count() -> usize {
 
 /// Amostras mínimas antes de julgar a postura. Com menos que isso a razão não
 /// é significativa — `n/a` (3) é mais honesto que declarar FAIL/WARN a partir
-/// de 1 observação (doutrina: painel de diagnóstico que mente derrota o
-/// propósito; `n/a ≠ 0`). Espelha o `n >= 8` de `trusted` em `note_outcome`.
-const POSTURE_MIN_SAMPLES: u64 = 4;
+/// de poucas observações (doutrina: painel de diagnóstico que mente derrota o
+/// propósito; `n/a ≠ 0`). Espelha o `n >= 8` de `trusted` em `note_outcome`:
+/// o mesmo piso vale aqui. Evidência boot_whpx_20260930: `a2 x0 e6` (total 8,
+/// 6 escalates) com piso 4 virava FAIL periódico — amostra fina, não sinal.
+// ponytail: piso único 8 p/ n/a e FAIL; sem histerese com estado (manter pura/testável).
+const POSTURE_MIN_SAMPLES: u64 = 8;
 
 /// Lógica pura da postura (testável sem tocar os contadores globais).
 /// 0=ok 1=warn 2=fail 3=n/a.
@@ -561,8 +564,10 @@ fn posture_from_counts(auto: u64, abs: u64, esc: u64) -> u8 {
     if total < POSTURE_MIN_SAMPLES {
         return 3; // n/a — amostra insuficiente para julgar
     }
-    // escalate alto → fail; abstain dominante → warn; senão ok
-    if esc * 2 > total {
+    // FAIL exige maioria simples E piso absoluto de escalates: 6/8 (75% em
+    // amostra fina) vira ok, 8/8 ou 8/12 viram fail. WARN segue maioria
+    // simples (sem slog — só sev 2 loga no hub_health, throttle 30s intacto).
+    if esc >= POSTURE_MIN_SAMPLES && esc * 2 > total {
         2
     } else if abs * 2 > total {
         1
@@ -667,16 +672,22 @@ mod tests {
 
     #[test]
     fn posture_needs_min_samples_and_ratios() {
-        // Amostra insuficiente → n/a (nunca FAIL de 1 observação).
+        // Amostra insuficiente → n/a (nunca FAIL de poucas observações).
         assert_eq!(posture_from_counts(0, 0, 0), 3, "zero → n/a");
         assert_eq!(posture_from_counts(0, 0, 1), 3, "1 escalate → n/a (era FAIL)");
         assert_eq!(posture_from_counts(1, 0, 1), 3, "2 amostras → n/a");
         assert_eq!(posture_from_counts(2, 0, 1), 3, "3 amostras → n/a");
-        // A partir do mínimo, as razões voltam a falar.
-        assert_eq!(posture_from_counts(3, 0, 1), 0, "4 amostras, 1 escalate → ok");
-        assert_eq!(posture_from_counts(2, 0, 6), 2, "6/8 escalate → fail");
+        assert_eq!(posture_from_counts(3, 0, 1), 3, "4 amostras → n/a (piso 8)");
+        assert_eq!(posture_from_counts(4, 0, 0), 3, "4 auto_ok → n/a (piso 8)");
+        assert_eq!(posture_from_counts(0, 0, 7), 3, "7 escalates → n/a (abaixo do piso)");
+        // Caso da evidência boot_whpx_20260930: a2 x0 e6 (total 8, 6 esc, 75%)
+        // era FAIL periódico com piso 4 → agora ok (esc < piso absoluto 8).
+        assert_eq!(posture_from_counts(2, 0, 6), 0, "6/8 escalate fino → ok, sem flap");
+        // A partir do piso absoluto, a maioria volta a falar.
+        assert_eq!(posture_from_counts(0, 0, 8), 2, "8/8 escalate → fail");
+        assert_eq!(posture_from_counts(4, 0, 8), 2, "8/12 escalate → fail");
         assert_eq!(posture_from_counts(2, 6, 0), 1, "6/8 abstain → warn");
-        assert_eq!(posture_from_counts(4, 0, 0), 0, "só auto_ok → ok");
+        assert_eq!(posture_from_counts(8, 0, 0), 0, "só auto_ok → ok");
     }
 
     #[test]

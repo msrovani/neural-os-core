@@ -46,6 +46,14 @@ pub static CARRY_OVERFLOW: AtomicU64 = AtomicU64::new(0);
 /// Capacidade do carry: 8 frames (160 ms). Se estourar, é bug — contabilizado.
 const CARRY_CAP: usize = FRAME_SAMPLES * 8;
 
+/// Bound por tick (watchdog 500 ms; alvo ~10 ms de trabalho síncrono): drena no
+/// máximo N eventos AUDIO_IN e N frames por tick; o restante fica enfileirado
+/// (EventBus + carry `asm`) para o próximo tick — early-return Pending, sem
+/// spin/retry. Espelha `MAX_POP_PER_TICK=320` do mixer (~20 ms de áudio).
+const MAX_AUDIO_EVENTS_PER_TICK: usize = 4;
+/// = CARRY_CAP / FRAME_SAMPLES: um dreno cheio do carry, nunca mais que isso.
+const MAX_FRAMES_PER_TICK: usize = 8;
+
 /// Conversão de stream cru (48 kHz estéreo intercalado) → frames mono 16 kHz.
 ///
 /// Separado do agente de propósito: é DSP puro, sem EventBus, e por isso a
@@ -173,8 +181,9 @@ impl AudioInputAgent {
         }
     }
 
-    fn drain_frames(&mut self) {
-        while let Some(frame) = self.asm.take_frame() {
+    fn drain_frames(&mut self, max_frames: usize) {
+        for _ in 0..max_frames {
+            let Some(frame) = self.asm.take_frame() else { break };
             crate::audio::mic_ring::push_frame(&frame);
             FRAMES_PUBLISHED.fetch_add(1, Ordering::Relaxed);
 
@@ -207,7 +216,10 @@ impl Agent for AudioInputAgent {
         k_hal::audio::hda::poll_hda_audio();
         crate::audio::usb::poll_uac_audio();
 
-        while let Some(ev) = self.receiver.try_receive() {
+        // Cap de eventos/tick: backlog (pós-stall) drena ao longo de N ticks em
+        // vez de estourar o watchdog num tick só. Resto fica na fila p/ o próximo.
+        for _ in 0..MAX_AUDIO_EVENTS_PER_TICK {
+            let Some(ev) = self.receiver.try_receive() else { break };
             if ev.payload.len() < 2 {
                 continue;
             }
@@ -225,7 +237,7 @@ impl Agent for AudioInputAgent {
             crate::display::avatar::process_audio_fft(&pcm);
             self.asm.ingest(&pcm);
         }
-        self.drain_frames();
+        self.drain_frames(MAX_FRAMES_PER_TICK);
         AgentTickResult::Pending
     }
 }

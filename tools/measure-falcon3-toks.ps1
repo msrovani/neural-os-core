@@ -1,6 +1,7 @@
 #!/usr/bin/env pwsh
-# Measure Falcon3-3B Instruct 1.58-bit decode tok/s on QEMU (TCG then WHPX).
-# Lab canonico ADR-0101: models\FALCON3.BIN = 22L / h=3072 (~990MB).
+# Measure Falcon3 Instruct 1.58-bit decode tok/s on QEMU (TCG then WHPX).
+# Lab canonico ADR-0101: -ModelKind 3b (default): models\FALCON3.BIN = 22L / h=3072 (~990MB).
+#   -ModelKind 1b: models\FALCON1B.BIN = 18L / h=2048 (~350MB, Tiny1B header-driven).
 #
 # PRIORIDADE testes/dev (sucesso medido):
 #   .\tools\measure-falcon3-toks.ps1 -Accel whpx -RamGB 6 -Smp 4
@@ -9,6 +10,8 @@
 param(
     [ValidateSet("tcg", "whpx", "both")]
     [string]$Accel = "both",
+    [ValidateSet("1b", "3b")]
+    [string]$ModelKind = "3b",
     [int]$RamGB = 6,
     [int]$Smp = 4,
     [int]$TimeoutSec = 2400,
@@ -27,11 +30,21 @@ if (-not (Test-Path $Ovmf)) { $Ovmf = Join-Path $Root "target\ovmf.bin" }
 $UefiImg = Join-Path $Root "target\uefi.img"
 $DiskImg = Join-Path $Root "target\disk_qemu.raw"
 if ($ModelPath -eq "") {
-    $cands = @(
-        (Join-Path $Root "models\FALCON3.BIN"),
-        (Join-Path $Root "target1\FALCON3_BASE.V6"),
-        (Join-Path $Root "target1\FALCON3.V6")
-    )
+    # ponytail: kind-driven candidates only (1b = 18L/h=2048 ~350MB; 3b = 22L/h=3072 ~990MB).
+    # Kernel is header-driven (parse_model_header/slot_footprint_mb) — no code surgery per kind.
+    if ($ModelKind -eq "1b") {
+        $cands = @(
+            (Join-Path $Root "models\FALCON1B.BIN"),
+            (Join-Path $Root "target1\FALCON1B.V6"),
+            (Join-Path $Root "target1\F1B.V6")
+        )
+    } else {
+        $cands = @(
+            (Join-Path $Root "models\FALCON3.BIN"),
+            (Join-Path $Root "target1\FALCON3_BASE.V6"),
+            (Join-Path $Root "target1\FALCON3.V6")
+        )
+    }
     $ModelPath = $cands | Where-Object { Test-Path $_ } | Select-Object -First 1
 }
 foreach ($p in @($Qemu, $Ovmf, $UefiImg, $ModelPath)) {
@@ -92,7 +105,7 @@ function Invoke-Measure([string]$Acc) {
     } else {
         $args += @("-vga", "std", "-display", "none")
     }
-    Write-Host ("=== Falcon3-3B tok/s accel={0} ram={1}G smp={2} model={3} ===" -f $Acc, $RamGB, $Smp, $ModelPath) -ForegroundColor Cyan
+    Write-Host ("=== Falcon3-{0} tok/s accel={1} ram={2}G smp={3} model={4} ===" -f $ModelKind, $Acc, $RamGB, $Smp, $ModelPath) -ForegroundColor Cyan
     $p = Start-Process -FilePath $Qemu -ArgumentList $args -PassThru
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $hit = $false
@@ -150,7 +163,7 @@ foreach ($a in $runs) {
 }
 
 Write-Host ""
-Write-Host "======== RESULTADOS Falcon3-3B 1.58 ========" -ForegroundColor Cyan
+Write-Host "======== RESULTADOS Falcon3-$ModelKind 1.58 ========" -ForegroundColor Cyan
 foreach ($r in $results) {
     Write-Host ("accel={0} hit={1} log={2} qemu_pid={3}" -f $r.accel, $r.hit, $r.log, $r.qemu_pid)
     $r.lines | ForEach-Object { Write-Host ("  {0}" -f $_) }

@@ -1125,6 +1125,7 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
                 "hub_health_agent" => Some(Box::new(hermes_crate::hub_health::HubHealthAgent::new())),
                 "audio_health_agent" => Some(Box::new(hermes_crate::audio_health::AudioHealthAgent::new())),
                 "sys_health_agent" => Some(Box::new(hermes_crate::sys_health::SysHealthAgent::new())),
+                "hub_triage_agent" => Some(Box::new(hermes_crate::hub_triage::HubTriageAgent::new())),
                 "vision" => Some(Box::new(vision_agent::VisionAgent::new())),
                 "browser" => Some(Box::new(browser_agent::BrowserAgent::new())),
                 "auto-installer" => Some(Box::new(k_nano::installer_agent::AutoInstallerAgent::new())),
@@ -3695,6 +3696,9 @@ pub(crate) fn kernel_boot(
     // SYS_HEALTH produtor+escalador: net/storage/gpu 1 Hz + NO_GO persistente → LLM
     // (mesma política única k_nano::sys_health::EscalationState, SESSION_415).
     registry.register(Box::new(hermes_crate::sys_health::SysHealthAgent::new()));
+    // s432: triagem IA do HUB (premissa máx. ADR-0088) — snapshot HUB\0 60s +
+    // pior-estado determinístico + proposta HITL (dedupe FNV cooldown 10min).
+    registry.register(Box::new(hermes_crate::hub_triage::HubTriageAgent::new()));
     // SESSION_415 freeze: EventDriven 1 Hz não justifica offload para AP — tick
     // no AP segura o AGENT_TICK_BUSY global (freeze do compositor, stamp no FB).
     // Ring 0 = BSP: publicação 1 Hz é imperceptível no scheduler.

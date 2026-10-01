@@ -1,5 +1,17 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s432] - 2026-10-01 - WHPX 6-lane hardening + HUB triage IA
+
+- Altas: hlt gate WHPX — `interrupts.rs:83-105`, pause-spin sob MicrosoftHv (hlt sem wake = stall).
+- Altas: yields audio/HUB — `capture.rs` caps 4ev/8fr + `hub_health.rs:144-161` drains cap 8.
+- Altas: refuse-in-slice→TALC spill — `allocator.rs:137-159,284-306`, serviço efetivo sem deferred-runner; huge-2MB gate OFF (`:160-281`).
+- Altas: LPIB-frozen estimate — `hda.rs:298-383`, `dt×48000` quando o LPIB congela.
+- Altas: submit-only proof — `agents.rs:371,482,538-542`.
+- Altas: posture MIN8+piso — `decision.rs:555`, MIN 4→8 + piso absoluto esc>=8 (`:559-575`); fim do FAIL com 1 escalate.
+- Medias: ps1 `-ModelKind 1b|3b`; triagem IA do HUB (`hub_triage.rs`: snapshot `HUB\0` 60s, worst-state puro, HITL dedupe FNV 10min).
+- Gates: `cargo check --release` 0 erros (1m41s); testes capture 3/3, allocator 7/7, hda 5/5, decision 6/6.
+- Session: SESSION_432
+
 ## [1.9.99-s431] - 2026-09-30 - TALC claim do budget completo: a cura estrutural do OOM no teto 2030MB
 
 - High: **causa-raiz do OOM da foto (heap 2024/2030M 99% + `OOM/TALC size=83 agente=audio_input`)** — o TALC (único allocator com free real) tinha span FIXO de 512MB (`LARGE_HEAP_SIZE = HEAP_SIZE − SLAB`); o bump sem free satura a janela ~2030MB e o overflow cai no TALC de 512MB, que estoura com **RAM física 70% livre** (9216MB, f30% no HUD).

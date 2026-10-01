@@ -295,6 +295,84 @@ pub static PLAY_CBL_LAST: AtomicU32 = AtomicU32::new(0);
 /// claro, DMA parado ou codec não clockando) e o ring nunca drena →
 /// VOICE_STATE preso em SPEAKING. Diagnosticado por `playback_stall_diag`.
 pub static PLAY_LPIB_STUCK: AtomicU64 = AtomicU64::new(0);
+/// Taxa de consumo do SD1 em frames estéreo/s (formato do stream: 48 kHz).
+/// Mesma família de relógio do budget do mixer (`dt_us*rate/1e6`, com
+/// VOICE_RATE_HZ=16000 mono × VOICE_DECIM(3) = 48000 frames).
+const PLAYBACK_FRAMES_HZ: u64 = 48000;
+/// Teto do avanço estimado POR CHAMADA (20 ms @48k = 960 frames) — espelha o
+/// teto ~20 ms/tick do mixer. Evita salto gigante após stall longo.
+const PLAY_EST_MAX_STEP_FRAMES: u32 = 960;
+/// Teto ACUMULADO desde a última leitura HW que mexeu (1 s @48k = 48000
+/// frames ≈ 3 anéis). Além disso o HW está morto e o back-pressure honesto
+/// volta a valer (excesso cai em PLAY_SAMPLES_DROPPED).
+const PLAY_EST_MAX_TOTAL_FRAMES: u32 = 48000;
+/// TSC (µs) da última leitura HW que mexeu — base temporal da estimativa.
+static PLAY_EST_T0_US: AtomicU64 = AtomicU64::new(0);
+/// rd (frames) na última leitura HW que mexeu — origem do avanço estimado.
+static PLAY_EST_BASE_RD: AtomicU32 = AtomicU32::new(0);
+/// Avanço estimado já aplicado (frames) — torna a estimativa idempotente
+/// entre os dois leitores do mesmo tick (free + write).
+static PLAY_EST_ADV_FRAMES: AtomicU32 = AtomicU32::new(0);
+
+/// Matemática pura da estimativa (host-testável): frames consumidos em
+/// `dt_us` à taxa `rate_hz`, com teto por chamada e teto acumulado.
+pub fn play_est_step_frames(
+    dt_us: u64,
+    rate_hz: u64,
+    already_adv: u32,
+    max_step: u32,
+    max_total: u32,
+) -> u32 {
+    if rate_hz == 0 {
+        return 0;
+    }
+    let total_want = (dt_us.saturating_mul(rate_hz) / 1_000_000) as u64;
+    let total_capped = total_want.min(max_total as u64);
+    let fresh = total_capped.saturating_sub(already_adv as u64);
+    fresh.min(max_step as u64).min(max_total as u64) as u32
+}
+
+/// Consumidor efetivo do SD1 (frames estéreo): LPIB cru + avanço estimado.
+///
+/// Congelado (mesmo rd HW da base, com o que drenar) → avança o ponteiro
+/// pela estimativa TSC em vez de confiar no LPIB estático. HW andou
+/// (rd_hw != base) → nova base, sem estimativa. Fail-closed triplo:
+/// passo ≤960f, total ≤48000f, avanço nunca cruza o WPI (adv ≤ used_hw —
+/// jamais reporta free de sample não escrita).
+fn play_rd_eff_frames(rd_hw: usize, used_hw: usize, total_frames: usize) -> usize {
+    if total_frames == 0 {
+        return rd_hw;
+    }
+    let rd_hw_m = rd_hw % total_frames;
+    let base = PLAY_EST_BASE_RD.load(Ordering::Relaxed) as usize % total_frames;
+    if base != rd_hw_m {
+        // HW andou desde a base (ou primeira observação) → nova base, T0 novo.
+        PLAY_EST_BASE_RD.store(rd_hw_m as u32, Ordering::Relaxed);
+        PLAY_EST_T0_US.store(crate::tsc::now_us().max(1), Ordering::Relaxed);
+        PLAY_EST_ADV_FRAMES.store(0, Ordering::Relaxed);
+        return rd_hw_m;
+    }
+    // HW congelado na base: só estima se há o que drenar (mesmo predicado
+    // que conta PLAY_LPIB_STUCK: prev!=0 implica rd_hw!=0; used>0).
+    if used_hw == 0 || rd_hw_m == 0 {
+        return rd_hw_m;
+    }
+    let now = crate::tsc::now_us();
+    let t0 = PLAY_EST_T0_US.load(Ordering::Relaxed);
+    let adv = PLAY_EST_ADV_FRAMES.load(Ordering::Relaxed);
+    let dt = now.saturating_sub(t0).min(1_000_000); // cap 1 s (= teto total)
+    let step = play_est_step_frames(
+        dt,
+        PLAYBACK_FRAMES_HZ,
+        adv,
+        PLAY_EST_MAX_STEP_FRAMES,
+        PLAY_EST_MAX_TOTAL_FRAMES,
+    );
+    let mut adv_new = adv.saturating_add(step).min(PLAY_EST_MAX_TOTAL_FRAMES);
+    adv_new = adv_new.min(used_hw.min(u32::MAX as usize) as u32); // nunca cruza o WPI
+    PLAY_EST_ADV_FRAMES.store(adv_new, Ordering::Relaxed);
+    (base + adv_new as usize) % total_frames
+}
 
 // DMA buffers (kept alive)
 static mut CORB_DMA: Option<DmaBuf> = None;
@@ -1558,10 +1636,15 @@ pub fn write_hda_playback(samples: &[i16]) {
         const FRAMES_PER_ENTRY: usize = ENTRY_BYTES / 4; // 1024 frames estéreo (4 B)
         const TOTAL_FRAMES: usize = FRAMES_PER_ENTRY * BDL_ENTRIES; // 16384 (≈341 ms)
 
-        // Posição de leitura do hardware, em frames estéreo.
+        // Posição de leitura do hardware, em frames estéreo. Se o LPIB
+        // congelou (RUN claro/DMA parado), avança pela estimativa TSC
+        // (play_rd_eff_frames) em vez de confiar no LPIB estático — o
+        // excedente continua caindo em PLAY_SAMPLES_DROPPED abaixo.
         let lpib = r32(bar, SD_PLAY_BASE + SDX_LPIB) as usize;
-        let rd = (lpib / 4) % TOTAL_FRAMES;
+        let rd_hw = (lpib / 4) % TOTAL_FRAMES;
         let mut pos = HDA_SD1_WPI.load(Ordering::Acquire) as usize % TOTAL_FRAMES;
+        let used_hw = (pos + TOTAL_FRAMES - rd_hw) % TOTAL_FRAMES;
+        let rd = play_rd_eff_frames(rd_hw, used_hw, TOTAL_FRAMES);
         let used = (pos + TOTAL_FRAMES - rd) % TOTAL_FRAMES;
         let free_frames = TOTAL_FRAMES - 1 - used;
 
@@ -1606,18 +1689,23 @@ pub fn playback_free_mono_samples() -> usize {
         const FRAMES_PER_ENTRY: usize = ENTRY_BYTES / 4;
         const TOTAL_FRAMES: usize = FRAMES_PER_ENTRY * BDL_ENTRIES;
         let lpib = r32(bar, SD_PLAY_BASE + SDX_LPIB) as usize;
-        let rd = (lpib / 4) % TOTAL_FRAMES;
+        let rd_hw = (lpib / 4) % TOTAL_FRAMES;
         let pos = HDA_SD1_WPI.load(Ordering::Acquire) as usize % TOTAL_FRAMES;
-        let used = (pos + TOTAL_FRAMES - rd) % TOTAL_FRAMES;
-        let free_frames = TOTAL_FRAMES.saturating_sub(1).saturating_sub(used);
+        let used_hw = (pos + TOTAL_FRAMES - rd_hw) % TOTAL_FRAMES;
         // Telemetria de stall: snapshot do LPIB cru; se não muda entre
         // observações com o anel não vazio, o HW não está consumindo (RUN
         // claro/DMA parado) e o ring nunca drena → SPEAKING eterno.
+        // Predicado de congelado inalterado; a estimativa abaixo só alivia
+        // o consumidor efetivo (nunca zera este contador nem o inventa).
         let prev_lpib = PLAY_LPIB_LAST.swap(lpib as u32, Ordering::Relaxed);
         PLAY_CBL_LAST.store(r32(bar, SD_PLAY_BASE + SDX_CBL), Ordering::Relaxed);
-        if lpib as u32 == prev_lpib && prev_lpib != 0 && used > 0 {
+        if lpib as u32 == prev_lpib && prev_lpib != 0 && used_hw > 0 {
             PLAY_LPIB_STUCK.fetch_add(1, Ordering::Relaxed);
         }
+        // Consumidor efetivo: LPIB cru + avanço estimado TSC quando congelado.
+        let rd = play_rd_eff_frames(rd_hw, used_hw, TOTAL_FRAMES);
+        let used = (pos + TOTAL_FRAMES - rd) % TOTAL_FRAMES;
+        let free_frames = TOTAL_FRAMES.saturating_sub(1).saturating_sub(used);
         free_frames / VOICE_DECIM.max(1)
     }
 }
@@ -1695,5 +1783,26 @@ mod tests {
         assert_eq!(sd0_entries_pending(16, 0, 16), 0);
         assert_eq!(sd0_entries_pending(0, 16, 16), 0);
         assert_eq!(sd0_entries_pending(0, 0, 0), 0);
+    }
+
+    #[test]
+    fn est_step_mesma_familia_do_mixer_dt_rate() {
+        // 20 ms @48k = 960 frames (teto por chamada); mixer: 20 ms @16k ≈ 320.
+        assert_eq!(play_est_step_frames(20_000, 48000, 0, 960, 48000), 960);
+        // dt curto: 1 ms @48k = 48 frames.
+        assert_eq!(play_est_step_frames(1_000, 48000, 0, 960, 48000), 48);
+        // Idempotente no mesmo instante: já aplicado tudo → passo 0.
+        assert_eq!(play_est_step_frames(20_000, 48000, 960, 960, 48000), 0);
+    }
+
+    #[test]
+    fn est_step_fail_closed_tetos_e_rate_zero() {
+        // Stall longo não salta: passo sempre ≤ max_step…
+        assert_eq!(play_est_step_frames(1_000_000, 48000, 0, 960, 48000), 960);
+        // …e o acumulado nunca passa do teto total (48000 = 1 s ≈ 3 anéis).
+        assert_eq!(play_est_step_frames(10_000_000, 48000, 47999, 960, 48000), 1);
+        assert_eq!(play_est_step_frames(10_000_000, 48000, 48000, 960, 48000), 0);
+        // Rate zero → 0 (nunca divide/inventa).
+        assert_eq!(play_est_step_frames(20_000, 0, 0, 960, 48000), 0);
     }
 }

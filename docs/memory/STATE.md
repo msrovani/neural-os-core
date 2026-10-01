@@ -1,6 +1,6 @@
-# STATE - neural-os-core v1.9.99-s431 - TALC claim budget completo (cura OOM teto 2030MB)
+# STATE - neural-os-core v1.9.99-s432 - WHPX 6-lane hardening + triagem IA do HUB
 
-#   PISTA ATIVA: s431 — TALC claim do BUDGET COMPLETO (6912MB em 8GB) em VA
+#   PISTA ATIVA: s432 (6 lanes + hub_triage) — TALC claim do BUDGET COMPLETO (6912MB em 8GB) em VA
 #     própria 0x400000080000 (fora da janela wrap do bump, demand-paged custo
 #     zero). Causa-raiz do OOM da foto: TALC span fixo 512MB estourava quando o
 #     bump chegava ao teto 2030MB, com RAM física 70% livre. Headroom combinado
@@ -8,7 +8,7 @@
 #     ANTES do claim (size-tag no fim do span demand-pageava fora do range).
 #     Validação: 13,6min, 0 OOM/heap-fail, bump cheio 2030MB e sistema vivo.
 #     LIÇÃO: cargo nk não regenera uefi.img — cargo build -p boot obrigatório.
-#   PISTA ANTERIOR: s430 — Lab QEMU 8GB/8c: goal 5min na UI batido (rodada 10:
+#   PISTA ANTERIOR: s431 (TALC claim) — Lab QEMU 8GB/8c: goal 5min na UI batido (rodada 10:
 #     14,8min runtime, UI viva, 1 storm contido por park, OOM final honesto).
 #     Fixes: logger no-op p/ crate `log` (LOGGER NULL deref cr2=0x18); storm
 #     park por IP (fail-closed de core); watchdog slice 30s medido no alvo;

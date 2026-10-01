@@ -174,6 +174,16 @@ pub struct SecurityAgent {
     runtime_inv: k_ai::safety_invariants::SafetyInvariants,
 }
 
+/// s432: snapshot do último SafetyStatus (I1–I4 + viol count) — hub_triage lê
+/// SEM dual-truth (mesma struct que o SEC loga). Lock-free (atomics copy).
+pub static LAST_SAFETY: spin::Mutex<Option<k_ai::safety_invariants::SafetyStatus>> =
+    spin::Mutex::new(None);
+
+/// Violações I1–I4 do último check (0 se nunca rodou).
+pub fn last_safety_violations() -> u64 {
+    LAST_SAFETY.lock().as_ref().map_or(0, |s| s.violations)
+}
+
 impl SecurityAgent {
     pub fn new() -> Self {
         SecurityAgent {
@@ -360,6 +370,7 @@ impl Agent for SecurityAgent {
                 k_ai::safety_invariants::InvariantResult::Warning
             };
             if !status.all_green() {
+                *LAST_SAFETY.lock() = Some(status.clone());
                 k_nano::slog_hermes!(
                     "SEC",
                     if status.all_pass() { "ok" } else { "warn" },

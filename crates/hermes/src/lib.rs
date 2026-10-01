@@ -35,6 +35,7 @@ pub mod netstack;
 pub mod network_agent;
 pub mod plugin_hub;
 pub mod security;
+pub mod hub_triage; // s432: triagem IA do HUB HEALTH (premissa máx. ADR-0088) — snapshot HUB\0 + pior-estado + proposta HITL
 pub mod safety; // s390b: I1–I4 + SAFETY_CHECK (não órfão)
 pub mod self_update;
 // pub mod shell; // DELETED SESSION_379 residual (0 callers; Command::Install)
