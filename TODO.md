@@ -1,11 +1,20 @@
 # 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s433 TEST
+**Versão:** v1.9.99-s434 TEST
 **Data:** 2026-10-01
-**Fonte:** SESSION_433 / SESSION_432 / STATE.md (LLM response gate) + ADRs 0081/0088–0112
+**Fonte:** SESSION_434 / SESSION_433 / STATE.md (LLM response gate) + ADRs 0081/0088–0112
 **Legenda:** ✅ feito | 🟡 em andamento | `[~]` parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | `[ ]` pendente
 
 ---
+
+## ✅ s434 — Overflow TALC: causa-raiz + fail-closed de classe (idea #630)
+
+- [x] Instrumentação: TALC_PF_OUTSIDE_SPAN, bins_avail snapshot, PF_DIAG_PT_ALLOC_FAIL, pmm counters, OOM-DIAG no handler
+- [x] Fail-closed de classe: oom() saiu do `loop { hlt() }` → spin + heartbeat `[OOM-HALT]` 10s (quebrou o stall silencioso; revelou N cores parkados)
+- [x] Gap 1 (s434b): Talck::realloc chama malloc interno — NULL de chunk TALC-residente sem counter → snapshot + oom() no path
+- [x] Gap 2 = causa-raiz (s434c): realloc bump-residente usava default realloc (alloc puro do bump, sem overflow) → morte cega com TALC 6911MB livre → realloc bump passa pelo híbrido
+- [x] Validação QEMU 8GB/8c (log 144435): **0× OOM/TALC em ~16min (T+57771, recorde; morria em T+34k)**, bump no teto com scheduler/matmuls/HubTriage vivos, stall silencioso sumiu
+- [ ] Residual: fragmentação de longo prazo do TALC (monitorar bins_avail em runtime de horas); alloc_zeroed bump-residente verificar no próximo bughunt
 
 ## ✅ s433 — HUB triage: proposta via LLM (heurística = fallback)
 

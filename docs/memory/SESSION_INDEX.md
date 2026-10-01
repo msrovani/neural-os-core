@@ -117,5 +117,6 @@
 | 302 | Ring3 | Onda 6 ADR-0102 | CPL=3 sandbox wired | k_nano::ring3 mailbox+T-056; P6 demos reais; register_native_ring gated T-053; 0 erros check |
 | 301 | Boot | #PF Fix | Kernel virtual range detection | Root cause: cr2-HHDM=140PB, correcto é kernel_phys+(cr2-kvirt); 0 #PFs; ATA FAT32 mount OK |
 | 299 | Boot | Audit + ATA TCG fix + #PF fix | ATA probe em TCG habilitado; slog visibility; demand-page dual-range |
+| 434 | Overflow TALC #630 | causa-raiz realloc bump-residente + fail-closed | 2 gaps de realloc (default realloc sem overflow; Talck malloc interno); oom() hlt→spin+heartbeat (stall quebrado, N cores visíveis); QEMU: 0× OOM/TALC em ~16min (T+57771 recorde), bump no teto com sistema vivo |
 | 433 | HUB triage lane LLM | proposta via LLM, heurística = fallback | InferQueue reply HUB_TRIAGE_LLM; parser sem serde; gates headroom publish/submit; timeout 60s → fallback; anti-loop reserva fp no submit; QEMU: submitted id=4 → fallback-timeout → HITL → LLM; residual: stall pós-OOM/TALC infer_worker (3ª sessão) |
 | 432 | WHPX hardening + HUB triage | 6 lanes do log 213145 + hub_triage s432 | hlt gate WHPX; yields audio/hub; refuse-in-slice + huge OFF; LPIB estimate; submit-only + ModelKind; posture MIN8+piso; triage HUB\0+HITL |

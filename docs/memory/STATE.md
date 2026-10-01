@@ -1,6 +1,14 @@
-# STATE - neural-os-core v1.9.99-s433 - HUB triage: proposta via LLM (heurística = fallback)
+# STATE - neural-os-core v1.9.99-s434 - Overflow TALC: causa-raiz (realloc) + fail-closed
 
-#   PISTA ATIVA: s433 — lane LLM no hub_triage: Propose submete o snapshot HUB\0+JSON ao
+#   PISTA ATIVA: s434 — causa-raiz do OOM/TALC infer_worker (idea #630, 3 sessões):
+#     realloc de chunk BUMP-residente usava o default GlobalAlloc::realloc (alloc novo
+#     SEM overflow do TALC) → NULL com janela cheia sem tocar os 6911MB → oom() cego.
+#     Fix: realloc bump→híbrido (TALC dá o espaço novo). Gap 2: Talck::realloc chama
+#     malloc interno (NULL de chunk TALC-residente sem counter) → instrumentado.
+#     Fail-closed de classe: oom() saiu do loop{hlt} → spin + heartbeat [OOM-HALT] 10s
+#     (stall silencioso quebrado; revelou N cores parkados). Validação: 0× OOM/TALC em
+#     ~16min (T+57771, recorde; morria em T+34k), bump no teto com sistema vivo.
+#   PISTA ANTERIOR: s433 — lane LLM no hub_triage: Propose submete o snapshot HUB\0+JSON ao
 #     LLM (InferQueue, reply HUB_TRIAGE_LLM, prompt com instrução determinística), parse
 #     sem serde, e publica a ação GERADA via HITL toast; modelo ausente/recusa/timeout 60s
 #     → fallback heurístico (s432); `{}` = declínio honesto (sem toast); gates headroom em

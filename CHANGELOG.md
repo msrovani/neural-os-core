@@ -1,5 +1,14 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s434] - 2026-10-01 - Overflow TALC: causa-raiz (realloc bump-residente sem overflow) + fail-closed de classe — 0 OOM em 16min
+
+- High: **causa-raiz do `OOM/TALC infer_worker` (idea #630, 3 sessões)** — realloc de chunk **bump-residente** usava o default `GlobalAlloc::realloc` (alloc novo + copy + dealloc) cujo alloc novo era do **bump puro SEM overflow**: com a janela ~2030MB cheia, NULL direto sem tocar o TALC (6911MB disponíveis!) → `alloc_error_handler` sem diag. Qualquer `Vec`/`String` nascido no bump crescendo com bump cheio = morte cega. Fix: realloc bump→aloca pelo híbrido (TALC dá o espaço novo) + copy manual.
+- High: **2º gap (s434b):** `Talck::realloc` (talc 4.4.3) chama o malloc INTERNO — NULL de chunk TALC-residente crescendo não passava pelo nosso `alloc` (counter/snapshot). Fix: realloc TALC com falha → snapshot bins + counter + `oom()` (antes: null propagado ao builtin sem diag).
+- High: **fail-closed de classe no `oom()`** — saiu do `loop { hlt() }` (WHPX sem wake = stall silencioso; E o core pode morrer segurando lock de sistema, congelando todos os que pedirem o mesmo lock) → spin com heartbeat `[OOM-HALT]` a cada 10s. O heartbeat quebrou o stall no 1º run: padrão `size=146`/`size=10624` alternando ~140 ticks = **N cores parkados** (não 1).
+- Med: **instrumentação #630** — `TALC_PF_OUTSIDE_SPAN` (cr2 acima do span demand-pagado), `TALC_NULL_BINS_*` + snapshot one-shot `availability_low/high` dos bins (layout confirmado no fonte 4.4.3), `PF_DIAG_PT_ALLOC_FAIL` no `map_page_direct` (alloc_pt_frame=0 virava MAP_FAIL genérico), `pmm_free_frames()`/`pmm_allocated_count()`/`pmm_total_frames()` em `memory.rs`, `[OOM-DIAG]` zero-alloc no handler, stop-the-world spin bounded no claim (diagnóstico de race).
+- Gates: **validação QEMU 8GB/8c (log 144435): 0× `OOM/TALC` em ~16min (T+57771, recorde; morria em T+34k), bump no teto 2030MB (62.5k recusas honestas de grow) com scheduler/matmuls/HubTriage/LLM vivos — o stall silencioso também sumiu (não há mais OOM)**. k-nano 244/244 (-t1), hermes 273/273 (-t1), `cargo nk` 0 erros, strings provadas no uefi.img/ELF (`bins_avail`, `OOM-DIAG`, `OOM-HALT`).
+- Session: SESSION_434
+
 ## [1.9.99-s433] - 2026-10-01 - HUB triage: proposta via LLM (heurística = fallback) + gates HITL
 
 - High: **lane LLM na triagem** — `Propose` submete o snapshot `HUB\0`+JSON ao LLM via InferQueue (`submit(..., TOPIC_HUB_TRIAGE_LLM)`, prompt único com instrução determinística: responda `{"title":..,"action":..}` ou `{}`), parse sem serde (scanner JSON minimalista com escapes + UTF-8 lossy, CAP 256B/campo), e publica a ação GERADA via HITL. Modelo ausente/submit recusado/timeout 60s/resposta inutilizável → **fallback heurístico** (comportamento s432) — a IA propõe quando pode, o kernel nunca fica sem proposta.

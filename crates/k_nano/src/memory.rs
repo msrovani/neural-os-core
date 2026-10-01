@@ -557,6 +557,26 @@ pub fn alloc_physical_frame() -> Option<PhysFrame<Size4KiB>> {
     guard.as_mut().and_then(|a| a.allocate_frame())
 }
 
+// ─── Diagnóstico PMM (idea #630, s434) — telemetria zero-alloc do estado do
+// frame allocator no momento de um OOM (lida de dentro do handler de morte).
+
+/// Frames livres estimados (watermark pessimista: total − entregues).
+pub fn pmm_free_frames() -> usize {
+    with_pmm(|a| {
+        a.total_frames.saturating_sub(a.allocated_count)
+    })
+}
+
+/// Frames entregues desde o boot (allocated_count do bitmap).
+pub fn pmm_allocated_count() -> usize {
+    with_pmm(|a| a.allocated_count)
+}
+
+/// Frames totais gerenciados (usable ranges).
+pub fn pmm_total_frames() -> usize {
+    with_pmm(|a| a.total_frames)
+}
+
 /// Fase 1 v2.0: reserva a pool dedicada de frames para page tables CoW/Ring3.
 /// Chamar no boot APÓS `init_global_allocator` (e após `reserve_range`).
 pub fn init_pt_pool(frames: usize) -> usize {

@@ -425,6 +425,81 @@ struct HybridAllocator;
 
 static TALC_READY: AtomicBool = AtomicBool::new(false);
 
+// ─── Diagnóstico TALC NULL (idea #630, s434) ────────────────────────────────
+// O OOM `infer_worker` com span de 6911MB é o residual de 3 sessões. O counter
+// TALC_OVERFLOW_NULL diz QUE falhou, não POR QUÊ. Candidatas distinguíveis:
+//   (1) PMM exausto — demand-page do gap-node tocado não conseguiu frame;
+//   (2) gap-node fora do span demand-pagado (cr2 >= TALC_SPAN_END) → #PF
+//       sem handler de heap → o talc lê lixo como tamanho do chunk;
+//   (3) fragmentação real — bins sem chunk ≥ required (span útil, memória
+//       viva em pedaços menores que o pedido);
+//   (4) corrupção — talc feature "counters" (4µs/alloc) ou sanity-check
+//       manual dos bins na morte (custo zero no caminho feliz).
+// Tudo ATOMIC, zero-alloc (chamável de dentro do path de OOM).
+
+/// Counter (2): último cr2 de fault no range TALC que ficou FORA do span
+/// demand-pagado (end = TALC_SPAN_END). 0 = nenhum.
+static TALC_PF_OUTSIDE_SPAN: AtomicU64 = AtomicU64::new(0);
+/// Counter (3): allocs NULL no TALC com bins não-vazios (fragmentação
+/// provável — havia memória registrada, nenhum chunk grande o bastante).
+static TALC_NULL_BINS_NONEMPTY: AtomicU64 = AtomicU64::new(0);
+/// Counter (3b): allocs NULL com bins VAZIOS (nada foi dado ao talc — span
+/// nunca se materializou em gaps: causam (1)/(2) ou claim sem gaps).
+static TALC_NULL_BINS_EMPTY: AtomicU64 = AtomicU64::new(0);
+/// Snapshot one-shot no 1º NULL: availability_low/high dos bins do talc
+/// (64 bits de bitmap cada; 0/0 = bins vazios) + requested/required.
+static TALC_NULL_AVAIL_LOW: AtomicU64 = AtomicU64::new(0);
+static TALC_NULL_AVAIL_HIGH: AtomicU64 = AtomicU64::new(0);
+static TALC_NULL_REQ_SIZE: AtomicUsize = AtomicUsize::new(0);
+static TALC_NULL_REQ_CHUNK: AtomicUsize = AtomicUsize::new(0);
+
+pub fn talc_null_diag() -> (u64, u64, u64, u64, u64, usize, usize) {
+    (
+        TALC_OVERFLOW_NULL.load(Ordering::Relaxed),
+        TALC_PF_OUTSIDE_SPAN.load(Ordering::Relaxed),
+        TALC_NULL_BINS_NONEMPTY.load(Ordering::Relaxed),
+        TALC_NULL_BINS_EMPTY.load(Ordering::Relaxed),
+        TALC_PF_OUTSIDE_SPAN.load(Ordering::Relaxed), // (legado: alias p/ logs)
+        TALC_NULL_REQ_SIZE.load(Ordering::Relaxed),
+        TALC_NULL_REQ_CHUNK.load(Ordering::Relaxed),
+    )
+}
+
+pub fn talc_pf_outside_span_cr2() -> u64 {
+    TALC_PF_OUTSIDE_SPAN.load(Ordering::Relaxed)
+}
+
+/// Sanity-check dos bins do talc na morte (custo zero no caminho feliz —
+/// só roda no 1º NULL): 0/0 = bins vazios (nada claimado/materializado);
+/// !=0 com NULL = fragmentação ou gap-nodes ilegíveis (cr2 fora do span).
+/// Lê `availability_low/high` privados via raw pointer (módulo irmão de
+/// confiança; scan_for_errors do talc pode PANICAR — nunca no path de OOM).
+fn snapshot_talc_bins(talc: &talc::Talc<talc::ErrOnOom>) {
+    // Layout real de talc-4.4.3 (src/talc.rs): availability_low @0,
+    // availability_high @8, bins @16, oom_handler (ZST, 0B) no fim.
+    // read_volatile = o compilador não reordena/otimiza a leitura.
+    unsafe {
+        let base = talc as *const _ as *const u64;
+        let avail_low = base.read_volatile();
+        let avail_high = base.add(1).read_volatile();
+        let bins = base.add(2).read_volatile();
+        TALC_NULL_AVAIL_LOW.store(avail_low, Ordering::Relaxed);
+        TALC_NULL_AVAIL_HIGH.store(avail_high, Ordering::Relaxed);
+        if bins == 0 {
+            TALC_NULL_BINS_EMPTY.fetch_add(1, Ordering::Relaxed);
+        } else {
+            TALC_NULL_BINS_NONEMPTY.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+pub fn talc_null_avail_snapshot() -> (u64, u64) {
+    (
+        TALC_NULL_AVAIL_LOW.load(Ordering::Relaxed),
+        TALC_NULL_AVAIL_HIGH.load(Ordering::Relaxed),
+    )
+}
+
 /// SESSION_416 diagnóstico: quantas vezes bump recusou E o TALC overflow
 /// também devolveu null (o caller recebe null → deref → #PF). Se crescer
 /// com heap crítico, o span TALC não tem espaço/páginas — investigar.
@@ -464,6 +539,17 @@ unsafe impl GlobalAlloc for HybridAllocator {
                 return q;
             }
             let n = TALC_OVERFLOW_NULL.fetch_add(1, Ordering::Relaxed);
+            // #630: snapshot one-shot dos bins no 1º NULL — distingue
+            // fragmentação (bins não-vazios) de span nunca materializado
+            // (vazio: demand-page falhou ou claim sem gaps). Zero-alloc.
+            if n == 0 {
+                snapshot_talc_bins(&TALC_ALLOC.lock());
+                TALC_NULL_REQ_SIZE.store(layout.size(), Ordering::Relaxed);
+                TALC_NULL_REQ_CHUNK.store(
+                    layout.size() + 3 * core::mem::size_of::<usize>(),
+                    Ordering::Relaxed,
+                );
+            }
             // 3 primeiras ocorrências: serial direto, zero-alloc (path de OOM).
             if n < 3 {
                 let mut buf = [0u8; 96];
@@ -494,9 +580,50 @@ unsafe impl GlobalAlloc for HybridAllocator {
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         if Self::ptr_in_talc(ptr) && TALC_READY.load(Ordering::Acquire) {
-            return TALC_ALLOC.realloc(ptr, layout, new_size);
+            let q = TALC_ALLOC.realloc(ptr, layout, new_size);
+            if !q.is_null() {
+                return q;
+            }
+            // s434b (#630): o realloc do Talck chama o malloc INTERNO (não o
+            // nosso GlobalAlloc::alloc) — um NULL aqui chegava ao
+            // alloc_error_handler SEM counter/snapshot (os 3 OOM do log
+            // 140959 com nulls=0: era realloc de chunk já-residente no TALC
+            // crescendo com o bump cheio). Caminho: grow_in_place falha →
+            // malloc falha (fragmentação no espaço do talc) → null direto.
+            // FAIL-CLOSED CORRETO: o dado continua válido no ponteiro velho;
+            // propagar null = UB no caller (realloc embutido), então
+            // oom() de verdade com diag completo.
+            snapshot_talc_bins(&TALC_ALLOC.lock());
+            TALC_NULL_REQ_SIZE.store(new_size, Ordering::Relaxed);
+            TALC_NULL_REQ_CHUNK.store(
+                new_size + 3 * core::mem::size_of::<usize>(),
+                Ordering::Relaxed,
+            );
+            TALC_OVERFLOW_NULL.fetch_add(1, Ordering::Relaxed);
+            oom(Layout::from_size_align_unchecked(new_size, layout.align()))
         }
-        GlobalAlloc::realloc(&BUMP_ALLOC, ptr, layout, new_size)
+        // s434c (#630): chunk bump-residente crescendo — o default realloc
+        // (alloc+copy+dealloc) do BUMP retornava NULL SEM tocar o TALC: o
+        // alloc novo era do bump puro (sem overflow!) e morria com a janela
+        // cheia mesmo com talc de 6911MB (os OOM com nulls=0 persistiam no
+        // log 142925: era ESTE path). Cai no híbrido: TALC dá o espaço novo
+        // (bump cheio), copy manual; o ponteiro velho segue no bump (sem
+        // free — sempre foi assim) e a memória nova tem free real.
+        let new_layout = Layout::from_size_align_unchecked(new_size, layout.align());
+        let q = GlobalAlloc::alloc(self, new_layout);
+        if q.is_null() {
+            // OOM real do híbrido (talc também recusou) — diag completo.
+            snapshot_talc_bins(&TALC_ALLOC.lock());
+            TALC_NULL_REQ_SIZE.store(new_size, Ordering::Relaxed);
+            TALC_NULL_REQ_CHUNK.store(
+                new_size + 3 * core::mem::size_of::<usize>(),
+                Ordering::Relaxed,
+            );
+            TALC_OVERFLOW_NULL.fetch_add(1, Ordering::Relaxed);
+            oom(new_layout);
+        }
+        core::ptr::copy_nonoverlapping(ptr, q, layout.size());
+        q
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
@@ -509,6 +636,15 @@ unsafe impl GlobalAlloc for HybridAllocator {
             if !q.is_null() {
                 return q;
             }
+            // s434b: mesmo gap do realloc — o alloc_zeroed do Talck cai no
+            // malloc interno; NULL aqui também não passava pelo counter.
+            snapshot_talc_bins(&TALC_ALLOC.lock());
+            TALC_NULL_REQ_SIZE.store(layout.size(), Ordering::Relaxed);
+            TALC_NULL_REQ_CHUNK.store(
+                layout.size() + 3 * core::mem::size_of::<usize>(),
+                Ordering::Relaxed,
+            );
+            TALC_OVERFLOW_NULL.fetch_add(1, Ordering::Relaxed);
         }
         core::ptr::null_mut()
     }
@@ -894,6 +1030,10 @@ pub static PF_DIAG_ALLOC_FAIL: AtomicU64 = AtomicU64::new(0);
 pub static PF_DIAG_MAP_FAIL: AtomicU64 = AtomicU64::new(0);
 pub static PF_DIAG_OK: AtomicU64 = AtomicU64::new(0);
 pub static PF_DIAG_P0: AtomicU64 = AtomicU64::new(0);
+/// #630: alloc_pt_frame devolveu 0 dentro do map_page_direct — o demand-page
+/// falhou por falta de frame de PAGE TABLE (não de dado); o caller vê
+/// heap_pte_present=false → PF_DIAG_MAP_FAIL, mas a causa real era PT.
+pub static PF_DIAG_PT_ALLOC_FAIL: AtomicU64 = AtomicU64::new(0);
 
 /// Returns all diagnostic counters as a tuple.
 pub fn pf_diag() -> (u64, u64, u64, u64, u64, u64) {
@@ -993,7 +1133,7 @@ unsafe fn map_page_direct(base: VirtAddr, virt: VirtAddr, phys: u64) {
     }
     if !e3.flags().contains(PageTableFlags::PRESENT) {
         let f = alloc_pt_frame(base);
-        if f == 0 { return; }
+        if f == 0 { PF_DIAG_PT_ALLOC_FAIL.fetch_add(1, Ordering::Relaxed); return; }
         e3.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
     }
     let l3_virt = base + e3.addr().as_u64();
@@ -1004,7 +1144,7 @@ unsafe fn map_page_direct(base: VirtAddr, virt: VirtAddr, phys: u64) {
     }
     if !e2.flags().contains(PageTableFlags::PRESENT) {
         let f = alloc_pt_frame(base);
-        if f == 0 { return; }
+        if f == 0 { PF_DIAG_PT_ALLOC_FAIL.fetch_add(1, Ordering::Relaxed); return; }
         e2.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
     }
     let l2_virt = base + e2.addr().as_u64();
@@ -1012,7 +1152,7 @@ unsafe fn map_page_direct(base: VirtAddr, virt: VirtAddr, phys: u64) {
     let e1 = &mut l2_tbl[virt.p2_index()];
     if !e1.flags().contains(PageTableFlags::PRESENT) {
         let f = alloc_pt_frame(base);
-        if f == 0 { return; }
+        if f == 0 { PF_DIAG_PT_ALLOC_FAIL.fetch_add(1, Ordering::Relaxed); return; }
         e1.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
     }
     if e1.flags().contains(PageTableFlags::HUGE_PAGE) {
@@ -1096,6 +1236,13 @@ pub fn try_fault_in_heap(cr2: u64) -> bool {
     }
 
     if in_talc || in_bump {
+        // #630: um fault no range TALC ACIMA do fim demand-pagado (cr2 >=
+        // TALC_SPAN_END) = gap-node/metadata lido como endereço de memória
+        // não-materializada → o handler não tem como cobrir (o span termina
+        // aqui). Registra o cr2 e RECUSA — o #PF seguinte é a evidência.
+        if in_talc && cr2 >= talc_end {
+            TALC_PF_OUTSIDE_SPAN.store(cr2, Ordering::Relaxed);
+        }
         // Heap ranges: allocate a fresh frame (old behavior)
         if let Some(f) = crate::memory::alloc_physical_frame() {
             let p = f.start_address().as_u64();
@@ -1230,6 +1377,28 @@ fn oom(layout: core::alloc::Layout) -> ! {
         if let Some(ref mut s) = *s {
             let _ = write!(s, "[OOM/TALC] sem memoria Tier 1. size={} align={} agente={} Verifique HEAP_SIZE.\n",
                 layout.size(), layout.align(), agent);
+            // #630: diag zero-alloc no momento da morte — as 5 candidatas
+            // legíveis numa linha só (sem isso, morre cego; não sabemos se
+            // PMM esgotou, se o span não demand-pagou, ou se é fragmentação).
+            let pmm_free = crate::memory::pmm_free_frames();
+            let pmm_alloc = crate::memory::pmm_allocated_count();
+            let pmm_total = crate::memory::pmm_total_frames();
+            let nulls = TALC_OVERFLOW_NULL.load(Ordering::Relaxed);
+            let (avail_low, avail_high) = talc_null_avail_snapshot();
+            let span_end = TALC_SPAN_END.load(Ordering::Acquire);
+            // s434b: diagnóstico CANÔNICO — espaço do talc agora vem do
+            // snapshot dos bins (availability ≠ gap bytes, mas 0/0 = span
+            // materializado em ZERO chunks ≥ req). pf_out>0 = gap-node
+            // ilegível (cr2 fora do span demand-pagado na morte).
+            let _ = write!(
+                s,
+                "[OOM-DIAG] pmm free={} alloc={} total={} | talc nulls={} bins_avail={:#x}/{:#x} req_size={} req_chunk={} span_end={:#x} pf_out={}\n",
+                pmm_free, pmm_alloc, pmm_total, nulls, avail_low, avail_high,
+                TALC_NULL_REQ_SIZE.load(Ordering::Relaxed),
+                TALC_NULL_REQ_CHUNK.load(Ordering::Relaxed),
+                span_end,
+                TALC_PF_OUTSIDE_SPAN.load(Ordering::Relaxed),
+            );
         }
     }
     // FB: o serial é invisível no metal — carimba o canal FB (SESSION_316/330).
@@ -1247,8 +1416,28 @@ fn oom(layout: core::alloc::Layout) -> ! {
         while d > 0 { d -= 1; if n < buf.len() { buf[n] = digits[d]; n += 1; } }
         crate::interrupts::exception_fb_stamp(&buf[..n]);
     }
+    // s434 (#630): FAIL-CLOSED de classe — o handler pode ter sido chamado
+    // por DENTRO de um critical section (alloc de dentro de MutexGuard do
+    // próprio kernel, ex. InferQueue poll_slice segurando locks). O hlt
+    // eterno aqui congela TODOS os outros cores que pedirem o MESMO lock
+    // (stall silencioso pós-OOM/TALC: 3ª sessão vendo, log 132152).
+    // SPIN com watchdog de serial: a cada 10s emite 1 linha de heartbeat
+    // (ordem: quem está vivo continua vivo; quem esperava o lock morre
+    // ruidosamente em vez de silenciosamente).
+    let mut last_beat = crate::tsc::now_us();
     loop {
-        x86_64::instructions::hlt();
+        core::hint::spin_loop();
+        let now = crate::tsc::now_us();
+        if now.wrapping_sub(last_beat) >= 10_000_000 {
+            last_beat = now;
+            {
+                let mut s = crate::serial::SERIAL.lock();
+                if let Some(ref mut s) = *s {
+                    let _ = write!(s, "[OOM-HALT] agente={} size={} tick={} — core parkado no OOM (FAIL-CLOSED s434)\n",
+                        agent, layout.size(), crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed));
+                }
+            }
+        }
     }
 }
 
@@ -1287,9 +1476,33 @@ pub fn talc_init_post_memory() -> Result<(), &'static str> {
     // cr2=0x4001affffff8 = fim do span de 6904MB, no_rng=1, "Tier 1 ready"
     // ausente do log).
     TALC_SPAN_END.store(LARGE_HEAP_START + (budget - SLAB_SIZE), Ordering::Release);
+    // s434 (#630): STOP-THE-WORLD durante o claim — o talc 4.4 escreve os gap
+    // nodes + size tags do span INTEIRO em memória demand-pagada; um core
+    // concurrente que tente demand-pagear o MESMO endereço no meio (ou o
+    // walk de PT do mapeamento) pode ver estado inconsistente → a leitura
+    // subseqüente do gap node devolve lixo como tamanho de chunk (cr2 fora
+    // do span demand-pagado = PF_OUTSIDE na morte). SPIN bounded (2s): se o
+    // timer morrer aqui o slog de warn denuncia (não é um hlt eterno).
+    static CLAIMING: AtomicBool = AtomicBool::new(false);
+    if CLAIMING.swap(true, Ordering::AcqRel) {
+        // Outro core já claimando (boot não deveria chegar aqui duas vezes —
+        // mas AP cedo + init race): espera bounded e segue honesto.
+        let t0 = crate::tsc::now_us();
+        while CLAIMING.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+            if crate::tsc::now_us().wrapping_sub(t0) > 2_000_000 {
+                crate::slog_nano!("HEAP", "warn", "talc claim: SPIN timeout (outro core preso no claim?)");
+                break;
+            }
+        }
+    }
     let claimed = unsafe {
-        TALC_ALLOC.lock().claim(span).map_err(|_| "talc claim failed")?
+        TALC_ALLOC.lock().claim(span).map_err(|_| {
+            CLAIMING.store(false, Ordering::Release);
+            "talc claim failed"
+        })?
     };
+    CLAIMING.store(false, Ordering::Release);
     *CLAIMED_HEAP.lock() = Some(claimed);
     // SESSION_415: ativa o TALC como primário do allocator híbrido. A partir
     // daqui dealloc é REAL — o bump (sem free) só cobre allocs de boot.
