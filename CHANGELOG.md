@@ -1,5 +1,15 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s431] - 2026-09-30 - TALC claim do budget completo: a cura estrutural do OOM no teto 2030MB
+
+- High: **causa-raiz do OOM da foto (heap 2024/2030M 99% + `OOM/TALC size=83 agente=audio_input`)** — o TALC (único allocator com free real) tinha span FIXO de 512MB (`LARGE_HEAP_SIZE = HEAP_SIZE − SLAB`); o bump sem free satura a janela ~2030MB e o overflow cai no TALC de 512MB, que estoura com **RAM física 70% livre** (9216MB, f30% no HUD).
+- High: **claim do BUDGET COMPLETO** (`talc_init_post_memory`): span = `HEAP_BUDGET_MB` real (6912MB em 8GB) em VA própria 0x400000080000.., FORA da janela wrap do bump (SESSION_339) — custo zero até tocar (demand-page do range TALC mapeia fresh frames sob demanda; claim só escreve metadados). `TALC_VA_MAX = 0x4780_0000_0000` (antes da arena Cortex 0x4800_0000_0000).
+- High: **bug do 1º attempt (boot 210748)** — `TALC_SPAN_END` era store DEPOIS do claim; o claim escreve size-tags no FIM do span (páginas não mapeadas) e o demand-page só cobre cr2 < TALC_SPAN_END → #PF storm no próprio claim (`register_gap`, cr2=0x4001affffff8 = fim do span de 6904MB, `Tier 1 ready` ausente do log). Fix: store ANTES do claim.
+- Med: **budget honesto em duas camadas** — `HEAP_BUDGET_MB` guarda o valor REAL (RAM-based); novo `BUMP_BUDGET_CLAMPED` guarda o clamp da janela (~2030MB) que o `grow_bump_auto` lê. Antes o clamp da janela do bump (SESSION_339) sobrescrevia o budget e o TALC herdava 2030.
+- Med: **headroom combinado** — `heap_headroom_bytes()`/`heap_observe()` = bump (window−used) + capacidade TALC claimed; `pressure` warn só quando NÃO há TALC. Fim do pessimismo estrutural (headroom 6MB com RAM 70% livre).
+- Gates: **validação QEMU 8GB/8c rodada 213145: 13,6min (T+48829), 0 heap-fail, 0 OOM/TALC, 0 budget-cap refusal, auto-grow até 2030MB e sistema saudável nos 8 workers** (bump cheio ≠ morte: overflow no TALC). 1 storm parkado (classe cr2=0x201 conhecida), sistema seguiu. k-nano 240, hermes 257 (-t1), cortex 110. LIÇÃO DE BUILD: `cargo nk` NÃO regenera o uefi.img — rodadas 9/10 testaram o kernel de 15:40; o fluxo canônico exige `cargo build --release -p boot` + `python tools/build_image.py` (provar com string nova no uefi.img antes do QEMU).
+- Session: SESSION_420 addendum s431
+
 ## [1.9.99-s430] - 2026-09-30 - Lab QEMU 8GB/8c: 5min na UI sem freeze (goal batido, 14,8min de uptime)
 
 - High: **goal do lab batido** — rodada 10: 14,8min de runtime com UI/scheduler vivos (613 ticks SCHED), 0 faltas até T+28050 (7,8min), 1 único storm CONTIDO por park (BSP/UI seguiram +5min), OOM final reportado honestamente (`OOM/TALC agente=audio_input`) sem #PF fantasma nem panic.

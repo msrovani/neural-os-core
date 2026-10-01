@@ -525,3 +525,54 @@ fantasma nem kernel panic.
 **Gates:** check release 0 erros; hermes 257/257 (-t1), cortex 110,
 k-nano 240 (flaky tickv compact_batch_guard passa isolado).
 Logs: logs/boot_whpx_20260930_{193855,195127,200959}.txt (rodadas 8-10).
+
+## Addendum s431 — TALC claim do budget completo: cura estrutural do OOM no teto 2030MB (2026-09-30)
+
+**Evidência (foto do usuário):** HUB HEALTH com `heap 2024/2030M 99%` (FAIL),
+`ram 9216M f30%`, toast "Heap crítico — HITL" em T+885s. No log da rodada 10:
+`budget cap 2030MB — recusa grow` em rajada + `OOM/TALC sem memoria Tier 1.
+size=83 agente=audio_input`.
+
+**Causa-raiz:** o híbrido bump-first (SESSION_415) mantém o bump SEM FREE como
+primário; o TALC — único allocator com dealloc real — tinha span FIXO de
+512MB (`LARGE_HEAP_SIZE = HEAP_SIZE − SLAB_SIZE`, herdado do .bss de 512MB).
+Quando o bump chega ao teto da janela (~2030MB), TODA alloc nova cai no TALC
+de 512MB, que também esgota — com **RAM física 70% livre**. O budget
+`heap_budget_mb(9216)=6912MB` era clampado à janela do bump (Fix A
+SESSION_339) e o TALC herdava o clamp.
+
+**Fix (3 peças):**
+1. `talc_init_post_memory` clama `HEAP_BUDGET_MB` REAL (6912MB) em VA própria
+   `0x400000080000..` (`TALC_VA_MAX=0x4780_0000_0000`, antes da arena Cortex).
+   Custo zero até tocar: `try_fault_in_heap` (range TALC) mapeia fresh frames
+   sob demanda; claim só escreve metadados (~2 páginas).
+2. `BUMP_BUDGET_CLAMPED` (novo static): o clamp da janela (~2030MB) agora vive
+   separado; `grow_bump_auto` lê o clampado, `HEAP_BUDGET_MB` mantém o real.
+3. Headroom combinado: `heap_headroom_bytes()`/`heap_observe()` = bump
+   (window−used) + capacidade TALC claimed. `heap_headroom_low/critical`
+   herdam de graça — os gates de 128/64MB agora são piso do BUMP, não do
+   sistema inteiro.
+
+**Bug do 1º attempt (boot 210748, apanhado no lab):** `TALC_SPAN_END` era
+store DEPOIS do claim. O claim escreve size-tags no FIM do span (TALC
+`register_gap` → `gap_acme_to_size(acme).write(size)`), a página do fim não
+está mapeada, e o demand-page só cobre `cr2 < TALC_SPAN_END` (ainda o default
+512MB) → `no_rng=1` → #PF storm no próprio claim (`register_gap`,
+cr2=0x4001affffff8 = fim do span de 6904MB) e `Tier 1 ready` ausente do log.
+Fix: store ANTES do claim.
+
+**Validação (rodada 213145, 8GB/8c):** `Tier 1 ready ... size=6911 MB (budget
+claim, demand-paged)`; 13,6min de runtime (T+48829), 0 heap-fail, 0 OOM/TALC,
+0 budget-cap refusal; auto-grow do bump até 2030MB e o sistema seguiu
+saudável nos 8 workers — **bump cheio ≠ morte** (overflow com free real no
+TALC). 1 storm parkado (classe cr2=0x201 conhecida), sistema seguiu.
+
+**Lição canônica de build (afetava TODAS as rodadas 9-10):** `cargo nk` (alias
+do bin) NÃO regenera o `uefi.img` — o build.rs do crate `boot` (que copia o
+kernel.elf pra ESP tree) só roda em `cargo build -p boot`. As rodadas 9/10
+testaram o kernel stale de 15:40 (sem os fixes BEI/supervisor). Fluxo
+canônico: `cargo build --release -p boot` → `python tools/build_image.py` →
+**provar string nova dentro do uefi.img** → QEMU.
+
+**Gates:** k-nano 240 (flaky compact_batch_guard isolado), hermes 257 (-t1),
+cortex 110; k-hal harness crash host pré-existente (stash, SESSION_418).

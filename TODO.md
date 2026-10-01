@@ -1,11 +1,21 @@
 # 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s430 TEST
+**Versão:** v1.9.99-s431 TEST
 **Data:** 2026-09-30
 **Fonte:** SESSION_412 / SESSION_411 / STATE.md (LLM response gate) + ADRs 0081/0089–0106 + SESSION_360/366
 **Legenda:** ✅ feito | 🟡 em andamento | `[~]` parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | `[ ]` pendente
 
 ---
+
+## ✅ s431 — TALC claim budget completo (cura OOM teto 2030MB)
+
+- [x] Causa-raiz: TALC span fixo 512MB estourava com bump no teto + RAM 70% livre (foto heap 2024/2030M 99%)
+- [x] Claim do HEAP_BUDGET_MB real (6912MB) em VA própria 0x400000080000 (TALC_VA_MAX antes da arena Cortex), demand-paged
+- [x] TALC_SPAN_END store ANTES do claim (size-tag do fim do span fora do range = storm no claim, boot 210748)
+- [x] BUMP_BUDGET_CLAMPED separado do budget real (clamp da janela não sobrescreve mais o budget do TALC)
+- [x] Headroom combinado bump+TALC em heap_headroom_bytes/heap_observe
+- [x] Validação QEMU 8c: 13,6min, 0 OOM/heap-fail/budget-cap, bump cheio 2030MB e sistema vivo nos 8 workers
+- [x] LIÇÃO canônica: cargo nk não regenera uefi.img — cargo build -p boot + build_image + prova de string no uefi.img
 
 ## ✅ s430 — Lab QEMU 8GB/8c: 5min na UI sem freeze (goal batido)
 

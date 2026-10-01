@@ -148,7 +148,7 @@ fn grow_bump_auto(need: usize) -> bool {
     crate::slog_nano!("HEAP", "BUMP", "grow entry need={}MB limit={}MB",
         need / (1024 * 1024), current_limit / (1024 * 1024));
     // SESSION_287: HEAP_BUDGET_MB era escrito e nunca lido — grow ia até OOM.
-    let budget_bytes = HEAP_BUDGET_MB
+    let budget_bytes = BUMP_BUDGET_CLAMPED
         .load(Ordering::Relaxed)
         .saturating_mul(1024 * 1024)
         .max(HEAP_SIZE);
@@ -265,13 +265,16 @@ pub fn talc_overflow_null_count() -> u64 {
 }
 
 const TALC_RANGE_START: usize = HEAP_START;
-const TALC_RANGE_END: usize = HEAP_START + HEAP_SIZE;
+/// s430b: range dinâmico — o claim do TALC pode cobrir o budget completo
+/// (não só o HEAP_SIZE estático de 512MB). Lido de TALC_SPAN_END.
+static TALC_SPAN_END: AtomicUsize = AtomicUsize::new(HEAP_START + HEAP_SIZE);
+const TALC_RANGE_END: usize = HEAP_START + HEAP_SIZE; // fallback estático (const fn ptr_in_talc usa TALC_SPAN_END)
 
 impl HybridAllocator {
     #[inline]
     fn ptr_in_talc(ptr: *mut u8) -> bool {
         let p = ptr as usize;
-        p >= TALC_RANGE_START && p < TALC_RANGE_END
+        p >= TALC_RANGE_START && p < TALC_SPAN_END.load(Ordering::Acquire)
     }
 }
 
@@ -358,9 +361,20 @@ pub fn heap_window_bytes() -> usize {
     bump_max_offset()
 }
 
-/// Headroom real: window − used (nunca o HUD “RAM guest”).
+/// Headroom real: window − used do bump + capacidade TALC livre (s430b).
+/// O TALC claim cobre o budget em VA própria (demand-paged) — overflow do
+/// bump cai lá com free real; contar só o bump era pessimismo estrutural
+/// (headroom 6MB com RAM 70% livre). Nunca o HUD “RAM guest”.
 pub fn heap_headroom_bytes() -> usize {
-    bump_max_offset().saturating_sub(heap_used_bytes())
+    let bump = bump_max_offset().saturating_sub(heap_used_bytes());
+    let talc_cap = if TALC_READY.load(Ordering::Acquire) {
+        TALC_SPAN_END.load(Ordering::Acquire)
+            .saturating_sub(LARGE_HEAP_START)
+            .saturating_sub(SLAB_SIZE)
+    } else {
+        0
+    };
+    bump.saturating_add(talc_cap)
 }
 
 /// Tópicos EventBus (consumidor publica fora do grow — grow é alloc-free).
@@ -389,10 +403,21 @@ pub struct HeapObserve {
 pub fn heap_observe() -> HeapObserve {
     let used = heap_used_bytes();
     let window = bump_max_offset();
-    let headroom = window.saturating_sub(used);
-    // Warn proativo: <256MB headroom com modelo heavy já carregado.
+    // s430b: headroom do bump é saturado na janela ~2030MB. O TALC (claim do
+    // budget completo, demand-paged) é memória real além disso — sem API de
+    // free-bytes no talc 4.4, telemetria honesta = span claimed inteiro conta
+    // como headroom DISPONÍVEL (estimativa generosa; os gates de 64/128MB
+    // continuam válidos como piso do bump, e o OOM/TALC real permanece
+    // fail-closed). window exibida segue a do bump (contrato do HUD).
+    let headroom_bump = window.saturating_sub(used);
+    let talc_cap = TALC_SPAN_END.load(Ordering::Acquire)
+        .saturating_sub(LARGE_HEAP_START)
+        .saturating_sub(SLAB_SIZE);
+    let talc_cap = if TALC_READY.load(Ordering::Acquire) { talc_cap } else { 0 };
+    let headroom = headroom_bump.saturating_add(talc_cap);
+    // Warn proativo: <256MB headroom COMBINADO com modelo heavy já carregado.
     let mut pressure = HEAP_PRESSURE_LEVEL.load(Ordering::Acquire) as u8;
-    if pressure < 1 && headroom < 256 * 1024 * 1024 {
+    if pressure < 1 && headroom_bump < 256 * 1024 * 1024 && talc_cap == 0 {
         pressure = 1;
     }
     HeapObserve {
@@ -498,20 +523,33 @@ static CLAIMED_HEAP: Mutex<Option<Span>> = Mutex::new(None);
 
 pub const HEAP_START: usize = 0x_4000_0000_0000;
 pub const HEAP_SIZE: usize = 512 * 1024 * 1024; // 512MB .bss
+/// s430b: teto VA do span TALC — antes da arena Cortex (0x4800_0000_0000),
+/// deixando margem de 0x800_0000_0000 (32GB) para growth futuro sem overlap.
+pub const TALC_VA_MAX: usize = 0x4780_0000_0000;
 pub static CURRENT_HEAP_MB: AtomicUsize = AtomicUsize::new(512);
 
 /// Budget máximo do heap em MB. grow_bump_auto para ao atingir este limite.
 /// Definido em main.rs baseado na RAM detectada (min(75% RAM, 1536MB)).
+/// s430b: valor REAL (RAM-based); o clamp da janela do bump vive em
+/// BUMP_BUDGET_CLAMPED (grow_bump_auto lê o clampado, TALC claim lê o real).
 pub static HEAP_BUDGET_MB: AtomicUsize = AtomicUsize::new(1536);
+static BUMP_BUDGET_CLAMPED: AtomicUsize = AtomicUsize::new(1536);
 
 /// Define o budget máximo do heap (chamado de main.rs no boot).
-/// Fix A: clamp à janela endereçável — budget em MB-de-RAM não pode exceder
-/// o offset máximo antes do wrap 2^64 (política e telemetria coerentes).
+/// Fix A (SESSION_339): o BUMP é clampado à janela endereçável — budget em
+/// MB-de-RAM não pode exceder o offset máximo antes do wrap 2^64.
+/// s430b: o BUMP guarda o clamp da janela, mas HEAP_BUDGET_MB guarda o valor
+/// REAL (o TALC clama o budget completo em VA própria 0x4000_0000_0000+,
+/// FORA da janela do bump — demand-paged, custo zero até tocar).
 pub fn set_heap_budget_mb(mb: usize) {
     let window_mb = bump_max_offset() / (1024 * 1024);
-    let mb = mb.min(window_mb);
+    let bump_budget = mb.min(window_mb);
     HEAP_BUDGET_MB.store(mb, Ordering::Release);
-    crate::slog_nano!("HEAP", "BUDGET", "budget={}MB (window=~{}MB)", mb, window_mb);
+    // grow_bump_auto lê HEAP_BUDGET_MB — dá a ele o valor clampado à janela
+    // (o bump não pode passar da janela), sem reescrever o budget real.
+    BUMP_BUDGET_CLAMPED.store(bump_budget, Ordering::Release);
+    crate::slog_nano!("HEAP", "BUDGET", "budget={}MB (bump={}MB window=~{}MB talc-claim={}MB)",
+        mb, bump_budget, window_mb, mb.min(TALC_VA_MAX / (1024 * 1024)));
 }
 
 // ─── (1) Per-core carve accounting (advisory auto-fractioning) ───────────────
@@ -842,8 +880,9 @@ pub fn try_fault_in_heap(cr2: u64) -> bool {
 
     // Determine which range the fault is in:
     // ponytail: range TALC canônico (LARGE_HEAP_*), não CURRENT_HEAP_MB (bump).
+    // s430b: fim DINÂMICO — o claim cobre o budget completo (demand-paged).
     let start = LARGE_HEAP_START as u64;
-    let talc_end = start + LARGE_HEAP_SIZE as u64;
+    let talc_end = TALC_SPAN_END.load(Ordering::Acquire) as u64;
     let in_talc = cr2 >= start && cr2 < talc_end;
 
     let bump_start = unsafe { HEAP_BUFFER.as_mut_ptr() as u64 };
@@ -1045,7 +1084,27 @@ pub fn init_heap() -> Result<(), &'static str> {
 /// init_global_allocator (global frame allocator disponível) e APÓS resize_bump_heap.
 /// TALC gerencia páginas mapeadas via frame allocator — pool separado do bump allocator.
 pub fn talc_init_post_memory() -> Result<(), &'static str> {
-    let span = Span::from_base_size(LARGE_HEAP_START as *mut u8, LARGE_HEAP_SIZE);
+    // s430b (foto heap 2024/2030M 99% + OOM/TALC size=83): o span do TALC era
+    // FIXO em 512MB (LARGE_HEAP_SIZE = HEAP_SIZE - SLAB) — quando o bump sem
+    // free satura a janela ~2030MB, o overflow cai no TALC de 512MB e estoura
+    // com RAM física 70% livre. Cura estrutural: clamar o BUDGET COMPLETO.
+    // Custo zero até tocar: a demanda-página (try_fault_in_heap range TALC)
+    // mapeia fresh frames sob demanda — claim só escreve metadados (~2 páginas).
+    // Heap em VA própria (0x4000_0000_0000..) fora da janela wrap do bump
+    // (SESSION_339) — até ~8GB endereçáveis antes do overlap com a arena
+    // Cortex (0x4800_0000_0000).
+    let budget = HEAP_BUDGET_MB.load(Ordering::Relaxed)
+        .saturating_mul(1024 * 1024)
+        .max(HEAP_SIZE)
+        .min(TALC_VA_MAX);
+    let span = Span::from_base_size(LARGE_HEAP_START as *mut u8, budget - SLAB_SIZE);
+    // s430b: TALC_SPAN_END ANTES do claim — o claim escreve size-tags no FIM do
+    // span (páginas ainda não mapeadas); o demand-page (try_fault_in_heap) só
+    // cobre cr2 < TALC_SPAN_END. Store depois do claim = a última página cai
+    // fora do range -> #PF storm no próprio claim (evidência boot 210748:
+    // cr2=0x4001affffff8 = fim do span de 6904MB, no_rng=1, "Tier 1 ready"
+    // ausente do log).
+    TALC_SPAN_END.store(LARGE_HEAP_START + (budget - SLAB_SIZE), Ordering::Release);
     let claimed = unsafe {
         TALC_ALLOC.lock().claim(span).map_err(|_| "talc claim failed")?
     };
@@ -1053,9 +1112,9 @@ pub fn talc_init_post_memory() -> Result<(), &'static str> {
     // SESSION_415: ativa o TALC como primário do allocator híbrido. A partir
     // daqui dealloc é REAL — o bump (sem free) só cobre allocs de boot.
     TALC_READY.store(true, Ordering::Release);
-    crate::slog_nano!("HEAP", "TALC", "Tier 1 ready (hybrid PRIMARY): virt={:#x} size={} MB",
+    crate::slog_nano!("HEAP", "TALC", "Tier 1 ready (hybrid PRIMARY): virt={:#x} size={} MB (budget claim, demand-paged)",
         LARGE_HEAP_START,
-        LARGE_HEAP_SIZE / (1024 * 1024));
+        (budget - SLAB_SIZE) / (1024 * 1024));
     Ok(())
 }
 
