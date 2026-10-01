@@ -15,6 +15,8 @@
 - [x] HUB HEALTH linha `talc` (21ª): `u{}M/{}M lg{}M g{}`, Warn de fragmentação (free≥256MB e largest×4<free), `partial g{}`, `n/a` sem amostra
 - [x] hub_triage: snapshot JSON com talc_used/free/largest/gaps/partial + vereditos Observe (fragmentado / metadata parcial) + slog `ok talc u...f...lg...g...`
 - [x] Validação: hermes 275/275, k-nano 244/244, jarbas 134/134 (-t1); QEMU 8GB/8c log 182016: `ok talc u0M f6911M lg6911M g1` telemetria viva, zero OOM
+- [x] Lab longo (2 boots 8GB/8c, logs 183000/185325): telemetria estável 1/min, zero OOM/TALC em ~23,4k ticks — MAS **novo stall silencioso determinístico** (2/2 boots, T+23334/T+23437, sem OOM): log congela no cleanup pós-`a2_proof done` (1º decode ok, out_len=4) com QEMU vivo ~1 core em spin; correlação temporal com o grow p/ teto 2030MB (T+23058/23148) e slow_slice n=22 nos 2 boots. Última linha comum: `[Log] [JARBAS] JARBAS:  and` → suspeito: serial/log lock segurado no path do echo do Jarbas pós-job.
+- [ ] 🔴 s436: bughunt do stall pós-a2_proof-done (id 2305, out_len=4) — carimbar enter/exit de JarbasAgent::tick + slog no path do eco; distinguir deadlock de serial/log vs spin infer vs hlt de AP; replicar sem carregar modelo (a2_proof-only)
 - [ ] Residual: observação de longo prazo (runtime de horas) da linha `talc` p/ calibrar o limiar largest×4<free; consolidar `talc_capacity_mb`/`talc_capacity_bytes` se 3ª cópia surgir
 
 ## ✅ s434 — Overflow TALC: causa-raiz + fail-closed de classe (idea #630)

@@ -11,6 +11,13 @@
 #     (fragmentado / metadata parcial) + slog `ok talc u..f..lg..g..` (regra 419).
 #     Validação: hermes 275, k-nano 244, jarbas 134 (-t1); QEMU 8GB/8c log 182016:
 #     `ok talc u0M f6911M lg6911M g1` telemetria viva 1/min, zero OOM, sistema vivo.
+#   🔴 DESCUBERTO NO LAB LONGO (s436): stall silencioso DETERMINÍSTICO sem OOM — 2/2
+#     boots (logs 183000/185325) congelam o log em T+23334/T+23437, QEMU vivo ~1 core
+#     em spin, SEM OOM-HALT (não é oom()) e sem #PF novo. Contexto: bump no teto 2030MB
+#     + a2_proof id=2 done (1º decode ok tok=2305 out_len=4, slow_slice n=22) + última
+#     linha `[Log] [JARBAS] JARBAS:  and` (eco do Jarbas). Suspeito: path de eco do
+#     Jarbas (log/serial lock) no cleanup pós-job; carimbar enter/exit do tick + slog
+#     no echo é o próximo passo.
 #   PISTA ANTERIOR: s434 — causa-raiz do OOM/TALC infer_worker (idea #630, 3 sessões):
 #     realloc de chunk BUMP-residente usava o default GlobalAlloc::realloc (alloc novo
 #     SEM overflow do TALC) → NULL com janela cheia sem tocar os 6911MB → oom() cego.

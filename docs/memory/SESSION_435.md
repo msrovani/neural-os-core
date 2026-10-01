@@ -50,3 +50,38 @@ hub_triage.
 
 - Fragmentação real só aparece com o bump derramando para o TALC e frees criando buracos — monitorar em runtime de horas (objetivo do #630 residual); a regra largest×4 < free é o primeiro detector.
 - `talc_capacity_bytes()` duplica a fórmula de `talc_capacity_mb()` (MB × ~1MB) — consolidação futura se uma 3ª cópia aparecer.
+
+## Addendum — Lab longo pós-s434 (2 boots 8GB/8c, 30+ min)
+
+**Resultado da telemetria (o que o lab foi fazer):** linha `talc` estável a 1/min
+nos 2 boots, `u0M f6911M lg6911M g1` durante toda a vida útil (gap único, sem
+spill materializado), **zero OOM/TALC/OOM-HALT** — estabilidade pós-s434
+confirmada até o freeze.
+
+**Stall silencioso DETERMINÍSTICO descoberto (novo residual, s436):**
+- 2/2 boots com o MESMO padrão: log congela em **T+23334** (boot 183000) e
+  **T+23437** (boot 185325), QEMU vivo com ~1 core em spin (CPU delta ≈1.0×
+  parede), **SEM nenhum OOM** (o heartbeat `[OOM-HALT]` não dispara = não é
+  `oom()`; sem #PF novo).
+- Contexto comum aos 2 boots: (1) bump acabou de chegar ao **teto 2030MB**
+  (grow T+23058/T+23148); (2) job `a2_proof` id=2 completa: prefill ~57s,
+  slow_slice n=22, **1º decode OK (tok=2305, out_len=4)**, `a2_proof done`,
+  `done id=2 len=4 in_flight=0`; (3) ÚLTIMA linha do log em ambos:
+  `[Log] [ok] - [JARBAS] JARBAS:  and` (echo do texto da resposta);
+  (4) HubTriage com telemetria ok até T+20898-23334.
+- Interpretação honesta: correlação temporal forte (teto do bump + cleanup
+  pós-a2_proof + eco do Jarbas), causa NÃO provada — suspeito principal é o
+  path de eco `[JARBAS]` do LogAgent (log/serial lock segurado ou spin no
+  String do eco), mas pode ser o AP do infer no cleanup pós-done. Carimbar
+  enter/exit de JarbasAgent::tick + slog no path do eco é o próximo passo
+  (s436).
+- Nota de transparência: o lab de 30+ min NÃO completou o tempo cheio nos 2
+  boots (freeze em ~T+23.4k = ~6,5min de runtime após warm-up). A telemetria
+  s435 está provada; a estabilidade de longo prazo segue bloqueada pelo stall
+  (3ª forma do residual silencioso: 1º OOM sem diag (s433), OOM com diag
+  (s434, resolvido), agora spin SEM OOM pós-job).
+
+**Lições:** (1) "QEMU vivo + log congelado" tem 3 classes distintas (OOM cego,
+OOM com heartbeat, spin sem OOM) — o OOM-HALT da s434 provou ser o filtro
+perfeito: sem heartbeat = não é oom(); (2) determinismo (2/2 no mesmo T e no
+mesmo job) é pista forte de path lógico (echo/cleanup), não race de boot.
