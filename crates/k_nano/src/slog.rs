@@ -120,7 +120,10 @@ impl Sev {
             | "observe" | "pcie" | "populate" | "Learn" | "CONSOLIDATE" | "REFLECT"
             | "h4" | "h5_demo" | "p3"
             | "0040" | "0047-G3" | "0047-G4" | "0047-G5" | "0047-H" | "0047-L3"
-            | "0047-NGRAM" => Sev::Ok,
+            | "0047-NGRAM"
+            //   recipe = k_hal offer.rs gate_bind_class ALLOW (device_recipe
+            //     promovida — sucesso de bind, SESSION_360: sucesso → ok).
+            | "recipe" => Sev::Ok,
             | "dbg" => Sev::Trace,
             "warn" | "WARN" | "warning" | "degraded" | "skip" | "absent" | "msc" => Sev::Warn,
             "fail" | "FAIL" | "error" | "panic" | "err" => Sev::Fail,
@@ -341,7 +344,7 @@ mod tests {
             "msg", "master", "worker", "sync", "await", "life", "mode", "map", "observe",
             "pcie", "populate", "Learn", "CONSOLIDATE", "REFLECT", "h4", "h5_demo",
             "p3", "0040", "0047-G3", "0047-G4", "0047-G5", "0047-H", "0047-L3",
-            "0047-NGRAM",
+            "0047-NGRAM", "recipe",
         ] {
             assert_eq!(Sev::from_sub(sub), Sev::Ok, "sub '{sub}' deveria ser Ok");
         }

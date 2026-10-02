@@ -861,11 +861,15 @@ pub fn heap_observe() -> HeapObserve {
     // continuam válidos como piso do bump; OOM/TALC real segue fail-closed.
     let headroom_bump = window.saturating_sub(used);
     let talc_free = (talc_usage().free_bytes as usize).min(talc_capacity_bytes());
-    let talc_cap = talc_capacity_bytes();
     let headroom = headroom_bump.saturating_add(talc_free);
-    // Warn proativo: <256MB headroom COMBINADO com modelo heavy já carregado.
+    // Warn proativo: headroom COMBINADO (bump + free TALC MEDIDO) < 256MB.
+    // s437: a guarda `talc_cap == 0` (s431) morreu quando o TALC passou a
+    // segurar o budget completo — com o TALC sempre claimado ela nunca mais
+    // disparava, e `talc_cap` (claim) não reflete uso. s435 já mede o free
+    // dos gap-nodes, então a condição honesta é o mesmo headroom que
+    // `heap_headroom_bytes()` usa: bump saturado + TALC esgotado = warn.
     let mut pressure = HEAP_PRESSURE_LEVEL.load(Ordering::Acquire) as u8;
-    if pressure < 1 && headroom_bump < 256 * 1024 * 1024 && talc_cap == 0 {
+    if pressure < 1 && headroom < 256 * 1024 * 1024 {
         pressure = 1;
     }
     // s435: telemetria real do TALC — cache (2 Hz no HUD), nunca walk aqui.
