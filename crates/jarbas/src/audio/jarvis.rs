@@ -15,6 +15,23 @@ use crate::audio::voice::PLAYBACK_RING;
 
 /// Saudacao HW emitida no register (K44) — evita depender do scheduler (hang pos-K44).
 static HW_GREET_EMITTED: AtomicBool = AtomicBool::new(false);
+/// BENCH_QUIET: decode sem contenção de áudio na janela de medida (fix-5 opção A).
+/// Default OFF (zero mudança sem a flag). ON pula synth TTS do greeting,
+///
+/// drain de BOOT_GREET_REMAINING, streaming TTS e INFER_TTS_PARTIAL.
+static BENCH_QUIET: AtomicBool = AtomicBool::new(false);
+/// Liga/desliga a janela silenciosa de bench.
+pub fn set_bench_quiet(on: bool) {
+    BENCH_QUIET.store(on, Ordering::Relaxed);
+}
+/// True durante a janela de medida (suprime TTS).
+pub fn bench_quiet() -> bool {
+    BENCH_QUIET.load(Ordering::Relaxed)
+}
+#[inline]
+fn tts_allowed() -> bool {
+    !BENCH_QUIET.load(Ordering::Relaxed)
+}
 /// Resto do PCM da saudação de boot (register só empurra 2560 samples no ring).
 static BOOT_GREET_REMAINING: spin::Mutex<alloc::vec::Vec<i16>> =
     spin::Mutex::new(alloc::vec::Vec::new());
@@ -351,7 +368,9 @@ pub fn emit_hw_greeting_at_register() {
     // Metal bare: Piper se carregado.
     let sandbox = k_nano::platform_probe::hypervisor().is_sandbox()
         || k_nano::storage_bw::skip_measure();
-    let pcm = if sandbox {
+    let pcm = if !tts_allowed() {
+        alloc::vec::Vec::new()
+    } else if sandbox {
         crate::audio::tts::synthesize(&body)
     } else {
         crate::audio::skills::synthesize_tts(&body)
@@ -390,7 +409,8 @@ impl Agent for JarbasAgent {
             self.greeting_prompt_sent = true;
         }
         // Drena resto da saudação de boot (register só enfiou 1 chunk no ring).
-        {
+        // BENCH_QUIET: pula o drain na janela de medida (sem contenção de áudio).
+        if tts_allowed() {
             let mut rem = BOOT_GREET_REMAINING.lock();
             if !rem.is_empty() {
                 let room = PLAYBACK_RING.free().min(2560);
@@ -472,7 +492,9 @@ impl Agent for JarbasAgent {
         }
 
         // --- Streaming TTS: drenar chunks + frase seguinte da queue ---
+        // BENCH_QUIET: pula na janela de medida (sem contenção de áudio).
         // Take ownership to avoid borrow-checker conflict on self.stream_tts
+        if tts_allowed() {
         let prev = core::mem::replace(&mut self.stream_tts, StreamingTtsState::Idle);
         match prev {
             StreamingTtsState::Streaming { gen, buffer, mut pos, mut queue } => {
@@ -523,6 +545,7 @@ impl Agent for JarbasAgent {
                 }
             }
             StreamingTtsState::Idle => {}
+        }
         }
 
         while let Some(ev) = self.llm_response.try_receive() {
@@ -579,7 +602,8 @@ impl Agent for JarbasAgent {
         // perder a frase final que nunca fechou durante o generate.
         // Parciais que chegam com Streaming ativo aguardam no EventBus (bounded
         // drop_oldest) — o finish via HERMES_RESPONSE cobre qualquer perda.
-        if matches!(self.stream_tts, StreamingTtsState::Idle) {
+        // BENCH_QUIET: pula parciais na janela de medida (sem contenção de áudio).
+        if tts_allowed() && matches!(self.stream_tts, StreamingTtsState::Idle) {
             while let Some(ev) = self.infer_tts_partial.try_receive() {
                 let text = core::str::from_utf8(&ev.payload).unwrap_or("");
                 if text.is_empty() {
@@ -813,8 +837,7 @@ mod dstream_tests {
     }
 
     #[test]
-    fn ledger_remainder_e_mismatch_em_sequencia() {
-        // Um único teste p/ o ledger global (paralelismo do harness).
+    fn ledger_remainder_e_mismatch_em_sequencia() {        // Um único teste p/ o ledger global (paralelismo do harness).
         clear_spoken();
         note_spoken("Olá mundo. ");
         assert_eq!(unsaid_remainder("Olá mundo. Como vai?"), "Como vai?");
@@ -827,5 +850,21 @@ mod dstream_tests {
         assert_eq!(unsaid_remainder("resposta nova total."), "resposta nova total.");
         clear_spoken();
         assert_eq!(unsaid_remainder("qualquer coisa"), "qualquer coisa");
+    }
+
+    #[test]
+    fn bench_quiet_on_suprime_tts_off_preserva() {
+        // Default OFF: comportamento atual preservado (greeting sintetiza, tick drena).
+        set_bench_quiet(false);
+        assert!(!bench_quiet());
+        assert!(tts_allowed());
+        // ON: synth do greeting + drains do tick (BOOT_GREET/streaming/parciais)
+        // são pulados via o mesmo predicado.
+        set_bench_quiet(true);
+        assert!(bench_quiet());
+        assert!(!tts_allowed());
+        // Restaura default OFF p/ não vazar estado global p/ outros testes.
+        set_bench_quiet(false);
+        assert!(tts_allowed());
     }
 }

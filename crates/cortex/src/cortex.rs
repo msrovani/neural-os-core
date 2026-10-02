@@ -52,6 +52,88 @@ pub fn kv_cache_reset() {
         for layer in cache.v_scale.iter_mut() { layer.clear(); }
     }
 }
+
+/// P1 lane memória — pool de logits p/ decode (1 alloc + reuse por token).
+/// O HybridAllocator é bump-first com dealloc no-op no bump: cada `Vec`
+/// de logits (vocab 131K × 4B = 512KB) por token consumia a janela
+/// ~2030MB p/ sempre (OOM SESSION_415-417). O pool segura UM `Vec` do
+/// tamanho do vocab vivo entre steps → decode ≈ 0 bytes/token de logits
+/// após o primeiro. Fail-closed: tamanho divergente → `f32_zeros`
+/// (headroom + try_reserve + is_valid) ou caminho legado.
+/// Caller que consome o Tensor devolve via `logits_recycle` após o
+/// argmax/sample (o dado já foi lido — só o backing store é reaproveitado).
+static LOGITS_POOL: spin::LazyLock<spin::Mutex<Option<Vec<f32>>>> = spin::LazyLock::new(|| {
+    spin::Mutex::new(None)
+});
+
+/// Teto do pool: 256K f32 (1MB) — cobre vocab 131K; all_logits do Medusa
+/// (new_len×vocab) NUNCA entra no pool. FP8 ausente de propósito (soft-float
+/// sem FMA = custo puro — logits seguem f32).
+pub const LOGITS_POOL_MAX: usize = 262_144;
+/// Piso do pool: sentinelas (1,1) e microscópicos não ocupam o slot.
+pub const LOGITS_POOL_MIN: usize = 64;
+
+/// Telemetria lock-free do pool (HUD/logs medem reuse, não tok/s).
+static LOGITS_POOLED_HITS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static LOGITS_POOL_FALLBACKS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Hits (0 alloc) vs fallbacks (caminho legado) do pool de logits.
+pub fn logits_pool_stats() -> (u64, u64) {
+    (LOGITS_POOLED_HITS.load(core::sync::atomic::Ordering::Relaxed),
+     LOGITS_POOL_FALLBACKS.load(core::sync::atomic::Ordering::Relaxed))
+}
+
+/// Toma o buffer do pool sse `len == vocab` (0 bytes novos). Divergente →
+/// `f32_zeros` fresco (contrato headroom/try_reserve); refuse → vazio.
+fn logits_take(vocab: usize) -> Vec<f32> {
+    if vocab < LOGITS_POOL_MIN || vocab > LOGITS_POOL_MAX {
+        return Vec::new();
+    }
+    if let Some(v) = LOGITS_POOL.lock().take() {
+        if v.len() == vocab {
+            return v;
+        }
+        // Tamanho de outro modelo — drop (custo único na troca de modelo).
+    }
+    crate::tensor::f32_zeros(vocab)
+}
+
+/// Devolve o backing store ao pool (slot único; cheio/oversize → drop).
+pub fn logits_recycle(v: Vec<f32>) {
+    if v.len() < LOGITS_POOL_MIN || v.len() > LOGITS_POOL_MAX {
+        return;
+    }
+    let mut g = LOGITS_POOL.lock();
+    if g.is_none() {
+        *g = Some(v);
+    }
+}
+
+/// Mesh despacharia este matmul p/ o Master (espelha `dispatch_ternary` —
+/// sem isso o pooled local roubaria a rota do mesh em Workers).
+#[cfg(feature = "p2p")]
+fn mesh_would_dispatch() -> bool {
+    let role = k_nano::net::mesh::local_role();
+    let can_send = matches!(
+        role,
+        k_nano::net::mesh::NodeRole::Worker
+            | k_nano::net::mesh::NodeRole::Memory
+            | k_nano::net::mesh::NodeRole::Compute
+    );
+    if !can_send {
+        return false;
+    }
+    let peers = k_nano::net::mesh::MESH_ENGINE
+        .lock()
+        .as_ref()
+        .map_or(0, |eng| eng.node_count());
+    peers >= 1 && !k_nano::memory::refuse_heavy_frag()
+}
+#[cfg(not(feature = "p2p"))]
+#[inline]
+fn mesh_would_dispatch() -> bool {
+    false
+}
 use crate::nn::{silu, relu2, rms_norm};
 use crate::tensor::{PackedTernaryTensor, Tensor};
 
@@ -847,8 +929,14 @@ impl KvPageList {
 
     /// Dequantize the valid values with one scale per `KV_BLOCK` block into
     /// `out_len` f32 values. Missing scales -> 0.0 (never panics).
+    /// P0 bounded: `f32_zeros` (headroom + try_reserve) — nunca `vec![0.0; n]`
+    /// cru (SESSION_349/351). Refuse → Vec vazio; callers checam len
+    /// (`dequant_all` pads/fail-closed; kv_h2o quebra no length-check).
     pub fn dequant(&self, scales: &[f32], out_len: usize) -> Vec<f32> {
-        let mut out = vec![0.0f32; out_len];
+        let mut out = crate::tensor::f32_zeros(out_len);
+        if out.len() != out_len {
+            return out; // refuse honesto — nunca indexar OOB no fill abaixo
+        }
         let n = self.used.min(out_len);
         let mut idx = 0usize;
         for page in &self.pages {
@@ -901,8 +989,12 @@ pub(crate) fn kv_quantize(src: &[f32]) -> (Vec<i8>, Vec<f32>) {
 
 /// Dequantize `q` with per-block `scales` into `out_len` f32 values
 /// (`x = q as f32 * scale`). Missing scales dequantize to 0.0 (never panics).
+/// P0 bounded: `f32_zeros` + refuse honesto (padrão tensor.rs:29-75).
 pub(crate) fn kv_dequantize(q: &[i8], scales: &[f32], out_len: usize) -> Vec<f32> {
-    let mut out = vec![0.0f32; out_len];
+    let mut out = crate::tensor::f32_zeros(out_len);
+    if out.len() != out_len {
+        return out; // refuse honesto — nunca indexar OOB no fill abaixo
+    }
     let n = q.len().min(out_len);
     for i in 0..n {
         let s = scales.get(i / KV_BLOCK).copied().unwrap_or(0.0);
@@ -1356,6 +1448,80 @@ impl TransformerModel {
         logits
     }
 
+    /// P1 lane — unembed de decode (1 row) SEM alloc nova: preenche o buffer
+    /// do pool via `sse2_ternary_matmul_fill` (MESMO kernel SSE2-128
+    /// metal-safe em que a escada termina + MESMA escala do legado).
+    /// `None` = caminho legado (`unembed_logits`) — nunca resultado parcial.
+    ///
+    /// Gate de equivalência (sem regressão): este path roda SOMENTE quando a
+    /// escada completa resolveria p/ CPU SSE2/scalar de qualquer jeito:
+    /// - Q6K tied → legado (dequant próprio com temp);
+    /// - mesh rotearia p/ Master → legado;
+    /// - NPU/GPU registrado → legado (device pode servir o unembed big);
+    /// - SMP workers vivos / AVX512 permitido / W2A8 ligado → legado;
+    /// - `hidden` não-(1, h) ou shape divergente → legado.
+    /// Fora do x86_64 → legado (o fill é `#[target_feature(sse2)]` x86_64).
+    fn unembed_logits_pooled(&self, hidden: &Tensor, vocab: usize) -> Option<Tensor> {
+        if vocab < LOGITS_POOL_MIN || vocab > LOGITS_POOL_MAX {
+            return None;
+        }
+        // Q6K tied tem dequant próprio (temp) — pool não economiza lá.
+        if self.tie_embeddings && self.embed_type == 1 && self.embed_q6k.is_some() {
+            return None;
+        }
+        if !hidden.is_valid() || hidden.shape.0 != 1 || hidden.shape.1 == 0 {
+            return None;
+        }
+        // Escada ativa em outro anel/nó → legado (não roubar a rota).
+        if mesh_would_dispatch() || crate::compute::accel_registered() {
+            return None;
+        }
+        if crate::bitnet_w2a8::w2a8_enabled() {
+            return None;
+        }
+        if k_nano::platform_probe::allow_avx512() {
+            return None;
+        }
+        if k_nano::platform_probe::allow_smp()
+            && k_nano::smp::ap_pollable()
+            && k_nano::smp::ap_entry_count() > 0
+        {
+            return None;
+        }
+        let hd = hidden.shape.1;
+        let w = if self.tie_embeddings { &self.embed } else { &self.unembed };
+        if w.shape != (hd, vocab) {
+            return None;
+        }
+        let mut buf = logits_take(vocab);
+        if buf.len() != vocab {
+            LOGITS_POOL_FALLBACKS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            return None;
+        }
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            crate::bitnet_sse::sse2_ternary_matmul_fill(w, hidden, 1, hd, vocab, &mut buf);
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            LOGITS_POOL_FALLBACKS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            logits_recycle(buf);
+            return None;
+        }
+        let scale = if self.tie_embeddings { self.embed_scale } else { self.unembed_scale };
+        for v in buf.iter_mut() {
+            *v *= scale;
+        }
+        let t = Tensor::from_row_major((1, vocab), buf)?;
+        if !t.is_valid() {
+            LOGITS_POOL_FALLBACKS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            return None;
+        }
+        crate::matmul_diag::note_call(hd, vocab, 1, 3, true);
+        LOGITS_POOLED_HITS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        Some(t)
+    }
+
     pub fn forward_with_kv(&self, tokens: &[u32], cache: &mut KvCache) -> (Tensor, Tensor) {
         let ctx_cap = if self.hidden >= 2048 {
             crate::heap_aios::last_ctx_cap().min(self.max_seq.min(512))
@@ -1488,6 +1654,9 @@ impl TransformerModel {
         let logits = if crate::vocab_shortlist::skip_full_unembed() {
             // Onda 1: sentinel 1-col — caller usa score_candidates.
             Tensor::zero((1, 1))
+        } else if let Some(t) = self.unembed_logits_pooled(&last_hidden, self.vocab_size as usize) {
+            // P1 lane: decode 1-row reusa o buffer do pool (0 alloc/token).
+            t
         } else {
             self.unembed_logits(&last_hidden, self.vocab_size as usize)
         };
@@ -2023,6 +2192,10 @@ impl TransformerModel {
             shape: (1, self.hidden),
             data: padded,
         };
+        // P1 lane: decode 1-row tenta o pool antes do legado (0 alloc/token).
+        if let Some(t) = self.unembed_logits_pooled(&last_hidden, self.vocab_size as usize) {
+            return (last_hidden, t);
+        }
         let logits = self.unembed_logits(&last_hidden, self.vocab_size as usize);
         (last_hidden, logits)
     }
@@ -4299,6 +4472,8 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
                 if step < max_gen && tokens.len() < max_seq {
                     if let Some(&last) = tokens.last() {
                         let (nh, nl) = model.forward_with_kv(&[last], &mut cache);
+                        // P1 lane: devolve o backing consumido ao pool antes de trocar.
+                        logits_recycle(core::mem::take(&mut last_logits.data));
                         last_hidden = nh;
                         last_logits = nl;
                         shortlist_age = crate::vocab_shortlist::REFRESH_EVERY;
@@ -4322,6 +4497,8 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
             let t_step1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             k_nano::slog_cortex!("GEN", "ok", "step={} token={} kv_cache: {} ticks (ctx={} shortlist={})",
                 step, next, t_step1 - t_step, tokens.len(), use_sl as u8);
+            // P1 lane: devolve o backing consumido ao pool antes de trocar.
+            logits_recycle(core::mem::take(&mut last_logits.data));
             last_hidden = new_hidden;
             last_logits = new_logits;
             if use_sl {
@@ -4334,6 +4511,9 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
 
     crate::vocab_shortlist::set_skip_full_unembed(false);
     crate::difficulty_gate::clear_soft_stride_override();
+
+    // P1 lane: último logits volta ao pool (cross-prompt reuse — 1 alloc no total).
+    logits_recycle(core::mem::take(&mut last_logits.data));
 
     // ADR-0047: publish last hidden as latent thought (non-fatal).
     crate::projection::publish_thought(&last_hidden.data);
@@ -5498,4 +5678,115 @@ fn vocab_shortlist_parity_unembed_logits() {
         // Não-candidatos ficam -inf.
         assert_eq!(sc.data[3], NEG_INFINITY);
     }
+}
+
+/// P1 lane memória — pool de logits + paridade pooled↔legado + KV 3.76x.
+/// Teste ÚNICO (não-paralelizável por construção): o pool é um static
+/// compartilhado — fns separadas correriam em threads distintas e o
+/// ptr-reuse flakaria. Sub-casos sequenciais aqui dentro.
+#[cfg(test)]
+#[test]
+fn p1_logits_pool_reuse_parity_and_kv_ratio() {
+    let hidden = 16usize;
+    let tern = |rows: usize, cols: usize, seed: u64| -> PackedTernaryTensor {
+        let mut s = seed;
+        let mut vals = Vec::with_capacity(rows * cols);
+        for _ in 0..rows * cols {
+            s = s.wrapping_mul(1103515245).wrapping_add(12345) & 0x7FFF_FFFF;
+            vals.push(match s % 3 { 0 => 1i8, 1 => -1i8, _ => 0i8 });
+        }
+        PackedTernaryTensor { shape: (rows, cols), packed_data: PackedTernaryTensor::pack_weights(&vals) }
+    };
+    let mk = |vocab: u32, tie: bool| -> TransformerModel {
+        TransformerModel {
+            embed: tern(hidden, vocab as usize, 7),
+            embed_scale: 1.5,
+            layers: Vec::new(),
+            rms_final: Vec::new(),
+            unembed: tern(hidden, vocab as usize, 99),
+            unembed_scale: 0.6,
+            medusa_heads: Vec::new(),
+            vocab_size: vocab,
+            hidden,
+            num_layers: 0,
+            max_seq: 8,
+            num_heads: 2,
+            num_kv_heads: 1,
+            head_dim: 8,
+            kv_dim: 8,
+            intermediate_size: 16,
+            ffn_group_size: 16,
+            tie_embeddings: tie,
+            act_type: 0,
+            embed_type: 0,
+            embed_q6k: None,
+            rope_theta: 10000.0,
+            rope_cos: Vec::new(),
+            rope_sin: Vec::new(),
+        }
+    };
+    let h: Vec<f32> = (0..hidden).map(|i| (i as f32 - 7.0) * 0.3).collect();
+    let hidden_t = Tensor::from_row_major((1, hidden), h).unwrap();
+
+    // 1) Reuse: take → recycle → take devolve a MESMA alocação (0 bytes novos).
+    let v0 = logits_take(96);
+    assert_eq!(v0.len(), 96);
+    let p0 = v0.as_ptr();
+    logits_recycle(v0);
+    let v1 = logits_take(96);
+    assert_eq!(v1.len(), 96);
+    assert_eq!(v1.as_ptr(), p0, "pool não reutilizou o backing store");
+    logits_recycle(v1);
+
+    // 2) Gates que recusam honesto (None → caller usa o legado).
+    let m96 = mk(96, false);
+    assert!(m96.unembed_logits_pooled(&hidden_t, 0).is_none(), "vocab 0");
+    assert!(m96.unembed_logits_pooled(&hidden_t, LOGITS_POOL_MAX + 1).is_none(), "oversize");
+    let two_rows = Tensor::from_row_major((2, hidden), alloc::vec![0.1f32; 2 * hidden]).unwrap();
+    assert!(m96.unembed_logits_pooled(&two_rows, 96).is_none(), "m!=1");
+    let mut mq = mk(96, true);
+    mq.embed_type = 1;
+    mq.embed_q6k = Some(alloc::vec![0u8; 64]);
+    assert!(mq.unembed_logits_pooled(&hidden_t, 96).is_none(), "q6k→legado");
+
+    // 3) Paridade pooled↔legado (alinhado 96 + tail 98), tied e untied.
+    //    Tolerância: host pode resolver o legado via AVX2-FMA (ordem de
+    //    soma distinta do SSE ADD/SUB) — contrato é argmax + 1e-3.
+    let (hits_before, _) = logits_pool_stats();
+    for (vocab, tie) in [(96u32, false), (96, true), (98, false), (98, true)] {
+        let m = mk(vocab, tie);
+        let want = m.unembed_logits(&hidden_t, vocab as usize);
+        assert!(want.is_valid());
+        let got = m.unembed_logits_pooled(&hidden_t, vocab as usize)
+            .expect("pooled recusou no host sem speedups (gates?)");
+        assert!(got.is_valid());
+        assert_eq!(got.shape, (1, vocab as usize));
+        for i in 0..vocab as usize {
+            assert!(
+                (got.data[i] - want.data[i]).abs() <= 1e-3,
+                "paridade vocab={vocab} tie={tie} i={i}: got={} want={}",
+                got.data[i], want.data[i]
+            );
+        }
+        assert_eq!(argmax_row(&got, 0), argmax_row(&want, 0), "argmax divergiu vocab={vocab}");
+        logits_recycle(got.data);
+    }
+    let (hits_after, _) = logits_pool_stats();
+    assert!(hits_after > hits_before, "pool nunca acertou");
+
+    // 4) KV INT8 paginado: bytes_used/f32 = 3.76x (4096/1088), não 4x —
+    //    a escala f32 por bloco-64 come 1/17 do ganho (SESSION_414).
+    let kd = 1024usize;
+    let n = 8usize;
+    let mut cache = KvCache::new(1, kd, kd);
+    let k = Tensor::from_row_major((1, kd), alloc::vec![0.5f32; kd]).unwrap();
+    let v = Tensor::from_row_major((1, kd), alloc::vec![0.25f32; kd]).unwrap();
+    for _ in 0..n {
+        cache.append(0, &k, &v);
+        cache.advance(1);
+    }
+    let int8 = cache.bytes_used();
+    let f32b = kv_bytes_f32(1, n, kd);
+    assert_eq!(f32b, 8 * n * kd);
+    assert_eq!(int8 * 100 / f32b, 26, "ratio int8/f32={} (esperado ~26.5% = 1/3.76)", int8 * 100 / f32b);
 }

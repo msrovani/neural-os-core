@@ -80,7 +80,11 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
         return Some(r);
     }
 
-    // Host AVX2 (FMA dequant — bandwidth ≠ contrato lab; ok em testes)
+    // Host AVX2 (FMA dequant — bandwidth ≠ contrato lab; ok em testes).
+    // Host-only: AVX2-256/bitwise/W2A8-maddubs NUNCA no metal soft-float
+    // (SESSION_412: 12× pior; SESSION_336: XMM i8 mal-compilado). No metal
+    // (`target_os="none"`) este ramo nem compila — cai no SSE2-128 abaixo.
+    #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
     if k_nano::platform_probe::allow_avx2() && k >= 8 && n >= 8 && n % 4 == 0 {
         let r = unsafe { crate::bitnet_avx2::avx2_ternary_matmul_impl(weight, input, m, k, n) };
         crate::matmul_diag::note_call(k, n, m, 4, r.is_valid());
@@ -151,6 +155,12 @@ pub(crate) unsafe fn sse2_ternary_matmul_skip_native(
 
 /// Matmul ternário: por peso ADD/SUB/SKIP; acc em `_mm_add_ps` (4 lanes).
 /// Preenche `out` (len == m*n) — **não** retorna Tensor (sret soft-float #GP).
+/// Escada metal = SSE2-128 APENAS: só `_mm_setzero_ps`/`_mm_loadu_ps`/
+/// `_mm_add_ps`/`_mm_storeu_ps` (f32). Sem intrins XMM i8
+/// (`_mm_loadu_si128`, `_mm_cvtepi8_*`, `_mm_movemask_epi8` — SESSION_336:
+/// mal-compilados no target soft-float, zeravam o canal G/lixo silencioso).
+/// Pesos via `get_weight` + delta f32 em stack; alloc (`Tensor::new`) sempre
+/// FORA do `#[target_feature]` (caller), nunca dentro.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 pub(crate) unsafe fn sse2_ternary_matmul_fill(

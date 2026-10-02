@@ -343,6 +343,12 @@ pub unsafe fn gemv_from_vram(
 }
 
 /// Gate: BAR compute só depois do canário de round-trip (stage ≥ Mapped).
+/// Honestidade ADR-0112: `Mapped` = pesos residentes + GEMV no HOST lendo a
+/// aperture — este gate NÃO afirma compute no device. `note_gpu_compute`
+/// (SYS_HEALTH gpu) é chamado SÓ no backend pós-canário `Pass`
+/// (`backend::gpu_matmul` com `COMPUTE_STATE == Ready`); stage `Mapped`
+/// sozinho mantém gpu UNKNOWN. O WIN medido aqui é RAM liberada
+/// (`total_bytes` fora da janela ~2030MB), nunca tok/s.
 pub fn bar_compute_enabled() -> bool {
     matches!(stage(), StreamStage::Mapped | StreamStage::StreamsW2a8 | StreamStage::ComputeDevice)
 }
@@ -440,5 +446,23 @@ mod tests {
         let x = Tensor::zero((1, 128));
         // Sem SEQ_MATS preenchido (host) → None em qualquer slot.
         assert!(vram_ternary_seq(0, &w, &x).is_none());
+    }
+
+    /// ADR-0112 honesty: sem aperture o lane NUNCA ativa — `on_model_loaded`
+    /// é no-op (sem panic, sem registro parcial) e o seq segue None.
+    /// Stage `Mapped` jamais afirma compute no device: `note_gpu_compute`
+    /// vive SÓ no backend pós-canário `Pass` (verificado por inspeção —
+    /// este módulo não referencia `sys_health::note_gpu_compute`).
+    #[test]
+    fn on_model_loaded_sem_stage_e_noop_honesto() {
+        if stage() == StreamStage::Off {
+            assert!(!bar_compute_enabled());
+            on_model_loaded(); // no-op honesto: sem aperture, nada a subir
+            assert!(!bar_compute_enabled());
+            assert!(!weights_uploaded());
+            let w = PackedTernaryTensor { packed_data: alloc::vec![0u8; 4096], shape: (128, 128) };
+            let x = Tensor::zero((1, 128));
+            assert!(vram_ternary_seq(0, &w, &x).is_none());
+        }
     }
 }

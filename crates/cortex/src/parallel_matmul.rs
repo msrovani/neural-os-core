@@ -43,6 +43,11 @@ static TERNARY_LOG_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Fase 2 (s-prefill): separa compute (worker) de sync (barreira) no SMP.
 static TERN_MAX_WORKER_US: AtomicU64 = AtomicU64::new(0);
 static TERN_WORKERS_DONE: AtomicU64 = AtomicU64::new(0);
+/// Sparsity MEDIDA, não claim (SESSION_352: claim sem artefato = overclaim).
+/// Pesos ternários 0 (pulados via ADD/SUB/SKIP) vs totais, acumulados pelos
+/// workers do ÚLTIMO dispatch — reset no boundary de cada matmul.
+static TERN_SKIP_ZERO_TOTAL: AtomicU64 = AtomicU64::new(0);
+static TERN_WEIGHT_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 struct MatmulJobCtx {
     a_ptr: *const f32,
@@ -219,6 +224,29 @@ struct TernaryJobCtx {
 static T_CTX: AtomicPtr<TernaryJobCtx> = AtomicPtr::new(core::ptr::null_mut());
 static COLS_CLAIMED: AtomicUsize = AtomicUsize::new(0);
 
+/// Tile próprio de COLUNAS do ternary_worker (SESSION_412) — NÃO reusar
+/// `matmul_tile_rows(k,n)` (fórmula de LINHAS: devolvia 4 → clamp 8 colunas =
+/// 2 B usados por linha de cache de 64 B).
+///
+/// Fit L1: strip packed por coluna = k/4 B + vetor x = k*4 B cabem em ~24 KB
+/// de L1d (32 KB típico). Sweep do piso (Falcon3-1B, prefill m=8, worker
+/// k=2048 n=8192): 8→204 ms, 16→154 ms, 32→105 ms, 64→130 ms, 128→127 ms.
+/// 32 é o ótimo (strip 16 KB + x 8 KB = 24 KB); 16 amortece pouco o load de
+/// x, 64+ estoura o L1. Resultado sempre múltiplo de 4 (byte-alinhado:
+/// 4 pesos/byte) via `& !3`; piso 32, teto 256.
+#[inline]
+fn ternary_col_tile(k: usize, n: usize) -> usize {
+    const L1_BUDGET: usize = 24 * 1024;
+    let x_bytes = k.saturating_mul(4).min(L1_BUDGET / 2);
+    let per_col = (k / 4).max(1);
+    let avail = L1_BUDGET.saturating_sub(x_bytes);
+    let fit = avail / per_col;
+    let t = fit.clamp(32, 256) & !3;
+    // Não pedir mais colunas que o problema tem (arredonda n p/ mult. de 4).
+    let cap = ((n + 3) & !3).max(4);
+    t.min(cap).max(4)
+}
+
 unsafe fn ternary_worker(_job_id: usize, _worker: usize) {
     let ctx = T_CTX.load(Ordering::Acquire);
     if ctx.is_null() {
@@ -228,18 +256,19 @@ unsafe fn ternary_worker(_job_id: usize, _worker: usize) {
     let t_w0 = k_nano::tsc::now_us();
     let w = &*c.w_ptr;
     // Tile de colunas múltiplo de 4 (byte-alinhado p/ bulk-load 4 pesos/byte).
-    // `matmul_tile_rows` é fórmula de tile de LINHAS e devolvia 4 → 8 colunas =
-    // 2 B usados por linha de cache (64 B). Sweep do piso em s411 (worker
-    // k=2048 n=8192, Falcon3-1B, prefill m=8): 8→204, 16→154, 32→105, 64→130,
-    // 128→127 ms. 32 é o ótimo — o strip packed (k/4 B por coluna) cabe no L1
-    // junto do x (16 KB + 8 KB = 24 KB de 32); 16 amortece pouco o load de x e 64
-    // já estoura o L1 (32 KB + 8 KB). AVX2 no alvo soft-float é 12× PIOR (256-bit
-    // não emite; f32 vira libcall) — não reintroduzir.
-    let tile = k_nano::platform_probe::matmul_tile_rows(c.k, c.n).clamp(32, 256) & !3;
+    // Fórmula própria de COLUNAS (ternary_col_tile): fit L1 strip k/4 + x.
+    // Sweep s412 (k=2048 n=8192): 8→204, 16→154, 32→105, 64→130, 128→127 ms.
+    // AVX2-256 no alvo soft-float é 12× PIOR (256-bit não emite no target
+    // soft-float; f32 vira libcall) — path metal nunca importa AVX2.
+    let tile = ternary_col_tile(c.k, c.n);
     // Fase 2d: t-externo (acesso sequencial) + BULK — 1 load de byte por 4 pesos
     // em vez de 1 por peso. O LUT (que ADICIONAVA um load) regrediu 2,1×; este
     // remove 3 de cada 4 loads. Sem tabela, sem SIMD.
     let mut acc = [0.0f32; 256];
+    // Sparsity: contadores LOCAIS por worker, somados 1× ao fim — nunca
+    // atomic por peso no hot-inner (custo zero quando não lido).
+    let mut skip_zero: u64 = 0;
+    let mut weight_total: u64 = 0;
     loop {
         let jstart = COLS_CLAIMED.fetch_add(tile, Ordering::Relaxed);
         if jstart >= c.n {
@@ -260,31 +289,33 @@ unsafe fn ternary_worker(_job_id: usize, _worker: usize) {
                     match byte & 3 {
                         1 => acc[jj] += xv,
                         2 => acc[jj] -= xv,
-                        _ => {}
+                        _ => skip_zero += 1,
                     }
                     match (byte >> 2) & 3 {
                         1 => acc[jj + 1] += xv,
                         2 => acc[jj + 1] -= xv,
-                        _ => {}
+                        _ => skip_zero += 1,
                     }
                     match (byte >> 4) & 3 {
                         1 => acc[jj + 2] += xv,
                         2 => acc[jj + 2] -= xv,
-                        _ => {}
+                        _ => skip_zero += 1,
                     }
                     match (byte >> 6) & 3 {
                         1 => acc[jj + 3] += xv,
                         2 => acc[jj + 3] -= xv,
-                        _ => {}
+                        _ => skip_zero += 1,
                     }
+                    weight_total += 4;
                     jj += 4;
                 }
                 while jj < width {
                     match w.get_weight(base + jj) {
                         1 => acc[jj] += xv,
                         -1 => acc[jj] -= xv,
-                        _ => {}
+                        _ => skip_zero += 1,
                     }
+                    weight_total += 1;
                     jj += 1;
                 }
             }
@@ -292,6 +323,10 @@ unsafe fn ternary_worker(_job_id: usize, _worker: usize) {
                 *c.c_ptr.add(i * c.n + jstart + jj) = acc[jj];
             }
         }
+    }
+    if weight_total > 0 {
+        TERN_SKIP_ZERO_TOTAL.fetch_add(skip_zero, Ordering::Relaxed);
+        TERN_WEIGHT_TOTAL.fetch_add(weight_total, Ordering::Relaxed);
     }
     let wd = k_nano::tsc::now_us().saturating_sub(t_w0);
     TERN_MAX_WORKER_US.fetch_max(wd, Ordering::Relaxed);
@@ -335,6 +370,9 @@ pub fn parallel_ternary_matmul(
     });
     COLS_CLAIMED.store(0, Ordering::Release);
     T_CTX.store(&mut *ctx as *mut _, Ordering::Release);
+    // Sparsity: janela = 1 dispatch (último matmul SMP medido).
+    TERN_SKIP_ZERO_TOTAL.store(0, Ordering::Release);
+    TERN_WEIGHT_TOTAL.store(0, Ordering::Release);
 
     let aps = k_nano::smp::ap_entry_count() as usize;
     let n_workers = aps + 1;
@@ -398,11 +436,12 @@ pub fn parallel_ternary_matmul(
     let t_total = k_nano::tsc::now_us().saturating_sub(t_mm0);
     let wmax = TERN_MAX_WORKER_US.swap(0, Ordering::Relaxed);
     let wdone = TERN_WORKERS_DONE.swap(0, Ordering::Relaxed);
+    let (skip, wtot) = skip_ratio().unwrap_or((0, 0));
     if log_it {
         k_nano::slog_cortex!(
             "cortex",
             "warn",
-            "matmul exit m={} k={} n={} us={} workers={} worker_max_us={} sync_us={} split=[setup={} bsp={} bar={}]",
+            "matmul exit m={} k={} n={} us={} workers={} worker_max_us={} sync_us={} split=[setup={} bsp={} bar={}] skip={}/{}",
             m,
             k,
             n,
@@ -412,8 +451,73 @@ pub fn parallel_ternary_matmul(
             t_total.saturating_sub(wmax),
             t_ipi.saturating_sub(t_mm0),
             t_bsp.saturating_sub(t_ipi),
-            t_bar.saturating_sub(t_bsp)
+            t_bar.saturating_sub(t_bsp),
+            skip,
+            wtot
         );
     }
     Some(result)
+}
+
+/// Sparsity medida do último dispatch ternário SMP: `(zeros pulados, total)`.
+/// `None` = nenhum dispatch medido ainda (n/a ≠ 0, SESSION_411).
+pub fn skip_ratio() -> Option<(u64, u64)> {
+    let total = TERN_WEIGHT_TOTAL.load(Ordering::Acquire);
+    if total == 0 {
+        return None;
+    }
+    Some((TERN_SKIP_ZERO_TOTAL.load(Ordering::Acquire), total))
+}
+
+#[cfg(test)]
+mod col_tile_tests {
+    use super::{skip_ratio, ternary_col_tile, TERN_SKIP_ZERO_TOTAL, TERN_WEIGHT_TOTAL};
+    use crate::tensor::PackedTernaryTensor;
+    use core::sync::atomic::Ordering;
+
+    #[test]
+    fn col_tile_fit_l1_sweep_shape_is_32() {
+        // Shape do sweep s412 (k=2048 n=8192): ótimo medido 32.
+        assert_eq!(ternary_col_tile(2048, 8192), 32);
+    }
+
+    #[test]
+    fn col_tile_always_mul4_and_bounded() {
+        for (k, n) in [(64, 64), (512, 128), (2048, 8192), (8192, 8192), (128, 16)] {
+            let t = ternary_col_tile(k, n);
+            assert_eq!(t & 3, 0, "k={k} n={n} tile={t} não é mult. de 4");
+            assert!((4..=256).contains(&t), "k={k} n={n} tile={t} fora de [4,256]");
+            assert!(t <= ((n + 3) & !3).max(4), "k={k} n={n} tile={t} > n");
+        }
+    }
+
+    #[test]
+    fn skip_ratio_none_sem_amostra_e_known_ratio() {
+        // n/a ≠ 0 (SESSION_411): sem dispatch medido = None, não 0.
+        TERN_SKIP_ZERO_TOTAL.store(0, Ordering::Relaxed);
+        TERN_WEIGHT_TOTAL.store(0, Ordering::Relaxed);
+        assert_eq!(skip_ratio(), None);
+        // 1 zero em 4 pesos = 25% de sparsity medida.
+        TERN_SKIP_ZERO_TOTAL.store(1, Ordering::Relaxed);
+        TERN_WEIGHT_TOTAL.store(4, Ordering::Relaxed);
+        assert_eq!(skip_ratio(), Some((1, 4)));
+        TERN_SKIP_ZERO_TOTAL.store(0, Ordering::Relaxed);
+        TERN_WEIGHT_TOTAL.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn packed_byte_zero_count_matches_pack() {
+        // [1,0,-1,0] → 01|00|10|00 = 0b00100001; 2 zeros dos 4 pesos.
+        let packed = PackedTernaryTensor::pack_weights(&[1, 0, -1, 0]);
+        assert_eq!(packed[0], 0b00_10_00_01);
+        let w = PackedTernaryTensor { shape: (1, 4), packed_data: packed };
+        let zeros = (0..4).filter(|&i| w.get_weight(i) == 0).count() as u64;
+        assert_eq!(zeros, 2);
+        // Contrato do worker: total conta os 4 pesos do byte.
+        TERN_SKIP_ZERO_TOTAL.store(zeros, Ordering::Relaxed);
+        TERN_WEIGHT_TOTAL.store(4, Ordering::Relaxed);
+        assert_eq!(skip_ratio(), Some((2, 4)));
+        TERN_SKIP_ZERO_TOTAL.store(0, Ordering::Relaxed);
+        TERN_WEIGHT_TOTAL.store(0, Ordering::Relaxed);
+    }
 }

@@ -15,7 +15,7 @@ use event_bus::{CapabilityToken, Event};
 use spin::Mutex;
 
 use crate::cortex::{
-    infer_guard_begin, infer_guard_end, infer_in_flight, KvCache,
+    infer_guard_begin, infer_guard_end, infer_in_flight, logits_recycle, KvCache,
     CURRENT_MODEL, CURRENT_STREAMING_MODEL, global_kv_cache_take, global_kv_cache_store,
     NO_MODEL_MSG, TOPIC_LLM_RESPONSE, model_is_loaded,
 };
@@ -702,6 +702,11 @@ fn try_claim_into_active() -> bool {
 fn finish_job(st: &mut ActiveState, text: &str) {
     crate::heap_aios::clear_job_overrides();
     crate::vocab_shortlist::set_skip_full_unembed(false);
+    // P1 lane: logits do job voltam ao pool (cross-job reuse — o warmup do
+    // próximo job não paga 512KB; mesmo padrão de generate_speculative:4506).
+    if let Some(t) = st.last_logits.take() {
+        logits_recycle(t.data);
+    }
     // Fecha wall-clock do decode (tok/s Hub Health).
     let t0 = DECODE_T0_US.swap(0, Ordering::AcqRel);
     let job_toks = DECODE_JOB_TOKS.swap(0, Ordering::AcqRel);
@@ -1095,7 +1100,10 @@ fn run_prefill_step(st: &mut ActiveState) {
         );
         return;
     }
-    let t_slice0 = k_nano::tsc::now_us();
+    // SESSION_413: TSC DEPOIS de qualquer log — `t_slice0` é capturado após
+    // o `prefill_step enter` abaixo (o slog serial ~1,4ms contaminava o
+    // `slice_us` e o instrumento media a si mesmo). Lock-wait/model-absent
+    // ficam fora da medida: ela cobre só o compute do slice.
     let guard = CURRENT_MODEL.lock();
     let Some(model_box) = guard.as_ref() else {
         drop(guard);
@@ -1143,6 +1151,7 @@ fn run_prefill_step(st: &mut ActiveState) {
 
     // Instrumentação s-prefill: prova em qual layer o slice ENTRA (o EXIT
     // correspondente vem depois do loop; ausência = hang dentro da layer).
+    // Cap 40/boot — fora do hot path após o warmup (não precisa de 1/20).
     let step_log = PREFILL_STEP_LOGGED.fetch_add(1, Ordering::Relaxed) < PREFILL_STEP_LOG_CAP;
     if step_log {
         k_nano::slog_cortex!(
@@ -1154,13 +1163,22 @@ fn run_prefill_step(st: &mut ActiveState) {
             st.is_proof as u8
         );
     }
+    // SESSION_413: TSC DEPOIS do log de entrada (ver comentário acima).
+    let t_slice0 = k_nano::tsc::now_us();
 
     while st.prefill_layer < n_layers && applied < layers_per_slice {
         let li = st.prefill_layer;
         st.prefill_layer += 1;
         if soft_stride > 1 && (li % soft_stride) != 0 {
-            // SESSION_351/359: pad KV — OOM aborta job (não desalinha silenciosamente)
+            // SESSION_351/359: pad KV — OOM aborta job (não desalinha silenciosamente).
+            // P0: `checked_mul` fail-fast ANTES de alocar — `Tensor::new`
+            // recusa sozinho (overflow → shape (0,0) + `is_valid()==false`),
+            // mas o pre-check evita `try_reserve` em tamanho com wrap.
             let kd = cache.k_dim();
+            if st.prefill_new_len.checked_mul(kd).is_none() {
+                pad_oom = true;
+                break;
+            }
             let zk = Tensor::new((st.prefill_new_len, kd));
             let zv = Tensor::new((st.prefill_new_len, kd));
             if zk.is_valid() && zv.is_valid() {
@@ -1217,7 +1235,10 @@ fn run_prefill_step(st: &mut ActiveState) {
         }
     }
     // Budget honesto: layer >100ms em soft-float é esperado; só warn se >2s.
-    if slice_us > 2_000_000 {
+    // P0 hot path: gating 1/20 via TELEM_PREFILL_SLICES (mesmo padrão do
+    // `log_it` em parallel_matmul) — refuses honestos (headroom/pad_oom)
+    // acima NUNCA são gated. TELEM já contou este slice (+1).
+    if slice_us > 2_000_000 && TELEM_PREFILL_SLICES.load(Ordering::Relaxed) % 20 == 1 {
         k_nano::slog_cortex!(
             "InferQ",
             "warn",
@@ -1335,8 +1356,6 @@ fn run_decode_one(st: &mut ActiveState) {
         finish_job(st, &acc);
         return;
     }
-    // Lane A2: decode_us por token da prova.
-    let t_d0 = k_nano::tsc::now_us();
 
     let guard = CURRENT_MODEL.lock();
     let Some(model_box) = guard.as_ref() else {
@@ -1364,6 +1383,14 @@ fn run_decode_one(st: &mut ActiveState) {
         finish_job(st, NO_MODEL_MSG);
         return;
     };
+
+    // Lane A2: decode_us por token. TSC DEPOIS de qualquer log (SESSION_413:
+    // lock-wait/model-absent ficam fora da medida — ela cobre argmax+forward)
+    // e AMOSTRADO fora do hot path: a prova mede todo token (1 token); jobs
+    // regulares só 1/32 ((step & 0x1F)==0) — o tok/s oficial é job-level
+    // (DECODE_T0_US → finish_job), não este instrumento.
+    let sample = st.is_proof || (st.step & 0x1F) == 0;
+    let t_d0 = if sample { k_nano::tsc::now_us() } else { 0 };
 
     if st.tokens.len() >= st.max_seq {
         // Onda 1: H2O no InferQueue (produção).
@@ -1410,20 +1437,24 @@ fn run_decode_one(st: &mut ActiveState) {
     } else {
         crate::cortex::Tokenizer::decode(&[next_u16])
     };
-    // Emit delta before next forward (UI respira).
-    // Model lock still held — emit is EventBus only.
-    // Actually we should drop model lock before heavy TTS publish — EventBus is fine under lock briefly.
-    let piece_clone = piece.clone();
 
     if st.step < st.max_gen && st.tokens.len() < st.max_seq {
+        // P1 lane: backing do token anterior volta ao pool ANTES do forward
+        // (o unembed tenta `logits_take` primeiro — pool vazio = 512KB/token
+        // no bump, OOM SESSION_415-417). Zero alloc/decode após o warmup.
+        logits_recycle(core::mem::take(&mut last_logits.data));
         let (new_hidden, new_logits) = model.forward_with_kv(&[next], cache);
         st.last_hidden = Some(new_hidden);
         *last_logits = new_logits;
     }
     drop(guard);
 
-    push_delta(st, &piece_clone);
-    // Lane A2: decode_us explícito (1 forward do prefill + argmax/decode aqui).
+    // TSC DEPOIS do forward e ANTES do push_delta (EventBus/TTS fora da
+    // medida — SESSION_413: o instrumento não se mede).
+    let t_dend = if t_d0 != 0 { k_nano::tsc::now_us() } else { 0 };
+
+    push_delta(st, &piece);
+    // Lane A2: decode_us explícito (argmax + forward do token).
     if st.is_proof {
         k_nano::slog_cortex!(
             "InferQ",
@@ -1432,8 +1463,19 @@ fn run_decode_one(st: &mut ActiveState) {
             st.job_id,
             st.step,
             next,
-            k_nano::tsc::now_us().saturating_sub(t_d0),
-            piece_clone.len()
+            t_dend.saturating_sub(t_d0),
+            piece.len()
+        );
+    } else if sample && t_dend != 0 {
+        // Telemetria amortizada 1/32 — única linha serial por N tokens.
+        k_nano::slog_cortex!(
+            "InferQ",
+            "ok",
+            "decode_sample id={} step={} tok={} us={}",
+            st.job_id,
+            st.step,
+            next,
+            t_dend.saturating_sub(t_d0)
         );
     }
 
@@ -1449,7 +1491,6 @@ fn run_coarse(st: &mut ActiveState) {
         return;
     }
     DECODE_JOB_TOKS.store(0, Ordering::Release);
-    DECODE_T0_US.store(k_nano::tsc::now_us(), Ordering::Release);
     // SESSION_359: coarse = generate() bloqueante sem yield — barge-in só
     // observável após o retorno. Log honesto; se cancelou durante generate, descarta.
     k_nano::slog_cortex!(
@@ -1458,6 +1499,8 @@ fn run_coarse(st: &mut ActiveState) {
         "coarse generate id={} (uncancellable mid-call)",
         st.job_id
     );
+    // TSC DEPOIS do log (SESSION_413) — o warn serial não entra no wall do job.
+    DECODE_T0_US.store(k_nano::tsc::now_us(), Ordering::Release);
     let text = {
         if let Some(ref sm) = *CURRENT_STREAMING_MODEL.lock() {
             sm.generate(&st.prompt)

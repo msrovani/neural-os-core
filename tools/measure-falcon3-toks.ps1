@@ -113,9 +113,9 @@ function Invoke-Measure([string]$Acc) {
         Start-Sleep -Seconds 8
         $elapsed = [int]$sw.Elapsed.TotalSeconds
         $txt = Read-LogShared $log
-        if ($txt -match "Falcon3 decode_tok/s=(\d+)") {
+        if ($txt -match "Falcon3 decode_tok/s=|\[InferQ\].*decode_tok/s=") {
             $hit = $true
-            $tpsLine = ($txt -split "`n" | Where-Object { $_ -match "decode_tok/s=|milli=" } | Select-Object -Last 5) -join "`n"
+            $tpsLine = ($txt -split "`n" | Where-Object { $_ -match "decode_tok/s=|toks=|\bus=|milli=|prefill_us|decode_us|a2_proof done" } | Select-Object -Last 5) -join "`n"
             Write-Host "[hit] ${elapsed}s"
             Write-Host $tpsLine -ForegroundColor Green
             if ($Window) {
@@ -147,7 +147,7 @@ function Invoke-Measure([string]$Acc) {
         log = $log
         model = $ModelPath
         qemu_pid = $p.Id
-        lines = @(($txt -split "`n" | Where-Object { $_ -match "decode_tok/s=|LLM LOADED|BENCH|Falcon3|h=3072|L=22|Probe 4GB|HDA|FAT" } | Select-Object -Last 30))
+        lines = @(($txt -split "`n" | Where-Object { $_ -match "decode_tok/s=|toks=|\bus=|milli=|prefill_us|decode_us|InferQ|LLM LOADED|BENCH|Falcon3|h=3072|L=22|Probe 4GB|HDA|FAT" } | Select-Object -Last 30))
     }
 }
 
