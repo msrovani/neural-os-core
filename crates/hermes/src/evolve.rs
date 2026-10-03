@@ -52,15 +52,18 @@ impl EvolveLedger {
         wasm: &[u8],
         origin: WasmOrigin,
     ) -> Result<(), &'static str> {
-        let gen = self.bump_gen(name);
-        if gen > MAX_GEN_PER_GAP {
+        // Orçamento só de instalações aceitas. Candidata inválida não queima a geração.
+        let gen_now = self.gen_count.get(name).copied().unwrap_or(0);
+        if gen_now >= MAX_GEN_PER_GAP {
             self.skips = self.skips.saturating_add(1);
             return Err("generation limit");
         }
 
         // Sandbox FIRST — CAP_NONE; do not touch prev/live/registry yet.
-        let test_ok = wasmi_rt::run_wasm(wasm, "_start", &[], wasmi_rt::CAP_NONE).is_ok()
-            || wasmi_rt::run_wasm(wasm, "main", &[], wasmi_rt::CAP_NONE).is_ok();
+        // A fábrica exporta `run`; canned/legado usa `_start` ou `main`.
+        let test_ok = ["_start", "main", "run"].iter().any(|export| {
+            wasmi_rt::run_wasm(wasm, export, &[], wasmi_rt::CAP_NONE).is_ok()
+        });
 
         if !test_ok {
             self.skips = self.skips.saturating_add(1);
@@ -69,11 +72,21 @@ impl EvolveLedger {
                 "warn",
                 "hot_swap sandbox fail skill={} gen={} (registry untouched)",
                 name,
-                gen
+                gen_now
             );
             return Err("hot_swap sandbox failed");
         }
 
+        let prov = match origin {
+            WasmOrigin::Generated => crate::wasmi_rt::SkillProvenance::ModelBorn,
+            WasmOrigin::Compiled | WasmOrigin::External => {
+                crate::wasmi_rt::SkillProvenance::Template
+            }
+        };
+        crate::wasmi_rt::register_wasm_skill_with_provenance(wasm, name, "hot-swap skill", prov)
+            .map_err(|_| "hot_swap register failed")?;
+
+        let gen = self.bump_gen(name);
         // Snapshot currently live bytecode for real rollback (not the candidate).
         if let Some(old) = self.live.get(name).cloned() {
             let ver = self.prev.get(name).map(|v| v.version.saturating_add(1)).unwrap_or(1);
@@ -86,17 +99,8 @@ impl EvolveLedger {
                 },
             );
         }
-
         self.live.insert(String::from(name), wasm.to_vec());
-        // Lane B: WasmSkill (executa no wasmi) + proveniência da origem.
-        let prov = match origin {
-            WasmOrigin::Generated => crate::wasmi_rt::SkillProvenance::ModelBorn,
-            WasmOrigin::Compiled | WasmOrigin::External => {
-                crate::wasmi_rt::SkillProvenance::Template
-            }
-        };
-        crate::wasmi_rt::register_wasm_skill_with_provenance(wasm, name, "hot-swap skill", prov)
-            .map_err(|_| "hot_swap register failed")?;
+        persist_installed_wasm("hot_swap", name, wasm, prov);
         crate::self_evolve::publish_change("skill", name);
         self.swaps_ok = self.swaps_ok.saturating_add(1);
         k_nano::slog_hermes!("EVOLVE", "ok", "hot_swap OK skill={} gen={} prov={}", name, gen, prov.as_str());
@@ -114,7 +118,8 @@ impl EvolveLedger {
             .unwrap_or(crate::wasmi_rt::SkillProvenance::Template);
         crate::wasmi_rt::register_wasm_skill_with_provenance(&bytes, name, "rollback", prov)
             .map_err(|_| "rollback register failed")?;
-        self.live.insert(String::from(name), bytes);
+        self.live.insert(String::from(name), bytes.clone());
+        persist_installed_wasm("rollback", name, &bytes, prov);
         crate::self_evolve::publish_change("skill", name);
         self.rollbacks = self.rollbacks.saturating_add(1);
         k_nano::slog_hermes!("EVOLVE", "ok", "rollback skill={} gen={}", name, gens);
@@ -283,27 +288,9 @@ fn promote_ops_with_provenance(
         return Err(e);
     }
     crate::self_evolve::publish_change("skill", name);
-    // 4. Persistência best-effort: VFS pode não existir no boot cedo/host.
-    let path = alloc::format!("/skills/{}.wasm", name);
-    if crate::fs::write_vfs(&path, &wasm).is_err() {
-        k_nano::slog_hermes!(
-            "EVOLVE",
-            "warn",
-            "ephemeral→WASM skill={} registered prov={}, persist SKIP (VFS absent)",
-            name,
-            provenance.as_str()
-        );
-    }
-    // 4b. Sidecar de proveniência (B3): reload recupera o carimbo ORIGINAL.
-    if crate::wasmi_rt::write_provenance_sidecar(name, provenance).is_err() {
-        k_nano::slog_hermes!(
-            "EVOLVE",
-            "warn",
-            "ephemeral→WASM skill={} prov={} sidecar SKIP (VFS absent)",
-            name,
-            provenance.as_str()
-        );
-    }
+    // 4. Persistência best-effort: VFS ausente no boot cedo/host = skip.
+    // Sidecar `.prov` vai junto para o reload recuperar o carimbo original.
+    persist_installed_wasm("ephemeral→WASM", name, &wasm, provenance);
     // 5. Efeito Matrix best-effort (B3 ≤20 linhas: 1 call; nunca falha o
     // promote — erros viram log dentro do `try_inject_on_promote`).
     let _ = crate::trinity_inject::try_inject_on_promote(name, &wasm);
@@ -317,6 +304,35 @@ fn promote_ops_with_provenance(
         provenance.as_str()
     );
     Ok(())
+}
+
+/// Grava `/skills/{name}.wasm` + sidecar `.prov`. VFS ausente não desfaz o registro.
+fn persist_installed_wasm(
+    stage: &str,
+    name: &str,
+    wasm: &[u8],
+    provenance: crate::wasmi_rt::SkillProvenance,
+) {
+    let path = alloc::format!("/skills/{}.wasm", name);
+    if crate::fs::write_vfs(&path, wasm).is_err() {
+        k_nano::slog_hermes!(
+            "EVOLVE",
+            "warn",
+            "{} skill={} persist SKIP (VFS absent)",
+            stage,
+            name
+        );
+    }
+    if crate::wasmi_rt::write_provenance_sidecar(name, provenance).is_err() {
+        k_nano::slog_hermes!(
+            "EVOLVE",
+            "warn",
+            "{} skill={} prov={} sidecar SKIP (VFS absent)",
+            stage,
+            name,
+            provenance.as_str()
+        );
+    }
 }
 
 /// Boot / DREAM hook: demo swap. H8: sem bytecode real não há swap.
@@ -468,5 +484,29 @@ mod tests {
         assert!(led.prev.get("echo").is_some());
         assert!(led.rollback("echo").is_ok());
         assert_eq!(led.rollbacks, 1);
+        crate::globals::SKILL_REGISTRY.lock().unregister("echo");
+    }
+
+    #[test]
+    fn sandbox_fail_does_not_burn_generation_budget() {
+        let mut led = EvolveLedger::new();
+        let bad = [0u8; 8];
+        let good = wasmi_rt::canned_test_module();
+        for _ in 0..5 {
+            assert_eq!(
+                led.hot_swap("gen_budget", &bad, WasmOrigin::Compiled),
+                Err("hot_swap sandbox failed")
+            );
+        }
+        assert_eq!(led.swaps_ok, 0);
+        assert!(led.hot_swap("gen_budget", &good, WasmOrigin::Compiled).is_ok());
+        assert!(led.hot_swap("gen_budget", &good, WasmOrigin::Compiled).is_ok());
+        assert!(led.hot_swap("gen_budget", &good, WasmOrigin::Compiled).is_ok());
+        assert_eq!(
+            led.hot_swap("gen_budget", &good, WasmOrigin::Compiled),
+            Err("generation limit")
+        );
+        assert_eq!(led.swaps_ok, 3);
+        crate::globals::SKILL_REGISTRY.lock().unregister("gen_budget");
     }
 }

@@ -325,6 +325,163 @@ mod lane_b_tests {
         }
         assert!(!crate::globals::SKILL_REGISTRY.lock().has_skill("lb_app_dummy"));
     }
+
+    /// Escada de criação (ADR-0059): fugaz não registra nem persiste; WASM
+    /// nasce desabilitada (deny-by-default) e sobrevive a unregister+reload;
+    /// definitiva regrava o .wasm, e o reload devolve a versão viva.
+    #[test]
+    fn create_app_fugaz_wasm_definitiva() {
+        use crate::wasm_build::Op;
+        setup_test_vfs();
+
+        let ops = [
+            Op::LocalGet(0),
+            Op::LocalGet(1),
+            Op::I32Add,
+            Op::I32Const(2),
+            Op::I32Mul,
+        ];
+        assert_ran(generate_and_run(&ops, 3, 4), 14, "fugaz");
+        assert!(!crate::globals::SKILL_REGISTRY.lock().has_skill("app_wasm_stage"));
+        assert!(crate::fs::read_vfs("/skills/app_wasm_stage.wasm").is_err());
+
+        assert_ran(
+            generate_persist_and_run("app_wasm_stage", "escada", "a*2+1", &[6]),
+            13,
+            "wasm",
+        );
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance("app_wasm_stage"),
+            Some(crate::wasmi_rt::SkillProvenance::ModelBorn)
+        );
+        assert_eq!(
+            crate::fs::read_vfs("/skills/app_wasm_stage.prov").ok().as_deref(),
+            Some(b"model-born".as_slice())
+        );
+        assert_disabled("app_wasm_stage");
+        enable_skill("app_wasm_stage");
+        assert_exec("app_wasm_stage", b"6", "13");
+
+        crate::globals::SKILL_REGISTRY.lock().unregister("app_wasm_stage");
+        assert!(!crate::globals::SKILL_REGISTRY.lock().has_skill("app_wasm_stage"));
+        assert!(crate::skill_loader::reload_persisted_wasm_skills() >= 1);
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance("app_wasm_stage"),
+            Some(crate::wasmi_rt::SkillProvenance::ModelBorn)
+        );
+        assert_disabled("app_wasm_stage");
+        enable_skill("app_wasm_stage");
+        assert_exec("app_wasm_stage", b"6", "13");
+
+        let v1 = mul_bias_module(2, 1);
+        let v2 = mul_bias_module(3, 1);
+        let mut led = crate::evolve::EvolveLedger::new();
+        assert!(led
+            .hot_swap("app_def_stage", &v1, crate::evolve::WasmOrigin::Generated)
+            .is_ok());
+        assert_eq!(crate::fs::read_vfs("/skills/app_def_stage.wasm").ok().as_deref(), Some(v1.as_slice()));
+        assert_disabled("app_def_stage");
+        enable_skill("app_def_stage");
+        assert_exec("app_def_stage", b"6", "13");
+
+        assert!(led
+            .hot_swap("app_def_stage", &v2, crate::evolve::WasmOrigin::Generated)
+            .is_ok());
+        assert_eq!(crate::fs::read_vfs("/skills/app_def_stage.wasm").ok().as_deref(), Some(v2.as_slice()));
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance("app_def_stage"),
+            Some(crate::wasmi_rt::SkillProvenance::ModelBorn)
+        );
+        assert_exec("app_def_stage", b"6", "19");
+
+        assert!(led
+            .hot_swap("app_def_stage", &[0u8; 8], crate::evolve::WasmOrigin::Generated)
+            .is_err());
+        assert_eq!(crate::fs::read_vfs("/skills/app_def_stage.wasm").ok().as_deref(), Some(v2.as_slice()));
+        assert_exec("app_def_stage", b"6", "19");
+
+        crate::globals::SKILL_REGISTRY.lock().unregister("app_def_stage");
+        assert!(crate::skill_loader::reload_persisted_wasm_skills() >= 1);
+        enable_skill("app_def_stage");
+        assert_exec("app_def_stage", b"6", "19");
+
+        assert!(led.rollback("app_def_stage").is_ok());
+        assert_eq!(crate::fs::read_vfs("/skills/app_def_stage.wasm").ok().as_deref(), Some(v1.as_slice()));
+        crate::globals::SKILL_REGISTRY.lock().unregister("app_def_stage");
+        assert!(crate::skill_loader::reload_persisted_wasm_skills() >= 1);
+        enable_skill("app_def_stage");
+        assert_exec("app_def_stage", b"6", "13");
+
+        crate::globals::SKILL_REGISTRY.lock().unregister("app_wasm_stage");
+        crate::globals::SKILL_REGISTRY.lock().unregister("app_def_stage");
+    }
+
+    fn setup_test_vfs() {
+        {
+            let mut guard = crate::vfs::VFS.lock();
+            if guard.is_none() {
+                *guard = Some(crate::vfs::VfsRegistry::new());
+            }
+            if let Some(ref mut v) = *guard {
+                if !v.mount_table().iter().any(|m| m.mount_point == "/skills") {
+                    v.mount("/skills", "ramfs");
+                }
+            }
+        }
+        if crate::fs::FS_AGENTS.lock().is_empty() {
+            crate::fs::register_fs_agent(alloc::boxed::Box::new(
+                crate::fs::ram_fs_agent::RamFsAgent::new(),
+            ));
+        }
+    }
+
+    fn assert_disabled(name: &str) {
+        let err = crate::globals::SKILL_REGISTRY
+            .lock()
+            .execute_skill_unchecked(name, b"6");
+        assert_eq!(err, Err("skill desabilitada por politica"));
+    }
+
+    fn assert_exec(name: &str, payload: &[u8], needle: &str) {
+        let out = crate::globals::SKILL_REGISTRY
+            .lock()
+            .execute_skill_unchecked(name, payload)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let text = core::str::from_utf8(&out).unwrap_or("");
+        assert!(text.contains(needle), "{name} saida: {text}");
+    }
+
+    fn enable_skill(name: &str) {
+        crate::globals::SKILL_REGISTRY.lock().set_policy(
+            name,
+            skill_registry::ToolPolicy {
+                enabled: true,
+                auto_approve: false,
+            },
+        );
+    }
+
+    fn assert_ran(got: FactoryOutcome, want: i32, stage: &str) {
+        match got {
+            FactoryOutcome::RanWasm(v) if v == want => {}
+            FactoryOutcome::RanWasm(v) => panic!("{stage} esperava {want}, veio {v}"),
+            FactoryOutcome::Denied(e) => panic!("{stage} negado: {e}"),
+            FactoryOutcome::AwaitingIsolation(_) => panic!("{stage} ficou gated"),
+            FactoryOutcome::RanNative(v) => panic!("{stage} nativo {v}"),
+        }
+    }
+
+    fn mul_bias_module(coeff: i32, bias: i32) -> alloc::vec::Vec<u8> {
+        use crate::wasm_build::Op;
+        let ops = [
+            Op::LocalGet(0),
+            Op::I32Const(coeff),
+            Op::I32Mul,
+            Op::I32Const(bias),
+            Op::I32Add,
+        ];
+        crate::wasm_build::build_run_module(1, &ops).expect("modulo")
+    }
 }
 
 

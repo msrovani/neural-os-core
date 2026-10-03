@@ -150,9 +150,13 @@ impl RingBufStore {
         let key = alloc::string::String::from(path.trim_matches('/'));
         if key.is_empty() { return Err("no path"); }
         let mut files = self.files.lock();
+        // Reescrita do mesmo path (hot_swap da versão definitiva) não soma a cota de novo.
+        if let Some(prev) = files.remove(&key) {
+            self.bytes.fetch_sub(prev.len() as u64, core::sync::atomic::Ordering::Relaxed);
+        }
 
-        // Evict oldest entries until quota fits
-        while self.bytes.load(core::sync::atomic::Ordering::Relaxed) + data.len() as u64 > self.max {
+        let need = data.len() as u64;
+        while self.bytes.load(core::sync::atomic::Ordering::Relaxed).saturating_add(need) > self.max {
             if let Some(oldest) = files.keys().next().cloned() {
                 if let Some(removed) = files.remove(&oldest) {
                     self.bytes.fetch_sub(removed.len() as u64, core::sync::atomic::Ordering::Relaxed);
@@ -160,7 +164,7 @@ impl RingBufStore {
             } else { break; }
         }
 
-        self.bytes.fetch_add(data.len() as u64, core::sync::atomic::Ordering::Relaxed);
+        self.bytes.fetch_add(need, core::sync::atomic::Ordering::Relaxed);
         files.insert(key, Vec::from(data));
         Ok(())
     }

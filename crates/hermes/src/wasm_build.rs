@@ -22,9 +22,9 @@ pub enum Op {
     I32Add, I32Sub, I32Mul,
     Drop,
     I32LtS, I32GtS, I32Eq, I32Eqz,
-    /// Short-circuit AND: a && b -> select(a, b, 0). Branchless.
+    /// AND de curto-circuito. O parser emite `If/Else`, não este op.
     LogicalAnd,
-    /// Short-circuit OR: a || b -> select(a, 1, b). Branchless.
+    /// OR de curto-circuito. O parser emite `If/Else`, não este op.
     LogicalOr,
     Block(BlockResult), Loop(BlockResult), If(BlockResult), Else,
     Br(u32), BrIf(u32), End,
@@ -317,10 +317,11 @@ impl<'a> ExprParser<'a> {
     fn ident_char(c: u8) -> bool { c.is_ascii_alphanumeric() || c == b'_' }
 
     fn param_index(&mut self, name: &[u8]) -> Result<u32, &'static str> {
-        if name.len() >= 2 && name[0] == b'p' && name[1..].iter().all(|b| b.is_ascii_digit()) {
+            if name.len() >= 2 && name[0] == b'p' && name[1..].iter().all(|b| b.is_ascii_digit()) {
             let text = core::str::from_utf8(&name[1..]).map_err(|_| "op-IR: pN inválido")?;
             let idx = text.parse::<u32>().map_err(|_| "op-IR: pN inválido")?;
-            if idx > 256 { return Err("op-IR: pN > 256"); }
+            // wasmi EnforcedLimits::strict recusa tipo com >32 parâmetros.
+            if idx >= 32 { return Err("op-IR: pN >= 32"); }
             while (self.params.len() as u32) <= idx { self.params.push(Vec::new()); }
             return Ok(idx);
         }
@@ -346,6 +347,9 @@ impl<'a> ExprParser<'a> {
     // ─── Precedence: if > comparison > additive > term > factor ───
 
     fn parse_expr(&mut self, ops: &mut Vec<Op>) -> Result<(), &'static str> {
+        // Marca só a condição. `drain(..)` levava operandos do lado de fora
+        // (`a+(b?1:0)` virava select com `a` dentro da condição).
+        let cond_base = ops.len();
         self.parse_logical_or(ops)?;
         // ternário branchless: `cond ? a : b`
         // WASM select pop order: c (top), val2, val1 → push val1, val2, c, select
@@ -354,8 +358,7 @@ impl<'a> ExprParser<'a> {
         if !self.at_end() && self.peek() == b'?' {
             self.pos += 1;
             self.skip_ws();
-            // Condition ops já estão em ops -- move para buffer
-            let cond_ops: Vec<Op> = ops.drain(..).collect();
+            let cond_ops: Vec<Op> = ops.drain(cond_base..).collect();
             let mut true_ops = Vec::new();
             self.parse_expr(&mut true_ops)?;
             self.skip_ws();
@@ -508,17 +511,19 @@ impl<'a> ExprParser<'a> {
                 self.pos += 1;
                 Ok(())
             }
-            b'0'..=b'9' | b'-' => {
-                let start = self.pos;
-                if self.peek() == b'-' { self.pos += 1; }
-                let d0 = self.pos;
-                while !self.at_end() && self.peek().is_ascii_digit() { self.pos += 1; }
-                if self.pos == d0 { return Err("op-IR: número malformado"); }
-                let text = core::str::from_utf8(&self.src[start..self.pos])
-                    .map_err(|_| "op-IR: não-utf8")?;
-                let v: i32 = text.parse().map_err(|_| "op-IR: i32 fora de faixa")?;
-                ops.push(Op::I32Const(v));
-                Ok(())
+            b'0'..=b'9' => self.push_number(ops),
+            b'-' => {
+                let next = self.src.get(self.pos + 1).copied().unwrap_or(0);
+                if next.is_ascii_digit() {
+                    self.push_number(ops)
+                } else {
+                    // `-a` / `-(...)`: 0 - fator. Sem isto o fator exigia dígito.
+                    self.pos += 1;
+                    ops.push(Op::I32Const(0));
+                    self.parse_factor(ops)?;
+                    ops.push(Op::I32Sub);
+                    Ok(())
+                }
             }
             c if Self::ident_start(c) => {
                 let start = self.pos;
@@ -624,8 +629,22 @@ impl<'a> ExprParser<'a> {
         Ok(())
     }
 
+    fn push_number(&mut self, ops: &mut Vec<Op>) -> Result<(), &'static str> {
+        let start = self.pos;
+        if self.peek() == b'-' { self.pos += 1; }
+        let d0 = self.pos;
+        while !self.at_end() && self.peek().is_ascii_digit() { self.pos += 1; }
+        if self.pos == d0 { return Err("op-IR: número malformado"); }
+        let text = core::str::from_utf8(&self.src[start..self.pos])
+            .map_err(|_| "op-IR: não-utf8")?;
+        let v: i32 = text.parse().map_err(|_| "op-IR: i32 fora de faixa")?;
+        ops.push(Op::I32Const(v));
+        Ok(())
+    }
+
     /// while_expr := 'while' cond ':' body_expr
-    /// Gera: Loop [cond BrIf(1) body Drop Br(0) End]
+    /// Sem local mutável o corpo é descartado; o valor da expressão é 0.
+    /// `while 0: …` não entra. Condição verdadeira constante estoura o fuel.
     fn parse_while_factor(&mut self, ops: &mut Vec<Op>) -> Result<(), &'static str> {
         self.skip_ws();
         let mut cond_ops = Vec::new();
@@ -635,16 +654,26 @@ impl<'a> ExprParser<'a> {
         self.pos += 1;
         self.skip_ws();
         let mut body_ops = Vec::new();
-        self.parse_additive(&mut body_ops)?;
-        ops.push(Op::Loop(None));
-        ops.extend_from_slice(&cond_ops);
-        ops.push(Op::BrIf(1));
-        ops.extend_from_slice(&body_ops);
-        ops.push(Op::Drop);
-        ops.push(Op::Br(0));
-        ops.push(Op::End);
+        self.parse_expr(&mut body_ops)?;
+        emit_while(ops, &cond_ops, &body_ops);
+        ops.push(Op::I32Const(0));
         Ok(())
     }
+}
+
+/// `block { loop { cond; eqz; br_if 1; body; drop; br 0 } }`.
+/// O `BrIf(1)` antigo não tinha bloco externo e saía quando a condição era verdadeira.
+fn emit_while(ops: &mut Vec<Op>, cond: &[Op], body: &[Op]) {
+    ops.push(Op::Block(None));
+    ops.push(Op::Loop(None));
+    ops.extend_from_slice(cond);
+    ops.push(Op::I32Eqz);
+    ops.push(Op::BrIf(1));
+    ops.extend_from_slice(body);
+    ops.push(Op::Drop);
+    ops.push(Op::Br(0));
+    ops.push(Op::End);
+    ops.push(Op::End);
 }
 
 /// Compila expressão para op-IR (v3).
@@ -657,6 +686,7 @@ pub fn compile_expression(source: &str) -> Result<(u32, Vec<Op>), &'static str> 
     p.parse_expr(&mut ops)?;
     p.skip_ws();
     if !p.at_end() { return Err("op-IR: trailing input"); }
+    if p.params.len() > 32 { return Err("op-IR: mais de 32 parâmetros"); }
     let n = p.params.len() as u32;
     validate(n, &ops)?;
     Ok((n, ops))
@@ -720,6 +750,28 @@ fn dsl_matching_paren(s: &[u8], pos: usize) -> Result<usize, &'static str> {
         }
     }
     Err("op-IR/DSL: parêntese não fechado")
+}
+
+/// `:` do `while` no nível 0. `:` de ternário (`?`) não conta.
+fn dsl_while_colon(s: &[u8]) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut tern = 0i32;
+    for (i, &c) in s.iter().enumerate() {
+        match c {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b'?' if depth == 0 => tern += 1,
+            b':' if depth == 0 => {
+                if tern > 0 {
+                    tern -= 1;
+                } else {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn dsl_top_level_eq(s: &[u8]) -> Option<usize> {
@@ -964,7 +1016,7 @@ pub fn compile_python_dsl(source: &str) -> Result<(u32, Vec<Op>), &'static str> 
         {
             if final_ops.is_some() { return Err("op-IR/DSL: statement após return"); }
             let rest = dsl_trim(&stmt[5..]);
-            let colon = rest.iter().position(|&c| c == b':')
+            let colon = dsl_while_colon(rest)
                 .ok_or("op-IR/DSL: while sem ':'")?;
             let cond_src = dsl_trim(&rest[..colon]);
             let body_src = dsl_trim(&rest[colon + 1..]);
@@ -972,13 +1024,7 @@ pub fn compile_python_dsl(source: &str) -> Result<(u32, Vec<Op>), &'static str> 
             let mut cond_ops = Vec::new();
             dsl_parse_expr_into(&cond_exp, &mut params, &mut cond_ops)?;
             let body_ops = dsl_parse_block_expr(body_src, &bindings, &mut params, &mut chain)?;
-            ops.push(Op::Loop(None));
-            ops.extend_from_slice(&cond_ops);
-            ops.push(Op::BrIf(1));
-            ops.extend_from_slice(&body_ops);
-            ops.push(Op::Drop);
-            ops.push(Op::Br(0));
-            ops.push(Op::End);
+            emit_while(&mut ops, &cond_ops, &body_ops);
             continue;
         }
 
@@ -1005,6 +1051,7 @@ pub fn compile_python_dsl(source: &str) -> Result<(u32, Vec<Op>), &'static str> 
     }
 
     if let Some(f) = final_ops { ops.extend(f); } else { ops.push(Op::I32Const(0)); }
+    if params.len() > 32 { return Err("op-IR: mais de 32 parâmetros"); }
     let n = params.len() as u32;
     validate(n, &ops)?;
     Ok((n, ops))
@@ -1742,6 +1789,40 @@ mod tests {
         assert!(!is_dummy_ops(&[Op::I32Const(7)]));
         assert!(!is_dummy_ops(&[Op::LocalGet(0), Op::I32Const(0)]));
         assert!(!is_dummy_ops(&[]));
+    }
+
+    #[test]
+    fn ternary_does_not_steal_outer_operand() {
+        let (n, ops) = compile_expression("a+(b?1:0)").expect("parse");
+        assert_eq!(n, 2);
+        let wasm = build_run_module(n, &ops).unwrap();
+        assert_eq!(wasmi_rt::run_i32_2(&wasm, "run", 10, 2, 0).unwrap(), 11);
+        assert_eq!(wasmi_rt::run_i32_2(&wasm, "run", 10, 0, 0).unwrap(), 10);
+    }
+
+    #[test]
+    fn unary_minus_on_name() {
+        let (n, ops) = compile_expression("a*-b").expect("parse");
+        let wasm = build_run_module(n, &ops).unwrap();
+        assert_eq!(wasmi_rt::run_i32_2(&wasm, "run", 4, 3, 0).unwrap(), -12);
+    }
+
+    #[test]
+    fn while_false_returns_zero() {
+        let (n, ops) = compile_expression("while 0: 1").expect("parse");
+        assert_eq!(n, 0);
+        let wasm = build_run_module(n, &ops).unwrap();
+        assert_eq!(wasmi_rt::run_i32_0(&wasm, "run", 0).unwrap(), 0);
+        let (n2, ops2) = compile_python_dsl("while a: 1").expect("dsl");
+        let wasm2 = build_run_module(n2, &ops2).unwrap();
+        assert_eq!(wasmi_rt::run_wasm(&wasm2, "run", &[0], 0).unwrap(), 0);
+    }
+
+    #[test]
+    fn host_trap_is_not_reported_as_missing_export() {
+        let wasm = build_run_module(0, &[Op::GpuMatmul]).unwrap();
+        let err = wasmi_rt::run_wasm(&wasm, "run", &[], wasmi_rt::CAP_GPU).unwrap_err();
+        assert!(err.contains("trap"), "trap mascarado: {err}");
     }
 
 }

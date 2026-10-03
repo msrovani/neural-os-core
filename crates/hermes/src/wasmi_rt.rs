@@ -87,6 +87,9 @@ fn read_guest_bytes(
     ptr: i32,
     len: i32,
 ) -> Result<Vec<u8>, wasmi::Error> {
+    if ptr < 0 || len < 0 {
+        return Err(wasmi::Error::new("guest ptr/len negativo"));
+    }
     let Some(wasmi::Extern::Memory(mem)) = caller.get_export("memory") else {
         return Err(wasmi::Error::new("wasm memory missing"));
     };
@@ -116,16 +119,8 @@ fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> 
     linker.func_wrap("aios", "log",
         |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32| -> Result<(), wasmi::Error> {
             check_cap(&caller, CAP_LOG, "aios", "log")?;
-            if let Some(wasmi::Extern::Memory(mem)) = caller.get_export("memory") {
-                let data = mem.data(&caller);
-                let (p, l) = (ptr as usize, len as usize);
-                let l = l.min(MAX_WASM_ALLOC);
-                if p.saturating_add(l) <= data.len() {
-                    let mut buf = Vec::with_capacity(l);
-                    buf.extend_from_slice(&data[p..p + l]);
-                    caller.data_mut().out.extend_from_slice(&buf);
-                }
-            }
+            let buf = read_guest_bytes(&caller, ptr, len)?;
+            caller.data_mut().out.extend_from_slice(&buf);
             k_nano::telemetry::TELEMETRY.push(3, 0, &[0; 32]); // EV_WASM_CALL
             Ok(())
         },
@@ -171,6 +166,9 @@ fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> 
             check_cap(&caller, CAP_FS, "aios_fs", "fs_read")?;
             if !crate::fs::vfs_ready_for_wasm() {
                 return Err(wasmi::Error::new("aios_fs::fs_read VFS absent"));
+            }
+            if max < 0 {
+                return Err(wasmi::Error::new("aios_fs::fs_read max negativo"));
             }
             let path = read_guest_str(&caller, ptr, len)?;
             let data = crate::fs::read_vfs(&path).map_err(|e| wasmi::Error::new(e))?;
@@ -219,6 +217,71 @@ fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> 
     Ok(())
 }
 
+/// Fuel + teto de recursão + limites estritos do wasmi. `start` desligado:
+/// um módulo não-confiável não corre código no instantiate.
+fn sandbox_config() -> Config {
+    let mut config = Config::default();
+    config.consume_fuel(true);
+    config.set_max_recursion_depth(64);
+    config.allow_start_fn(false);
+    config.enforced_limits(wasmi::EnforcedLimits::strict());
+    config
+}
+
+fn open_instance(
+    engine: &Engine,
+    wasm: &[u8],
+    caps: u32,
+) -> Result<(Store<HostState>, wasmi::Instance), &'static str> {
+    if wasm.len() < 8 || wasm[0..4] != [0x00, 0x61, 0x73, 0x6D] {
+        return Err("wasm: bytes inválidos (sem magic)");
+    }
+    let module = Module::new(engine, wasm).map_err(|_| "wasm: módulo inválido")?;
+    let mut store = Store::new(engine, HostState::new(caps));
+    store.set_fuel(DEFAULT_FUEL).map_err(|_| "wasm: set_fuel")?;
+    let mut linker = <Linker<HostState>>::new(engine);
+    install_host_abi(&mut linker)?;
+    let instance = linker
+        .instantiate_and_start(&mut store, &module)
+        .map_err(|_| "wasm: instantiate (import negado/ausente?)")?;
+    Ok((store, instance))
+}
+
+/// `Ok(None)` = assinatura não bate (não executou). `Err` = trap/fuel.
+fn call_i32(
+    instance: &wasmi::Instance,
+    store: &mut Store<HostState>,
+    name: &str,
+    n: usize,
+    args: &[i32],
+) -> Result<Option<i32>, &'static str> {
+    let a = |i: usize| args.get(i).copied().unwrap_or(0);
+    let trap = "wasm: trap/out-of-fuel";
+    match n {
+        0 => match instance.get_typed_func::<(), i32>(&mut *store, name) {
+            Err(_) => Ok(None),
+            Ok(f) => f.call(store, ()).map(Some).map_err(|_| trap),
+        },
+        1 => match instance.get_typed_func::<(i32,), i32>(&mut *store, name) {
+            Err(_) => Ok(None),
+            Ok(f) => f.call(store, (a(0),)).map(Some).map_err(|_| trap),
+        },
+        2 => match instance.get_typed_func::<(i32, i32), i32>(&mut *store, name) {
+            Err(_) => Ok(None),
+            Ok(f) => f.call(store, (a(0), a(1))).map(Some).map_err(|_| trap),
+        },
+        3 => match instance.get_typed_func::<(i32, i32, i32), i32>(&mut *store, name) {
+            Err(_) => Ok(None),
+            Ok(f) => f.call(store, (a(0), a(1), a(2))).map(Some).map_err(|_| trap),
+        },
+        4 => match instance.get_typed_func::<(i32, i32, i32, i32), i32>(&mut *store, name) {
+            Err(_) => Ok(None),
+            Ok(f) => f.call(store, (a(0), a(1), a(2), a(3))).map(Some).map_err(|_| trap),
+        },
+        _ => Err("wasm: muitos argumentos (max 4)"),
+    }
+}
+
 /// Executa uma função exportada `func_name(i32,i32)->i32` de um módulo WASM.
 /// `caps` = capabilities concedidas (CapGate). Fuel limita o tempo.
 pub fn run_i32_2(
@@ -228,29 +291,12 @@ pub fn run_i32_2(
     b: i32,
     caps: u32,
 ) -> Result<i32, &'static str> {
-    let mut config = Config::default();
-    config.consume_fuel(true);
-    let engine = Engine::new(&config);
-    // ponytail: verificar integridade basica antes de chamar parser (evita #PF em wasmparser)
-    if wasm.len() < 8 || wasm[0..4] != [0x00, 0x61, 0x73, 0x6D] {
-        return Err("wasm: bytes inválidos (sem magic)");
+    let engine = Engine::new(&sandbox_config());
+    let (mut store, instance) = open_instance(&engine, wasm, caps)?;
+    match call_i32(&instance, &mut store, func_name, 2, &[a, b])? {
+        Some(v) => Ok(v),
+        None => Err("wasm: export não encontrado"),
     }
-    let module = Module::new(&engine, wasm).map_err(|_| "wasm: módulo inválido")?;
-    let mut store = Store::new(&engine, HostState::new(caps));
-    store.set_fuel(DEFAULT_FUEL).map_err(|_| "wasm: set_fuel")?;
-
-    let mut linker = <Linker<HostState>>::new(&engine);
-    install_host_abi(&mut linker)?;
-
-    let instance = linker
-        .instantiate_and_start(&mut store, &module)
-        .map_err(|_| "wasm: instantiate (import negado/ausente?)")?;
-
-    let func = instance
-        .get_typed_func::<(i32, i32), i32>(&store, func_name)
-        .map_err(|_| "wasm: export não encontrado")?;
-
-    func.call(&mut store, (a, b)).map_err(|_| "wasm: trap/out-of-fuel")
 }
 
 /// Executa uma funcao exportada 'func_name()->i32' (zero params).
@@ -259,24 +305,12 @@ pub fn run_i32_0(
     func_name: &str,
     caps: u32,
 ) -> Result<i32, &'static str> {
-    let mut config = Config::default();
-    config.consume_fuel(true);
-    let engine = Engine::new(&config);
-    if wasm.len() < 8 || wasm[0..4] != [0x00, 0x61, 0x73, 0x6D] {
-        return Err("wasm: bytes invalidos");
+    let engine = Engine::new(&sandbox_config());
+    let (mut store, instance) = open_instance(&engine, wasm, caps)?;
+    match call_i32(&instance, &mut store, func_name, 0, &[])? {
+        Some(v) => Ok(v),
+        None => Err("wasm: export não encontrado"),
     }
-    let module = Module::new(&engine, wasm).map_err(|_| "wasm: modulo invalido")?;
-    let mut store = Store::new(&engine, HostState::new(caps));
-    store.set_fuel(DEFAULT_FUEL).map_err(|_| "wasm: set_fuel")?;
-    let mut linker = <Linker<HostState>>::new(&engine);
-    install_host_abi(&mut linker)?;
-    let instance = linker
-        .instantiate_and_start(&mut store, &module)
-        .map_err(|_| "wasm: instantiate")?;
-    let func = instance
-        .get_typed_func::<(), i32>(&store, func_name)
-        .map_err(|_| "wasm: export nao encontrado")?;
-    func.call(&mut store, ()).map_err(|_| "wasm: trap/out-of-fuel")
 }
 
 /// Executa uma funcao exportada 'func_name(i32,i32,i32)->i32' (3 params).
@@ -288,24 +322,12 @@ pub fn run_i32_3(
     c: i32,
     caps: u32,
 ) -> Result<i32, &'static str> {
-    let mut config = Config::default();
-    config.consume_fuel(true);
-    let engine = Engine::new(&config);
-    if wasm.len() < 8 || wasm[0..4] != [0x00, 0x61, 0x73, 0x6D] {
-        return Err("wasm: bytes invalidos");
+    let engine = Engine::new(&sandbox_config());
+    let (mut store, instance) = open_instance(&engine, wasm, caps)?;
+    match call_i32(&instance, &mut store, func_name, 3, &[a, b, c])? {
+        Some(v) => Ok(v),
+        None => Err("wasm: export não encontrado"),
     }
-    let module = Module::new(&engine, wasm).map_err(|_| "wasm: modulo invalido")?;
-    let mut store = Store::new(&engine, HostState::new(caps));
-    store.set_fuel(DEFAULT_FUEL).map_err(|_| "wasm: set_fuel")?;
-    let mut linker = <Linker<HostState>>::new(&engine);
-    install_host_abi(&mut linker)?;
-    let instance = linker
-        .instantiate_and_start(&mut store, &module)
-        .map_err(|_| "wasm: instantiate")?;
-    let func = instance
-        .get_typed_func::<(i32, i32, i32), i32>(&store, func_name)
-        .map_err(|_| "wasm: export nao encontrado")?;
-    func.call(&mut store, (a, b, c)).map_err(|_| "wasm: trap/out-of-fuel")
 }
 
 /// Módulo WASM mínimo válido: `(func (export "add")(param i32 i32)(result i32)
@@ -350,60 +372,39 @@ pub fn canned_test_module() -> Vec<u8> {
 }
 
 /// Executa uma função exportada de um módulo WASM com argumentos `&[i32]`.
-/// Tenta resolver por assinatura (0..4 args i32 → i32).
-
+///
+/// `args` vazio sonda aridades 0..=4 (o sandbox não sabe a assinatura).
+/// Com args, só a aridade pedida corre: trap continua trap, e uma assinatura
+/// errada não cai noutra chamada com zeros.
 pub fn run_wasm(
     wasm: &[u8],
     func_name: &str,
     args: &[i32],
     caps: u32,
 ) -> Result<i32, &'static str> {
-    let mut config = Config::default();
-    config.consume_fuel(true);
-    let engine = Engine::new(&config);
-    if wasm.len() < 8 || wasm[0..4] != [0x00, 0x61, 0x73, 0x6D] {
-        return Err("wasm: bytes inválidos (sem magic)");
-    }
-    let module = Module::new(&engine, wasm).map_err(|_| "wasm: módulo inválido")?;
-    let mut store = Store::new(&engine, HostState::new(caps));
-    store.set_fuel(DEFAULT_FUEL).map_err(|_| "wasm: set_fuel")?;
-    let mut linker = <Linker<HostState>>::new(&engine);
-    install_host_abi(&mut linker)?;
-    let instance = linker
-        .instantiate_and_start(&mut store, &module)
-        .map_err(|_| "wasm: instantiate")?;
     if args.len() > 4 {
         return Err("wasm: muitos argumentos (max 4)");
     }
-    // Resolve por assinatura: tenta a aridade fornecida primeiro, depois as
-    // demais 0..=4. Necessário porque `sandbox_validate_and_run` chama com
-    // `args` vazio módulos cujo export tem aridade > 0 (ex.: DSL `run(a,b)`);
-    // a assinatura errada falha no `get_typed_func` sem executar.
-    let a = |i: usize| args.get(i).copied().unwrap_or(0);
-    for n_params in [args.len(), 0, 1, 2, 3, 4] {
-        let r: Result<i32, _> = match n_params {
-            0 => instance.get_typed_func::<(), i32>(&store, func_name)
-                .and_then(|f| f.call(&mut store, ()).map_err(|e| e.into())),
-            1 => instance.get_typed_func::<(i32,), i32>(&store, func_name)
-                .and_then(|f| f.call(&mut store, (a(0),)).map_err(|e| e.into())),
-            2 => instance.get_typed_func::<(i32, i32), i32>(&store, func_name)
-                .and_then(|f| f.call(&mut store, (a(0), a(1))).map_err(|e| e.into())),
-            3 => instance.get_typed_func::<(i32, i32, i32), i32>(&store, func_name)
-                .and_then(|f| f.call(&mut store, (a(0), a(1), a(2))).map_err(|e| e.into())),
-            4 => instance.get_typed_func::<(i32, i32, i32, i32), i32>(&store, func_name)
-                .and_then(|f| f.call(&mut store, (a(0), a(1), a(2), a(3))).map_err(|e| e.into())),
-            _ => continue,
-        };
-        if let Ok(val) = r {
-            return Ok(val);
+    let engine = Engine::new(&sandbox_config());
+    let (mut store, instance) = open_instance(&engine, wasm, caps)?;
+    if args.is_empty() {
+        for n in 0..=4 {
+            if let Some(v) = call_i32(&instance, &mut store, func_name, n, args)? {
+                return Ok(v);
+            }
         }
+        return Err("wasm: export não encontrado ou assinatura incompatível");
     }
-    Err("wasm: export não encontrado ou assinatura incompatível")
+    match call_i32(&instance, &mut store, func_name, args.len(), args)? {
+        Some(v) => Ok(v),
+        None => Err("wasm: export não encontrado ou assinatura incompatível"),
+    }
 }
-/// Valida e executa um modulo WASM no sandbox (fuel limitado, sem imports perigosos).
-/// Retorna true se executou sem trap.
+
+/// Valida e executa `run` no sandbox (fuel, sem `start`, caps nenhum).
+/// Retorna true se executou sem trap. Não concede net/fs/gpu.
 pub fn sandbox_validate_and_run(wasm: &[u8]) -> bool {
-    run_wasm(wasm, "run", &[], CAP_ALL).is_ok()
+    run_wasm(wasm, "run", &[], CAP_NONE).is_ok()
 }
 
 
@@ -838,9 +839,7 @@ impl skill_registry::Skill for WasmSkill {
 
     fn verify(&self, _payload: &[u8]) -> Result<(), &'static str> {
         // Verifica se o bytecode WASM é válido pelo wasmi
-        let mut c = wasmi::Config::default();
-        c.consume_fuel(true);
-        wasmi::Module::new(&wasmi::Engine::new(&c), &self.bytecode)
+        wasmi::Module::new(&wasmi::Engine::new(&sandbox_config()), &self.bytecode)
             .map(|_| ())
             .map_err(|_| "WASM: bytecode inválido")
     }
@@ -934,7 +933,33 @@ mod lane_b_tests {
         assert!(pok1 >= pok0 + 1 && pden1 >= pden0 + 1);
         assert!(metrics_reload_ok() >= 1);
     }
+
+    /// `aios::debug(7)` só corre com CAP_LOG. O sandbox valida com CAP_NONE.
+    fn debug_echo_wasm() -> Vec<u8> {
+        let mut w = Vec::new();
+        w.extend_from_slice(&[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+        w.extend_from_slice(&[
+            0x01, 0x0a, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f, 0x60, 0x00, 0x01, 0x7f,
+        ]);
+        w.extend_from_slice(&[
+            0x02, 0x0e, 0x01, 0x04, b'a', b'i', b'o', b's', 0x05, b'd', b'e', b'b', b'u', b'g',
+            0x00, 0x00,
+        ]);
+        w.extend_from_slice(&[0x03, 0x02, 0x01, 0x01]);
+        w.extend_from_slice(&[0x07, 0x07, 0x01, 0x03, b'r', b'u', b'n', 0x00, 0x01]);
+        w.extend_from_slice(&[0x0a, 0x08, 0x01, 0x06, 0x00, 0x41, 0x07, 0x10, 0x00, 0x0b]);
+        w
+    }
+
+    #[test]
+    fn sandbox_validate_grants_no_caps() {
+        let wasm = debug_echo_wasm();
+        assert_eq!(run_wasm(&wasm, "run", &[], CAP_LOG).unwrap(), 7);
+        assert!(run_wasm(&wasm, "run", &[], CAP_NONE).is_err());
+        assert!(!sandbox_validate_and_run(&wasm));
+    }
 }
+
 
 
 
