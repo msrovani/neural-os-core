@@ -1,6 +1,16 @@
-# STATE - neural-os-core v1.9.99-s435 - Telemetria de uso REAL do TALC (HUB + triage)
+# STATE - neural-os-core v1.9.99-s437 - Telemetria honesta + tokenizer Falcon3
 
-#   PISTA ATIVA: s435 — telemetria de uso REAL do TALC (idea #630 residual, monitorar
+#   PISTA ATIVA: s437 — resposta degenerada do LLM Falcon3 (log HUB triage). Causa-raiz:
+#     `bpe::encode` para Falcon3 (ByteLevel 131k, sp32=0) caía em `encode_chat_frame`
+#     — frame-cue Llama-3 fixo de 6 tokens (`[bos,1919,eot,128006,78191,128007]`) que
+#     NÃO tokeniza o prompt → todo job via o mesmo input e a saída degenerava no mesmo
+#     gibberish determinístico (`prompt_len=6` p/ 581B; logs boot_mon:3708 / boot_a2proof).
+#     Fix: `is_falcon_bytelevel` (bos=10) + `encode_falcon_chat` (BOS + template Instruct
+#     `<|user|>…<|assistant|>` via ByteLevel real; 26 tokens no tokenizer HF) + `encode`
+#     roteia; `slim_prompt_tokens_for_heavy` mantém a cauda (não a cabeça). Telemetria:
+#     `recipe`→Sev::Ok e pressure pelo headroom COMBINADO (bug: guarda `talc_cap==0` do
+#     s431 tornava o warn proativo inalcançável). Validação: cortex 118/118, check 0 erros.
+#   PISTA ANTERIOR: s435 — telemetria de uso REAL do TALC (idea #630 residual, monitorar
 #     fragmentação em runtime de horas). talc_walk_bins percorre os gap-nodes dos 128
 #     bins do talc 4.4.3 (layout confirmado no fonte; free = soma dos gaps, used = span−free,
 #     largest_free = maior gap, gaps = nº fragmentos; CAP 4096 + bounds-check → partial=1

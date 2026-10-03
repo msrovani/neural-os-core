@@ -1,5 +1,14 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s437] - 2026-10-02 - Telemetria honesta (recipe/pressure) + tokenizer Falcon3 (resposta degenerada)
+
+- High: **resposta degenerada do LLM Falcon3** — `bpe::encode` para Falcon3 (ByteLevel 131k, `sp32=0`) caía em `encode_chat_frame`, que devolve um **frame-cue Llama-3 fixo de 6 tokens** (`[bos,1919,eot,128006,78191,128007]`) e **nunca tokeniza o prompt**. Prova: `a2_proof setup ... prompt_len=6` para prompt de 581B; saída idêntica entre prompts/runs. Fix: `is_falcon_bytelevel()` (`bos<1000`) + `encode_falcon_chat()` (`BOS + encode_bytelevel("<|user|>\n{prompt}\n<|assistant|>\n")`, template Instruct real; 26 tokens no tokenizer HF) + `encode` roteia. A nota "modelo stub = gibberish" dos s432/433 estava desatualizada (run tem `file=989MB`).
+- Med: **`slim_prompt_tokens_for_heavy` mantém a cauda** (branch BPE) — `truncate(8)` preservava a cabeça e descartava o `<|assistant|>` final, contradizendo o próprio doc ("keep only last few tokens") e o branch não-BPE.
+- Med: **`slog::Sev::from_sub` mapeia `recipe` → Ok** — emissor `k_hal/offer.rs::gate_bind_class` ALLOW (device_recipe promovida = sucesso de bind, s360); antes caía em TRACE mudo + warn de sev desconhecida (ADR-0092).
+- Med: **`heap_observe` pressure pelo headroom COMBINADO** — o warn proativo usava `headroom_bump < 256MB && talc_cap == 0`; a guarda `talc_cap == 0` (s431, TALC fixo) morreu quando o TALC passou a segurar o budget completo → nunca mais disparava. Fix: `headroom < 256MB` (bump + free TALC medido no s435), o mesmo de `heap_headroom_bytes()`.
+- Gates: cortex **118/118** (-t1, 2 novos: `falcon_chat_encodes_prompt_not_cue_frame`, `slim_prompt_keeps_tail_not_head`); `cargo check --release` 0 erros; frame validado contra o tokenizer HF real (26 tokens, decode round-trip).
+- Session: SESSION_437
+
 ## [1.9.99-s435] - 2026-10-01 - Telemetria de uso REAL do TALC no HUB HEALTH + hub_triage (idea #630 residual)
 
 - High: **walk dos gap-nodes dos bins** (`allocator.rs::talc_walk_bins`) — o talc 4.4 não expõe free-bytes; layout confirmado no fonte (bins = array de 128 sentinelas `Option<NonNull<LlistNode>>` @16, gap-node com `next` @0 e `size` @16, listas terminadas em NULL). Soma dos gaps = free REAL; `used = span − free`; `largest_free` = maior gap contíguo (o que um alloc grande consegue de fato); `gaps` = nº de fragmentos. Zero alloc, CAP 4096 gaps + bounds-check no span → `partial=1` honesto (metadados ilegíveis) em vez de pendar ou mintir.

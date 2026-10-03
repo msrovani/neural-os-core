@@ -4175,7 +4175,12 @@ pub fn slim_prompt_tokens_for_heavy(tokens: &[u32], use_bpe: bool) -> Vec<u32> {
     let mut t: Vec<u32> = tokens.to_vec();
     if use_bpe {
         const MAX_CHAT: usize = 8;
-        if t.len() > MAX_CHAT { t.truncate(MAX_CHAT); }
+        // s437: manter a CAUDA (doc: "keep only last few tokens"), não a cabeça.
+        // `truncate` preservava o início do frame e descartava o `<|assistant|>`
+        // final — o modelo não tinha o marcador de turno para continuar.
+        if t.len() > MAX_CHAT {
+            return t[t.len() - MAX_CHAT..].to_vec();
+        }
         return t;
     }
     if t.last() == Some(&(EOS as u32)) { t.pop(); }
@@ -4188,6 +4193,18 @@ pub fn slim_prompt_tokens_for_heavy(tokens: &[u32], use_bpe: bool) -> Vec<u32> {
         slim.extend_from_slice(&t[from..]);
         slim
     } else { t }
+}
+
+#[cfg(test)]
+#[test]
+fn slim_prompt_keeps_tail_not_head() {
+    // s437: o frame Falcon3 termina em `<|assistant|>` — a cauda é o que o
+    // modelo precisa; `truncate` (cabeça) descartava o marcador de turno.
+    let toks: Vec<u32> = (0..20).collect();
+    let slim = slim_prompt_tokens_for_heavy(&toks, true);
+    assert_eq!(slim, (12..20).collect::<Vec<u32>>(), "deve manter os 8 últimos");
+    // ≤ MAX_CHAT: inalterado.
+    assert_eq!(slim_prompt_tokens_for_heavy(&[1, 2, 3], true), vec![1, 2, 3]);
 }
 
 pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder: Option<&mut StructuredDecoder>) -> alloc::string::String {

@@ -37,6 +37,14 @@ impl BpeVocab {
         self.vocab_n > 0 && self.vocab_n <= 33_000
     }
 
+    /// Falcon3 ByteLevel BPE (131k, `bos=<|startoftext|>=10`) vs Llama-3 128k
+    /// (ByteLevel mas `bos=128000`). Distingue o frame de chat correto: para o
+    /// Falcon3 o `encode_chat_frame` legado (cue Llama-3, 6 tokens) NÃO tokeniza
+    /// o prompt — s437.
+    pub fn is_falcon_bytelevel(&self) -> bool {
+        !self.is_sp32() && self.bos < 1000
+    }
+
     pub fn decode_id(&self, id: u32) -> Option<&str> {
         if id >= self.vocab_n { return None; }
         let i = id as usize;
@@ -315,6 +323,20 @@ impl BpeVocab {
             ASSISTANT,
             END_HDR,
         ]
+    }
+
+    /// Falcon3 Instruct: `<|user|>\n{prompt}\n<|assistant|>\n` + BOS, tokenizado
+    /// com o BPE ByteLevel REAL. O frame Llama-3 (`encode_chat_frame`) descartava
+    /// o texto e devolvia 6 tokens constantes — todo job via o mesmo input e a
+    /// saída degenerava no mesmo gibberish determinístico (s437, `prompt_len=6`).
+    pub fn encode_falcon_chat(&self, prompt: &str) -> Vec<u32> {
+        let mut framed = String::with_capacity(prompt.len() + 32);
+        framed.push_str("<|user|>\n");
+        framed.push_str(prompt);
+        framed.push_str("\n<|assistant|>\n");
+        let mut out = vec![self.bos];
+        out.extend(self.encode_bytelevel(&framed));
+        out
     }
 
     /// Moldura chat + cue de saudacao (IDs BPB1 reais). Logits escolhem o resto.
@@ -684,6 +706,11 @@ pub fn encode(text: &str) -> Vec<u32> {
             if tok.is_sp32() {
                 // BitNet 850/xl/3B: merge-order (mais preciso que greedy).
                 tok.encode_merge_order(text)
+            } else if tok.is_falcon_bytelevel() {
+                // Falcon3 131k: template Instruct + texto real (s437). Antes caía
+                // em `encode_chat_frame` (cue Llama-3, 6 tokens) e o prompt era
+                // descartado — mesma saída p/ todo input.
+                tok.encode_falcon_chat(text)
             } else if prompt_is_greeting(text) {
                 tok.encode_greeting_cue(text)
             } else if false { // ponytail: demo_flags bin-specific
@@ -1379,6 +1406,22 @@ mod tests {
         assert_eq!(v.encode_bytelevel("12345").as_slice(), &[2040, 2041, 2042, 2043, 2044]);
         // `Punctuation` separa o apóstrofo: `'s` NÃO funde
         assert_eq!(v.encode_bytelevel("it's").as_slice(), &[2287, 2030, 2106]);
+    }
+
+    /// s437: Falcon3 (ByteLevel 131k) deve tokenizar o PROMPT, não devolver o
+    /// frame-cue Llama-3 fixo de 6 tokens (que descartava o texto e degenerava
+    /// toda resposta no mesmo gibberish determinístico).
+    #[test]
+    fn falcon_chat_encodes_prompt_not_cue_frame() {
+        let v = fixture_vocab();
+        assert!(v.is_falcon_bytelevel(), "fixture = Falcon ByteLevel (bos<1000, vocab>33k)");
+        let a = v.encode_falcon_chat(" world");
+        let b = v.encode_falcon_chat("temperature");
+        assert!(a.len() > 6, "prompt deve ser tokenizado (len={})", a.len());
+        assert_ne!(a, b, "prompts diferentes → tokens diferentes");
+        assert_eq!(a[0], v.bos(), "BOS no início");
+        assert!(a.contains(&3139), "peça 'Ġworld' presente");
+        assert!(b.contains(&49815), "peça 'Ġtemperature' presente");
     }
 
     /// Monta um BPB1 sintético (só o header + heap; sem MRG1).
