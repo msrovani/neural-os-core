@@ -4098,7 +4098,8 @@ pub fn argmax_row(logits: &Tensor, row: usize) -> u32 {
 // ── F0: structured logits dump for parity ──
 pub fn dump_logits_top(logits: &Tensor, n: usize) {
     let cols = logits.shape.1;
-    let mut top: Vec<(u32, f32)> = (0..cols.min(128000) as u32)
+    // ora-1 bullet2: sem cap 128000 — Falcon3 vai a 131072 (dump pode mostrar ids>128k).
+    let mut top: Vec<(u32, f32)> = (0..cols as u32)
         .map(|i| (i, logits.data[i as usize]))
         .collect();
     top.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
@@ -4148,10 +4149,11 @@ impl SampleRng {
 }
 
 /// Sample token with configurable temperature, top-k, repetition penalty (Gumbel-max).
-pub fn sample_token_coherence(logits: &Tensor, row: usize, recent: &[u16]) -> u32 {
+pub fn sample_token_coherence(logits: &Tensor, row: usize, recent: &[u32]) -> u32 {
     let cols = logits.shape.1;
     let start = row * cols;
-    let hi = cols.min(128000);
+    // ora-1 bullet2: sem cap 128000 (vocab full; Falcon3 131072).
+    let hi = cols;
     let temp = f32::from_bits(COHERENCE_TEMP.load(core::sync::atomic::Ordering::Relaxed));
     let top_k = COHERENCE_TOP_K.load(core::sync::atomic::Ordering::Relaxed);
     let repeat = f32::from_bits(COHERENCE_REPEAT.load(core::sync::atomic::Ordering::Relaxed));
@@ -4175,7 +4177,7 @@ pub fn sample_token_coherence(logits: &Tensor, row: usize, recent: &[u16]) -> u3
 
     if (repeat - 1.0).abs() > 0.001 {
         for i in 0..n {
-            if recent.iter().any(|&p| u32::from(p) == cand[i].0) {
+            if recent.iter().any(|&p| p == cand[i].0) {
                 let v = cand[i].1;
                 cand[i].1 = if v >= 0.0 { v / repeat } else { v * repeat };
             }
@@ -4197,52 +4199,36 @@ pub fn sample_token_coherence(logits: &Tensor, row: usize, recent: &[u16]) -> u3
     best
 }
 
-/// Argmax sobre HF vocab: top-64 brutos → re-score com BPE.
-pub fn argmax_row_hf_vocab(logits: &Tensor, row: usize, recent: &[u16]) -> u32 {
+/// Argmax puro sobre HF vocab (ora-1 bullet3): logits crus, sem score_piece /
+/// weather_bias / coherence. As funções de bias seguem existindo p/ o path
+/// clima dedicado (`argmax_row_weather_only`); o path Falcon nunca as chama.
+pub fn argmax_row_hf_vocab(logits: &Tensor, row: usize, recent: &[u32]) -> u32 {
     let cols = logits.shape.1;
     let start = row * cols;
-    let hi = cols.min(128000);
-    let mut top: [(u32, f32); 64] = [(0, NEG_INFINITY); 64];
-    let mut filled = 0usize;
+    // ora-1 bullet2: vocab full (Falcon3 131072 pode emitir ids>128k).
+    let hi = cols;
+    let mut best = crate::bpe::eos_id();
+    let mut best_val = NEG_INFINITY;
+    let mut any = false;
     for j in 0..hi {
         let id = j as u32;
-        if recent.iter().any(|&p| p as u32 == id) { continue; }
+        if recent.iter().any(|&p| p == id) { continue; }
         if crate::bpe::is_special_id(id) { continue; }
         let v = logits.data[start + j];
         if v.is_nan() { continue; }
-        if filled < 64 { top[filled] = (id, v); filled += 1; }
-        else {
-            let mut worst = 0usize;
-            for i in 1..64 { if top[i].1 < top[worst].1 { worst = i; } }
-            if v > top[worst].1 { top[worst] = (id, v); }
-        }
+        if !any || v > best_val { best_val = v; best = id; any = true; }
     }
-    let weather = crate::bpe::weather_candidate_ids();
-    let mut wx: [(u32, f32); 24] = [(0, NEG_INFINITY); 24];
-    let mut wx_n = 0usize;
-    for &id in weather.iter() {
-        if (id as usize) >= hi { continue; }
-        if recent.iter().any(|&p| p as u32 == id) { continue; }
-        let v = logits.data[start + id as usize];
-        if v.is_nan() { continue; }
-        if wx_n < 24 { wx[wx_n] = (id, v); wx_n += 1; }
-    }
-    if filled == 0 && wx_n == 0 { return crate::bpe::eos_id(); }
-
-    let mut best = if filled > 0 { top[0].0 } else { wx[0].0 };
-    let mut best_val = NEG_INFINITY;
-    for i in 0..filled { let s = top[i].1 + crate::bpe::score_piece(top[i].0); if s > best_val { best_val = s; best = top[i].0; } }
-    for i in 0..wx_n { let s = wx[i].1 + crate::bpe::score_piece(wx[i].0); if s > best_val { best_val = s; best = wx[i].0; } }
-    best
+    if any { best } else { crate::bpe::eos_id() }
 }
 
 /// Constrained weather token selection.
-pub fn argmax_row_weather_only(logits: &Tensor, row: usize, recent: &[u16]) -> u32 {
+pub fn argmax_row_weather_only(logits: &Tensor, row: usize, recent: &[u32]) -> u32 {
     let cols = logits.shape.1;
     let start = row * cols;
-    let hi = cols.min(128000);
+    // ora-1 bullet2: vocab full (mesmo no path clima dedicado).
+    let hi = cols;
     let step = recent.len().saturating_sub(1);
-    let prev = recent.last().copied().map(|p| p as u32);
+    let prev = recent.last().copied();
     let masked = crate::bpe::weather_step_candidates(step, prev);
     let weather = if masked.is_empty() { crate::bpe::weather_candidate_ids() } else { masked };
     let mut best = weather[0];
@@ -4250,7 +4236,7 @@ pub fn argmax_row_weather_only(logits: &Tensor, row: usize, recent: &[u16]) -> u
     let mut any = false;
     for &id in weather.iter() {
         if (id as usize) >= hi { continue; }
-        if recent.iter().any(|&p| u32::from(p) == id) { continue; }
+        if recent.iter().any(|&p| p == id) { continue; }
         if crate::bpe::weather_same_stem(prev, id) { continue; }
         let v = logits.data[start + id as usize];
         if v.is_nan() { continue; }
@@ -4296,7 +4282,13 @@ pub fn argmax_row_char_vocab(logits: &Tensor, row: usize, prev: Option<u16>) -> 
 pub fn slim_prompt_tokens_for_heavy(tokens: &[u32], use_bpe: bool) -> Vec<u32> {
     let mut t: Vec<u32> = tokens.to_vec();
     if use_bpe {
-        const MAX_CHAT: usize = 8;
+        // ora-1 bullet1: Falcon3 (prompt real tokenizado, s437) nunca amputa —
+        // o frame `<|user|>...<|assistant|>` precisa ficar inteiro (first=bos,
+        // last=assistant, prompt_len>=20 p/ 581B). Demais vocabs: cauda ≥32.
+        if crate::bpe::is_falcon_active() {
+            return t;
+        }
+        const MAX_CHAT: usize = 32;
         // s437: manter a CAUDA (doc: "keep only last few tokens"), não a cabeça.
         // `truncate` preservava o início do frame e descartava o `<|assistant|>`
         // final — o modelo não tinha o marcador de turno para continuar.
@@ -4322,37 +4314,59 @@ pub fn slim_prompt_tokens_for_heavy(tokens: &[u32], use_bpe: bool) -> Vec<u32> {
 fn slim_prompt_keeps_tail_not_head() {
     // s437: o frame Falcon3 termina em `<|assistant|>` — a cauda é o que o
     // modelo precisa; `truncate` (cabeça) descartava o marcador de turno.
-    let toks: Vec<u32> = (0..20).collect();
+    // ora-1: MAX_CHAT 8→32 (sem BPE carregado no host, cai no ramo genérico).
+    let toks: Vec<u32> = (0..40).collect();
     let slim = slim_prompt_tokens_for_heavy(&toks, true);
-    assert_eq!(slim, (12..20).collect::<Vec<u32>>(), "deve manter os 8 últimos");
+    assert_eq!(slim, (8..40).collect::<Vec<u32>>(), "deve manter os 32 últimos");
     // ≤ MAX_CHAT: inalterado.
     assert_eq!(slim_prompt_tokens_for_heavy(&[1, 2, 3], true), vec![1, 2, 3]);
 }
 
 pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder: Option<&mut StructuredDecoder>) -> alloc::string::String {
+    // Fallback texto-legível intacto: sem struct = caminho idêntico ao legado.
+    generate_speculative_with_ctx(model, prompt, None, decoder)
+}
+
+/// Bullet 4 protótipo: `machine=Some` usa ids diretos (sem framed PT-BR);
+/// `machine=None` = texto-legível atual, byte-igual.
+pub fn generate_speculative_with_ctx(
+    model: &TransformerModel,
+    prompt: &str,
+    machine: Option<&crate::infer_queue::MachineCtx>,
+    mut decoder: Option<&mut StructuredDecoder>,
+) -> alloc::string::String {
     let use_bpe = crate::bpe::is_loaded();
     let eos: u32 = if use_bpe { crate::bpe::eos_id() as u32 } else { EOS as u32 };
     let eot: u32 = if use_bpe { crate::bpe::eot_id() as u32 } else { EOS as u32 };
     let eos_u16 = eos as u16;
     let _eot_u16 = eot as u16;
-    let mut tokens: Vec<u32> = if use_bpe {
+    let vs = model.vocab_size;
+    let has_machine = machine.is_some();
+    let mut tokens: Vec<u32> = if let Some(m) = machine {
+        let bos = if use_bpe { crate::bpe::bos_id() } else { BOS as u32 };
+        m.to_tokens(vs, bos)
+    } else if use_bpe {
         crate::bpe::encode(prompt)
     } else {
         Tokenizer::encode(prompt).into_iter().map(|t| t as u32).collect()
     };
     // Guarda: IDs fora do vocab → OOB no embed.
-    let vs = model.vocab_size;
     tokens.retain(|&t| t < vs);
     if tokens.is_empty() {
         tokens.push(if use_bpe { crate::bpe::bos_id().min(vs.saturating_sub(1)) } else { BOS as u32 });
     }
     let raw_len = tokens.len();
-    // Heavy model: slim prompt
-    if model.hidden >= 2048 && tokens.len() > 1 {
+    // Struct já é mínima: sem slim. Texto mantém o single-slim legado.
+    if !has_machine && model.hidden >= 2048 && tokens.len() > 1 {
         tokens = slim_prompt_tokens_for_heavy(&tokens, use_bpe);
     }
 
-    let is_greeting = crate::bpe::prompt_is_greeting(prompt);
+    // Bullet 4: struct nunca consulta cues PT-BR; texto sem struct = legado.
+    let is_greeting = if has_machine {
+        false
+    } else {
+        crate::bpe::prompt_is_greeting(prompt)
+    };
     let base = crate::difficulty_gate::classify(prompt, is_greeting, model.hidden);
     // SESSION_351: mesmo plano Heap AIOS que InferQueue (não só difficulty_gate).
     let plan = crate::heap_aios::plan_for(base, model.hidden, use_bpe, is_greeting);
@@ -4368,11 +4382,18 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
     let tier = plan.tier;
     if tokens.len() > max_seq {
         let keep = max_seq.max(1);
-        tokens = tokens[tokens.len() - keep..].to_vec();
+        if has_machine {
+            // Struct: preserva a cabeça (bos/intent/slots), corta a cauda.
+            tokens.truncate(keep);
+        } else {
+            tokens = tokens[tokens.len() - keep..].to_vec();
+        }
     }
     let prompt_len = tokens.len();
+    // Bullet 4: observabilidade — `machine_ctx=1` struct, `=0` texto-legível.
     k_nano::slog_cortex!("GEN", "ok",
-        "prompt_len={} (raw={}) max_seq={} h={} L={} bpe={} first={} last={}",
+        "machine_ctx={} prompt_len={} (raw={}) max_seq={} h={} L={} bpe={} first={} last={}",
+        has_machine as u8,
         prompt_len, raw_len, max_seq,
         model.hidden, model.num_layers,
         use_bpe as u8,
@@ -4413,15 +4434,18 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
     // Wall-clock só do decode (pós-prefill) — tok/s honesto p/ Hub / microbench.
     let decode_t0_us = k_nano::tsc::now_us();
 
-    // recent is Vec<u16> for u16-based argmax/sample functions
-    let mut recent_u16: Vec<u16> = Vec::new();
-    if !is_greeting { if let Some(&last) = tokens.last() { recent_u16.push(last as u16); } }
+    // ora-1 bullet2: recent/tokens em u32 (u16 truncava ids>64k: 131000 as u16=65464).
+    // Nomes `*_u16` mantidos p/ diff mínimo — o tipo é que importa.
+    let mut recent_u16: Vec<u32> = Vec::new();
+    if !is_greeting { if let Some(&last) = tokens.last() { recent_u16.push(last); } }
 
-    // Ngram speculator for speculative decoding (works with u16 tokens internally)
-    let mut tokens_u16: Vec<u16> = tokens.iter().map(|&t| t as u16).collect();
+    // Ngram speculator segue u16 interno (truncado só p/ spec, sem afetar argmax).
+    let mut tokens_u16: Vec<u32> = tokens.to_vec();
     let mut spec = NgramSpeculator::new();
-    let tokens_u16_slice: Vec<u16> = tokens.iter().map(|&t| t as u16).collect();
-    spec.feed_slice(&tokens_u16_slice);
+    {
+        let trunc: Vec<u16> = tokens.iter().map(|&t| t as u16).collect();
+        spec.feed_slice(&trunc);
+    }
 
     // Onda 1: shortlist state (refresh periódico com full unembed)
     let mut shortlist: Vec<u32> = Vec::new();
@@ -4442,9 +4466,9 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
             if dropped > 0 && tokens.len() > cache.len {
                 tokens.drain(..tokens.len() - cache.len);
                 recent_u16.clear();
-                if let Some(&last) = tokens.last() { recent_u16.push(last as u16); }
+                if let Some(&last) = tokens.last() { recent_u16.push(last); }
                 tokens_u16.clear();
-                tokens_u16.extend(tokens.iter().map(|&t| t as u16));
+                tokens_u16.extend(tokens.iter().copied());
             }
             // Re-check after eviction
             if tokens.len() >= max_seq { break; }
@@ -4464,25 +4488,30 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
         } else if model.tie_embeddings && model.hidden >= 2048 && use_bpe {
             crate::vocab_shortlist::note_full_unembed();
             let top = crate::vocab_shortlist::top_k_ids(&last_logits, crate::vocab_shortlist::SHORTLIST_K);
+            // shortlist segue &[u16] (crate fora do escopo ora-1): trunc só p/ hint.
+            let recent_trunc: Vec<u16> = recent_u16.iter().map(|&t| t as u16).collect();
             shortlist = crate::vocab_shortlist::build_candidates(
                 &top,
-                &recent_u16,
+                &recent_trunc,
                 model.vocab_size as usize,
                 &[eos, eot],
             );
             shortlist_age = 0;
         }
 
-        // ── Select next token (returns u16) ──
-        let next_u16 = if COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed) && use_bpe {
+        // ── Select next token (ora-1 bullet3: Falcon = argmax puro) ──
+        let is_falcon = crate::bpe::is_falcon_active();
+        let coh_on = COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed) && !is_falcon;
+        let next: u32 = if coh_on && use_bpe {
             sample_token_coherence(&last_logits, 0, &recent_u16)
         } else if use_bpe {
-            // Full-vocab argmax (greeting/weather canned pools removidos — Audit 7.5).
+            // Full-vocab argmax puro (greeting/weather canned pools removidos — Audit 7.5).
             argmax_row_hf_vocab(&last_logits, 0, &recent_u16)
         } else {
-            argmax_row_char_vocab(&last_logits, 0, recent_u16.last().copied())
+            let prev_u16 = recent_u16.last().copied().map(|v| v as u16);
+            argmax_row_char_vocab(&last_logits, 0, prev_u16)
         };
-        let next = next_u16 as u32;
+        let next_u16: u32 = next;
 
         // F4: advance structured decoder FSM
         if let Some(ref mut d) = decoder {
@@ -4498,11 +4527,11 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
 
         // ── Speculative decoding (ngram draft + verify) ──
         tokens.push(next);
-        recent_u16.push(next_u16 as u16);
+        recent_u16.push(next);
         if recent_u16.len() > 4 { recent_u16.remove(0); }
-        tokens_u16.push(next_u16 as u16);
+        tokens_u16.push(next);
         step += 1;
-        spec.feed(next_u16 as u16);
+        spec.feed(next as u16); // spec interno u16 (trunc só p/ draft, argmax intacto)
         record_classic_step();
 
         // Early-exit: greetingish / weatherish
@@ -4516,7 +4545,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
 
         // Try speculative draft (skip when structured decoder active — ngram drafts don't respect FSM constraints)
         let draft = spec.propose();
-        if draft.len() >= 2 && !COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed) && decoder.is_none() {
+        if draft.len() >= 2 && !coh_on && decoder.is_none() {
             // ngram speculation (disabled when coherence sampling active — distributions differ)
             let m = draft.len().min(max_gen - step).min(crate::ngram_spec::M);
             if m > 0 {
@@ -4530,9 +4559,9 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
 
                 for &t in drafts_u16.iter().take(kept) {
                     tokens.push(t as u32);
-                    recent_u16.push(t);
+                    recent_u16.push(t as u32);
                     if recent_u16.len() > 4 { recent_u16.remove(0); }
-                    tokens_u16.push(t);
+                    tokens_u16.push(t as u32);
                     step += 1;
                     spec.feed(t);
                 }
@@ -4540,9 +4569,9 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
                 // Bonus token after accepted prefix
                 if bonus_u16 as u16 != eos_u16 && step < max_gen && tokens.len() < max_seq {
                     tokens.push(bonus_u16);
-                    recent_u16.push(bonus_u16 as u16);
+                    recent_u16.push(bonus_u16);
                     if recent_u16.len() > 4 { recent_u16.remove(0); }
-                    tokens_u16.push(bonus_u16 as u16);
+                    tokens_u16.push(bonus_u16);
                     step += 1;
                     spec.feed(bonus_u16 as u16);
                     record_spec_bonus_forward();
@@ -4556,7 +4585,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
         // Onda 1: Medusa heads draft (se pack tiver heads) — verify igual n-gram.
         if !model.medusa_heads.is_empty()
             && decoder.is_none()
-            && !COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed)
+            && !coh_on
             && step < max_gen
         {
             let mut drafts_u16: Vec<u16> = Vec::with_capacity(model.medusa_heads.len().min(3));
@@ -4568,12 +4597,13 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
                 let t = if use_bpe {
                     argmax_row_hf_vocab(&mlogits, 0, &recent_u16)
                 } else {
-                    argmax_row_char_vocab(&mlogits, 0, recent_u16.last().copied())
+                    let prev_u16 = recent_u16.last().copied().map(|v| v as u16);
+                    argmax_row_char_vocab(&mlogits, 0, prev_u16)
                 };
-                if t as u32 == eos || t as u32 == eot {
+                if t == eos || t == eot {
                     break;
                 }
-                drafts_u16.push(t as u16);
+                drafts_u16.push(t as u16); // spec interno u16 (miss seguro p/ ids>64k)
             }
             if drafts_u16.len() >= 2 {
                 let drafts_u32: Vec<u32> = drafts_u16.iter().map(|&t| t as u32).collect();
@@ -4584,21 +4614,21 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
                 k_nano::slog_cortex!("GEN", "ok", "medusa draft kept={}/{}", kept, drafts_u16.len());
                 for &t in drafts_u16.iter().take(kept) {
                     tokens.push(t as u32);
-                    recent_u16.push(t);
+                    recent_u16.push(t as u32);
                     if recent_u16.len() > 4 {
                         recent_u16.remove(0);
                     }
-                    tokens_u16.push(t);
+                    tokens_u16.push(t as u32);
                     step += 1;
                     spec.feed(t);
                 }
                 if bonus_u16 as u16 != eos_u16 && step < max_gen && tokens.len() < max_seq {
                     tokens.push(bonus_u16);
-                    recent_u16.push(bonus_u16 as u16);
+                    recent_u16.push(bonus_u16);
                     if recent_u16.len() > 4 {
                         recent_u16.remove(0);
                     }
-                    tokens_u16.push(bonus_u16 as u16);
+                    tokens_u16.push(bonus_u16);
                     step += 1;
                     spec.feed(bonus_u16 as u16);
                     record_spec_bonus_forward();
@@ -4698,6 +4728,20 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
         let u16s: Vec<u16> = gen.iter().map(|&t| t as u16).collect();
         Tokenizer::decode(&u16s)
     };
+    // ora-1 bullet5: contrato gibberish honesto — nunca envia "andsfaqt..." ao TTS.
+    // Se a janela de 8 toks colapsou (rep/distinct/piece), aborta com escalate HITL.
+    if use_bpe && crate::bpe::gibberish_stop(gen) {
+        k_nano::slog_cortex!("GEN", "warn",
+            "stop=gibberish toks={} first={} last={} — HITL escalate (sem TTS)",
+            gen.len(),
+            gen.first().copied().unwrap_or(0xFFFF),
+            gen.last().copied().unwrap_or(0xFFFF));
+        k_nano::boot_logger::log_quiet(&alloc::format!(
+            "stop=gibberish toks={} (HITL escalate, TTS abortado)",
+            gen.len()
+        ));
+        return alloc::string::String::from("[stop=gibberish — HITL escalate]");
+    }
     if out.is_empty() {
         k_nano::slog_cortex!("GEN", "ok", "decoded_empty n={} first_gen={}",
             gen.len(), gen.first().copied().unwrap_or(0xFFFF));

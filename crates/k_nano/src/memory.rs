@@ -780,6 +780,141 @@ pub fn page_leaf_phys(virt: u64) -> Option<u64> {
     Some(l1e.addr().as_u64() + (virt & 0xFFF))
 }
 
+// ─── QEMU-loader READ-ONLY (ora-2 item 2A, ADAPTAR) ────────────────────────
+// A região [0x100000000..0x180000000) recebe os .bitnet via `-device loader`
+// (RAM física, identidade via HHDM). O HHDM do Limine mapeia tudo RW; este
+// passo rebaixa para RO (PRESENT mantido, WRITABLE limpo) em granularidade
+// 2MB — pesos de expert/modelo nunca sofrem store acidental do kernel.
+// REGRAS (demand-page + hybrid allocator intactos):
+// - NUNCA cria mapeamento: só rebaixa PDE/PTE já PRESENT (hole = skip).
+//   `is_page_present` do scan (main.rs:3002-3059) segue byte-igual.
+// - NUNCA reparte huge 1GB (split exigiria 512 frames): skip honesto.
+// - NUNCA toca heap/TALC/bump: só endereços dentro do range loader.
+
+/// Base física (inclusiva) da região QEMU-loader.
+pub const LOADER_REGION_START: u64 = 0x1_0000_0000;
+/// Fim físico (exclusivo) da região QEMU-loader.
+pub const LOADER_REGION_END: u64 = 0x1_8000_0000;
+/// Passo de cobertura RO (PDE 2MB).
+pub const LOADER_REGION_STEP_2MB: u64 = 0x20_0000;
+
+/// True se `phys` está na região QEMU-loader (puro — testável no host).
+#[inline]
+pub fn loader_range_contains(phys: u64) -> bool {
+    phys >= LOADER_REGION_START && phys < LOADER_REGION_END
+}
+
+/// VA HHDM de `phys` se (e só se) está no range loader e o HHDM existe.
+/// None = fora do range ou boot ainda sem PHYS_MEM_OFFSET (honesto).
+pub fn loader_hhdm_va(phys: u64) -> Option<u64> {
+    if !loader_range_contains(phys) {
+        return None;
+    }
+    let pm = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Acquire);
+    if pm == 0 {
+        return None;
+    }
+    phys.checked_add(pm)
+}
+
+/// Rebaixa para RO a janela 2MB que contém `phys` (idempotente).
+/// - PDE 2MB PRESENT: limpa WRITABLE, flush, true.
+/// - PDE-tabela PRESENT: limpa WRITABLE das 512 folhas PRESENT, flush, true.
+/// - Hole (qualquer nível ausente) ou huge 1GB: false (skip, sem fabricar RAM).
+pub fn ensure_loader_page_ro(phys: u64) -> bool {
+    use x86_64::structures::paging::{PageTable, PageTableFlags};
+    use x86_64::VirtAddr;
+    if !loader_range_contains(phys) {
+        return false;
+    }
+    let pm = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Acquire);
+    if pm == 0 {
+        return false;
+    }
+    // Alinha o chunk em 2MB (a PDE cobre exatamente o chunk se ele está no range).
+    let base_phys = phys & !(LOADER_REGION_STEP_2MB - 1);
+    if base_phys + LOADER_REGION_STEP_2MB > LOADER_REGION_END {
+        return false;
+    }
+    let chunk_va = match base_phys.checked_add(pm) {
+        Some(v) => VirtAddr::new(v),
+        None => return false,
+    };
+    let (l4_frame, _) = x86_64::registers::control::Cr3::read();
+    let hhdm = VirtAddr::new(pm);
+    let l4 = unsafe { &mut *(hhdm + l4_frame.start_address().as_u64()).as_mut_ptr::<PageTable>() };
+    let l4e = &l4[chunk_va.p4_index()];
+    if !l4e.flags().contains(PageTableFlags::PRESENT) {
+        return false;
+    }
+    let l3 = unsafe { &mut *(hhdm + l4e.addr().as_u64()).as_mut_ptr::<PageTable>() };
+    let l3e = &l3[chunk_va.p3_index()];
+    if !l3e.flags().contains(PageTableFlags::PRESENT) {
+        return false;
+    }
+    if l3e.flags().contains(PageTableFlags::HUGE_PAGE) {
+        return false; // 1GB huge: split = 512 frames — skip honesto.
+    }
+    let l2 = unsafe { &mut *(hhdm + l3e.addr().as_u64()).as_mut_ptr::<PageTable>() };
+    let pde = &mut l2[chunk_va.p2_index()];
+    if !pde.flags().contains(PageTableFlags::PRESENT) {
+        return false;
+    }
+    if pde.flags().contains(PageTableFlags::HUGE_PAGE) {
+        if pde.flags().contains(PageTableFlags::WRITABLE) {
+            let mut f = pde.flags();
+            f.remove(PageTableFlags::WRITABLE);
+            pde.set_flags(f);
+            x86_64::instructions::tlb::flush(chunk_va);
+        }
+        return true;
+    }
+    // PDE-tabela: rebaixa folha a folha (só PRESENT; ausente = hole parcial).
+    // A tabela cobre exatamente este chunk 2MB → índices 0..512.
+    let l1 = unsafe { &mut *(hhdm + pde.addr().as_u64()).as_mut_ptr::<PageTable>() };
+    let mut any = false;
+    for idx in 0..512usize {
+        let leaf = &mut l1[idx];
+        if leaf.flags().contains(PageTableFlags::PRESENT) {
+            any = true;
+            if leaf.flags().contains(PageTableFlags::WRITABLE) {
+                let mut f = leaf.flags();
+                f.remove(PageTableFlags::WRITABLE);
+                leaf.set_flags(f);
+                x86_64::instructions::tlb::flush(VirtAddr::new(
+                    chunk_va.as_u64() + (idx as u64) * 0x1000,
+                ));
+            }
+        }
+    }
+    any
+}
+
+/// Pass de boot: rebaixa TODA a região loader para RO (idempotente).
+/// Retorna nº de janelas 2MB rebaixadas. Skips (hole/1GB) só no slog.
+/// Chamar no boot APÓS o HHDM estar ativo e ANTES dos scans de expert/LLM
+/// (main.rs, 1 linha — fora do escopo deste diff). Custo: ≤1024 iterações.
+pub fn map_loader_region_ro() -> u64 {
+    let pm = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Acquire);
+    if pm == 0 {
+        crate::slog_nano!("MEM", "warn", "loader RO skip: HHDM nao setado");
+        return 0;
+    }
+    let mut ro = 0u64;
+    let mut skip = 0u64;
+    let mut addr = LOADER_REGION_START;
+    while addr < LOADER_REGION_END {
+        if ensure_loader_page_ro(addr) {
+            ro += 1;
+        } else {
+            skip += 1;
+        }
+        addr += LOADER_REGION_STEP_2MB;
+    }
+    crate::slog_nano!("MEM", "ok", "loader RO [0x100000000..0x180000000): {}x2MB ro skip={} (hole/1G)", ro, skip);
+    ro
+}
+
 #[allow(dead_code)]
 pub unsafe fn dealloc_physical_frame(frame: PhysFrame<Size4KiB>) {
     let mut guard = GLOBAL_ALLOCATOR.lock();
@@ -957,5 +1092,23 @@ mod tests {
             assert_eq!(a.allocated_count, 0);
             assert!(!a.is_delivered(idx));
         });
+    }
+
+    /// ora-2 2A: limites do range loader (puro, sem HW).
+    #[test]
+    fn loader_range_bounds() {
+        assert!(!loader_range_contains(0));
+        assert!(!loader_range_contains(LOADER_REGION_START - 1));
+        assert!(loader_range_contains(LOADER_REGION_START));
+        assert!(loader_range_contains(LOADER_REGION_START + 0x100000));
+        assert!(loader_range_contains(LOADER_REGION_END - 1));
+        assert!(!loader_range_contains(LOADER_REGION_END));
+        assert!(!loader_range_contains(u64::MAX));
+        // loader_hhdm_va fora do range = None sem tocar no HHDM.
+        assert!(loader_hhdm_va(0).is_none());
+        assert!(loader_hhdm_va(LOADER_REGION_END).is_none());
+        // ensure fora do range = false sem tocar nas page tables.
+        assert!(!ensure_loader_page_ro(0));
+        assert!(!ensure_loader_page_ro(LOADER_REGION_END));
     }
 }

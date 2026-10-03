@@ -320,6 +320,15 @@ pub fn kernel_cr3() -> (PhysFrame<Size4KiB>, Cr3Flags) { Cr3::read() }
 pub unsafe fn restore_cr3(frame: PhysFrame<Size4KiB>, flags: Cr3Flags) { Cr3::write(frame, flags); }
 pub fn alloc_frame() -> Result<PhysFrame<Size4KiB>, &'static str> { alloc_zeroed_frame().ok_or("mvp-c: sem frame fisico") }
 pub fn rw_flags() -> PageTableFlags { PageTableFlags::PRESENT | PageTableFlags::WRITABLE }
+/// Variante READ-ONLY (ora-2 item 2A): PRESENT sem WRITABLE — usada SÓ pela
+/// região QEMU-loader (pesos .bitnet residem em RAM, nunca sofrem store).
+/// Heap/demand-page/TALC seguem em `rw_flags()` + `map_page_direct` (intactos).
+pub fn ro_flags() -> PageTableFlags { PageTableFlags::PRESENT }
+/// PDE 2MB read-only (PRESENT|HUGE_PAGE, sem WRITABLE) — par RO de
+/// `map_page_2mb` do allocator (PRESENT|WRITABLE|HUGE_PAGE). Só loader.
+pub fn ro_huge_2mb_flags() -> PageTableFlags {
+    PageTableFlags::PRESENT | PageTableFlags::HUGE_PAGE
+}
 pub fn user_code_flags() -> PageTableFlags { PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE }
 pub fn user_data_flags() -> PageTableFlags { PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE }
 

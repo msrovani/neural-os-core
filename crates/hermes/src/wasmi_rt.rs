@@ -858,6 +858,82 @@ impl skill_registry::Skill for WasmSkill {
     }
 }
 
+// ─── Skill cache pré-LLM (ora-2 item 5, ADOTAR) ──────────────────────────
+// Templates canônicos observe-only (pura op-IR, sem imports/host-calls,
+// CAP_NONE): o WASM nunca é hardcoded — a fonte canônica é o model_text e
+// os bytes são gerados via `model_text_to_ops` + `build_run_module`.
+// Semântica honesta: sem acesso a HW/PCI — computam sobre valores já
+// observados (params i32); `Template` na proveniência, nunca `ModelBorn`.
+pub const SKILL_CACHE_SOURCES: &[(&str, &str)] = &[
+    ("pci_observe_clamp", "if a > 0: a else: 0"),
+    ("pci_class_match", "a == b"),
+    ("hw_scan_summary", "a+b"),
+];
+
+/// Fonte canônica model_text do template (consulta exata por nome).
+pub fn skill_cache_source(name: &str) -> Option<&'static str> {
+    for (cached, src) in SKILL_CACHE_SOURCES {
+        if *cached == name {
+            return Some(*src);
+        }
+    }
+    None
+}
+
+/// Resolve consulta exata por nome/intent → nome canônico do template.
+/// `name` = nome da skill pedida; `intent_or_text` = intent ou texto op-IR
+/// (casa por nome do template ou por fonte canônica exata).
+pub fn skill_cache_resolve(name: &str, intent_or_text: &str) -> Option<&'static str> {
+    for (cached, _) in SKILL_CACHE_SOURCES {
+        if *cached == name {
+            return Some(*cached);
+        }
+    }
+    let t = intent_or_text.trim();
+    for (cached, src) in SKILL_CACHE_SOURCES {
+        if *cached == t || *src == t {
+            return Some(*cached);
+        }
+    }
+    None
+}
+
+/// Gera os bytes WASM do template via pipeline existente (nunca hardcoded).
+pub fn skill_cache_wasm(name: &str) -> Option<Vec<u8>> {
+    let src = skill_cache_source(name)?;
+    let (n_params, ops) = crate::wasm_build::model_text_to_ops(src).ok()?;
+    if crate::wasm_build::is_dummy_ops(&ops) {
+        return None;
+    }
+    crate::wasm_build::build_run_module(n_params, &ops).ok()
+}
+
+/// Lookup pré-LLM: hit → registra (Template) + sandbox (CAP_NONE+fuel).
+/// `Some(true)` = hit instalado; `Some(false)` = hit recusado (fail-closed);
+/// `None` = miss (caller segue o path atual). 1 linha `ok` por lookup.
+pub fn skill_cache_try_register(name: &str, desc: &str) -> Option<bool> {
+    let wasm = skill_cache_wasm(name)?;
+    if !sandbox_validate_and_run(&wasm) {
+        k_nano::slog_hermes!("SKILLCACHE", "ok", "skill_cache hit={} sandbox=fail", name);
+        return Some(false);
+    }
+    match register_wasm_skill_with_provenance(&wasm, name, desc, SkillProvenance::Template) {
+        Ok(()) => {
+            k_nano::slog_hermes!("SKILLCACHE", "ok", "skill_cache hit={}", name);
+            Some(true)
+        }
+        Err(_) => {
+            k_nano::slog_hermes!("SKILLCACHE", "ok", "skill_cache hit={} register=fail", name);
+            Some(false)
+        }
+    }
+}
+
+/// Log de miss (1 linha `ok` por lookup; path atual segue byte-igual).
+pub fn skill_cache_log_miss(name_or_intent: &str) {
+    k_nano::slog_hermes!("SKILLCACHE", "ok", "skill_cache miss name={}", name_or_intent);
+}
+
 #[cfg(test)]
 mod lane_b_tests {
     use super::*;
@@ -957,6 +1033,51 @@ mod lane_b_tests {
         assert_eq!(run_wasm(&wasm, "run", &[], CAP_LOG).unwrap(), 7);
         assert!(run_wasm(&wasm, "run", &[], CAP_NONE).is_err());
         assert!(!sandbox_validate_and_run(&wasm));
+    }
+
+    #[test]
+    fn skill_cache_templates_build_via_pipeline_and_run_cap_none() {
+        // Bytes nunca hardcoded: fonte = model_text → op-IR → wasm; CAP_NONE.
+        for (name, src) in SKILL_CACHE_SOURCES {
+            let (n, ops) = crate::wasm_build::model_text_to_ops(src).expect("parse");
+            assert!(!crate::wasm_build::is_dummy_ops(&ops));
+            let wasm = crate::wasm_build::build_run_module(n, &ops).expect("build");
+            assert_eq!(&wasm[0..4], &[0x00, 0x61, 0x73, 0x6D]);
+            assert!(sandbox_validate_and_run(&wasm), "{}", name);
+            assert_eq!(skill_cache_wasm(name).expect("cache wasm"), wasm);
+        }
+        let clamp = skill_cache_wasm("pci_observe_clamp").expect("clamp");
+        assert_eq!(run_wasm(&clamp, "run", &[5], CAP_NONE).unwrap(), 5);
+        assert_eq!(run_wasm(&clamp, "run", &[-3], CAP_NONE).unwrap(), 0);
+        let mat = skill_cache_wasm("pci_class_match").expect("match");
+        assert_eq!(run_wasm(&mat, "run", &[7, 7], CAP_NONE).unwrap(), 1);
+        assert_eq!(run_wasm(&mat, "run", &[7, 8], CAP_NONE).unwrap(), 0);
+        let sum = skill_cache_wasm("hw_scan_summary").expect("sum");
+        assert_eq!(run_wasm(&sum, "run", &[6, 7], CAP_NONE).unwrap(), 13);
+    }
+
+    #[test]
+    fn skill_cache_resolve_is_exact_only() {
+        assert_eq!(skill_cache_resolve("pci_class_match", "x"), Some("pci_class_match"));
+        assert_eq!(skill_cache_resolve("mine", "a == b"), Some("pci_class_match"));
+        assert_eq!(skill_cache_resolve("nope", "zzz"), None);
+        assert_eq!(skill_cache_source("nope"), None);
+        assert_eq!(skill_cache_wasm("nope"), None);
+    }
+
+    #[test]
+    fn skill_cache_try_register_is_template_and_fail_closed() {
+        assert_eq!(
+            skill_cache_try_register("hw_scan_summary", "test"),
+            Some(true)
+        );
+        assert_eq!(
+            skill_provenance("hw_scan_summary"),
+            Some(SkillProvenance::Template)
+        );
+        assert!(crate::globals::SKILL_REGISTRY.lock().has_skill("hw_scan_summary"));
+        crate::globals::SKILL_REGISTRY.lock().unregister("hw_scan_summary");
+        assert_eq!(skill_cache_try_register("nope", "test"), None);
     }
 }
 

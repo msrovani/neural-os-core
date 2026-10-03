@@ -1,4 +1,39 @@
-# STATE - neural-os-core v1.9.99-s436 - Watchdog de silêncio [SILENCE] (OOM-HALT para spin sem OOM)
+# STATE - neural-os-core v1.9.99-s440 - Falcon3-3B 1.58bit: fim do gibberish (slim 32 + bypass Falcon + BPE 131k) + wedge terminal do InferQ
+
+#   [s440] Falcon3-3B 1.58bit — saída sem sentido (`andsfaqt...` determinística)
+#     NÃO era o tokenizer: `encode_chat_frame` (cue Llama-3 6 tokens) colapsava o
+#     prompt p/ `prompt_len=6`; o fix s437 só trocou 6→8 por causa de `MAX_CHAT=8`
+#     + duplo-slim. Fixes (cortex.rs/bpe.rs/infer_queue.rs): slim 8→32 + bypass
+#     Falcon; vocab 131072 (`min(128000)`→`cols`, `recent Vec<u16>`→`Vec<u32>`,
+#     remove filtro `t>=128000`); argmax puro no path Falcon (sem score_piece/
+#     weather/coherence); contrato `gibberish_stop` (rep 4-gram>0.6 || distinct-2<0.2
+#     || piece_len<3) → `stop=gibberish` nunca vai a TTS; `MachineCtx{intent_id,
+#     slots,ctx_ids}` (fala-máquina ao lado do texto, path texto byte-igual).
+#     Wedge terminal do InferQ: `slice_stall id=2 elapsed_us=30003962 (budget=500000us)
+#     — wedge, terminal` no prefill 512 toks (matmul 512x3072x3072 ~14s). Fix:
+#     chunked prefill 16 toks + yield + budget hv-gated (`slice_budget hv=WHPX
+#     budget_us=120000000 sandbox=1`) + stall persistente aborta o JOB
+#     (`stop=slice_budget`), nunca a fila; `set_prefill_chunk_toks` tunável
+#     (clamp 1..64, default 16). Plano 5 camadas (ora-2): rejeitados 1B (AVX2 já
+#     existe em bitnet_w2a8.rs, host-only), 1C (pinning/budget 50ms), 2B (arena
+#     512MB/agente), 3B (IP estático 192.168.100.50); adaptados 1A (chunk tunável),
+#     2A (RO 2MB loader + get_or_mmap_expert), 3A (flags VirtIO lab-only), 4 (flush
+#     oportunista TICKV); adotado 5 (skill cache WASM pré-LLM). Implementado+wired:
+#     2A `map_loader_region_ro` (main.rs boot scan) + `get_or_mmap_expert`; 4
+#     `flush_idle` (main.rs idle closure) + high_water; 5 `skill_cache_try_register`
+#     (agents.rs pré-LLM, era DCE'd). BPE: `models/bpe_vocab.bin`/`target1/bpe_vocab.bin`
+#     eram SP32 32K (vocab_n=32002) — ERRADO p/ Falcon3; gerado `target/falcon_bpe.bin`
+#     via `tools/export_bpe_bin.py target1/falcon3/tokenizer.json` (vocab_n=131072
+#     bos=10 merges=128810) e copiado p/ `target/bpe_vocab.bin` (canônico do `find_bpe()`).
+#     Verificação: `cargo check --release` 0 erros; cortex 126/126, k-nano 251/251,
+#     hermes 287 + 1 falha PRÉ-EXISTENTE (`permission_gate::test_risk_level_classify`,
+#     provado via stash: 282/1 sem o diff). QEMU 8c/6GB WHPX (log
+#     boot_whpx_20261003_182030_8c_or2.txt): `loader RO ... 1024x2MB ro skip=0`,
+#     `skill_cache miss name=hw_pnp_pci_bridge...`, `prefill_chunk 1/32→3/32` sem
+#     wedge, BPE 131072. Imagem HW: `PACK_LLM=all python tools/build_image.py --hw
+#     --unified --size 15360` → `target/usb_hw.img` (~14GB, 4 Falcon ×2 aliases +
+#     BGE/E5/RERANKER/RUSTCDR3/AGENT/LEARNER/PIPER/STT/VISION/HWEXPRT + firmware +
+#     BPE 131072).
 
 #   [s439 · concorrente a s436] real-HW unlock (ROCEKT: Intel Core 7 240H /
 #     RTX 3050 6GB / 16GB / SSD atras do VMD / WiFi MT7925). Boot real OK (8 fases,

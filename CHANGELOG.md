@@ -1,5 +1,18 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s440] - 2026-10-03 - Falcon3-3B 1.58bit: fim do gibberish (slim 32 + bypass Falcon + BPE 131k) + wedge terminal do InferQ
+
+- High: **saída sem sentido do Falcon3-3B 1.58bit (`andsfaqt...`, determinística) NÃO era o tokenizer** — `encode_chat_frame` usava cue Llama-3 fixo de 6 tokens → prompt de 581B colapsava p/ `prompt_len=6`; o fix s437 (`is_falcon_bytelevel`+`encode_falcon_chat`) só trocou 6→8 por causa de `MAX_CHAT=8` + **duplo-slim**. Fix: `MAX_CHAT` 8→**32** + `slim_prompt_tokens_for_heavy` **bypassa** o path Falcon (não re-corta o frame Instruct de 26 tokens).
+- High: **vocab 131072** (`cortex/bpe.rs`, `cortex.rs`) — `min(128000)`→`cols` (vocab real do Falcon3 = 131072), `recent: Vec<u16>`→`Vec<u32>` (131072 não cabe em u16), removido o filtro `t >= 128000` que descartava tokens válidos.
+- High: **argmax puro no path Falcon** — sem `score_piece`/`weather`/`coherence` (heurísticas de desempate que não se aplicam a ByteLevel 131k e enviesavam a escolha).
+- High: **contrato `gibberish_stop`** — `rep 4-gram > 0.6` **||** `distinct-2 < 0.2` **||** `piece_len < 3` → `stop=gibberish`, **nunca vai a TTS** (melhor silêncio que fala degenerada).
+- High: **wedge terminal do InferQ** — `slice_stall id=2 elapsed_us=30003962 (budget=500000us) — wedge, terminal` no prefill de 512 toks (matmul 512×3072×3072 ~14s). Fix: **chunked prefill 16 toks** + yield + budget **hv-gated** (`slice_budget hv=WHPX budget_us=120000000 sandbox=1`); stall persistente **aborta o JOB** (`stop=slice_budget`), **nunca a fila**; `set_prefill_chunk_toks` tunável (clamp 1..64, default 16).
+- Med: **`MachineCtx{intent_id, slots, ctx_ids}`** — fala-máquina ao lado do texto no mesmo job; o path texto permanece **byte-igual** (zero regressão).
+- Med: **plano de 5 camadas adjudicado (ora-2)** — rejeitados 1B (AVX2 já existe em `bitnet_w2a8.rs`, host-only), 1C (pinning/budget 50ms), 2B (arena 512MB/agente), 3B (IP estático 192.168.100.50); adaptados 1A (chunk tunável), 2A (RO 2MB loader + `get_or_mmap_expert`), 3A (flags VirtIO lab-only), 4 (flush oportunista TICKV); adotado 5 (skill cache WASM pré-LLM). Implementado+wired: 2A `map_loader_region_ro` (main.rs boot scan) + `get_or_mmap_expert`; 4 `flush_idle` (main.rs idle closure) + high_water; 5 `skill_cache_try_register` (agents.rs pré-LLM, era DCE'd).
+- Med: **BPE canônico por modelo** — `models/bpe_vocab.bin`/`target1/bpe_vocab.bin` eram **SP32 32K** (`vocab_n=32002`), errado p/ Falcon3; gerado `target/falcon_bpe.bin` via `tools/export_bpe_bin.py target1/falcon3/tokenizer.json` (`vocab_n=131072 bos=10 merges=128810`) e copiado p/ `target/bpe_vocab.bin` (canônico do `find_bpe()`).
+- Gates: `cargo check --release` **0 erros**; cortex **126/126**, k-nano **251/251**, hermes **287 + 1 falha PRÉ-EXISTENTE** (`permission_gate::test_risk_level_classify`, provado via stash: 282/1 sem o diff). **QEMU 8c/6GB WHPX** (log `boot_whpx_20261003_182030_8c_or2.txt`): `loader RO ... 1024x2MB ro skip=0`, `skill_cache miss name=hw_pnp_pci_bridge...`, `prefill_chunk 1/32→3/32` sem wedge, BPE 131072. Imagem HW: `PACK_LLM=all python tools/build_image.py --hw --unified --size 15360` → `target/usb_hw.img` (~14GB).
+- Session: SESSION_440
+
 ## [1.9.99-s439] - 2026-10-03 - real-HW unlock: GPU VRAM (BAR fix) + VMD/USB diag + forja WASM a quente
 
 - High: **fix da medição da VRAM (GPU dGPU)** — `k_hal/gpu/detect.rs` só considerava os pares `(0,1)(2,3)(4,5)` como bases de BAR; a **VRAM NVIDIA está em BAR1** (índice ímpar) → nunca medida → `vram: n/a` e o lane **BAR Compute (ADR-0112) off**. Fix: varre os 6 dwords de BAR (pulando o *high* de BARs 64-bit) e escolhe o maior BAR ≥64MB como VRAM (MMIO=BAR0, salvo quando BAR0 é a aperture → BAR5, AMD).

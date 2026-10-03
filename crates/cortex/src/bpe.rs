@@ -60,10 +60,8 @@ impl BpeVocab {
             if t == self.bos || t == self.eos || t == self.eot {
                 continue;
             }
-            // especiais Llama 3 restante: 128000..128255
-            if t >= 128000 {
-                continue;
-            }
+            // ora-1 bullet2: sem cap 128000 — Falcon3 vai a 131072; especiais
+            // caem no filtro `<|...|>` abaixo (texto-legível intacto).
             if let Some(s) = self.decode_id(t) {
                 if s.starts_with("<|") && s.ends_with("|>") {
                     continue;
@@ -756,6 +754,78 @@ pub fn bos_id() -> u32 {
     BPE.lock().as_ref().map(|t| t.bos()).unwrap_or(0)
 }
 
+/// ora-1 bullet1/3: Falcon3 ativo? (ByteLevel 131k, bos<1000). Usado p/ bypass
+/// do slim e p/ argmax puro (sem coherence/bias) no path Falcon.
+pub fn is_falcon_active() -> bool {
+    BPE.lock().as_ref().map(|t| t.is_falcon_bytelevel()).unwrap_or(false)
+}
+
+/// ora-1 bullet5: contrato gibberish honesto sobre janela de 8 toks.
+/// true = rep 4-gram>0.6 OU distinct-2<0.2 OU piece_len médio<3.
+/// Sem vocab carregado → false (não acusa no path texto-legível/char).
+pub fn gibberish_stop(tail: &[u32]) -> bool {
+    if tail.len() < 8 {
+        return false;
+    }
+    let w = &tail[tail.len() - 8..];
+    // distinct-2: 7 bigramas; <0.2 → ≤1 distinto.
+    let mut dist2 = 0usize;
+    for i in 0..7 {
+        let a0 = w[i];
+        let b0 = w[i + 1];
+        let mut seen = false;
+        for k in 0..i {
+            if w[k] == a0 && w[k + 1] == b0 {
+                seen = true;
+                break;
+            }
+        }
+        if !seen {
+            dist2 += 1;
+        }
+    }
+    if dist2 * 5 < 7 {
+        // dist2/7 < 0.2  → dist2 ≤ 1
+        return true;
+    }
+    // 4-gram: 5 janelas; rep>0.6 → distinct/total<0.4 → ≤1 distinto.
+    let mut dist4 = 0usize;
+    for i in 0..5 {
+        let mut seen = false;
+        for k in 0..i {
+            if w[k] == w[i] && w[k + 1] == w[i + 1] && w[k + 2] == w[i + 2] && w[k + 3] == w[i + 3] {
+                seen = true;
+                break;
+            }
+        }
+        if !seen {
+            dist4 += 1;
+        }
+    }
+    let total4 = 5usize;
+    // rep = 1 - dist/total > 0.6
+    if (total4 - dist4) * 10 > total4 * 6 {
+        return true;
+    }
+    // piece_len médio < 3 (peças de 1-2 chars = BPE colapsado).
+    let guard = BPE.lock();
+    let Some(tok) = guard.as_ref() else { return false };
+    let mut sum = 0usize;
+    let mut n = 0usize;
+    for &id in w {
+        // decode_id cru (sem skip de special — special já filtrado no argmax;
+        // se aparecer aqui, len 0 baixa a média = suspeito, honesto).
+        let l = tok.decode_id(id).map(|s| s.chars().count()).unwrap_or(0);
+        sum += l;
+        n += 1;
+    }
+    if n > 0 && sum * 10 < n * 30 {
+        // sum/n < 3
+        return true;
+    }
+    false
+}
+
 /// Léxico clima p/ bias + constrained decode (logits reais; sem string canned).
 /// Ordem: conectores PT primeiro → subst. clima (forma frase mais legível no soft-float).
 const WEATHER_BIAS_IDS: &[u32] = &[
@@ -1422,6 +1492,20 @@ mod tests {
         assert_eq!(a[0], v.bos(), "BOS no início");
         assert!(a.contains(&3139), "peça 'Ġworld' presente");
         assert!(b.contains(&49815), "peça 'Ġtemperature' presente");
+    }
+
+    /// Bullet 4: path Falcon nunca cruza cues greeting/weather — mesmo texto
+    /// de saudação tokeniza o prompt real, nunca o frame-cue fixo de 6 toks.
+    #[test]
+    fn falcon_ignores_greeting_cue() {
+        let v = fixture_vocab();
+        assert!(v.is_falcon_bytelevel());
+        let f = v.encode_falcon_chat("hello jarbas");
+        let g = v.encode_greeting_cue("hello jarbas");
+        assert_eq!(g.len(), 6, "cue legado = frame fixo de 6 toks");
+        assert!(f.len() > 6, "Falcon tokeniza o prompt (len={})", f.len());
+        assert_ne!(f, g, "Falcon nunca devolve o cue de saudação");
+        assert_eq!(f[0], v.bos(), "BOS no início");
     }
 
     /// Monta um BPB1 sintético (só o header + heap; sem MRG1).

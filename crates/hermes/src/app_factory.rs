@@ -221,6 +221,34 @@ pub fn generate_and_run(ops: &[crate::wasm_build::Op], a: i32, b: i32) -> Factor
     execute(&rec, &wasm, "run", a, b)
 }
 
+/// Skill cache pré-LLM (ora-2 item 5): consulta exata por nome/intent ANTES
+/// de qualquer `TOPIC_LLM_REQUEST` para geração de skill. Hit → registra o
+/// template (`Template`, nunca `ModelBorn`) + executa via sandbox
+/// (`CAP_NONE` + fuel, fail-closed mantido). `None` = miss (path atual).
+/// Chamadores que publicariam `TOPIC_LLM_REQUEST` devem sondar aqui primeiro.
+pub fn skill_cache_generate(name: &str, desc: &str, intent_or_text: &str, args: &[i32]) -> Option<FactoryOutcome> {
+    let cached = crate::wasmi_rt::skill_cache_resolve(name, intent_or_text)?;
+    let wasm = crate::wasmi_rt::skill_cache_wasm(cached)?;
+    if !crate::wasmi_rt::sandbox_validate_and_run(&wasm) {
+        k_nano::slog_hermes!("SKILLCACHE", "ok", "skill_cache hit={} sandbox=fail", name);
+        return Some(FactoryOutcome::Denied("skill-cache-sandbox-fail"));
+    }
+    if let Err(e) = crate::wasmi_rt::register_wasm_skill_with_provenance(
+        &wasm,
+        name,
+        desc,
+        crate::wasmi_rt::SkillProvenance::Template,
+    ) {
+        k_nano::slog_hermes!("SKILLCACHE", "ok", "skill_cache hit={} register=fail", name);
+        return Some(FactoryOutcome::Denied(e));
+    }
+    k_nano::slog_hermes!("SKILLCACHE", "ok", "skill_cache hit={}", name);
+    match crate::wasmi_rt::run_wasm(&wasm, "run", args, crate::wasmi_rt::CAP_NONE) {
+        Ok(v) => Some(FactoryOutcome::RanWasm(v)),
+        Err(e) => Some(FactoryOutcome::Denied(e)),
+    }
+}
+
 /// Lane B: model-text → persiste (WasmSkill model-born + `/skills/*.wasm`)
 /// + executa (A wasmi). Fecha o gap "generate_and_run é efêmero".
 /// Refuse honesto (`Denied`) em texto fora-da-gramática/dummy/falha de
@@ -234,6 +262,11 @@ pub fn generate_persist_and_run(
     model_text: &str,
     args: &[i32],
 ) -> FactoryOutcome {
+    // ora-2 item 5: lookup pré-LLM primeiro; miss → path atual byte-igual.
+    if let Some(hit) = skill_cache_generate(name, desc, model_text, args) {
+        return hit;
+    }
+    crate::wasmi_rt::skill_cache_log_miss(name);
     let (n_params, ops) = match crate::wasm_build::model_text_to_ops(model_text) {
         Ok(parsed) => parsed,
         Err(e) => return FactoryOutcome::Denied(e),
@@ -324,6 +357,62 @@ mod lane_b_tests {
             _ => panic!("dummy deveria ser Denied"),
         }
         assert!(!crate::globals::SKILL_REGISTRY.lock().has_skill("lb_app_dummy"));
+    }
+
+    #[test]
+    fn skill_cache_hit_skips_llm_and_runs_template() {
+        // Hit por nome: registra Template (nunca ModelBorn) + roda CAP_NONE.
+        match skill_cache_generate("pci_class_match", "test", "qualquer-intent", &[7, 7]) {
+            Some(FactoryOutcome::RanWasm(1)) => {}
+            Some(FactoryOutcome::RanWasm(v)) => panic!("esperava 1, veio {}", v),
+            Some(FactoryOutcome::Denied(e)) => panic!("negado: {}", e),
+            _ => panic!("esperava hit RanWasm(1)"),
+        }
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance("pci_class_match"),
+            Some(crate::wasmi_rt::SkillProvenance::Template)
+        );
+        crate::globals::SKILL_REGISTRY.lock().unregister("pci_class_match");
+        // Hit por intent/fonte exata sob nome pedido diferente.
+        match skill_cache_generate("minha_skill", "test", "a+b", &[6, 7]) {
+            Some(FactoryOutcome::RanWasm(13)) => {}
+            other => panic!("esperava hit 13, veio {}", other.is_some()),
+        }
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance("minha_skill"),
+            Some(crate::wasmi_rt::SkillProvenance::Template)
+        );
+        crate::globals::SKILL_REGISTRY.lock().unregister("minha_skill");
+        // Miss → None (path atual intacto).
+        assert!(skill_cache_generate("lb_cache_miss", "test", "a*b+7", &[6, 7]).is_none());
+    }
+
+    #[test]
+    fn persist_and_run_cache_hit_vs_miss_paths() {
+        // Hit via generate_persist_and_run (nome canônico): Template, sem LLM.
+        match generate_persist_and_run("hw_scan_summary", "test", "texto-que-seria-llm", &[6, 7]) {
+            FactoryOutcome::RanWasm(13) => {}
+            FactoryOutcome::RanWasm(v) => panic!("esperava 13, veio {}", v),
+            FactoryOutcome::Denied(e) => panic!("negado: {}", e),
+            _ => panic!("esperava hit 13"),
+        }
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance("hw_scan_summary"),
+            Some(crate::wasmi_rt::SkillProvenance::Template)
+        );
+        crate::globals::SKILL_REGISTRY.lock().unregister("hw_scan_summary");
+        // Miss → path atual byte-igual (model-born).
+        match generate_persist_and_run("lb_app_miss", "test", "a*b+7", &[6, 7]) {
+            FactoryOutcome::RanWasm(49) => {}
+            FactoryOutcome::RanWasm(v) => panic!("esperava 49, veio {}", v),
+            FactoryOutcome::Denied(e) => panic!("negado: {}", e),
+            _ => panic!("esperava miss 49"),
+        }
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance("lb_app_miss"),
+            Some(crate::wasmi_rt::SkillProvenance::ModelBorn)
+        );
+        crate::globals::SKILL_REGISTRY.lock().unregister("lb_app_miss");
     }
 
     /// Escada de criação (ADR-0059): fugaz não registra nem persiste; WASM

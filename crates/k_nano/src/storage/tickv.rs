@@ -40,6 +40,12 @@ fn hdr_tickv_shaped(hdr: &[u8]) -> bool {
 /// Dispara GC se append_off ultrapassar isto (ou dead/live).
 const HIGH_WATER: u64 = 256 * 1024;
 
+/// Razões do flush oportunista (log honesto `tickv flush reason=..`).
+/// - `idle`: scheduler sem trabalho / entre slices (sem timer dedicado).
+/// - `high_water`: o append log cruzou [`HIGH_WATER`] ao fim de uma escrita.
+pub const FLUSH_IDLE: &str = "idle";
+pub const FLUSH_HIGH_WATER: &str = "high_water";
+
 /// s410j: guard de recursão — `compact()` regrava via `put_batch_impl` que
 /// chama `maybe_gc` no fim; se o live-set pós-compact ainda > HIGH_WATER
 /// (volume de dados real maior que o gatilho), o maybe_gc dispararia compact
@@ -270,6 +276,9 @@ pub struct TickvLite {
     /// recover TIMEOUT / índice parcial — puts OK mas honesty: mount degradado.
     degraded: bool,
     backend: &'static str,
+    /// Latched ao cruzar HIGH_WATER: impede re-disparo do flush oportunista a
+    /// cada put enquanto o GC não baixar o append (ou o backend não permitir GC).
+    hw_latched: bool,
     pub stats: TickvStats,
 }
 
@@ -281,6 +290,7 @@ impl TickvLite {
             ready: false,
             degraded: false,
             backend: "none",
+            hw_latched: false,
             stats: TickvStats::default(),
         }
     }
@@ -618,6 +628,71 @@ impl TickvLite {
         self.stats.live_bytes = live;
     }
 
+    /// Política de GC: append passou o HIGH_WATER ou há mais dead que live.
+    fn gc_due(&self) -> bool {
+        self.append_off > HIGH_WATER
+            || (self.stats.live_bytes > 0
+                && self.stats.dead_bytes * DEAD_RATIO_DEN
+                    > self.stats.live_bytes * DEAD_RATIO_NUM)
+    }
+
+    /// GC automático só é permitido onde ele é barato e seguro: RAM (e qualquer
+    /// backend não-file/nvme). file/nvme = wipe+rewrite via PIO (hang TCG/HW) —
+    /// compact só explícito (SleepCycle/HITL). GC_SUSPENDED suspende no boot.
+    fn gc_allowed(&self) -> bool {
+        !(self.backend == "file" || self.backend == "nvme")
+            && !GC_SUSPENDED.load(Ordering::Acquire)
+    }
+
+    /// Flush oportunista (ADR-ora-2 item 4 adaptado): SEM timer dedicado.
+    /// Chamado quando o scheduler está idle/entre slices (`reason=idle`) ou
+    /// quando o append cruza o HIGH_WATER ao fim de uma escrita
+    /// (`reason=high_water`). Compacta **somente se devido e permitido** —
+    /// nunca no hot path de cada put. Loga `tickv flush reason=.. bytes=..`
+    /// (ok) apenas quando um GC real correu.
+    fn flush_opportunistic(&mut self, reason: &'static str) -> bool {
+        if !self.ready || COMPACTING.load(Ordering::Acquire) {
+            return false;
+        }
+        if !self.gc_due() || !self.gc_allowed() {
+            return false;
+        }
+        let before = self.stats.compactions;
+        let _ = self.maybe_gc();
+        if self.stats.compactions == before {
+            return false; // gated (file/nvme/suspend) — nada a logar
+        }
+        // Re-arma o latch conforme o append pós-GC (RAM baixa < HIGH_WATER).
+        self.hw_latched = self.append_off >= HIGH_WATER;
+        crate::slog_nano!(
+            "TICKV",
+            "ok",
+            "tickv flush reason={} bytes={}",
+            reason,
+            self.append_off
+        );
+        true
+    }
+
+    /// Dispara o flush de HIGH_WATER no fim de put/put_batch (1× por travessia).
+    fn maybe_high_water_flush(&mut self) {
+        if self.append_off <= HIGH_WATER || self.hw_latched {
+            return;
+        }
+        // Dentro de compact(): preserva a telemetria do guard anti-recursão.
+        if COMPACTING.load(Ordering::Acquire) {
+            let _ = self.maybe_gc();
+            return;
+        }
+        if !self.gc_allowed() {
+            // file/nvme/suspenso: não compacta no write path; latch p/ não
+            // re-avaliar a cada put. O idle flush (RAM) continua disponível.
+            self.hw_latched = true;
+            return;
+        }
+        let _ = self.flush_opportunistic(FLUSH_HIGH_WATER);
+    }
+
     fn maybe_gc(&mut self) -> Result<(), &'static str> {
         // s410j: dentro de um compact → nunca re-entrar (recursão infinita se
         // live-set real > HIGH_WATER; aí o volume SEMPRE vai re-disparar).
@@ -636,11 +711,7 @@ impl TickvLite {
         if self.backend == "file" || self.backend == "nvme" {
             return Ok(());
         }
-        let need = self.append_off > HIGH_WATER
-            || (self.stats.live_bytes > 0
-                && self.stats.dead_bytes * DEAD_RATIO_DEN
-                    > self.stats.live_bytes * DEAD_RATIO_NUM);
-        if need {
+        if self.gc_due() {
             self.compact()
         } else {
             Ok(())
@@ -729,7 +800,7 @@ impl TickvLite {
         }
         self.put_raw(key, val)?;
         if key != "__gc_lock" {
-            let _ = self.maybe_gc();
+            self.maybe_high_water_flush();
         }
         Ok(())
     }
@@ -754,9 +825,10 @@ impl TickvLite {
         for (key, val) in items {
             self.put_raw(key, val)?;
         }
-        // 3) GC uma única vez no fim (hot path de N puts paga 1 verificação)
+        // 3) flush de HIGH_WATER uma única vez no fim (hot path de N puts paga
+        // 1 verificação); o GC acontece fora do put individual (ponto certo).
         if items.iter().any(|(k, _)| *k != "__gc_lock") {
-            let _ = self.maybe_gc();
+            self.maybe_high_water_flush();
         }
         Ok(())
     }
@@ -887,6 +959,22 @@ pub fn is_ready() -> bool {
 /// True se recover timeoutou / índice parcial (ready mas honesty DEGRADED).
 pub fn is_degraded() -> bool {
     TICKV.lock().as_ref().map(|k| k.is_degraded()).unwrap_or(false)
+}
+
+/// Flush oportunista global, SEM timer dedicado. O scheduler chama isto
+/// quando está idle/entre slices (`FLUSH_IDLE`); o write path chama ao cruzar
+/// o HIGH_WATER (`FLUSH_HIGH_WATER`). Compacta só quando devido e permitido;
+/// loga `tickv flush reason=.. bytes=..` quando um GC real correu.
+pub fn flush_opportunistic(reason: &'static str) -> bool {
+    let mut g = TICKV.lock();
+    g.as_mut()
+        .map(|kv| kv.flush_opportunistic(reason))
+        .unwrap_or(false)
+}
+
+/// Atalho canônico do idle hook (scheduler sem trabalho).
+pub fn flush_idle() -> bool {
+    flush_opportunistic(FLUSH_IDLE)
 }
 
 /// Após MSC: promove FileFlash, **migra** chaves RAM → stick, remonta TickvLite.
@@ -1312,29 +1400,68 @@ mod interop_tests {
         reset();
     }
 
-    /// s410j (bughunt): puts INDIVIDUAIS com volume > HIGH_WATER disparam um
-    /// compact COMPLETO por put (bug de performance pré-existente exposto
-    /// por este bughunt: ~N/2 compacts de wipe+rewrite = O(n²)). Documentado
-    /// como work-around: cargas grandes DEVEM usar put_batch (1 GC-check);
-    /// o put individual permanece para cargas pequenas.
+    /// ora-2 item 4 (adaptado): puts INDIVIDUAIS NÃO compactam a cada put — o
+    /// GC só dispara UMA vez quando o append cruza o HIGH_WATER (ponto certo).
+    /// Antes deste fix o put individual disparava compact completo ~N/2 vezes
+    /// (O(n²)); agora a travessia é latched e a correção se mantém.
     #[test]
-    fn put_individual_above_high_water_is_expensive_but_correct() {
+    fn put_individual_flushes_once_at_high_water_not_per_put() {
         let _g = TEST_LOCK.lock();
         reset();
         install_ram_flash(1024 * 1024);
         let mut kv = TickvLite::new();
         kv.mount().expect("mount");
         let val = [0xCDu8; 448];
-        // Poucos puts além do HIGH_WATER — só provamos CORREÇÃO (dados
-        // íntegros), não performance (aí está o bug documentado).
         for i in 0..520u32 {
             let mut key = String::from("solo/big/");
             push_u32_hex(&mut key, i);
             kv.put(&key, &val).expect("put");
         }
-        assert!(kv.stats.compactions >= 1);
+        // 520 records de 512B: cruza o HIGH_WATER 1× → 1 compact, não O(n²).
+        assert!(
+            kv.stats.compactions >= 1 && kv.stats.compactions <= 2,
+            "compactions={} devia ser 1 (não ~N/2)",
+            kv.stats.compactions
+        );
         let mut probe = String::from("solo/big/");
         push_u32_hex(&mut probe, 519);
+        assert_eq!(kv.get(&probe).unwrap(), &val[..]);
+        reset();
+    }
+
+    /// ora-2 item 4 (adaptado): o flush IDLE (scheduler sem trabalho) compacta
+    /// quando devido, sem timer dedicado. Reproduz o caso real: GC suspenso no
+    /// boot (file/nvme) faz o write path latched e sem compact; ao retomar, o
+    /// idle flush encontra o volume fragmentado e compacta — log `reason=idle`.
+    #[test]
+    fn flush_idle_compacts_when_due_after_resume() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        install_ram_flash(1024 * 1024);
+        let mut kv = TickvLite::new();
+        kv.mount().expect("mount");
+        // Benigno: abaixo do HIGH_WATER e sem dead → nada a fazer.
+        kv.put("k", b"v").expect("put");
+        assert!(!kv.flush_opportunistic(FLUSH_IDLE));
+        // GC suspenso: puts cruzam o HIGH_WATER mas não compactam.
+        set_gc_suspended(true);
+        let val = [0xEEu8; 448];
+        for i in 0..600u32 {
+            let mut key = String::from("flush/big/");
+            push_u32_hex(&mut key, i);
+            kv.put(&key, &val).expect("put");
+        }
+        assert_eq!(kv.stats.compactions, 0, "GC suspenso não compacta");
+        // Retoma: o idle flush encontra o append acima do HIGH_WATER e compacta.
+        set_gc_suspended(false);
+        let before = kv.stats.compactions;
+        assert!(
+            kv.flush_opportunistic(FLUSH_IDLE),
+            "flush idle devia compactar"
+        );
+        assert!(kv.stats.compactions > before);
+        let mut probe = String::from("flush/big/");
+        push_u32_hex(&mut probe, 599);
         assert_eq!(kv.get(&probe).unwrap(), &val[..]);
         reset();
     }

@@ -57,6 +57,8 @@ struct QueueSlot {
     cancel: AtomicBool,
     prompt: Mutex<Option<String>>,
     reply_topic: Mutex<Option<String>>,
+    /// Bullet 4: struct-máquina do job (None = texto puro).
+    machine: Mutex<Option<MachineCtx>>,
 }
 
 use core::sync::atomic::AtomicU8;
@@ -70,6 +72,7 @@ impl QueueSlot {
             cancel: AtomicBool::new(false),
             prompt: Mutex::new(None),
             reply_topic: Mutex::new(None),
+            machine: Mutex::new(None),
         }
     }
 }
@@ -158,6 +161,94 @@ const A2_SLICE_STALL_US: u64 = 30_000_000;
 /// TSC do início do slice EM CURSO (0 = nenhum) + contador p/ telemetria.
 static A2_SLICE_T0_US: AtomicU64 = AtomicU64::new(0);
 static A2_SLICE_N: AtomicU64 = AtomicU64::new(0);
+/// Chunked prefill (wedge WHPX 8c T+1910: 1 layer × 512 toks ≈ minutos em
+/// soft-float e o watchdog declarava a prova — que nem rodava — wedge
+/// terminal). O prompt é fatiado em blocos; cada slice faz ≤1 layer de ≤1
+/// chunk (≈ segundos) e o yield entre chunks mostra progresso ao watchdog.
+const PREFILL_CHUNK_TOKS: usize = 16;
+/// Tunável sem mudar o default provado: `set_prefill_chunk_toks(n)` com clamp
+/// 1..=64 (test-hook/calibragem futura). Runtime permanece em 16.
+const PREFILL_CHUNK_TOKS_MIN: usize = 1;
+const PREFILL_CHUNK_TOKS_MAX: usize = 64;
+static PREFILL_CHUNK_TOKS_VAL: AtomicUsize = AtomicUsize::new(PREFILL_CHUNK_TOKS);
+
+/// Lê o chunk efetivo (default 16).
+#[inline]
+pub fn prefill_chunk_toks() -> usize {
+    PREFILL_CHUNK_TOKS_VAL.load(Ordering::Relaxed)
+}
+
+/// Test-hook/tuning: ajusta o chunk com clamp 1..=64; retorna o efetivo.
+/// Default segue 16 — não subir em runtime sem revalidar o wedge WHPX 8c.
+pub fn set_prefill_chunk_toks(n: usize) -> usize {
+    let v = n.clamp(PREFILL_CHUNK_TOKS_MIN, PREFILL_CHUNK_TOKS_MAX);
+    PREFILL_CHUNK_TOKS_VAL.store(v, Ordering::Relaxed);
+    v
+}
+/// Streak p/ declarar stall em sandbox: 3 polls consecutivos sem progresso.
+const SANDBOX_STALL_STREAK_N: u32 = 3;
+/// Piso do budget sandbox (120s) e teto do auto-tune (1800s).
+const SANDBOX_STALL_US: u64 = 120_000_000;
+const SANDBOX_STALL_MAX_US: u64 = 1_800_000_000;
+/// Custo do último slice de prefill (auto-tune do budget sandbox: 8×).
+static PREFILL_LAST_SLICE_US: AtomicU64 = AtomicU64::new(0);
+/// Streak atual sem progresso observável (só sandbox; HW usa terminal direto).
+static SANDBOX_STALL_STREAK: AtomicU32 = AtomicU32::new(0);
+/// Marca de progresso do job ativo p/ o watchdog: (job, fase+chunk+layer, step).
+static WATCH_MARK_A: AtomicU64 = AtomicU64::new(0);
+static WATCH_MARK_B: AtomicU64 = AtomicU64::new(0);
+static WATCH_MARK_C: AtomicU64 = AtomicU64::new(0);
+
+/// true em sandbox (WHPX/TCG/QEMU) ou probe ainda não rodou (leniente: nunca
+/// declara wedge terminal sem evidência; HW real probado segue estrito).
+fn eff_sandbox() -> bool {
+    if !k_nano::platform_probe::probe_done() {
+        return true;
+    }
+    k_nano::platform_probe::hypervisor().is_sandbox()
+}
+
+fn eff_hv_name() -> &'static str {
+    if !k_nano::platform_probe::probe_done() {
+        return "unknown";
+    }
+    k_nano::platform_probe::hypervisor().name()
+}
+
+/// Budget do watchdog de slice: HW real 500ms→stall 30s fixos; sandbox 120s
+/// ou 8× o custo do último slice de prefill (teto 1800s) — TCG lento calibra
+/// sozinho, sem declarar wedge no meio de matmul legítimo.
+fn slice_stall_budget_us() -> u64 {
+    if !eff_sandbox() {
+        return A2_SLICE_STALL_US;
+    }
+    SANDBOX_STALL_US
+        .max(PREFILL_LAST_SLICE_US.load(Ordering::Relaxed).saturating_mul(8))
+        .min(SANDBOX_STALL_MAX_US)
+}
+
+/// Janela do próximo chunk: (offset, n). None = nada restante.
+fn chunk_window(total: usize, off: usize) -> Option<(usize, usize)> {
+    if off >= total {
+        return None;
+    }
+    Some((off, (total - off).min(prefill_chunk_toks())))
+}
+
+/// Marca de progresso do ACTIVE (None = idle/sem lock — sem wedge possível).
+fn active_progress_mark() -> Option<(u64, u64, u64)> {
+    let g = ACTIVE.try_lock()?;
+    let st = g.as_ref()?;
+    if matches!(st.phase, Phase::Idle | Phase::Finishing) {
+        return None;
+    }
+    let a = st.job_id;
+    let b = ((st.phase as u64) << 56)
+        | ((st.prefill_chunks_done & 0x00FF_FFFF) << 32)
+        | ((st.prefill_chunk as u64 & 0xFFFF) << 16)
+        | (st.prefill_layer as u64 & 0xFFFF);
+    Some((a, b, st.step as u64))
+}
 /// Diagnóstico decisivo rate-limited no topo de `poll_slice`.
 static SLICE_POLL_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Loga em n==1 (prova que `poll_slice` é chamado) e depois a cada N chamadas.
@@ -279,12 +370,63 @@ enum Phase {
     Finishing,
 }
 
+/// Bullet 4 protótipo mínimo: contexto-máquina ao lado do texto.
+/// Quando presente no job, o prefill usa os ids diretos (sem framed PT-BR);
+/// quando ausente, o path texto-legível atual permanece byte-igual.
+/// `slots` = pequena lista KV (cap 8); `ctx_ids` = tensor_ctx (cap 256).
+#[derive(Clone, Debug, Default)]
+pub struct MachineCtx {
+    pub intent_id: u32,
+    pub slots: Vec<(u32, u32)>,
+    pub ctx_ids: Vec<u32>,
+}
+
+impl MachineCtx {
+    pub const MAX_SLOTS: usize = 8;
+    pub const MAX_CTX: usize = 256;
+
+    /// Encode direto dos ids, sem framed/string: `[bos, intent, k0, v0, ...,
+    /// ctx...]`, filtrado por `vocab_size` (mesmo gate `retain` do texto).
+    /// Nunca vazio (cai em `[bos]`); nunca chama `bpe::encode`.
+    pub fn to_tokens(&self, vocab_size: u32, bos: u32) -> Vec<u32> {
+        let vs = vocab_size;
+        let b = if vs > 0 { bos.min(vs.saturating_sub(1)) } else { bos };
+        let mut out = Vec::new();
+        out.push(b);
+        if vs == 0 {
+            return out;
+        }
+        if self.intent_id != b && self.intent_id < vs {
+            out.push(self.intent_id);
+        }
+        for (k, v) in self.slots.iter().take(Self::MAX_SLOTS) {
+            if *k < vs {
+                out.push(*k);
+            }
+            if *v < vs {
+                out.push(*v);
+            }
+        }
+        for &id in self.ctx_ids.iter().take(Self::MAX_CTX) {
+            if id < vs {
+                out.push(id);
+            }
+        }
+        if out.is_empty() {
+            out.push(b);
+        }
+        out
+    }
+}
+
 struct ActiveState {
     phase: Phase,
     job_id: u64,
     mode: InferMode,
     reply_topic: String,
     prompt: String,
+    /// Bullet 4: struct-máquina opcional (None = texto-legível, byte-igual).
+    machine: Option<MachineCtx>,
     tokens: Vec<u32>,
     prompt_len: usize,
     step: usize,
@@ -294,7 +436,7 @@ struct ActiveState {
     is_greeting: bool,
     eos: u32,
     eot: u32,
-    recent_u16: Vec<u16>,
+    recent_u16: Vec<u32>,
     cache: Option<KvCache>,
     last_logits: Option<Tensor>,
     last_hidden: Option<Tensor>,
@@ -311,6 +453,12 @@ struct ActiveState {
     prefill_start_pos: usize,
     prefill_total_seq: usize,
     prefill_t0_us: u64,
+    /// Chunked prefill (wedge WHPX 8c): offset em `tokens` do chunk atual.
+    prefill_chunk: usize,
+    /// Chunks concluídos (marcador de progresso p/ o watchdog).
+    prefill_chunks_done: u64,
+    /// TSC do início do chunk atual.
+    prefill_chunk_t0_us: u64,
     /// Lane A2: job de prova (stride 1 local, ctx mínimo, 1 token).
     is_proof: bool,
     /// Wall inicial do job (total_us no finish_job).
@@ -441,7 +589,22 @@ fn a2_note_terminal(id: u64) {
 
 /// Enfileira job. Acorda APs via monitor flag.
 pub fn submit(prompt: String, mode: InferMode, reply_topic: &str) -> Result<u64, SubmitErr> {
-    if prompt.is_empty() {
+    // Fallback texto-legível intacto: sem struct = caminho idêntico ao anterior.
+    submit_with_ctx(prompt, None, mode, reply_topic)
+}
+
+/// Bullet 4: enfileira job com struct-máquina opcional ao lado do texto.
+/// `machine=Some` dispensa a string framed PT-BR (ids diretos no prefill);
+/// `machine=None` = `submit` legado, byte-igual.
+pub fn submit_with_ctx(
+    prompt: String,
+    machine: Option<MachineCtx>,
+    mode: InferMode,
+    reply_topic: &str,
+) -> Result<u64, SubmitErr> {
+    // Texto vazio só vale com struct (job-máquina puro); sem struct mantém o
+    // `EmptyPrompt` legado.
+    if prompt.is_empty() && machine.is_none() {
         return Err(SubmitErr::EmptyPrompt);
     }
     // Fail-closed ANTES de claim/encode: headroom=4MB + encode BPE = #UD/#PF (mesh A).
@@ -497,6 +660,7 @@ pub fn submit(prompt: String, mode: InferMode, reply_topic: &str) -> Result<u64,
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     *slot.prompt.lock() = Some(prompt);
     *slot.reply_topic.lock() = Some(topic);
+    *slot.machine.lock() = machine;
     slot.mode.store(mode as u8, Ordering::Release);
     slot.cancel.store(false, Ordering::Release);
     slot.id.store(id, Ordering::Release);
@@ -618,7 +782,9 @@ fn try_claim_into_active() -> bool {
             .lock()
             .take()
             .unwrap_or_else(|| String::from(TOPIC_LLM_RESPONSE));
-        if cancelled || prompt.is_empty() {
+        // Bullet 4: struct viaja no slot; prompt vazio vale com struct.
+        let machine = slot.machine.lock().take();
+        if cancelled || (prompt.is_empty() && machine.is_none()) {
             emit_reply(&reply_topic, "[cancelled]");
             a2_note_terminal(id);
             continue;
@@ -653,6 +819,7 @@ fn try_claim_into_active() -> bool {
             mode,
             reply_topic,
             prompt,
+            machine,
             tokens: Vec::new(),
             prompt_len: 0,
             step: 0,
@@ -676,6 +843,9 @@ fn try_claim_into_active() -> bool {
             prefill_start_pos: 0,
             prefill_total_seq: 0,
             prefill_t0_us: 0,
+            prefill_chunk: 0,
+            prefill_chunks_done: 0,
+            prefill_chunk_t0_us: 0,
             is_proof,
             job_t0_us: k_nano::tsc::now_us(),
             prefill_us: 0,
@@ -684,6 +854,17 @@ fn try_claim_into_active() -> bool {
         infer_guard_begin();
         emit_msg_start();
         k_nano::slog_cortex!("InferQ", "ok", "claim id={} coarse={}", id, coarse as u8);
+        // Wedge WHPX 8c: budget do watchdog por hypervisor na abertura do job —
+        // sandbox (WHPX/TCG) tolera matmul legítimo de minutos; HW real 30s.
+        k_nano::slog_cortex!(
+            "InferQ",
+            "ok",
+            "slice_budget hv={} budget_us={} sandbox={} id={}",
+            eff_hv_name(),
+            slice_stall_budget_us(),
+            eff_sandbox() as u8,
+            id
+        );
         // s419: marco persistente pós-claim (a2_proof stall pós-teto).
         k_nano::boot_logger::log_quiet(&alloc::format!(
             "infer-claim id={} proof={}", id, is_proof as u8
@@ -729,7 +910,15 @@ fn finish_job(st: &mut ActiveState, text: &str) {
     // Verify + Remember (SESSION_350 Heap AIOS).
     let completed = !st.heap_escalate && !text.starts_with("[heap escalate]");
     crate::heap_aios::verify_job(completed, job_toks, us);
-    let out = if text.is_empty() {
+    // ora-1 bullet5: se a cauda gerada colapsou, a resposta NÃO leva gibberish
+    // ao TTS/reply — honesto com escalate HITL (tts_buf já foi mutado no push).
+    let gen_tail: &[u32] = if st.prompt_len < st.tokens.len() {
+        &st.tokens[st.prompt_len..]
+    } else {
+        &st.tokens
+    };
+    let gib_final = st.use_bpe && crate::bpe::gibberish_stop(gen_tail);
+    let mut out = if text.is_empty() {
         if st.acc_text.is_empty() {
             String::from(NO_MODEL_MSG)
         } else {
@@ -738,6 +927,17 @@ fn finish_job(st: &mut ActiveState, text: &str) {
     } else {
         String::from(text)
     };
+    if gib_final {
+        k_nano::slog_cortex!("InferQ", "warn",
+            "stop=gibberish done id={} toks={} — HITL escalate (TTS abortado)",
+            st.job_id, gen_tail.len());
+        k_nano::boot_logger::log_quiet(&alloc::format!(
+            "stop=gibberish done id={} toks={} (HITL escalate, TTS abortado)",
+            st.job_id, gen_tail.len()
+        ));
+        st.tts_buf.clear();
+        out = String::from("[stop=gibberish — HITL escalate]");
+    }
     // Flush TTS residual as final delta already in acc; reply once.
     emit_reply(&st.reply_topic, &out);
     emit_stop();
@@ -818,6 +1018,17 @@ fn push_delta(st: &mut ActiveState, piece: &str) {
         return;
     }
     st.acc_text.push_str(piece);
+    // ora-1 bullet5: gibberish nunca chega ao TTS (stream LLM segue p/ debug,
+    // TTS parcial é abortado e o residual é descartado).
+    let gib = st.use_bpe && crate::bpe::gibberish_stop(&st.tokens);
+    if gib {
+        k_nano::slog_cortex!("InferQ", "warn",
+            "stop=gibberish step={} toks={} — HITL escalate (TTS parcial abortado)",
+            st.step, st.tokens.len());
+        st.tts_buf.clear();
+        emit_msg_delta(piece);
+        return;
+    }
     st.tts_buf.push_str(piece);
     emit_msg_delta(piece);
     // TTS parcial: publicar frase fechada em HERMES_RESPONSE path via tópico dedicado.
@@ -870,7 +1081,14 @@ fn run_prefill_setup(st: &mut ActiveState) {
     } else {
         crate::cortex::EOS as u32
     };
-    st.is_greeting = crate::bpe::prompt_is_greeting(&st.prompt);
+    // Bullet 4: struct-máquina nunca consulta cues PT-BR (greeting/weather);
+    // texto sem struct mantém o comportamento legado byte-igual.
+    let has_machine = st.machine.is_some();
+    st.is_greeting = if has_machine {
+        false
+    } else {
+        crate::bpe::prompt_is_greeting(&st.prompt)
+    };
 
     // SESSION_350/366: Observe→Plan→Act ANTES do encode BPE.
     // Encode sob headroom=4MB estoura a janela bump → #UD/#PF (mesh A).
@@ -896,7 +1114,17 @@ fn run_prefill_setup(st: &mut ActiveState) {
         return;
     }
 
-    let mut tokens: Vec<u32> = if st.use_bpe {
+    let vs = model.vocab_size;
+    // Bullet 4: com struct, encode direto dos ids (sem framed/string); sem
+    // struct, encode de texto idêntico ao legado.
+    let mut tokens: Vec<u32> = if let Some(m) = st.machine.as_ref() {
+        let bos = if st.use_bpe {
+            crate::bpe::bos_id()
+        } else {
+            crate::cortex::BOS as u32
+        };
+        m.to_tokens(vs, bos)
+    } else if st.use_bpe {
         crate::bpe::encode(&st.prompt)
     } else {
         crate::cortex::Tokenizer::encode(&st.prompt)
@@ -904,7 +1132,6 @@ fn run_prefill_setup(st: &mut ActiveState) {
             .map(|t| t as u32)
             .collect()
     };
-    let vs = model.vocab_size;
     tokens.retain(|&t| t < vs);
     if tokens.is_empty() {
         tokens.push(if st.use_bpe {
@@ -913,7 +1140,10 @@ fn run_prefill_setup(st: &mut ActiveState) {
             crate::cortex::BOS as u32
         });
     }
-    if model.hidden >= 2048 && tokens.len() > 1 {
+    // Struct já é mínima: sem slim (amputaria intent/slots no tail-cut).
+    if !has_machine && model.hidden >= 2048 && tokens.len() > 1 {
+        // ora-1 bullet1: single-slim (o 2º slim abaixo foi removido; Falcon bypass
+        // dentro do slim preserva prompt_len>=20, first=bos, last=assistant).
         tokens = crate::cortex::slim_prompt_tokens_for_heavy(&tokens, st.use_bpe);
     }
     st.prompt_len = tokens.len();
@@ -924,15 +1154,29 @@ fn run_prefill_setup(st: &mut ActiveState) {
         model.max_seq.min(64)
     });
     st.max_seq = max_seq;
-    if plan.force_slim && tokens.len() > 1 {
-        tokens = crate::cortex::slim_prompt_tokens_for_heavy(&tokens, st.use_bpe);
-    }
+    // ora-1: duplo-slim removido (single-slim acima; force_slim não re-slimma).
     if tokens.len() > max_seq {
         let keep = max_seq.max(1);
-        tokens = tokens[tokens.len() - keep..].to_vec();
+        if has_machine {
+            // Struct: preserva a cabeça (bos/intent/slots), corta a cauda.
+            tokens.truncate(keep);
+        } else {
+            tokens = tokens[tokens.len() - keep..].to_vec();
+        }
     }
     st.prompt_len = tokens.len();
     st.max_gen = plan.max_gen;
+    // Bullet 4: observabilidade — `machine_ctx=1` struct, `=0` texto-legível.
+    k_nano::slog_cortex!(
+        "InferQ",
+        "ok",
+        "prefill_setup machine_ctx={} id={} prompt_len={} first={} last={}",
+        has_machine as u8,
+        st.job_id,
+        st.prompt_len,
+        tokens.first().copied().unwrap_or(0xFFFF),
+        tokens.last().copied().unwrap_or(0xFFFF)
+    );
     k_nano::slog_cortex!(
         "InferQ",
         "ok",
@@ -996,33 +1240,19 @@ fn run_prefill_setup(st: &mut ActiveState) {
         }
     }
 
-    let (x, mask, start_pos, new_len, total_seq) = model.embed_for_kv(&tokens, &cache);
-    if !x.is_valid()
-        || !mask.is_valid()
-        || mask.shape != (new_len, total_seq)
-        || new_len == 0
-    {
-        k_nano::slog_cortex!(
-            "InferQ",
-            "fail",
-            "embed/mask refuse id={} x={:?} mask={:?}",
-            st.job_id,
-            x.shape,
-            mask.shape
-        );
-        drop(guard);
-        a2_refuse(st, "embed_mask");
-        finish_job(st, "[heap: embed/mask refuse — HITL escalate]");
-        return;
-    }
+    // Chunked prefill: o embed é por chunk dentro do slice (cada chunk mostra
+    // progresso ao watchdog); aqui só ancora o cursor no chunk 0.
     st.tokens = tokens;
     st.cache = Some(cache);
-    st.prefill_x = Some(x);
-    st.prefill_mask = Some(mask);
+    st.prefill_x = None;
+    st.prefill_mask = None;
     st.prefill_layer = 0;
-    st.prefill_new_len = new_len;
-    st.prefill_start_pos = start_pos;
-    st.prefill_total_seq = total_seq;
+    st.prefill_new_len = 0;
+    st.prefill_start_pos = 0;
+    st.prefill_total_seq = 0;
+    st.prefill_chunk = 0;
+    st.prefill_chunks_done = 0;
+    st.prefill_chunk_t0_us = 0;
     st.prefill_t0_us = k_nano::tsc::now_us();
     st.phase = Phase::Prefilling;
     k_nano::slog_cortex!(
@@ -1117,6 +1347,62 @@ fn run_prefill_step(st: &mut ActiveState) {
         finish_job(st, NO_MODEL_MSG);
         return;
     };
+
+    // Chunked prefill: sem x pendente = início do próximo chunk (embed de
+    // ≤16 toks + yield; o watchdog vê 1 linha/chunk e nunca declara wedge no
+    // meio de prefill legítimo). Roda ANTES dos reborrows x/mask/cache.
+    if st.prefill_x.is_none() {
+        let total = st.tokens.len();
+        let Some((off, n)) = chunk_window(total, st.prefill_chunk) else {
+            drop(guard);
+            a2_refuse(st, "chunk_oob");
+            finish_job(st, "[prefill chunk OOB — HITL escalate]");
+            return;
+        };
+        let chunk_ids: Vec<u32> = st.tokens[off..off + n].to_vec();
+        let cache_ref = match st.cache.as_ref() {
+            Some(c) => c,
+            None => {
+                drop(guard);
+                a2_refuse(st, "model_absent");
+                finish_job(st, NO_MODEL_MSG);
+                return;
+            }
+        };
+        let (x0, mask0, sp, nl, ts) = model.embed_for_kv(&chunk_ids, cache_ref);
+        if !x0.is_valid() || !mask0.is_valid() || mask0.shape != (nl, ts) || nl == 0 {
+            k_nano::slog_cortex!(
+                "InferQ",
+                "fail",
+                "embed/mask refuse id={} chunk_off={} x={:?} mask={:?}",
+                st.job_id,
+                off,
+                x0.shape,
+                mask0.shape
+            );
+            drop(guard);
+            a2_refuse(st, "embed_mask");
+            finish_job(st, "[heap: embed/mask refuse — HITL escalate]");
+            return;
+        }
+        st.prefill_x = Some(x0);
+        st.prefill_mask = Some(mask0);
+        st.prefill_start_pos = sp;
+        st.prefill_new_len = nl;
+        st.prefill_total_seq = ts;
+        st.prefill_layer = 0;
+        st.prefill_chunk_t0_us = k_nano::tsc::now_us();
+        k_nano::slog_cortex!(
+            "InferQ",
+            "ok",
+            "prefill_chunk id={} n={}/{} (chunk {}/{})",
+            st.job_id,
+            off + n,
+            total,
+            off / prefill_chunk_toks() + 1,
+            total.div_ceil(prefill_chunk_toks())
+        );
+    }
 
     let Some(ref mut x) = st.prefill_x else {
         drop(guard);
@@ -1217,6 +1503,8 @@ fn run_prefill_step(st: &mut ActiveState) {
 
     let now1 = k_nano::tsc::now_us();
     let slice_us = now1.saturating_sub(t_slice0);
+    // Auto-tune do budget sandbox (8× o último slice; piso 120s no leitor).
+    PREFILL_LAST_SLICE_US.store(slice_us, Ordering::Relaxed);
     if step_log {
         k_nano::slog_cortex!(
             "InferQ",
@@ -1269,8 +1557,22 @@ fn run_prefill_step(st: &mut ActiveState) {
         return;
     }
 
-    // Finalize
+    // Chunk completo (todas as layers): commit do KV do chunk. Com mais
+    // chunks, recicla o x e cede — o próximo slice embebe o próximo chunk
+    // (progresso visível ao watchdog a cada chunk).
     cache.advance(st.prefill_new_len);
+    st.prefill_chunks_done += 1;
+    st.prefill_chunk += st.prefill_new_len;
+    if st.prefill_chunk < st.tokens.len() {
+        let dead = core::mem::replace(&mut *x, Tensor::zero((0, 0)));
+        logits_recycle(dead.data);
+        st.prefill_x = None;
+        st.prefill_mask = None;
+        drop(guard);
+        return;
+    }
+
+    // Finalize (último chunk)
     let new_len = st.prefill_new_len;
     let (last_hidden, last_logits) = model.finalize_logits(x, new_len);
     let total_us = k_nano::tsc::now_us().saturating_sub(st.prefill_t0_us);
@@ -1313,7 +1615,8 @@ fn run_prefill_step(st: &mut ActiveState) {
     st.recent_u16.clear();
     if !st.is_greeting {
         if let Some(&last) = st.tokens.last() {
-            st.recent_u16.push(last as u16);
+            // ora-1 bullet2: u32 (u16 truncava ids>64k).
+            st.recent_u16.push(last);
         }
     }
     st.last_hidden = Some(last_hidden);
@@ -1414,12 +1717,13 @@ fn run_decode_one(st: &mut ActiveState) {
         }
     }
 
-    let next = if st.use_bpe {
+    let next: u32 = if st.use_bpe {
+        // ora-1 bullet3: argmax puro (sem score_piece/weather/coherence).
         crate::cortex::argmax_row_hf_vocab(last_logits, 0, &st.recent_u16)
     } else {
-        crate::cortex::argmax_row_char_vocab(last_logits, 0, st.recent_u16.last().copied())
+        let prev_u16 = st.recent_u16.last().copied().map(|v| v as u16);
+        crate::cortex::argmax_row_char_vocab(last_logits, 0, prev_u16)
     };
-    let next_u16 = next as u16;
 
     if next == st.eos || next == st.eot {
         let acc = st.acc_text.clone();
@@ -1429,7 +1733,8 @@ fn run_decode_one(st: &mut ActiveState) {
     }
 
     st.tokens.push(next);
-    st.recent_u16.push(next_u16);
+    // ora-1 bullet2: recent em u32, sem `as u16` (truncava 131000→65464).
+    st.recent_u16.push(next);
     if st.recent_u16.len() > 4 {
         st.recent_u16.remove(0);
     }
@@ -1440,7 +1745,8 @@ fn run_decode_one(st: &mut ActiveState) {
     let piece = if st.use_bpe {
         crate::bpe::decode(&[next])
     } else {
-        crate::cortex::Tokenizer::decode(&[next_u16])
+        let nu = next as u16; // char vocab <256, trunc seguro
+        crate::cortex::Tokenizer::decode(&[nu])
     };
 
     if st.step < st.max_gen && st.tokens.len() < st.max_seq {
@@ -1506,6 +1812,16 @@ fn run_coarse(st: &mut ActiveState) {
     );
     // TSC DEPOIS do log (SESSION_413) — o warn serial não entra no wall do job.
     DECODE_T0_US.store(k_nano::tsc::now_us(), Ordering::Release);
+    // Bullet 4: coarse (modelo não-Transformer) só fala texto — struct vira
+    // fallback de texto, honesto e explícito (nunca silencioso).
+    if st.machine.is_some() {
+        k_nano::slog_cortex!(
+            "InferQ",
+            "warn",
+            "coarse machine_ctx=1 id={} (ids ignorados, texto fallback — HITL)",
+            st.job_id
+        );
+    }
     let text = {
         if let Some(ref sm) = *CURRENT_STREAMING_MODEL.lock() {
             sm.generate(&st.prompt)
@@ -1550,12 +1866,90 @@ fn slice_diag_and_proof_deadline() {
         }
         // s428: watchdog POR SLICE — stall real vs slice lento. O T0 do slice
         // em curso foi marcado ANTES do latch; se `poll_slice` não voltou em
-        // >STALL (30s), é wedge (lost wakeup/lock preso/#PF silencioso),
-        // não slice lento. Terminal honesto imediato — não espera os 120s.
+        // >STALL, é wedge (lost wakeup/lock preso/#PF silencioso),
+        // não slice lento. HW real: terminal honesto imediato.
+        // Sandbox (WHPX/TCG): progress-aware e nunca terminal da fila —
+        // matmul legítimo de minutos (Falcon3-3B 512×3072×3072 ≈14s cada)
+        // não pode matar a prova que nem estava rodando (wedge T+1910).
         let t0 = A2_SLICE_T0_US.load(Ordering::Acquire);
         if t0 != 0 && now != 0 {
+            let budget = slice_stall_budget_us();
             let slice_elapsed = now.saturating_sub(t0);
-            if slice_elapsed > A2_SLICE_STALL_US {
+            if slice_elapsed > budget {
+                if eff_sandbox() {
+                    // Progresso desde a última checagem = prefill/decode vivo:
+                    // re-arma e nunca declara wedge no meio de trabalho legítimo.
+                    let mark = active_progress_mark();
+                    let last = (
+                        WATCH_MARK_A.load(Ordering::Relaxed),
+                        WATCH_MARK_B.load(Ordering::Relaxed),
+                        WATCH_MARK_C.load(Ordering::Relaxed),
+                    );
+                    let progressed = match (mark, last) {
+                        (Some(m), l) => m != l,
+                        // Idle/sem lock = nada preso: sem wedge possível.
+                        (None, _) => true,
+                    };
+                    if progressed {
+                        if let Some((a, b, c)) = mark {
+                            WATCH_MARK_A.store(a, Ordering::Relaxed);
+                            WATCH_MARK_B.store(b, Ordering::Relaxed);
+                            WATCH_MARK_C.store(c, Ordering::Relaxed);
+                        }
+                        SANDBOX_STALL_STREAK.store(0, Ordering::Relaxed);
+                        A2_SLICE_T0_US.store(now, Ordering::Release);
+                        return;
+                    }
+                    let streak =
+                        SANDBOX_STALL_STREAK.fetch_add(1, Ordering::Relaxed) + 1;
+                    if streak < SANDBOX_STALL_STREAK_N {
+                        if streak == 1 {
+                            k_nano::slog_cortex!(
+                                "InferQ",
+                                "warn",
+                                "slice_stall hv={} elapsed_us={} (budget={}us) action=watch streak={}/{} — fila intacta",
+                                eff_hv_name(),
+                                slice_elapsed,
+                                budget,
+                                streak,
+                                SANDBOX_STALL_STREAK_N
+                            );
+                        }
+                        return;
+                    }
+                    // Stall persistente após N checagens sem progresso: aborta
+                    // o JOB com stop honesto (sem TTS), nunca a fila/prova.
+                    let mut jid = 0u64;
+                    let mut aborted = false;
+                    if let Some(mut g) = ACTIVE.try_lock() {
+                        if let Some(st) = g.as_mut() {
+                            if !matches!(st.phase, Phase::Idle | Phase::Finishing) {
+                                jid = st.job_id;
+                                finish_job(st, "[stop=slice_budget — HITL escalate]");
+                                aborted = true;
+                            }
+                        }
+                    }
+                    k_nano::slog_cortex!(
+                        "InferQ",
+                        "fail",
+                        "slice_stall hv={} id={} elapsed_us={} (budget={}us) stop=slice_budget action={} — fila intacta",
+                        eff_hv_name(),
+                        jid,
+                        slice_elapsed,
+                        budget,
+                        if aborted { "abort_job" } else { "watch_locked" }
+                    );
+                    if aborted {
+                        k_nano::boot_logger::log_quiet(&alloc::format!(
+                            "stop=slice_budget id={} (stall sandbox, job abortado, fila intacta)",
+                            jid
+                        ));
+                    }
+                    SANDBOX_STALL_STREAK.store(0, Ordering::Relaxed);
+                    A2_SLICE_T0_US.store(now, Ordering::Release);
+                    return;
+                }
                 let id = A2_PROOF_ID.load(Ordering::Acquire);
                 let n = A2_SLICE_N.load(Ordering::Relaxed);
                 if !A2_PROOF_TIMEOUT_LOGGED.swap(true, Ordering::Relaxed) {
@@ -1574,6 +1968,8 @@ fn slice_diag_and_proof_deadline() {
                 return;
             }
         }
+        // Slices fluindo: zera o streak sandbox.
+        SANDBOX_STALL_STREAK.store(0, Ordering::Relaxed);
     }
     // Diagnóstico: prova qual gate travou no próximo run. n==1 sempre.
     let n = SLICE_POLL_CALLS.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
@@ -1712,8 +2108,15 @@ mod tests {
         A2_SLICE_T0_US.store(0, Ordering::Release);
         A2_SLICE_N.store(0, Ordering::Release);
         SLICE_POLL_CALLS.store(0, Ordering::Release);
+        PREFILL_LAST_SLICE_US.store(0, Ordering::Release);
+        PREFILL_CHUNK_TOKS_VAL.store(PREFILL_CHUNK_TOKS, Ordering::Release);
+        SANDBOX_STALL_STREAK.store(0, Ordering::Release);
+        WATCH_MARK_A.store(0, Ordering::Release);
+        WATCH_MARK_B.store(0, Ordering::Release);
+        WATCH_MARK_C.store(0, Ordering::Release);
         for i in 0..QUEUE_CAP {
             slots()[i].occupied.store(false, Ordering::Release);
+            *slots()[i].machine.lock() = None;
         }
     }
 
@@ -1916,25 +2319,88 @@ mod tests {
 
     #[test]
     fn s428_slice_stall_terminal_no_host() {
-        // Wedge simulado: prova pendente, T0 de slice no passado remoto →
-        // o watchdog do topo do poll_slice termina a prova IMEDIATAMENTE
-        // (antes dos 120s), sem precisar de deadline global.
+        // Wedge WHPX 8c: no host (probe ausente = leniente/sandbox) o piso é
+        // 120s — T0 40s estagnado NÃO é stall (era terminal nos 30s do HW).
+        // Fila/prova intactas; terminal HW segue byte-idêntico no metal.
         let _g = TEST_LOCK.lock();
         drain_infer_queue_statics();
         assert!(k_nano::tsc::now_us() != 0, "host TSC calibrada");
+        assert!(eff_sandbox(), "host sem probe = leniente");
         A2_PROOF_SUBMITTED.store(true, Ordering::Release);
         A2_PROOF_DONE.store(false, Ordering::Release);
         A2_PROOF_ID.store(9, Ordering::Release);
         // deadline no FUTURO (prova NÃO estourou o prazo global)
         let now = k_nano::tsc::now_us();
         A2_PROOF_DEADLINE_AT_US.store(now + A2_PROOF_DEADLINE_US, Ordering::Release);
-        // slice "em curso" desde 20s atrás (> stall 10s)
-        A2_SLICE_T0_US.store(now.saturating_sub(A2_SLICE_STALL_US + 10_000_000), Ordering::Release);
+        // slice "em curso" há 40s (> 30s HW, < 120s sandbox = legítimo)
+        A2_SLICE_T0_US.store(now.saturating_sub(40_000_000), Ordering::Release);
         assert!(a2_proof_pending(), "armado antes do watchdog");
         slice_diag_and_proof_deadline();
-        assert!(!a2_proof_pending(), "stall por slice termina a prova (wedge)");
-        assert!(A2_PROOF_DONE.load(Ordering::Acquire));
-        assert_eq!(A2_SLICE_T0_US.load(Ordering::Acquire), 0, "T0 limpo pós-terminal");
+        assert!(a2_proof_pending(), "sandbox: 40s < 120s, prova continua");
+        assert!(!A2_PROOF_DONE.load(Ordering::Acquire));
+        // T0 200s estagnado com ACTIVE vazio (=idle): re-arma, sem terminal.
+        let now2 = k_nano::tsc::now_us();
+        A2_SLICE_T0_US.store(now2.saturating_sub(200_000_000), Ordering::Release);
+        slice_diag_and_proof_deadline();
+        assert!(a2_proof_pending(), "idle nunca é wedge — fila intacta");
+        assert!(!A2_PROOF_DONE.load(Ordering::Acquire));
+        drain_infer_queue_statics();
+    }
+
+    #[test]
+    fn sandbox_stall_persistente_aborta_job_nao_fila() {
+        // Stall persistente após N=3 checagens sem progresso: aborta o JOB com
+        // `stop=slice_budget` (sem TTS); prova/fila seguem intactas.
+        let _g = TEST_LOCK.lock();
+        drain_infer_queue_statics();
+        assert!(k_nano::tsc::now_us() != 0, "host TSC calibrada");
+        let prev_ap = k_nano::smp::ap_pollable();
+        k_nano::smp::set_ap_pollable(true);
+        crate::cortex::set_model(alloc::boxed::Box::new(crate::cortex::TransformerModel::new()));
+        let rx = k_nano::EVENT_BUS.subscribe(TOPIC_LLM_RESPONSE);
+        while rx.try_receive().is_some() {}
+        A2_PROOF_SUBMITTED.store(true, Ordering::Release);
+        A2_PROOF_DONE.store(false, Ordering::Release);
+        A2_PROOF_ID.store(999, Ordering::Release);
+        let now = k_nano::tsc::now_us();
+        A2_PROOF_DEADLINE_AT_US.store(now + A2_PROOF_DEADLINE_US, Ordering::Release);
+        let jid = submit(String::from("ola"), InferMode::Plain, TOPIC_LLM_RESPONSE)
+            .expect("submit");
+        assert!(try_claim_into_active(), "claim");
+        // Trava o job em Prefilling sem progresso (chunk/layer congelados).
+        {
+            let mut g = ACTIVE.lock();
+            let st = g.as_mut().expect("active");
+            st.phase = Phase::Prefilling;
+        }
+        // 1ª checagem com T0 200s estagnado: marca nova = progresso → re-arma.
+        A2_SLICE_T0_US.store(k_nano::tsc::now_us().saturating_sub(200_000_000), Ordering::Release);
+        slice_diag_and_proof_deadline();
+        assert!(a2_proof_pending(), "1ª fire registra a marca, prova intacta");
+        // Mais 3 checagens sem progresso (T0 re-estagnado de propósito).
+        for _ in 0..3 {
+            A2_SLICE_T0_US.store(k_nano::tsc::now_us().saturating_sub(200_000_000), Ordering::Release);
+            slice_diag_and_proof_deadline();
+        }
+        // Job abortado com stop honesto; prova segue pendente (fila intacta).
+        assert!(a2_proof_pending(), "prova nunca terminal em sandbox");
+        assert!(!A2_PROOF_DONE.load(Ordering::Acquire));
+        {
+            let g = ACTIVE.lock();
+            assert!(
+                g.as_ref().map(|s| s.phase == Phase::Idle).unwrap_or(false),
+                "job abortado"
+            );
+        }
+        let mut last: Vec<u8> = Vec::new();
+        while let Some(evt) = rx.try_receive() {
+            last = evt.payload;
+        }
+        let text = String::from_utf8_lossy(&last);
+        assert!(text.contains("stop=slice_budget"), "stop honesto no reply: {}", text);
+        let _ = jid;
+        crate::cortex::clear_model();
+        k_nano::smp::set_ap_pollable(prev_ap);
         drain_infer_queue_statics();
     }
 
@@ -1954,6 +2420,113 @@ mod tests {
         slice_diag_and_proof_deadline();
         assert!(a2_proof_pending(), "slice lento ≠ wedge — prova continua");
         assert!(!A2_PROOF_DONE.load(Ordering::Acquire));
+        drain_infer_queue_statics();
+    }
+
+    /// Wedge WHPX 8c: matemática do chunking (8–32 toks/bloco, 16 canônico).
+    #[test]
+    fn prefill_chunk_window_math() {
+        let _g = TEST_LOCK.lock();
+        set_prefill_chunk_toks(PREFILL_CHUNK_TOKS);
+        assert_eq!(prefill_chunk_toks(), 16);
+        assert_eq!(PREFILL_CHUNK_TOKS, 16);
+        assert_eq!(chunk_window(512, 0), Some((0, 16)));
+        assert_eq!(chunk_window(512, 16), Some((16, 16)));
+        assert_eq!(chunk_window(512, 496), Some((496, 16)));
+        assert_eq!(chunk_window(512, 500), Some((500, 12)));
+        assert_eq!(chunk_window(512, 512), None);
+        assert_eq!(chunk_window(10, 0), Some((0, 10)));
+        // 512 toks → 32 chunks de 16.
+        assert_eq!(512usize.div_ceil(prefill_chunk_toks()), 32);
+        drain_infer_queue_statics();
+    }
+
+    /// Chunk tunável: exercita 32 na matemática pura (sem modelo); o clamp
+    /// 1..=64 segura abusos e o default 16 é restaurado ao fim.
+    #[test]
+    fn prefill_chunk_tunable_32_math_only() {
+        let _g = TEST_LOCK.lock();
+        drain_infer_queue_statics();
+        assert_eq!(prefill_chunk_toks(), 16, "default provado");
+        // Clamp 1..=64.
+        assert_eq!(set_prefill_chunk_toks(0), 1);
+        assert_eq!(set_prefill_chunk_toks(999), 64);
+        // 32: window math + ordinal do log `prefill_chunk id=.. n=../..`.
+        assert_eq!(set_prefill_chunk_toks(32), 32);
+        assert_eq!(prefill_chunk_toks(), 32);
+        assert_eq!(chunk_window(512, 0), Some((0, 32)));
+        assert_eq!(chunk_window(512, 32), Some((32, 32)));
+        assert_eq!(chunk_window(512, 480), Some((480, 32)));
+        assert_eq!(chunk_window(512, 500), Some((500, 12)));
+        assert_eq!(chunk_window(512, 512), None);
+        assert_eq!(512usize.div_ceil(prefill_chunk_toks()), 16);
+        // n=toks_done/total e chunk ord/total coerentes em 32.
+        let (off, n) = chunk_window(512, 64).expect("janela");
+        assert_eq!((off + n, 512), (96, 512));
+        assert_eq!((off / prefill_chunk_toks() + 1, 512usize.div_ceil(prefill_chunk_toks())), (3, 16));
+        // Restaura o default provado — runtime nunca sai de 16.
+        assert_eq!(set_prefill_chunk_toks(PREFILL_CHUNK_TOKS), 16);
+        assert_eq!(prefill_chunk_toks(), 16);
+        assert_eq!(chunk_window(512, 0), Some((0, 16)));
+        drain_infer_queue_statics();
+    }
+
+    /// Budget por hypervisor: HW 30s fixo; sandbox ≥120s (piso), auto-tune por slice.
+    #[test]
+    fn slice_budget_sandbox_floor_and_hw_const() {
+        assert_eq!(A2_SLICE_STALL_US, 30_000_000);
+        assert_eq!(SANDBOX_STALL_US, 120_000_000);
+        assert_eq!(SANDBOX_STALL_STREAK_N, 3);
+        // Host sem probe = leniente (sandbox): nunca wedge terminal no teste.
+        assert!(eff_sandbox());
+        assert!(slice_stall_budget_us() >= SANDBOX_STALL_US);
+        PREFILL_LAST_SLICE_US.store(60_000_000, Ordering::Relaxed);
+        assert_eq!(slice_stall_budget_us(), 480_000_000);
+        PREFILL_LAST_SLICE_US.store(0, Ordering::Relaxed);
+    }
+
+    /// Bullet 4: struct-máquina vira ids diretos, sem framed/string.
+    #[test]
+    fn machine_ctx_to_tokens_direct_no_framed() {
+        let m = MachineCtx {
+            intent_id: 42,
+            slots: alloc::vec![(1, 2), (3, 4)],
+            ctx_ids: alloc::vec![10, 20, 30],
+        };
+        // bos=10 (Falcon), vs ampla: cabeça bos+intent+slots+ctx, sem framed.
+        assert_eq!(m.to_tokens(131072, 10), alloc::vec![10, 42, 1, 2, 3, 4, 10, 20, 30]);
+        // Filtro vocab: ids >= vs caem (mesmo gate `retain` do texto).
+        let m2 = MachineCtx {
+            intent_id: 200_000,
+            slots: alloc::vec![(5, 300_000)],
+            ctx_ids: alloc::vec![7, 400_000],
+        };
+        assert_eq!(m2.to_tokens(131072, 10), alloc::vec![10, 5, 7]);
+        // Cap de slots (8 pares): o 9º par é descartado.
+        let mut slots = Vec::new();
+        for i in 0..10u32 {
+            slots.push((100 + i, 200 + i));
+        }
+        let m3 = MachineCtx { intent_id: 42, slots, ctx_ids: Vec::new() };
+        let t3 = m3.to_tokens(131072, 10);
+        assert_eq!(t3.len(), 1 + 1 + MachineCtx::MAX_SLOTS * 2);
+        assert_eq!(t3[0], 10);
+        // Nunca vazio: sem nada válido, cai em [bos].
+        let m4 = MachineCtx { intent_id: 999_999, slots: Vec::new(), ctx_ids: Vec::new() };
+        assert_eq!(m4.to_tokens(131072, 10), alloc::vec![10]);
+    }
+
+    /// Bullet 4: submit sem struct = legado (EmptyPrompt p/ texto vazio);
+    /// com struct, texto vazio é job-máquina válido.
+    #[test]
+    fn machine_ctx_submit_empty_text_rules() {
+        let _g = TEST_LOCK.lock();
+        drain_infer_queue_statics();
+        assert!(submit(String::from(""), InferMode::Plain, TOPIC_LLM_RESPONSE).is_err());
+        let m = MachineCtx { intent_id: 7, slots: Vec::new(), ctx_ids: alloc::vec![11, 12] };
+        let id = submit_with_ctx(String::from(""), Some(m), InferMode::Plain, TOPIC_LLM_RESPONSE)
+            .expect("struct dispensa texto");
+        assert!(cancel(id));
         drain_infer_queue_statics();
     }
 }

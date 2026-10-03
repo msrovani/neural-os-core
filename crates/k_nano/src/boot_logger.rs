@@ -629,7 +629,7 @@ fn heal_on_first_failure(detail: &str) {
         .try_lock()
         .map(|g| g.is_none())
         .unwrap_or(true);
-    if internal_disk_skipped() && no_msc {
+    if internal_disk_skipped() && no_msc && !ui_is_live() {
         log_no_flush("BOOT.LOG self-heal SKIP (live USB sem MSC — sem re-probe xHCI)");
         return;
     }

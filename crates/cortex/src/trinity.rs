@@ -2,10 +2,11 @@
 //! `moe_router_loaded` = pesos TREINADOS. LCG seed=42 não roteia (keyword).
 
 use crate::tensor::PackedTernaryTensor;
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::vec;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use event_bus::{CapabilityToken, Event};
 use lazy_static::lazy_static;
 use ticket_lock::TicketLock;
@@ -689,8 +690,9 @@ impl TrinityRouter {
     }
 
     /// Carrega pesos de um expert na Cortex Arena sob demanda (Efeito Matrix).
-    /// Retorna Some(&PackedTernaryTensor) só se o expert já tem weight injetado.
-    /// Slot ModelHub loaded ≠ tensor ternário no Expert — mmap FAT residual (s388).
+    /// Retorna Some(&PackedTernaryTensor) se o expert tem weight residente OU
+    /// vista mmap RO do QEMU-loader (zero-copy — sem copiar para o heap).
+    /// Slot ModelHub loaded sem descritor loader = warn residual (s388).
     pub fn get_or_mmap_expert(&self, kind: ExpertKind) -> Option<&PackedTernaryTensor> {
         if let Some(e) = self.experts.iter().find(|e| e.kind == kind) {
             if let Some(ref w) = e.weight {
@@ -703,6 +705,20 @@ impl TrinityRouter {
             ExpertKind::Generator => Some(crate::model_hub::ModelSlot::GeneratorPro),
             _ => None,
         };
+        // Efeito Matrix: descritor loader registrado + slot loaded → vista RO.
+        if let Some(idx) = mmap_index(kind) {
+            if let Some(v) = mmap_view(idx) {
+                return Some(v);
+            }
+            let desc: Option<MmapDescriptor> = MMAP_DESCS.lock()[idx];
+            if let (Some(d), Some(s)) = (desc, slot) {
+                if crate::model_hub::slot_loaded(s) {
+                    if let Some(v) = build_mmap_view(idx, &d) {
+                        return Some(v);
+                    }
+                }
+            }
+        }
         if let Some(slot) = slot {
             if crate::model_hub::slot_loaded(slot) {
                 k_nano::slog_cortex!(
@@ -740,6 +756,247 @@ impl TrinityRouter {
             .filter_map(|e| e.weight.as_ref())
             .map(|w| w.packed_data.len())
             .sum()
+    }
+}
+
+// ─── Expert mmap RO / QEMU-loader (ora-2 item 2A) ──────────────────────────
+// Vista zero-copy dos pesos residentes na região loader: o scan de boot
+// registra (phys, len, shape) via `note_mmap_expert`; `get_or_mmap_expert`
+// materializa UM `&'static PackedTernaryTensor` por kind (Box::leak — sem
+// copiar bytes para o heap, sem bypass do Talc fora do range loader).
+// Segurança da vista: backing em páginas rebaixadas para RO via
+// `k_nano::memory::ensure_loader_page_ro`, acesso só por `&` (nunca `&mut`),
+// `ManuallyDrop` (o drop nunca libera a RAM do loader), Vec nunca realocado.
+
+/// Descritor de um expert residente no QEMU-loader (registrado no boot).
+#[derive(Clone, Copy)]
+struct MmapDescriptor {
+    kind: ExpertKind,
+    /// Endereço FÍSICO do 1º byte packed (região loader).
+    phys: u64,
+    packed_len: usize,
+    rows: usize,
+    cols: usize,
+}
+
+/// Slot por kind mmapável: 0=HwIdentify, 1=RustCoder, 2=Generator.
+fn mmap_index(kind: ExpertKind) -> Option<usize> {
+    match kind {
+        ExpertKind::HwIdentify => Some(0),
+        ExpertKind::RustCoder => Some(1),
+        ExpertKind::Generator => Some(2),
+        _ => None,
+    }
+}
+
+static MMAP_DESCS: spin::Mutex<[Option<MmapDescriptor>; 3]> =
+    spin::Mutex::new([None, None, None]);
+static MMAP_VIEW_0: AtomicU64 = AtomicU64::new(0);
+static MMAP_VIEW_1: AtomicU64 = AtomicU64::new(0);
+static MMAP_VIEW_2: AtomicU64 = AtomicU64::new(0);
+
+fn mmap_ptr_cell(idx: usize) -> Option<&'static AtomicU64> {
+    match idx {
+        0 => Some(&MMAP_VIEW_0),
+        1 => Some(&MMAP_VIEW_1),
+        2 => Some(&MMAP_VIEW_2),
+        _ => None,
+    }
+}
+
+/// Vista já materializada (fast path de `get_or_mmap_expert`).
+fn mmap_view(idx: usize) -> Option<&'static PackedTernaryTensor> {
+    let ptr = mmap_ptr_cell(idx)?.load(Ordering::Acquire);
+    if ptr == 0 {
+        return None;
+    }
+    Some(unsafe { &*(ptr as *const PackedTernaryTensor) })
+}
+
+/// Registra um expert residente no QEMU-loader (chamar no boot scan, após
+/// parse do header .bitnet — phys/len/shape vêm do blob encontrado).
+/// Fora do range loader ou shape incoerente = recusado (false, honesto).
+/// Rebaixa as páginas do span para RO na hora (idempotente; hole = skip).
+pub fn note_mmap_expert(
+    kind: ExpertKind,
+    phys: u64,
+    packed_len: usize,
+    rows: usize,
+    cols: usize,
+) -> bool {
+    let Some(idx) = mmap_index(kind) else {
+        return false;
+    };
+    if !k_nano::memory::loader_range_contains(phys) {
+        k_nano::slog_cortex!(
+            "TRINITY",
+            "warn",
+            "mmap note {:?} fora do range loader @{:#x} — recusado",
+            kind,
+            phys
+        );
+        return false;
+    }
+    let end = match phys.checked_add(packed_len as u64) {
+        Some(e) => e,
+        None => return false,
+    };
+    if packed_len == 0 || rows == 0 || cols == 0 || end > k_nano::memory::LOADER_REGION_END {
+        return false;
+    }
+    if packed_len != (rows.saturating_mul(cols) + 3) / 4 {
+        k_nano::slog_cortex!(
+            "TRINITY",
+            "warn",
+            "mmap note {:?} shape incoerente {}x{} len={} — recusado",
+            kind,
+            rows,
+            cols,
+            packed_len
+        );
+        return false;
+    }
+    MMAP_DESCS.lock()[idx] = Some(MmapDescriptor {
+        kind,
+        phys,
+        packed_len,
+        rows,
+        cols,
+    });
+    #[cfg(target_os = "none")]
+    {
+        let _ = k_nano::memory::ensure_loader_page_ro(phys);
+        if packed_len > 1 {
+            let _ = k_nano::memory::ensure_loader_page_ro(
+                phys + (packed_len as u64).saturating_sub(1),
+            );
+        }
+    }
+    k_nano::slog_cortex!(
+        "TRINITY",
+        "ok",
+        "mmap note {:?} @{:#x} len={}KB shape={}x{} (vista RO, sem copia)",
+        kind,
+        phys,
+        packed_len / 1024,
+        rows,
+        cols
+    );
+    true
+}
+
+fn build_mmap_view(idx: usize, d: &MmapDescriptor) -> Option<&'static PackedTernaryTensor> {
+    if let Some(v) = mmap_view(idx) {
+        return Some(v);
+    }
+    build_mmap_view_inner(idx, d)
+}
+
+/// Bare-metal: vista sobre o HHDM (guard PRESENT + RO antes de expor).
+/// `Vec::from_raw_parts` sobre a RAM do loader dentro de `ManuallyDrop`:
+/// só leitura via `&`, nunca `&mut`/grow/drop — o Talc/heap não é tocado.
+#[cfg(target_os = "none")]
+fn build_mmap_view_inner(
+    idx: usize,
+    d: &MmapDescriptor,
+) -> Option<&'static PackedTernaryTensor> {
+    let pm = k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Acquire);
+    if pm == 0 {
+        return None;
+    }
+    let va = pm.checked_add(d.phys)?;
+    if !k_nano::memory::is_page_present(va & !0xFFF) {
+        return None;
+    }
+    let tail = va + (d.packed_len as u64).saturating_sub(1);
+    if !k_nano::memory::is_page_present(tail & !0xFFF) {
+        return None;
+    }
+    let _ = k_nano::memory::ensure_loader_page_ro(d.phys);
+    let _ = k_nano::memory::ensure_loader_page_ro(d.phys + (d.packed_len as u64).saturating_sub(1));
+    let bytes: Vec<u8> =
+        unsafe { alloc::vec::Vec::from_raw_parts(va as *mut u8, d.packed_len, d.packed_len) };
+    let tensor = PackedTernaryTensor {
+        shape: (d.rows, d.cols),
+        packed_data: bytes,
+    };
+    let leaked: &'static mut core::mem::ManuallyDrop<PackedTernaryTensor> =
+        Box::leak(Box::new(core::mem::ManuallyDrop::new(tensor)));
+    let ptr = leaked as *const _ as *const PackedTernaryTensor as u64;
+    let cell = mmap_ptr_cell(idx)?;
+    match cell.compare_exchange(0, ptr, Ordering::SeqCst, Ordering::SeqCst) {
+        Ok(_) => {
+            k_nano::slog_cortex!(
+                "TRINITY",
+                "ok",
+                "mmap hit {:?} @{:#x} vista RO {}KB sem copia",
+                d.kind,
+                d.phys,
+                d.packed_len / 1024
+            );
+            Some(unsafe { &*(ptr as *const PackedTernaryTensor) })
+        }
+        // Corrida 1-vez (leak duplo aceito, 1 vista vence): devolve a vencedora.
+        Err(winner) => Some(unsafe { &*(winner as *const PackedTernaryTensor) }),
+    }
+}
+
+/// Host/teste: sem HHDM — a vista real só existe no bare-metal.
+#[cfg(not(target_os = "none"))]
+fn build_mmap_view_inner(
+    _idx: usize,
+    _d: &MmapDescriptor,
+) -> Option<&'static PackedTernaryTensor> {
+    None
+}
+
+/// Teste-host: instala vista heap-backed (o host não tem HHDM físico).
+/// Exercita o wire `note → get_or_mmap_expert` sem tocar em endereço falso.
+#[cfg(test)]
+pub fn note_mmap_expert_test_view(kind: ExpertKind, weights: &[i8], rows: usize, cols: usize) -> bool {
+    let Some(idx) = mmap_index(kind) else {
+        return false;
+    };
+    let packed_len = (weights.len() + 3) / 4;
+    if rows == 0 || cols == 0 || packed_len != (rows.saturating_mul(cols) + 3) / 4 {
+        return false;
+    }
+    let packed = PackedTernaryTensor::pack_weights(weights);
+    if packed.len() != packed_len {
+        return false;
+    }
+    let phys = k_nano::memory::LOADER_REGION_START
+        + (idx as u64) * k_nano::memory::LOADER_REGION_STEP_2MB;
+    MMAP_DESCS.lock()[idx] = Some(MmapDescriptor {
+        kind,
+        phys,
+        packed_len,
+        rows,
+        cols,
+    });
+    let tensor = PackedTernaryTensor {
+        shape: (rows, cols),
+        packed_data: packed,
+    };
+    let leaked = Box::leak(Box::new(core::mem::ManuallyDrop::new(tensor)));
+    let ptr = leaked as *const _ as *const PackedTernaryTensor as u64;
+    match mmap_ptr_cell(idx) {
+        Some(cell) => {
+            cell.store(ptr, Ordering::SeqCst);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Teste-host: limpa descritores + vistas.
+#[cfg(test)]
+pub fn clear_mmap_for_tests() {
+    *MMAP_DESCS.lock() = [None, None, None];
+    for i in 0..3 {
+        if let Some(c) = mmap_ptr_cell(i) {
+            c.store(0, Ordering::SeqCst);
+        }
     }
 }
 
@@ -989,6 +1246,50 @@ mod tests {
         // Limpa statics p/ não vazar para outros testes.
         *ROUTER_EMBED.lock() = None;
         *ROUTER_WEIGHT.lock() = None;
+    }
+
+    /// ora-2 2A: wire `note → get_or_mmap_expert` (host usa vista heap-backed;
+    /// o bare-metal usa a RAM do loader — mesma lógica de gate/índice).
+    #[test]
+    fn mmap_hit_returns_view_without_heap_copy() {
+        use super::{
+            clear_mmap_for_tests, note_mmap_expert, note_mmap_expert_test_view, ExpertKind,
+        };
+        use alloc::vec::Vec;
+        static MMAP_TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+        let _g = MMAP_TEST_LOCK.lock();
+        clear_mmap_for_tests();
+        let r = init_trinity();
+        // Sem descritor: comportamento atual byte-igual (None; slot descarregado).
+        assert!(r.get_or_mmap_expert(ExpertKind::HwIdentify).is_none());
+        // Fora do range loader: note recusa, get segue None (byte-igual).
+        assert!(!note_mmap_expert(ExpertKind::RustCoder, 0x0, 16, 4, 4));
+        assert!(r.get_or_mmap_expert(ExpertKind::RustCoder).is_none());
+        // Shape incoerente (len 16B ≠ 4x999): recusa.
+        assert!(!note_mmap_expert(
+            ExpertKind::Generator,
+            k_nano::memory::LOADER_REGION_START,
+            16,
+            4,
+            999
+        ));
+        assert!(r.get_or_mmap_expert(ExpertKind::Generator).is_none());
+        // Vista de teste: hit devolve os pesos exatos sem copiar p/ Expert.weight.
+        let w: Vec<i8> = (0..64).map(|i| (i % 3) as i8 - 1).collect();
+        assert!(note_mmap_expert_test_view(ExpertKind::HwIdentify, &w, 8, 8));
+        let v = r
+            .get_or_mmap_expert(ExpertKind::HwIdentify)
+            .expect("mmap hit");
+        assert_eq!(v.shape, (8, 8));
+        assert_eq!(v.packed_data.len(), (64 + 3) / 4);
+        for (i, &x) in w.iter().enumerate() {
+            assert_eq!(v.get_weight(i), x, "peso {}", i);
+        }
+        // Expert.weight continua None (zero-copy: nada foi injetado no heap).
+        let e = r.experts().iter().find(|e| e.kind == ExpertKind::HwIdentify).unwrap();
+        assert!(e.weight.is_none());
+        clear_mmap_for_tests();
+        assert!(r.get_or_mmap_expert(ExpertKind::HwIdentify).is_none());
     }
 
     #[test]

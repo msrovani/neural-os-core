@@ -1042,17 +1042,25 @@ impl Agent for HermesAgent {
             if let Some(ev) = self.skill_gen_receiver.try_receive() {
                 had_work = true;
                 if let Some((name, desc)) = crate::self_evolve::parse_skill_gen_request(&ev.payload) {
-                    let task = alloc::format!("Gerar skill WASM '{}': {}", name, desc);
-                    let prompt = crate::structured_decode::model_skill_prompt(&task);
-                    *PENDING_WASM_SKILL.lock() = Some((name.clone(), desc));
-                    let _ = EVENT_BUS.publish(Event {
-                        id: 0,
-                        topic: String::from(cortex::cortex::TOPIC_LLM_REQUEST),
-                        payload: prompt.into_bytes(),
-                        token: CapabilityToken::Legacy(1),
-                    });
-                    self.state = HermesState::AwaitingLLM;
-                    k_nano::slog_hermes!("Skill", "info", "skill_gen '{}' → LLM op-IR (FORJA WASM)", name);
+                    // ora-2 item 5: cache pré-LLM. Hit (template WASM pré-compilado)
+                    // registra/executa e NÃO consome a fila de inferência; miss segue o
+                    // path atual byte-igual.
+                    if crate::wasmi_rt::skill_cache_try_register(&name, &desc) == Some(true) {
+                        k_nano::slog_hermes!("Skill", "ok", "skill_cache hit={} (sem LLM)", name);
+                    } else {
+                        crate::wasmi_rt::skill_cache_log_miss(&name);
+                        let task = alloc::format!("Gerar skill WASM '{}': {}", name, desc);
+                        let prompt = crate::structured_decode::model_skill_prompt(&task);
+                        *PENDING_WASM_SKILL.lock() = Some((name.clone(), desc));
+                        let _ = EVENT_BUS.publish(Event {
+                            id: 0,
+                            topic: String::from(cortex::cortex::TOPIC_LLM_REQUEST),
+                            payload: prompt.into_bytes(),
+                            token: CapabilityToken::Legacy(1),
+                        });
+                        self.state = HermesState::AwaitingLLM;
+                        k_nano::slog_hermes!("Skill", "info", "skill_gen '{}' → LLM op-IR (FORJA WASM)", name);
+                    }
                 }
             }
         }

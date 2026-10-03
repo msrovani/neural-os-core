@@ -1088,6 +1088,8 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
                 );
             }
             // hlt se timer vivo; soft ~18Hz se IRQ morto (orb/relógio/mouse).
+            // ora-2 item 4: flush oportunista do TICKV no idle (sem timer dedicado).
+            let _ = k_nano::storage::tickv::flush_idle();
             k_nano::interrupts::scheduler_idle_halt();
         },
         || {
@@ -2999,6 +3001,9 @@ pub(crate) fn kernel_boot(
         let mut loaded = false;
         let mut found = false;
         crate::display::fb::boot_ckpt(40, "QEMU loader scan start");
+        // ora-2 item 2A: região QEMU-loader [0x100000000..0x180000000) vira RO 2MB
+        // (idempotente, hole/1G skip). HHDM já ativo aqui; scans leem PRESENT (intacto).
+        let _ = k_nano::memory::map_loader_region_ro();
         // QEMU-loader scan: varre [0x100000000..0x180000000) step=1MB por magic 0xBE11BE11 (BGE.BIN)
         {
             let pm = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
