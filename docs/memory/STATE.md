@@ -1,6 +1,16 @@
-# STATE - neural-os-core v1.9.99-s437 - Telemetria honesta + tokenizer Falcon3
+# STATE - neural-os-core v1.9.99-s438 - QEMU 8c/8GB 1h: 10 fixes de #PF (GOAL bloqueado por wild-write)
 
-#   PISTA ATIVA: s437 — resposta degenerada do LLM Falcon3 (log HUB triage). Causa-raiz:
+#   PISTA ATIVA: s438 — QEMU 8c/8GB 1h (bit-engine). cargo clean 71.2GiB + build
+#     from-scratch 0 erros (incl. nsgdb 1.3: bridge resolve_conflict->ResolveOutcome).
+#     10 fixes de #PF/freeze verificados: BeiState Arc guard (all_ptrs_valid),
+#     realloc min(size,new), flood cap-check+throttle, EventBus TicketLock bounded
+#     (QEMU-monitor confirmou o spin), scheduler latch budget 50ms, process_wakes cap,
+#     hook ptr range, #PF handler is_page_present, HDA bar==0, park observavel;
+#     arnes tools/watch_corruption.ps1. NAO fechou o GOAL: #PF rotativo multi-site
+#     (0x6/0x13c/0x7ee00001/0x42d) pos-jobs e o park do BSP (loop{hlt}) amplifica p/
+#     freeze. 2c inconclusivo (SMP-1-AP barrier pending=1 done=0). Bloqueio: wild-write
+#     -> watchpoint no writer.
+#   PISTA ANTERIOR: s437 — resposta degenerada do LLM Falcon3 (log HUB triage). Causa-raiz:
 #     `bpe::encode` para Falcon3 (ByteLevel 131k, sp32=0) caía em `encode_chat_frame`
 #     — frame-cue Llama-3 fixo de 6 tokens (`[bos,1919,eot,128006,78191,128007]`) que
 #     NÃO tokeniza o prompt → todo job via o mesmo input e a saída degenerava no mesmo

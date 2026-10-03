@@ -193,11 +193,18 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
         puts(b"[PF_DBG] ip="); puthex(ip);
         puts(b" cr2="); puthex(cr2.as_u64());
         puts(b" err="); puthex(code.bits()); putc(b'\n');
-        // Dump first 16 bytes at IP (helps identify the instruction)
+        // Dump first 16 bytes at IP (helps identify the instruction).
+        // s437: guardar com is_page_present — um IP selvagem (branch indireto
+        // corrompido) fazia o read_volatile faultar de novo (nested); o streak
+        // contava o IP do HANDLER e parqueava o BSP (freeze silencioso).
         puts(b"[PF_DBG] ip_bytes:");
-        for i in 0..16u64 {
-            let b = unsafe { core::ptr::read_volatile((ip + i) as *const u8) };
-            puthex(b as u64);
+        if k_nano::memory::is_page_present(ip) {
+            for i in 0..16u64 {
+                let b = unsafe { core::ptr::read_volatile((ip + i) as *const u8) };
+                puthex(b as u64);
+            }
+        } else {
+            puts(b" <ip-unmapped>");
         }
         putc(b'\n');
         // Walk return addresses up the stack (20 qwords)
@@ -206,7 +213,7 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
         for i in 0..20u64 {
             let a = sp + i * 8;
             let page_end = (a | 0xFFF) + 1;
-            if a + 8 > page_end { break; }
+            if a + 8 > page_end || !k_nano::memory::is_page_present(a) { break; }
             let v = unsafe { core::ptr::read_volatile(a as *const u64) };
             if v >= 0xffffffff80000000 && v < 0xffffffffc0000000 {
                 putc(b' ');
@@ -236,7 +243,13 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
         if streak >= 3 {
             puts(b"[EXC] #PF storm ip=");
             puthex(ip);
+            puts(b" cr2=");
+            puthex(cr2.as_u64());
             puts(b" streak=3+ park core (fail-closed)\n");
+            // s437: não congelar em SILÊNCIO — persiste o BOOT.LOG para o
+            // próximo boot nomear o IP/CR2 original (o dump serial é lossy sob
+            // SMP e o core parqueado é o BSP: scheduler/timer/display morrem).
+            let _ = k_nano::boot_logger::try_flush_ramlog();
             loop { x86_64::instructions::hlt(); }
         }
     }

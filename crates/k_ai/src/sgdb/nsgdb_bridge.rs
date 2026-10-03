@@ -478,7 +478,11 @@ pub fn open_conflicts_count_nsgdb() -> usize {
 /// Resolved. O core não decide — só executa a decisão da camada cognitiva.
 pub fn resolve_conflict_nsgdb(conflict_id: &str, winner_vid: &str) -> Result<(), &'static str> {
     with_nsgdb(|db| {
+        // v1.3: resolve_conflict devolve ResolveOutcome (already_resolved/
+        // imported/superseded). O bridge só executa a decisão da camada
+        // cognitiva e reporta sucesso — o outcome é telemetria do core.
         db.resolve_conflict(conflict_id, winner_vid)
+            .map(|_outcome| ())
             .map_err(|_| "resolve_conflict fail")
     })
     .unwrap_or(Err("nsgdb unavailable"))

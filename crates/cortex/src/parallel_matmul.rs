@@ -520,4 +520,34 @@ mod col_tile_tests {
         TERN_SKIP_ZERO_TOTAL.store(0, Ordering::Relaxed);
         TERN_WEIGHT_TOTAL.store(0, Ordering::Relaxed);
     }
+
+    /// Tática II (BitEngine) refutada para o v6. O pack é 4 pesos/byte: zeros
+    /// dividem byte com não-zeros, então nem bitmask de presença nem formato
+    /// esparso (índice+sign) reduzem banda na sparsity medida (~25%, s436).
+    /// Aritmética inteira (bp) — não depende de f32 no host.
+    #[test]
+    fn tatica_ii_bitmask_refutada_por_sparsity_v6() {
+        // Sparsity medida s436: 1 zero em 4 pesos = 25%. Doc reivindica 30-45%.
+        const Z: u64 = 25;
+
+        // (a) Byte todo-zero = única unidade que um bitmask de byte pularia:
+        //     P = z^4. A 25% → 39 bp (0,39%) dos bytes; doc reivindica -35% de DRAM.
+        let byte_all_zero_bp = Z.pow(4) / 10_000; // (25/100)^4 × 10_000
+        assert!(
+            byte_all_zero_bp < 100,
+            "byte all-zero {byte_all_zero_bp}bp ≥ 1% — invalida o -35% do doc"
+        );
+
+        // (b) Esparso (delta 4-bit + sign 1-bit por não-zero) = 5 bits/não-zero
+        //     vs 2 bits/peso do pack v6. Break-even em z > 60%.
+        let sparse_bits_per_100 = 5 * (100 - Z);
+        let packed_bits_per_100 = 2 * 100;
+        assert!(
+            sparse_bits_per_100 > packed_bits_per_100,
+            "esparso {sparse_bits_per_100}bps > packed {packed_bits_per_100}bps a z={Z}%"
+        );
+        let breakeven_z = 100 - (packed_bits_per_100 / 5);
+        assert_eq!(breakeven_z, 60, "break-even de sparsity mal calculado");
+        assert!(Z < breakeven_z, "sparsity medida {Z}% abaixo do break-even 60%");
+    }
 }

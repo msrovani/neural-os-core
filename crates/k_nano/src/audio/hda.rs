@@ -391,33 +391,56 @@ unsafe fn reg32(bar: u64, off: u64) -> *mut u32 {
     (bar + off) as *mut u32
 }
 
+// s437: guard `bar == 0` no choke point MMIO. Um AudioMixerAgent::tick lia o
+// HDA com base nula (`r32(0, SD_PLAY_BASE+SDX_LPIB=0x13c)`) → #PF storm →
+// park do BSP → freeze silencioso determinístico (confirmado por QEMU-monitor:
+// AudioMixerAgent::tick → playback_free_mono_samples → r32, CR2=0x13c). Base 0
+// = HDA não mapeado: leitura devolve 0, escrita é no-op — nunca deref null.
 #[inline]
 unsafe fn r32(bar: u64, off: u64) -> u32 {
+    if bar == 0 {
+        return 0;
+    }
     core::ptr::read_volatile(reg32(bar, off))
 }
 
 #[inline]
 unsafe fn w32(bar: u64, off: u64, v: u32) {
+    if bar == 0 {
+        return;
+    }
     core::ptr::write_volatile(reg32(bar, off), v);
 }
 
 #[inline]
 unsafe fn r16(bar: u64, off: u64) -> u16 {
+    if bar == 0 {
+        return 0;
+    }
     core::ptr::read_volatile((bar + off) as *const u16)
 }
 
 #[inline]
 unsafe fn w16(bar: u64, off: u64, v: u16) {
+    if bar == 0 {
+        return;
+    }
     core::ptr::write_volatile((bar + off) as *mut u16, v);
 }
 
 #[inline]
 unsafe fn r8(bar: u64, off: u64) -> u8 {
+    if bar == 0 {
+        return 0;
+    }
     core::ptr::read_volatile((bar + off) as *const u8)
 }
 
 #[inline]
 unsafe fn w8(bar: u64, off: u64, v: u8) {
+    if bar == 0 {
+        return;
+    }
     core::ptr::write_volatile((bar + off) as *mut u8, v);
 }
 

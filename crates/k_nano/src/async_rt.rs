@@ -314,9 +314,17 @@ impl AsyncExecutor {
     /// (aloca no heap, pode pegar locks) dentro do IRQ. Use
     /// [`request_wake_processing`] no IRQ e [`drain_pending_wakes`] no loop.
     pub fn process_wakes(&self) {
-        while let Some(index) = self.wake_channel.try_pop() {
+        // s437: cap por chamada — um future que se re-acorda (self-wake) enchia
+        // o canal e o `while try_pop` girava para sempre no BSP (spin silencioso
+        // pós-`bei_tick`). Bounded: o excedente fica para a próxima volta.
+        let mut budget = 64usize;
+        while budget > 0 {
+            let Some(index) = self.wake_channel.try_pop() else {
+                break;
+            };
             // Poll the future at this index
             self.poll_task(index);
+            budget -= 1;
         }
     }
 

@@ -73,6 +73,12 @@ unsafe impl GlobalAlloc for LazyBumpAllocator {
                 None => return core::ptr::null_mut(),
             };
             let aligned_ptr = (current_ptr + align - 1) & !(align - 1);
+            // s437: guarda de wrap — `current_ptr + align - 1` perto de
+            // usize::MAX envolve para VA baixa; escrita nesse ponteiro =
+            // #PF em endereço baixo (storm → park). Refusa honestamente.
+            if aligned_ptr < heap_start {
+                return core::ptr::null_mut();
+            }
             let next_offset = aligned_ptr.wrapping_sub(heap_start).saturating_add(size);
             let hard_limit = HEAP_LIMIT.load(Ordering::Relaxed).min(window);
 
@@ -147,6 +153,12 @@ const INFER_SLICE_TICK: &str = "infer_worker";
 /// Último HEAP_LIMIT já logado no refuse-in-slice (anti-spam: cada alloc além
 /// do LIMIT re-chamaria o grow; o TALC serve os spills no intervalo).
 static SLICE_GROW_REFUSED_AT: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Último HEAP_LIMIT já logado no cap de orçamento do bump (anti-spam s437:
+/// com o bump no teto, cada alloc que estoura re-entrava no grow e logava
+/// `grow entry`+`budget cap` 2× — 44k logs/10min — antes do TALC servir o
+/// spill; loga 1× por valor de HEAP_LIMIT, como o refuse-in-slice).
+static CAP_REFUSED_LOG_AT: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 /// True se um slice de inferência está em curso (qualquer core). Só atomics +
 /// comparação de bytes — seguro no path de alloc (nunca aloca/publica).
@@ -303,24 +315,32 @@ fn grow_bump_auto(need: usize) -> bool {
         }
         return false;
     }
-    // (3) Grow-gate entry: quotas + observe via ATOMICS ONLY — nunca
-    // BOOT_LOG/EVENT_BUS/MHI/GLOBAL_ALLOCATOR locks aqui, nunca publish
-    // (publish_heap_pressure_if_due roda FORA do grow — pode alocar).
-    let entry_obs = heap_observe();
-    let _entry_carve0 = core_quota_for(0);
-    // Fix C: log do need na ENTRADA (o path wrap/refuse era cego).
-    crate::slog_nano!("HEAP", "BUMP", "grow entry need={}MB limit={}MB",
-        need / (1024 * 1024), current_limit / (1024 * 1024));
     // SESSION_287: HEAP_BUDGET_MB era escrito e nunca lido — grow ia até OOM.
     let budget_bytes = BUMP_BUDGET_CLAMPED
         .load(Ordering::Relaxed)
         .saturating_mul(1024 * 1024)
         .max(HEAP_SIZE);
+    // Cap ANTES do entry-observe/log: com o bump no orçamento o grow NUNCA
+    // sucede (o TALC serve o spill). Sem esta ordem, cada alloc que estoura
+    // logava `grow entry`+`budget cap` e pagava heap_observe à toa — flood
+    // s437 (44k logs/10min). Log único por HEAP_LIMIT, como o refuse-in-slice.
     if current_limit >= budget_bytes {
-        crate::slog_nano!("HEAP", "BUMP", "budget cap {}MB — recusa grow (need={}MB)",
-            budget_bytes / (1024 * 1024), need / (1024 * 1024));
+        if CAP_REFUSED_LOG_AT.load(Ordering::Relaxed) != current_limit {
+            CAP_REFUSED_LOG_AT.store(current_limit, Ordering::Relaxed);
+            crate::slog_nano!("HEAP", "BUMP", "budget cap {}MB — recusa grow (need={}MB); spill→TALC",
+                budget_bytes / (1024 * 1024), need / (1024 * 1024));
+        }
         return false;
     }
+    // (3) Grow-gate entry: quotas + observe via ATOMICS ONLY — nunca
+    // BOOT_LOG/EVENT_BUS/MHI/GLOBAL_ALLOCATOR locks aqui, nunca publish
+    // (publish_heap_pressure_if_due roda FORA do grow — pode alocar). Só chega
+    // aqui quando o grow PODE suceder (abaixo do cap).
+    let entry_obs = heap_observe();
+    let _entry_carve0 = core_quota_for(0);
+    // Fix C: log do need na ENTRADA (o path wrap/refuse era cego).
+    crate::slog_nano!("HEAP", "BUMP", "grow entry need={}MB limit={}MB",
+        need / (1024 * 1024), current_limit / (1024 * 1024));
     let heap_start = unsafe { HEAP_BUFFER.as_mut_ptr() as usize };
     let base = VirtAddr::new(crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed));
     if base.as_u64() == 0 {
@@ -738,7 +758,10 @@ unsafe impl GlobalAlloc for HybridAllocator {
             TALC_OVERFLOW_NULL.fetch_add(1, Ordering::Relaxed);
             oom(new_layout);
         }
-        core::ptr::copy_nonoverlapping(ptr, q, layout.size());
+        // s437: copia o MENOR tamanho — `realloc` pode ENCOLHER
+        // (new_size < layout.size()); copiar o tamanho antigo transborda o
+        // buffer novo (heap stray write — candidato ao Arc corrompido 0x6).
+        core::ptr::copy_nonoverlapping(ptr, q, layout.size().min(new_size));
         q
     }
 

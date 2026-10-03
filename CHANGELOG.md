@@ -1,5 +1,19 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s438] - 2026-10-02 - bit-engine: clean build + QEMU 8c/8GB 1h (10 fixes de #PF; GOAL bloqueado por wild-write)
+
+- High: **clean build from-scratch** (`cargo clean` 71.2GiB) incl. **neural-sgdb 1.3** — resolvido o bloqueio de compilação: `resolve_conflict` 1.3.0 devolve `ResolveOutcome` (não `()`); a bridge `k_ai/nsgdb_bridge.rs` fazia `.map_err` sobre `Result<ResolveOutcome, _>` (E0308) → `.map(|_outcome| ())`. `cargo build -p boot` 0 erros.
+- High: **crash #PF por corrupção de Arc** (mesmo parqueando o BSP) — `BeiState.cell_network` (Arc em +0x18) virava `0x6` e o lock do Mutex dava #PF em `0x16`. Fix: `all_ptrs_valid()` (valida `Arc::as_ptr` high-half) antes de qualquer `.lock()` no `tick`; tick pulado + warn rate-limited (fail-closed observável).
+- High: **spin eterno no `TicketLock<VecDeque<Event>>` do EventBus** (BSP 100% CPU, log congelado) — confirmado por QEMU-monitor (RIP no `lock`). `publish`/`try_receive`/`has_pending`/`pending_len`/`subscriber_count` agora usam aquisição **bounded** (`try_lock` + 256 spins + desistir) — o bus é best-effort (bounded + drop-oldest).
+- High: **HDA lido com base nula** — `AudioMixerAgent::tick` → `playback_free_mono_samples` → `r32(bar=0, 0x13c)` → #PF storm. Fix: guard `bar==0` em `r32/w32/r16/w16/r8/w8` (choke point único; leitura devolve 0, escrita no-op).
+- Med: **overflow de `realloc`** — copiava `layout.size()` (antigo) no buffer de `new_size`; `realloc` pode ENCOLHER → heap overflow. Fix: `min(layout.size(), new_size)`.
+- Med: **flood de log do heap** (44.187 `grow entry` + 44.187 `budget cap`/10min com o bump no teto) — cap-check ANTES de `heap_observe`/entry-log + `CAP_REFUSED_LOG_AT` (1 log por HEAP_LIMIT, espelha o refuse-in-slice).
+- Med: **latch do scheduler** com budget (`try_with_agent_tick_lock_ms(50)`) + **`process_wakes`** com cap (64/chamada, anti self-wake) + **hooks indiretos** validados (`hook_ptr_ok`, range `.text`) antes do `transmute` + **handler #PF** com `is_page_present` no dump de `ip`/`stk` (impede o fault nested que contava o IP do handler).
+- Low: **park do #PF storm observável** — loga `cr2=` + `try_flush_ramlog()` antes do `loop{hlt}` (o dump serial é lossy sob SMP). Novo arnês `tools/watch_corruption.ps1` (QEMU com monitor → detecta freeze/storm → extrai `ip=`/`cr2=` → dumpa+simboliza RIPs por vCPU).
+- **GOAL "1h sem crash/#PF" NÃO atingido:** `#PF` de **site rotativo** (ponteiro corrompido p/ valor pequeno: `0x6`/`0x13c`/`0x7ee00001`/`0x42d`) pós-jobs; o park do BSP em `loop{hlt}` amplifica qualquer fault em freeze total. 2c é inconclusivo (SMP-1-**AP** barrier `pending=1 done=0`, novo bug). Bloqueio: wild-write esporádico → exige watchpoint no *writer*.
+- Gates: Cortex 118/118; `cargo build -p boot` 0 erros; QEMU 8c/8GB 8 fases + Runtime + inferência (jobs até o #PF); diagnóstico por `-monitor` + `llvm-nm`.
+- Session: SESSION_438
+
 ## [1.9.99-s437] - 2026-10-02 - Telemetria honesta (recipe/pressure) + tokenizer Falcon3 (resposta degenerada)
 
 - High: **resposta degenerada do LLM Falcon3** — `bpe::encode` para Falcon3 (ByteLevel 131k, `sp32=0`) caía em `encode_chat_frame`, que devolve um **frame-cue Llama-3 fixo de 6 tokens** (`[bos,1919,eot,128006,78191,128007]`) e **nunca tokeniza o prompt**. Prova: `a2_proof setup ... prompt_len=6` para prompt de 581B; saída idêntica entre prompts/runs. Fix: `is_falcon_bytelevel()` (`bos<1000`) + `encode_falcon_chat()` (`BOS + encode_bytelevel("<|user|>\n{prompt}\n<|assistant|>\n")`, template Instruct real; 26 tokens no tokenizer HF) + `encode` roteia. A nota "modelo stub = gibberish" dos s432/433 estava desatualizada (run tem `file=989MB`).

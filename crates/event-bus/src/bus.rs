@@ -13,9 +13,28 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
-use ticket_lock::TicketLock;
+use ticket_lock::{TicketLock, TicketLockGuard};
 
 use crate::event::Event;
+
+/// s437: aquisição BOUNDED. Um `TicketLock` é não-reentrante: se um IRQ (ou o
+/// BSP) chama `lock()` enquanto o MESMO core já segura o lock (ex.: `publish`
+/// no thread interrompido por um IRQ que também publica/consome), `serving`
+/// nunca avança e o core gira para SEMPRE. Confirmado por QEMU-monitor: BSP
+/// preso em `TicketLock<VecDeque<Event>>::lock`. O bus é best-effort (filas
+/// bounded + drop-oldest): dar spin-limit e DESISTIR mantém o OS vivo (AIOS
+/// fail-closed mas vivo) em vez de congelar o scheduler.
+const LOCK_SPIN_BUDGET: u32 = 256;
+
+fn lock_bounded<T>(l: &TicketLock<T>) -> Option<TicketLockGuard<'_, T>> {
+    for _ in 0..LOCK_SPIN_BUDGET {
+        if let Some(g) = l.try_lock() {
+            return Some(g);
+        }
+        core::hint::spin_loop();
+    }
+    None
+}
 
 /// Default depth for control-plane topics (BOOT_PHASE, HEALTH_ISSUE, …).
 pub const DEFAULT_QUEUE_DEPTH: usize = 64;
@@ -43,11 +62,11 @@ pub struct Receiver {
 
 impl Receiver {
     pub fn try_receive(&self) -> Option<Event> {
-        self.queue.lock().pop_front()
+        lock_bounded(&self.queue).and_then(|mut g| g.pop_front())
     }
 
     pub fn has_pending(&self) -> bool {
-        !self.queue.lock().is_empty()
+        lock_bounded(&self.queue).map(|g| !g.is_empty()).unwrap_or(false)
     }
 
     pub fn topic(&self) -> &str {
@@ -55,7 +74,7 @@ impl Receiver {
     }
 
     pub fn pending_len(&self) -> usize {
-        self.queue.lock().len()
+        lock_bounded(&self.queue).map(|g| g.len()).unwrap_or(0)
     }
 }
 
@@ -111,15 +130,21 @@ impl EventBus {
         event.id = self.next_event_id.fetch_add(1, Ordering::Relaxed);
         let depth = queue_depth_for(&event.topic);
         let topic_key = event.topic.clone();
-        let mut subs = self.subscribers.lock();
+        // s437: bounded — publish pode ser chamado de IRQ; bloquear no map lock
+        // (enquanto um thread o segura) gira para sempre no mesmo core.
+        let Some(mut subs) = lock_bounded(&self.subscribers) else {
+            return Ok(0); // bus ocupado (IRQ vs thread) — dropar é seguro
+        };
         let mut delivered = 0usize;
         let mut empty_after = false;
         if let Some(queues) = subs.get_mut(&topic_key) {
             // Zombie prune: Receiver dropped ⇒ strong_count == 1 (map only).
             queues.retain(|q| Arc::strong_count(q) > 1);
             for q in queues.iter() {
-                push_bounded(&mut q.lock(), event.clone(), depth);
-                delivered = delivered.saturating_add(1);
+                if let Some(mut g) = lock_bounded(q) {
+                    push_bounded(&mut g, event.clone(), depth);
+                    delivered = delivered.saturating_add(1);
+                }
             }
             empty_after = queues.is_empty();
         }
@@ -131,7 +156,9 @@ impl EventBus {
 
     /// Live subscriber count for a topic (after zombie prune).
     pub fn subscriber_count(&self, topic: &str) -> usize {
-        let mut subs = self.subscribers.lock();
+        let Some(mut subs) = lock_bounded(&self.subscribers) else {
+            return 0; // ocupado — n/a ≠ 0, mas evita spin (HUD tolera)
+        };
         let Some(queues) = subs.get_mut(topic) else {
             return 0;
         };

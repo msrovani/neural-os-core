@@ -707,7 +707,7 @@ impl AgentRegistry {
                 // congelado mostra o AGENTE TRAVADO, não o último paint do
                 // display. Throttle: só na troca (mesmo &str = mesmo ptr).
                 let stamp_f = TICK_STAMP_FN.load(core::sync::atomic::Ordering::Relaxed);
-                if stamp_f != 0 {
+                if stamp_f != 0 && hook_ptr_ok(stamp_f) {
                     let key = agent_name.as_ptr() as u64;
                     if LAST_STAMPED_AGENT.swap(key, core::sync::atomic::Ordering::Relaxed) != key {
                         // SAFETY: ponteiro registrado via set_tick_stamp_fn.
@@ -715,16 +715,22 @@ impl AgentRegistry {
                         g(agent_name.as_bytes());
                     }
                 }
-                let result = with_agent_tick_lock(|| {
+                // s437: latch com budget — se um worker prender o AGENT_TICK_BUSY
+                // além do budget, o BSP PULA o tick (degrada) em vez de girar
+                // para sempre (freeze silencioso do scheduler/UI).
+                let Some(result) = try_with_agent_tick_lock_ms(BSP_TICK_LOCK_BUDGET_MS, || {
                     self.agents[i].tick_counter += 1;
                     let tc = self.agents[i].tick_counter;
                     self.agents[i].agent.tick(tick_id, tc)
-                });
+                }) else {
+                    TICK_ENTERED_MS.store(0, core::sync::atomic::Ordering::Relaxed);
+                    continue;
+                };
                 TICK_ENTERED_MS.store(0, core::sync::atomic::Ordering::Relaxed);
                 // s419: heartbeat pós-retorno do tick — evidência de progresso
                 // no canal persistente. Custo: 1 load + branch quando dt < min.
                 let hb_f = HEARTBEAT_HOOK.load(core::sync::atomic::Ordering::Relaxed);
-                if hb_f != 0 {
+                if hb_f != 0 && hook_ptr_ok(hb_f) {
                     let dt = wdt_clock
                         .map(|c| c().saturating_sub(wdt_t0))
                         .unwrap_or(0);
@@ -856,6 +862,15 @@ static TICK_STAMP_FN: core::sync::atomic::AtomicU64 =
 static LAST_STAMPED_AGENT: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(0);
 
+/// s437: valida um ponteiro de hook antes do `transmute`+call. Um `static mut`
+/// corrompido (stray write) fazia o BSP saltar para lixo (instruction-fetch em
+/// ~0x7ce53b88 → #PF storm nested → park/hlt). Só chama se estiver no range
+/// .text do kernel (high-half); fora = pula (hook é best-effort de diag/HUD).
+#[inline]
+fn hook_ptr_ok(p: u64) -> bool {
+    p >= 0xffff_ffff_8000_0000 && p < 0xffff_ffff_c000_0000
+}
+
 /// Registra a fn de stamp FB (None = desativa). Chamada uma vez pós-graphics.
 pub fn set_tick_stamp_fn(f: Option<fn(&[u8])>) {
     let v = match f {
@@ -889,7 +904,7 @@ pub fn set_tick_stage_fn(f: Option<fn(u8)>) {
 /// Marca sub-estágio n do tick em curso (no-op sem registro). Lock-free.
 pub fn tick_stage(n: u8) {
     let f = TICK_STAGE_FN.load(core::sync::atomic::Ordering::Relaxed);
-    if f != 0 {
+    if f != 0 && hook_ptr_ok(f) {
         // SAFETY: ponteiro registrado via set_tick_stage_fn.
         let g: fn(u8) = unsafe { core::mem::transmute(f as usize) };
         g(n);
@@ -978,6 +993,12 @@ static mut SMP_DISTRIBUTE: Option<fn(&[(u32, u8, u8, Option<usize>, u8)], u32) -
 /// sem spin infinito esperando remote `on_cpu` / handoff cross-core.
 static AGENT_TICK_BUSY: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
+
+/// s437: budget do latch por agente no scheduler do BSP. Acima disto o tick é
+/// PULADO (degradação observável) em vez de girar — o latch é um spinlock sem
+/// fairness; um worker preso = freeze silencioso do scheduler/UI (s437: BSP a
+/// 100% com log congelado após `done id=4`).
+const BSP_TICK_LOCK_BUDGET_MS: u64 = 50;
 
 fn with_agent_tick_lock<R>(f: impl FnOnce() -> R) -> R {
     while AGENT_TICK_BUSY.swap(true, core::sync::atomic::Ordering::AcqRel) {

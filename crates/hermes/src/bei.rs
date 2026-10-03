@@ -189,8 +189,46 @@ impl BeiState {
         );
     }
     
+    /// s437: valida os ponteiros internos dos Arc ANTES de qualquer `.lock()`.
+    /// Um stray write no objeto leaked pode zerar o ponteiro interno (visto em
+    /// produção: `cell_network`→0x6) e o lock do `spin::Mutex` vira #PF storm
+    /// no BSP — o park do handler (`loop{hlt}`, IF=0) congela o OS inteiro
+    /// (scheduler/timer/display vivem no BSP). `Arc::as_ptr` só lê o campo,
+    /// sem deref → seguro mesmo com o Arc corrompido.
+    fn all_ptrs_valid(&self) -> bool {
+        #[inline]
+        fn ok<T>(a: &Arc<T>) -> bool {
+            (Arc::as_ptr(a) as usize) >= 0xffff_0000_0000_0000
+        }
+        ok(&self.cell_message_queue)
+            && ok(&self.budget_manager)
+            && ok(&self.expert_lifecycle)
+            && ok(&self.cell_network)
+            && ok(&self.plasticity_controller)
+            && ok(&self.dynamic_moe)
+            && ok(&self.memory_store)
+            && ok(&self.affect_regulator)
+            && ok(&self.executive_supervisor)
+            && ok(&self.current_tick)
+    }
+
     /// Main BEI tick - called every scheduler tick
     pub fn tick(&self) {
+        // s437: fail-closed observável — nunca dar deref de Arc corrompido.
+        // O tick é pulado e o sistema segue vivo (auto-cura pela próxima volta).
+        if !self.all_ptrs_valid() {
+            static CORRUPT_TICKS: core::sync::atomic::AtomicU32 =
+                core::sync::atomic::AtomicU32::new(0);
+            let n = CORRUPT_TICKS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            if n % 64 == 0 {
+                k_nano::slog_bin!(
+                    "BEI",
+                    "warn",
+                    "tick pulado: ponteiro Arc corrompido (stray heap write); sistema segue"
+                );
+            }
+            return;
+        }
         let mut tick = self.current_tick.lock();
         *tick += 1;
         let current_tick = *tick;
