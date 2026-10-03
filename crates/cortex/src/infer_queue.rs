@@ -1182,7 +1182,12 @@ fn run_prefill_step(st: &mut ActiveState) {
             let zk = Tensor::new((st.prefill_new_len, kd));
             let zv = Tensor::new((st.prefill_new_len, kd));
             if zk.is_valid() && zv.is_valid() {
-                cache.append(li, &zk, &zv);
+                if !cache.append(li, &zk, &zv) {
+                    // s439: página TALC indisponível — refuse honesto do pad
+                    // (mesmo fail-closed do OOM: não desalinha silenciosamente).
+                    pad_oom = true;
+                    break;
+                }
             } else {
                 pad_oom = true;
                 break;

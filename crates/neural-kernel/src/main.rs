@@ -1015,6 +1015,9 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     // Só ticks ≥ 2 ms (limiar) — o volume normal (60Hz) não pode custar IO de disco.
     agent_core::set_heartbeat_hook(
         Some(|name, ms| {
+            // s436: tick do scheduler retornou = progresso do core do scheduler
+            // (stamp por core p/ dump [SILENCE] do watchdog de silêncio).
+            k_nano::silence_watchdog::note_core_progress();
             k_nano::boot_logger::log_quiet(&alloc::format!(
                 "HB post-tick agent={} ms={}", name, ms
             ));

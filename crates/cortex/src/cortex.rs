@@ -865,13 +865,87 @@ pub const KV_BLOCK: usize = 64;
 /// ADR-0111 P2: i8 values per fixed KV page (= 64 `KV_BLOCK` blocks).
 pub const KV_PAGE: usize = 4096;
 
+/// s439: página de KV alocada pela ROTA TALC (k_nano::allocator::alloc_talc_routed)
+/// — consumer pesado de LONGA VIDA fora do bump (bump nunca libera; ~604MB de
+/// KV p/ Falcon3-1B ctx 4096 no bump = janela ~2030MB saturada, classe OOM
+/// s431/s434). Drop devolve a página ao TALC (dealloc REAL — free que o bump
+/// nunca teve; `clear`/`truncate` do KvPageList devolvem o espaço).
+/// Fallback honesto: TALC ainda não pronto (boot cedo / host tests) → chunk
+/// pelo global híbrido (o mesmo que `Box::new` fazia; dealloc detecta bump-
+/// residente pelo range e faz no-op — igual ao híbrido).
+struct KvTalcPage {
+    ptr: core::ptr::NonNull<u8>,
+}
+
+impl KvTalcPage {
+    fn new() -> Option<Self> {
+        // SAFETY: layout constante com align 1 (i8) — sempre válido.
+        let layout = core::alloc::Layout::from_size_align(KV_PAGE, 1).ok()?;
+        let p = k_nano::allocator::alloc_talc_routed(layout);
+        let ptr = core::ptr::NonNull::new(p)?;
+        // TALC/devolve memória NÃO inicializada (o `Box::new([0i8; KV_PAGE])`
+        // antigo zerava) — zera explicitamente: lixo dequantizado com escala
+        // vira logit selvagem; zero é neutro (get_value já devolve 0 fora de used).
+        unsafe { core::ptr::write_bytes(ptr.as_ptr(), 0, KV_PAGE) };
+        Some(KvTalcPage { ptr })
+    }
+
+    #[inline]
+    fn slice(&self) -> &[i8; KV_PAGE] {
+        // SAFETY: ptr veio de alloc de KV_PAGE bytes (align 1) e vive enquanto
+        // self existir (Drop único — KvPageList é dono exclusivo).
+        unsafe { &*self.ptr.as_ptr().cast::<[i8; KV_PAGE]>() }
+    }
+
+    #[inline]
+    fn slice_mut(&mut self) -> &mut [i8; KV_PAGE] {
+        // SAFETY: idem slice, com exclusividade &mut self.
+        unsafe { &mut *self.ptr.as_ptr().cast::<[i8; KV_PAGE]>() }
+    }
+}
+
+impl Drop for KvTalcPage {
+    fn drop(&mut self) {
+        // SAFETY: layout idêntico ao do alloc (constante); ptr é o mesmo.
+        unsafe {
+            k_nano::allocator::dealloc_talc_routed(
+                self.ptr.as_ptr(),
+                core::alloc::Layout::from_size_align(KV_PAGE, 1).unwrap_unchecked(),
+            );
+        }
+    }
+}
+
+// SAFETY: KvTalcPage é dono EXCLUSIVO do chunk (um único Drop devolve ao
+// TALC; slice/slice_mut exigem &/&mut self) — mover entre threads transfere a
+// posse, e o span TALC é global (mesmo espaço de endereçamento). Padrão do
+// Box<T>: posse única → Send. Sem Sync (não compartilhamos &KvTalcPage entre
+// threads sem lock; os callers usam o Mutex do KvCache).
+unsafe impl Send for KvTalcPage {}
+
+// Deref p/ `[i8; KV_PAGE]`: `page.iter()`, indexação e slicing funcionam como
+// no `Box<[i8; KV_PAGE]>` antigo — dequant etc. não mudam.
+impl core::ops::Deref for KvTalcPage {
+    type Target = [i8; KV_PAGE];
+    fn deref(&self) -> &Self::Target {
+        self.slice()
+    }
+}
+
+impl core::ops::DerefMut for KvTalcPage {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.slice_mut()
+    }
+}
+
 /// ADR-0111 P2: one layer's INT8 KV values as fixed-size pages. The values
 /// live in `[i8; KV_PAGE]` pages; `push_i8` appends a page only when the
 /// current one is full, so existing pages are never reallocated. `used` is the
 /// number of valid values (the last page may be partially filled).
+/// s439: páginas na rota TALC (KvTalcPage) — longa-vida fora do bump.
 #[derive(Default)]
 pub struct KvPageList {
-    pages: Vec<Box<[i8; KV_PAGE]>>,
+    pages: Vec<KvTalcPage>,
     used: usize,
 }
 
@@ -898,25 +972,45 @@ impl KvPageList {
         if i >= self.used { return 0; }
         let page = i / KV_PAGE;
         let off = i % KV_PAGE;
-        self.pages.get(page).map(|p| p[off]).unwrap_or(0)
+        self.pages.get(page).map(|p| p.slice()[off]).unwrap_or(0)
+    }
+
+    /// s439: pré-aloca as páginas que `extra_values` vão exigir. Falha de
+    /// alloc TALC = `false` SEM mutação de dados — o caller aborta limpo.
+    /// (Páginas spare de um reserve abortado ficam alocadas: viram a página
+    /// do próximo push; custo ≤ 1 página por falha, liberadas no `clear`.)
+    pub fn reserve(&mut self, extra_values: usize) -> bool {
+        let need_pages = (self.used + extra_values + KV_PAGE - 1) / KV_PAGE;
+        while self.pages.len() < need_pages {
+            match KvTalcPage::new() {
+                Some(page) => self.pages.push(page),
+                None => return false,
+            }
+        }
+        true
     }
 
     /// Append raw INT8 values, allocating a new page only when the current one
     /// is full. Existing pages are never reallocated.
-    pub fn push_i8(&mut self, src: &[i8]) {
+    /// s439: retorna `false` se a alocação de página TALC falhou (recusa
+    /// honesta, SEM oom()). Com o `reserve` garantindo as páginas ANTES da
+    /// escrita, uma falha aqui não deixa anexação parcial: `used` e as
+    /// páginas ficam consistentes (get_value devolve 0 fora de used).
+    pub fn push_i8(&mut self, src: &[i8]) -> bool {
+        if !self.reserve(src.len()) {
+            return false;
+        }
         let mut i = 0usize;
         while i < src.len() {
-            let off = self.used % KV_PAGE;
-            if off == 0 {
-                self.pages.push(Box::new([0i8; KV_PAGE]));
-            }
-            let n = (KV_PAGE - off).min(src.len() - i);
-            if let Some(page) = self.pages.last_mut() {
-                page[off..off + n].copy_from_slice(&src[i..i + n]);
+            let n = (KV_PAGE - (self.used % KV_PAGE)).min(src.len() - i);
+            if let Some(page) = self.pages.get_mut(self.used / KV_PAGE) {
+                let off = self.used % KV_PAGE;
+                page.slice_mut()[off..off + n].copy_from_slice(&src[i..i + n]);
             }
             self.used += n;
             i += n;
         }
+        true
     }
 
     /// Drop values past `n` (used only to re-quantize a partial tail block).
@@ -1019,14 +1113,19 @@ impl KvCache {
     /// not a multiple of `KV_BLOCK`, the partial tail block is re-quantized
     /// together with the new values (bounded extra error, only on misaligned
     /// appends; production `kv_dim` is a multiple of 64 so this is a no-op).
-    fn append_quant(store: &mut KvPageList, scales: &mut Vec<f32>, src: &[f32]) {
+    /// s439: `false` = página TALC indisponível — NENHUMA mutação de estado
+    /// (o caminho desalinhado reconstrói numa lista TEMP e só troca no fim;
+    /// `truncate_values` nunca roda sem o espaço já reservado).
+    fn append_quant(store: &mut KvPageList, scales: &mut Vec<f32>, src: &[f32]) -> bool {
         let base = store.len();
         let rem = base % KV_BLOCK;
         if rem == 0 {
             let (q, s) = kv_quantize(src);
-            store.push_i8(&q);
+            if !store.push_i8(&q) {
+                return false;
+            }
             scales.extend_from_slice(&s);
-            return;
+            return true;
         }
         let tail_start = base - rem;
         let last_scale = scales.pop().unwrap_or(0.0);
@@ -1036,14 +1135,23 @@ impl KvCache {
         }
         combined.extend_from_slice(src);
         let (q, s) = kv_quantize(&combined);
-        store.truncate_values(tail_start);
-        store.push_i8(&q);
+        // Reconstrução em lista TEMP: falha de alloc = store/scales intactos.
+        let mut fresh = KvPageList::new();
+        if !fresh.push_i8(&q) {
+            scales.push(last_scale); // devolve o scale popado
+            return false;
+        }
+        core::mem::swap(&mut fresh, store);
+        // fresh agora contém a lista VELHA (drop → páginas TALC devolvidas).
         scales.extend_from_slice(&s);
+        true
     }
 
-    pub fn append(&mut self, layer: usize, k_new: &Tensor, v_new: &Tensor) {
-        Self::append_quant(&mut self.k[layer], &mut self.k_scale[layer], &k_new.data);
-        Self::append_quant(&mut self.v[layer], &mut self.v_scale[layer], &v_new.data);
+    pub fn append(&mut self, layer: usize, k_new: &Tensor, v_new: &Tensor) -> bool {
+        if !Self::append_quant(&mut self.k[layer], &mut self.k_scale[layer], &k_new.data) {
+            return false;
+        }
+        Self::append_quant(&mut self.v[layer], &mut self.v_scale[layer], &v_new.data)
     }
 
     pub fn k_dim(&self) -> usize { self.k_dim }
@@ -1171,7 +1279,7 @@ fn kv_int8_bytes_4x_smaller() {
     let k = Tensor::from_row_major((1, kd), alloc::vec![0.5f32; kd]).unwrap();
     let v = Tensor::from_row_major((1, kd), alloc::vec![0.25f32; kd]).unwrap();
     for _ in 0..n {
-        cache.append(0, &k, &v);
+        assert!(cache.append(0, &k, &v));
         cache.advance(1);
     }
     let int8_bytes = cache.bytes_used();
@@ -1200,7 +1308,7 @@ fn kv_pages_cross_boundary_roundtrip() {
         let row = src[t * kd..(t + 1) * kd].to_vec();
         let k = Tensor::from_row_major((1, kd), row.clone()).unwrap();
         let v = Tensor::from_row_major((1, kd), row).unwrap();
-        cache.append(0, &k, &v);
+        assert!(cache.append(0, &k, &v));
         cache.advance(1);
     }
     // Values must span more than one fixed page.
@@ -1598,7 +1706,16 @@ impl TransformerModel {
                 let zk = Tensor::new((new_len, kd));
                 let zv = Tensor::new((new_len, kd));
                 if zk.is_valid() && zv.is_valid() {
-                    cache.append(layer_idx, &zk, &zv);
+                    if !cache.append(layer_idx, &zk, &zv) {
+                        // s439: página TALC indisponível — abort fwd honesto.
+                        k_nano::slog_cortex!(
+                            "FWD",
+                            "fail",
+                            "soft_stride pad TALC cheio layer={} — abort fwd",
+                            layer_idx
+                        );
+                        return (Tensor::zero((0, 0)), Tensor::zero((0, 0)));
+                    }
                 } else {
                     k_nano::slog_cortex!(
                         "FWD",
@@ -1864,7 +1981,12 @@ impl TransformerModel {
         let t2 = k_nano::tsc::now_us();
         crate::layer_diag::note(crate::layer_diag::S_QKV, t2.saturating_sub(t1));
 
-        cache.append(layer_idx, &k, &v);
+        if !cache.append(layer_idx, &k, &v) {
+            // s439: página TALC indisponível — abort honesto (mesmo caminho
+            // do KV inválido logo abaixo; nunca desalinha silenciosamente).
+            *x = Tensor::zero((0, 0));
+            return;
+        }
 
         let total_k = cache.k_all(layer_idx, total_seq);
         let total_v = cache.v_all(layer_idx, total_seq);
@@ -5799,7 +5921,7 @@ fn p1_logits_pool_reuse_parity_and_kv_ratio() {
     let k = Tensor::from_row_major((1, kd), alloc::vec![0.5f32; kd]).unwrap();
     let v = Tensor::from_row_major((1, kd), alloc::vec![0.25f32; kd]).unwrap();
     for _ in 0..n {
-        cache.append(0, &k, &v);
+        assert!(cache.append(0, &k, &v));
         cache.advance(1);
     }
     let int8 = cache.bytes_used();

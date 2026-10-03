@@ -315,6 +315,9 @@ fn persist_timestamped_vfs(content: &[u8]) -> bool {
 }
 
 fn buffer_log(msg: &str) {
+    // s436 (watchdog de silêncio): escrever no BOOT.LOG é emissão de log —
+    // common site de log_quiet/append_raw/log_no_flush.
+    crate::silence_watchdog::note_log_emit();
     // Espelho fÃ­sico (ramlog); persistÃªncia FAT sÃ³ via MSC/ATA â€” sem soft-reboot.
     crate::boot_ramlog::append(msg);
     if !HEAP_READY.load(Ordering::Relaxed) {

@@ -70,7 +70,7 @@ fn kv_k_all_mismatch_no_panic_pads() {
     // Layer 0: só 1 token (4 floats); pedimos seq_len=3 → mismatch → pad, sem unwrap panic.
     let k = Tensor::from_row_major((1, 4), alloc::vec![1.0, 2.0, 3.0, 4.0]).unwrap();
     let v = Tensor::from_row_major((1, 4), alloc::vec![0.5; 4]).unwrap();
-    cache.append(0, &k, &v);
+    assert!(cache.append(0, &k, &v));
     cache.advance(1);
     let total = cache.k_all(0, 3);
     assert!(total.is_valid());

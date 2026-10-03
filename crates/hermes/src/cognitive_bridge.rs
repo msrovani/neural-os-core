@@ -729,6 +729,7 @@ fn render_typed_hits(typed_hits: Vec<k_ai::sgdb::nsgdb_bridge::Hit>, _query: &st
             k_ai::sgdb::nsgdb_bridge::RecallPath::Semantic => "sem",
             k_ai::sgdb::nsgdb_bridge::RecallPath::Lexical => "lex",
             k_ai::sgdb::nsgdb_bridge::RecallPath::Entities => "ent",
+            k_ai::sgdb::nsgdb_bridge::RecallPath::Graph => "grf",
         };
         let ct_tag = match hit.content_type {
             k_ai::sgdb::nsgdb_bridge::ContentType::Json => "JSON",

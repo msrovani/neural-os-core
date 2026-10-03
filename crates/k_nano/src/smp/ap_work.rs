@@ -227,6 +227,10 @@ pub fn ap_idle_loop(worker_id: usize) -> ! {
     let use_mwait = crate::platform_probe::has_mwait();
 
     loop {
+        // s436 (watchdog de silêncio): stamp de progresso deste core — o dump
+        // [SILENCE] usa a idade p/ distinguir "loop vivo que não loga" de
+        // "core sem progresso". Custo: 1 load + 1 store Relaxed/iteração.
+        crate::silence_watchdog::note_core_progress();
         if let Some((f, jid)) = try_dequeue() {
             unsafe { f(jid, worker_id) };
             job_done();

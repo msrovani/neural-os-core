@@ -653,6 +653,10 @@ fn send_eoi(vector: u8) {
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     let ticks = TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    // s436: stamp do core do timer + watchdog de silêncio ([SILENCE]). O gate
+    // interno (ARM_TICKS + rate-limit) mantém o custo zero fora do stall;
+    // no stall, dump lock-free via puts (puts já é usado neste IRQ).
+    crate::silence_watchdog::on_timer_irq();
     // ADR-0104: EWMA (α=1/8) do intervalo de TSC entre ticks — alimenta
     // `timer_jitter_ppm`. Custo: 1 rdtsc + aritmética inteira, sem alocação.
     let now_tsc = crate::tsc::rdtsc();

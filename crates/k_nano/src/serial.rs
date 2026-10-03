@@ -189,6 +189,9 @@ fn dispatch_bytes(msg: &[u8], to_console: bool, to_file: bool, fb_args: Option<f
             crate::interrupts::puts(b"[NESTED] ");
             crate::interrupts::puts(msg);
         }
+        // s436: [NESTED] também é emissão — o watchdog de silêncio não pode
+        // enxergar um sistema logando (só via fallback) como "parado".
+        crate::silence_watchdog::note_log_emit();
         return;
     }
     let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
@@ -226,6 +229,9 @@ fn dispatch_bytes(msg: &[u8], to_console: bool, to_file: bool, fb_args: Option<f
         }
     }
     EMIT_GUARD.store(false, core::sync::atomic::Ordering::SeqCst);
+    // s436 (watchdog de silêncio): última emissão real de log. Choke point
+    // único — todo slog console/file passa aqui. Custo: 1 store Relaxed.
+    crate::silence_watchdog::note_log_emit();
 }
 
 /// Tenta escrever no journal de sessão no disco (HW real sem serial).

@@ -115,9 +115,17 @@ pub fn h2o_evict(cache: &mut KvCache, recent: usize, heavy: usize) -> usize {
         let (kq, ksc) = kv_quantize(&nk);
         let (vq, vsc) = kv_quantize(&nv);
         let mut klist = KvPageList::new();
-        klist.push_i8(&kq);
         let mut vlist = KvPageList::new();
-        vlist.push_i8(&vq);
+        // s439: página TALC indisponível → restaura a camada (mesmo padrão do
+        // try_reserve/checked_mul acima): eviction parcial honesta, cache
+        // nunca pela metade.
+        if !klist.push_i8(&kq) || !vlist.push_i8(&vq) {
+            cache.k[l] = old_k;
+            cache.v[l] = old_v;
+            cache.k_scale[l] = old_ks;
+            cache.v_scale[l] = old_vs;
+            continue;
+        }
         cache.k[l] = klist;
         cache.v[l] = vlist;
         cache.k_scale[l] = ksc;
@@ -170,8 +178,8 @@ pub fn gate_smoke() -> &'static str {
     for _ in 0..32 {
         let k = crate::tensor::Tensor::from_row_major((1, 16), alloc::vec![0.1f32; 16]).unwrap();
         let v = crate::tensor::Tensor::from_row_major((1, 16), alloc::vec![0.05f32; 16]).unwrap();
-        cache.append(0, &k, &v);
-        cache.append(1, &k, &v);
+        assert!(cache.append(0, &k, &v));
+        assert!(cache.append(1, &k, &v));
         cache.advance(1);
     }
     let before = cache.len;

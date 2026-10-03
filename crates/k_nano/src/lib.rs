@@ -88,6 +88,7 @@ pub mod rtl8139;
 pub mod rtl8168;
 pub mod scancode_to_ascii;
 pub mod serial;
+pub mod silence_watchdog; // s436: [SILENCE] = OOM-HALT para spin sem OOM (log parado + timer vivo → stamps por core)
 pub mod slog;
 pub mod simd;
 pub mod slab;

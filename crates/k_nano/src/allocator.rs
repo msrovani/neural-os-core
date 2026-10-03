@@ -1151,6 +1151,70 @@ pub fn agent_bump_quota(kind: &AgentKind, schedule: &ScheduleKind) -> usize {
 /// O limite REAL é a janela endereçável (~2GB, bump_max_offset) + HEAP_BUDGET_MB.
 pub static HEAP_LIMIT: AtomicUsize = AtomicUsize::new(HEAP_SIZE);
 
+// ─── s439: rota TALC explícita p/ consumers pesados de longa vida ───────────
+// Bump nunca libera: consumer longa-vida nele (ex.: KV cache da LLM, ~604MB
+// em páginas de 4KB para Falcon3-1B ctx 4096 — SESSION_413: KV > modelo) é
+// consumo PERMANENTE da janela ~2030MB = a classe OOM s431/s434. A rota
+// explícita coloca esses chunks DIRETO no TALC, que tem dealloc real (o walk
+// de bins s435 passa a medir a fragmentação REAL desses consumers).
+pub static TALC_ROUTED_BYTES: AtomicU64 = AtomicU64::new(0);
+pub static TALC_ROUTED_COUNT: AtomicU64 = AtomicU64::new(0);
+pub static TALC_ROUTED_REFUSED: AtomicU64 = AtomicU64::new(0);
+
+fn talc_routed_ptr_in_span(ptr: *mut u8) -> bool {
+    let p = ptr as usize;
+    p >= TALC_RANGE_START && p < TALC_SPAN_END.load(Ordering::Relaxed)
+}
+
+/// Alloc DIRETO no TALC (s439) — para consumers pesados de longa vida (KV
+/// cache, context window da LLM). TALC pronto → chunk no TALC (dealloc real;
+/// NULL honesto se cheio — caller faz fail-closed, sem oom()); TALC ainda não
+/// pronto (boot cedo / host tests) → fallback no híbrido global (bump-first,
+/// exatamente o que `Box::new` fazia — mesmo comportamento, mesma rota de
+/// dealloc). NUNCA chamar de dentro de uma alloc em curso (o Talck lock não
+/// é reentrante) nem de IRQ.
+pub fn alloc_talc_routed(layout: core::alloc::Layout) -> *mut u8 {
+    if TALC_READY.load(Ordering::Acquire) {
+        // SAFETY: Talck GlobalAlloc — layout válido do caller; lock interno.
+        let p = unsafe { TALC_ALLOC.alloc(layout) };
+        if !p.is_null() {
+            let n = TALC_ROUTED_COUNT.fetch_add(1, Ordering::Relaxed);
+            TALC_ROUTED_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
+            if n == 0 {
+                // regra 419: evidência de wire em runtime ANTES de "done".
+                crate::slog_nano!("HEAP", "TALC",
+                    "1a rota TALC explícita (KV longa-vida) size={} — fora do bump",
+                    layout.size());
+            }
+            return p;
+        }
+        TALC_ROUTED_REFUSED.fetch_add(1, Ordering::Relaxed);
+        return core::ptr::null_mut();
+    }
+    unsafe { GlobalAlloc::alloc(&HybridAllocator, layout) }
+}
+
+/// Dealloc da rota TALC explícita. O par do `alloc_talc_routed`: chunk no
+/// span → `TALC_ALLOC.dealloc` (free REAL — o que o bump nunca teve);
+/// chunk bump-residente (fallback pré-claim) → no-op, igual ao híbrido.
+/// # Safety: `ptr` DEVE ter vindo de `alloc_talc_routed` com o MESMO layout.
+pub unsafe fn dealloc_talc_routed(ptr: *mut u8, layout: core::alloc::Layout) {
+    if ptr.is_null() {
+        return;
+    }
+    if talc_routed_ptr_in_span(ptr) && TALC_READY.load(Ordering::Acquire) {
+        TALC_ALLOC.dealloc(ptr, layout);
+        TALC_ROUTED_BYTES.fetch_sub(layout.size() as u64, Ordering::Relaxed);
+        return;
+    }
+    unsafe { GlobalAlloc::dealloc(&HybridAllocator, ptr, layout) }
+}
+
+/// Bytes vivos alocados pela rota TALC explícita (KV longa-vida etc.).
+pub fn talc_routed_bytes() -> u64 {
+    TALC_ROUTED_BYTES.load(Ordering::Relaxed)
+}
+
 /// Phys do `HEAP_BUFFER` (bump). 0 = ainda não reservado no PMM.
 /// `alloc_pt_frame` recusa zerar um frame nesta faixa — alias HHDM sobre o
 /// bump heap era o #PF-storm (PT escrita em nós BTree, CR2=0x16a).
