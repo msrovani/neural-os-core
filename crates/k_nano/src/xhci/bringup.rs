@@ -3,11 +3,17 @@
 //! Sem isto, `usb_msc::probe` usava slot=2 fantasma e BOOT.LOG nunca gravava.
 
 use super::{alloc_phys, pop_event, portsc_addr, r32, w32, BulkEndpoint, XHCI_STATE};
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 /// Contador de AddressDevice FAIL (diagnóstico Hub Health, lock-free).
 /// Incrementado nos sites com log FAIL (MSC + HID); UAC/UVC silenciosos não contam.
 pub static ADDR_FAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Diagnóstico HUD (s438): último Command Completion Code != Success (0 = nenhum).
+/// Diz POR QUE o Address/Enable Slot falhou (5=TRB err, 7=USB trans err, ...).
+pub static LAST_USB_CC: AtomicU8 = AtomicU8::new(0);
+/// Diagnóstico HUD (s438): comandos que expiraram SEM CC (ring/doorbell/event ring).
+pub static USB_CMD_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 
 fn hc_context_size() -> usize {
     XHCI_STATE
@@ -953,8 +959,19 @@ unsafe fn reset_port(port: u8, speed_hint: u8) -> bool {
     drop(g);
 
     // TSC 100ms — 2M spins sem teto = freeze preto no metal (SESSION_315).
+    // s439: warm reset (Speed≥4) após takeover do UEFI precisa de MAIS tempo de
+    // retrain do que 100ms — evidência HW: `port 2 reset FAIL` num stick SS
+    // (P2 CCS=1 PED=1 speed=4) → MSC abortava → BOOT.LOG nunca persistia.
     let hz = crate::tsc::tsc_hz();
-    let budget = if hz > 1_000_000 { hz / 10 } else { 0 };
+    let budget = if hz > 1_000_000 {
+        if warm {
+            hz / 2 // 500ms — retrain do link SuperSpeed pós-UEFI
+        } else {
+            hz / 10 // 100ms — reset USB2
+        }
+    } else {
+        0
+    };
     let t0 = crate::tsc::rdtsc();
     let mut spins = 0u32;
     loop {
@@ -984,6 +1001,20 @@ unsafe fn reset_port(port: u8, speed_hint: u8) -> bool {
         core::hint::spin_loop();
         spins = spins.saturating_add(1);
         if budget > 0 && crate::tsc::rdtsc().wrapping_sub(t0) > budget {
+            let g = XHCI_STATE.lock();
+            if let Some(st) = g.as_ref() {
+                if let Some(a) = portsc_addr(st, port) {
+                    let pv = r32(st.base, a - st.base);
+                    crate::slog_nano!(
+                        "USB",
+                        "warn",
+                        "port {} reset TIMEOUT PORTSC={:#x} warm={}",
+                        port,
+                        pv,
+                        warm as u8
+                    );
+                }
+            }
             return false;
         }
         if budget == 0 && spins >= 80_000 {
@@ -1117,6 +1148,7 @@ unsafe fn wait_cmd_completion() -> Option<(u8, u8)> {
                     return Some((slot, cc));
                 }
                 crate::slog_nano!("USB", "warn", "cmd CC={} slot={}", cc, slot);
+                LAST_USB_CC.store(cc, Ordering::Relaxed);
                 return None;
             }
         }
@@ -1137,6 +1169,7 @@ unsafe fn wait_cmd_completion() -> Option<(u8, u8)> {
                     crate::slog_nano!("USB", "warn", "cmd TIMEOUT ms={} edq={} evt={:#x} {:#x} {:#x} {:#x}", ms, st2.er_dequeue, p0, p1, p2, p3);
                 }
             }
+            USB_CMD_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
             return None;
         }
         if budget == 0 && spins >= 80_000 {
@@ -1151,6 +1184,7 @@ unsafe fn wait_cmd_completion() -> Option<(u8, u8)> {
                     crate::slog_nano!("USB", "warn", "cmd TIMEOUT spins edq={} evt={:#x} {:#x} {:#x} {:#x}", st2.er_dequeue, p0, p1, p2, p3);
                 }
             }
+            USB_CMD_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
             return None;
         }
     }

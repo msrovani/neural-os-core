@@ -15,7 +15,7 @@ pub use bringup::{
     host_device_class, host_disable_slot, host_enable_slot, host_ep0_class_nodata,
     host_ep0_control_in, host_ep0_tr_va, host_mark_hub, host_max_ports, host_port_ccs,
     host_reset_port, host_restore_ep0, host_set_configuration, host_set_msc_port,
-    host_ccs_count, host_msc_info,
+    host_ccs_count, host_msc_info, LAST_USB_CC, USB_CMD_TIMEOUTS,
     msc_port_skipped, parse_msc_config, push_route, register_msc_bringup, DevLoc, MscDevice,
     MscEpInfo,
 };

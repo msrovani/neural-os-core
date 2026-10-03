@@ -373,21 +373,16 @@ impl BeiState {
                     if k_nano::allocator::heap_headroom_low() {
                         k_nano::slog_bin!("BEI", "warn", "PromoteSkill pulado: heap crítico (wasmi alloc)");
                     } else {
-                        match crate::evolve::promote_ephemeral_to_wasm(&skill_name, "") {
-                        Ok(()) => k_nano::slog_bin!(
+                        // s440: NÃO carimbar dummy — publica o pedido de geração
+                        // real (forja model-born via LLM op-IR); dummy não é solução
+                        // (paridade com hw_pnp; o elo morto agora publica).
+                        crate::self_evolve::publish_skill_gen_request(&skill_name, "");
+                        k_nano::slog_bin!(
                             "BEI",
                             "ok",
-                            "PromoteSkill: {} → WASM promovida (dummy stub até #412)",
+                            "PromoteSkill: {} → pedido de geração WASM (LLM op-IR)",
                             skill_name
-                        ),
-                        Err(e) => k_nano::slog_bin!(
-                            "BEI",
-                            "warn",
-                            "PromoteSkill: {} falhou: {}",
-                            skill_name,
-                            e
-                        ),
-                        }
+                        );
                     }
                 }
             }

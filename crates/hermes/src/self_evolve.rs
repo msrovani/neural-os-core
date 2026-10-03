@@ -15,10 +15,42 @@ use crate::skill_observer;
 
 /// Tópico EventBus para insights de meta-cognição.
 pub const TOPIC_SELF_EVOLVE: &str = "SELF_EVOLVE";
-/// Pedido de geração LLM de skill (payload = prompt SKILL.md).
+/// Pedido de geração LLM de skill (payload = "name\ndescription").
 pub const TOPIC_SKILL_GEN_REQUEST: &str = "SKILL_GEN_REQUEST";
 /// Notificação "fonte mudou sob você" (swarm): payload "what:name".
 pub const TOPIC_CHANGE: &str = "CHANGE_NOTIFY";
+
+/// Elo da FORJA WASM: publica o pedido de geração de uma skill.
+/// O consumer (HermesAgent) monta o prompt op-IR com
+/// `structured_decode::model_skill_prompt` e, na resposta, chama
+/// `evolve::promote_model_text_to_wasm` (proveniência `model-born`).
+/// Payload = `"name\ndescription"` (description pode ser multi-linha).
+/// Sem modelo carregado a resposta é `NO_MODEL_MSG` e a forja recusa —
+/// refuse honesto, nunca dummy carimbado como solução.
+pub fn publish_skill_gen_request(name: &str, description: &str) {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 64 {
+        return;
+    }
+    let payload = format!("{}\n{}", name, description);
+    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+        id: 0,
+        topic: String::from(TOPIC_SKILL_GEN_REQUEST),
+        payload: payload.into_bytes(),
+        token: event_bus::CapabilityToken::Legacy(1),
+    });
+}
+
+/// Parse do payload de [`publish_skill_gen_request`] → `(name, description)`.
+pub fn parse_skill_gen_request(payload: &[u8]) -> Option<(String, String)> {
+    let text = core::str::from_utf8(payload).ok()?;
+    let (name, desc) = text.split_once('\n')?;
+    let name = name.trim();
+    if name.is_empty() || name.len() > 64 {
+        return None;
+    }
+    Some((String::from(name), String::from(desc)))
+}
 
 /// Publica CHANGE_NOTIFY quando uma skill foi criada/alterada por outra fonte.
 pub fn publish_change(what: &str, name: &str) {
@@ -314,6 +346,9 @@ pub fn auto_generate_pending(loader: &mut SkillLoader) -> u32 {
         if loader.list_skills().iter().any(|(n, _, _)| n == &name) {
             continue;
         }
+        // Elo da FORJA WASM: pede ao LLM o op-IR da skill (model-born).
+        // O SKILL.md abaixo continua como fallback rápido sem LLM.
+        publish_skill_gen_request(&name, &alloc::format!("auto-skill from {} hits", hits));
         if let Some(md) = skill_gen::maybe_auto_skill(&name).or_else(|| generate_from_pattern(&name))
         {
             match verify_and_register(loader, &md) {
@@ -543,6 +578,20 @@ mod tests {
         assert!(prompt.contains("my_skill"));
         assert!(prompt.contains("Deploys things"));
         assert!(prompt.contains("ADR-0052"));
+    }
+
+    // ── skill_gen_request round-trip (elo FORJA) ─────────────────────────
+
+    #[test]
+    fn skill_gen_request_roundtrip() {
+        let (n, d) = parse_skill_gen_request(b"my_skill\nlinha 1\nlinha 2").expect("parse");
+        assert_eq!(n, "my_skill");
+        assert_eq!(d, "linha 1\nlinha 2");
+        // Sem separador ou nome vazio/longo → refuse (não vira pedido).
+        assert!(parse_skill_gen_request(b"no-newline").is_none());
+        assert!(parse_skill_gen_request(b"\nempty-name").is_none());
+        let long = format!("{}\ndesc", "a".repeat(65));
+        assert!(parse_skill_gen_request(long.as_bytes()).is_none());
     }
 
     // ── verify_skill_md ──────────────────────────────────────────────────

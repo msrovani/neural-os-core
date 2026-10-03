@@ -27,6 +27,11 @@ use crate::decode_harness::recognize;
 /// (k_ai) com o par (input → resposta) quando o LLM responder.
 static PENDING_LEARNER_INPUT: spin::Mutex<Option<String>> = spin::Mutex::new(None);
 
+/// Marcador de resposta "op-IR de skill": skill WASM aguardando o texto do
+/// modelo. Espelha `PENDING_SKILL` (SKILL.md), mas a resposta é entregue à
+/// FORJA real `evolve::promote_model_text_to_wasm` (proveniência model-born).
+static PENDING_WASM_SKILL: spin::Mutex<Option<(String, String)>> = spin::Mutex::new(None);
+
 // ---------------------------------------------------------------------------
 // MonitorAgent — Oneshot: publica SYSTEM_READY e conclui
 // ---------------------------------------------------------------------------
@@ -703,6 +708,7 @@ pub struct HermesAgent {
     pnp_receiver: Receiver,
     cap_receiver: Receiver,
     skill_create_receiver: Receiver,
+    skill_gen_receiver: Receiver,
     latent_receiver: LatentReceiver,
     voice_emotion_receiver: Receiver,
     latent_recv_total: u64,
@@ -739,6 +745,7 @@ impl HermesAgent {
             pnp_receiver: EVENT_BUS.subscribe(k_ai::hw_capability::TOPIC_HW_PNP_ACTION),
             cap_receiver: EVENT_BUS.subscribe(k_ai::hw_capability::TOPIC_HW_CAPABILITY),
             skill_create_receiver: EVENT_BUS.subscribe("SKILL_CREATE"),
+            skill_gen_receiver: EVENT_BUS.subscribe(crate::self_evolve::TOPIC_SKILL_GEN_REQUEST),
             latent_receiver: k_nano::globals::LATENT_BUS.subscribe(TOPIC_THOUGHT_LLM),
             voice_emotion_receiver: k_nano::EVENT_BUS.subscribe("VOICE_EMOTION"),
             latent_recv_total: 0,
@@ -1026,6 +1033,30 @@ impl Agent for HermesAgent {
             }
         }
 
+        // FORJA WASM (elo runtime): pedido de skill (self_evolve/hw_pnp) →
+        // prompt op-IR → LLM_REQUEST. Um pedido por tick; com o LLM ocupado o
+        // evento fica na fila do receiver para o próximo tick. A resposta volta
+        // com o marcador PENDING_WASM_SKILL e é entregue a
+        // evolve::promote_model_text_to_wasm (model-born; nunca dummy).
+        if !matches!(self.state, HermesState::AwaitingLLM) {
+            if let Some(ev) = self.skill_gen_receiver.try_receive() {
+                had_work = true;
+                if let Some((name, desc)) = crate::self_evolve::parse_skill_gen_request(&ev.payload) {
+                    let task = alloc::format!("Gerar skill WASM '{}': {}", name, desc);
+                    let prompt = crate::structured_decode::model_skill_prompt(&task);
+                    *PENDING_WASM_SKILL.lock() = Some((name.clone(), desc));
+                    let _ = EVENT_BUS.publish(Event {
+                        id: 0,
+                        topic: String::from(cortex::cortex::TOPIC_LLM_REQUEST),
+                        payload: prompt.into_bytes(),
+                        token: CapabilityToken::Legacy(1),
+                    });
+                    self.state = HermesState::AwaitingLLM;
+                    k_nano::slog_hermes!("Skill", "info", "skill_gen '{}' → LLM op-IR (FORJA WASM)", name);
+                }
+            }
+        }
+
         // FASE 1.6: BeiInit LoopPhase modulation
         let phase = crate::executive::current_phase();
         let latency_tolerance = match phase {
@@ -1053,8 +1084,21 @@ impl Agent for HermesAgent {
                 let text = core::str::from_utf8(&event.payload).unwrap_or("");
                 k_nano::slog_cortex!("LLM", "info", "Resposta: \"{}\"", text);
                 let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-                let pending = PENDING_SKILL.lock().take();
-                if let Some((name, _desc)) = pending {
+                // FORJA WASM: resposta marcada como op-IR de skill → promote
+                // model-born (wasmi). NUNCA o dummy `promote_ephemeral_to_wasm`.
+                if let Some((name, desc)) = PENDING_WASM_SKILL.lock().take() {
+                    match crate::evolve::promote_model_text_to_wasm(&name, &desc, text) {
+                        Ok(()) => {
+                            self.con_skills_ok = self.con_skills_ok.saturating_add(1);
+                            k_nano::slog_hermes!("Skill", "ok", "FORJA WASM '{}' model-born registrada", name);
+                            responded = alloc::format!("[Hermes] Skill WASM '{}' gerada (model-born).", name);
+                        }
+                        Err(e) => {
+                            k_nano::slog_hermes!("Skill", "warn", "FORJA WASM '{}' recusada: {} (sem dummy)", name, e);
+                            responded = alloc::format!("[Hermes] Skill WASM '{}' recusada: {}.", name, e);
+                        }
+                    }
+                } else if let Some((name, _desc)) = PENDING_SKILL.lock().take() {
                     let mut storage = SKILL_STORAGE.lock();
                     // Sign FIRST → verificação estrita (ADR-0052) → register.
                     match crate::self_evolve::verify_and_register(&mut storage, text) {

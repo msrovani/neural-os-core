@@ -178,42 +178,45 @@ pub unsafe fn detect_all() -> Vec<GpuInfo> {
         };
 
         // AIOS: mede o silício, não assume tabela (ADR-0087 §2.0.1).
-        // VRAM aperture = maior BAR de memória medido ≥ 64MB (sem ReBAR ≈ 256MB;
-        // APU/iGPU não têm BAR grande → DRAM compartilhada, honesto).
-        // MMIO = BAR0, exceto quando BAR0 É a aperture (AMD dGPU: VRAM→BAR0,
-        // doorbell→BAR2, MMIO→BAR5) → usa o par BAR4/5.
+        // VRAM = maior BAR de memória medido ≥64MB (sem ReBAR ≈ 256MB; iGPU/APU
+        // sem BAR grande = DRAM compartilhada, honesto). Itera os 6 dwords e
+        // PULA o HIGH de BARs 64-bit — a NVIDIA põe a VRAM em **BAR1** (índice
+        // ÍMPAR): um par fixo (0,1)(2,3)(4,5) nunca a mede → `vram: n/a` (bug s439).
         let (bar0, bar2, vram_bytes) = unsafe {
-            let pairs = [
-                (
-                    crate::pci_bar::decode_bar(dev.bar0, dev.bar1),
-                    k_nano::pci::read_bar_size(dev.bus, dev.device, dev.function, 0),
-                ),
-                (
-                    crate::pci_bar::decode_bar(dev.bar2, dev.bar3),
-                    k_nano::pci::read_bar_size(dev.bus, dev.device, dev.function, 2),
-                ),
-                (
-                    crate::pci_bar::decode_bar(dev.bar4, dev.bar5),
-                    k_nano::pci::read_bar_size(dev.bus, dev.device, dev.function, 4),
-                ),
-            ];
-            let vram_idx = pairs
-                .iter()
-                .enumerate()
-                .filter(|(_, (base, size))| *base != 0 && *size >= 64 * 1024 * 1024)
-                .max_by_key(|(_, (_, size))| *size)
-                .map(|(i, _)| i);
-            let vram = vram_idx
-                .map(|i| (pairs[i].0, pairs[i].1))
-                .unwrap_or((0, 0));
-            let mmio = match vram_idx {
-                // AMD dGPU: VRAM→BAR0 ⇒ MMIO=BAR5 (amdgpu Bonaire+); fallback BAR0
-                Some(0) if pairs[2].0 != 0 => pairs[2].0,
-                // APU: BAR0 ausente (VRAM = carveout de RAM, sem BAR) ⇒ MMIO=BAR5
-                None if pairs[0].0 == 0 && pairs[2].0 != 0 => pairs[2].0,
-                _ => pairs[0].0,
+            let mut mmio = 0u64;
+            let mut vram_base = 0u64;
+            let mut vram_sz = 0u64;
+            let mut i: u8 = 0;
+            while i < 6 {
+                let raw = k_nano::pci::read_config_dword(
+                    dev.bus,
+                    dev.device,
+                    dev.function,
+                    0x10u8 + i * 4,
+                );
+                if raw & 1 == 0 {
+                    let is_64 = (raw & 0x6) == 0x4;
+                    let base = k_nano::pci::read_bar_value(dev.bus, dev.device, dev.function, i);
+                    let size = k_nano::pci::read_bar_size(dev.bus, dev.device, dev.function, i);
+                    if i == 0 {
+                        mmio = base; // MMIO default = BAR0 (AMD dGPU sobrescreve abaixo)
+                    }
+                    if base != 0 && size >= 64 * 1024 * 1024 && size > vram_sz {
+                        vram_base = base;
+                        vram_sz = size;
+                    }
+                    i += if is_64 { 2 } else { 1 };
+                } else {
+                    i += 1; // I/O BAR — não é memória
+                }
+            }
+            // MMIO = BAR0, exceto quando BAR0 É a aperture (AMD: VRAM→BAR0) → BAR5.
+            let mmio = if mmio == 0 || (vram_base != 0 && mmio == vram_base) {
+                k_nano::pci::read_bar_value(dev.bus, dev.device, dev.function, 5)
+            } else {
+                mmio
             };
-            (mmio, vram.0, vram.1)
+            (mmio, vram_base, vram_sz)
         };
 
         let (backend_kind, isa_tag, compute_candidate) =

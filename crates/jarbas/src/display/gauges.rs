@@ -522,6 +522,9 @@ pub fn refresh_hub_health() {
     let dbc = k_nano::dbc::dbc_present() as u8;
     let fo = k_nano::xhci::FAILOVER_LAST.load(Ordering::Relaxed);
     let af = k_nano::xhci::ADDR_FAIL_COUNT.load(Ordering::Relaxed);
+    // s438: POR QUE o MSC falha — último Command Completion Code + timeouts.
+    let cc = k_nano::xhci::LAST_USB_CC.load(Ordering::Relaxed);
+    let to = k_nano::xhci::USB_CMD_TIMEOUTS.load(Ordering::Relaxed);
     let (st, val, pill) = match (msc, maxp) {
         (true, _) => {
             let v = match msc_info {
@@ -533,7 +536,7 @@ pub fn refresh_hub_health() {
         }
         (false, Some(p)) => {
             let st = if k_nano::xhci::xhci_msc_down() { HubState::Fail } else { HubState::Warn };
-            (st, alloc::format!("{}p ccs{} no msc dbc{} fo{} af{}", p, ccs, dbc, fo, af), true)
+            (st, alloc::format!("{}p ccs{} no msc cc{} to{} dbc{} fo{} af{}", p, ccs, cc, to, dbc, fo, af), true)
         }
         (false, None) => (HubState::Na, alloc::format!("no xhci dbc{} fo{} af{}", dbc, fo, af), false),
     };
@@ -590,8 +593,11 @@ pub fn refresh_hub_health() {
     // ── STORAGE ──
     let ata = k_nano::globals::ATA_DRIVER.lock().is_some();
     let ahci = k_nano::globals::AHCI_DRIVER.lock().is_some();
+    let nvme = k_nano::disk_agent::nvme::NVME_DRIVER.lock().is_some();
     let fat = k_nano::boot_logger::FAT_READY.load(Ordering::Relaxed);
-    let bus = if ata {
+    let bus = if nvme {
+        "nvme"
+    } else if ata {
         "ata"
     } else if ahci {
         "ahci"
@@ -600,8 +606,10 @@ pub fn refresh_hub_health() {
     } else {
         "none"
     };
+    // s439: VMD stage (0=n/a; 2=found; 7=init OK; 8=sem NVMe; 11=probe OK; 0x8X=fail).
+    let vmd = k_nano::vmd::vmd_stage();
     let (st, val, pill) = if bus == "none" {
-        (HubState::Na, alloc::string::String::from("no dev"), false)
+        (HubState::Na, alloc::format!("no dev vmd{:#04x}", vmd), false)
     } else if fat {
         (HubState::Ok, alloc::format!("{} fat32", bus), true)
     } else {
@@ -802,7 +810,18 @@ pub fn refresh_hub_health() {
     let vstage = k_hal::gpu::vram_stream::stage();
     let (st, val, pill) = match vstage {
         k_hal::gpu::vram_stream::StreamStage::Off => {
-            (HubState::Na, alloc::string::String::from("n/a"), false)
+            // s439: lane off — mostra POR QUÊ (vendor/ISA/aperture BAR medida).
+            let ven = match k_hal::gpu::backend::compute_vendor() {
+                Some(k_hal::gpu::detect::GpuVendor::Nvidia) => "nv",
+                Some(k_hal::gpu::detect::GpuVendor::Amd) => "amd",
+                Some(k_hal::gpu::detect::GpuVendor::Intel) => "intel",
+                _ => "cpu",
+            };
+            let isa = k_hal::gpu::backend::compute_isa_tag()
+                .map(|t| t.as_str())
+                .unwrap_or("-");
+            let ap = k_hal::gpu::vram::vram_status_aperture_bytes().unwrap_or(0) / (1024 * 1024);
+            (HubState::Warn, alloc::format!("off {} {} ap{}M", ven, isa, ap), false)
         }
         _ => {
             let resident_mb = k_hal::gpu::vram_stream::BYTES_RESIDENT

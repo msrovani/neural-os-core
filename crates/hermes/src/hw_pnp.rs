@@ -6,7 +6,6 @@
 use alloc::format;
 use alloc::string::String;
 
-use crate::evolve;
 use crate::self_evolve;
 use crate::skill_gen;
 use crate::skill_opt;
@@ -18,8 +17,10 @@ pub struct PnpDecision {
     pub escalate_to_llm: bool,
     pub user_intent: Option<String>,
     pub ack: String,
-    pub promoted_wasm: bool,
     pub auto_skill_md: Option<String>,
+    /// Pedido de geração WASM publicado à FORJA neste card (ainda não
+    /// promovido — só vira WASM se o LLM emitir op-IR válido).
+    pub requested_wasm: bool,
 }
 
 fn wire_field(wire: &str, key: &str) -> String {
@@ -74,17 +75,14 @@ pub fn hermes_decide_card(payload: &str, tick: u64) -> PnpDecision {
     );
     skill_opt::record_python_run(&skill_key, &ephemeral_src, true);
 
-    let mut promoted_wasm = false;
+    let mut requested_wasm = false;
     if skill_opt::maybe_promote_to_wasm(&skill_key).is_some() {
-            match evolve::promote_ephemeral_to_wasm(&skill_key, &ephemeral_src) {
-            Ok(()) => {
-                promoted_wasm = true;
-                k_nano::slog_hermes!("PnP", "info", "skill '{}' promovida efêmera→WASM (uso rotineiro)", skill_key);
-            }
-            Err(e) => {
-                k_nano::slog_hermes!("PnP", "info", "promote WASM '{}' falhou: {}", skill_key, e);
-            }
-        }
+        // Elo da FORJA: em uso rotineiro, pede geração ao LLM. A skill só vira
+        // WASM model-born se o modelo emitir op-IR válido; NUNCA carimba dummy
+        // (`promote_ephemeral_to_wasm`) como solução.
+        self_evolve::publish_skill_gen_request(&skill_key, &ephemeral_src);
+        requested_wasm = true;
+        k_nano::slog_hermes!("PnP", "info", "skill '{}' uso rotineiro → pedido de geração WASM (FORJA)", skill_key);
     }
 
     let auto_skill_md = skill_gen::maybe_auto_skill(&skill_key);
@@ -122,9 +120,9 @@ pub fn hermes_decide_card(payload: &str, tick: u64) -> PnpDecision {
             "[Hermes-PnP] {} family={} → {}",
             next, family, oa
         )
-    } else if promoted_wasm {
+    } else if requested_wasm {
         format!(
-            "[Hermes-PnP] {} family={} → skill '{}' → WASM",
+            "[Hermes-PnP] {} family={} → skill '{}' → pedido WASM (LLM op-IR)",
             next, family, skill_key
         )
     } else if escalate {
@@ -144,8 +142,8 @@ pub fn hermes_decide_card(payload: &str, tick: u64) -> PnpDecision {
         escalate_to_llm: escalate,
         user_intent,
         ack,
-        promoted_wasm,
         auto_skill_md,
+        requested_wasm,
     }
 }
 

@@ -30,7 +30,7 @@
 
 use crate::pci::PciDevice;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use spin::Mutex;
 
 /// DIDs do `vmd.c` do Linux (driver_data VMD_FEATS_CLIENT exceto os server
@@ -57,6 +57,13 @@ const BUS_RESTRICT_CAP_BIT: u16 = 0x1;
 const SHDW_MAGIC: u32 = 0x5348_4457;
 
 pub static VMD_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// s439: estágio do bring-up VMD p/ HUD (0=n/a; 1=found; 2=D0 ok; 3=cfgbar ok;
+/// 4=busn ok; 5=mapped; 6=children; 7=init OK; 8=sem NVMe no domínio;
+/// 9=child NVMe achado; 10=probe NVMe falhou; 11=probe OK). 0x80|n = fail no passo n.
+pub static VMD_STAGE: AtomicU8 = AtomicU8::new(0);
+pub fn vmd_stage() -> u8 {
+    VMD_STAGE.load(Ordering::Relaxed)
+}
 static VMD_CFG_VA: AtomicU64 = AtomicU64::new(0);
 static VMD_CFGBAR_BYTES: AtomicU64 = AtomicU64::new(0);
 static VMD_BUSN_START: AtomicU32 = AtomicU32::new(0);
@@ -194,9 +201,11 @@ pub unsafe fn init() -> bool {
     }
     let devs = crate::pci::scan_pci();
     let Some(vmd) = devs.iter().find(|d| is_vmd(d.vendor_id, d.device_id)) else {
+        VMD_STAGE.store(0x82, Ordering::Relaxed); // 0x82 = ausente no domínio 0
         crate::slog_nano!("VMD", "info", "ausente no dominio 0 (normal fora de Intel RST)");
         return false;
     };
+    VMD_STAGE.store(2, Ordering::Relaxed); // encontrado
     if vmd.device_id == DID_USE_BIOS_INFO {
         crate::slog_nano!("VMD", "warn", "DID 28C1 (USE_BIOS_INFO) nao suportado — abort honesto");
         return false;
@@ -213,6 +222,7 @@ pub unsafe fn init() -> bool {
         let after = crate::pci::pci_power_on_d0(vmd.bus, vmd.device, vmd.function);
         crate::slog_nano!("VMD", "info", "D-state {} -> {}", dstate, after);
         if after != 0 {
+            VMD_STAGE.store(0x83, Ordering::Relaxed);
             crate::slog_nano!("VMD", "fail", "D-state {} incoerente (power-on falhou)", after);
             return false;
         }
@@ -222,17 +232,20 @@ pub unsafe fn init() -> bool {
     // CFGBAR = BAR0 64-bit (vmd.c VMD_CFGBAR = resource 0). <1MB = -ENOMEM no vmd.c.
     let cfgbar = (vmd.bar0 & !0xF) | ((vmd.bar1 & !0xF) << 32);
     if cfgbar == 0 {
+        VMD_STAGE.store(0x84, Ordering::Relaxed);
         crate::slog_nano!("VMD", "fail", "CFGBAR (BAR0) zerado — abort honesto");
         return false;
     }
     let cfgbar_size = crate::pci::read_bar_size(vmd.bus, vmd.device, vmd.function, 0);
     if cfgbar_size < (1 << 20) {
+        VMD_STAGE.store(0x84, Ordering::Relaxed);
         crate::slog_nano!("VMD", "fail", "CFGBAR {} bytes < 1MB (abort)", cfgbar_size);
         return false;
     }
     let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     let pages = crate::apic::map_region_uc_2mb(cfgbar, cfgbar_size, pmoff);
     if pages == 0 {
+        VMD_STAGE.store(0x86, Ordering::Relaxed);
         crate::slog_nano!("VMD", "fail", "mapeamento UC do CFGBAR @ {:#x} falhou", cfgbar);
         return false;
     }
@@ -241,6 +254,7 @@ pub unsafe fn init() -> bool {
     let vmcap = crate::pci::read_config_word(vmd.bus, vmd.device, vmd.function, VMCAP);
     let vmcfg = crate::pci::read_config_word(vmd.bus, vmd.device, vmd.function, VMCONFIG);
     let Some(busn_start) = busn_start_from_regs(vmcap, vmcfg) else {
+        VMD_STAGE.store(0x85, Ordering::Relaxed);
         crate::slog_nano!("VMD", "fail", "bus offset setting desconhecido (vmcfg={:#06x})", vmcfg);
         return false;
     };
@@ -320,6 +334,7 @@ pub unsafe fn init() -> bool {
     VMD_CFGBAR_BYTES.store(cfgbar_size, Ordering::Release);
     VMD_CFG_VA.store(cfg_va, Ordering::Release);
     VMD_ACTIVE.store(true, Ordering::Release);
+    VMD_STAGE.store(7, Ordering::Relaxed); // init OK (domínio ativo)
     true
 }
 
@@ -428,8 +443,15 @@ pub unsafe fn probe_vmd_nvme() -> Option<crate::disk_agent::nvme::NvmeDriver> {
     }
     let nvme_dev = {
         let children = VMD_CHILDREN.lock();
-        children.iter().find(|d| d.class == 0x01 && d.subclass == 0x08).copied()?
+        match children.iter().find(|d| d.class == 0x01 && d.subclass == 0x08).copied() {
+            Some(d) => d,
+            None => {
+                VMD_STAGE.store(8, Ordering::Relaxed); // domínio ativo, mas sem NVMe 01:08
+                return None;
+            }
+        }
     };
+    VMD_STAGE.store(9, Ordering::Relaxed); // child NVMe achado
     crate::slog_nano!(
         "VMD", "info",
         "NVMe filho {:02x}:{:02x}.{:02x} did={:#06x} bar0={:#x}",
@@ -464,7 +486,9 @@ pub unsafe fn probe_vmd_nvme() -> Option<crate::disk_agent::nvme::NvmeDriver> {
     // DMA de RAM do filho é UNTRANSLATED (identidade) em ambos os modos — o
     // driver NVMe não precisa de tradução (vmd.c aplica offset só a recursos).
     let pm = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
-    crate::disk_agent::nvme::NvmeDriver::probe_at_mmio_va((bar0_phys + pm) as *mut u32)
+    let r = crate::disk_agent::nvme::NvmeDriver::probe_at_mmio_va((bar0_phys + pm) as *mut u32);
+    VMD_STAGE.store(if r.is_some() { 11 } else { 10 }, Ordering::Relaxed);
+    r
 }
 
 #[cfg(test)]
