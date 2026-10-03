@@ -1,5 +1,15 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s439] - 2026-10-03 - real-HW unlock: GPU VRAM (BAR fix) + VMD/USB diag + forja WASM a quente
+
+- High: **fix da medição da VRAM (GPU dGPU)** — `k_hal/gpu/detect.rs` só considerava os pares `(0,1)(2,3)(4,5)` como bases de BAR; a **VRAM NVIDIA está em BAR1** (índice ímpar) → nunca medida → `vram: n/a` e o lane **BAR Compute (ADR-0112) off**. Fix: varre os 6 dwords de BAR (pulando o *high* de BARs 64-bit) e escolhe o maior BAR ≥64MB como VRAM (MMIO=BAR0, salvo quando BAR0 é a aperture → BAR5, AMD).
+- High: **forja de skills WASM a quente LIGADA** (era órfã — só testes chamavam) — `self_evolve::auto_generate_pending` publica `TOPIC_SKILL_GEN_REQUEST` (elo morto); `HermesAgent` consome, monta o prompt op-IR (`structured_decode::model_skill_prompt`) → `TOPIC_LLM_REQUEST` (marcado `PENDING_WASM_SKILL`) → na resposta chama `evolve::promote_model_text_to_wasm` (forja real, proveniência **model-born**, **wasmi-only**). `hw_pnp.rs` e `bei.rs::PromoteSkill` **deixaram de carimbar dummy** `I32Const(0)` → publicam o pedido de geração (honestidade: dummy ≠ solução).
+- Med: **VMD diagnosticado no HUD** — `k_nano/vmd.rs` ganha `VMD_STAGE` (0=n/a, 2=found, 7=init OK, 8=sem NVMe, 11=probe OK, `0x8X`=falha no passo X) e a linha `storage` do HUD passa a incluir **NVMe** (antes ignorava) + `vmd{N}`.
+- Med: **USB warm port reset** — `xhci/bringup.rs` budget 100→**500ms** para Speed≥4 (evidência HW: `port 2 reset FAIL` num stick SuperSpeed `P2 CCS=1 PED=1 speed=4`, UEFI habilitou a porta e o warm reset não completava) + último Command Completion Code (`LAST_USB_CC`) + timeouts (`USB_CMD_TIMEOUTS`) no HUD + log do PORTSC no timeout. Linha `vram` do HUD mostra `off {vendor} {isa} ap{N}M`.
+- Gates: `cargo build -p boot` **0 erros**; hermes **282/283** (1 fail **pré-existente** `permission_gate::test_risk_level_classify`, confirmado via stash — poluição de VFS por `app_factory::lane_b_tests`, fora do escopo).
+- **HW real (ROCEKT: Intel Core 7 240H / RTX 3050 6GB / 16GB):** boot OK (8 fases, UI viva, `fault: none`); bloqueios achados e endereçados: USB-MSC (`port 2 reset`), VMD/NVMe (storage), GPU VRAM (BAR role). WiFi **MT7925 `14c3:7925`** = sem driver mt76 + firmware → AWAITING. Método: QEMU-monitor + `llvm-nm` + HUD.
+- Session: SESSION_439 (continuação HW-real da SESSION_438)
+
 ## [1.9.99-s438] - 2026-10-02 - bit-engine: clean build + QEMU 8c/8GB 1h (10 fixes de #PF; GOAL bloqueado por wild-write)
 
 - High: **clean build from-scratch** (`cargo clean` 71.2GiB) incl. **neural-sgdb 1.3** — resolvido o bloqueio de compilação: `resolve_conflict` 1.3.0 devolve `ResolveOutcome` (não `()`); a bridge `k_ai/nsgdb_bridge.rs` fazia `.map_err` sobre `Result<ResolveOutcome, _>` (E0308) → `.map(|_outcome| ())`. `cargo build -p boot` 0 erros.
@@ -13,6 +23,14 @@
 - **GOAL "1h sem crash/#PF" NÃO atingido:** `#PF` de **site rotativo** (ponteiro corrompido p/ valor pequeno: `0x6`/`0x13c`/`0x7ee00001`/`0x42d`) pós-jobs; o park do BSP em `loop{hlt}` amplifica qualquer fault em freeze total. 2c é inconclusivo (SMP-1-**AP** barrier `pending=1 done=0`, novo bug). Bloqueio: wild-write esporádico → exige watchpoint no *writer*.
 - Gates: Cortex 118/118; `cargo build -p boot` 0 erros; QEMU 8c/8GB 8 fases + Runtime + inferência (jobs até o #PF); diagnóstico por `-monitor` + `llvm-nm`.
 - Session: SESSION_438
+
+## [1.9.99-s436] - 2026-10-03 - Watchdog de silêncio `[SILENCE]` no kernel (OOM-HALT para spin SEM OOM)
+
+- High: **watchdog de silêncio** (`k_nano::silence_watchdog`) — o stall silencioso do lab s435 (log congela T+23.3k, QEMU vivo ~1 core, sem OOM nem #PF) não é coberto pelo `[OOM-HALT]` (só o `oom()` reporta). Agora a IRQ do timer (que segue disparando durante spins com IF=1) compara o tempo desde a última emissão de log (`note_log_emit` nos choke points únicos: `serial::dispatch_bytes` normal+NESTED e `boot_logger::buffer_log`) contra 60s (prefill medido ~57s não falso-positiva); estourou → linha única `[SILENCE]` com **stamps de todos os cores** (`irq:` = idade do timer IRQ, `prog:` = idade do progresso por core — idade crescendo = core sem progresso), heap/budget, APs online, #PFs e última exceção. Escrita via `interrupts::puts` **lock-free** (o spinner pode estar segurando o próprio lock do serial). Observe-only (lição s429-lab), rate-limit 1 dump/10s (cadência OOM-HALT), gate de boot `TIMER_TICKS≥1800`.
+- Med: **stamps de progresso por core** — `note_core_progress()` no `ap_idle_loop` (APs) e no heartbeat pós-tick do scheduler (bin, core BSP); guard "1º timer IRQ já ocorreu" evita ler `gs:[8]` antes do PerCpu pronto (risco de #PF em IRQ). IRQs roteiam ao BSP neste kernel → `irq cN=` só c0 tem amostra; demais `–` honesto (n/a ≠ 0).
+- Limite honesto: spin com IF=0 NO core do timer mata o watchdog junto (nada em kernel-user vigia isso) — classe coberta pelo QEMU-monitor/`watch_corruption.ps1` (s438).
+- Gates: k-nano **249/249** (-t1, 5 novos — decisão pura `decide()` testável com tempo injetado); `cargo nk` 0 erros; boot+build_image; strings provadas no uefi.img (`[SILENCE]`, `log parado ha`, `| irq:`, `| prog:`, `dump#`). **QEMU 8GB/8c (log 110255):** vivo até T+83156 (~20min), zero `[SILENCE]` (sem falso-positivo), zero OOM — o stall do lab s435 (T+23334, 2/2 boots) NÃO reproduziu nesta run; disparo real pendente de stall ao vivo.
+- Session: SESSION_436
 
 ## [1.9.99-s437] - 2026-10-02 - Telemetria honesta (recipe/pressure) + tokenizer Falcon3 (resposta degenerada)
 

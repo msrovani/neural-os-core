@@ -1,6 +1,34 @@
-# STATE - neural-os-core v1.9.99-s438 - QEMU 8c/8GB 1h: 10 fixes de #PF (GOAL bloqueado por wild-write)
+# STATE - neural-os-core v1.9.99-s436 - Watchdog de silêncio [SILENCE] (OOM-HALT para spin sem OOM)
 
-#   PISTA ATIVA: s438 — QEMU 8c/8GB 1h (bit-engine). cargo clean 71.2GiB + build
+#   [s439 · concorrente a s436] real-HW unlock (ROCEKT: Intel Core 7 240H /
+#     RTX 3050 6GB / 16GB / SSD atras do VMD / WiFi MT7925). Boot real OK (8 fases,
+#     UI viva, fault:none). Fixes: (1) GPU VRAM = BAR1 — detect.rs varre os 6
+#     dwords e pega o maior BAR >=64MB (vram: n/a antes); (2) forja WASM a quente
+#     LIGADA (self_evolve publica TOPIC_SKILL_GEN_REQUEST -> HermesAgent -> LLM
+#     op-IR -> evolve::promote_model_text_to_wasm model-born; hw_pnp/bei sem
+#     dummy); (3) VMD_STAGE no HUD + linha storage com NVMe; (4) USB warm port
+#     reset 100->500ms + CC/to no HUD. Build 0 erros; hermes 282/283 (1 fail
+#     pre-existente permission_gate). Commits cb51890d/407cb31f/f3b430cf (main).
+#     AWAITING: WiFi MT7925 (sem mt76), NVMe VMD (VMD_STAGE aponta o passo),
+#     dGPU BAR lane (precisa ReBAR p/ caber o modelo).
+
+#   PISTA ATIVA: s436 — watchdog de silêncio implementado + validado sem falso-positivo;
+#     bughunt do stall pós-a2_proof-done segue aberto (s436b).
+#     k_nano::silence_watchdog: timer IRQ (segue disparando em spin com IF=1) compara
+#     idade desde a última emissão de log (note_log_emit nos choke points únicos:
+#     dispatch_bytes normal+NESTED + buffer_log) contra 60s; estourou → [SILENCE] única
+#     com stamps de todos os cores (irq c0=idade do timer; prog cN=idade do progresso —
+#     core com idade crescendo = sem progresso), heap/budget, APs, #PFs, última exceção.
+#     Dump via interrupts::puts LOCK-FREE (o spinner pode estar segurando o lock do
+#     serial). Observe-only (lição s429-lab); rate-limit 1 dump/10s (cadência OOM-HALT);
+#     gate boot TIMER_TICKS≥1800. Progress por core: ap_idle_loop + heartbeat pós-tick
+#     (bin); guard 1º timer IRQ evita ler gs:[8] antes do PerCpu. Limite honesto: spin
+#     com IF=0 no core do timer mata o watchdog junto → QEMU-monitor/watch_corruption.
+#     Validação: k-nano 249/249 (-t1, 5 novos); cargo nk 0 erros; strings no uefi.img
+#     ([SILENCE], log parado ha, | irq:, | prog:, dump#); QEMU 8GB/8c log 110255: vivo
+#     T+83156 (~20min), zero [SILENCE] (sem falso-positivo), zero OOM — stall do lab
+#     s435 (T+23334, 2/2 boots) NÃO reproduziu nesta run; disparo real pendente.
+#   PISTA ANTERIOR: s438 — QEMU 8c/8GB 1h (bit-engine). cargo clean 71.2GiB + build
 #     from-scratch 0 erros (incl. nsgdb 1.3: bridge resolve_conflict->ResolveOutcome).
 #     10 fixes de #PF/freeze verificados: BeiState Arc guard (all_ptrs_valid),
 #     realloc min(size,new), flood cap-check+throttle, EventBus TicketLock bounded
