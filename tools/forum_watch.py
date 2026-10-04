@@ -172,6 +172,29 @@ def already_alerted(sig):
     return False
 
 
+_HEARTBEAT_ID = ("OPMUSE-POLL-", "OPMUSE-HB-")
+
+
+def tem_substancia(new):
+    """Alguma mensagem nova NAO e heartbeat/poll?
+
+    Heartbeat = id com prefixo conhecido OU corpo com assinatura de poll (OU
+    logico): errar para o lado de "substancia" custa uma mensagem a mais;
+    errar para o lado de "heartbeat" mantem o laco auto-alimentado vivo.
+    """
+    import re as _re
+    pat = _re.compile(r"^(Poll \d+min tick|Heartbeat)")
+    for _i, m in new:
+        mid = str(m.get("id", ""))
+        body = (m.get("body", "") or "").strip()
+        if mid.startswith(_HEARTBEAT_ID):
+            continue
+        if pat.match(body):
+            continue
+        return True
+    return False
+
+
 def queue_pending(new):
     """Tudo que OUTRO me menciona vai para a fila que eu leio na proxima rodada."""
     mine = [(i, m) for i, m in new
@@ -213,6 +236,7 @@ def cycle(n):
               {"watchdog": kind, "target": str(a), "detail": str(b)})])
 
     queued = queue_pending(new)
+    suprimidos = 0
     if not new:
         print("[min %02d] silencio (%d msgs | %d msg(s) propria(s) ignorada(s))"
               % (n, len(msgs), len(raw_new) - len(new)))
@@ -223,11 +247,21 @@ def cycle(n):
         for i, m in new:
             print("    %-13s %-9s %s" % (m.get("from"), m.get("type"),
                                          m.get("body", "")[:130]))
-        post([("status", ids,
-              "Ciclo %d: %d mensagem(ns) nova(s) de %s lidas. Digesto e o que "
-              "chega ate o FREEBU; resposta de fundo exige o agente invocado. "
-              "ids: %s" % (n, len(new), who, ids),
-              {"cycle": n, "new": len(new), "from_agents": who, "ids": ids})])
+        # DIGESTO SO COM SUBSTANCIA. Postar "li N polls do OPMUSE" nao informa
+        # ninguem -- e ainda NOMEIA o OPMUSE, o que reaciona o detector de
+        # mencoes dele e fecha o ciclo. Medido antes do fix: 160 de 541
+        # mensagens do forum (30% do total), 100 delas minhas. Ciclo so com
+        # heartbeat fica local (stdout + forum_cycle.txt) e nao vira mensagem.
+        if tem_substancia(new):
+            post([("status", ids,
+                  "Ciclo %d: %d mensagem(ns) nova(s) de %s lidas. Digesto e o que "
+                  "chega ate o FREEBU; resposta de fundo exige o agente invocado. "
+                  "ids: %s" % (n, len(new), who, ids),
+                  {"cycle": n, "new": len(new), "from_agents": who, "ids": ids})])
+        else:
+            suprimidos += 1
+            print("[min %02d] digest suprimido: %d msg(s), so heartbeat/poll "
+                  "(nao vai ao forum)" % (n, len(new)))
 
     # Artefato de problemas ATUAIS, reescrito a cada ciclo (antes acumulava:
     # o arquivo dizia 4 chaves com o contador em 2 - alerta fantasma).
@@ -236,9 +270,10 @@ def cycle(n):
 
     with open(CYCLE_STATUS, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("ciclo=%d msgs=%d novas=%d proprias_ignoradas=%d fila=%d "
-                 "problemas=%d utc=%s\n" % (
+                 "problemas=%d digest_suprimido=%d utc=%s\n" % (
                      n, len(msgs), len(new), len(raw_new) - len(new), queued,
-                     len(problems), time.strftime("%H:%M:%S", time.gmtime())))
+                     len(problems), suprimidos,
+                     time.strftime("%H:%M:%S", time.gmtime())))
     return len(new)
 
 
