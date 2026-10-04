@@ -1,11 +1,11 @@
 # Roadmap — neural-os-core
 
-**Última atualização:** 2026-09-26
-**Versão release:** **v1.9.99-s412 TEST / NÃO ESTÁVEL**
-**Estado:** ~169K LOC, ~672 arquivos Rust (12 crates do workspace), 41 agentes nativos, 0 erros (`cargo nk`)
+**Última atualização:** 2026-10-04
+**Versão release:** **v1.9.99-s449 TEST / NÃO ESTÁVEL**
+**Estado:** ~214K LOC, ~714 arquivos Rust (12 crates do workspace), 41 agentes nativos, 0 erros (`cargo build --release -p boot`)
 **Marco s360:** interface Jarbas **funcional** + rede mesh + computação distribuída em **6 QEMU** (WHPX, hub L2, FRAG matmul, orb/`MESH_HEALTH` por role).
-**Pista ativa:** s412 ternary_worker tile de colunas (1,9x, SESSION_412); s410m forget cognitivo HITL; s411 A2 proof (1 token real).
-<!-- MEASURED: rs=777 loc=252696 members=12 -->
+**Pista ativa:** s449 consolidação do working tree (E1–E4 ADR-0113 + F1 + AION-storage + cleanup dead-weight); F1.5 aberto (TICKV backend=file, dono AION).
+<!-- MEASURED: rs=714 loc=213629 members=12 -->
 
 ---
 
@@ -211,7 +211,7 @@
 - ADR-0047 Latent/Evolve/Probe/GPU/HMI ✅ MVP/PoC
 - ADRs 0048–0050 GPU multigeração ⏳ propostas
 - ADR-0057 Compute Dispatch SMP+GPU+NPU ✅ WS-A (wake multi-AP `-smp 4`→APs=3) + WS-B/C dispatcher + WS-G #412 structured decode; WS-D/E GPU/NPU + WS-F on-demand AP-worker = residual HW/Layer S
-- ADR-0058 Generative Card Desktop (UI/Jarbas) 🟡 Proposed — embedded-graphics + `UiDeclaration`/`UiRenderer` (cards gerados por LLM #412 / skill WASM); supersede parcial 0047-HMI; aguarda confirmação
+- ADR-0058 Generative Card Desktop (UI/Jarbas) ✅ S1–S4 (supersede parcial 0047-HMI) — embedded-graphics + `UiDeclaration`/`UiRenderer` (cards gerados por LLM #412 / skill WASM)
 
 **Uso:** integração e testes. Não é release estável e não altera o gate de v2.0.0.
 
@@ -248,23 +248,28 @@ Auto-skill generation, verification, self-improvement, meta-reflect — **CLOSED
 
 ## 📊 ADR v2.0 — Topologia do Workspace
 
-**Status:** ✅ Migração + wire concluídos (Sprint 106 + ADR-0042 N2.5–N5.7) — bin `neural-kernel` linka os 5 crates; residuals documentados em `STATE.md`.
+**Status:** ✅ Migração + wire concluídos (Sprint 106 + ADR-0042 N2.5–N5.7) — bin `neural-kernel` linka os 6 crates de produto (k_nano, k_hal, k_ai, cortex, hermes, jarbas); residuals documentados em `STATE.md`.
 
 ```
 [workspace]
 members = [
-    "crates/k_nano",    # Ring 0 Estrito (HAL, drivers, PCI, memory)
-    "crates/k_ai",      # Ring 1 Lógico (Sondagem, SelfHeal, Trust)
-    "crates/cortex",    # Cognição e MoE (Trinity, BitNet, BPE)
-    "crates/hermes",    # Executor (WASM, RustPython, Rede, Intent)
-    "crates/jarbas",    # HCI, UI e Persona (Display, Audio, CLI)
+    "crates/k_nano",        # R0 fundação (HAL, drivers, PCI, memory)
+    "crates/k_hal",         # R1 DeviceCap, HalOffer, MMIO BE, VirtIO transporte
+    "crates/k_ai",          # R2 SelfHeal, Trust, inventário, Agency
+    "crates/cortex",        # R2 LLM BitNet, Trinity MoE, tensores
+    "crates/hermes",        # R3 Orquestração, WASM, rede, skills
+    "crates/jarbas",        # R3 Display FE, persona
+    "crates/neural-kernel", # bin boot — integração
+    "crates/boot", "crates/agent-core", "crates/event-bus",
+    "crates/skill-registry", "crates/ticket-lock",
 ]
 ```
 
 **Isolamento de Camadas:**
 - Ring 0 (k_nano): HAL, drivers, PCI, memory — acesso direto ao hardware
-- Ring 1 (k_ai): Sondagem, SelfHeal, Trust — lógica de autogestão
-- Ring 2 (cortex+hermes+jarbas): Cognição, orquestração, UI
+- Ring 1 (k_hal): DeviceCap, HalOffer, MMIO BE
+- Ring 2 (k_ai+cortex): SelfHeal/Trust + LLM/MoE
+- Ring 3 (hermes+jarbas): orquestração + UI
 
 ---
 

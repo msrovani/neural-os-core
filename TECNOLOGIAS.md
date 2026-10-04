@@ -1,11 +1,11 @@
 # CATÁLOGO DE TECNOLOGIAS — AIOS K³CHJ (neural-os-core)
 ## Registro de Propriedade Intelectual e Inovação
 
-**~169.000 LOC, ~672 arquivos Rust (12 crates do workspace), 41 agentes nativos**
-**Versão release:** v1.9.99-s412 TEST / NÃO ESTÁVEL (2026-09-26)
+**~214.000 LOC, ~714 arquivos Rust (12 crates do workspace), 41 agentes nativos**
+**Versão release:** v1.9.99-s449 TEST / NÃO ESTÁVEL (2026-10-04)
 **Marco:** UI Jarbas funcional + mesh + compute distribuído em **6 QEMU** (WHPX / hub L2 / FRAG)
 **Build:** `cargo clean -p neural-kernel && cargo nk` = 0 erros (warnings dead-code = política conhecida)
-**Licença:** MIT (código próprio) / MIT, GPL, Apache 2.0 (componentes inspirados/portados)
+**Licença:** AGPL-3.0 (código próprio) / MIT, GPL, Apache 2.0 (componentes inspirados/portados)
 **Repositório:** [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)
 **HuggingFace:** [huggingface.co/aios-k2chj](https://huggingface.co/aios-k2chj)
 
@@ -50,7 +50,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
 |---|-----------|------------|------------|---------------|---------|--------|
-| 2.1 | **Limine bootloader (UEFI; BIOS legado)** | 📦 Framebuffer UEFI GOP + request de stack; `crates/boot/build.rs` → `tools/limine/mk_esp_fat.py` (GPT+ESP) → `limine-esp.img` → `uefi.img`. Migração SESSION_232: crate `bootloader` 0.11 **removida** (Limine é o handoff canônico). Boot validado em UEFI/OVMF — imagem BIOS dá triple-fault. | Limine (limine-bootloader) | BSD-2-Clause | `crates/boot/`, `tools/limine/`, `limine.ld` | ✅ 0 err |
+| 2.1 | **Limine bootloader (UEFI only; BIOS legacy não suportado)** | 📦 Framebuffer UEFI GOP + request de stack; `crates/boot/build.rs` → `tools/limine/mk_esp_fat.py` (GPT+ESP) → `limine-esp.img` → `uefi.img`. Migração SESSION_232: crate `bootloader` 0.11 **removida** (Limine é o handoff canônico). Boot validado em UEFI/OVMF — imagem BIOS dá triple-fault. | Limine (limine-bootloader) | BSD-2-Clause | `crates/boot/`, `tools/limine/`, `limine.ld` | ✅ 0 err |
 | 2.2 | **IDT 32 handlers + IST** | 🔄 Double Fault IST com stack dedicada, GPF recoverable, Page Fault com endereço | `x86_64` crate, OSDev wiki | MIT/Apache 2.0 | `interrupts.rs` | ✅ 0 err |
 | 2.3 | **Bitmap Frame Allocator 8GB** | 🔄 Adaptado para suportar até 8GB RAM com bitmap 128KB | `linked_list_allocator`, OSDev | MIT/Apache 2.0 | `memory.rs` | ✅ 0 err |
 | 2.4 | **Adaptive Heap (AI Budget) + talc Dual-Tier** | 🏆 Tier 1: `talc` como `#[global_allocator]` (substitui `linked_list_allocator`). Tier 2: `TensorArena` bump em `0x4800_0000_0000` exclusiva Cortex/R3. `resize_heap_to_mb()` via `talc::extend`. | `talc` crate, bumpalo pattern | MIT/Apache 2.0 | `allocator.rs`, `arena.rs` | ✅ 0 err |
@@ -71,7 +71,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 2.10d | **Demand-paging #PF (P7)** | ✅ Lazy VA registry + reserve NOT PRESENT + #PF cura leaf; Cap DEMAND_PAGE; frames pré-alocados (path #PF sem alloc). ADR-0041 P7. | Cap + #PF demand-page | MIT | `demand_page.rs`, `cortex_mmap.rs`, `interrupts.rs` | ✅ PoC |
 | 2.10e | **VirtIO vring + DMA pin (P8)** | ✅ Virtqueue layout-compatible sobre pin; Cap VRING_SETUP; NIC live untouched. ADR-0041 P8. | Cap + VirtIO vring | MIT | `virtio_vring.rs`, `k_ia_dma.rs` | ✅ PoC |
 | 2.10f | **GGUF/FAT file-backed mmap (P9)** | ✅ Pré-fill FAT→frames + demand-page; Cap MAP_FILE; magic GGUF/BitNet; fallback NFIL. ADR-0041 P9. **≠ AirLLM** (prefixo só). | Cap + FAT mmap | MIT | `gguf_mmap.rs`, `demand_page.rs`, `fat32.rs` | ✅ PoC |
-| 2.10g | **Ring3 Isolation Production (ADR-0082)** | 🏆 **Sucessor de ADR-0041 §P9+** — Isolamento Ring3 real para WASM B/C (native JIT). Deep L4 clone (create_sandbox_as), per-process RSP0, ELF64 loader mínimo (RELATIVE), SYSCALL/SYSRET, sandbox AS + ring3_run_native(), CapGate host functions reais. Depreca ADR-0041 §3,§4,§7,§8 para escopo Ring3. MVP 5-8 sem, ~3.4K LOC. | ADR-0041 PoC, seL4, Fuchsia, Theseus | MIT | `docs/architecture/0082-*.md`, `address_space.rs`, `user_mode.rs`, `syscall.rs`, `isolation_ring.rs`, `elf_loader.rs` (novo) | 🟡 Proposed |
+| 2.10g | **Ring3 Isolation (ADR-0077/0102)** | 🏆 **Sucessor de ADR-0041 §P9+** — Isolamento Ring3 real para WASM B/C (native JIT). Deep L4 clone (create_sandbox_as), per-process RSP0, ELF64 loader mínimo (RELATIVE), SYSCALL/SYSRET, sandbox AS + ring3_run_native(), CapGate host functions reais. Depreca ADR-0041 §3,§4,§7,§8 para escopo Ring3. MVP 5-8 sem, ~3.4K LOC. | ADR-0041 PoC, seL4, Fuchsia, Theseus | MIT | `docs/architecture/0077-ring3-isolation-ring.md`, `address_space.rs`, `user_mode.rs`, `syscall.rs`, `isolation_ring.rs`, `elf_loader.rs` (novo) | 🟡 gated (não registrado) |
 | 2.10f2 | **AirLLM GGUF Streaming (ADR-0046)** | 🏆 Layer-wise: header+layer map+embed/unembed em RAM; 1 layer/forward via ATA `read_file_range`; PrefetchEngine **soft** (nao DMA); dequant Q4_0/Q5_0/Q8_0/F16; hot-swap ATA + Net→FAT→`set_model` (L3.5/RX se RX=0). Stream-to-disk/DMA deferred. | AirLLM, llama.cpp GGUF | MIT | `gguf_streaming.rs`, `gguf.rs`, `cortex.rs` | ✅ MVP / 🟡 residual |
 | 2.10h | **LoadStatus + BitNet 2B LOADED (QEMU)** | ✅ Telemetria `LoadStatus`/`[STATUS]`; 2B ~590MB L=30 LOADED via QEMU-loader; FWD OK; TTS empty = known. v1.7.0. | BitNet v4 + LoadStatus | MIT | `load_status.rs`, `cortex.rs`, `main.rs` | ✅ load / 🟡 gen |
 | 2.11 | **Huge Pages 2MiB/1GiB** | 🔄 `allocate_huge_2mb()` mapeia páginas grandes no page table para performance de memória. | x86_64 MMU, Linux hugetlbfs | GPLv2 | `memory.rs` | ✅ 0 err |
@@ -298,7 +298,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 95-96 | 0.95-0.96 | Cognitive Engine, Self-Healing | ~860 | Self-healing framework | — |
 | 97 | 0.97.x | RustCoder Expert + Trinity MoE | ~300 | Trinity MoE router | `575115b` |
 | 98 | 0.98.x | Trinity MoE no LLM | ~50 | MoE integrado ao generate | `7b3e428` |
-| 99 | 0.99.x | SDIO Dataset (2.794 entradas) | ~500 | Pipeline SDIO | `001c47f` |
+| 99 | 0.99.x | SDIO Dataset (95.812 entradas) | ~500 | Pipeline SDIO | `001c47f` |
 | 100 | 0.100.x | Register Map IA | ~250 | Síntese de registradores por IA | `b034a1a` |
 | 101 | 0.101.x | Router + Boot Agent | ~130 | Boot agents IA | `4933f00` |
 | 102 | 0.102.x | Trinity AutoLearn | ~170 | AutoLearn: detecta→treina→registra | `f8edd70` |
@@ -321,7 +321,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | Realtek NIC (rtl_nic) | 0 | — | linux-firmware.git | MIT | não coletado no repo; `rtl_specs` faz fallback do clone (s392) |
 | Realtek WiFi (rtlwifi) | 0 | — | linux-firmware.git | MIT | idem |
 | Intel WiFi (iwlwifi AX200/210) | 0 | — | linux-firmware.git | MIT | idem (`intel/iwlwifi` no fallback); gap `.pnvm` SESSION_154 |
-| **Total** | **90** | **~14.4 MB** | linux-firmware.git | MIT | medido em firmware/ (s392) |
+| **Total** | **90** | **~13.7 MB** | linux-firmware.git | MIT | medido em firmware/ (s392) |
 
 ---
 
@@ -333,18 +333,18 @@ $ cargo clean -p neural-kernel && cargo nk
     0 errors
 ```
 
-**Métricas (v1.9.99-s412 TEST):**
+**Métricas (v1.9.99-s449 TEST):**
 
 | Métrica | Valor |
 |---------|-------|
-| Linhas de código (Rust, 12 crates do workspace) | ~169.000 |
-| Arquivos Rust (workspace) | ~672 |
+| Linhas de código (Rust, 12 crates do workspace) | ~214.000 |
+| Arquivos Rust (workspace) | ~714 |
 | Agentes nativos (seeds `skills/agents/`) | 41 |
 | The Agency | data-driven (AGENT.md assinados via PackageHub) |
-| ADRs (`docs/architecture/`) | ~100 |
-| Firmware blobs | 92 (~13.7 MB) |
+| ADRs (`docs/architecture/`) | ~110 |
+| Firmware blobs | 90 (~13.7 MB) |
 | HWIDs HW Expert v3 (treino) | **61.453 VID/DID** |
-| Tags release | v1.0.0 → **v1.9.99-s315** (dev atual v1.9.99-s328; gate v2.0.0 = review + `por_fazer` + OK humano) |
+| Tags release | v1.0.0 → **v1.9.99-s440** (dev atual v1.9.99-s449; gate v2.0.0 = review + `por_fazer` + OK humano) |
 | Crates K³CHJ wired | k_nano, k_hal, k_ai, cortex, hermes, jarbas |
 | Erros (`cargo nk`) | **0** |
 
@@ -356,7 +356,7 @@ $ cargo clean -p neural-kernel && cargo nk
 
 | Componente | Licença | Detalhes |
 |-----------|---------|----------|
-| **Código próprio (AIOS K³CHJ)** | **MIT** | Todo código original. Copyright © 2026 Marcelo Scapin Rovani. |
+| **Código próprio (AIOS K³CHJ)** | **AGPL-3.0** | Todo código original. Copyright © 2026 Marcelo Scapin Rovani. |
 | linux-firmware blobs | MIT | Firmware NVIDIA, Intel, Realtek redistribuível. |
 | pci.ids / usb.ids | MIT/GPL | Listas de IDs PCI-SIG e USB-IF. |
 | SDIO HWIDs | MIT | Dados extraídos de DriverPacks públicos. |
@@ -373,8 +373,8 @@ $ cargo clean -p neural-kernel && cargo nk
 
 ---
 
-> **AIOS K³CHJ — Neural OS Hermes v1.9.99-s412 TEST / NÃO ESTÁVEL**
-> *~169.000 LOC, ~672 arquivos Rust (12 crates do workspace), 41 agentes nativos, 6 crates K³CHJ wired, cargo nk = 0 erros.*
+> **AIOS K³CHJ — Neural OS Hermes v1.9.99-s449 TEST / NÃO ESTÁVEL**
+> *~214.000 LOC, ~714 arquivos Rust (12 crates do workspace), 41 agentes nativos, 6 crates K³CHJ wired, cargo nk = 0 erros.*
 > *"O hardware real não perdoa. O silício obedece."*
 > [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)
 > [huggingface.co/aios-k2chj](https://huggingface.co/aios-k2chj)

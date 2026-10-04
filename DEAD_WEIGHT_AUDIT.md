@@ -1,6 +1,8 @@
 # DEAD_WEIGHT AUDIT — neural-os-core Agent Ecosystem
 # Per OPCODE/1 Mission §3 and §15 (maintainer guidelines)
 
+> **STATUS (s449):** findings #1,#2,#3,#5,#6 IMPLEMENTED; #7 INVERTED (E3 added the consumer); #4,#8,#9 NOT done. This file is a pre-fix snapshot.
+
 ## Audit Scope
 Read-only audit of all crates in `C:\DEV\neural-os-core-latest\crates/` plus `neural-kernel/`, `skills/`, `tools/`. 
 Classified per taxonomy: OBSERVED | VERIFIED | IMPLEMENTED | UNKNOWN | BLOCKED | DEAD_WEIGHT.
@@ -10,7 +12,7 @@ Rule: NÃO transformar UNKNOWN→0, IMPLEMENTED→DONE, HOST TEST PASS→RUNTIME
 
 ## RANKED DEAD_WEIGHT FINDINGS (most impactful first)
 
-### 1. MatrixLearningAgent — redundant polling + duplicated functionality
+### 1. MatrixLearningAgent — redundant polling + duplicated functionality — ✅ IMPLEMENTED (s449)
 - **File**: `crates/hermes/src/agents/log_analyst_agent.rs` (manifest + struct), `crates/hermes/src/matrix_learn.rs` (pipeline)
 - **Line**: Manifest at log_analyst_agent.rs:415-421 (PollEvery(200)); tick at :448-477
 - **Classification**: DEAD_WEIGHT (OBSERVED: agent tick never produces output not already handled by HermesAgent::tick() inline at agents.rs:1232-1357)
@@ -22,7 +24,7 @@ Rule: NÃO transformar UNKNOWN→0, IMPLEMENTED→DONE, HOST TEST PASS→RUNTIME
 - **Minimal case**: Remove `MatrixLearningAgent` entirely. If future need arises, convert to event-driven only (subscribe to USER_INTENT without PollEvery, handle in Hermes tick).
 - **Breaks**: None — Hermes already handles learning requests. Removing this agent has zero functional impact.
 
-### 2. BootLogAgent redundant polling — PollEvery(32) after one-shot analysis
+### 2. BootLogAgent redundant polling — PollEvery(32) after one-shot analysis — ✅ IMPLEMENTED (s449)
 - **File**: `crates/k_ai/src/boot_log_agent.rs`
 - **Line**: PollEvery(32) at :10; tick at :175-219; `self.analyzed = true` guard at :186
 - **Classification**: DEAD_WEIGHT (OBSERVED: after first FAT walk, tick drains BOOT_PHASE events without re-analyzing)
@@ -33,7 +35,7 @@ Rule: NÃO transformar UNKNOWN→0, IMPLEMENTED→DONE, HOST TEST PASS→RUNTIME
 - **Minimal case**: Change manifest to `ScheduleKind::Oneshot` and invoke boot log analysis once during `init_platform_sync` or early boot. Remove PollEvery entirely. If periodic boot log tailing is needed, use a much longer interval (e.g., PollEvery(60000)) or make it event-driven.
 - **Breaks**: Would need to ensure boot log analysis runs once during boot initialization. The `read_last_boot_log()` function could be called from `k_nano::init` instead.
 
-### 3. SelfLearningAgent — heavyweight learning with artificial test states
+### 3. SelfLearningAgent — heavyweight learning with artificial test states — ✅ IMPLEMENTED (s449)
 - **File**: `crates/k_ai/src/self_learning.rs`
 - **Line**: Manifest at :23-29 (PollEvery(500)); tick at :340-343 calls `learn_tick()`; demo test at :409-432; learner_self_test at :435-487
 - **Classification**: DEAD_WEIGHT (UNKNOWN: runtime value not verified; tests pass with artificial states per SESSION_379: "gera template draft (não aprendizado real)")
@@ -58,7 +60,7 @@ Rule: NÃO transformar UNKNOWN→0, IMPLEMENTED→DONE, HOST TEST PASS→RUNTIME
 - **Minimal case**: Make the agent event-driven: trigger on `HUD_UPDATE` or similar event, or increase poll interval to `PollEvery(50)` (~2.8s) if periodic is preferred. Alternatively, remove the agent and have the compositor sample directly from `agent_core::agent_budget_stats()` or `k_nano::memory::global_hardware_context()`.
 - **Breaks**: HUD may lose some real-time granularity, but per docstring the compositor already reads snapshots without hot-path sampling, so impact is minimal.
 
-### 5. SelfHealAgent — silent failure detector never triggers
+### 5. SelfHealAgent — silent failure detector never triggers — ✅ IMPLEMENTED (s449)
 - **File**: `crates/k_ai/src/self_heal_agent.rs`
 - **Line**: Manifest at :377-385 (PollEvery(1000)); tick at :456-457 `self.silent.heartbeat("self_heal")`; watched_count check at :461-474
 - **Classification**: DEAD_WEIGHT (OBSERVED: silent failure detector never triggers because no fleet heartbeats wired — per line 460 comment: "Sem fleet heartbeats wired, publicar I5 = spam falso (só self_heal no mapa)")
@@ -70,7 +72,7 @@ Rule: NÃO transformar UNKNOWN→0, IMPLEMENTED→DONE, HOST TEST PASS→RUNTIME
 - **Minimal case**: Remove the `watched_count() > 1` guard or remove the silent heartbeat entirely. Keep the core error processing (kernel error drain, checkpoint, healing response handling) but simplify the heartbeat/health issue publishing.
 - **Breaks**: Minimal — core self-heal functionality (error drain, checkpoint, AI diagnosis) would remain. Only the fake I5 health issue publishing would be removed.
 
-### 6. Redundant USB keyboard polling in InputAgent
+### 6. Redundant USB keyboard polling in InputAgent — ✅ IMPLEMENTED (s449)
 - **File**: `crates/hermes/src/agents.rs`
 - **Line**: tick at :181-203; `poll_usb_keyboard()` at :207-209; tick spacing at :186-193 (tick == 90 || tick == 180 || tick == 360)
 - **Classification**: DEAD_WEIGHT (OBSERVED: s361 explicitly notes "não chamar a cada tick"; 90/180/360 spacing added to reduce redundancy)
@@ -82,7 +84,7 @@ Rule: NÃO transformar UNKNOWN→0, IMPLEMENTED→DONE, HOST TEST PASS→RUNTIME
 - **Minimal case**: Remove the `poll_usb_keyboard()` call from tick entirely. Keep only the IRQ-driven path and the periodic bringup at ticks 90/180/360. If USB polling was needed for reliability, add it back as a conditional every-N-ticks with proper spacing.
 - **Breaks**: May lose some USB keyboard support in configurations where IRQ1 is not routed, but the IRQ-driven path (via `RAW_HW_IRQ1`) should cover the primary use case.
 
-### 7. Redundant digest/hash computations in stamp system
+### 7. Redundant digest/hash computations in stamp system — ❌ INVERTED (E3 wired the consumer; do NOT remove)
 - **File**: `crates/event-bus/src/stamp.rs`
 - **Line**: FNV-1a64 at :106, chain_hash at :254-257, verify_stamps at :291-312
 - **Classification**: UNKNOWN (could be OBSERVED as infrastructure, but may be dead weight if never used at runtime)
@@ -189,4 +191,4 @@ Rule: NÃO transformar UNKNOWN→0, IMPLEMENTED→DONE, HOST TEST PASS→RUNTIME
 9. **Safety message audit**: In `crates/hermes/src/safety.rs` and `crates/hermes/src/security.rs`, review each `slog_*` call: keep those referencing actionable items (budget, trust, agent count thresholds), simplify or demote to `trace` those that only log status without downstream consumption.
 
 ---
-*End of audit. This is a read-only report — no code changes were made.*
+*End of audit (pre-fix snapshot). Fixes #1,#2,#3,#5,#6 landed in s449 (commit 166305be); #7 inverted by E3.*

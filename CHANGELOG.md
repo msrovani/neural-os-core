@@ -1,5 +1,26 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s450] - 2026-10-04 - Reconciliação dos .md da raiz (doc-drift pós-s449)
+
+- **Drift universal:** README/SUMMARY/ROADMAP/TECNOLOGIAS/codemap presos em
+  `v1.9.99-s412` / `2026-09-26` e `~169K LOC / ~672 .rs`. Corrigido para `s449` /
+  `~214K LOC / ~714 .rs` (medido).
+- **TECNOLOGIAS:** licença `MIT`→**`AGPL-3.0`** (header + tabela — o `LICENSE` é AGPL);
+  Limine "UEFI only"; SDIO `2.794`→`95.812`; firmware `92`→`90`/`~13.7 MB`; tags
+  `s315/s328`→`s440/s449`; linha 2.10g retargetada de ADR-0082 (Hardware Info Registry)
+  para **ADR-0077/0102 (Ring3)** — o corpo era Ring3, o número estava errado.
+- **ROADMAP:** ADR-0058 `Proposed`→`✅ S1–S4`; `5 crates`→`6`; workspace members reais
+  (**12**) + rings corretos (`k_hal`=R1, `k_ai`=R2, `hermes`/`jarbas`=R3).
+- **README:** testes `784/6`→3 pré-existentes; `~100`→`~110` ADRs; link `0042-*.md`
+  (glob literal) → `0042-k2chj-adequacao-boot.md`; HW Expert v3→v4.
+- **codemap:** FS `ext2/NTFS/Btrfs` (não existem) → `FAT32/exFAT/NeuralFS/VFS`.
+- **`tools/measure_repo.py`:** o gate contava `crates/neural-sgdb` (repo irmão
+  gitignored, 64 `.rs`) → `rs=777 loc=252696` inflado. `SKIP_PARTS += "neural-sgdb"`
+  → `rs=714 loc=213629` honesto; marcadores AGENTS/ROADMAP atualizados; **exit 0**.
+- **DEAD_WEIGHT_AUDIT.md:** status anotado (#1/#2/#3/#5/#6 IMPLEMENTED em s449; #7
+  INVERTED pelo E3).
+- Zero `.rs` de produto. `CONTEXT`/`COMMERCIAL`/`CONTRIBUTING` já estavam corretos.
+
 ## [1.9.99-s449] - 2026-10-04 - Consolidação do working tree: E1–E4 (ADR-0113) + F1 + storage AION + cleanup dead-weight
 
 - **Consolida 41 modificados + untracked desde a s441 num commit.** Zero código novo

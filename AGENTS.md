@@ -1,6 +1,6 @@
 # ════════════════════════════════════════════════════════
 #   PLANO DIRETOR — neural-os-core v2.0 "K³CHJ Core" 🏆
-#   ~242K LOC, ~771 arquivos Rust (12 crates do workspace), 41 agentes nativos, 0 erros
+#   ~214K LOC, ~714 arquivos Rust (12 crates do workspace), 41 agentes nativos, 0 erros
 #   **s360 MARCO:** UI Jarbas funcional + mesh P2P + compute distribuído em **6 QEMU** (WHPX)
 #   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício ✅
 #   Sprint 100: Code Freeze — 07/2026
@@ -10,7 +10,7 @@
 #   Gate v2.0.0 = N1–N5 + wire + review; v1.8.0 = marco adequação (Jul 2026); não "2.0 completo" sem review
 # K³CHJ = k-nano + k-hal + k-ai + Cortex + Hermes + Jarbas (histórico K²CHJ = sem k-hal na marca)
 # ════════════════════════════════════════════════════════
-<!-- MEASURED: rs=777 loc=252696 members=12 -->
+<!-- MEASURED: rs=714 loc=213629 members=12 -->
 
 # ════════════════════════════════════════════════════════
 #   ⚡ PREMISSA MÁXIMA — IRREVOGÁVEL, IRRETRATÁVEL (ADR-0088)

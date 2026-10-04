@@ -234,6 +234,7 @@ $env:CARGO_TARGET_DIR = "$PWD\target"
 cargo nk
 # Opcional: log B*.LOG no FAT (além do serial) — útil sem cabo COM:
 # cargo nk --features fat-boot-log
+# NOTA: fat-boot-log já vem ON (boot -> neural-kernel features=["fat-boot-log"]; default do neural-kernel inclui) — o alias `cargo nk` apenas repete.
 
 # Imagem UEFI bootável (bootloader + kernel):
 # Preferir bootloader_linker se `cargo build -p boot` travar em nested install.
@@ -601,5 +602,5 @@ Código: **AGPL-3.0**. Matriz FW/datasets/recipes: [docs/community/LICENSES.md](
 
 ---
 
-> **AIOS K³CHJ — Neural OS Hermes v1.9.99-s412 TEST / NÃO ESTÁVEL**
+> **AIOS K³CHJ — Neural OS Hermes v1.9.99-s449 TEST / NÃO ESTÁVEL**
 > *"O hardware real não perdoa. O silício obedece."*

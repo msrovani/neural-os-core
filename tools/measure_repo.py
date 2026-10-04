@@ -23,7 +23,9 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SKIP_PARTS = ("target", ".git")
+# "neural-sgdb" = repo irmão clonado localmente (k_ai path dep), gitignored
+# (`.gitignore` L95) — NÃO é deste git; contá-lo inflava rs/loc (s449).
+SKIP_PARTS = ("target", ".git", "neural-sgdb")
 DRIFT = 0.05  # 5%
 
 

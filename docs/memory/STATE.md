@@ -1,3 +1,27 @@
+# STATE - neural-os-core v1.9.99-s450 TEST - reconciliacao dos .md da raiz (doc-drift pos-s449)
+
+#   [s450] REVISAO DOS 14 .md DA RAIZ (2 lanes explorer) + tools/measure_repo.py.
+#     Drift universal: README/SUMMARY/ROADMAP/TECNOLOGIAS/codemap presos em
+#     v1.9.99-s412 / 2026-09-26 e ~169K/~672. Corrigido para s449 / ~214K/~714.
+#     Correcoes: README (testes 784/6->3 pre-existentes, ~100->~110 ADRs, link
+#     0042-*.md->0042-k2chj-adequacao-boot.md, HW Expert v3->v4); ROADMAP
+#     (ADR-0058 Proposed->S1-S4, 5->6 crates, workspace members reais 12, rings
+#     k_hal=R1/k_ai=R2/hermes+jarbas=R3); TECNOLOGIAS (licenca MIT->AGPL-3.0,
+#     Limine UEFI-only, SDIO 2.794->95.812, blobs 92->90, tags s315/s328->
+#     s440/s449, 2.10g retargetado ADR-0082->ADR-0077/0102 porque o corpo e
+#     Ring3); codemap (FS ext2/NTFS/Btrfs removidos, heap floor); HOWTO footer;
+#     ATTRIBUTIONS URL placeholder; DEAD_WEIGHT_AUDIT status anotado
+#     (#1/2/3/5/6 IMPLEMENTED s449, #7 INVERTED). CONTEXT/COMMERCIAL/
+#     CONTRIBUTING limpos.
+#     CORRECAO ESTRUTURAL: measure_repo.py contava crates/neural-sgdb (repo
+#     IRMAO gitignored, 64 .rs) -> 777/252696 inflado. SKIP_PARTS +=
+#     "neural-sgdb" -> 714/213629 honesto; marcadores AGENTS/ROADMAP atualizados.
+#     VERIFICADO: python tools/measure_repo.py exit 0 (AGENTS/ROADMAP OK);
+#     LICENSE=AGPL-3.0; 110 ADRs; 0 modulos ext2/ntfs/btrfs; 90 blobs/13.7MB.
+#     UNKNOWN: contagens de prosa (HW Expert v3 vs v4, estrelas, SLA) nao
+#     re-medidas; 2.10g (0077 vs 0082) e decisao do maintainer. Zero .rs.
+#     Detalhe: docs/memory/SESSION_450.md
+
 # STATE - neural-os-core v1.9.99-s449 TEST - consolidacao do working tree nao commitado (E1-E4 + F1 + AION-storage + dead-weight)
 
 #   [s449] CONSOLIDACAO (41 modificados + untracked desde s441 num so commit):

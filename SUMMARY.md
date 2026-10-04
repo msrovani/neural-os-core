@@ -2,9 +2,9 @@
 
 **O que é:** Sistema operacional bare-metal (`no_std` Rust) onde **tudo é Agente ou Skill**. 41 agentes nativos, Trinity MoE no kernel (VOCAB=256, routing telemetry), BitNet ternário para HW e inferência.
 
-**Versão release:** **v1.9.99-s412 TEST / NÃO ESTÁVEL** (2026-09-26)
+**Versão release:** **v1.9.99-s449 TEST / NÃO ESTÁVEL** (2026-10-04)
 **Marco vivo:** interface Jarbas **funcional** no framebuffer + **rede mesh** + **computação distribuída** em **6 máquinas QEMU** (WHPX, hub L2, FRAG matmul, orb por role/`MESH_HEALTH`).
-**Estado:** ~169K LOC, ~672 arquivos (12 crates do workspace), `cargo nk` = 0 erros.
+**Estado:** ~214K LOC, ~714 arquivos (12 crates do workspace), `cargo build --release -p boot` = 0 erros.
 
 **Base v1.8.0:**
 - ADR-0042 N1–N5 ✅ — cadeia funcional K³CHJ
@@ -19,7 +19,7 @@
 - ADRs GPU 0048–0050 ⏳
 - **ADR-0057** Compute Dispatch SMP+GPU+NPU: WS-A wake multi-AP (`-smp 4`→APs=3, CorePools r0=1 r1=2 r2=1) + `cortex::compute` dispatcher + WS-G #412 structured decode ✅; GPU/NPU hooks + on-demand AP-worker (IDT/IPI) = Layer S/HW
 - **ADR-0058** Generative Card Desktop (UI/Jarbas) ✅ **S1–S4**: embedded-graphics (`DrawTarget`) + `UiDeclaration`/`UiRenderer` (cards por LLM #412 ou skill WASM); orb responsivo + barra de relógios/HUD preservados; WM stacking; supersede parcial ADR-0047-HMI (H3 ❌); S5+A/V residual
-- **ADR-0059** Runtime App Factory ✅ **Caminho A** (wasmi): módulo WASM real roda no bare-metal (`add(2,3)=5`); seletor por IA A(wasmi)/B(Cranelift JIT)/C(Rust-subset) + CapGate/HW-gate/HITL; B/C compilam (feature) mas exec nativa **gated** por ring de isolamento (ADR-0041). Motor do self-improve/heal/update. Supersede ADR-0031(WASM)/0032; aposenta VM `Op`
+- **ADR-0059** Runtime App Factory ✅ **Caminho A** (wasmi): módulo WASM real roda no bare-metal (`add(2,3)=5`); seletor por IA A(wasmi)/B(Cranelift JIT)/C(Rust-subset) + CapGate/HW-gate/HITL; B/C compilam (feature) mas exec nativa **gated** por ring de isolamento (ADR-0077/0102). Motor do self-improve/heal/update. Supersede ADR-0031(WASM)/0032; aposenta VM `Op`
 - **Não** é declaração de `v2.0.0`
 
 **Arquitetura K³CHJ:**
@@ -34,7 +34,7 @@
 | `jarbas` | Display FE, persona, **orb + Hub Health** (GPU BE em k_hal) |
 | `neural-kernel` | Bin de boot (integração + residuals) |
 
-**Pista ativa (s412 / s410m):** ternary_worker tile de colunas (1,9x, SESSION_412) + forget cognitivo HITL (s410m). Residual: threshold tiny f32; prefill 3B ~7 s/layer. Gate v2.0.0 review pendente.
+**Pista ativa (s449):** consolidação do working tree (E1–E4 ADR-0113 + F1 + AION-storage + cleanup dead-weight); F1.5 aberto (TICKV backend=file, dono AION).
 
 **Para agentes de IA:**
 1. `AGENTS.md` — regras operacionais
