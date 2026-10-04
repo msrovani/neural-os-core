@@ -52,6 +52,33 @@ if ($LASTEXITCODE -ne 0) { throw "gen_lsk1.py failed ($LASTEXITCODE)" }
 foreach ($p in @($Qemu, $OvmfCode, $OvmfVars, $Uefi, $Disk)) {
     if (-not (Test-Path $p)) { throw "missing: $p" }
 }
+# --- [14] IDENTIDADE DO ARTEFATO BOOTADO -------------------------------------
+# Regra: nenhuma conclusao de runtime vale sem dizer qual imagem bootou. Gravo
+# um sidecar ao lado do log com tamanho + mtime das duas imagens e a presenca de
+# um literal do codigo-fonte dentro da uefi.img. Sem isso, um veredito mede um
+# artefato desconhecido (foi assim que uma imagem em reconstrucao me deu um
+# serial de 0 bytes que eu culpei no launcher).
+$ImgIdPath = [System.IO.Path]::ChangeExtension($LogPath, "imgid")
+$probe = "SKILL_LAB"
+try {
+    $srcHit = Select-String -Path (Join-Path $Root "crates\hermes\src\skill_lab.rs") `
+                          -Pattern $probe -SimpleMatch -Quiet
+} catch { $srcHit = $false }
+$uefiHit = (Select-String -Path $Uefi -Pattern $probe -SimpleMatch -Quiet -ErrorAction SilentlyContinue)
+$imgid = @(
+    "uefi=$Uefi"
+    ("uefi_bytes={0}" -f (Get-Item $Uefi).Length)
+    ("uefi_mtime={0}" -f (Get-Item $Uefi).LastWriteTimeUtc.ToString("o"))
+    "disk=$Disk"
+    ("disk_bytes={0}" -f (Get-Item $Disk).Length)
+    ("disk_mtime={0}" -f (Get-Item $Disk).LastWriteTimeUtc.ToString("o"))
+    "probe=$probe"
+    "probe_na_fonte=$srcHit"
+    "probe_na_imagem=$uefiHit"
+)
+[System.IO.File]::WriteAllLines($ImgIdPath, $imgid)
+Write-Host ("[f15] imgid: {0} (probe na imagem={1})" -f $ImgIdPath, $uefiHit)
+
 New-Item -ItemType Directory -Force -Path (Split-Path $LogPath -Parent) | Out-Null
 Remove-Item -Force $LogPath -ErrorAction SilentlyContinue
 Copy-Item -Force $OvmfVars $OvmfVarsRun

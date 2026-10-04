@@ -29,6 +29,9 @@ CASES = [
     ("b1_forja_outro_nome", 1, 0, "PASS", ""),  # FORJA de OUTRA skill nao reprova
     ("b2_hashdiff", 2, 0, "PASS", ""),          # hash so e julgar no Compare
     # ---- negativos ----
+    # ---- secao 14: identidade do artefato bootado (fail-closed) ----
+    ("b1_imgid_stale", 1, 1, "FALSIFIED", "NAO contem o literal da fonte"),
+    ("b1_sem_imgid", 1, 1, "FALSIFIED", "sem identidade do artefato bootado"),
     ("b1_unknown_true", 1, 1, "FALSIFIED", "UNKNOWN"),
     ("b1_forja_lab", 1, 1, "FALSIFIED", "escalate/FORJA"),
     ("b1_wrong_name", 1, 1, "FALSIFIED", "act=gen"),

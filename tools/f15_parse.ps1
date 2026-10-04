@@ -120,6 +120,20 @@ function Invoke-Boot($path, $boot) {
     }
     else { throw "-Boot tem de ser 1 ou 2" }
 
+    # --- [14] o veredito so vale se o artefato bootado for identificavel ------
+    # Regra: nenhuma conclusao de runtime vale sem demonstrar qual imagem bootou.
+    # Ausencia do sidecar NAO e zero: e prova faltando -> FALSIFIED.
+    $imgid = [System.IO.Path]::ChangeExtension($path, "imgid")
+    if (Test-Path -LiteralPath $imgid) {
+        $ident = @(Get-Content -LiteralPath $imgid)
+        $evid += "artefato bootado: " + (($ident | Where-Object { $_ -match '^(uefi_bytes|disk_bytes|probe_na_imagem)=' }) -join " ")
+        if (($ident -join "`n") -notmatch "probe_na_imagem=True") {
+            $fail += "FALSIFIED boot$boot : a imagem bootada NAO contem o literal da fonte (probe_na_imagem!=True) - veredito sobre artefato stale"
+        }
+    } else {
+        $fail += "FALSIFIED boot$boot : sem identidade do artefato bootado (sidecar $imgid ausente) - secao 14 nao permite concluir sobre imagem desconhecida"
+    }
+
     if ($fail.Count -eq 0) { $fail += "PASS boot$boot" }
     # nome do artefato vem do NOME DO LOG, nao do -Boot: se viesse do boot, parsear outro
     # log sobrescreveria a evidencia anterior (achado no proprio teste).
