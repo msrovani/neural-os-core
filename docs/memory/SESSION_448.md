@@ -49,13 +49,15 @@ Por que mmap e nao `read()`: 3 GB nao cabem na memoria e o fatiavel precisaria d
 2. **boot 1 com `disk_lab_state_before=1` → FALSIFIED** (`act=gen` nao prova
    geracao num disco que ja tinha a skill).
 3. **boot 2 com `restore=1` → FALSIFIED** (o restore apaga o estado que o boot 1
-   deveria ter persistido: experimento rigged).
+   deveria ter persistido: experimento rigged). O **run é permitido** — é a
+   condicao de controle do experimento, e o dado (o skill nao volta) fica no log.
+   O que o parser recusa e a **afirmacao de persistencia**, nao a coleta do dado.
 
 ## 3. Alternativas rejeitadas (e por que)
 
 | alternativa | por que nao |
 |---|---|
-| restaurar sempre (implicitamente) no boot 2 | apaga exatamente o estado cuja persistencia se quer provar; o `-RestorePristine` e opt-in e a regra 3 barra o uso errado |
+| restaurar **implicitamente** no boot 2 | apagaria o estado cuja persistencia se quer provar sem ninguem pedir; o `-RestorePristine` e explicito, e a regra 3 barra a **conclusao** mesmo quando o run e feito de proposito (condicao de controle) |
 | SHA256 do disco inteiro a cada boot | ~10-20 s por boot e **nao responde a pergunta**: "o disco tem a skill?" e o que importa, nao "o disco mudou?" |
 | confiar em mtime do disco | qualquer escrita muda o mtime (ruim de lab, NVRAM, etc.); nao distingue skill de ruido |
 | filtrar no log em vez do disco | o contaminado e o disco; o log esta limpo por construcao |
@@ -67,8 +69,11 @@ Por que mmap e nao `read()`: 3 GB nao cabem na memoria e o fatiavel precisaria d
 bootando enquanto esta sessao rodava (o mtime do disco mudou de 00:45 para 01:00
 durante o trabalho). Sobrescrever 3 GB sem pedido destrói o boot de outra agente,
 entao:
-- `-RestorePristine` e switch explicito e so faz sentido no boot 1 (o launcher
-  **recusa** no boot 2);
+- `-RestorePristine` e switch explicito, aceito em **qualquer** boot: no boot 2 ele
+  e a **condicao de controle** (o skill nao pode ser recuperado de um disco
+  limpo), e quem barra a conclusao e o parser (`restore=1` no boot 2 = FALSIFIED).
+  Run permitido, log preservado, veredito bloqueado — porque o log e o dado e o
+  veredito e a conclusao;
 - o launcher loga `restore=1|0 disk_lab_state_before=0|1` antes de lancer o QEMU;
 - `test_f15_stamp.ps1` roda com `$RestorePristine = $false` de proposito e
   **verifica** que o sidecar saiu com `restore=0` (o teste nao pode mexer no disco
@@ -90,7 +95,7 @@ entao:
 | check | resultado |
 |---|---|
 | `python tools/run_f15_fixtures.py` | **26/26, EXIT=0** (22 anteriores + `b1_lab_state1`, `b1_sem_ablacao`, `b2_restore1`, `b1_sha_erro`) |
-| `powershell -File tools/test_f15_ablation.ps1` | **13/13, EXIT=0** — executa o bloco `[7]` REAL sobre discos de 4 MB: restore copia, verifica, apaga a skill; sem restore o disco segue sujo; `ensure` recusa fonte suja; restore no boot 2 e recusado |
+| `powershell -File tools/test_f15_ablation.ps1` | **17/17, EXIT=0** — executa o bloco `[7]` REAL sobre discos de 4 MB: restore copia, verifica, apaga a skill; sem restore o disco segue sujo; `ensure` recusa fonte suja; restore no boot 2 **roda** como condicao de controle (restore=1, motivo nomeado, disco limpo) |
 | `powershell -File tools/test_f15_stamp.ps1` | **EXIT=0** — executa `[7]`+`[14]` reais e confere 15 campos do sidecar contra os arquivos |
 | `Parser::ParseFile` nos 3 `.ps1` | sintaxe OK nos 3 |
 

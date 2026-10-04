@@ -4,9 +4,10 @@
 #   Boot 2 (E): target\lab_skill_boot2.bin -> LSK1 'E' reuse + run (durable Tickv).
 #
 # Braco de ablacao (secao 7): -PreparePristine cria o snapshot (so de fonte
-# LIMPA) e -RestorePristine o devolve ao disco antes do boot 1. restore=1|0 e
-# disk_lab_state_before=0|1 vao para o sidecar .imgid, e o parser reprova quando
-# o boot 1 partiu de um disco que ja tinha a skill.
+# LIMPA) e -RestorePristine o devolve ao disco antes do boot. restore=1|0 e
+# disk_lab_state_before=0|1 vao para o sidecar .imgid. O parser reprova quando o
+# boot 1 partiu de um disco que ja tinha a skill, e reprova restore=1 no boot 2
+# (condicao de controle: o run vale como dado, a conclusao de persistencia nao).
 # Not run by CI; invoke manually. The pristine copy enables ablation from a clean disk.
 #
 # VEREDITO: depois do run, use tools\f15_parse.ps1 (le 1 log por boot, grava <log>.parse,
@@ -81,12 +82,21 @@ $AblPy = Join-Path $Root "tools\f15_pristine.py"
 $restore = 0
 $restoreMotivo = "nao solicitado (-RestorePristine ausente)"
 if ($RestorePristine) {
-    if ($Boot -ne 1) { throw "-RestorePristine so faz sentido no boot 1: no boot 2 ele apaga o estado que o boot 1 deveria ter persistido" }
+    if ($Boot -ne 1) {
+        # Nao e proibido: rodar o boot 2 a partir do pristine e a CONDICAO DE
+        # CONTROLE do experimento (o skill nao sobrevive quando nao ha o que
+        # recuperar). O que nao pode e o veredito: o parser reprova restore=1 no
+        # boot 2, porque ali a persistencia nao pode ser afirmada. Run permitido,
+        # conclusao bloqueada -- e o dado do controle fica no log.
+        Write-Host "[f15] AVISO: restore no boot 2 e a CONDICAO DE CONTROLE (o skill nao pode ser recuperado de um disco limpo). O parser vai reprovar por restore=1 -- o log e o dado, o veredito e a conclusao."
+        $restoreMotivo = "CONDICAO DE CONTROLE: pristine restaurado no boot 2 - o parser reprova porque a persistencia nao pode ser afirmada aqui"
+    } else {
+        $restoreMotivo = "pristine restaurado e verificado byte a byte antes do boot"
+    }
     if (-not (Test-Path -LiteralPath $Prist)) { throw "pristine ausente: $Prist (rode -PreparePristine antes)" }
     & python $AblPy restore --disk $Disk --pristine $Prist
     if ($LASTEXITCODE -ne 0) { throw "restore do pristine falhou ($LASTEXITCODE)" }
     $restore = 1
-    $restoreMotivo = "pristine restaurado e verificado byte a byte antes do boot"
 }
 # Estado do lab NO DISCO AGORA (depois de qualquer restore). Medido, nao assumido.
 $scanOut = @(& python $AblPy scan --disk $Disk)

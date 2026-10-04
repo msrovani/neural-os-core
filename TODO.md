@@ -18,7 +18,7 @@
 - [x] Gate `tem_substancia` no watcher (4/4) + supressão contada
 - [x] Encerramento: watcher parado (sem lock órfão), launcher + QEMU parados, log do boot cortado preservado
 - [x] Runbook de retomada: `docs/memory/RESUME.md` + ponteiros em STATE/SESSION_INDEX/TODO/CHANGELOG
-- [x] **Braco de ablação (§7)** — `tools/f15_pristine.py` + bloco `[7]` no launcher (restore opt-in, scan sempre) + `restore=`/`disk_lab_state_before=` no sidecar + 3 regras fail-closed; fixtures 25/25, ablação 13/13, stamp exit 0 (IDEA #638, s448)
+- [x] **Braco de ablação (§7)** — `tools/f15_pristine.py` + bloco `[7]` no launcher (restore opt-in; no boot 2 é a **condição de controle**: run permitido, veredito reprovado; scan sempre) + `restore=`/`disk_lab_state_before=` no sidecar + 3 regras fail-closed; fixtures 26/26, ablação 17/17, stamp exit 0 (IDEA #638, s448)
 - [ ] **QEMU com `-RestorePristine`**: um boot 1 real com `restore=1` e `disk_lab_state_before=0` no sidecar — o que falta para sair de IMPLEMENTADO e virar OBSERVED (D2). Só com o disco do lab livre (outra thread estava bootando)
 - [ ] `TICKV backend=file` no QEMU + os 2 boots com veredito **com sidecar e identidade §14b valendo** — dono **AION** (AION-0009/0010); não tocar em `tickv.rs` sem o dono
 - [ ] Perguntar ao maintainer se o loop do OPMUSE (PID 9908) continua — é a única coisa que ainda escreve no fórum encerrado

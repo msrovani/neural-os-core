@@ -14,13 +14,15 @@
   `ensure` **recusa (exit 3)** criar um "pristine" a partir de um disco que já tem a
   skill — um snapshot tirado de disco sujo é um controle que mente sozinho.
   `restore` copia e **verifica byte a byte**; `scan` diz `lab_state=0|1`.
-- **Launcher:** bloco `[7]` com `-RestorePristine` (**opt-in** e recusado no boot 2,
-  que apagaria justamente o estado a provar) e `scan` sempre; antes de lançar o QEMU
+- **Launcher:** bloco `[7]` com `-RestorePristine` (**opt-in**, aceito em qualquer
+  boot — no boot 2 ele e a **condição de controle** e o run é permitido, mas o
+  veredito reprova) e `scan` sempre; antes de lançar o QEMU
   loga `restore=1|0 disk_lab_state_before=0|1`. Sidecar ganha `restore`,
   `restore_motivo`, `disk_lab_state_before`, `pristine_bytes`.
 - **Parser: 3 regras fail-closed** — sidecar sem o registro de ablação; boot 1 com
   `disk_lab_state_before=1` (`act=gen` não prova geração num disco que já tinha a
-  skill); boot 2 com `restore=1` (experimento rigged).
+  skill); boot 2 com `restore=1` (experimento rigged — o run é o dado do controle,
+  a afirmação de persistência é que não pode sair dali).
 - **Restore é opt-in porque `target/disk_qemu.raw` é estado compartilhado** (outra
   thread bootando: mtime 00:45 → 01:00 durante o trabalho). `tools/test_f15_stamp.ps1`
   roda com `restore=0` de propósito e **verifica** isso no sidecar.
@@ -36,7 +38,7 @@
   stamp sai **2 (inconclusivo)** com a imagem travada em vez de fingir veredito.
   *Degradar no carimbo, reprovar no veredito.*
 - **Gates:** `run_f15_fixtures` **26/26** (+`b1_lab_state1`, `b1_sem_ablacao`,
-  `b2_restore1`, `b1_sha_erro`); `tools/test_f15_ablation.ps1` **13/13** — executa o bloco `[7]`
+  `b2_restore1`, `b1_sha_erro`); `tools/test_f15_ablation.ps1` **17/17** — executa o bloco `[7]`
   **real** extraído do launcher sobre discos de 4 MB (restore copia, verifica e
   apaga a skill; sem restore o disco segue sujo; `ensure` recusa fonte suja);
   `tools/test_f15_stamp.ps1` exit 0 com 15 campos — **versionado**, o antecessor

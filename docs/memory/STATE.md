@@ -19,14 +19,16 @@
 #     contra orcamento de 900 s; 4 MB no teste = 0,03 s.
 #     RESTORE E OPT-IN DE PROPOSITO: target/disk_qemu.raw e estado
 #     COMPARTILHADO (outra thread bootando: mtime 00:45 -> 01:00 durante o
-#     trabalho) e sobrescrever 3 GB sem pedido destruiria o boot dela. O
-#     launcher RECUSA -RestorePristine no boot 2.
+#     trabalho) e sobrescrever 3 GB sem pedido destruiria o boot dela. No boot 2
+#     o restore e a CONDICAO DE CONTROLE: o run e permitido e o dado fica no
+#     log, mas o parser reprova (restore=1 = a persistencia nao pode ser
+#     afirmada ali). Log e dado; veredito e conclusao.
 #     BUG DE PRECISAO (2a vez no mesmo arquivo): epoch batia errado em 1 s
 #     (PS 758 vs Python 757) — `/` no PS e divisao em DOUBLE e o cast
 #     arredonda, e Ticks (~1,8e17) passa de 2^53. Formula exata nos dois
 #     lados: (($ticks - ($ticks % 10000000)) / 10000000) = truncamento.
-#     GATES: fixtures 25/25 exit 0 (+b1_lab_state1, b1_sem_ablacao,
-#     b2_restore1); tools/test_f15_ablation.ps1 13/13 exit 0 (bloco [7] REAL
+#     GATES: fixtures 26/26 exit 0 (+b1_lab_state1, b1_sem_ablacao,
+#     b2_restore1, b1_sha_erro); tools/test_f15_ablation.ps1 17/17 exit 0 (bloco [7] REAL
 #     sobre discos de 4 MB); tools/test_f15_stamp.ps1 exit 0 (15 campos do
 #     sidecar, e restore=0 de proposito para nao tocar no disco do lab);
 #     sintaxe OK nos 3 .ps1. O stamp test saiu de target/ (gitignored) para

@@ -88,12 +88,19 @@ $out = @(& python $AblPy ensure --disk $Disk --pristine (Join-Path $T 'p3.raw'))
 Testa 'ensure recusa fonte com a skill do lab' ($LASTEXITCODE -eq 3) ("exit=$LASTEXITCODE out=$($out -join ' | ')")
 Testa 'ensure nao criou snapshot recusado' (-not (Test-Path (Join-Path $T 'p3.raw'))) 'p3.raw foi criado apesar da recusa'
 
-# --- 5. -RestorePristine no boot 2 tem de ser recusado pelo launcher ------
+# --- 5. restore no BOOT 2: rodado (condicao de controle), veredito barrado ---
+# O launcher deixa rodar (e o dado do controle fica no log); quem barra a
+# conclusao e o parser (FALSIFIED restore=1). Aqui so se prova o comportamento do
+# bloco: restore=1, motivo nomeado e o disco de volta ao pristine.
 $RestorePristine = $true
 $Boot = 2
 $threw = $false
 try { Invoke-Expression $bloco } catch { $threw = $true }
-Testa 'restore no boot 2 e recusado' $threw 'o launcher aceitou restore no boot 2 (apagaria o estado a persistir)'
+Testa 'restore no boot 2 roda (nao e proibido)' (-not $threw) 'o launcher lancou em vez de rodar a condicao de controle'
+Testa 'restore no boot 2 => restore=1' ($restore -eq 1) ("restore=$restore")
+Testa 'restore no boot 2 => motivo nomeado' ($restoreMotivo -like '*CONTROLE*') ("motivo=$restoreMotivo")
+$h = Scan-Disk $Disk
+Testa 'controle: boot 2 partiu de disco limpo' ($h['lab_state'] -eq '0') ("lab_state=" + $h['lab_state'])
 
 Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
 Write-Host ''

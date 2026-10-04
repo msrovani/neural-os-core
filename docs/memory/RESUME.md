@@ -96,9 +96,11 @@ powershell -File tools/f15_parse.ps1 -Compare "logs\f15_boot1.txt,logs\f15_boot2
 - Exit code do parser: **0 = PASS, 1 = FALSIFIED**. O launcher nao tira veredito:
   ele so entrega log + status (por design).
 - **Ablacao (§7):** `-PreparePristine` cria o snapshot (so de fonte limpa);
-  `-RestorePristine` o devolve ao disco — **so no boot 1** (o launcher recusa no
-  boot 2, porque o restore apagaria justamente o estado a provar). Sem o switch,
-  o launcher roda o `scan` e registra `restore=0` + `disk_lab_state_before=0|1`.
+  `-RestorePristine` o devolve ao disco antes do boot. No **boot 1** e o controle;
+  no **boot 2** e a **condicao de controle** (o skill nao pode ser recuperado de
+  um disco limpo): o run e permitido e o dado fica no log, mas o parser **reprova**
+  (`restore=1` no boot 2) porque a persistencia nao pode ser afirmada ali. Sem o
+  switch, o launcher roda o `scan` e registra `restore=0` + `disk_lab_state_before=0|1`.
   Diagnostico do disco: `python tools/f15_pristine.py check --disk target\disk_qemu.raw`.
 - **§14 + §14b (s447):** o veredito so vale com o sidecar `<log>.imgid` ao lado do log.
   Ausente, `probe_na_imagem!=True`, ou **identidade divergente** → **FALSIFIED**.
@@ -234,7 +236,7 @@ confirmar com o dono (D5).
 | gate | comando | esperado |
 |---|---|---|
 | suite do veredito F1.5 | `python tools/run_f15_fixtures.py` | **26/26**, exit 0 (gerador em `tools/gen_f15_fixtures.py`, versionado) |
-| braco de ablacao | `powershell -File tools\test_f15_ablation.ps1` | **13/13**, exit 0 (executa o bloco `[7]` REAL sobre discos de 4 MB) |
+| braco de ablacao | `powershell -File tools\test_f15_ablation.ps1` | **17/17**, exit 0 (executa o bloco `[7]` REAL sobre discos de 4 MB) |
 | carimbo §14 | `powershell -File tools\test_f15_stamp.ps1` | exit 0, 15 campos do sidecar coerentes com os arquivos (roda com `restore=0` de proposito: nao pode mexer no disco compartilhado) |
 | lock do forum | `python tools/test_forum_lock.py` | 0 id dup, 0 linha rasgada |
 | carimbo §14 | (movido p/ a linha de cima: `tools/test_f15_stamp.ps1`) | — |
