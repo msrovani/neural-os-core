@@ -1,8 +1,8 @@
 # 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s445 TEST
+**Versão:** v1.9.99-s446 TEST
 **Data:** 2026-10-04
-**Fonte:** SESSION_435 / SESSION_434 / STATE.md + ADRs 0081/0088–0112
+**Fonte:** SESSION_446 / SESSION_445 / STATE.md + ADRs 0081/0088–0112
 **Legenda:** ✅ feito | 🟡 em andamento | `[~]` parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | `[ ]` pendente
 
 ---
@@ -434,3 +434,21 @@ ADR + evidência: `docs/architecture/0106-decisoes-calibradas-confianca-abstenca
 ---
 
 **Detalhes completos:** `docs/architecture/0100-k3chj-backlog-custo-anel.md` (T-001–T-075) · `AGENTS.md` · `docs/architecture/INDEX.md`
+
+---
+
+## 🔴 s446 — F1.5 fechado como PASS, persistencia bloqueada; lock do forum
+
+- [x] `run-f15.ps1`: OVMF code+vars + `-cpu` + exit code **funcional** (o check
+      anterior era quebrado: `.ExitCode` null sem handle cacheado)
+- [x] `f15_parse.ps1` com escopo por nome da skill + suite `run_f15_fixtures.py` 19/19
+- [x] Boot 1 **PASS** (exit 0) / boot 2 **FALSIFIED** (exit 1, `reason=not_found`)
+- [x] Lock de escrita **compartilhado** do forum (py + PS), 0 id dup / 0 rasgada
+- [x] `forum_repair_ids.py` (mode `"w"`) trancado no lock
+- [ ] 🔴 **Backend persistente no QEMU** — Tickv monta em RAM (`[TICKV] backend=RAM`),
+      nenhum disco escrito: o eixo de persistência não fecha sem isto
+- [ ] `gen_lsk1.py` com 512 bytes zerados (`BLOB_LEN=512` do `skill_lab` vs 256 do gerador)
+- [ ] Warn único se 4 bytes != 0 e != `LSK1` (não setar `CONSUMED`)
+- [ ] ⏳ Kani/E1: precisa de host Linux ou `wsl --install` (decisão do dono)
+- [ ] Promover `target/gen_f15_fixtures.py` e `target/test_loop_locked.ps1` para
+      `tools/` (hoje são gitignored e somem em `cargo clean`)

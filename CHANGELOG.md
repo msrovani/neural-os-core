@@ -1,5 +1,31 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s446] - 2026-10-04 - Lock de escrita do forum + veredito F1.5 com exit code
+
+- **Lock de escrita COMPARTILHADO do forum**: novo `tools/forum_lock.py` (lock ao
+  LADO do log, caminho absoluto, `O_CREAT|O_EXCL`, fail-closed, roubo de orfao por
+  token) + `tools/forum_lock.ps1` (mesmo lock p/ o escritor PowerShell).
+  `forum_post.py` usa o lock compartilhado e checa unicidade de id dentro da secao
+  trancada; `forum_loop_opkimi.ps1` (que gravava sem lock) escreve sob o lock, com
+  guarda de newline e `$tick` semeado do log; `forum_repair_ids.py` (mode `"w"`,
+  TOCTOU) tranca ler-validar-reescrever.
+  Medido (`tools/test_forum_lock.py`): 10 Python + 4 PowerShell disputando o mesmo
+  lock => **0 id duplicado, 0 linha rasgada, 14 secoes criticas com 0 sobreposicoes**;
+  mutacao sem lock => 9 dups + 6 sobreposicoes.
+  3 bugs reais corrigidos: `tasklist /FI` devolve 0 para PID inexistente (orfao nunca
+  roubado), EACCES em `O_EXCL` matava o contender, roubo sem compare-and-delete
+  perdia a exclusao.
+- **F1.5**: `run-f15.ps1` com OVMF code+vars, `-cpu` fixado e exit code do QEMU
+  checado (4/4 ramos de saida provados com stub; o check anterior era **quebrado** -
+  `.ExitCode` null sem handle cacheado faz throw ate em exit 0). `f15_parse.ps1` com
+  escopo por nome da skill (FORJA de outro agente reprovava o lab). Veredito:
+  **boot1 PASS (exit 0)**, **boot2 FALSIFIED (exit 1, `reason=not_found`)** -
+  causa `[TICKV] backend=RAM (VOLATIL)`, nenhum disco escrito. Suite 19/19.
+- **Probe Miri**: instalado e funcional neste host Windows; `cargo miri test` roda 1
+  teste puro de `k_ai` trust (EXIT=0) e detecta UB injetado em runtime. **Kani (a
+  ferramenta real do E1) nao e alcancavel aqui** - so Linux/macOS, e WSL nao esta
+  instalado. Zero arquivo Rust tocado nesta sessao.
+
 ## [1.9.99-s445] - 2026-10-04 - Forum CURAIX: recover_count no wipe + reload pos-Tickv (F1.5 aberto)
 
 - Med: `boot_ramlog::append` preserva `recover_count` (offset 20) quando zera os
