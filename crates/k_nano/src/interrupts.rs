@@ -505,6 +505,9 @@ fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Opt
     for i in 0..24u64 {
         let a = sp + i * 8;
         if a + 8 > page_end { break; }
+        // P0.3: nunca ler VA não-mapeada (um stack inválido cascatearia em
+        // #DF/#TF ANTES do selo). Mesmo guard do bin (interrupts_ext.rs:240).
+        if !crate::memory::is_page_present(a) { break; }
         let v = unsafe { core::ptr::read_volatile(a as *const u64) };
         putc(b' '); puthex(v);
     }
@@ -524,6 +527,35 @@ fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Opt
     // Fatal handlers abaixo fazem halt — Act de SelfHeal só roda se o BSP continuar
     // (ex.: #PF ≤3). Observe-only em Ring0 fatal = honesty AIOS (NØNOS fail-closed).
     note_exception_irq(name, stack_frame.instruction_pointer.as_u64(), error_code);
+}
+
+/// Tail comum de exceção fatal (P0.3): sela a evidência, anota `[RECOVER]` e
+/// NUNCA faz park mudo. BSP -> reboot ordenado observável; AP -> park observável.
+///
+/// Lock-free/alloc-free (buffer de stack) — seguro no próprio handler de
+/// exceção (#DF/#PF storm). `dump_exception` já é guarded (item 4).
+fn fatal_exception(name: &str, f: &InterruptStackFrame, code: Option<u64>) -> ! {
+    dump_exception(name, f, code);
+    {
+        let mut buf = [0u8; 96];
+        let mut n = 0usize;
+        for &b in b"[RECOVER] reason=" {
+            if n < buf.len() { buf[n] = b; n += 1; }
+        }
+        for &b in name.as_bytes() {
+            if n >= buf.len() { break; }
+            buf[n] = b; n += 1;
+        }
+        if let Ok(s) = core::str::from_utf8(&buf[..n]) {
+            crate::boot_ramlog::append(s);
+        }
+    }
+    let _ = crate::boot_ramlog::seal_for_next_boot_quiet();
+    if crate::smp::percpu::fault_context_is_bsp() {
+        crate::boot_ramlog::reboot_ordered(name);
+    } else {
+        crate::boot_ramlog::park_observable(name);
+    }
 }
 
 /// Hex em buffer de stack (sem alloc — IRQ context).
@@ -547,41 +579,31 @@ pub fn push_hex_fb(buf: &mut [u8], n: &mut usize, mut v: u64) {
     }
 }
 
-extern "x86-interrupt" fn divide_error_handler(f: InterruptStackFrame) { dump_exception("#DE", &f, None); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn debug_handler(f: InterruptStackFrame) { dump_exception("#DB", &f, None); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn nmi_handler(f: InterruptStackFrame) { dump_exception("#NMI", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn divide_error_handler(f: InterruptStackFrame) { fatal_exception("#DE", &f, None); }
+extern "x86-interrupt" fn debug_handler(f: InterruptStackFrame) { fatal_exception("#DB", &f, None); }
+extern "x86-interrupt" fn nmi_handler(f: InterruptStackFrame) { fatal_exception("#NMI", &f, None); }
 extern "x86-interrupt" fn breakpoint_handler(_f: InterruptStackFrame) { puts(b"[EXC] #BP Breakpoint\n"); }
-extern "x86-interrupt" fn overflow_handler(f: InterruptStackFrame) { dump_exception("#OF", &f, None); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn bound_range_handler(f: InterruptStackFrame) { dump_exception("#BR", &f, None); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn invalid_opcode_handler(f: InterruptStackFrame) {
-    dump_exception("#UD", &f, None);
-    puts(b"[SELF-HEAL] observe-only (#UD) -- fatal halt (Act needs BSP)\n");
-    loop { x86_64::instructions::hlt(); }
-}
-extern "x86-interrupt" fn device_not_available_handler(f: InterruptStackFrame) { dump_exception("#NM", &f, None); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn coprocessor_segment_overrun_handler(f: InterruptStackFrame) { dump_exception("#MF", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn overflow_handler(f: InterruptStackFrame) { fatal_exception("#OF", &f, None); }
+extern "x86-interrupt" fn bound_range_handler(f: InterruptStackFrame) { fatal_exception("#BR", &f, None); }
+extern "x86-interrupt" fn invalid_opcode_handler(f: InterruptStackFrame) { fatal_exception("#UD", &f, None); }
+extern "x86-interrupt" fn device_not_available_handler(f: InterruptStackFrame) { fatal_exception("#NM", &f, None); }
+extern "x86-interrupt" fn coprocessor_segment_overrun_handler(f: InterruptStackFrame) { fatal_exception("#MF", &f, None); }
 
-extern "x86-interrupt" fn invalid_tss_handler(f: InterruptStackFrame, code: u64) { dump_exception("#TS", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn segment_not_present_handler(f: InterruptStackFrame, code: u64) { dump_exception("#NP", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn stack_segment_handler(f: InterruptStackFrame, code: u64) { dump_exception("#SS", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFrame, code: u64) {
-    dump_exception("#GP", &f, Some(code));
-    puts(b"[SELF-HEAL] observe-only (#GP) -- fatal halt (Act needs BSP)\n");
-    loop { x86_64::instructions::hlt(); }
-}
-extern "x86-interrupt" fn alignment_check_handler(f: InterruptStackFrame, code: u64) { dump_exception("#AC", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn security_exception_handler(f: InterruptStackFrame, code: u64) { dump_exception("#CP", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn invalid_tss_handler(f: InterruptStackFrame, code: u64) { fatal_exception("#TS", &f, Some(code)); }
+extern "x86-interrupt" fn segment_not_present_handler(f: InterruptStackFrame, code: u64) { fatal_exception("#NP", &f, Some(code)); }
+extern "x86-interrupt" fn stack_segment_handler(f: InterruptStackFrame, code: u64) { fatal_exception("#SS", &f, Some(code)); }
+extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFrame, code: u64) { fatal_exception("#GP", &f, Some(code)); }
+extern "x86-interrupt" fn alignment_check_handler(f: InterruptStackFrame, code: u64) { fatal_exception("#AC", &f, Some(code)); }
+extern "x86-interrupt" fn security_exception_handler(f: InterruptStackFrame, code: u64) { fatal_exception("#CP", &f, Some(code)); }
 
-extern "x86-interrupt" fn machine_check_handler(f: InterruptStackFrame) -> ! { dump_exception("#MC", &f, None); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn fpu_error_handler(f: InterruptStackFrame) { dump_exception("#MF", &f, None); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn simd_fp_exception_handler(f: InterruptStackFrame) { dump_exception("#XM", &f, None); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn virtualization_handler(f: InterruptStackFrame) { dump_exception("#VE", &f, None); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn reserved_handler(f: InterruptStackFrame) { dump_exception("#RSVD", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn machine_check_handler(f: InterruptStackFrame) -> ! { fatal_exception("#MC", &f, None) }
+extern "x86-interrupt" fn fpu_error_handler(f: InterruptStackFrame) { fatal_exception("#MF", &f, None); }
+extern "x86-interrupt" fn simd_fp_exception_handler(f: InterruptStackFrame) { fatal_exception("#XM", &f, None); }
+extern "x86-interrupt" fn virtualization_handler(f: InterruptStackFrame) { fatal_exception("#VE", &f, None); }
+extern "x86-interrupt" fn reserved_handler(f: InterruptStackFrame) { fatal_exception("#RSVD", &f, None); }
 
 extern "x86-interrupt" fn double_fault_handler(f: InterruptStackFrame, code: u64) -> ! {
-    dump_exception("#DF", &f, Some(code));
-    puts(b"[SELF-HEAL] Halt (lock-free).\n");
-    loop { x86_64::instructions::hlt(); }
+    fatal_exception("#DF", &f, Some(code))
 }
 
 extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageFaultErrorCode) {
@@ -604,8 +626,9 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     if count <= 3 {
         return;
     }
-    puts(b"[SELF-HEAL] #PF threshold exceeded -- halting.\n");
-    loop { x86_64::instructions::hlt(); }
+    puts(b"[SELF-HEAL] #PF threshold exceeded -- fatal.\n");
+    // P0.3: nada de `loop{hlt}` mudo — tail comum (BSP reboot / AP park).
+    fatal_exception("#PF", &f, Some(code.bits() as u64));
 }
 
 /// Seam H2: cura de #PF por camada superior (demand-page Ring3, aulas,

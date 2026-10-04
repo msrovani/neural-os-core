@@ -483,7 +483,10 @@ pub unsafe fn warm_reset() -> ! {
 /// lock do serial (lição s438: TicketLock não-reentrante + IRQ = deadlock).
 /// ponytail: puts lock-free em vez de `SERIAL.lock()` do OOM-HALT — o heartbeat
 /// é a única saída observável; travar no lock do serial seria pior que o park.
-fn park_observable(reason: &str) -> ! {
+///
+/// P0.3: `pub` — reusado pelo tail de exceção fatal (BSP/AP), pelo panic handler
+/// e pelo OOM handler. NUNCA trocar por `loop{hlt}` mudo.
+pub fn park_observable(reason: &str) -> ! {
     let mut last = crate::tsc::now_us();
     loop {
         core::hint::spin_loop();

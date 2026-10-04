@@ -29,6 +29,5 @@ pub use hermes_crate::agents::init_platform_sync;
 pub use hermes_crate::agents::register_agency_agents;
 pub use hermes_crate::agents::register_hw_agents;
 pub use hermes_crate::agents::report_unmatched_intent;
-pub use hermes_crate::agents::log_analyst_agent;
 pub use hermes_crate::agents::mouse_agent;
 pub use hermes_crate::agents::sysinfo_agent;

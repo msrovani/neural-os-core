@@ -16,7 +16,7 @@ k_hal R1, cortex/k_ai R2). Concretely it provides:
   (`agents.rs`: HermesAgent, NetAgent, CortexAgent, InputAgent, ConsoleAgent,
   boot-phase agents, SpecialistAgent/HwSpecialistAgent, AutoLearnAgent,
   SleepCycleAgent, FsBridgeAgent, GpuDriverAgent; plus `agents/mouse_agent.rs`,
-  `agents/log_analyst_agent.rs`). `actor_registry.rs`, `native_agents.rs`,
+  `agents/sysinfo_agent.rs`). `actor_registry.rs`, `native_agents.rs`,
   `hub.rs` (Observability ring buffer), `orchestrator.rs` (multi-agent workflows).
 - **WASM runtime (ADR-0059)** — `wasmi_rt.rs` (wasmi sandbox, fuel, CapGate-gated
   `aios::*` host ABI), `wasm_build.rs` (op-IR → valid wasm assembler),
@@ -185,7 +185,7 @@ same pair in `skill_marketplace`) drain them lazily and apply/activate skills.
 
 | Submodule | Files | Responsibility |
 |-----------|-------|----------------|
-| `src/agents/` | 2 (+`agents.rs`) | Native agent structs: MouseAgent (PS/2 → EventBus), LogAnalystAgent (Cortex log mining); the bulk of agents live in `agents.rs` |
+| `src/agents/` | 2 (+`agents.rs`) | Native agent structs: MouseAgent (PS/2 → EventBus), SysInfoAgent; the bulk of agents live in `agents.rs` |
 | `src/apps/` | 3 (+`mod.rs`) | `App` trait + `APP_REGISTRY`; HermesApp/SettingsApp/PowerApp expose chat commands (no multi-window) |
 | `src/cross_os/` | 3 (+`mod.rs`) | CrossOsAgent + CrossOsDiscoverer (runtime skill search: package hub / P2P / GitHub / crates.io via MCP) + CrossOsIntent classification |
 | `src/fs/` | 8 (+`mod.rs`) | `FilesystemAgent` trait + ATA/DevFS/ProcFS/Inference/Hermes/Ram/Log FS agents + `RingBufStore` + `MhiScheduler` tier promotion |

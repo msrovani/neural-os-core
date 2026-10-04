@@ -1909,21 +1909,10 @@ fn oom(layout: core::alloc::Layout) -> ! {
     if crate::smp::percpu::fault_context_is_bsp() {
         crate::boot_ramlog::reboot_ordered("oom");
     }
-    let mut last_beat = crate::tsc::now_us();
-    loop {
-        core::hint::spin_loop();
-        let now = crate::tsc::now_us();
-        if now.wrapping_sub(last_beat) >= 10_000_000 {
-            last_beat = now;
-            {
-                let mut s = crate::serial::SERIAL.lock();
-                if let Some(ref mut s) = *s {
-                    let _ = write!(s, "[OOM-HALT] agente={} size={} tick={} — core parkado no OOM (FAIL-CLOSED s434)\n",
-                        agent, layout.size(), crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed));
-                }
-            }
-        }
-    }
+    // P0.3: AP park observável compartilhado — heartbeat lock-free (puts) a cada
+    // 10s. NUNCA `SERIAL.lock()`: o OOM pode ter interrompido segurando o lock
+    // do serial (lição s438) e o park travaria em self-deadlock.
+    crate::boot_ramlog::park_observable("oom");
 }
 
 /// Inicializa TALC (SLAB adiado). LazyBumpAllocator auto-inicializa na primeira alloc().

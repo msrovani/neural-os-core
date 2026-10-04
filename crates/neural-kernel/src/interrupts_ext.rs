@@ -151,7 +151,12 @@ extern "x86-interrupt" fn invalid_opcode_handler(f: InterruptStackFrame) {
     }
     dump_exception("#UD", &f, None);
     let _ = k_nano::boot_ramlog::seal_for_next_boot_quiet();
-    loop { x86_64::instructions::hlt(); }
+    // P0.3: BSP -> reboot ordenado observável; AP -> park observável. Nunca hlt mudo.
+    if k_nano::smp::percpu::fault_context_is_bsp() {
+        k_nano::boot_ramlog::reboot_ordered("#ud");
+    } else {
+        k_nano::boot_ramlog::park_observable("#ud");
+    }
 }
 
 extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFrame, code: u64) {
@@ -172,7 +177,12 @@ extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFram
     }
     dump_exception("#GP", &f, Some(code));
     let _ = k_nano::boot_ramlog::seal_for_next_boot_quiet();
-    loop { x86_64::instructions::hlt(); }
+    // P0.3: BSP -> reboot ordenado observável; AP -> park observável. Nunca hlt mudo.
+    if k_nano::smp::percpu::fault_context_is_bsp() {
+        k_nano::boot_ramlog::reboot_ordered("#gp");
+    } else {
+        k_nano::boot_ramlog::park_observable("#gp");
+    }
 }
 
 extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageFaultErrorCode) {
@@ -342,6 +352,23 @@ pub fn patch_idt() {
     // Bounds check: precisamos de pelo menos o vetor 0x90 (16 bytes cada).
     if base == 0 || limit < (0x90u64 * 16 + 15) {
         k_nano::slog_bin!("IDT", "warn", "patch_idt: IDTR fora do esperado (base={:#x} limit={}), pulando overlays", base, limit);
+        // P0.3: fail-LOUD — sem overlay o bin perde syscall 0x90 + hooks
+        // #UD/#GP/#PF, e o `slog` é serial-only no metal (invisível). Grava no FB
+        // + ramlog (evidência no próximo BOOT.LOG).
+        let mut buf = [0u8; 80];
+        let mut n = 0usize;
+        for &b in b"patch_idt FAIL: IDTR base=" {
+            if n < buf.len() { buf[n] = b; n += 1; }
+        }
+        k_nano::interrupts::push_hex_fb(&mut buf, &mut n, base);
+        for &b in b" limit=" {
+            if n < buf.len() { buf[n] = b; n += 1; }
+        }
+        k_nano::interrupts::push_hex_fb(&mut buf, &mut n, limit);
+        if let Ok(s) = core::str::from_utf8(&buf[..n]) {
+            crate::display::fb::console_print(s);
+            k_nano::boot_ramlog::append(s);
+        }
         return;
     }
     unsafe {

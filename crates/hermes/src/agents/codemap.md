@@ -15,7 +15,6 @@ FsBridgeAgent, GpuDriverAgent, plus `register_agency_agents`/`register_hw_agents
 `agents.rs`: `HermesAgent` (`Agent::tick` → chat/route/LLM pipeline), `NetAgent`,
 `MonitorAgent`, `HwBridgeAgent`, `report_unmatched_intent`.
 `mouse_agent.rs`: `MouseAgent` (IRQ12 → MOUSE_MOVED/MOUSE_CLICK events).
-`log_analyst_agent.rs`: `LogAnalystAgent` (Cortex-mining of `/logs/`).
 
 ## Integration
 

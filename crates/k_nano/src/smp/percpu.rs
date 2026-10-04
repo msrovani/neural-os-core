@@ -136,6 +136,27 @@ pub fn this_cpu() -> &'static PerCpu {
     unsafe { &*(ptr as *const PerCpu) }
 }
 
+/// Lê IA32_GS_BASE (MSR 0xC0000101) sem dereferenciar `gs:[0]`.
+///
+/// P0.3: antes do `init_bsp_percpu` o GS base é 0 — ler `gs:[0]` acessaria a VA 0
+/// e daria um fault ANINHADO dentro do handler de exceção. O MSR é sempre
+/// legível e devolve o base sem tocar memória.
+#[cfg(target_os = "none")]
+fn read_gs_base() -> u64 {
+    let lo: u32;
+    let hi: u32;
+    unsafe {
+        core::arch::asm!(
+            "rdmsr",
+            in("ecx") 0xC0000101u32,
+            out("eax") lo,
+            out("edx") hi,
+            options(nostack, preserves_flags)
+        );
+    }
+    ((hi as u64) << 32) | (lo as u64)
+}
+
 /// BSP no handler de exceção. Antes do GS de PerCpu, só o BSP executa.
 /// No host (teste) devolve false: ler GS aqui não é o PerCpu do kernel.
 pub fn fault_context_is_bsp() -> bool {
@@ -145,18 +166,13 @@ pub fn fault_context_is_bsp() -> bool {
     }
     #[cfg(target_os = "none")]
     {
-        let self_ptr: u64;
-        unsafe {
-            core::arch::asm!(
-                "mov {0}, gs:[0]",
-                out(reg) self_ptr,
-                options(nostack, preserves_flags, readonly)
-            );
-        }
-        if self_ptr < 0xffff_8000_0000_0000 {
+        // P0.3: base via MSR (nunca `gs:[0]`). Base 0 / não-high-half ⇒
+        // pré-PerCpu ⇒ só o BSP executa ⇒ true SEM dereferenciar.
+        let base = read_gs_base();
+        if base < 0xffff_8000_0000_0000 {
             return true;
         }
-        unsafe { (*(self_ptr as *const PerCpu)).is_bsp }
+        unsafe { (*(base as *const PerCpu)).is_bsp }
     }
 }
 

@@ -3,7 +3,6 @@
 
 pub mod mouse_agent;
 pub mod sysinfo_agent;
-pub mod log_analyst_agent;
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -927,7 +926,6 @@ impl Agent for HermesAgent {
             .count();
         if agents_total == 0 && _tick > 0 && _tick % 2000 == 0 {
             k_nano::slog_hermes!("CONSCIOUSNESS", "warn", "self_report=degraded reason=budget_stats_unwired (agent_health sem fonte)");
-            log_analyst_agent::write_log("consciousness", "self_report=degraded reason=budget_stats_unwired");
         }
         self.consciousness.tick(
             _tick,
@@ -970,10 +968,6 @@ impl Agent for HermesAgent {
                 } else {
                     k_nano::slog_hermes!("Hermes", "ok", "Metricas criticas: {:?}", crit);
                 }
-                let _ = log_analyst_agent::write_log(
-                    "hermes",
-                    &alloc::format!("Metricas criticas: {:?}", crit),
-                );
             } else {
                 SUPPRESSED.fetch_add(1, Ordering::Relaxed);
             }
@@ -981,13 +975,12 @@ impl Agent for HermesAgent {
 
         // Self-Improvement Loop: periódico
         if !self.sil.is_active() && _tick % 1000 == 0 { self.sil.start(_tick); }
-        if self.sil.needs_research() { log_analyst_agent::write_log("sil", "Research phase"); self.sil.advance(true); }
+        if self.sil.needs_research() { self.sil.advance(true); }
 
         // Consciousness report periódico
         if _tick > 0 && _tick % 2000 == 0 {
             let report = self.consciousness.report();
             k_nano::slog_hermes!("Log", "msg", "{}", report);
-            log_analyst_agent::write_log("consciousness", &report);
         }
 
         // ── Processamento de eventos (o trabalho real) ──
@@ -2712,16 +2705,12 @@ impl Agent for BootSelfHealAgent {
             Some(k_ai::shutdown::ShutdownCause::Unexpected) => {
                 k_nano::slog_hermes!("SELF", "warn", "*** ULTIMO DESLIGAMENTO FOI INESPERADO! ***");
                 k_nano::slog_hermes!("SELF", "warn", "Analisando boot log para possiveis erros...");
-                let _ = log_analyst_agent::write_log("self_heal",
-                    "Ultimo desligamento foi INESPERADO. Iniciando analise de erros.");
                 if usb_boot {
                     k_nano::slog_hermes!("SELF", "ok", "skip boot_log analyze (USB-MSC boot)");
                 } else if let Some(log) = boot_log_agent::BootLogAgent::read_last_boot_log() {
                     let diagnostics = boot_log_agent::BootLogAgent::analyze_log(&log);
                     for (kind, msg) in &diagnostics {
                         k_nano::slog_hermes!("SELF", "warn", "Diagnostico: {} — {}", kind, msg);
-                        let _ = log_analyst_agent::write_log("self_heal",
-                            &alloc::format!("Diagnostico: {} — {}", kind, msg));
                         if *kind == "PANIC" || *kind == "GPU_HUNG" {
                             let ctx = k_ai::self_heal::ErrorContext {
                                 kind: "BOOT_ERROR", message: msg.clone(),

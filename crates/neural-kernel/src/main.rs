@@ -818,17 +818,11 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
     use core::fmt::Write;
 
-    // Safe path: VGA + serial sem alocar
-
-    {
-        let mut writer = crate::vga_buffer::WRITER.lock();
-        if let Some(ref mut w) = *writer { let _ = write!(w, "[PANIC] {}", info); }
-    }
-
-    {
-        let mut serial = crate::serial::SERIAL.lock();
-        if let Some(ref mut s) = *serial { let _ = write!(s, "[PANIC] {}", info); }
-    }
+    // P0.3: sela PRIMEIRO (antes de qualquer lock) — um panic ocorrido segurando
+    // WRITER/SERIAL travava o panic handler em self-deadlock e o BOOT.LOG do
+    // próximo boot ficava sem evidência. append/selo são lock-free (volatile).
+    k_nano::boot_ramlog::append("[RECOVER] reason=panic");
+    k_nano::boot_ramlog::seal_for_next_boot_quiet();
 
     // SESSÃO_260: pinta o panic no framebuffer — VGA morre após o claim do FB e
     // o serial é mudo no notebook real → freeze parecia "travou sem razão".
@@ -855,6 +849,9 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
             w.1
         };
         if n > 0 {
+            // Saída lock-free (sem SERIAL.lock): serial cru + FB.
+            crate::interrupts_ext::puts(&buf[..n]);
+            crate::interrupts_ext::puts(b"\n");
             if let Ok(s) = core::str::from_utf8(&buf[..n]) {
                 crate::display::fb::console_print(s);
             }
@@ -904,13 +901,13 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         crate::display::fb::console_print("[PANIC] halt (foto regs acima)");
     }
 
-    // Sela ramlog + HALT → logwriter grava BOOT.LOG no próximo boot (power cycle).
-    // Contexto de exceção: usa o selo QUIET (sem slog/lock — evita deadlock do
-    // serial/BOOT_LOG se o panic ocorreu segurando um deles; o append é volatile).
-    k_nano::boot_ramlog::append("[PANIC] seal+reboot");
-    k_nano::boot_ramlog::seal_for_next_boot_quiet();
-    x86_64::instructions::interrupts::disable();
-    loop { x86_64::instructions::hlt(); }
+    // P0.3: BSP -> reboot ORDENADO observável (selo + [RECOVER] já anexados
+    // acima); AP -> park observável. NUNCA `loop{hlt}` mudo.
+    if k_nano::smp::percpu::fault_context_is_bsp() {
+        k_nano::boot_ramlog::reboot_ordered("panic");
+    } else {
+        k_nano::boot_ramlog::park_observable("panic");
+    }
 }
 
 
@@ -1750,8 +1747,6 @@ pub(crate) fn kernel_boot(
         crate::display::fb::boot_ckpt(12, "arena+boot_logger");
     }
 
-// Consumer BOOT_PHASE antes de qualquer publish (EventBus → serial)
-    ensure_boot_phase_consumer();
     publish_boot_phase(BootPhase::SafeHarbor, "Serial+Display+IDT prontos");
     publish_boot_phase(BootPhase::MemoryCore, "Frame allocator + page tables + heap");
     crate::display::fb::boot_ckpt(13, "SafeHarbor+MemoryCore");
@@ -5490,25 +5485,6 @@ pub(crate) fn kernel_boot(
 
 pub const TOPIC_BOOT_PHASE: &str = "BOOT_PHASE";
 
-/// Receiver estático: 1 consumer mínimo inscrito antes das publishes.
-static BOOT_PHASE_RX: spin::Mutex<Option<event_bus::Receiver>> = spin::Mutex::new(None);
-
-pub fn ensure_boot_phase_consumer() {
-    let mut g = BOOT_PHASE_RX.lock();
-    if g.is_none() {
-        *g = Some(EVENT_BUS.subscribe(TOPIC_BOOT_PHASE));
-        k_nano::slog_bin!("BOOT", "ok", "Consumer BOOT_PHASE inscrito no EventBus");
-    }
-}
-
-fn drain_boot_phase_consumer() {
-    // Drena sem serial/FB — publish_boot_phase já imprimiu a payload.
-    // Imprimir de novo gerava 3 linhas sobrepostas ([BOOT] + [LOG] + [BOOT-PHASE-RX]).
-    if let Some(ref mut rx) = *BOOT_PHASE_RX.lock() {
-        while rx.try_receive().is_some() {}
-    }
-}
-
 /// P001: Registra skills builtin no SKILL_REGISTRY canônico (k_nano::globals).
 /// Antes isto era um `lazy_static` privado no bin — shadowing deixava hermes/k_ai
 /// vendo um registry vazio. Agora todos compartilham `k_nano::SKILL_REGISTRY`.
@@ -5571,7 +5547,6 @@ pub enum BootPhase {
 
 
 pub fn publish_boot_phase(phase: BootPhase, msg: &str) {
-    ensure_boot_phase_consumer();
     let (n, name) = match phase {
         BootPhase::SafeHarbor => (0u8, "SafeHarbor"),
         BootPhase::MemoryCore => (1, "MemoryCore"),
@@ -5611,7 +5586,6 @@ pub fn publish_boot_phase(phase: BootPhase, msg: &str) {
         payload: payload.into_bytes(),
         token: crate::CapabilityToken::Legacy(1),
     });
-    drain_boot_phase_consumer();
 }
 
 

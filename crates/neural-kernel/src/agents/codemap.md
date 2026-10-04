@@ -11,8 +11,6 @@ DiagnosticSkill, plus `init_platform_sync()` and `register_agency_agents()`).
   `TOPIC_MOUSE_MOVED/CLICK/DRAG/SCROLL`.
 - `sysinfo_agent.rs` — `SysInfoAgent`: lock-free CPU/RAM/agent/uptime snapshot → Jarbas
   debug card (ID 9001) refreshed every ~50 ticks.
-- `log_analyst_agent.rs` — `LogAnalystAgent` (`PollEvery(500)`): reads `/logs/` and runs
-  Cortex LLM pattern/anomaly analysis, publishes findings on the EventBus.
 
 ## Integration
 

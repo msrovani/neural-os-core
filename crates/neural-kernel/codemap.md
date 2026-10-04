@@ -106,7 +106,7 @@ Single entry chain: `limine_boot::_start` → `limine_entry` (collect `LimineHan
 
 | Module | Compiled? | Responsibility |
 |---|---|---|
-| `agents.rs` (+ `agents/`) | ✅ `pub mod agents` | Native agent fleet (~60 agents: system/router/driver/console/network + `init_platform_sync`, `register_agency_agents`, `register_hw_agents`); `agents/` adds MouseAgent, SysInfoAgent, LogAnalystAgent |
+| `agents.rs` (+ `agents/`) | ✅ `pub mod agents` | Native agent fleet (~60 agents: system/router/driver/console/network + `init_platform_sync`, `register_agency_agents`, `register_hw_agents`); `agents/` adds MouseAgent, SysInfoAgent |
 | `audio/` | ✅ `mod audio` | Voice/audio facade: `pub use jarbas_crate::audio::*` (TTS/STT skills, Jarvis/WakeWord/AudioPipeline/Mixer agents, `TOPIC_*`) |
 | `disk_agent/` | ✅ `mod disk_agent` | Disk intelligence facade: `pub use k_nano::disk_agent::*` (DiskIntelligenceAgent, NVMe, controller adapters) |
 | `smp/` | ✅ `mod smp` | SMP bring-up: `init_smp()`, `AP_COUNT`, PerCpu, SPSC queue, cortex parallel-matmul re-export, k_nano trampoline/work-stealing re-exports |

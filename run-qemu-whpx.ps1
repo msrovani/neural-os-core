@@ -53,8 +53,19 @@ $bridgeScript = Join-Path $Root "tools\serial_bridge.py"
 $netmodeFile = Join-Path $Root "target\netmode.flag"
 
 if (!(Test-Path $uefi)) { Write-Host "ERRO: target\uefi.img ausente. cargo build --release"; exit 1 }
-if (!(Test-Path $ovmfCode)) { Write-Host "ERRO: target\ovmf_code.fd ausente"; exit 1 }
-if (!(Test-Path $ovmfVars)) { Write-Host "ERRO: target\ovmf_vars.fd ausente"; exit 1 }
+# OVMF: `cargo clean` apaga target/ (inclusive estes firmware) -> auto-restaura do QEMU.
+# Sem isto o launcher morre com "ovmf_code.fd ausente" apos qualquer cargo clean.
+$qemuShare = "C:\Program Files\qemu\share"
+if (!(Test-Path $ovmfCode)) {
+    $srcCode = Join-Path $qemuShare "edk2-x86_64-code.fd"
+    if (Test-Path $srcCode) { Copy-Item $srcCode $ovmfCode -Force; Write-Host "OVMF code restaurado de $srcCode" -ForegroundColor Yellow }
+    else { Write-Host "ERRO: target\ovmf_code.fd ausente e $srcCode nao encontrado"; exit 1 }
+}
+if (!(Test-Path $ovmfVars)) {
+    $srcVars = Join-Path $qemuShare "edk2-i386-vars.fd"
+    if (Test-Path $srcVars) { Copy-Item $srcVars $ovmfVars -Force; Write-Host "OVMF vars restaurado de $srcVars" -ForegroundColor Yellow }
+    else { Write-Host "ERRO: target\ovmf_vars.fd ausente e $srcVars nao encontrado"; exit 1 }
+}
 if (!(Test-Path $qemu)) { Write-Host "ERRO: QEMU nao encontrado"; exit 1 }
 
 $script:bridgeProc = $null
@@ -303,6 +314,7 @@ try {
         $a += @(
             "-drive", "if=pflash,format=raw,file=$ovmfCode,readonly=on",
             "-drive", "if=pflash,format=raw,file=$ovmfVars",
+            "-monitor", "tcp:127.0.0.1:5555,server,nowait",
             "-serial", "file:$logfile"
         )
         if ($wantSlip) {
