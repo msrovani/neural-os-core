@@ -136,6 +136,30 @@ pub fn this_cpu() -> &'static PerCpu {
     unsafe { &*(ptr as *const PerCpu) }
 }
 
+/// BSP no handler de exceção. Antes do GS de PerCpu, só o BSP executa.
+/// No host (teste) devolve false: ler GS aqui não é o PerCpu do kernel.
+pub fn fault_context_is_bsp() -> bool {
+    #[cfg(not(target_os = "none"))]
+    {
+        return false;
+    }
+    #[cfg(target_os = "none")]
+    {
+        let self_ptr: u64;
+        unsafe {
+            core::arch::asm!(
+                "mov {0}, gs:[0]",
+                out(reg) self_ptr,
+                options(nostack, preserves_flags, readonly)
+            );
+        }
+        if self_ptr < 0xffff_8000_0000_0000 {
+            return true;
+        }
+        unsafe { (*(self_ptr as *const PerCpu)).is_bsp }
+    }
+}
+
 pub fn cpu_id() -> u64 {
     let id: u64;
     unsafe {

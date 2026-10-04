@@ -23,7 +23,7 @@
 //! Observe-only (lição s429-lab): NUNCA age (sem reboot/park/hlt) — só prova
 //! vida e carimba, rate-limited a 1 dump / 10s (mesmo cadastro do OOM-HALT).
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 /// Silêncio considerado stall: 60s sem emitir NENHUMA linha de log.
 /// Prefill medido ~57s com logs por slice (s413) — 60s não falso-positiva.
@@ -47,6 +47,10 @@ pub static DUMP_COUNT: AtomicU64 = AtomicU64::new(0);
 static CORE_LAST_IRQ_US: [AtomicU64; MAX_CORES] = [const { AtomicU64::new(0) }; MAX_CORES];
 /// Idade do último progresso por core (0 = sem amostra).
 static CORE_LAST_PROG_US: [AtomicU64; MAX_CORES] = [const { AtomicU64::new(0) }; MAX_CORES];
+/// Estágio por core (s439/F1; fases F1): onde o core estava quando o log parou
+/// — 0=fora/idle, 1=infer prefill, 2=infer decode, 3=infer coarse,
+/// 4=Jarbas drain LLM_RESPONSE. O `[SILENCE]` dump imprime o número por core.
+static CORE_INFER_STAGE: [AtomicU8; MAX_CORES] = [const { AtomicU8::new(0) }; MAX_CORES];
 
 /// Chamar a CADA linha emitida (choke point único: `serial::dispatch_bytes` e
 /// `boot_logger::append_raw`). Custo: 1 store Relaxed — seguro no IRQ path.
@@ -64,6 +68,20 @@ pub fn note_core_progress() {
     let idx = crate::smp::percpu::cpu_id() as usize;
     if idx < MAX_CORES {
         CORE_LAST_PROG_US[idx].store(crate::tsc::now_us(), Ordering::Relaxed);
+    }
+}
+
+/// Carimba o estágio do core atual (PHASE-level do freeze F1, s439 + fases F1).
+/// Valores: 0=fora, 1=infer prefill, 2=infer decode, 3=infer coarse,
+/// 4=Jarbas drain LLM_RESPONSE. Barato: 1 store Relaxed. Mesmo guard de
+/// `note_core_progress`: antes do 1º timer IRQ o PerCpu/GS podem não estar prontos.
+pub fn note_infer_stage(stage: u8) {
+    if CORE_LAST_IRQ_US[0].load(Ordering::Relaxed) == 0 {
+        return;
+    }
+    let idx = crate::smp::percpu::cpu_id() as usize;
+    if idx < MAX_CORES {
+        CORE_INFER_STAGE[idx].store(stage, Ordering::Relaxed);
     }
 }
 
@@ -212,6 +230,21 @@ fn dump_line(now: u64, age_us: u64, dump_n: u64) {
         w.put(b"=");
         w.put_age(CORE_LAST_PROG_US[i].load(Ordering::Relaxed), now);
     }
+    w.put(b" | stage:");
+    for i in 0..MAX_CORES {
+        if i >= 8 {
+            break;
+        }
+        w.put(b" c");
+        w.put_num(i as u64);
+        w.put(b"=");
+        let s = CORE_INFER_STAGE[i].load(Ordering::Relaxed);
+        if s == 0 {
+            w.put(b"-"); // n/a honesto (fora do infer)
+        } else {
+            w.put_num(s as u64);
+        }
+    }
     w.put(b"\n");
     // puts = escrita serial lock-free dos handlers de IRQ — NUNCA SERIAL.lock()
     // (o spinner pode estar segurando o lock do serial: é UMA causa de silêncio).
@@ -228,6 +261,9 @@ pub fn reset_for_tests() {
         c.store(0, Ordering::Relaxed);
     }
     for c in CORE_LAST_PROG_US.iter() {
+        c.store(0, Ordering::Relaxed);
+    }
+    for c in CORE_INFER_STAGE.iter() {
         c.store(0, Ordering::Relaxed);
     }
 }

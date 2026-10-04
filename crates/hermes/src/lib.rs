@@ -25,6 +25,7 @@ pub mod cross_os;
 pub mod hermes;
 pub mod hub;
 pub mod lab_inject;
+pub mod skill_lab; // F1.5 (OPCODE-0063): hook de lab LSK1 @0x02110000 (G gera / E reusa + roda)
 pub mod mcp;
 pub mod mcp_server;
 pub mod net;
@@ -36,6 +37,7 @@ pub mod network_agent;
 pub mod plugin_hub;
 pub mod security;
 pub mod hub_triage; // s432: triagem IA do HUB HEALTH (premissa máx. ADR-0088) — snapshot HUB\0 + pior-estado + proposta HITL
+pub mod anti_frag; // s442: IA-observa→IA-age — TALC fragmentado vira AÇÃO (vocabulário fechado + HITL + verificação medida)
 pub mod safety; // s390b: I1–I4 + SAFETY_CHECK (não órfão)
 pub mod self_update;
 // pub mod shell; // DELETED SESSION_379 residual (0 callers; Command::Install)
@@ -105,7 +107,6 @@ pub use k_hal::net::wifi_softmac;
 pub mod trinity_inject;
 pub mod stream_packet;
 pub mod chat_tree;
-pub mod matrix_learn;
 pub mod tls;
 pub mod crdt;
 

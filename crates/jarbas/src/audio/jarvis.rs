@@ -40,6 +40,8 @@ static BOOT_GREET_REMAINING: spin::Mutex<alloc::vec::Vec<i16>> =
 /// tivesse entrado — áudio silenciosamente truncado quando o ring enchia.
 pub static TTS_PUSH_DROPPED: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(0);
+/// s439 (F1): só loga enter/exit do drain LLM_RESPONSE acima disto (anti-spam).
+const JARVIS_LLM_SLOW_US: u64 = 500_000;
 
 /// Push honesto: devolve o que ENTROU de fato; o que não coube é contado.
 fn tts_push(samples: &[i16]) -> usize {
@@ -548,18 +550,37 @@ impl Agent for JarbasAgent {
         }
         }
 
+        // s439 (F1): instrumenta o handler LLM_RESPONSE — o freeze F1 foi
+        // observado no fim deste drain (`[JARBAS] JARBAS: and`), suspeita de
+        // lock de log/serial no cleanup pós-job. TSC lido DEPOIS dos slogs.
+        let llm_enter_us = k_nano::tsc::now_us();
+        // F1 (missao §5): carimba o estagio 4 (drain LLM_RESPONSE) — o freeze
+        // F1 foi observado no fim deste drain; o [SILENCE] dump nomeia o core.
+        k_nano::silence_watchdog::note_infer_stage(4);
         while let Some(ev) = self.llm_response.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             if text.is_empty() {
                 continue;
             }
             if text_is_tts_telemetry(text) {
+                let telem_t0 = k_nano::tsc::now_us();
                 k_nano::slog_jarbas!(
                     "Jarbas",
                     "ok",
                     "LLM_RESPONSE telemetria — sem TTS: {}",
                     text.chars().take(48).collect::<String>()
                 );
+                // TSC após o slog (s413): mede o slog, não o instrumento.
+                let telem_us = k_nano::tsc::now_us().saturating_sub(telem_t0);
+                if telem_us > JARVIS_LLM_SLOW_US {
+                    k_nano::slog_jarbas!(
+                        "Jarbas",
+                        "warn",
+                        "LLM_RESPONSE telemetria lenta us={} text='{}'",
+                        telem_us,
+                        text.chars().take(24).collect::<String>()
+                    );
+                }
                 continue;
             }
 
@@ -593,6 +614,11 @@ impl Agent for JarbasAgent {
                 payload: response.into_bytes(),
                 token: CapabilityToken::Legacy(1),
             });
+        }
+        let llm_us = k_nano::tsc::now_us().saturating_sub(llm_enter_us);
+        k_nano::silence_watchdog::note_infer_stage(0);
+        if llm_us > JARVIS_LLM_SLOW_US {
+            k_nano::slog_jarbas!("Jarbas", "warn", "LLM_RESPONSE drain lento us={}", llm_us);
         }
 
         // --- INFER_TTS_PARTIAL: frases fechadas durante generate fatiado ---

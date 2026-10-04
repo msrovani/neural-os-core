@@ -333,6 +333,52 @@ fn persist_installed_wasm(
             provenance.as_str()
         );
     }
+    // F1.5 (OPCODE-0042 Option 2): persistência DURÁVEL em TickvLite.
+    // O ramfs /skills é volátil e some no reboot — o TickvLite index
+    // via put_blob é o que garante sobrevivência entre boots.
+    // Antes: best-effort warn-only que escondia falhas e quebrava o
+    // experimento F1.5 (boot2 encontrava 0 keys duráveis). Agora: erro
+    // logado explicitamente; sucesso logged como info.
+    let dkey = alloc::format!("skill/wasm/{}", name);
+    let put_wasm = k_nano::storage::put_blob(&dkey, wasm);
+    if put_wasm.is_err() {
+        k_nano::slog_hermes!(
+            "EVOLVE",
+            "error",
+            "{} skill={} durable wasm FAIL (tickv): {}",
+            stage,
+            name,
+            put_wasm.unwrap_err()
+        );
+    } else {
+        k_nano::slog_hermes!(
+            "EVOLVE",
+            "info",
+            "{} skill={} durable wasm OK (tickv)",
+            stage,
+            name
+        );
+    }
+    let pkey = alloc::format!("skill/wasm_prov/{}", name);
+    let put_prov = k_nano::storage::put_blob(&pkey, provenance.as_str().as_bytes());
+    if put_prov.is_err() {
+        k_nano::slog_hermes!(
+            "EVOLVE",
+            "error",
+            "{} skill={} durable prov FAIL (tickv): {}",
+            stage,
+            name,
+            put_prov.unwrap_err()
+        );
+    } else {
+        k_nano::slog_hermes!(
+            "EVOLVE",
+            "info",
+            "{} skill={} durable prov OK (tickv)",
+            stage,
+            name
+        );
+    }
 }
 
 /// Boot / DREAM hook: demo swap. H8: sem bytecode real não há swap.

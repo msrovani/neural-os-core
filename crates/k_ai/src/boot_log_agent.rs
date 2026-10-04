@@ -6,8 +6,10 @@ use event_bus::Receiver;
 const MANIFEST: AgentManifest = AgentManifest {
     name: "boot_log",
     kind: AgentKind::Skill,
-    // PollEvery(32): drena BOOT_PHASE; FAT analyze uma vez (não Continuous).
-    schedule: ScheduleKind::PollEvery(32),
+    // PollEvery(32) -> Oneshot: FAT analyze uma vez no init, não Continuous.
+    // O tick Continuous engasgava mesh 1G (audit §3). Oneshot roda uma vez
+    // no boot e desliga; o guard `analyzed` garante idempotência.
+    schedule: ScheduleKind::Oneshot,
     auto_start: true,
     persist: true,
 };

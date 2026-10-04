@@ -55,6 +55,16 @@ fn ps2_reset() {
     k_nano::hal::ARCH.reboot();
 }
 
+/// WBINVD — força TODAS as linhas sujas ao DRAM antes de reset/power-off.
+/// (O selo do ramlog só sobrevive a um warm-reset se estiver no DRAM.)
+fn flush_caches() {
+    unsafe {
+        core::arch::asm!("wbinvd", options(nostack, preserves_flags));
+    }
+}
+
+#[allow(dead_code)] // fallback físico — NÃO usar no shutdown: S5 apaga a DRAM
+                    // antes de a captura acontecer no próximo boot (exp-1).
 fn power_off_cascade() -> ! {
     let tried_s5 = k_nano::acpi::power_off_s5();
     if tried_s5 {
@@ -93,9 +103,21 @@ pub fn begin_orderly_shutdown(cause: ShutdownCause) -> ! {
     );
     dump_boot_log_sector();
     let _ = k_nano::boot_logger::try_flush_ramlog();
+    // F1 anti-loop (OPCODE-0054): shutdown ordenado = estado limpo — zera o
+    // contador DURÁVEL de recover-reboots (um crash futuro não herda a conta).
+    k_nano::boot_ramlog::clear_recover_count();
     k_nano::boot_ramlog::seal_for_next_boot();
+    // exp-1: S5 frio apaga a DRAM antes da captura. Arma o flag e faz WARM
+    // RESET p/ o logwriter-efi (pré-Limine) gravar o BOOT.LOG e só então
+    // desligar via UEFI ResetSystem(Shutdown).
+    k_nano::boot_ramlog::set_poweroff_after_capture();
+    k_nano::slog_bin!("SHUTDOWN", "ok", "warm-reset p/ captura (logwriter grava BOOT.LOG + power-off)");
     halt_aps();
-    power_off_cascade()
+    flush_caches();
+    ps2_reset();
+    loop {
+        x86_64::instructions::hlt();
+    }
 }
 
 /// Reinício ordenado.
@@ -117,8 +139,11 @@ pub fn begin_orderly_reboot(cause: ShutdownCause) -> ! {
     );
     dump_boot_log_sector();
     let _ = k_nano::boot_logger::try_flush_ramlog();
+    // F1 anti-loop (OPCODE-0054): reboot ordenado = estado limpo.
+    k_nano::boot_ramlog::clear_recover_count();
     k_nano::boot_ramlog::seal_for_next_boot();
     halt_aps();
+    flush_caches();
     ps2_reset();
     loop {
         x86_64::instructions::hlt();

@@ -1,3 +1,35 @@
+# STATE - neural-os-core v1.9.99-s449 TEST - consolidacao do working tree nao commitado (E1-E4 + F1 + AION-storage + dead-weight)
+
+#   [s449] CONSOLIDACAO (41 modificados + untracked desde s441 num so commit):
+#     E1-E4 (ADR-0113) + F1 runtime + AION-storage + cleanup dead-weight + codigo
+#     de s441-s445. ZERO codigo novo escrito -- verificacao + registro + higiene.
+#     E1 formal (mesh p99 + kani) / E2 caps (trust grant/mint/enforce/revoke +
+#     CAP_GENERATION global + wasmi cap_gen) / E3 provenance (event-bus/stamp.rs
+#     NOVO + bus wire + register_audit_hooks(sha256)) / E4 perf (bench_stats.rs
+#     novo + agent-core bench_* + BENCH markers + tools/bench_boot.ps1).
+#     HONESTIDADE: as provas #[cfg(kani)] compilam mas NAO rodam no host
+#     (x86_64-unknown-none fora do guide) => E1/E2 formal = UNKNOWN.
+#     F1 runtime: interrupts_ext pf_storm BSP->reboot_ordered + ramlog_note
+#     lock-free; silence_watchdog stage por core; percpu fault_context_is_bsp;
+#     compositor PAINT_GAP EWMA; jarvis TSC; infer_queue DECODE_RING.
+#     AION-storage (DONO AION -- so se commitou): tickv advance_oversized +
+#     replay da cauda pos-ckpt + append_off=size fail-closed + ckpt-on-flush;
+#     flash with_flash_dev -> virtio_modern; virtio_modern BlockDevice;
+#     virtio_blk legacy-first; self_heal checkpoint v4 SHV4 (sem bitmap 2MiB).
+#     Cleanup dead-weight (DEAD_WEIGHT_AUDIT.md, root, versionado): findings
+#     1,2,3,5,6 (matrix_learn.rs DELETADO, boot_log/self_learning -> Oneshot,
+#     self_heal sem heartbeat falso, input sem USB poll); #7 INVERTIDO (o E3
+#     criou o consumidor que o audit nao achou); #4/#8/#9 nao.
+#     GATES: cargo build --release -p boot = 0 erros (1m12s). Testes ISOLADOS
+#     (-t1): hermes 322/323 (permission_gate PRE-EXISTENTE), cortex 126/126,
+#     jarbas 135/135, k-hal 75/75; k_ai abort PRE-EXISTENTE (sgdb bench);
+#     tq2_0_gguf_load PRE-EXISTENTE (gguf.rs + teste NAO modificados). A suite
+#     paralela mentiu 6 targets (flaky de statics, licao s346/418) -- isolado
+#     volta a passar.
+#     UNKNOWN: Kani nao rodou; nenhuma frente validada em boot QEMU (host !=
+#     runtime); causa do tq2_0_gguf_load nao isolada.
+#     Detalhe: docs/memory/SESSION_449.md
+
 # STATE - neural-os-core v1.9.99-s448 TEST - forum ENCERRADO; F1.5 = carimbo (§14/§14b) + braco de ablacao (§7, IMPLEMENTADO/host)
 
 #   [s448] BRACO DE ABLACAO DO F1.5 (IDEA #638, era a peca 100% da lane FREEBU).

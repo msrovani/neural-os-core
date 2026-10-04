@@ -53,6 +53,41 @@ pub fn kv_cache_reset() {
     }
 }
 
+/// s442: eviction H2O no KV cache GLOBAL — seam real da ação anti-fragmentação
+/// com HITL (`hermes::anti_frag`, cmd `evict_kv`).
+///
+/// `None` = o global está VAZIO porque um job em voo tem a posse dele
+/// (`global_kv_cache_take`) → a ação é honestamente no-op (fail-closed: a
+/// anti-fragmentação NUNCA rouba o cache de um prefill/decode em andamento).
+/// `Some(dropped)` = posições (e páginas TALC) efetivamente liberadas.
+///
+/// Honesto sobre o custo: `h2o_evict` desquantiza/requantiza e REALOCA as
+/// páginas restantes — o ganho é líquido quando o contexto é longo, e pode ser
+/// nulo (ou negativo em página) quando `recent + heavy` ≈ len. Por isso o
+/// caller mede o delta na telemetria depois (não prometemos ganho, medimos).
+pub fn kv_h2o_evict_global(recent: usize, heavy: usize) -> Option<usize> {
+    let mut g = GLOBAL_KV_CACHE.lock();
+    let cache = g.as_mut()?;
+    let dropped = crate::kv_h2o::h2o_evict(cache, recent, heavy);
+    Some(dropped)
+}
+
+/// s442: páginas TALC vivas no KV global (0 = cache ausente/em voo). Usado pela
+/// anti-fragmentação para dizer "nada a liberar" ANTES de pedir HITL — proposta
+/// sem alvo é ruído (lição s410d: proposta sem consumidor vira spam).
+pub fn kv_global_pages() -> usize {
+    GLOBAL_KV_CACHE
+        .lock()
+        .as_ref()
+        .map(|c| c.k.iter().map(|l| l.page_count()).sum())
+        .unwrap_or(0)
+}
+
+/// s442: posições (tokens) vivas no KV global (0 = cache ausente/em voo).
+pub fn kv_global_len() -> usize {
+    GLOBAL_KV_CACHE.lock().as_ref().map(|c| c.len).unwrap_or(0)
+}
+
 /// P1 lane memória — pool de logits p/ decode (1 alloc + reuse por token).
 /// O HybridAllocator é bump-first com dealloc no-op no bump: cada `Vec`
 /// de logits (vocab 131K × 4B = 512KB) por token consumia a janela

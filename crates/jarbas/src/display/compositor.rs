@@ -285,12 +285,24 @@ static FRAME_COST_US: core::sync::atomic::AtomicU32 = core::sync::atomic::Atomic
 /// Substitui o gate por tick (o `%3` do orb + `/30` do frame davam 15 fps reais).
 static LAST_PRESENT_US: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
+/// Intervalo entre presents (EWMA α=1/4, µs) — a cadência que a UI REALMENTE
+/// alcança. O rail do scheduler pode ser bem < 60 Hz (PIT/WHPX ~7–18 Hz); usar
+/// o alvo de 60 fps como referência fazia `present_overdue` disparar a CADA tick,
+/// ligando o gate de Infer sem a UI estar atrasada (flap → flood no AP idle).
+static PAINT_GAP_US: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 /// Período-alvo do paint em µs (constante — NÃO derivar da cadência do rail).
 pub fn target_period_us() -> u64 {
     1_000_000 / TARGET_FPS
 }
 
-/// True se o último present atrasou >2× o período-alvo (UI “travada” sob carga).
+/// Predicado puro: o gap atual excede 2× a referência (piso no período-alvo).
+/// Referência = cadência observada, não o alvo de 60 fps (ver `PAINT_GAP_US`).
+fn gap_is_overdue(gap_us: u64, reference_us: u64) -> bool {
+    gap_us > reference_us.max(target_period_us()).saturating_mul(2)
+}
+
+/// True se o último present atrasou >2× a cadência recente (UI “travada”).
 /// `LAST_PRESENT_US==0` = desktop ainda não pintou → false (não gatear Infer no boot).
 pub fn present_overdue() -> bool {
     let last = LAST_PRESENT_US.load(core::sync::atomic::Ordering::Relaxed);
@@ -301,7 +313,23 @@ pub fn present_overdue() -> bool {
     if now == 0 {
         return false;
     }
-    now.wrapping_sub(last) > target_period_us().saturating_mul(2)
+    let reference = PAINT_GAP_US.load(core::sync::atomic::Ordering::Relaxed);
+    gap_is_overdue(now.wrapping_sub(last), reference)
+}
+
+/// Registra o intervalo entre presents (EWMA α=1/4) e atualiza `LAST_PRESENT_US`.
+/// Chamado no paint — a referência de "atrasada" é a própria cadência da UI.
+fn record_paint_gap(now: u64) {
+    let prev = LAST_PRESENT_US.load(core::sync::atomic::Ordering::Relaxed);
+    if prev != 0 {
+        let gap = now.wrapping_sub(prev);
+        if gap > 0 {
+            let cur = PAINT_GAP_US.load(core::sync::atomic::Ordering::Relaxed);
+            let next = if cur == 0 { gap } else { cur - cur / 4 + gap / 4 };
+            PAINT_GAP_US.store(next, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    LAST_PRESENT_US.store(now, core::sync::atomic::Ordering::Relaxed);
 }
 
 /// Propaga `present_overdue` → `k_nano::smp::set_ui_yield_infer` (APs/InferWorker).
@@ -899,7 +927,7 @@ impl JarbasDesktop {
             return;
         }
         self.last_paint_tick = tick;
-        LAST_PRESENT_US.store(now, core::sync::atomic::Ordering::Relaxed);
+        record_paint_gap(now);
         self.damage.clear();
 
         // Orb anima a cada paint (time-driven dentro do SoulMirror).
@@ -2642,6 +2670,19 @@ mod damage_tests {
     fn target_period_is_60fps() {
         assert_eq!(TARGET_FPS, 60, "teto tunável deve ser 60 fps");
         assert_eq!(target_period_us(), 16_666);
+    }
+
+    /// Regressão do flap: com rail < 60 Hz a cadência saudável (ex. 139 ms) já é
+    /// > 33 ms; a referência tem de ser o gap OBSERVADO, não o alvo de 60 fps.
+    #[test]
+    fn overdue_is_relative_to_observed_cadence() {
+        // gap == cadência observada → NÃO atrasada (antes: 139 ms > 33 ms → flap).
+        assert!(!gap_is_overdue(139_000, 139_000));
+        // gap > 2× a cadência observada → atrasada de verdade.
+        assert!(gap_is_overdue(139_000 * 3, 139_000));
+        // Sem amostra (EWMA=0): piso no período-alvo → 1 frame de 60 fps não é atraso.
+        assert!(!gap_is_overdue(16_000, 0));
+        assert!(gap_is_overdue(34_000, 0));
     }
 
     #[test]

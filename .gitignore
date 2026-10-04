@@ -100,3 +100,9 @@ fb_viewer.html
 # Patches one-shot de sessões (não integrados)
 tools/patch_*.py
 !tools/patch_usb_esp.py
+# s449: artefatos locais de verificação/ops (não versionar)
+*_check.txt
+sgdb_memory.db
+tools/.forum_loop_state/
+tools/forum_freebu_intro.py
+tools/forum_loop_opkimi.ps1

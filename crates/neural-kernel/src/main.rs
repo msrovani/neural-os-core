@@ -905,8 +905,10 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     }
 
     // Sela ramlog + HALT → logwriter grava BOOT.LOG no próximo boot (power cycle).
+    // Contexto de exceção: usa o selo QUIET (sem slog/lock — evita deadlock do
+    // serial/BOOT_LOG se o panic ocorreu segurando um deles; o append é volatile).
     k_nano::boot_ramlog::append("[PANIC] seal+reboot");
-    k_nano::boot_ramlog::seal_for_next_boot();
+    k_nano::boot_ramlog::seal_for_next_boot_quiet();
     x86_64::instructions::interrupts::disable();
     loop { x86_64::instructions::hlt(); }
 }
@@ -1060,11 +1062,32 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
         },
     });
     crate::display::fb::boot_ckpt(53, "scheduler run start");
+    // E4 (OPCODE-0098): Runtime start (TSC).
+    {
+        let us = k_nano::tsc::now_us();
+        if us != 0 {
+            k_nano::slog_bin!("BENCH", "ok", "runtime_start_us={}", us);
+        }
+    }
     // Consumer de SYSTEM_SHUTDOWN/SYSTEM_REBOOT (botão OFF do dock): assina
     // uma vez e drena a cada ciclo do scheduler — nunca dentro de IRQ.
+    // HITL BOOT.LOG: não há handler de tecla/comando no bin hoje. Quando houver
+    // um gatilho (tecla dedicada ou comando shell), chamar
+    // `k_nano::boot_ramlog::seal_now()` — sela o ramlog sob demanda p/ o
+    // logwriter-efi gravar o BOOT.LOG no próximo reset, sem shutdown ordenado.
     crate::shutdown::init_power_drain();
     registry.run(
         || {
+            // E4 (OPCODE-0098): 1º ciclo completo do scheduler → ready (TSC).
+            // `static` local: 1× só, sem alocação, sem tocar o registry.
+            static BENCH_READY_EMITTED: core::sync::atomic::AtomicBool =
+                core::sync::atomic::AtomicBool::new(false);
+            if !BENCH_READY_EMITTED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                let us = k_nano::tsc::now_us();
+                if us != 0 {
+                    k_nano::slog_bin!("BENCH", "ok", "ready_us={}", us);
+                }
+            }
             // Power: drena SYSTEM_SHUTDOWN/SYSTEM_REBOOT → begin_orderly_*.
             crate::shutdown::power_drain_tick();
             // Wakes marcados pelo IRQ do timer são processados aqui (fora do IRQ).
@@ -1862,6 +1885,15 @@ pub(crate) fn kernel_boot(
         tsc_hz,
         k_nano::tsc::tsc_source_name()
     );
+    // E4 (OPCODE-0098): marcador de boot p/ o harness de bench (TSC já calibrado).
+    {
+        let hv = k_nano::platform_probe::hypervisor();
+        let env = if hv.is_sandbox() { "sandbox" } else { "baremetal" };
+        let us = k_nano::tsc::now_us();
+        if us != 0 {
+            k_nano::slog_bin!("BENCH", "ok", "env={} hv={} boot_start_us={}", env, hv.name(), us);
+        }
+    }
     // Ponytail: K137 trava comum (i5 7ª / 240H) — tenta pendrive sem hang.
     // USB-MSC pode ainda não estar, mas ATA fallback (try_lock) tenta.
     let _ = k_nano::boot_logger::try_flush_ramlog();
@@ -1900,6 +1932,11 @@ pub(crate) fn kernel_boot(
 
 
     tpm::init_tpm(pm_offset);
+
+    // E3 (OPCODE-0088): registra o hasher do kernel (sha256) + publisher no
+    // event-bus para o carimbo de proveniência (anel de audit). Fn-pointer
+    // bridge — event-bus não depende de k_nano (sem ciclo de Cargo).
+    EVENT_BUS.register_audit_hooks(k_nano::tpm::sha256, bin_audit_publisher);
 
     crate::boot_logger::log("BOOT: TPM probe done");
 
@@ -2748,6 +2785,10 @@ pub(crate) fn kernel_boot(
         crate::boot_logger::log("BOOT: [TICKV] smoke FAIL");
     }
     k33_step!("tickv");
+    // F1.5 (OPCODE-0063): o 1º reload (~L2495) roda ANTES do Tickv mount acima,
+    // então skills DURÁVEIS nunca carregavam no boot. 2ª chamada idempotente
+    // (dedupe via has_skill) AGORA que o Tickv está montado.
+    let _ = crate::skill_loader::reload_persisted_wasm_skills();
     // s363+: canário SSE2 sret ANTES de K33[28] sgdb — prova rebuild soft-float
     // sem depender de Tickv/ROUTER (stall K33 ≠ matmul).
     k33_step!("sse2_sret...");
@@ -3788,8 +3829,6 @@ pub(crate) fn kernel_boot(
     k_hal::hw_gate::emit_all_refresh();
 
     // BootLogAgent ja registrado no inicio do registry (BOOT_PHASE consumer)
-
-    registry.register(Box::new(agents::log_analyst_agent::LogAnalystAgent::new()));
 
     // DiagnosticSkill — SystemAgent no SYSTEM_READY + execucao explicita no boot
 
@@ -5473,6 +5512,12 @@ fn drain_boot_phase_consumer() {
 /// P001: Registra skills builtin no SKILL_REGISTRY canônico (k_nano::globals).
 /// Antes isto era um `lazy_static` privado no bin — shadowing deixava hermes/k_ai
 /// vendo um registry vazio. Agora todos compartilham `k_nano::SKILL_REGISTRY`.
+/// E3 (OPCODE-0088): publisher id do carimbo de audit (kernel/boot). Sem
+/// contexto de agente no `publish`, é um id estável — não finge um agente.
+fn bin_audit_publisher() -> u64 {
+    0xB007
+}
+
 pub fn register_builtin_skills() {
     let mut reg = k_nano::SKILL_REGISTRY.lock();
     reg.register(alloc::boxed::Box::new(EchoSkill));

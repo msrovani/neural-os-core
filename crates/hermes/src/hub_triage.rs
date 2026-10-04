@@ -87,6 +87,10 @@ pub struct HubTriageInputs {
     pub talc_gaps: u64,
     /// 1 = última amostra parcial (walk abortado — metadados ilegíveis).
     pub talc_partial: u8,
+    /// s443: gaps por faixa de tamanho (`k_nano::allocator::TALC_HIST_BOUNDS`).
+    /// Totais dizem QUE; isto diz DE QUE JEITO — é o dado que decide qual
+    /// acao anti-fragmentacao faz sentido (poeira vs poucos gaps grandes).
+    pub talc_hist: [u32; k_nano::allocator::TALC_HIST_BUCKETS],
     /// Arena Cortex usada/capacidade (MB) — `cortex::global_arena::arena_stats`.
     pub arena_used_mb: u64,
     pub arena_cap_mb: u64,
@@ -115,6 +119,7 @@ impl HubTriageInputs {
             talc_largest_mb: obs.talc_largest_mb as u64,
             talc_gaps: obs.talc_gaps,
             talc_partial: obs.talc_partial,
+            talc_hist: obs.talc_hist,
             arena_used_mb: (arena_used / (1024 * 1024)) as u64,
             arena_cap_mb: (arena_cap / (1024 * 1024)) as u64,
             posture_sev: cortex::decision::hub_posture_sev(),
@@ -181,7 +186,7 @@ pub fn triage_snapshot_json(i: &HubTriageInputs) -> String {
     };
     let machine = i.machine_json.as_deref().unwrap_or("{}");
     format!(
-        "{{\"heap\":{{\"used\":{},\"window\":{},\"pct\":{},\"pressure\":{},\"talc\":{},\"talc_used\":{},\"talc_free\":{},\"talc_largest\":{},\"talc_gaps\":{},\"talc_partial\":{}}},\
+        "{{\"heap\":{{\"used\":{},\"window\":{},\"pct\":{},\"pressure\":{},\"talc\":{},\"talc_used\":{},\"talc_free\":{},\"talc_largest\":{},\"talc_gaps\":{},\"talc_partial\":{},\"talc_hist\":[{},{},{},{},{},{}]}},\
 \"arena\":{{\"used\":{},\"cap\":{}}},\
 \"decide\":{{\"sev\":{},\"line\":\"{}\"}},\
 \"sched_violations\":{},\"machine\":{}}}",
@@ -195,6 +200,12 @@ pub fn triage_snapshot_json(i: &HubTriageInputs) -> String {
         i.talc_largest_mb,
         i.talc_gaps,
         i.talc_partial,
+        i.talc_hist[0],
+        i.talc_hist[1],
+        i.talc_hist[2],
+        i.talc_hist[3],
+        i.talc_hist[4],
+        i.talc_hist[5],
         i.arena_used_mb,
         i.arena_cap_mb,
         i.posture_sev,
@@ -541,9 +552,11 @@ pub fn triage_tick(state: &mut TriageState, now_tick: u64) -> String {
                 String::from("ok (talc sem amostra — aguardando HUD refresh)")
             } else {
                 format!(
-                    "ok talc u{}M f{}M lg{}M g{}",
+                    "ok talc u{}M f{}M lg{}M g{} hist={}/{}/{}/{}/{}/{}",
                     inputs.talc_used_mb, inputs.talc_free_mb,
-                    inputs.talc_largest_mb, inputs.talc_gaps
+                    inputs.talc_largest_mb, inputs.talc_gaps,
+                    inputs.talc_hist[0], inputs.talc_hist[1], inputs.talc_hist[2],
+                    inputs.talc_hist[3], inputs.talc_hist[4], inputs.talc_hist[5]
                 )
             }
         }
@@ -610,6 +623,9 @@ pub struct HubTriageAgent {
     /// Respostas do LLM de triagem (o InferQueue publica o texto cru aqui;
     /// podem chegar em QUALQUER tick — fora da cadência de 60s).
     llm_receiver: Receiver,
+    /// s442: lane anti-fragmentação (IA-observa→IA-age com HITL).
+    anti: crate::anti_frag::AntiFragState,
+    anti_receiver: Receiver,
 }
 
 impl HubTriageAgent {
@@ -624,6 +640,8 @@ impl HubTriageAgent {
             },
             state: TriageState::default(),
             llm_receiver: EVENT_BUS.subscribe(TOPIC_HUB_TRIAGE_LLM),
+            anti: crate::anti_frag::AntiFragState::default(),
+            anti_receiver: EVENT_BUS.subscribe(crate::anti_frag::TOPIC_ANTIFRAG_LLM),
         }
     }
 }
@@ -647,6 +665,11 @@ impl agent_core::Agent for HubTriageAgent {
         self.state.due(now)
             || self.state.llm_timeout_due(now)
             || self.llm_receiver.has_pending()
+            // s442: a lane anti-frag acorda por reply do LLM, por HITL em voo
+            // e pela medição do efeito (mesma lição de lost-wakeup s411: quem
+            // espera resposta re-checa bounded em vez de dormir).
+            || self.anti.busy()
+            || self.anti_receiver.has_pending()
     }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> agent_core::AgentTickResult {
@@ -665,6 +688,39 @@ impl agent_core::Agent for HubTriageAgent {
         let line = triage_tick(&mut self.state, now);
         if !line.is_empty() {
             k_nano::slog_hermes!("HubTriage", "info", "{}", line);
+        }
+        // 4. s442: lane anti-fragmentação — LLM escolhe, HITL decide, a
+        //    telemetria julga o efeito. Share a cadência do mesmo painel.
+        match crate::anti_frag::pump(&mut self.anti, &self.anti_receiver, now) {
+            crate::anti_frag::Step::Idle(_) => {}
+            crate::anti_frag::Step::AskLlm => k_nano::slog_hermes!(
+                "AntiFrag", "info", "perguntando ao LLM qual acao anti-fragmentar"
+            ),
+            crate::anti_frag::Step::OpenHitl(cmd) => k_nano::slog_hermes!(
+                "AntiFrag", "info", "aguardando HITL p/ {}", cmd.key()
+            ),
+            crate::anti_frag::Step::Apply(cmd) => k_nano::slog_hermes!(
+                "AntiFrag", "ok", "HITL aprovou {} — executado, medindo efeito", cmd.key()
+            ),
+            crate::anti_frag::Step::Denied(why) => {
+                k_nano::slog_hermes!("AntiFrag", "info", "{} (IA respeitada)", why)
+            }
+            crate::anti_frag::Step::Verify(eff) => {
+                let detail = match eff {
+                    crate::anti_frag::Effect::Improved { largest_gain_mb, free_gain_mb } => format!(
+                        "melhorou: largest +{}M, free +{}M",
+                        largest_gain_mb, free_gain_mb
+                    ),
+                    crate::anti_frag::Effect::NoChange => {
+                        String::from("sem efeito medido — hipótese errada, não repete")
+                    }
+                    crate::anti_frag::Effect::Worse { used_delta_mb } => format!(
+                        "piorou: uso +{}M — não repete",
+                        used_delta_mb
+                    ),
+                };
+                k_nano::slog_hermes!("AntiFrag", "info", "efeito: {}", detail);
+            }
         }
         agent_core::AgentTickResult::Pending
     }
@@ -686,6 +742,7 @@ mod tests {
             talc_largest_mb: 6911,
             talc_gaps: 1,
             talc_partial: 0,
+            talc_hist: [1, 0, 0, 0, 0, 0],
             arena_used_mb: 0,
             arena_cap_mb: 256,
             posture_sev: sev,

@@ -2,8 +2,8 @@
 //! Cada struct implementa agent_core::Agent. Substituem as 7 async fn legacy.
 
 pub mod mouse_agent;
-pub mod log_analyst_agent;
 pub mod sysinfo_agent;
+pub mod log_analyst_agent;
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -194,10 +194,6 @@ impl Agent for InputAgent {
         // PS/2 keyboard (IRQ-driven)
         if let Some(event) = self.receiver.try_receive() {
             self.process_scancode(event.payload.first().copied().unwrap_or(0));
-        }
-        // USB keyboard poll (cada tick — sendkey/HID perde teclas se %5)
-        if let Some(scancode) = unsafe { self.poll_usb_keyboard() } {
-            self.process_scancode(scancode);
         }
         AgentTickResult::Pending
     }
@@ -845,6 +841,18 @@ impl HermesAgent {
                     return Err("trust deny (Contain/Enforce)");
                 }
             }
+            // E2 (OPCODE-0084): capability revogada nega execução (transitiva).
+            // Reusa o guard já segurado (sem double-lock).
+            if tc.is_cap_revoked(token_val) {
+                k_nano::slog_hermes!(
+                    "Cap",
+                    "warn",
+                    "DENY cap revogada token={} skill={}",
+                    token_val,
+                    name
+                );
+                return Err("cap revogada");
+            }
         }
         let result = reg.execute_skill(name, payload, token);
         if idempotent {
@@ -871,6 +879,9 @@ impl Agent for HermesAgent {
 
         // Lab: QEMU-loader LINJ @ 0x02100000 → USER_INTENT (clima / inject deterministico)
         let _ = crate::lab_inject::poll_and_publish();
+
+        // F1.5 (OPCODE-0063): lab LSK1 @ 0x02110000 → gera/reusa skill WASM e roda.
+        let _ = crate::skill_lab::poll_and_run();
 
         // ADR-0047: drain LatentBus → cognitive_bridge (prompt Cortex)
         while let Some(pkt) = self.latent_receiver.try_receive() {
@@ -2208,12 +2219,6 @@ impl Agent for HermesAgent {
                     msg
                 }
                 hermes::Command::Chat(ref msg) => {
-                    // Matrix Learning (#311f) — intercept learning intents before LLM routing
-                    if crate::matrix_learn::is_learning_request(msg) {
-                        crate::matrix_learn::OnDemandLearning::new()
-                            .handle_learning_request(msg)
-                            .unwrap_or_else(|e| alloc::format!("[Matrix] Erro ao aprender: {}", e))
-                    } else {
                     // ── Hermes pre-flight: skill_writer OBRIGATORIO para criacao de skill ──
                     if crate::cognitive_bridge::is_skill_creation_request(msg) {
 
@@ -2384,7 +2389,6 @@ impl Agent for HermesAgent {
                             }
                         }
                     }
-                    }  // close else (matrix learn)
                 }
             };
 

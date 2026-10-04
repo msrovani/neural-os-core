@@ -428,13 +428,11 @@ pub unsafe fn init_driver_virtio_blk() -> bool {
         return true;
     }
 
-    // Try modern transport first (virtio-drivers crate)
-    if crate::virtio_modern::init_driver_virtio_blk_modern() {
-        crate::slog_nano!("VBLK", "ok", "Modern VirtIO-blk driver initialized");
-        return true;
-    }
-
-    // Fallback to legacy manual driver
+    // Legacy/transitional PRIMEIRO: e o unico caminho de I/O PROVADO (FileFlash
+    // dev=virtio, s297). O driver moderno (SESSION_343) tinha I/O nunca exercitado
+    // (MODERN_BLK sem leitor) e pendurava o Tickv no primeiro read_blocks -> o
+    // FileFlash nao achava o dispositivo e o backend caia em RAM. Moderno fica como
+    // FALLBACK para devices modern-only (1af4:1042).
     let devices = crate::pci::scan_pci();
     for dev in &devices {
         if dev.vendor_id != VIRTIO_VENDOR {
@@ -483,6 +481,10 @@ pub unsafe fn init_driver_virtio_blk() -> bool {
             *VIRTIO_BLK_DEV.lock() = Some(b);
             return true;
         }
+    }
+    if crate::virtio_modern::init_driver_virtio_blk_modern() {
+        crate::slog_nano!("VBLK", "ok", "Modern VirtIO-blk driver initialized (fallback)");
+        return true;
     }
     crate::slog_nano!("VBLK", "info", "Nenhum VirtIO-blk encontrado.");
     false

@@ -5,6 +5,7 @@
 **Estado:** ~169K LOC, ~672 arquivos Rust (12 crates do workspace), 41 agentes nativos, 0 erros (`cargo nk`)
 **Marco s360:** interface Jarbas **funcional** + rede mesh + computação distribuída em **6 QEMU** (WHPX, hub L2, FRAG matmul, orb/`MESH_HEALTH` por role).
 **Pista ativa:** s412 ternary_worker tile de colunas (1,9x, SESSION_412); s410m forget cognitivo HITL; s411 A2 proof (1 token real).
+<!-- MEASURED: rs=777 loc=252696 members=12 -->
 
 ---
 

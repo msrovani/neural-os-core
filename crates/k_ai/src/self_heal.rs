@@ -101,6 +101,16 @@ impl SilentFailureDetector {
 }
 
 
+/// FNV-1a 64 (offset 0xcbf29ce484222325, prime 0x100000001b3).
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
 #[derive(Clone, Debug)]
 pub struct Checkpoint {
     pub valid: bool,
@@ -119,7 +129,11 @@ pub struct Checkpoint {
     pub heap_size: u64,               // heap region size in bytes
     pub page_table_pml4_addr: u64,    // CR3 / PML4 physical address (0 = unknown)
     pub driver_state_hash: u64,       // FNV-1a hash of driver init flags (0 = not captured)
-    pub checkpoint_version: u8,       // serialization format version (v2=10 u64s, v3=+save_count)
+    /// Sessao AION: hash FNV-1a do bitmap PMM (drift/telemetria). O bitmap
+    /// completo NAO e mais persistido (v4) — restaurar PMM stale sem os objetos
+    /// donos libera frames em uso (double-alloc) ou vaza; ver restore_checkpoint.
+    pub bitmap_hash: u64,
+    pub checkpoint_version: u8,       // v2=10 u64s, v3=+save_count, v4=SHV4 sem bitmap
     pub save_count: u64,              // incremented on each save_checkpoint() call
 }
 
@@ -138,26 +152,22 @@ impl Checkpoint {
             heap_size: 0,
             page_table_pml4_addr: 0,
             driver_state_hash: 0,
+            bitmap_hash: 0,
             checkpoint_version: 0,
             save_count: 0,
         }
     }
 
-    fn ensure_bitmap_buf(&mut self) {
-        if self.bitmap.len() != BITMAP_SIZE {
-            self.bitmap = alloc::vec![0u8; BITMAP_SIZE];
-        }
-    }
-
     /// Serialize checkpoint to binary blob for SGDB storage.
+    /// Sessao AION v4: NAO inclui o bitmap PMM (2MiB) — so o hash + escalares.
+    /// O record cai de ~2MB para ~102B. O bitmap de um instante anterior nao
+    /// corresponde aos objetos vivos (restore incoerente) e era o gatilho do
+    /// bug de scan do Tickv (record > MAX_VLEN).
     fn serialize(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(1 + BITMAP_SIZE + 11 * 8 + 1);
+        let mut buf = Vec::with_capacity(102);
+        buf.extend_from_slice(b"SHV4");
         buf.push(if self.valid { 1 } else { 0 });
-        if self.bitmap.len() == BITMAP_SIZE {
-            buf.extend_from_slice(&self.bitmap);
-        } else {
-            buf.resize(buf.len() + BITMAP_SIZE, 0);
-        }
+        buf.extend_from_slice(&self.bitmap_hash.to_le_bytes());
         buf.extend_from_slice(&(self.next_free_bit as u64).to_le_bytes());
         buf.extend_from_slice(&(self.total_frames as u64).to_le_bytes());
         buf.extend_from_slice(&(self.usable_frames as u64).to_le_bytes());
@@ -173,9 +183,70 @@ impl Checkpoint {
         buf
     }
 
-    /// Deserialize checkpoint from binary blob.
-    /// Supports v2 (10 u64s) and v3 (10 u64s + save_count) formats.
+    /// Deserialize checkpoint from binary blob. Dispatch por magic: `SHV4` =
+    /// formato v4 (sem bitmap); senao legado v2/v3 (com bitmap de 2MiB).
     fn deserialize(data: &[u8]) -> Option<Self> {
+        if data.starts_with(b"SHV4") {
+            return Self::deserialize_v4(data);
+        }
+        Self::deserialize_legacy(data)
+    }
+
+    /// v4: "SHV4" + valid(1) + bitmap_hash(8) + 10*u64(80) + version(1) + save_count(8).
+    fn deserialize_v4(data: &[u8]) -> Option<Self> {
+        let mut off = 4; // apos "SHV4"
+        let valid = *data.get(off)? != 0;
+        off += 1;
+        let bitmap_hash = u64::from_le_bytes(data.get(off..off + 8)?.try_into().ok()?);
+        off += 8;
+        let next_free_bit = u64::from_le_bytes(data.get(off..off + 8)?.try_into().ok()?) as usize;
+        off += 8;
+        let total_frames = u64::from_le_bytes(data.get(off..off + 8)?.try_into().ok()?) as usize;
+        off += 8;
+        let usable_frames = u64::from_le_bytes(data.get(off..off + 8)?.try_into().ok()?) as usize;
+        off += 8;
+        let allocated_count = u64::from_le_bytes(data.get(off..off + 8)?.try_into().ok()?) as usize;
+        off += 8;
+        let mhi_dram_bytes = u64::from_le_bytes(data.get(off..off + 8)?.try_into().ok()?);
+        off += 8;
+        let tick = u64::from_le_bytes(data.get(off..off + 8)?.try_into().ok()?);
+        off += 8;
+        let heap_start = u64::from_le_bytes(data.get(off..off + 8)?.try_into().ok()?);
+        off += 8;
+        let heap_size = u64::from_le_bytes(data.get(off..off + 8)?.try_into().ok()?);
+        off += 8;
+        let page_table_pml4_addr = u64::from_le_bytes(data.get(off..off + 8)?.try_into().ok()?);
+        off += 8;
+        let driver_state_hash = u64::from_le_bytes(data.get(off..off + 8)?.try_into().ok()?);
+        off += 8;
+        let checkpoint_version = *data.get(off)?;
+        off += 1;
+        let save_count = if data.len() >= off + 8 {
+            u64::from_le_bytes(data[off..off + 8].try_into().ok()?)
+        } else {
+            0
+        };
+        Some(Checkpoint {
+            valid,
+            bitmap: Vec::new(),
+            next_free_bit,
+            total_frames,
+            usable_frames,
+            allocated_count,
+            mhi_dram_bytes,
+            tick,
+            heap_start,
+            heap_size,
+            page_table_pml4_addr,
+            driver_state_hash,
+            bitmap_hash,
+            checkpoint_version,
+            save_count,
+        })
+    }
+
+    /// Legado v2/v3: valid(1) + bitmap(BITMAP_SIZE) + 10*u64(80) + version(1) [+ save_count(8)].
+    fn deserialize_legacy(data: &[u8]) -> Option<Self> {
         // minimum: valid(1) + bitmap(BITMAP_SIZE) + 10*u64(80) + version(1) = BITMAP_SIZE + 82
         // v3 adds save_count(8) = BITMAP_SIZE + 90
         if data.len() < 1 + BITMAP_SIZE + 80 + 1 {
@@ -229,6 +300,7 @@ impl Checkpoint {
             heap_size,
             page_table_pml4_addr,
             driver_state_hash,
+            bitmap_hash: 0,
             checkpoint_version,
             save_count,
         })
@@ -504,15 +576,13 @@ impl SelfHeal {
         {
             let guard = GLOBAL_ALLOCATOR.lock();
             if let Some(ref alloc) = *guard {
-                self.checkpoint.ensure_bitmap_buf();
-                if self.checkpoint.bitmap.len() == BITMAP_SIZE {
-                    self.checkpoint.bitmap.copy_from_slice(&alloc.bitmap);
-                    self.checkpoint.next_free_bit = alloc.next_free_bit;
-                    self.checkpoint.total_frames = alloc.total_frames;
-                    self.checkpoint.usable_frames = alloc.usable_frames;
-                    self.checkpoint.allocated_count = alloc.allocated_count;
-                    bitmap_ok = true;
-                }
+                // Sessao AION v4: hash do bitmap (nao copia os 2MiB).
+                self.checkpoint.bitmap_hash = fnv1a64(&alloc.bitmap);
+                self.checkpoint.next_free_bit = alloc.next_free_bit;
+                self.checkpoint.total_frames = alloc.total_frames;
+                self.checkpoint.usable_frames = alloc.usable_frames;
+                self.checkpoint.allocated_count = alloc.allocated_count;
+                bitmap_ok = true;
             }
         }
         if !bitmap_ok {
@@ -520,8 +590,7 @@ impl SelfHeal {
             k_nano::slog_kai!(
                 "CHECKPOINT",
                 "fail",
-                "save abort — GLOBAL_ALLOCATOR ausente ou bitmap len≠{}",
-                BITMAP_SIZE
+                "save abort — GLOBAL_ALLOCATOR ausente"
             );
             return;
         }
@@ -546,10 +615,10 @@ impl SelfHeal {
         }
         self.checkpoint.driver_state_hash = hash;
         self.checkpoint.save_count = self.checkpoint.save_count.wrapping_add(1);
-        self.checkpoint.checkpoint_version = 3; // v3 = save_count field
+        self.checkpoint.checkpoint_version = 4; // v4 = SHV4 sem bitmap (hash only)
         self.checkpoint.valid = true;
-        k_nano::slog_kai!("CHECKPOINT", "ok", "Salvo #{} @ tick {} — {} frames alocados ({} KB bitmap)",
-            self.checkpoint.save_count, self.checkpoint.tick, self.checkpoint.allocated_count, BITMAP_SIZE / 1024);
+        k_nano::slog_kai!("CHECKPOINT", "ok", "Salvo #{} @ tick {} — {} frames alocados (hash={:#x})",
+            self.checkpoint.save_count, self.checkpoint.tick, self.checkpoint.allocated_count, self.checkpoint.bitmap_hash);
         // Persist to SGDB
         let blob = self.checkpoint.serialize();
         match crate::sgdb::put_kv("sys/checkpoint", &blob) {
@@ -609,8 +678,8 @@ impl SelfHeal {
     ///
     /// | State                  | Saved? | Restored? | Reason |
     /// |------------------------|--------|-----------|-------|
-    /// | Frame allocator bitmap | ✅     | ✅        | Written back to `GLOBAL_ALLOCATOR` |
-    /// | Frame allocator cursor | ✅     | ✅        | `next_free_bit`, totals |
+    /// | Frame allocator bitmap | ✅(hash) | ❌      | v4: hash only; restaurar bitmap stale = footgun |
+    /// | Frame allocator cursor | ✅     | ❌        | v4: telemetria apenas (nao muta o allocator) |
     /// | Heap region (start/sz) | ✅     | ❌        | `talc` heap not snapshot-aware |
     /// | Page tables (PML4/CR3) | ✅     | ❌        | P09 — would need full PML4 walk |
     /// | Driver init state      | ✅     | ❌        | Driver structs not snapshot-aware |
@@ -640,46 +709,20 @@ impl SelfHeal {
             k_nano::slog_kai!("CHECKPOINT", "warn", "Nenhum checkpoint valido para restaurar.");
             return false;
         }
-        if self.checkpoint.bitmap.len() != BITMAP_SIZE {
-            k_nano::slog_kai!(
-                "CHECKPOINT",
-                "fail",
-                "bitmap len={} != {} — refuse restore (evita cursor/counts inconsistentes)",
-                self.checkpoint.bitmap.len(),
-                BITMAP_SIZE
-            );
-            return false;
-        }
-        k_nano::slog_kai!("CHECKPOINT", "ok", "Restaurando checkpoint #{} v{} @ tick {}...",
-            self.checkpoint.save_count, self.checkpoint.checkpoint_version, self.checkpoint.tick);
-        let mut guard = GLOBAL_ALLOCATOR.lock();
-        if let Some(ref mut alloc) = *guard {
-            alloc.bitmap.copy_from_slice(&self.checkpoint.bitmap);
-            alloc.next_free_bit = self.checkpoint.next_free_bit;
-            alloc.total_frames = self.checkpoint.total_frames;
-            alloc.usable_frames = self.checkpoint.usable_frames;
-            alloc.allocated_count = self.checkpoint.allocated_count;
-        } else {
-            k_nano::slog_kai!("CHECKPOINT", "fail", "GLOBAL_ALLOCATOR ausente — restore abortado");
-            return false;
-        }
-        drop(guard);
+        // Sessao AION v4: NAO escrever bitmap/counters no GLOBAL_ALLOCATOR. Um
+        // bitmap de um instante anterior nao corresponde aos objetos vivos
+        // (heap/PT/drivers nao sao restaurados) — restaura-lo libera frames em
+        // uso (double-alloc) ou marca frames livres como ocupados (leak). O
+        // checkpoint e telemetria, nao rollback.
         k_nano::slog_kai!("CHECKPOINT", "ok",
-            "RESTORED bitmap={}/{} frames allocated_count={} heap={:#x}+{}MB",
-            self.checkpoint.next_free_bit, self.checkpoint.total_frames,
-            self.checkpoint.allocated_count,
-            self.checkpoint.heap_start,
-            self.checkpoint.heap_size / (1024 * 1024));
+            "checkpoint v{} #{} carregado (diagnostics-only) tick={} frames={}/{} hash={:#x}",
+            self.checkpoint.checkpoint_version, self.checkpoint.save_count, self.checkpoint.tick,
+            self.checkpoint.next_free_bit, self.checkpoint.total_frames, self.checkpoint.bitmap_hash);
         k_nano::slog_kai!("CHECKPOINT", "warn",
-            "BEST-EFFORT: page_tables(pml4={:#x}) heap_talc drivers(mhi={},hash={:#x}) NOT restored — subsystems not checkpoint-aware (P09)",
+            "BEST-EFFORT: allocator NAO mutado (P09); page_tables(pml4={:#x}) heap_talc drivers(mhi={},hash={:#x}) NOT restored",
             self.checkpoint.page_table_pml4_addr,
             self.checkpoint.mhi_dram_bytes,
             self.checkpoint.driver_state_hash);
-        k_nano::slog_kai!("SELF-HEAL", "ok",
-            "checkpoint loaded: saved={} version={} heap={}",
-            self.checkpoint.save_count,
-            self.checkpoint.checkpoint_version,
-            self.checkpoint.heap_size);
         true
     }
 
@@ -1021,6 +1064,60 @@ mod tests {
         assert!(normalize_respawn_name("kernel").is_none());
         assert_eq!(normalize_respawn_name("SelfHealAgent"), Some("self_heal"));
         assert_eq!(normalize_respawn_name("network_agent"), Some("network_agent"));
+    }
+
+    /// Sessao AION v4: o checkpoint NAO persiste o bitmap (2MiB) — so o hash +
+    /// escalares (~102B). Falsifica o record de 2MB que quebrava o scan do Tickv.
+    #[test]
+    fn v4_checkpoint_is_small_and_roundtrips() {
+        let mut cp = Checkpoint::empty();
+        cp.valid = true;
+        cp.bitmap_hash = 0xDEAD_BEEF_1234_5678;
+        cp.next_free_bit = 12345;
+        cp.total_frames = 1_000_000;
+        cp.usable_frames = 999_000;
+        cp.allocated_count = 4321;
+        cp.tick = 77;
+        cp.heap_start = 0x4000_0000_0000;
+        cp.heap_size = 512 * 1024 * 1024;
+        cp.page_table_pml4_addr = 0x1000;
+        cp.driver_state_hash = 0xABCD;
+        cp.checkpoint_version = 4;
+        cp.save_count = 9;
+
+        let blob = cp.serialize();
+        assert!(blob.len() <= 128, "v4 deve ser ~102B, veio {}", blob.len());
+        assert!(blob.len() < BITMAP_SIZE, "v4 nao pode conter o bitmap");
+
+        let got = Checkpoint::deserialize(&blob).expect("v4 parse");
+        assert_eq!(got.bitmap_hash, cp.bitmap_hash);
+        assert_eq!(got.next_free_bit, cp.next_free_bit);
+        assert_eq!(got.total_frames, cp.total_frames);
+        assert_eq!(got.allocated_count, cp.allocated_count);
+        assert_eq!(got.tick, cp.tick);
+        assert_eq!(got.page_table_pml4_addr, cp.page_table_pml4_addr);
+        assert_eq!(got.save_count, cp.save_count);
+        assert_eq!(got.checkpoint_version, 4);
+        assert!(got.bitmap.is_empty(), "v4 nao materializa bitmap");
+    }
+
+    /// Compat: um record v3 (com bitmap de 2MiB) ainda parseia.
+    #[test]
+    fn legacy_v3_checkpoint_still_parses() {
+        let mut blob = Vec::with_capacity(1 + BITMAP_SIZE + 89);
+        blob.push(1);
+        blob.resize(1 + BITMAP_SIZE, 0);
+        for v in [11u64, 22, 33, 44, 0, 55, 0, 0, 0, 0] {
+            blob.extend_from_slice(&v.to_le_bytes());
+        }
+        blob.push(3);
+        blob.extend_from_slice(&777u64.to_le_bytes());
+
+        let got = Checkpoint::deserialize(&blob).expect("legacy parse");
+        assert_eq!(got.save_count, 777);
+        assert_eq!(got.next_free_bit, 11);
+        assert_eq!(got.checkpoint_version, 3);
+        assert_eq!(got.bitmap.len(), BITMAP_SIZE);
     }
 }
 

@@ -16,6 +16,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use ticket_lock::{TicketLock, TicketLockGuard};
 
 use crate::event::Event;
+use crate::stamp::{self, HashFn, PublisherFn, StampRing};
 
 /// s437: aquisição BOUNDED. Um `TicketLock` é não-reentrante: se um IRQ (ou o
 /// BSP) chama `lock()` enquanto o MESMO core já segura o lock (ex.: `publish`
@@ -81,14 +82,29 @@ impl Receiver {
 pub struct EventBus {
     subscribers: TicketLock<BTreeMap<String, Vec<Arc<TicketLock<VecDeque<Event>>>>>>,
     next_event_id: AtomicU64,
+    /// E3 (OPCODE-0088): anel de stamps de proveniência (kernel-stamped).
+    audit: TicketLock<StampRing>,
+    /// E3: sequência monotônica dos stamps (só avança sob o lock do anel).
+    next_seq: AtomicU64,
 }
+
+/// E3: stamps dropados por falha do lock bounded do anel (best-effort).
+static AUDIT_SKIPPED: AtomicU64 = AtomicU64::new(0);
 
 impl EventBus {
     pub fn new() -> Self {
         EventBus {
             subscribers: TicketLock::new(BTreeMap::new()),
             next_event_id: AtomicU64::new(1),
+            audit: TicketLock::new(StampRing::new()),
+            next_seq: AtomicU64::new(0),
         }
+    }
+
+    /// E3: registra o hasher do kernel (ex.: `k_nano::tpm::sha256`) e o publisher
+    /// do carimbo. Fn-pointer bridge — sem dependência event-bus → k_nano.
+    pub fn register_audit_hooks(&self, hasher: HashFn, publisher: PublisherFn) {
+        stamp::register_audit_hooks(hasher, publisher);
     }
 
     pub fn subscribe(&self, topic: &str) -> Receiver {
@@ -128,6 +144,30 @@ impl EventBus {
             return Err("token de capacidade invalido");
         }
         event.id = self.next_event_id.fetch_add(1, Ordering::Relaxed);
+        // E3 (OPCODE-0088): kernel-stamped provenance. Lock bounded do anel
+        // ANTES (e separado) do lock dos subscribers — nunca aninhado. Se a
+        // aquisição falhar, dropa o stamp (AUDIT_SKIPPED) e SEGUE entregando.
+        {
+            if let Some(mut ring) = lock_bounded(&self.audit) {
+                let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+                let prev = ring.last_hash();
+                let hasher = stamp::active_hasher();
+                let publisher = stamp::active_publisher()();
+                let st = stamp::build_stamp(
+                    seq,
+                    event.id,
+                    event.token.as_legacy(),
+                    publisher,
+                    prev,
+                    event.topic.as_bytes(),
+                    &event.payload,
+                    hasher,
+                );
+                ring.push(st);
+            } else {
+                AUDIT_SKIPPED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         let depth = queue_depth_for(&event.topic);
         let topic_key = event.topic.clone();
         // s437: bounded — publish pode ser chamado de IRQ; bloquear no map lock
@@ -152,6 +192,25 @@ impl EventBus {
             subs.remove(&topic_key);
         }
         Ok(delivered)
+    }
+
+    /// E3: verifica a cadeia retida do anel de stamps. `Ok(n)` = `n` íntegros;
+    /// `Err(seq)` = primeiro stamp adulterado. `Err(u64::MAX)` = anel ocupado
+    /// (lock bounded falhou — não verificável agora, honesto).
+    pub fn audit_verify(&self) -> Result<u64, u64> {
+        match lock_bounded(&self.audit) {
+            Some(ring) => stamp::verify_stamps(&ring, stamp::active_hasher()),
+            None => Err(u64::MAX),
+        }
+    }
+
+    /// E3: stamps evictados do anel (cap `STAMP_RING_CAP`); sob contenção do
+    /// lock, reporta os stamps dropados por falha de lock (`AUDIT_SKIPPED`).
+    pub fn audit_dropped(&self) -> u64 {
+        match lock_bounded(&self.audit) {
+            Some(ring) => ring.dropped(),
+            None => AUDIT_SKIPPED.load(Ordering::Relaxed),
+        }
     }
 
     /// Live subscriber count for a topic (after zombie prune).

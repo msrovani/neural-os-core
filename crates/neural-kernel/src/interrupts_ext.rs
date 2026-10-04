@@ -79,6 +79,25 @@ fn putdec(mut n: u64) {
     for &c in &buf[i..] { putc(c); }
 }
 
+/// Anexa linha lock-free ao ramlog (sem slog/lock) — o serial é lossy no metal
+/// e o core parqueado pode ser o BSP: o IP/CR2 do park precisa chegar ao
+/// BOOT.LOG do próximo boot via logwriter-efi. `append` é puramente volatile.
+fn ramlog_note(prefix: &[u8], ip: u64, cr2: u64) {
+    let mut buf = [0u8; 96];
+    let mut n = 0usize;
+    for &b in prefix {
+        if n < buf.len() { buf[n] = b; n += 1; }
+    }
+    k_nano::interrupts::push_hex_fb(&mut buf, &mut n, ip);
+    for &b in b" cr2=" {
+        if n < buf.len() { buf[n] = b; n += 1; }
+    }
+    k_nano::interrupts::push_hex_fb(&mut buf, &mut n, cr2);
+    if let Ok(s) = core::str::from_utf8(&buf[..n]) {
+        k_nano::boot_ramlog::append(s);
+    }
+}
+
 fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Option<u64>) {
     puts(b"[EXC] ");
     puts(name.as_bytes());
@@ -127,9 +146,11 @@ fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Opt
 extern "x86-interrupt" fn invalid_opcode_handler(f: InterruptStackFrame) {
     if crate::user_mode::demo_active() {
         dump_exception("#UD", &f, None);
+        let _ = k_nano::boot_ramlog::seal_for_next_boot_soft();
         crate::user_mode::fault_abort("P6 #UD in Ring3 demo");
     }
     dump_exception("#UD", &f, None);
+    let _ = k_nano::boot_ramlog::seal_for_next_boot_quiet();
     loop { x86_64::instructions::hlt(); }
 }
 
@@ -138,6 +159,7 @@ extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFram
     let cs = f.code_segment;
     if crate::user_mode::demo_active() {
         dump_exception("#GP", &f, Some(code));
+        let _ = k_nano::boot_ramlog::seal_for_next_boot_soft();
         crate::user_mode::fault_abort("P6 #GP in Ring3 demo");
     }
     let class = k_nano::ring3::gp_fault_class(ip, cs);
@@ -149,6 +171,7 @@ extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFram
         return;
     }
     dump_exception("#GP", &f, Some(code));
+    let _ = k_nano::boot_ramlog::seal_for_next_boot_quiet();
     loop { x86_64::instructions::hlt(); }
 }
 
@@ -160,6 +183,7 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
         puts(b" CR2=");
         puthex(cr2.as_u64());
         putc(b'\n');
+        let _ = k_nano::boot_ramlog::seal_for_next_boot_soft();
         crate::user_mode::fault_abort("P6 #PF in Ring3 demo");
     }
     // P7: demand-paging — cura lazy map e retorna (retry insn); sem hlt.
@@ -246,16 +270,33 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
             puts(b" cr2=");
             puthex(cr2.as_u64());
             puts(b" streak=3+ park core (fail-closed)\n");
-            // s437: não congelar em SILÊNCIO — persiste o BOOT.LOG para o
+            // s437/s438: não congelar em SILÊNCIO — persiste o BOOT.LOG para o
             // próximo boot nomear o IP/CR2 original (o dump serial é lossy sob
             // SMP e o core parqueado é o BSP: scheduler/timer/display morrem).
+            // 1) anexa o site ao ramlog (lock-free); 2) flush FAT oportunista;
+            // 3) sela SEM slog (contexto de exceção — sem lock/alocação).
+            ramlog_note(b"[RECOVER] pf_storm ip=", ip, cr2.as_u64());
             let _ = k_nano::boot_logger::try_flush_ramlog();
-            loop { x86_64::instructions::hlt(); }
+            // s439 (F1): BSP park = freeze total (lição s438). BSP → reboot
+            // ORDENADO observável (seal + [RECOVER] + warm_reset); AP → hlt
+            // fail-closed (a UI no BSP segue). `fault_context_is_bsp` é o check
+            // GS-based já usado (seguro no handler IST; `cpu_id()` seria UNCERTAIN).
+            if k_nano::smp::percpu::fault_context_is_bsp() {
+                k_nano::boot_ramlog::reboot_ordered("pf_storm");
+            } else {
+                loop { x86_64::instructions::hlt(); }
+            }
         }
     }
     let count = PAGE_FAULT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if count <= 10 {
         return;
+    }
+    ramlog_note(b"[RECOVER] pf_repeat ip=", f.instruction_pointer.as_u64(), cr2.as_u64());
+    // s439 (F1): mesmo tratamento do storm — BSP reinicia ordenado (observável),
+    // AP mantém o park fail-closed.
+    if k_nano::smp::percpu::fault_context_is_bsp() {
+        k_nano::boot_ramlog::reboot_ordered("pf_repeat");
     }
     loop { x86_64::instructions::hlt(); }
 }

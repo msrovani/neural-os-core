@@ -64,3 +64,43 @@ jobs:
           grep -q "Phase 6" logs/boot.txt && grep -q "tick=" logs/boot.txt \
             || { echo "BOOT SMOKE FAILED"; tail -50 logs/boot.txt; exit 1; }
           echo "BOOT SMOKE PASS"
+
+  # OPCODE-0079: verificação formal (Kani) dos predicados puros extraídos +
+  # Miri no fuzz do walker do TALC. Alocador global do kernel é gated
+  # `not(miri)` (allocator.rs) para o host usar o alocador padrão.
+  verify:
+    name: Kani proofs + Miri
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # k_ai tem path-dep para o repo comunitário (mesmo clone do job build).
+      - name: Checkout neural-sgdb (path-dep do k_ai)
+        uses: actions/checkout@v4
+        with:
+          repository: msrovani/neural-sgdb
+          path: crates/neural-sgdb
+
+      - name: Show active toolchain
+        run: rustup show active-toolchain
+
+      - name: Install Kani
+        run: |
+          cargo install --locked kani-verifier
+          cargo kani setup
+
+      - name: Kani proofs (trust)
+        run: |
+          cargo kani -p k_ai --lib --harness trust_deny_overrides
+          cargo kani -p k_ai --lib --harness trust_enforce_nonexempt_denies
+          cargo kani -p k_ai --lib --harness trust_valid_entry_allows
+          cargo kani -p k_ai --lib --harness trust_expired_entry_denies
+
+      - name: Kani proof (p99 index in bounds)
+        run: cargo kani -p k-nano --lib --harness p99_index_in_bounds
+
+      - name: Install Miri
+        run: rustup component add miri
+
+      - name: Miri talc_walk_fuzz
+        run: cargo miri test -p k-nano --lib allocator::talc_walk_fuzz

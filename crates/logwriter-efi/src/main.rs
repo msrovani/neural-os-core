@@ -22,22 +22,30 @@ use uefi::proto::device_path::{build, DevicePath, DeviceType};
 use uefi::proto::loaded_image::LoadedImage;
 use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType};
 use uefi::proto::media::fs::SimpleFileSystem;
+use uefi::proto::media::partition::PartitionInfo;
 use uefi::proto::BootPolicy;
 use uefi::CStr16;
 
 /// Espelha `k_nano::boot_ramlog::BOOT_RAMLOG_PHYS`.
 const RAMLOG_PHYS: usize = 0x1000_0000;
 const RAMLOG_CAP: usize = 256 * 1024;
-const HDR_SIZE: usize = 16;
+const HDR_SIZE: usize = 24;
 const MAGIC_NEED: u64 = u64::from_le_bytes(*b"NEURLOG!");
 const MAGIC_DONE: u64 = u64::from_le_bytes(*b"NEURDONE");
 const BOOT_LOG_CAP: usize = 256 * 1024;
+/// Espelha `k_nano::boot_ramlog::FLAG_POWEROFF_AFTER_CAPTURE`.
+const FLAG_POWEROFF_AFTER_CAPTURE: u32 = 0x504F_4646; // "POFF"
 
 #[repr(C)]
 struct RamLogHeader {
     magic: u64,
     len: u32,
     crc_and_ckpt: u32,
+    flags: u32,
+    /// Contador durável de recover-reboots (offset 20). Espelha
+    /// `k_nano::boot_ramlog::BootRamLogHeader` — `mark_done` NÃO o toca.
+    #[allow(dead_code)] // layout-only: o kernel escreve/lê; o logwriter só preserva.
+    recover_count: u32,
 }
 
 fn crc32_24(data: &[u8]) -> u32 {
@@ -91,6 +99,12 @@ unsafe fn mark_done(ckpt: u8) {
     hdr.crc_and_ckpt = pack_crc_ckpt(0, ckpt);
 }
 
+/// `true` se o kernel armou power-off pós-captura no header.
+unsafe fn poweroff_requested() -> bool {
+    let hdr = &*(RAMLOG_PHYS as *const RamLogHeader);
+    hdr.flags == FLAG_POWEROFF_AFTER_CAPTURE
+}
+
 fn c16<'a>(s: &str, buf: &'a mut [u16]) -> Option<&'a CStr16> {
     let mut i = 0;
     for ch in s.encode_utf16() {
@@ -124,6 +138,42 @@ fn try_write_regular(
     true
 }
 
+/// `true` se o volume for a ESP (partição de sistema).
+///
+/// 1. Protocolo de partição (autoritativo quando presente): `is_system()`
+///    cobre GPT/ESP; no MBR, `os_type == 0xEF` é a ESP e `0x0C/0x0B` são FAT32
+///    de dados.
+/// 2. Senão, heurística: a ESP contém `\EFI\BOOT\BOOTX64.EFI`.
+fn handle_is_esp(handle: Handle) -> bool {
+    if let Ok(info) = boot::open_protocol_exclusive::<PartitionInfo>(handle) {
+        if info.is_system() {
+            return true;
+        }
+        if let Some(rec) = info.mbr_partition_record() {
+            return rec.os_type.0 == 0xEF;
+        }
+        if info.gpt_partition_entry().is_some() {
+            // GPT não-system (não-ESP) = partição de dados.
+            return false;
+        }
+    }
+    volume_has_file(handle, "\\EFI\\BOOT\\BOOTX64.EFI")
+}
+
+fn volume_has_file(handle: Handle, path: &str) -> bool {
+    let Ok(mut sfs) = boot::open_protocol_exclusive::<SimpleFileSystem>(handle) else {
+        return false;
+    };
+    let Ok(mut root) = sfs.open_volume() else {
+        return false;
+    };
+    let mut buf = [0u16; 64];
+    let Some(p) = c16(path, &mut buf) else {
+        return false;
+    };
+    root.open(p, FileMode::Read, FileAttribute::empty()).is_ok()
+}
+
 fn write_bootlog(payload: &[u8]) -> Result<usize, &'static str> {
     let handles = boot::locate_handle_buffer(SearchType::from_proto::<SimpleFileSystem>())
         .map_err(|_| "no SimpleFileSystem")?;
@@ -131,7 +181,12 @@ fn write_bootlog(payload: &[u8]) -> Result<usize, &'static str> {
     let mut path_buf = [0u16; 64];
     let boot_log = c16("BOOT.LOG", &mut path_buf).ok_or("cstr")?;
 
+    // PREFERIR a partição de dados sobre a ESP: o placeholder BOOT.LOG da ESP
+    // não deve roubar a escrita (diagnóstico exp-1).
     for &handle in handles.iter() {
+        if handle_is_esp(handle) {
+            continue;
+        }
         let Ok(mut sfs) = boot::open_protocol_exclusive::<SimpleFileSystem>(handle) else {
             continue;
         };
@@ -140,11 +195,15 @@ fn write_bootlog(payload: &[u8]) -> Result<usize, &'static str> {
         };
         // Volume de dados: BOOT.LOG pré-alocado — ReadWrite (não Create).
         if try_write_regular(&mut root, boot_log, payload, FileMode::ReadWrite) {
+            info!("logwriter: target=dados path=BOOT.LOG");
             return Ok(payload.len());
         }
     }
 
-    write_bootlog_on_esp(payload)
+    // Nenhum volume de dados com BOOT.LOG — fallback `\NEURAL\BOOT.LOG` na ESP.
+    let n = write_bootlog_on_esp(payload)?;
+    info!("logwriter: target=esp path=NEURAL\\BOOT.LOG");
+    Ok(n)
 }
 
 fn write_bootlog_on_esp(payload: &[u8]) -> Result<usize, &'static str> {
@@ -257,6 +316,16 @@ fn main() -> Status {
                 Ok(n) => {
                     info!("BOOT.LOG gravado ({n} bytes, ckpt=K{ckpt})");
                     unsafe { mark_done(ckpt) };
+                    // exp-1: shutdown = warm-reset p/ captura. Se o kernel armou
+                    // o flag, desliga agora (UEFI Shutdown) em vez de chainload.
+                    if unsafe { poweroff_requested() } {
+                        info!("logwriter: BOOT.LOG gravado + power-off");
+                        uefi::runtime::reset(
+                            uefi::runtime::ResetType::SHUTDOWN,
+                            Status::SUCCESS,
+                            None,
+                        );
+                    }
                 }
                 Err(e) => {
                     error!("BOOT.LOG write FAIL: {e}");

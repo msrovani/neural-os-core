@@ -1469,6 +1469,13 @@ pub fn cleanup_peer_health_ttl() {
     }
 }
 
+/// Índice p99 (0-based) para `count` amostras: `ceil(count*99/100)-1`, clampado
+/// a `[0, count-1]`. Aritmética inteira (sem `f32::ceil` — no_std).
+/// `count == 0` → 0 (saturating). Predicado puro (OPCODE-0079 / ORACLE-0062).
+pub fn p99_index(count: usize) -> usize {
+    ((count * 99 + 99) / 100).min(count).saturating_sub(1)
+}
+
 /// Calcula p99 RTT a partir do buffer circular de amostras.
 /// Retorna 0 se não houver amostras suficientes.
 pub fn peer_p99_rtt(node_id: u8) -> u64 {
@@ -1494,7 +1501,7 @@ pub fn peer_p99_rtt(node_id: u8) -> u64 {
                 }
                 // p99 index: ceil(count * 0.99) - 1, usando aritmética inteira.
                 // ceil(a/b) = (a + b - 1) / b. Aqui: ceil(count * 99 / 100).
-                let p99_idx = ((count * 99 + 99) / 100).min(count).saturating_sub(1);
+                let p99_idx = p99_index(count);
                 return samples[p99_idx];
             }
         }
@@ -2294,5 +2301,23 @@ None => {
             // Discover → MESH_GRAPH na UI (fora do lock do engine).
             flush_mesh_health_if_dirty();
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Kani proof (OPCODE-0079 / ORACLE-0062) — p99 index in bounds.
+// `cargo kani -p k-nano --lib --harness p99_index_in_bounds`
+// ---------------------------------------------------------------------------
+#[cfg(kani)]
+mod kani_proofs {
+    use super::p99_index;
+
+    /// Para qualquer `count` em `1..=32` (teto do buffer circular de amostras),
+    /// o índice p99 é um índice VÁLIDO em `0..count`.
+    #[kani::proof]
+    fn p99_index_in_bounds() {
+        let count: usize = kani::any();
+        kani::assume(count >= 1 && count <= 32);
+        assert!(p99_index(count) < count);
     }
 }

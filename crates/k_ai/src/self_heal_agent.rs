@@ -227,7 +227,7 @@ impl SelfHealAgent {
                     SelfHealAgent::notify_user(
                         "checkpoint",
                         &daemon,
-                        "bitmap-only best-effort (P09)",
+                        "diagnostics-only (no allocator mutation)",
                         tick,
                     );
                 } else {
@@ -357,7 +357,7 @@ impl SelfHealAgent {
                     SelfHealAgent::notify_user(
                         "checkpoint",
                         "system",
-                        "bitmap-only best-effort (P09)",
+                        "diagnostics-only (no allocator mutation)",
                         tick,
                     );
                 } else {
@@ -450,26 +450,6 @@ impl Agent for SelfHealAgent {
                     let mut heal = GLOBAL_SELF_HEAL.lock();
                     let _ = heal.analyze(&ctx, false);
                 }
-            }
-        }
-
-        // Self-health heartbeat (nome canónico = manifest / arm RESPAWN)
-        self.silent.heartbeat("self_heal");
-
-        // SilentFailureDetector: só publica I5 se há agentes observados além de si.
-        // Sem fleet heartbeats wired, publicar I5 = spam falso (só self_heal no mapa).
-        if self.silent.watched_count() > 1 {
-            for agent in self.silent.detect_silent() {
-                if agent == "self_heal" || agent == "SelfHealAgent" {
-                    continue;
-                }
-                let msg = format!("I5:{}:silent", agent);
-                let _ = EVENT_BUS.publish(Event {
-                    id: 0,
-                    topic: "HEALTH_ISSUE".into(),
-                    payload: msg.into_bytes(),
-                    token: CapabilityToken::Legacy(1),
-                });
             }
         }
 

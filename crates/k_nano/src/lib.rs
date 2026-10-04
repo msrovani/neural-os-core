@@ -26,6 +26,7 @@ pub mod boot_bind;
 pub mod boot_logger;
 pub mod boot_mode;
 pub mod boot_report;
+pub mod bench_stats; // E4 (OPCODE-0098): stats puras do bench (P50/P99/mean/stddev)
 pub mod fts_search;
 pub mod boot_ramlog;
 pub mod load_status;

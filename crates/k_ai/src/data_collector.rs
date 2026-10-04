@@ -28,9 +28,10 @@ pub struct DataCollector {
     /// Total de pares coletados desde o boot
     total_collected: u64,
     /// Receivers do EventBus
-    hermes_rx: Receiver,
-    intent_rx: Receiver,
-    error_rx: Receiver,
+    #[allow(dead_code)]
+    pub hermes_rx: Receiver,
+    pub intent_rx: Receiver,
+    pub error_rx: Receiver,
     /// Input pendente (USER_INTENT) aguardando resposta (HERMES_RESPONSE)
     pending_input: Option<String>,
 }

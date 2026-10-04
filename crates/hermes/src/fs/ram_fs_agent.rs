@@ -7,6 +7,12 @@ use alloc::vec::Vec;
 use crate::fs::{FilesystemAgent, RingBufStore};
 static STORE: RingBufStore = RingBufStore::new(1024 * 1024);
 
+/// F1.5 (OPCODE-0054): acesso público ao store para o teste de reload durável
+/// (`STORE.clear()` simula reboot do ramfs volátil).
+pub fn store() -> &'static RingBufStore {
+    &STORE
+}
+
 pub struct RamFsAgent;
 
 impl RamFsAgent {

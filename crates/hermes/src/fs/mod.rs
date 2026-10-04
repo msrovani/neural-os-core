@@ -173,6 +173,13 @@ impl RingBufStore {
         self.files.lock().keys().cloned().collect()
     }
 
+    /// F1.5 (OPCODE-0054): esvazia o store e zera a cota — simula reboot do
+    /// ramfs volátil para provar que o TickvLite é a fonte durável.
+    pub fn clear(&self) {
+        self.files.lock().clear();
+        self.bytes.store(0, core::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn lock(&self) -> spin::MutexGuard<'_, BTreeMap<alloc::string::String, Vec<u8>>> {
         self.files.lock()
     }

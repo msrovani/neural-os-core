@@ -8,6 +8,17 @@
 
 ---
 
+## 🔥 s449 — Consolidação do working tree: E1–E4 (ADR-0113) + F1 + storage AION + cleanup dead-weight
+
+- [x] Commit de consolidação dos 41 modificados + untracked desde a s441 (E1–E4 + F1 + AION-storage + dead-weight + s441–s445)
+- [x] E1–E4 (ADR-0113): `mesh::p99_index`+Kani; `trust.rs` caps + `CAP_GENERATION`; `event-bus/stamp.rs` + `register_audit_hooks(sha256)`; `bench_stats.rs` + `BENCH` markers (IDEA #642)
+- [x] Cleanup dead-weight: findings 1,2,3,5,6 (`matrix_learn.rs` deletado; `Oneshot`+receiver-gate; sem heartbeat falso; sem USB poll) (IDEA #643)
+- [x] `cargo build --release -p boot` = 0 erros; testes isolados só com 3 pré-existentes (permission_gate, sgdb bench abort, tq2_0_gguf fixture)
+- [ ] **Kani/E1/E2**: provas `#[cfg(kani)]` compilam mas não rodam (`x86_64-unknown-none` fora do guide; WSL ausente) — verificação formal = UNKNOWN (IDEA #639)
+- [ ] **Validar em boot de QEMU** as frentes E1–E4/F1/storage/cleanup — o gate desta sessão foi host (`HOST PASS != RUNTIME PASS`)
+- [ ] `tq2_0_gguf_load` (IDEA #644): isolar fixture vs dequant (pré-existente)
+- [ ] Sync n-sgdb de SESSION_449 + IDEA #642–#644
+
 ## 🔴 s447 — Fechamento: fórum encerrado, F1.5 com carimbo §14, ablação ausente
 
 - [x] §14: sidecar `.imgid` no launcher + parser fail-closed sem ele (teste do carimbo EXIT=0, fixtures 22/22)

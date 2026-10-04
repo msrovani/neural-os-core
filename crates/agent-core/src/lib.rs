@@ -179,6 +179,17 @@ pub struct AgentInstance {
     /// Polls acumulados em Paused na vida do agent; crash ao atingir 10000
     /// (sobrevive a recovers — senão o ramo crash era dead code).
     pub lifetime_paused_polls: u64,
+    // ─── E4 bench (OPCODE-0098) — clock ms via TICK_CLOCK_HOOK; exposto em µs.
+    /// Soma de espera (fim do tick anterior → início deste) em µs.
+    pub bench_waiting_us: u64,
+    /// Soma de turnaround (início → fim do tick) em µs.
+    pub bench_turnaround_us: u64,
+    /// Ticks contabilizados.
+    pub bench_ticks: u64,
+    /// Início do tick em curso (ms); 0 = não iniciado.
+    pub bench_tick_start_ms: u64,
+    /// Fim do último tick (ms); 0 = nenhum ainda.
+    pub bench_last_end_ms: u64,
 }
 
 impl AgentInstance {
@@ -230,8 +241,22 @@ impl AgentInstance {
             coherence_partner: None,
             paused_ticks: 0,
             lifetime_paused_polls: 0,
+            bench_waiting_us: 0,
+            bench_turnaround_us: 0,
+            bench_ticks: 0,
+            bench_tick_start_ms: 0,
+            bench_last_end_ms: 0,
         }
     }
+}
+
+/// E4 (OPCODE-0098): linha de bench por agente (snapshot, sem hot-path alloc).
+#[derive(Clone, Copy)]
+pub struct AgentBench {
+    pub name: &'static str,
+    pub ticks: u64,
+    pub waiting_us: u64,
+    pub turnaround_us: u64,
 }
 
 pub struct AgentRegistry {
@@ -358,6 +383,20 @@ impl AgentRegistry {
         self.agents.iter().filter(|a| a.state == AgentState::Active).count()
     }
 
+    /// E4 (OPCODE-0098): snapshot dos contadores de bench por agente.
+    /// Aloca (Vec) — chamar fora do hot path (bench/HUD), nunca por tick.
+    pub fn bench_snapshot(&self) -> Vec<AgentBench> {
+        self.agents
+            .iter()
+            .map(|a| AgentBench {
+                name: a.name,
+                ticks: a.bench_ticks,
+                waiting_us: a.bench_waiting_us,
+                turnaround_us: a.bench_turnaround_us,
+            })
+            .collect()
+    }
+
     /// ADR-0055: índices por affinity_ring (0=BSP/critical, 1=compute, 2=event).
     pub fn agents_by_affinity_ring(&self, ring: u8) -> Vec<usize> {
         self.agents
@@ -431,11 +470,44 @@ impl AgentRegistry {
         true
     }
 
+    /// E4 (OPCODE-0098): contabiliza o tick recém-terminado usando o clock hook
+    /// (ms). `bench_tick_start_ms` é setado antes do tick; sem clock = no-op.
+    /// Aloc-free/atômico (só u64 no instance) — nunca no caminho de alloc.
+    fn bench_record(&mut self, idx: usize) {
+        let start = self.agents[idx].bench_tick_start_ms;
+        if start == 0 {
+            return;
+        }
+        let Some(clock) = (unsafe { TICK_CLOCK_HOOK }) else {
+            self.agents[idx].bench_tick_start_ms = 0;
+            return;
+        };
+        let now = clock();
+        let turnaround = now.saturating_sub(start);
+        let last_end = self.agents[idx].bench_last_end_ms;
+        let waiting = if last_end == 0 {
+            0
+        } else {
+            start.saturating_sub(last_end)
+        };
+        let a = &mut self.agents[idx];
+        // clock é ms; exposto em µs (resolução 1ms, conversão exata).
+        a.bench_waiting_us = a.bench_waiting_us.saturating_add(waiting.saturating_mul(1000));
+        a.bench_turnaround_us = a
+            .bench_turnaround_us
+            .saturating_add(turnaround.saturating_mul(1000));
+        a.bench_ticks = a.bench_ticks.saturating_add(1);
+        a.bench_last_end_ms = now;
+        a.bench_tick_start_ms = 0;
+    }
+
     /// Aplica resultado de tick (BSP e AP compartilham — ADR-0089 honesty).
     fn apply_tick_result(&mut self, idx: usize, result: AgentTickResult, tick_id: u64) {
         if idx >= self.agents.len() {
             return;
         }
+        // E4 (OPCODE-0098): acumula waiting/turnaround do tick recém-terminado.
+        self.bench_record(idx);
         let agent_name = self.agents[idx].name;
         self.agents[idx].last_poll = tick_id;
         match result {
@@ -718,6 +790,8 @@ impl AgentRegistry {
                 // s437: latch com budget — se um worker prender o AGENT_TICK_BUSY
                 // além do budget, o BSP PULA o tick (degrada) em vez de girar
                 // para sempre (freeze silencioso do scheduler/UI).
+                // E4 (OPCODE-0098): marca o início do tick p/ os contadores de bench.
+                self.agents[i].bench_tick_start_ms = wdt_t0;
                 let Some(result) = try_with_agent_tick_lock_ms(BSP_TICK_LOCK_BUDGET_MS, || {
                     self.agents[i].tick_counter += 1;
                     let tc = self.agents[i].tick_counter;
@@ -1075,6 +1149,9 @@ pub fn tick_agent_by_index(idx: u32, tick_id: u32) -> bool {
         }
         reg.agents[i].tick_counter += 1;
         let tc = reg.agents[i].tick_counter;
+        // E4 (OPCODE-0098): início do tick no path AP (mesmo clock hook).
+        reg.agents[i].bench_tick_start_ms =
+            unsafe { TICK_CLOCK_HOOK }.map(|c| c()).unwrap_or(0);
         let result = reg.agents[i].agent.tick(tick_id as u64, tc);
         reg.apply_tick_result(i, result, tick_id as u64);
         true

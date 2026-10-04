@@ -23,7 +23,7 @@ use crate::training_agent::TrainingAgent;
 const MANIFEST: AgentManifest = AgentManifest {
     name: "self-learning",
     kind: AgentKind::System,
-    schedule: ScheduleKind::PollEvery(500),
+    schedule: ScheduleKind::Oneshot,
     auto_start: true,
     persist: false,
 };
@@ -338,8 +338,20 @@ impl Agent for SelfLearningAgent {
     }
 
     fn tick(&mut self, _tick: u64, _tick_count: u64) -> AgentTickResult {
-        self.learn_tick();
-        AgentTickResult::Done
+        // Event-driven: only learn if there are pending events on the DataCollector's
+        // EventBus receivers (HERMES_RESPONSE, USER_INTENT, KERNEL_ERROR). The original
+        // PollEvery(500) spun every tick even when no events were present — the audit
+        // flagged this as dead weight (artificial activity, no real production benefit).
+        // Oneshot + receiver check preserves the API while eliminating wasteful timer.
+        let has_events = self.collector.hermes_rx.try_receive().is_some()
+            || self.collector.intent_rx.try_receive().is_some()
+            || self.collector.error_rx.try_receive().is_some();
+        if has_events {
+            self.learn_tick();
+            AgentTickResult::Done
+        } else {
+            AgentTickResult::Pending
+        }
     }
 
     fn on_activate(&mut self) {

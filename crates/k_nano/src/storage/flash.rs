@@ -153,8 +153,19 @@ fn with_flash_dev<R>(
             Ok(f(d))
         }
         FlashDev::VirtioBlk => {
-            let mut g = crate::virtio_blk::VIRTIO_BLK_DEV.lock();
-            let d = g.as_mut().ok_or("no virtio_blk")?;
+            // Sessao AION: existem DOIS statics de virtio-blk. O boot inicializa o
+            // driver MODERNO (`virtio_modern::MODERN_BLK`), mas este caminho lia so
+            // o LEGADO (`virtio_blk::VIRTIO_BLK_DEV`), que fica None -> FileFlash
+            // devolvia Err("no virtio_blk") e o Tickv caia em backend=RAM (nada
+            // persistia entre boots). Tenta o legado e, se ausente, o moderno.
+            {
+                let mut g = crate::virtio_blk::VIRTIO_BLK_DEV.lock();
+                if let Some(d) = g.as_mut() {
+                    return Ok(f(d));
+                }
+            }
+            let mut m = crate::virtio_modern::MODERN_BLK.lock();
+            let d = m.as_mut().ok_or("no virtio_blk")?;
             Ok(f(d))
         }
     }

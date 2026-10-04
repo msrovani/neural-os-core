@@ -3,6 +3,33 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
+
+// ---------------------------------------------------------------------------
+// E2 (OPCODE-0084): capabilities com delegação e revogação transitiva
+// ---------------------------------------------------------------------------
+
+/// Teto de nós revogados por chamada — defesa anti-DoS (BFS limitada).
+pub const MAX_REVOKE_NODES: usize = 256;
+
+/// Geração global de capabilities — espelho do `cap_generation` do TrustCache
+/// canônico (hermes `TRUST_CACHE`). Bumpada em `revoke_cap`; lida por
+/// `current_cap_generation()` no gate de import do wasmi SEM lock por import.
+pub static CAP_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Leitura lock-free da geração atual de capabilities (E2 / OPCODE-0084).
+pub fn current_cap_generation() -> u64 {
+    CAP_GENERATION.load(Ordering::Acquire)
+}
+
+/// Handle opaco de capability. `generation` é a geração no momento da
+/// concessão; `enforce_cap` a compara com a geração atual (revogação global
+/// invalida handles antigos).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapHandle {
+    pub token: u64,
+    pub generation: u64,
+}
 // ---------------------------------------------------------------------------
 // #166 Multi-mode Trust
 // ---------------------------------------------------------------------------
@@ -91,12 +118,50 @@ pub struct TrustEntry {
     pub path_rule: Option<PathRule>,
 }
 
+/// Predicado PURO de decisão de trust (OPCODE-0079) — extraído de
+/// `TrustCache::is_trusted` para verificação formal (Kani). O corpo é a regra
+/// canônica: denylist vence; Enforce global nega não-isentos; entry dentro do
+/// TTL concede iff o estado dela não é Enforce; caso contrário nega.
+///
+/// * `denied`         — token/skill está na denylist
+/// * `global_enforce` — política global == Enforce
+/// * `exempt`         — token isento (`add_exempt_token`)
+/// * `has_entry`      — existe TrustEntry para (token, skill)
+/// * `entry_enforce`  — estado da entry == Enforce
+/// * `age`            — `now - granted_at` (saturating)
+/// * `ttl`            — `entry.ttl_ticks`
+pub fn trust_decision(
+    denied: bool,
+    global_enforce: bool,
+    exempt: bool,
+    has_entry: bool,
+    entry_enforce: bool,
+    age: u64,
+    ttl: u64,
+) -> bool {
+    if denied {
+        false
+    } else if global_enforce && !exempt {
+        false
+    } else if has_entry && age <= ttl {
+        !entry_enforce
+    } else {
+        false
+    }
+}
+
 pub struct TrustCache {
     entries: BTreeMap<(u64, String), TrustEntry>,
     denylist: BTreeMap<(u64, String), ()>,
     pub global_policy: PolicyState,
     escalation_log: Vec<String>,
     exempt_tokens: BTreeSet<u64>,
+    /// E2: árvore de delegação parent → filhos.
+    children: BTreeMap<u64, BTreeSet<u64>>,
+    /// E2: tokens revogados (transitivo).
+    revoked: BTreeSet<u64>,
+    /// E2: tokens com capability concedida.
+    granted: BTreeSet<u64>,
 }
 
 impl TrustCache {
@@ -107,6 +172,9 @@ impl TrustCache {
             global_policy: PolicyState::Observe,
             escalation_log: Vec::new(),
             exempt_tokens: BTreeSet::new(),
+            children: BTreeMap::new(),
+            revoked: BTreeSet::new(),
+            granted: BTreeSet::new(),
         }
     }
 
@@ -160,20 +228,107 @@ impl TrustCache {
         self.denylist.insert(key, ());
     }
 
+    // ─── E2 (OPCODE-0084): capabilities com delegação e revogação ───────────
+
+    /// Concede uma capability raiz ao token (limpa revogação anterior).
+    /// Fix 3 (OPCODE-0093): geração vem do ÚNICO global `CAP_GENERATION`.
+    pub fn grant_cap(&mut self, token: u64) -> CapHandle {
+        self.revoked.remove(&token);
+        self.granted.insert(token);
+        CapHandle { token, generation: current_cap_generation() }
+    }
+
+    /// Delega uma capability de `parent` para `child`. Recusa auto-delegação,
+    /// parent revogado, parent sem concessão e RE-PARENTING (child que já tem
+    /// pai) — preserva o invariante de floresta (fix 2 / OPCODE-0093).
+    pub fn mint_cap(&mut self, parent: u64, child: u64) -> Result<CapHandle, &'static str> {
+        if parent == child {
+            return Err("self-delegation");
+        }
+        if self.revoked.contains(&parent) {
+            return Err("parent revoked");
+        }
+        if !self.granted.contains(&parent) {
+            return Err("parent not granted");
+        }
+        // fix 2: re-parent proibido — child já presente em qualquer children set.
+        if self.children.values().any(|kids| kids.contains(&child)) {
+            return Err("already has parent");
+        }
+        self.children.entry(parent).or_insert_with(BTreeSet::new).insert(child);
+        self.granted.insert(child);
+        Ok(CapHandle { token: child, generation: current_cap_generation() })
+    }
+
+    /// Valida um handle: geração global atual, não revogado, concedido.
+    pub fn enforce_cap(&self, h: CapHandle) -> Result<(), &'static str> {
+        if h.generation != current_cap_generation() {
+            return Err("stale generation");
+        }
+        if self.revoked.contains(&h.token) {
+            return Err("revoked");
+        }
+        if !self.granted.contains(&h.token) {
+            return Err("not granted");
+        }
+        Ok(())
+    }
+
+    /// `true` se o token foi revogado. Nunca-concedido ≠ revogado.
+    pub fn is_cap_revoked(&self, token: u64) -> bool {
+        self.revoked.contains(&token)
+    }
+
+    /// Revoga o token e TODA a descendência (BFS, cap `MAX_REVOKE_NODES`).
+    /// Remove entries+denylist de cada token revogado, bumpa `cap_generation`
+    /// (e o espelho global) e devolve a contagem. Já revogado → 0.
+    pub fn revoke_cap(&mut self, token: u64) -> usize {
+        if self.revoked.contains(&token) {
+            return 0;
+        }
+        let mut stack: Vec<u64> = Vec::new();
+        stack.push(token);
+        let mut count = 0usize;
+        while let Some(t) = stack.pop() {
+            if count >= MAX_REVOKE_NODES {
+                break;
+            }
+            if !self.revoked.insert(t) {
+                continue; // já visitado
+            }
+            count += 1;
+            self.granted.remove(&t);
+            if let Some(kids) = self.children.remove(&t) {
+                for k in kids {
+                    stack.push(k);
+                }
+            }
+            self.entries.retain(|(tok, _), _| *tok != t);
+            self.denylist.retain(|(tok, _), _| *tok != t);
+        }
+        if count > 0 {
+            // Fix 3: ÚNICA fonte de geração (o wasmi gate lê o mesmo global).
+            CAP_GENERATION.fetch_add(1, Ordering::Release);
+        }
+        count
+    }
+
     pub fn is_trusted(&self, token: u64, skill: &str, now: u64) -> bool {
         let key = (token, String::from(skill));
-        if self.denylist.contains_key(&key) {
-            return false;
-        }
-        if self.global_policy == PolicyState::Enforce && !self.is_exempt(token) {
-            return false;
-        }
-        if let Some(entry) = self.entries.get(&key) {
-            if now.saturating_sub(entry.granted_at_ticks) <= entry.ttl_ticks {
-                return entry.state != PolicyState::Enforce;
-            }
-        }
-        false
+        let denied = self.denylist.contains_key(&key);
+        let global_enforce = self.global_policy == PolicyState::Enforce;
+        let exempt = self.is_exempt(token);
+        let (has_entry, entry_enforce, age, ttl) = match self.entries.get(&key) {
+            Some(entry) => (
+                true,
+                entry.state == PolicyState::Enforce,
+                now.saturating_sub(entry.granted_at_ticks),
+                entry.ttl_ticks,
+            ),
+            None => (false, false, 0, 0),
+        };
+        // A decisão vive no predicado puro (verificado por Kani).
+        trust_decision(denied, global_enforce, exempt, has_entry, entry_enforce, age, ttl)
     }
 
     fn is_exempt(&self, token: u64) -> bool {
@@ -366,4 +521,121 @@ impl SyscallClass {
 /// This stub returns 0 (= unchecked from Ring 2).
 pub fn global_trust_entry_count() -> usize {
     0
+}
+
+// ---------------------------------------------------------------------------
+// Kani proofs (OPCODE-0079 / ORACLE-0060) — verificação formal do predicado.
+// `cargo kani -p k_ai --lib --harness <name>`
+// ---------------------------------------------------------------------------
+#[cfg(kani)]
+mod kani_proofs {
+    use super::trust_decision;
+
+    /// Denylist sempre vence, independente de qualquer outro estado.
+    #[kani::proof]
+    fn trust_deny_overrides() {
+        let denied: bool = kani::any();
+        let global_enforce: bool = kani::any();
+        let exempt: bool = kani::any();
+        let has_entry: bool = kani::any();
+        let entry_enforce: bool = kani::any();
+        let age: u64 = kani::any();
+        let ttl: u64 = kani::any();
+        kani::assume(denied);
+        assert!(!trust_decision(
+            denied, global_enforce, exempt, has_entry, entry_enforce, age, ttl
+        ));
+    }
+
+    /// Enforce global nega todo token NÃO isento.
+    #[kani::proof]
+    fn trust_enforce_nonexempt_denies() {
+        let denied: bool = kani::any();
+        let exempt: bool = kani::any();
+        let has_entry: bool = kani::any();
+        let entry_enforce: bool = kani::any();
+        let age: u64 = kani::any();
+        let ttl: u64 = kani::any();
+        kani::assume(!denied);
+        kani::assume(!exempt);
+        assert!(!trust_decision(
+            denied, true, exempt, has_entry, entry_enforce, age, ttl
+        ));
+    }
+
+    /// Entry válida (dentro do TTL, estado != Enforce) concede, sem deny nem
+    /// Enforce global bloqueante.
+    #[kani::proof]
+    fn trust_valid_entry_allows() {
+        let age: u64 = kani::any();
+        let ttl: u64 = kani::any();
+        kani::assume(age <= ttl);
+        assert!(trust_decision(false, false, false, true, false, age, ttl));
+        // Enforce global não bloqueia token isento.
+        assert!(trust_decision(false, true, true, true, false, age, ttl));
+    }
+
+    /// Entry expirada (age > ttl) sempre nega, mesmo com estado != Enforce.
+    #[kani::proof]
+    fn trust_expired_entry_denies() {
+        let age: u64 = kani::any();
+        let ttl: u64 = kani::any();
+        kani::assume(age > ttl);
+        assert!(!trust_decision(false, false, false, true, false, age, ttl));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// E2 (OPCODE-0084 / ORACLE-0070) — revogação transitiva de capabilities.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn revoke_is_transitive_and_bumps_generation() {
+        let mut tc = TrustCache::new();
+        // Cadeia de delegação 1 -> 2 -> 3.
+        let h1 = tc.grant_cap(1);
+        let h2 = tc.mint_cap(1, 2).expect("mint 1->2");
+        let h3 = tc.mint_cap(2, 3).expect("mint 2->3");
+        assert!(tc.enforce_cap(h1).is_ok());
+        assert!(tc.enforce_cap(h2).is_ok());
+        assert!(tc.enforce_cap(h3).is_ok());
+        let gen_before = current_cap_generation();
+
+        // Revogar a raiz derruba a subárvore inteira.
+        let n = tc.revoke_cap(1);
+        assert_eq!(n, 3, "revogação transitiva deve atingir 3 nós");
+        assert!(tc.is_cap_revoked(1));
+        assert!(tc.is_cap_revoked(2));
+        assert!(tc.is_cap_revoked(3));
+        // Geração GLOBAL bumpou e handles antigos ficam stale (negar).
+        assert_eq!(current_cap_generation(), gen_before + 1);
+        assert!(tc.enforce_cap(h1).is_err());
+        assert!(tc.enforce_cap(h2).is_err());
+        assert!(tc.enforce_cap(h3).is_err());
+
+        // Token nunca concedido: não é "revogado", mas enforce falha.
+        assert!(!tc.is_cap_revoked(99));
+        let h99 = CapHandle { token: 99, generation: current_cap_generation() };
+        assert!(tc.enforce_cap(h99).is_err());
+
+        // Mint a partir de parent revogado falha.
+        assert!(tc.mint_cap(1, 4).is_err());
+
+        // Revogar de novo é no-op.
+        assert_eq!(tc.revoke_cap(1), 0);
+    }
+
+    /// Fix 2 (OPCODE-0093): re-parent é recusado — floresta preservada.
+    #[test]
+    fn mint_rejects_reparent() {
+        let mut tc = TrustCache::new();
+        tc.grant_cap(1);
+        tc.grant_cap(2);
+        tc.mint_cap(1, 3).expect("mint 1->3");
+        // 3 já tem pai (1) → 2 (concedido) não pode re-parentear.
+        assert_eq!(tc.mint_cap(2, 3), Err("already has parent"));
+    }
 }

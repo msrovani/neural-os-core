@@ -216,6 +216,15 @@ pub fn invalidate_skill_index() {
 /// VFS aparece e marca DONE mesmo se 0 skills (nunca busy-loop, sem log/tick).
 static RELOAD_DONE: AtomicBool = AtomicBool::new(false);
 static RELOAD_SKIPPED: AtomicBool = AtomicBool::new(false);
+/// Orcamento do retry (F1.5): 1x so. Sem isto a cauda rearmava SKIPPED a cada
+/// tick enquanto o Tickv nao montasse, porque `retry_reload_if_skipped` grava
+/// DONE=true ANTES de chamar o reload. O agente que chama o retry a cada tick
+/// (SelfEvolveAgent) virava busy-loop no proprio dono do ciclo de vida das skills.
+static RELOAD_RETRIED: AtomicBool = AtomicBool::new(false);
+/// `true` quando o ULTIMO reload NAO executou o pass duravel (Tickv ausente).
+/// UNKNOWN != 0: `durable=0` sozinho nao distingue "zero skills duraveis" de
+/// "nao olhei" — e o boot 2 do harness F1.5 lia esse 0 como FALSIFIED legitimo.
+static RELOAD_DURABLE_UNKNOWN: AtomicBool = AtomicBool::new(false);
 
 /// Garante o mount `/skills` → ramfs (idempotente, silencioso). Root cause Q2:
 /// `init_standard_mounts` monta /mnt/* mas nunca /skills → `resolve("/skills")`
@@ -243,13 +252,14 @@ pub fn retry_reload_if_skipped() {
     }
     RELOAD_SKIPPED.store(false, Ordering::Relaxed);
     RELOAD_DONE.store(true, Ordering::Relaxed); // 1× só — mesmo se 0 skills/SKIP.
+    RELOAD_RETRIED.store(true, Ordering::Relaxed); // consome o orcamento
     reload_persisted_wasm_skills();
 }
 
 /// Boot hook (in-hermes): re-registra `/skills/*.wasm` persistidos no VFS
 /// como WasmSkill no sandbox wasmi (Caminho A) — recarregadas EXECUTAM
 /// (unifica com o promote; DynamicSkill com `wasm` sem bridge era stub).
-/// Best-effort: VFS ausente → 0 + log; bytes que falham no sandbox/register
+/// Best-effort: VFS ausente segue o pass Tickv; bytes que falham no sandbox/register
 /// são pulados com log (nunca panic). B3: o sidecar `/skills/{name}.prov`
 /// devolve a proveniência ORIGINAL; ausente (skill antiga) = `Reloaded` + warn.
 pub fn reload_persisted_wasm_skills() -> u32 {
@@ -258,9 +268,8 @@ pub fn reload_persisted_wasm_skills() -> u32 {
     let items = match crate::fs::list_vfs("/skills") {
         Ok(v) => v,
         Err(_) => {
-            RELOAD_SKIPPED.store(true, Ordering::Relaxed);
-            k_nano::slog_hermes!("SKILL", "warn", "reload SKIP (VFS absent)");
-            return 0;
+            k_nano::slog_hermes!("SKILL", "warn", "reload VFS absent — segue tickv");
+            alloc::vec::Vec::new()
         }
     };
     let mut n = 0u32;
@@ -319,10 +328,130 @@ pub fn reload_persisted_wasm_skills() -> u32 {
             }
         }
     }
-    k_nano::slog_hermes!("SKILL", "ok", "[skills][ok] reload n={} model-born={} template={} dummy={} imported={} reloaded={}", n, c_born, c_tmpl, c_dummy, c_imp, c_rel);
-    RELOAD_DONE.store(true, Ordering::Relaxed);
-    RELOAD_SKIPPED.store(false, Ordering::Relaxed);
+    // F1.5 (OPCODE-0042 Option 2): fonte DURÁVEL TickvLite — o ramfs /skills é
+    // volátil e some no reboot. Enumera `skill/wasm/` e registra o que não veio
+    // do VFS; proveniência de `skill/wasm_prov/{name}`. Best-effort (sem tickv
+    // = 0 + silêncio: não é erro de boot). NÃO segura o lock do tickv durante
+    // sandbox/register (get_blob pega e solta).
+    let mut c_durable = 0u32;
+    let mut durable_unknown = false;
+    let durable_keys: Vec<String> =
+        match k_nano::storage::with_tickv(|kv| kv.keys_with_prefix("skill/wasm/")) {
+            Some(v) => v,
+            None => {
+                // `with_tickv` devolve None quando o Tickv nao esta montado — que e
+                // o caso normal do reload do BOOT (main.rs chama antes do mount).
+                // `unwrap_or_default` achatava isso em Vec vazio e a cauda marcava
+                // DONE: o boot registava "pronto" tendo feito um pass que nao rodou.
+                durable_unknown = true;
+                Vec::new()
+            }
+        };
+    for key in &durable_keys {
+        let name = key.strip_prefix("skill/wasm/").unwrap_or(key.as_str());
+        if name.is_empty() || crate::globals::SKILL_REGISTRY.lock().has_skill(name) {
+            continue; // já registrada pelo VFS
+        }
+        let bytes = match k_nano::storage::get_blob(key) {
+            Ok(b) => b,
+            Err(_) => {
+                k_nano::slog_hermes!("SKILL", "warn", "reload durable SKIP {} (get fail)", key);
+                continue;
+            }
+        };
+        if !crate::wasmi_rt::sandbox_validate_and_run(&bytes) {
+            k_nano::slog_hermes!("SKILL", "warn", "reload durable SKIP {} (sandbox fail)", key);
+            continue;
+        }
+        let pkey = alloc::format!("skill/wasm_prov/{}", name);
+        let prov = match k_nano::storage::get_blob(&pkey)
+            .ok()
+            .as_deref()
+            .and_then(crate::wasmi_rt::parse_provenance_bytes)
+        {
+            Some(p) => p,
+            None => {
+                k_nano::slog_hermes!(
+                    "SKILL",
+                    "warn",
+                    "reload durable {} sem prov → prov=reloaded",
+                    key
+                );
+                crate::wasmi_rt::SkillProvenance::Reloaded
+            }
+        };
+        match crate::wasmi_rt::register_wasm_skill_with_provenance(
+            &bytes,
+            name,
+            "reloaded tickv skill/wasm/*",
+            prov,
+        ) {
+            Ok(()) => {
+                n = n.saturating_add(1);
+                c_durable += 1;
+                crate::wasmi_rt::note_reload_ok();
+                match prov {
+                    crate::wasmi_rt::SkillProvenance::ModelBorn => c_born += 1,
+                    crate::wasmi_rt::SkillProvenance::Template => c_tmpl += 1,
+                    crate::wasmi_rt::SkillProvenance::Dummy => c_dummy += 1,
+                    crate::wasmi_rt::SkillProvenance::Imported => c_imp += 1,
+                    crate::wasmi_rt::SkillProvenance::Reloaded => c_rel += 1,
+                }
+            }
+            Err(e) => {
+                k_nano::slog_hermes!(
+                    "SKILL",
+                    "warn",
+                    "reload durable SKIP {} (register: {})",
+                    key,
+                    e
+                );
+            }
+        }
+    }
+    // `durable=` continua no prefixo (o harness F1.5 faz grep nessa linha, em
+    // ORACLE-0055) e o estado vira um campo a mais: 0 com durable_unknown=true e
+    // "UNKNOWN, nao olhei", nao "zero skills".
+    k_nano::slog_hermes!("SKILL", "ok", "[skills][ok] reload n={} model-born={} template={} dummy={} imported={} reloaded={} durable={} durable_unknown={}", n, c_born, c_tmpl, c_dummy, c_imp, c_rel, c_durable, durable_unknown);
+    RELOAD_DURABLE_UNKNOWN.store(durable_unknown, Ordering::Relaxed);
+    if durable_unknown {
+        k_nano::slog_hermes!("SKILL", "warn", "[skills][skip] durable tickv ausente — pass NAO executado (UNKNOWN != 0)");
+    }
+    let (done, skipped) = reload_tail_flags(!durable_unknown, RELOAD_RETRIED.load(Ordering::Relaxed));
+    RELOAD_DONE.store(done, Ordering::Relaxed);
+    RELOAD_SKIPPED.store(skipped, Ordering::Relaxed);
     n
+}
+
+/// `true` quando o ultimo reload NAO rodou o pass duravel (Tickv ausente).
+/// Superficie honesta para o watchdog e para o harness: o resumo `durable=0`
+/// sozinho e ilegivel como veredito.
+pub fn reload_durable_unknown() -> bool {
+    RELOAD_DURABLE_UNKNOWN.load(Ordering::Relaxed)
+}
+
+/// Decisao da CAUDA do reload como funcao PURA — (RELOAD_DONE, RELOAD_SKIPPED).
+///
+/// Fica pura de proposito: a variante integrada depende de o Tickv estar montado,
+/// e na suite de host isso depende da ORDEM dos testes (o teste que monta o Tickv
+/// roda antes do que checa o reload). Um teste que so pega um dos lados nao prova
+/// o contrato; aqui os 3 casos sao verificaveis sem nenhum estado global.
+///
+/// Contrato:
+/// - pass rodou        -> (true, false): pronto, nada a repetir;
+/// - pass NAO rodou e
+///   orcamento sobrando -> (false, true): nao marca DONE (UNKNOWN != 0) e rearma o
+///                        retry, porque o Tickv pode montar depois (o reload do
+///                        BOOT roda antes do mount);
+/// - pass NAO rodou e
+///   orcamento gasto    -> (true, false): o wrapper ja gravou DONE; so nao rearma
+///                        (rearmar aqui = reentrada todo tick no SelfEvolveAgent).
+pub(crate) fn reload_tail_flags(durable_ran: bool, retried: bool) -> (bool, bool) {
+    match (durable_ran, retried) {
+        (true, _) => (true, false),
+        (false, true) => (true, false),
+        (false, false) => (false, true),
+    }
 }
 
 pub fn load_embedded_skills() -> SkillLoader {
@@ -418,6 +547,52 @@ mod lane_b_tests {
         crate::globals::SKILL_REGISTRY.lock().unregister(name);
     }
 
+    /// F1.5 (OPCODE-0054): variante que ESVAZIA o ramfs volátil (simula reboot)
+    /// e prova que o reload recupera via TickvLite durável. Requer
+    /// `--test-threads=1` (STORE/FLASH globais compartilhados).
+    #[test]
+    fn model_born_round_trip_reloads_from_durable_tickv_after_ramfs_clear() {
+        setup_test_vfs();
+        // TickvLite limpo (RamFlash) para o teste ser determinístico.
+        *k_nano::storage::TICKV.lock() = None;
+        *k_nano::storage::FLASH.lock() = None;
+        k_nano::storage::install_ram_flash(256 * 1024);
+
+        let name = "lb_durable_skill";
+        // 1. promote persiste no VFS *e* no tickv durável.
+        assert!(crate::evolve::promote_model_text_to_wasm(name, "durable", "a*2+1").is_ok());
+        // 2. reboot simulado: ramfs volátil esvazia; tickv é a fonte durável.
+        crate::fs::ram_fs_agent::store().clear();
+        assert!(crate::fs::read_vfs("/skills/lb_durable_skill.wasm").is_err());
+        // 3. registry limpo (reboot) + reload → recupera do tickv.
+        assert!(crate::globals::SKILL_REGISTRY.lock().unregister(name));
+        assert!(!crate::globals::SKILL_REGISTRY.lock().has_skill(name));
+        let rel_before = crate::wasmi_rt::metrics_reload_ok();
+        let n = reload_persisted_wasm_skills();
+        assert!(n >= 1, "reload deveria vir do tickv durável");
+        assert!(crate::wasmi_rt::metrics_reload_ok() >= rel_before + 1);
+        assert!(crate::globals::SKILL_REGISTRY.lock().has_skill(name));
+        assert_eq!(
+            crate::wasmi_rt::skill_provenance(name),
+            Some(crate::wasmi_rt::SkillProvenance::ModelBorn)
+        );
+        // 4. recarregada executa no wasmi: a*2+1 com "6" → 13.
+        {
+            let mut reg = crate::globals::SKILL_REGISTRY.lock();
+            reg.set_policy(
+                name,
+                skill_registry::ToolPolicy { enabled: true, auto_approve: true },
+            );
+        }
+        let out = crate::globals::SKILL_REGISTRY
+            .lock()
+            .execute_skill_unchecked(name, b"6")
+            .expect("reload durável deve executar no wasmi");
+        let text = core::str::from_utf8(&out).expect("utf8");
+        assert!(text.contains("13"), "esperava a*2+1=13, veio {}", text);
+        crate::globals::SKILL_REGISTRY.lock().unregister(name);
+    }
+
     #[test]
     fn reload_without_sidecar_falls_back_to_reloaded() {
         setup_test_vfs();
@@ -463,6 +638,92 @@ mod lane_b_tests {
         assert_eq!(crate::wasmi_rt::metrics_reload_ok(), rel_after);
         crate::globals::SKILL_REGISTRY.lock().unregister(name);
         // Estado pós-boot canônico p/ os demais testes (DONE, sem SKIP armado).
+        super::RELOAD_RETRIED.store(false, Ordering::Relaxed);
+    }
+
+    /// UNKNOWN != 0 (F1.5): se o Tickv nao esta montado, o pass duravel NAO
+    /// rodou — e o estado tem de dizer isso. Antes do patch a cauda marcava
+    /// DONE=true e SKIPPED=false incondicionalmente, entao o boot 2 lia
+    /// `durable=0` como se fosse "zero skills duraveis" e o harness accusava
+    /// FALSIFIED na camada errada.
+    #[test]
+    fn durable_unknown_is_not_reported_as_zero() {
+        setup_test_vfs();
+        let tickv_mounted = k_nano::storage::with_tickv(|_| ()).is_some();
+        super::RELOAD_RETRIED.store(false, Ordering::Relaxed);
+        super::RELOAD_DONE.store(false, Ordering::Relaxed);
+        super::RELOAD_SKIPPED.store(false, Ordering::Relaxed);
+
+        let _ = super::reload_persisted_wasm_skills();
+
+        assert_eq!(
+            super::reload_durable_unknown(),
+            !tickv_mounted,
+            "o pass duravel tem de estar UNKNOWN quando nao ha Tickv montado"
+        );
+        if tickv_mounted {
+            assert!(super::RELOAD_DONE.load(Ordering::Relaxed));
+            assert!(!super::RELOAD_SKIPPED.load(Ordering::Relaxed));
+        } else {
+            // Pass nao rodou => o boot nao pode estar DONE, e o retry fica
+            // armado para quando o Tickv montar (main.rs chama antes do mount).
+            assert!(
+                !super::RELOAD_DONE.load(Ordering::Relaxed),
+                "DONE com pass duravel nao executado = estado mentindo"
+            );
+            assert!(
+                super::RELOAD_SKIPPED.load(Ordering::Relaxed),
+                "sem Tickv o retry tem de ficar armado"
+            );
+        }
+        // canonico p/ os demais testes
+        super::RELOAD_RETRIED.store(false, Ordering::Relaxed);
+        super::RELOAD_SKIPPED.store(false, Ordering::Relaxed);
+        super::RELOAD_DONE.store(true, Ordering::Relaxed);
+    }
+
+    /// Orcamento de 1x: o retry consome o orcamento e nao reentra. Sem isto a
+    /// cauda rearmava SKIPPED a cada tick (o wrapper grava DONE=true antes de
+    /// chamar o reload) e o agente que chama o retry todo tick virava busy-loop.
+    ///
+    /// O CONTRATO fica em `reload_tail_flags` (puro) — verificado nos 3 casos
+    /// sem depender do Tickv nem da ordem dos testes. Aqui so o que a integracao
+    /// garante independente de ramo: 1a chamada consome o orcamento, 2a e no-op.
+    #[test]
+    fn retry_budget_is_one_shot() {
+        // Contrato puro: 3 casos, nenhum global.
+        assert_eq!(super::reload_tail_flags(true, false), (true, false), "pass rodou: DONE");
+        assert_eq!(super::reload_tail_flags(true, true), (true, false), "pass rodou: DONE");
+        assert_eq!(
+            super::reload_tail_flags(false, false),
+            (false, true),
+            "UNKNOWN com orcamento sobrando: nao DONE e rearma"
+        );
+        assert_eq!(
+            super::reload_tail_flags(false, true),
+            (true, false),
+            "UNKNOWN com orcamento gasto: nao rearma (senao reentra todo tick)"
+        );
+
+        setup_test_vfs();
+        super::RELOAD_RETRIED.store(false, Ordering::Relaxed);
+        super::RELOAD_DONE.store(false, Ordering::Relaxed);
+        super::RELOAD_SKIPPED.store(true, Ordering::Relaxed);
+
+        super::retry_reload_if_skipped();
+        assert!(
+            super::RELOAD_RETRIED.load(Ordering::Relaxed),
+            "a 1a tentativa precisa consumir o orcamento"
+        );
+
+        // 2a chamada = no-op (ja DONE).
+        let before = crate::wasmi_rt::metrics_reload_ok();
+        super::retry_reload_if_skipped();
+        assert_eq!(crate::wasmi_rt::metrics_reload_ok(), before);
+        // canonico p/ os demais testes
+        super::RELOAD_RETRIED.store(false, Ordering::Relaxed);
+        super::RELOAD_SKIPPED.store(false, Ordering::Relaxed);
+        super::RELOAD_DONE.store(true, Ordering::Relaxed);
     }
 }
 

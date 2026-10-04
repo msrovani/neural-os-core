@@ -80,7 +80,20 @@ fn mount_scan_deadline() -> u64 {
 }
 
 fn mount_scan_expired(deadline: u64) -> bool {
+    #[cfg(test)]
+    if FORCE_SCAN_TIMEOUT.load(Ordering::Relaxed) {
+        return true; // host nao reproduz o PIO lento do backend=file
+    }
     deadline != u64::MAX && crate::tsc::now_us() >= deadline
+}
+
+/// Sessao AION: hook de teste — o RamFlash host nao tem PIO lento, entao o
+/// caminho de timeout do scan precisa ser forcado para o teste ser deterministico.
+#[cfg(test)]
+static FORCE_SCAN_TIMEOUT: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+fn force_scan_timeout(v: bool) {
+    FORCE_SCAN_TIMEOUT.store(v, Ordering::Relaxed);
 }
 
 /// s410j: log honesto do guard de recursão — skipped>0 significa "live-set
@@ -137,6 +150,20 @@ pub fn record_size(klen: usize, vlen: usize) -> usize {
 
 fn rec_total(klen: usize, vlen: usize) -> usize {
     record_size(klen, vlen)
+}
+
+/// Sessao AION: avanca `off` por um record de header TKL valido mas com
+/// klen/vlen acima do teto (ex.: `sys/checkpoint` ~2MB > MAX_VLEN). Pula pelo
+/// TOTAL (bounded por `size`) em vez de 512-a-512 — o passo de 512 caia no corpo
+/// do record e fazia `break` no primeiro trecho zerado, perdendo todo o log
+/// depois dele (bug F1.5). Se o total nao couber no volume, avanca 512 (corrupto).
+fn advance_oversized(off: u64, klen: usize, vlen: usize, size: u64) -> u64 {
+    let big = rec_total(klen, vlen) as u64;
+    if big >= 512 && off.saturating_add(big) <= size {
+        off + big
+    } else {
+        (off + 512) & !511
+    }
 }
 
 /// Serializa um record TKLV completo (512-alinhado) — byte-exato vs neural-sgdb.
@@ -279,6 +306,10 @@ pub struct TickvLite {
     /// Latched ao cruzar HIGH_WATER: impede re-disparo do flush oportunista a
     /// cada put enquanto o GC não baixar o append (ou o backend não permitir GC).
     hw_latched: bool,
+    /// Sessao AION: o índice mudou desde o último ckpt. Dispara o ckpt no flush
+    /// idle/high-water. Para backend=file/nvme o GC é proibido e o full-scan PIO
+    /// estoura o budget do mount — o ckpt é o ÚNICO mount rápido desses backends.
+    ckpt_dirty: bool,
     pub stats: TickvStats,
 }
 
@@ -291,6 +322,7 @@ impl TickvLite {
             degraded: false,
             backend: "none",
             hw_latched: false,
+            ckpt_dirty: false,
             stats: TickvStats::default(),
         }
     }
@@ -391,7 +423,11 @@ impl TickvLite {
             body.extend_from_slice(kb);
             body.extend_from_slice(&off.to_le_bytes());
         }
-        self.put_raw("sys/tickv_ckpt", &body)
+        let r = self.put_raw("sys/tickv_ckpt", &body);
+        if r.is_ok() {
+            self.ckpt_dirty = false;
+        }
+        r
     }
 
     fn try_mount_from_ckpt(&mut self, deadline: u64) -> Result<(), &'static str> {
@@ -424,8 +460,8 @@ impl TickvLite {
             let klen = u32::from_le_bytes(hdr[4..8].try_into().unwrap()) as usize;
             let vlen = u32::from_le_bytes(hdr[8..12].try_into().unwrap()) as usize;
             let want_crc = u32::from_le_bytes(hdr[12..16].try_into().unwrap());
-            if klen > 4096 || vlen > 2 * 1024 * 1024 {
-                off = (off + 512) & !511;
+            if klen > MAX_KLEN || vlen > MAX_VLEN {
+                off = advance_oversized(off, klen, vlen, size);
                 continue;
             }
             let total = rec_total(klen, vlen) as u64;
@@ -525,18 +561,36 @@ impl TickvLite {
         }
         self.append_off = end;
         self.recompute_live_estimate();
+        // Sessao AION: replay da cauda pos-ckpt (ver scan_range). O record de
+        // ckpt ocupa [end, end+ckpt_total); a cauda comeca depois dele. Mesma
+        // validacao do recover; `keep=true` anexa sem limpar o indice do ckpt.
+        let ckpt_total = rec_total(CKPT_KEY.len(), val.len()) as u64;
+        self.scan_range(end + ckpt_total, true, deadline)?;
         Ok(())
     }
 
     /// Recover: CRC fail → corrupt++, tenta avançar 512B; magic break = fim do log.
     /// Timeout TSC → mount degradado (índice parcial + append_off = off atual).
     fn recover(&mut self, deadline: u64) -> Result<(), &'static str> {
-        self.index.clear();
-        self.append_off = 0;
-        self.stats.live_bytes = 0;
-        self.stats.dead_bytes = 0;
+        self.scan_range(0, false, deadline)
+    }
+
+    /// Varre [start..size]. `keep=false` = recover (limpa índice/stats);
+    /// `keep=true` = replay da cauda pós-ckpt (anexa, last-wins).
+    ///
+    /// Sessao AION: o ckpt so cobre [0, append) — o estado no instante do ckpt.
+    /// Records appendados DEPOIS do ultimo ckpt (hard-kill antes do proximo
+    /// flush) ficavam invisiveis, e `append_off < fim real` fazia a proxima
+    /// escrita sobrescrever a cauda. Este range scan fecha o buraco.
+    fn scan_range(&mut self, start: u64, keep: bool, deadline: u64) -> Result<(), &'static str> {
+        if !keep {
+            self.index.clear();
+            self.append_off = 0;
+            self.stats.live_bytes = 0;
+            self.stats.dead_bytes = 0;
+        }
         let size = self.with_flash(|fl| fl.size_bytes())?;
-        let mut off = 0u64;
+        let mut off = start;
         let mut hdr = [0u8; HEADER];
         while off + HEADER as u64 <= size {
             if mount_scan_expired(deadline) {
@@ -564,9 +618,9 @@ impl TickvLite {
             let klen = u32::from_le_bytes(hdr[4..8].try_into().unwrap()) as usize;
             let vlen = u32::from_le_bytes(hdr[8..12].try_into().unwrap()) as usize;
             let want_crc = u32::from_le_bytes(hdr[12..16].try_into().unwrap());
-            if klen > 4096 || vlen > 1024 * 1024 {
+            if klen > MAX_KLEN || vlen > MAX_VLEN {
                 self.stats.corrupt_records = self.stats.corrupt_records.saturating_add(1);
-                off = (off + 512) & !511;
+                off = advance_oversized(off, klen, vlen, size);
                 continue;
             }
             let body_len = klen + vlen;
@@ -613,7 +667,11 @@ impl TickvLite {
             }
             off += total;
         }
-        self.append_off = off;
+        // Sessao AION: `off` é o fim REAL só se o scan completou. Em timeout o
+        // índice é parcial e gravar em `off` sobrescreve a cauda não-varrida
+        // (foi o que apagou o skill no boot 2). Fail-closed: aponta para o fim
+        // do volume; put_raw passa a devolver Err("oob") em vez de clobber.
+        self.append_off = if self.degraded { size } else { off };
         // recalcula live a partir do índice (mais preciso pós-overwrite)
         self.recompute_live_estimate();
         Ok(())
@@ -652,6 +710,26 @@ impl TickvLite {
     /// (ok) apenas quando um GC real correu.
     fn flush_opportunistic(&mut self, reason: &'static str) -> bool {
         if !self.ready || COMPACTING.load(Ordering::Acquire) {
+            return false;
+        }
+        // Sessao AION: file/nvme proíbem GC (wipe+rewrite PIO), mas o ckpt é o
+        // ÚNICO mount rápido desses backends — sem ele o boot paga um full-scan
+        // PIO que estoura o budget e perde registros recentes. Desacopla o ckpt
+        // do gc_allowed(); grava o snapshot do índice quando sujo.
+        if self.backend == "file" || self.backend == "nvme" {
+            if !self.ckpt_dirty {
+                return false;
+            }
+            if self.write_ckpt().is_ok() {
+                crate::slog_nano!(
+                    "TICKV",
+                    "ok",
+                    "tickv flush reason={} bytes={} (ckpt)",
+                    reason,
+                    self.append_off
+                );
+                return true;
+            }
             return false;
         }
         if !self.gc_due() || !self.gc_allowed() {
@@ -785,6 +863,9 @@ impl TickvLite {
         }
         self.append_off = off + total as u64;
         self.stats.puts = self.stats.puts.saturating_add(1);
+        if key != CKPT_KEY {
+            self.ckpt_dirty = true;
+        }
         Ok(())
     }
 
@@ -1228,6 +1309,117 @@ mod interop_tests {
         assert_eq!(
             scanned.map.get("hello").map(|v| v.as_slice()),
             Some(&b"world"[..])
+        );
+        reset();
+    }
+
+    /// Sessao AION: um ckpt NAO cobre o volume inteiro — so [0, append). Um
+    /// record appendado depois do ultimo ckpt e antes de um hard-kill (sem novo
+    /// ckpt) tem de sobreviver: o mount por ckpt precisa replayar a cauda.
+    /// Falsifica o bug do F1.5 (skill/wasm escrito apos o ckpt sumia no boot 2).
+    #[test]
+    fn ckpt_mount_replays_post_ckpt_records_after_hard_kill() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        install_ram_flash(256 * 1024);
+        {
+            let mut kv = TickvLite::new();
+            kv.mount().expect("mount1");
+            kv.put("before/ckpt", b"old").expect("put pre");
+            kv.write_ckpt().expect("ckpt");
+            kv.put("skill/wasm/oracle_rt_expr_v1", b"WASM-BYTES")
+                .expect("put post");
+            // hard kill: drop SEM outro write_ckpt
+        }
+        // reabre sobre o MESMO flash (sem reset/reinstall)
+        let mut kv2 = TickvLite::new();
+        kv2.mount().expect("mount2");
+        assert_eq!(kv2.get("before/ckpt").unwrap(), b"old");
+        assert_eq!(
+            kv2.get("skill/wasm/oracle_rt_expr_v1").unwrap(),
+            b"WASM-BYTES",
+            "record pos-ckpt tem de sobreviver ao hard-kill"
+        );
+        // e o proximo write nao pode sobrescrever a cauda (append_off correto)
+        kv2.put("after/reopen", b"x").expect("put pos-reopen");
+        assert_eq!(
+            kv2.get("skill/wasm/oracle_rt_expr_v1").unwrap(),
+            b"WASM-BYTES",
+            "append_off tem de apontar depois da cauda replayada"
+        );
+        reset();
+    }
+
+    /// (A) timeout do scan NÃO pode subestimar append_off nem sobrescrever a cauda.
+    #[test]
+    fn scan_timeout_is_fail_closed_and_never_clobbers_tail() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        install_ram_flash(64 * 1024);
+        {
+            let mut kv = TickvLite::new();
+            kv.mount().expect("m1");
+            kv.put("a", b"1").expect("put a");
+            kv.put("b", b"2").expect("put b");
+        }
+        force_scan_timeout(true);
+        let mut kv2 = TickvLite::new();
+        kv2.mount().expect("m2");
+        force_scan_timeout(false);
+        assert_eq!(kv2.append_off(), 64 * 1024, "timeout deve apontar p/ o fim");
+        assert!(kv2.put("c", b"3").is_err(), "put pos-timeout = fail-closed");
+        drop(kv2);
+        let mut kv3 = TickvLite::new();
+        kv3.mount().expect("m3");
+        assert_eq!(kv3.get("a").unwrap(), b"1");
+        assert_eq!(kv3.get("b").unwrap(), b"2");
+        reset();
+    }
+
+    /// (B) file backend grava ckpt no flush; reopen reindexa o pos-ckpt (tail scan).
+    #[test]
+    fn file_backend_flush_writes_ckpt_and_reopen_recalls_post_ckpt() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        install_ram_flash(256 * 1024);
+        {
+            let mut kv = TickvLite::new();
+            kv.mount().expect("m1");
+            kv.backend = "file";
+            kv.put("before", b"1").expect("put");
+            assert!(kv.flush_opportunistic(FLUSH_IDLE), "file deve gravar ckpt");
+            kv.put("skill/wasm/oracle_rt_expr_v1", b"WASM")
+                .expect("put skill");
+        }
+        let mut kv2 = TickvLite::new();
+        kv2.mount().expect("m2");
+        assert_eq!(kv2.get("before").unwrap(), b"1");
+        assert_eq!(kv2.get("skill/wasm/oracle_rt_expr_v1").unwrap(), b"WASM");
+        reset();
+    }
+
+    /// Sessao AION: um record shaped oversized (vlen > MAX_VLEN, ex. sys/checkpoint
+    /// ~2MB) NAO pode interromper o scan — os records depois dele devem ser
+    /// indexados (bug F1.5: o scan avancava 512-a-512 pelo corpo e fazia break nos
+    /// zeros do meio, perdendo o skill e o ckpt do fim).
+    #[test]
+    fn mount_scans_past_oversized_record() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        install_ram_flash(8 * 1024 * 1024);
+        {
+            let mut kv = TickvLite::new();
+            kv.mount().expect("m1");
+            let big = vec![0u8; MAX_VLEN + 4096];
+            kv.put("sys/checkpoint", &big).expect("put big");
+            kv.put("after/big", b"ok").expect("put after");
+        }
+        let mut kv2 = TickvLite::new();
+        kv2.mount().expect("m2");
+        assert_eq!(
+            kv2.get("after/big").unwrap(),
+            b"ok",
+            "record apos um oversized deve ser indexado"
         );
         reset();
     }

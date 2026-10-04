@@ -1,5 +1,41 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s449] - 2026-10-04 - Consolidação do working tree: E1–E4 (ADR-0113) + F1 + storage AION + cleanup dead-weight
+
+- **Consolida 41 modificados + untracked desde a s441 num commit.** Zero código novo
+  nesta sessão — só verificação (`cargo build --release -p boot` = **0 erros**, 1m12s),
+  registro e higiene. As frentes mantêm seus donos (D5): AION = storage, E1–E4 = ADR-0113.
+- **E1–E4 (ADR-0113):** E1 formal (`mesh::p99_index` + `#[kani::proof]`; fuzz
+  `talc_walk_bins` da s441); E2 capabilities (`trust.rs` `grant/mint/enforce/revoke_cap`
+  + `CAP_GENERATION` global; `wasmi_rt` `cap_gen` capturado → import negado se a geração
+  mudou; DENY de cap revogada na execução de skill); E3 provenance (`event-bus/stamp.rs`
+  **novo** — anel bounded de `Stamp` encadeado + `register_audit_hooks(sha256)`;
+  best-effort: lock falha → `AUDIT_SKIPPED`, o evento é entregue); E4 performance
+  (`k_nano/bench_stats.rs` novo — P50/P99, `0` = n/a nunca conta; contadores `bench_*`
+  no `AgentInstance` via `TICK_CLOCK_HOOK`; linha `BENCH` no boot_report; harness).
+- **Honestidade E1/E2:** as provas `#[cfg(kani)]` **compilam mas não rodam** neste host
+  (`x86_64-unknown-none` fora do guide; WSL ausente) → verificação formal = **UNKNOWN**.
+- **F1 runtime:** `interrupts_ext` (`ramlog_note` lock-free; `pf_storm`/`pf_repeat` do
+  BSP → `reboot_ordered`, o AP segue `hlt`); `silence_watchdog` stage por core;
+  `percpu::fault_context_is_bsp` por GS; compositor `PAINT_GAP_US` EWMA (`gap_is_overdue`
+  relativo à cadência — mata o flap <60 Hz); `jarvis` TSC no drain; `infer_queue`
+  `DECODE_RING` (P50/P99) + `A2_SLICE_EXIT_US`.
+- **AION-storage (dono AION — só se commitou):** `tickv` `advance_oversized` + replay da
+  cauda pós-ckpt + `append_off=size` fail-closed + ckpt-on-flush; `flash::with_flash_dev`
+  cai p/ `virtio_modern` (antes só legacy → Tickv em RAM); `virtio_modern` `BlockDevice`
+  (era init sem leitor); `virtio_blk` legacy-first; `self_heal` checkpoint v4 `SHV4`.
+- **Cleanup dead-weight (`DEAD_WEIGHT_AUDIT.md`):** findings 1,2,3,5,6 implementados —
+  `matrix_learn.rs` **deletado**, `BootLogAgent`/`SelfLearningAgent` → `Oneshot` +
+  gate por receiver, `SelfHealAgent` sem heartbeat falso, `InputAgent` sem USB poll por
+  tick. O finding #7 (remover stamp hashing) foi **invertido** pelo E3. #4/#8/#9 não.
+- **Testes (isolados `--test-threads=1`):** hermes 322/323 (1 **pré-existente**
+  `permission_gate`), cortex 126/126, jarbas 135/135, k-hal 75/75; k_ai abort
+  **pré-existente** (`sgdb::bench::d_series_100k`); `tq2_0_gguf_load` **pré-existente**.
+  A suíte paralela reportou 6 targets falhos — 3 eram **flaky de statics** (passam
+  isolados).
+- **UNKNOWN:** Kani não rodou; nenhuma frente validada em boot QEMU; causa do
+  `tq2_0_gguf_load` não isolada.
+
 ## [1.9.99-s448] - 2026-10-04 - Braço de ablação do F1.5: o disco de partida vira variável declarada
 
 - **O confound era real, não teórico.** `target/disk_qemu.pristine.raw` (03/10 22:47)

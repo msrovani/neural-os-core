@@ -112,6 +112,13 @@ static TELEM_LAST_DECODE_US: AtomicU64 = AtomicU64::new(0);
 static DECODE_T0_US: AtomicU64 = AtomicU64::new(0);
 static DECODE_JOB_TOKS: AtomicU64 = AtomicU64::new(0);
 
+/// E4 (OPCODE-0098): anel bounded de amostras de decode concluído (toks, us)
+/// p/ P50/P99 (o `last_decode_timing` guarda só a última). Escrita sem alloc.
+pub const DECODE_RING_CAP: usize = 64;
+static DECODE_RING: [(AtomicU64, AtomicU64); DECODE_RING_CAP] =
+    [const { (AtomicU64::new(0), AtomicU64::new(0)) }; DECODE_RING_CAP];
+static DECODE_RING_IDX: AtomicUsize = AtomicUsize::new(0);
+
 /// Lane A2 — MVP 1 token real FALCON3.V6 (prova, 1 inferência por boot).
 /// Escopo fechado: prompt curto fixo, max 1 token, stride 1 local, ctx mínimo.
 /// Sem Medusa/draft. Defaults globais intactos (override só no job de prova).
@@ -161,6 +168,12 @@ const A2_SLICE_STALL_US: u64 = 30_000_000;
 /// TSC do início do slice EM CURSO (0 = nenhum) + contador p/ telemetria.
 static A2_SLICE_T0_US: AtomicU64 = AtomicU64::new(0);
 static A2_SLICE_N: AtomicU64 = AtomicU64::new(0);
+/// s439 (F1): TSC do fim do último slice concluído (0 = nenhum). Carimbado
+/// DEPOIS do log do slice (lição s413 — instrumento não mede o instrumento).
+static A2_SLICE_EXIT_US: AtomicU64 = AtomicU64::new(0);
+/// s439 (F1): só loga a duração do slice acima disto — 2s alinha o limiar
+/// `prefill_slice slow` já existente e evita spam no hot path.
+const A2_SLICE_EXIT_LOG_US: u64 = 2_000_000;
 /// Chunked prefill (wedge WHPX 8c T+1910: 1 layer × 512 toks ≈ minutos em
 /// soft-float e o watchdog declarava a prova — que nem rodava — wedge
 /// terminal). O prompt é fatiado em blocos; cada slice faz ≤1 layer de ≤1
@@ -292,6 +305,20 @@ pub fn last_decode_tok_s() -> u64 {
     }
 }
 
+/// E4 (OPCODE-0098): snapshot do anel de decode (toks, us) — só amostras
+/// válidas (`0` = n/a descartado). Aloca (Vec) — fora do hot path.
+pub fn decode_samples() -> Vec<(u64, u64)> {
+    let mut out = Vec::new();
+    for s in DECODE_RING.iter() {
+        let t = s.0.load(Ordering::Relaxed);
+        let u = s.1.load(Ordering::Relaxed);
+        if t > 0 && u > 0 {
+            out.push((t, u));
+        }
+    }
+    out
+}
+
 /// Grava amostra de decode (InferQueue **ou** `generate_speculative` clássico).
 /// Usado pelo Hub Health e pelo microbench QEMU Falcon3-3B.
 pub fn record_last_decode(toks: u64, us: u64) {
@@ -303,6 +330,10 @@ pub fn record_last_decode(toks: u64, us: u64) {
     TELEM_DECODE_US.fetch_add(us, Ordering::Relaxed);
     TELEM_LAST_DECODE_TOKS.store(toks, Ordering::Relaxed);
     TELEM_LAST_DECODE_US.store(us, Ordering::Relaxed);
+    // E4 (OPCODE-0098): amostra no anel bounded (sem alloc) p/ P50/P99.
+    let slot = DECODE_RING_IDX.fetch_add(1, Ordering::Relaxed) % DECODE_RING_CAP;
+    DECODE_RING[slot].0.store(toks, Ordering::Relaxed);
+    DECODE_RING[slot].1.store(us, Ordering::Relaxed);
     let tps = toks.saturating_mul(1_000_000) / us;
     // milli-tok/s quando <1 tok/s (QEMU/soft-float do 3B).
     let milli = toks.saturating_mul(1_000_000_000) / us;
@@ -2009,6 +2040,10 @@ pub fn poll_slice() -> bool {
     }
     let _busy = SliceGuard;
 
+    // s439 (F1): fronteira de entrada do slice — o [SILENCE] dump nomeia o
+    // estágio do core que parou. 1 = dentro de poll_slice.
+    k_nano::silence_watchdog::note_infer_stage(1);
+
     // s428: marca o T0 do slice em curso — o watchdog (no topo do próximo
     // poll_slice) mede contra ISTO. Limpo no fim do poll_slice (retorno =
     // slice terminou; slice lento é contabilizado no budget, não aqui).
@@ -2046,11 +2081,26 @@ pub fn poll_slice() -> bool {
                 }
                 st.phase = Phase::Finishing;
             }
+            // F1 (missao §5): carimba a FASE antes de cada passo — o [SILENCE]
+            // dump localiza em QUAL estagio do infer o core parou (1=prefill,
+            // 2=decode, 3=coarse; 0=fora do slice). Antes era so 1 generico.
             match st.phase {
-                Phase::NeedPrefill => run_prefill(st),
-                Phase::Prefilling => run_prefill_step(st),
-                Phase::Decoding => run_decode_one(st),
-                Phase::CoarseFallback => run_coarse(st),
+                Phase::NeedPrefill => {
+                    k_nano::silence_watchdog::note_infer_stage(1);
+                    run_prefill(st)
+                }
+                Phase::Prefilling => {
+                    k_nano::silence_watchdog::note_infer_stage(1);
+                    run_prefill_step(st)
+                }
+                Phase::Decoding => {
+                    k_nano::silence_watchdog::note_infer_stage(2);
+                    run_decode_one(st)
+                }
+                Phase::CoarseFallback => {
+                    k_nano::silence_watchdog::note_infer_stage(3);
+                    run_coarse(st)
+                }
                 Phase::Finishing | Phase::Idle => {
                     finished = true;
                 }
@@ -2064,8 +2114,28 @@ pub fn poll_slice() -> bool {
         }
     }
 
+    // s439 (F1): duração do slice — loga só acima do limiar (anti-spam); o
+    // stamp de saída é lido DEPOIS do log (lição s413).
+    let slice_t0 = A2_SLICE_T0_US.load(Ordering::Acquire);
+    if slice_t0 != 0 {
+        let now = k_nano::tsc::now_us();
+        let elapsed = now.saturating_sub(slice_t0);
+        if elapsed > A2_SLICE_EXIT_LOG_US {
+            k_nano::slog_cortex!(
+                "InferQ",
+                "warn",
+                "slice exit lento us={} (limiar={}us) n={}",
+                elapsed,
+                A2_SLICE_EXIT_LOG_US,
+                A2_SLICE_N.load(Ordering::Relaxed)
+            );
+        }
+    }
+    A2_SLICE_EXIT_US.store(k_nano::tsc::now_us(), Ordering::Release);
     // s428: slice terminou — limpa o T0 (stall = só existe com slice EM CURSO).
     A2_SLICE_T0_US.store(0, Ordering::Release);
+    // s439 (F1): fronteira de saída — core não está mais no slice.
+    k_nano::silence_watchdog::note_infer_stage(0);
 
     // s429-lab: o deadline da prova é NO-PROGRESS, não wall-clock — cada slice
     // concluído é progresso e re-arma o deadline (QEMU 8c/WHPX mediu prova

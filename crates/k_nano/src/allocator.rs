@@ -546,9 +546,41 @@ pub struct TalcUsage {
     /// 0 = walk completo; 1 = abortado (node fora do span / CAP) — dados
     /// parciais: leitura de lixo ou corrupção de metadados. NUNCA mintir.
     pub partial: u8,
+    /// s443: HISTOGRAMA de tamanhos de gap (contagem por faixa). Totais
+    /// dizem QUE fragmentou; o histograma diz DE QUE JEITO. É o dado que
+    /// separa "poeira de 4KB" (milhares de gaps inúteis) de "v Few gaps
+    /// grandes" (que quase nãofragmentam de verdade) — e, portanto, qual
+    /// ação anti-fragmentação faz sentido. Zero alloc: só incrementos.
+    pub hist: [u32; TALC_HIST_BUCKETS],
+}
+
+/// Faixas do histograma (limites superiores EXCLUSIVOS, em bytes).
+/// Escolhidas pelos tamanhos reais dos consumers roteados: página de KV =
+/// 4096B, chunk de arena/expert = KiB..MiB, aloc de 2MB (gate de spill).
+pub const TALC_HIST_BOUNDS: [u64; TALC_HIST_BUCKETS - 1] = [
+    8 * 1024,      // < 8KB  (poeira: header/tag, página de KV)
+    64 * 1024,     // 8..64KB
+    256 * 1024,    // 64..256KB
+    1024 * 1024,   // 256KB..1MB
+    16 * 1024 * 1024, // 1..16MB
+];
+pub const TALC_HIST_BUCKETS: usize = 6; // 5 faixas + ">= 16MB"
+
+/// Classifica um gap no histograma (puro, testável).
+#[inline]
+pub fn talc_hist_bucket(size: u64) -> usize {
+    let mut i = 0;
+    while i < TALC_HIST_BOUNDS.len() {
+        if size < TALC_HIST_BOUNDS[i] {
+            return i;
+        }
+        i += 1;
+    }
+    TALC_HIST_BUCKETS - 1
 }
 
 static TALC_USAGE: Mutex<TalcUsage> = Mutex::new(TalcUsage {
+    hist: [0; TALC_HIST_BUCKETS],
     free_bytes: 0,
     used_bytes: 0,
     largest_free: 0,
@@ -557,17 +589,28 @@ static TALC_USAGE: Mutex<TalcUsage> = Mutex::new(TalcUsage {
 });
 static TALC_USAGE_SAMPLES: AtomicU64 = AtomicU64::new(0);
 
-/// CAP do walk: um span sã tem dezenas de gaps; milhares = lista corrompida
+/// CAP do walk: um span são tem dezenas de gaps; milhares = lista corrompida
 /// (node lixo encadeado em loop) — aborta com partial=1 em vez de pender.
 const TALC_WALK_MAX_GAPS: u64 = 4096;
+
+/// s439 (fuzz host): footprint MÍNIMO de um gap-node = LlistNode (2 ptr = 16B)
+/// + SIZE (8B) = MIN_CHUNK_SIZE do talc 4.4.3. O walk só pode ler `size` se o
+/// header inteiro couber no span: `node+24 > acme` = `next` corrompido apontando
+/// pro fim — ler o size sairia do claim (página não mapeada → #PF). Também exige
+/// alinhamento de palavra: `next` lixo não pode gerar `read_volatile` desalinhado
+/// (UB por contrato de `*const usize`).
+const TALC_GAP_MIN_FOOTPRINT: usize = 24;
 
 /// Percorre os bins do talc somando os gap-nodes. `talc` deve estar sob
 /// lock (chamador). Zero alloc, nunca panica.
 fn talc_walk_bins(talc: &Talc<ErrOnOom>, span: Span) -> TalcUsage {
+    // Declarado antes dos returns de "sem span": o histograma é zerado nos
+    // caminhos parciais (dado parcial não inventa distribuição).
+    let mut hist = [0u32; TALC_HIST_BUCKETS];
     let (base, acme) = match span.get_base_acme() {
         Some((b, a)) => (b as usize, a as usize),
         None => {
-            return TalcUsage { free_bytes: 0, used_bytes: span.size() as u64, largest_free: 0, gaps: 0, partial: 1 }
+            return TalcUsage { free_bytes: 0, used_bytes: span.size() as u64, largest_free: 0, gaps: 0, partial: 1, hist }
         }
     };
     let mut free = 0u64;
@@ -579,26 +622,41 @@ fn talc_walk_bins(talc: &Talc<ErrOnOom>, span: Span) -> TalcUsage {
         let bins = (talc as *const _ as *const u64).add(2).read_volatile() as *const usize;
         if bins.is_null() {
             // Nunca claimado: span vazio.
-            return TalcUsage { free_bytes: 0, used_bytes: span.size() as u64, largest_free: 0, gaps: 0, partial: 1 };
+            return TalcUsage { free_bytes: 0, used_bytes: span.size() as u64, largest_free: 0, gaps: 0, partial: 1, hist };
         }
         'bins: for b in 0..128usize {
             let mut node = bins.add(b).read_volatile() as usize;
             while node != 0 {
                 gaps += 1;
                 if gaps > TALC_WALK_MAX_GAPS {
-                    return TalcUsage { free_bytes: free, used_bytes: 0, largest_free: largest, gaps, partial: 1 };
+                    return TalcUsage { free_bytes: free, used_bytes: 0, largest_free: largest, gaps, partial: 1, hist };
                 }
-                if node < base || node >= acme {
-                    return TalcUsage { free_bytes: free, used_bytes: 0, largest_free: largest, gaps, partial: 1 };
+                if node < base
+                    || node % core::mem::align_of::<usize>() != 0
+                    || node.saturating_add(TALC_GAP_MIN_FOOTPRINT) > acme
+                {
+                    return TalcUsage { free_bytes: free, used_bytes: 0, largest_free: largest, gaps, partial: 1, hist };
                 }
                 let size = ((node + 16) as *const usize).read_volatile();
                 if size == 0 || node.saturating_add(size) > acme {
-                    return TalcUsage { free_bytes: free, used_bytes: 0, largest_free: largest, gaps, partial: 1 };
+                    return TalcUsage { free_bytes: free, used_bytes: 0, largest_free: largest, gaps, partial: 1, hist };
                 }
-                free += size as u64;
+                // free NUNCA dá wrap: com `size <= span` e `gaps <= CAP`, o teto real
+                // é CAP·span (~28TB no claim de 6.9GB) — o wrap de u64 exigiria
+                // um span de 4.5PB, fora do budget do kernel. Mantido
+                // saturating como cinto-e-suspensório: se algum dia o bound
+                // acima afrouxar, o número publicado continua sendo o maior
+                // possível em vez de mentir um valor pequeno. (O fuzz M4 mostra
+                // que hoje o += simples passaria — este guard não é coberto
+                // por teste porque é inalcançável, não por ser inútil.)
+                free = free.saturating_add(size as u64);
                 if size as u64 > largest {
                     largest = size as u64;
                 }
+                // Contador de histograma: 32 bits bastam (CAP de gaps = 4096)
+                // e não pode estourar sem que o dado vire lixo — saturado.
+                let b = talc_hist_bucket(size as u64);
+                hist[b] = hist[b].saturating_add(1);
                 node = (node as *const usize).read_volatile();
             }
         }
@@ -610,6 +668,7 @@ fn talc_walk_bins(talc: &Talc<ErrOnOom>, span: Span) -> TalcUsage {
         largest_free: largest,
         gaps,
         partial: 0,
+        hist,
     }
 }
 
@@ -792,6 +851,9 @@ unsafe impl GlobalAlloc for HybridAllocator {
 /// Instância bump usada como fallback/boot do híbrido.
 static BUMP_ALLOC: LazyBumpAllocator = LazyBumpAllocator::new();
 
+// OPCODE-0079/0093: sob Miri/Kani o alocador global do kernel (ponteiros
+// crus/volatile) é incompatível — usa o alocador padrão do host nos testes.
+#[cfg(not(any(miri, kani)))]
 #[global_allocator]
 static GLOBAL_ALLOC: HybridAllocator = HybridAllocator;
 
@@ -872,6 +934,9 @@ pub struct HeapObserve {
     pub talc_gaps: u64,
     /// 1 = última amostra parcial (walk abortado — metadados ilegíveis).
     pub talc_partial: u8,
+    /// s443: contagem de gaps por faixa de tamanho (`TALC_HIST_BOUNDS`) — o
+    /// dado que distingue "poeira" de "fragmentos que importam".
+    pub talc_hist: [u32; TALC_HIST_BUCKETS],
 }
 
 pub fn heap_observe() -> HeapObserve {
@@ -910,6 +975,7 @@ pub fn heap_observe() -> HeapObserve {
         talc_largest_mb: (tu.largest_free / (1024 * 1024)) as usize,
         talc_gaps: tu.gaps,
         talc_partial: tu.partial,
+        talc_hist: tu.hist,
     }
 }
 
@@ -1213,6 +1279,189 @@ pub unsafe fn dealloc_talc_routed(ptr: *mut u8, layout: core::alloc::Layout) {
 /// Bytes vivos alocados pela rota TALC explícita (KV longa-vida etc.).
 pub fn talc_routed_bytes() -> u64 {
     TALC_ROUTED_BYTES.load(Ordering::Relaxed)
+}
+
+/// s443: buffer POSSUÍDO na rota TALC — `String`/`Vec` não servem aqui.
+///
+/// O bump allocator **nunca devolve** memória (dealloc = no-op): todo
+/// `String` que morre no bump é memória permanentemente perdida. Isso torna o
+/// churn normal de um consumer de longa vida (uma `ContextWindow` que compacta e
+/// remove mensagens a cada conversa) um **vazamento monotônico** — cada mensagem
+/// descartada deixa para trás seus bytes para sempre. É por isso que rotear
+/// esse consumer não é otimização: é o conserto do vazamento.
+///
+/// Contrato:
+/// - falha de alocação = `None`/`false` (**fail-closed**, nunca `oom()`);
+/// - `Drop` devolve o chunk ao TALC (free REAL);
+/// - nunca chamar de dentro de outra alloc em curso (o `Talck` não é
+///   reentrante) nem de IRQ — igual a `alloc_talc_routed`.
+pub struct TalcBuf {
+    ptr: *mut u8,
+    len: usize,
+    cap: usize,
+}
+
+impl TalcBuf {
+    pub const fn new() -> Self {
+        TalcBuf { ptr: core::ptr::null_mut(), len: 0, cap: 0 }
+    }
+
+    /// Capacidade mínima (bytes). `None` = o TALC recusou (fail-closed).
+    pub fn with_capacity(n: usize) -> Option<Self> {
+        if n == 0 {
+            return Some(Self::new());
+        }
+        let layout = core::alloc::Layout::from_size_align(n, 1).ok()?;
+        // SAFETY: layout válido; a rota devolve NULL se recusar.
+        let p = unsafe { alloc_talc_routed(layout) };
+        if p.is_null() {
+            return None;
+        }
+        Some(TalcBuf { ptr: p, len: 0, cap: n })
+    }
+
+    /// Cópia de um `&str`. `None` = sem espaço (o caller decide o fallback —
+    /// nunca finge que gravou).
+    pub fn from_str(s: &str) -> Option<Self> {
+        let mut b = Self::with_capacity(s.len())?;
+        // SAFETY: `cap >= s.len()` por construção; o TALC devolve memória não
+        // inicializada, então a escrita abaixo é a primeira.
+        unsafe { core::ptr::copy_nonoverlapping(s.as_ptr(), b.ptr, s.len()) };
+        b.len = s.len();
+        Some(b)
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.cap
+    }
+
+    /// Bytes vivos no TALC por este buffer (0 = vazio/sem chunk).
+    pub fn bytes(&self) -> usize {
+        self.cap
+    }
+
+    pub fn as_str(&self) -> &str {
+        if self.len == 0 {
+            return "";
+        }
+        // SAFETY: invariante `len <= cap` e os `len` primeiros bytes foram
+        // escritos por `push_str`/`from_str` (ASCII/UTF-8 preservado byte a byte).
+        unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(self.ptr, self.len)) }
+    }
+
+    /// Concatena. `false` = não coube (o conteúdo fica **intacto**, fail-closed).
+    pub fn push_str(&mut self, s: &str) -> bool {
+        if s.is_empty() {
+            return true;
+        }
+        let need = self.len + s.len();
+        if need > self.cap {
+            if !self.grow(need) {
+                return false;
+            }
+        }
+        // SAFETY: garante `len + s.len() <= cap` acima.
+        unsafe {
+            core::ptr::copy_nonoverlapping(s.as_ptr(), self.ptr.add(self.len), s.len());
+        }
+        self.len = need;
+        true
+    }
+
+    /// Libera a capacidade de sobra (`Vec::shrink_to_fit`): um buffer que caiu
+    /// de 1MB para 2KB segura 1MB hostage no TALC. Cópia + free = coalesce real.
+    pub fn shrink_to_fit(&mut self) -> bool {
+        if self.cap == 0 || self.cap == self.len {
+            return true;
+        }
+        let Ok(layout) = core::alloc::Layout::from_size_align(self.len.max(1), 1) else {
+            return false;
+        };
+        // SAFETY: `len <= cap`; o novo chunk tem `len` bytes.
+        let np = unsafe { alloc_talc_routed(layout) };
+        if np.is_null() {
+            return false; // sem espaço p/ mover: fica como está (honesto)
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(self.ptr, np, self.len);
+            if !self.ptr.is_null() {
+                dealloc_talc_routed(self.ptr, core::alloc::Layout::from_size_align_unchecked(self.cap, 1));
+            }
+        }
+        self.ptr = np;
+        self.cap = self.len;
+        true
+    }
+
+    fn grow(&mut self, need: usize) -> bool {
+        // Dobra a capacidade (como `Vec`), mas nunca menos que o necessário.
+        let mut new_cap = if self.cap == 0 { 64 } else { self.cap * 2 };
+        if new_cap < need {
+            new_cap = need;
+        }
+        // NAO usa `core::alloc::realloc` de propósito (lição s434b): para um
+        // chunk TALC-resident cujo realloc falha, `HybridAllocator::realloc`
+        // chama `oom()` — um HALT do kernel. Aqui grow é fail-closed por
+        // contrato (conteúdo intacto, `false`); então é alloc+copy+free, que
+        // devolve NULL honesto em vez de derrubar o sistema. Custo: uma
+        // alocação transitória no grow (barato: crescimento é raro e dobrado).
+        let Some(mut nb) = TalcBuf::with_capacity(new_cap) else {
+            return false;
+        };
+        if self.len > 0 {
+            // SAFETY: `len <= cap` do buffer velho; destino tem `new_cap >= len`.
+            unsafe {
+                core::ptr::copy_nonoverlapping(self.ptr, nb.ptr, self.len);
+            }
+            nb.len = self.len;
+        }
+        // O drop do buffer velho devolve o chunk antigo (free real no TALC).
+        drop(core::mem::replace(self, nb));
+        true
+    }
+}
+
+impl Default for TalcBuf {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for TalcBuf {
+    fn drop(&mut self) {
+        if !self.ptr.is_null() {
+            // SAFETY: par exato do `alloc_talc_routed` que produziu `ptr`.
+            unsafe {
+                dealloc_talc_routed(
+                    self.ptr,
+                    core::alloc::Layout::from_size_align_unchecked(self.cap, 1),
+                )
+            };
+            self.ptr = core::ptr::null_mut();
+        }
+    }
+}
+
+// SAFETY: posse EXCLUSIVA do chunk (um único `Drop` devolve) ⇒ `Send`.
+unsafe impl Send for TalcBuf {}
+// Sem `Sync`: `&TalcBuf` expõe `as_str()`; escrita compartilhada exigiria
+// sincronização que este tipo deliberadamente não tem (como `Vec<u8>` cru).
+
+impl core::fmt::Debug for TalcBuf {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TalcBuf")
+            .field("len", &self.len)
+            .field("cap", &self.cap)
+            .finish()
+    }
 }
 
 /// Phys do `HEAP_BUFFER` (bump). 0 = ainda não reservado no PMM.
@@ -1652,6 +1901,14 @@ fn oom(layout: core::alloc::Layout) -> ! {
     // SPIN com watchdog de serial: a cada 10s emite 1 linha de heartbeat
     // (ordem: quem está vivo continua vivo; quem esperava o lock morre
     // ruidosamente em vez de silenciosamente).
+    // Park eterno do BSP segura os locks que o OOM interrompeu (s434/s438).
+    // Um warm-reset, com selo, deixa [RECOVER] para o próximo boot.
+    // s439 (F1): BSP park = freeze total. BSP → reboot ORDENADO observável
+    // (seal + [RECOVER] + warm_reset); AP → heartbeat park abaixo (o BSP que
+    // ainda desenha a tela segue vivo).
+    if crate::smp::percpu::fault_context_is_bsp() {
+        crate::boot_ramlog::reboot_ordered("oom");
+    }
     let mut last_beat = crate::tsc::now_us();
     loop {
         core::hint::spin_loop();
@@ -1808,5 +2065,647 @@ mod auto_fractioning_tests {
     fn no_infer_slice_outside_tick() {
         // Fora de tick (boot/test): o gate (a) nunca barra grow de boot.
         assert!(!super::infer_slice_in_progress());
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// s439 — FUZZ HOST de talc_walk_bins contra gap-lists CORROMPIDAS
+// ═══════════════════════════════════════════════════════════════════════════
+// Por que host e não QEMU: o walk é o ÚNICO lugar que lê metadado do TALC
+// sem confiar nele (todo resto do kernel confia). Se um `next` lixo virar um
+// ptr inválido, o boot morre com #PF rotativo — exatamente a classe que a
+// s438 passou 2 sessões caçando. Aqui a mesma corrupção é reproduzível em
+// microssegundos e o walk tem que responder partial=1 (ou os valores
+// consistentes) SEM pender e SEM ler fora do span.
+//
+// Layout (fonte talc-4.4.3, igual ao comentário de talc_walk_bins):
+//   Talc<O>: availability_low @0, availability_high @8, bins @16 (ptr)
+//   bins:    [Option<NonNull<LlistNode>>; 128] (Option<NonNull> niche = 8B)
+//   node:    next @0 (0 = fim), size @16 (footprint mínimo 24B)
+//
+// Regra do módulo: o scratch é [span | redzone] numa caixa só. O redzone fica
+// ATRÁS de `acme` com um size plausível (32) — se o walk ler o `size` de um
+// node cujo cabeçalho cruza `acme`, o número muda e o teste acusa. Detecta
+// leitura fora do span sem depender de página de guarda (portável no host).
+#[cfg(test)]
+mod talc_walk_fuzz {
+    use super::*;
+    use std::time::Instant;
+
+    const MAX_BINS: usize = 128;
+    const REDZONE_BYTES: usize = 64;
+    /// Teto generoso: o walk tem CAP 4096 gaps (microsegundos). Só estoura se
+    /// a lista corrompida conseguiu pender — que é o que o teste prova.
+    const WALK_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
+    /// Scratch = [span | redzone] numa alocação única, alinhado em palavra.
+    struct Scratch {
+        buf: Box<[u64]>,
+        base: usize,
+        acme: usize,
+    }
+
+    impl Scratch {
+        fn new(span_bytes: usize) -> Self {
+            assert!(span_bytes % 8 == 0 && span_bytes >= 4096);
+            let words = (span_bytes + REDZONE_BYTES) / 8;
+            let mut buf: Box<[u64]> = vec![0u64; words].into_boxed_slice();
+            let base = buf.as_mut_ptr() as usize;
+            // Redzone = size plausível: leitura além de acme muda o resultado.
+            for w in buf[(span_bytes / 8)..].iter_mut() {
+                *w = 32;
+            }
+            Self { buf, base, acme: base + span_bytes }
+        }
+
+        fn span(&self) -> Span {
+            Span::from_base_size(self.base as *mut u8, self.acme - self.base)
+        }
+
+        fn end(&self) -> usize {
+            self.base + self.buf.len() * 8
+        }
+
+        /// Escreve um `usize` word-aligned dentro da caixa (span OU redzone).
+        fn put(&self, addr: usize, val: usize) {
+            assert!(addr % 8 == 0, "put exige alinhamento de palavra");
+            assert!(addr + 8 <= self.end(), "put fora da caixa");
+            unsafe { (addr as *mut usize).write(val) }
+        }
+
+        /// Planta um gap-node: next em @0, size em @16 (footprint 24B).
+        fn node(&self, addr: usize, next: usize, size: usize) {
+            self.put(addr, next);
+            self.put(addr + 16, size);
+        }
+    }
+
+    /// Talc sintético: `new` já traz `bins = null_mut()` (fonte talc-4.4.3), então
+    /// só gravamos o ponteiro de bins no offset 16 — o mesmo read_volatile que o
+    /// walk faz em produção. Sem Drop no Talc: nada tenta liberar a caixa.
+    fn fake_talc(bins: &[usize; MAX_BINS]) -> Talc<ErrOnOom> {
+        let mut t = Talc::new(ErrOnOom);
+        unsafe {
+            let p = &mut t as *mut Talc<ErrOnOom> as *mut usize;
+            p.add(2).write(bins.as_ptr() as usize);
+        }
+        t
+    }
+
+    /// Talc NUNCA claimado: `bins` fica null_mut() (ramo que reporta
+    /// `used = span` como "tudo ocupado", sem nunca ter medido nada).
+    fn fake_talc_unclaimed() -> Talc<ErrOnOom> {
+        Talc::new(ErrOnOom)
+    }
+
+    /// Roda o walk com budget de tempo e devolve (usage, elapsed).
+    fn walk(s: &Scratch, bins: &[usize; MAX_BINS]) -> (TalcUsage, std::time::Duration) {
+        let t0 = Instant::now();
+        let u = super::talc_walk_bins(&fake_talc(bins), s.span());
+        (u, t0.elapsed())
+    }
+
+    /// Invariantes que valem para QUALQUER saída (corrompida ou não):
+    /// - não pendura (teto de tempo + gaps no CAP);
+    /// - `largest_free` nunca excede a soma dos free;
+    /// - partial=1 ⇒ used colapsa para 0 (ou = span nos 2 ramos degenerados);
+    /// - partial=0 ⇒ used fecha com span − free (dado honesto, não estimativa).
+    fn assert_invariants(u: &TalcUsage, span_bytes: usize) {
+        assert!(
+            u.largest_free <= u.free_bytes,
+            "largest {} > free {}",
+            u.largest_free,
+            u.free_bytes
+        );
+        assert!(u.gaps <= super::TALC_WALK_MAX_GAPS + 1, "CAP furado: gaps={}", u.gaps);
+        assert!(u.partial <= 1, "partial precisa ser 0/1, veio {}", u.partial);
+        if u.partial == 1 {
+            assert!(
+                u.used_bytes == 0 || u.used_bytes == span_bytes as u64,
+                "partial não pode reportar uso parcial: used={} span={}",
+                u.used_bytes,
+                span_bytes
+            );
+        } else {
+            assert_eq!(u.used_bytes, (span_bytes as u64).saturating_sub(u.free_bytes));
+        }
+    }
+
+    // ── caso são: 2 gaps em cadeia, um deles órfão noutro bin ──────────────
+    #[test]
+    fn walk_sane_chain_sums_free_exactly() {
+        let s = Scratch::new(64 * 1024);
+        let n1 = s.base;
+        let n2 = n1 + 4096;
+        s.node(n1, n2, 4096);
+        s.node(n2, 0, 8192);
+        let n3 = s.base + 12288; // gap solto no bin 7
+        s.node(n3, 0, 2048);
+        let mut bins = [0usize; MAX_BINS];
+        bins[3] = n1;
+        bins[7] = n3;
+        let (u, _) = walk(&s, &bins);
+        assert_invariants(&u, s.acme - s.base);
+        assert_eq!(u.partial, 0, "span são não pode ser partial");
+        assert_eq!(u.gaps, 3);
+        assert_eq!(u.free_bytes, 4096 + 8192 + 2048);
+        assert_eq!(u.largest_free, 8192);
+        assert_eq!(u.used_bytes, (s.acme - s.base) as u64 - 14336);
+    }
+
+    // ── loop: node.next = node (o CAP tem de salvar, não o kernel inteiro) ──
+    #[test]
+    fn walk_self_loop_aborts_at_cap_without_hanging() {
+        let s = Scratch::new(64 * 1024);
+        let n1 = s.base;
+        s.node(n1, n1, 4096); // next = si mesmo
+        let mut bins = [0usize; MAX_BINS];
+        bins[0] = n1;
+        let (u, dt) = walk(&s, &bins);
+        assert!(dt < WALK_BUDGET, "walk pendurou no self-loop: {:?}", dt);
+        assert_eq!(u.partial, 1, "loop tem que ser partial=1");
+        assert_eq!(u.gaps, super::TALC_WALK_MAX_GAPS + 1);
+        assert_invariants(&u, s.acme - s.base);
+    }
+
+    #[test]
+    fn walk_two_node_cycle_aborts_at_cap() {
+        let s = Scratch::new(64 * 1024);
+        let a = s.base;
+        let b = s.base + 4096;
+        s.node(a, b, 4096);
+        s.node(b, a, 4096); // a→b→a→…
+        let mut bins = [0usize; MAX_BINS];
+        bins[1] = a;
+        let (u, dt) = walk(&s, &bins);
+        assert!(dt < WALK_BUDGET, "walk pendurou no ciclo de 2: {:?}", dt);
+        assert_eq!(u.partial, 1);
+        assert_eq!(u.gaps, super::TALC_WALK_MAX_GAPS + 1);
+    }
+
+    #[test]
+    fn walk_all_bins_looping_still_bounded_by_global_cap() {
+        // CAP é GLOBAL (contador único de gaps): 128 bins em self-loop somam o
+        // mesmo teto, não 128× o teto.
+        let s = Scratch::new(1024 * 1024);
+        let mut bins = [0usize; MAX_BINS];
+        for (i, b) in bins.iter_mut().enumerate() {
+            let addr = s.base + i * 8192;
+            s.node(addr, addr, 128);
+            *b = addr;
+        }
+        let (u, dt) = walk(&s, &bins);
+        assert!(dt < WALK_BUDGET, "walk pendurou com 128 loops: {:?}", dt);
+        assert_eq!(u.partial, 1);
+        assert_eq!(u.gaps, super::TALC_WALK_MAX_GAPS + 1);
+    }
+
+    // ── node fora do span (abaixo de base, acima/igual a acme) ──────────────
+    #[test]
+    fn walk_node_outside_span_is_partial() {
+        // base - 8 (abaixo do span) no PRIMEIRO bin: aborta no gap #1, sem
+        // pender e sem tocar memória fora da caixa.
+        let s = Scratch::new(64 * 1024);
+        let mut bins = [0usize; MAX_BINS];
+        bins[0] = s.base - 8;
+        let (u, dt) = walk(&s, &bins);
+        assert!(dt < WALK_BUDGET);
+        assert_eq!(u.partial, 1);
+        assert_eq!(u.gaps, 1, "o nó rejeitado ainda conta como gap visto");
+        assert_eq!(u.free_bytes, 0);
+        assert_invariants(&u, s.acme - s.base);
+
+        // acme (exatamente no fim) e um lixo gigante.
+        let s2 = Scratch::new(64 * 1024);
+        let mut b2 = [0usize; MAX_BINS];
+        b2[0] = s2.acme;
+        let (u2, _) = walk(&s2, &b2);
+        assert_eq!(u2.partial, 1);
+        assert_eq!(u2.gaps, 1);
+
+        let s3 = Scratch::new(64 * 1024);
+        let mut b3 = [0usize; MAX_BINS];
+        b3[0] = usize::MAX - 7;
+        let (u3, _) = walk(&s3, &b3);
+        assert_eq!(u3.partial, 1);
+        assert_eq!(u3.free_bytes, 0);
+
+        // Gap válido no bin 0 + lixo no bin 1: o válido conta, o lixo aborta.
+        let s4 = Scratch::new(64 * 1024);
+        s4.node(s4.base, 0, 4096);
+        let mut b4 = [0usize; MAX_BINS];
+        b4[0] = s4.base;
+        b4[1] = usize::MAX;
+        let (u4, _) = walk(&s4, &b4);
+        assert_eq!(u4.partial, 1);
+        assert_eq!(u4.gaps, 2, "válido + lixo rejeitado");
+        assert_eq!(u4.free_bytes, 4096, "o gap válido antes do lixo conta");
+        assert_invariants(&u4, s4.acme - s4.base);
+    }
+
+    // ── size gigante / size zero ────────────────────────────────────────────
+    #[test]
+    fn walk_giant_size_is_partial_and_never_wraps_free() {
+        let s = Scratch::new(64 * 1024);
+        let n1 = s.base;
+        let n2 = s.base + 4096;
+        s.node(n1, n2, 4096);
+        s.node(n2, 0, usize::MAX); // size impossível
+        let mut bins = [0usize; MAX_BINS];
+        bins[0] = n1;
+        let (u, _) = walk(&s, &bins);
+        assert_eq!(u.partial, 1);
+        assert_eq!(u.free_bytes, 4096, "gap válido antes do lixo conta");
+        assert_invariants(&u, s.acme - s.base);
+
+        let s2 = Scratch::new(64 * 1024);
+        let m = s2.base;
+        s2.node(m, 0, usize::MAX - 3); // satura o usize
+        let mut b2 = [0usize; MAX_BINS];
+        b2[0] = m;
+        let (u2, _) = walk(&s2, &b2);
+        assert_eq!(u2.partial, 1);
+        assert_eq!(u2.free_bytes, 0);
+
+        let s3 = Scratch::new(64 * 1024);
+        let z = s3.base;
+        s3.node(z, 0, 0); // size zero = gap impossível
+        let mut b3 = [0usize; MAX_BINS];
+        b3[0] = z;
+        let (u3, _) = walk(&s3, &b3);
+        assert_eq!(u3.partial, 1);
+        assert_eq!(u3.free_bytes, 0);
+    }
+
+    #[test]
+    fn walk_free_saturates_instead_of_wrapping() {
+        // 4000 gaps INDIVIDUALMENTE válidos (cada size cabe no span, cada node
+        // cabe com footprint 24B) mas com DOMÍNIOS sobrepostos: a soma passa do
+        // span. `free` tem que reportar a soma cheia e `used` saturar em 0 —
+        // nunca dar wrap para um número pequeno (free publicado mentindo).
+        let s = Scratch::new(1024 * 1024);
+        let chain = s.base;
+        const N: usize = 4000;
+        let each = 4096usize;
+        for k in 0..N {
+            let addr = chain + k * super::TALC_GAP_MIN_FOOTPRINT;
+            let next = if k == N - 1 { 0 } else { addr + super::TALC_GAP_MIN_FOOTPRINT };
+            s.node(addr, next, each);
+        }
+        let mut bins = [0usize; MAX_BINS];
+        bins[5] = chain;
+        let (u, dt) = walk(&s, &bins);
+        assert!(dt < WALK_BUDGET);
+        assert_eq!(u.gaps, N as u64, "a cadeia inteira tem que ser percorrida");
+        assert_eq!(u.partial, 0, "metadado válido (só sobreposto) não é lixo");
+        assert_eq!(u.free_bytes, N as u64 * each as u64, "soma cheia, sem wrap");
+        assert_eq!(u.largest_free, each as u64);
+        assert_eq!(u.used_bytes, 0, "soma > span: usado satura em 0");
+        assert_invariants(&u, s.acme - s.base);
+    }
+
+    // ── desalinhamento: next lixo desalinhado = UB se lido ───────────────────
+    #[test]
+    fn walk_misaligned_node_is_partial() {
+        let s = Scratch::new(64 * 1024);
+        let mut bins = [0usize; MAX_BINS];
+        bins[0] = s.base + 4; // dentro do span, mas desalinhado
+        let (u, dt) = walk(&s, &bins);
+        assert!(dt < WALK_BUDGET);
+        assert_eq!(u.partial, 1, "node desalinhado tem que ser rejeitado");
+        assert_eq!(u.free_bytes, 0);
+    }
+
+    // ── cabeçalho cruzando acme: PROVA de que o size não é lido fora ────────
+    #[test]
+    fn walk_header_crossing_acme_never_reads_past_span() {
+        let s = Scratch::new(64 * 1024);
+        // node a 8B do fim: `size` cai no REDZONE (preenchido com 32, valor que
+        // o walk aceitaria). Lido => free=32 e partial=0 (falso "são").
+        let node = s.acme - 8;
+        s.put(node, 0);
+        let mut bins = [0usize; MAX_BINS];
+        bins[0] = node;
+        let (u, _) = walk(&s, &bins);
+        assert_eq!(u.partial, 1, "node sem cabeçalho inteiro no span é lixo");
+        assert_eq!(u.free_bytes, 0, "leu o redzone: leitura fora do span");
+
+        // E o caso-limite válido: node cujo footprint 24B termina exatamente
+        // em acme continua aceito (não é over-reject do footprint mínimo).
+        let s2 = Scratch::new(64 * 1024);
+        let node2 = s2.acme - super::TALC_GAP_MIN_FOOTPRINT;
+        s2.node(node2, 0, 24);
+        let mut b2 = [0usize; MAX_BINS];
+        b2[0] = node2;
+        let (u2, _) = walk(&s2, &b2);
+        assert_eq!(u2.partial, 0, "footprint mínimo exato tem que passar");
+        assert_eq!(u2.free_bytes, 24);
+    }
+
+    // ── ramos degenerados: bins nulo e span vazio ───────────────────────────
+    #[test]
+    fn walk_null_bins_and_empty_span_are_partial() {
+        let s = Scratch::new(64 * 1024);
+        let span_bytes = (s.acme - s.base) as u64;
+        // Nunca claimado: bins = null_mut() → o walk não mediu nada, então
+        // used = span e partial=1 (nunca "0 livre, tudo ocupado" como fato).
+        let u = super::talc_walk_bins(&fake_talc_unclaimed(), s.span());
+        assert_eq!(u.partial, 1, "nunca claimado (bins nulo) = parcial");
+        assert_eq!(u.gaps, 0);
+        assert_eq!(u.free_bytes, 0);
+        assert_eq!(u.used_bytes, span_bytes);
+        assert_invariants(&u, span_bytes as usize);
+
+        // span vazio: get_base_acme() = None
+        let null_bins = [0usize; MAX_BINS];
+        let t = super::talc_walk_bins(&fake_talc(&null_bins), Span::empty());
+        assert_eq!(t.partial, 1);
+        assert_eq!(t.free_bytes, 0);
+        assert_eq!(t.used_bytes, 0);
+    }
+
+    // ── FUZZ dirigido: xorshift determinístico, 400 casos corrompidos ───────
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    #[test]
+    fn fuzz_corrupted_gap_lists_never_hang_and_stay_consistent() {
+        let mut rng = Rng(0xDEEC_E66D_0BAD_F00D);
+        for case in 0..400usize {
+            let span_bytes = 4096 * (1 + rng.below(16));
+            let s = Scratch::new(span_bytes);
+            let mut bins = [0usize; MAX_BINS];
+
+            // Planta 1..6 "gaps" com metadado majoritariamente lixo (passo
+            // 256B: 6 nós + footprint 24B cabem no span mínimo de 4096B).
+            let n_nodes = 1 + rng.below(6);
+            let mut addrs = [0usize; 6];
+            for (i, a) in addrs.iter_mut().enumerate().take(n_nodes) {
+                let addr = s.base + i * 256;
+                s.put(addr, 0);
+                s.put(addr + 16, 0);
+                *a = addr;
+            }
+            for i in 0..n_nodes {
+                let addr = addrs[i];
+                let kind = rng.below(10);
+                let next = match kind {
+                    0 => 0,                                   // fim honesto
+                    1 => addrs[rng.below(n_nodes)],           // ciclo honesto
+                    2 => s.base - 8,                          // abaixo do span
+                    3 => s.acme + 8,                          // acima do span
+                    4 => usize::MAX - rng.below(64),           // lixo gigante
+                    5 => addr + 1,                            // desalinhado
+                    _ => addrs[rng.below(n_nodes)],
+                };
+                let size = match rng.below(10) {
+                    0 => usize::MAX,
+                    1 => 0,
+                    2 => (s.acme - s.base) + rng.below(4096), // maior que o span
+                    _ => 8 * (1 + rng.below(512)),
+                };
+                s.node(addr, next, size);
+                bins[rng.below(MAX_BINS)] = addr;
+            }
+
+            let (u, dt) = walk(&s, &bins);
+            assert!(dt < WALK_BUDGET, "caso {} pendurou: {:?}", case, dt);
+            assert_invariants(&u, s.acme - s.base);
+
+            // Corrupção que sobrevive (partial=0) tem que ser aritmeticamente
+            // fechável: o que o walk contou bate com o que ele somou.
+            if u.partial == 0 {
+                assert_eq!(u.used_bytes, (s.acme - s.base) as u64 - u.free_bytes);
+                assert!(u.largest_free <= u.free_bytes);
+            } else {
+                assert_eq!(u.used_bytes, 0, "partial não publica uso inventado");
+            }
+        }
+    }
+
+    // ── INTEGRAÇÃO com um Talc REAL: os guards NÃO podem rejeitar o allocator ──
+    //
+    // O teste sintético acima prova que os guards pegam corrupção; este prova
+    // o outro lado do contrato: metadado que o talc 4.4.3 REAL escreve tem que
+    // passar ileso (partial=0), senão a telemetria s435 no kernel inteiro
+    // vira "nunca medida". Usa claim/alloc/dealloc de verdade — o mesmo
+    // caminho que `talc_init_post_memory` + GlobalAlloc exercitam no boot.
+    #[test]
+    fn walk_over_real_talc_is_never_partial() {
+        // 1MB word-aligned (Box<[u64]>); claim exige >= MIN_HEAP_SIZE (32B).
+        let mut heap = Box::new([0u64; (1024 * 1024) / 8]);
+        let span = Span::from(heap.as_mut_slice());
+        let mut real = Talc::new(ErrOnOom);
+        unsafe { real.claim(span).expect("claim do heap de teste") };
+
+        // Allocs de tamanho variado (caem em bins distintos do talc) + frees
+        // parciais que registram gaps reais no meio do span (fragmentação).
+        let mut live: Vec<(core::ptr::NonNull<u8>, core::alloc::Layout)> = Vec::new();
+        for i in 0..24usize {
+            let size = 24 * (1 + i * 7); // 24B..~4KB
+            let layout = core::alloc::Layout::from_size_align(size, 8).unwrap();
+            match unsafe { real.malloc(layout) } {
+                Ok(p) => live.push((p, layout)),
+                Err(()) => panic!("malloc {i} (size={size}) falhou"),
+            }
+        }
+        let freed: Vec<_> = live.drain(..live.len() / 2).collect();
+        for (p, layout) in &freed {
+            unsafe { real.free(*p, *layout) };
+        }
+
+        let u = super::talc_walk_bins(&real, span);
+        assert_eq!(u.partial, 0, "metadado do talc REAL não pode ser parcial");
+        assert!(u.gaps >= 1, "deveria haver gaps registrados");
+        assert!(u.free_bytes > 0);
+        assert!(u.largest_free > 0);
+        assert_eq!(u.used_bytes, (span.size() as u64).saturating_sub(u.free_bytes));
+
+        // Sanidade do cálculo: o free medido cabe no span e o maior gap é um
+        // dos bins visitados (nunca > span).
+        assert!(u.free_bytes <= span.size() as u64, "free acima do span");
+        assert!(u.largest_free <= span.size() as u64);
+        assert!(u.gaps <= super::TALC_WALK_MAX_GAPS);
+
+        // Limpa só o que ainda está alocado (os `freed` já foram liberados).
+        for (p, layout) in live.iter() {
+            unsafe { real.free(*p, *layout) };
+        }
+    }
+
+    // ── fuzz de cauda: 1 nó com next = ponteiro aleatório (a classe do s438) ─
+    #[test]
+    fn fuzz_single_node_random_pointer_never_pends() {
+        let mut rng = Rng(0x1234_5678_9ABC_DEF1);
+        for case in 0..2000usize {
+            let s = Scratch::new(8192);
+            let addr = s.base;
+            let next = match rng.below(4) {
+                0 => rng.next() as usize,                     // qualquer lixo
+                1 => s.base + rng.below(64),                  // dentro do span
+                2 => s.acme.wrapping_sub(rng.below(64)),       // borda de acme
+                _ => 0,
+            };
+            let size = match rng.below(3) {
+                0 => rng.next() as usize,
+                1 => usize::MAX,
+                _ => 24 * (1 + rng.below(8)),
+            };
+            s.node(addr, next, size);
+            let mut bins = [0usize; MAX_BINS];
+            bins[0] = addr;
+            let (u, dt) = walk(&s, &bins);
+            assert!(dt < WALK_BUDGET, "caso {} pendurou: {:?}", case, dt);
+            assert!(u.partial <= 1);
+            assert!(u.gaps <= super::TALC_WALK_MAX_GAPS + 1);
+        }
+    }
+
+    // ── s443: histograma de tamanhos (o "dados reais" da fragmentação) ────────
+
+    #[test]
+    fn buckets_sao_faixas_exclusivas_no_limite_correto() {
+        // Limite = exclusivo: um gap de exatamente 8192 entra na faixa de cima.
+        assert_eq!(super::talc_hist_bucket(0), 0);
+        assert_eq!(super::talc_hist_bucket(8191), 0);
+        assert_eq!(super::talc_hist_bucket(8192), 1);
+        assert_eq!(super::talc_hist_bucket(64 * 1024), 2);
+        assert_eq!(super::talc_hist_bucket(256 * 1024), 3);
+        assert_eq!(super::talc_hist_bucket(1024 * 1024), 4);
+        assert_eq!(super::talc_hist_bucket(16 * 1024 * 1024), 5);
+        assert_eq!(super::talc_hist_bucket(u64::MAX), 5);
+    }
+
+    #[test]
+    fn histograma_conta_cada_gap_na_faixa_certa() {
+        // Um gap por faixa, escolhido bem dentro dela (limites são exclusivos).
+        let sizes: [usize; 6] = [4096, 16 * 1024, 128 * 1024, 512 * 1024, 4 << 20, 32 << 20];
+        let total: usize = sizes.iter().sum::<usize>() + 64 * 6;
+        let s = Scratch::new(total + 4096);
+        let mut addr = s.span().get_base_acme().unwrap().0 as usize;
+        let mut nodes = [0usize; 6];
+        for i in 0..6 {
+            nodes[i] = addr;
+            s.node(addr, 0, sizes[i]);
+            addr += sizes[i] + 64; // 64B de vão entre os gaps
+        }
+        // Fecha a CADEIA (o último aponta p/ 0). Um anel aqui seria lista corrompida:
+        // o walk abortaria no CAP com partial=1 (comportamento certo, já
+        // coberto pelo fuzz) e não haveria histograma para conferir.
+        for i in 0..6 {
+            let next = if i + 1 < 6 { nodes[i + 1] } else { 0 };
+            s.node(nodes[i], next, sizes[i]);
+        }
+        let mut bins = [0usize; MAX_BINS];
+        bins[0] = nodes[0];
+        let (u, _dt) = walk(&s, &bins);
+        assert_eq!(u.partial, 0, "cadeia valida nao pode ser parcial");
+        assert_eq!(u.gaps, 6);
+        let sum: u32 = u.hist.iter().sum();
+        assert_eq!(sum as u64, u.gaps, "histograma tem que fechar com gaps");
+        for b in 0..super::TALC_HIST_BUCKETS {
+            assert_eq!(u.hist[b], 1, "faixa {} com {} gaps", b, u.hist[b]);
+        }
+    }
+
+    #[test]
+    fn histograma_zera_em_walk_parcial() {
+        // Dado parcial nao inventa distribuicao: se abortou no meio, os
+        // buckets ficam so com o que deu para ler (aqui: nada, o 1o node ja
+        // e invalido).
+        let s = Scratch::new(1 << 20);
+        let mut bins = [0usize; MAX_BINS];
+        bins[0] = s.span().get_base_acme().unwrap().1 as usize - 4; // fora do span
+        let (u, _dt) = walk(&s, &bins);
+        assert_eq!(u.partial, 1);
+        assert_eq!(u.hist.iter().sum::<u32>(), 0, "walk parcial nao pode publicar buckets");
+    }
+}
+
+/// s443: `TalcBuf` — buffer POSSUÍDO na rota TALC (o tipo que conserta o
+/// vazamento de consumers de longa vida com churn no bump).
+#[cfg(test)]
+mod talc_buf_tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip_de_string() {
+        let b = TalcBuf::from_str("ola neural").expect("host: TALC nao pronto, cai no hibrido");
+        assert_eq!(b.as_str(), "ola neural");
+        assert_eq!(b.len(), 10);
+        assert!(b.capacity() >= 10);
+        assert_eq!(b.bytes(), b.capacity());
+    }
+
+    #[test]
+    fn push_cresce_preservando_o_que_ja_existia() {
+        let mut b = TalcBuf::new();
+        assert!(b.is_empty());
+        assert!(b.push_str("abc"));
+        // Estoura a capacidade inicial (64B) para exercitar o grow.
+        for i in 0..40 {
+            assert!(b.push_str("0123456789"), "grow falhou no chunk {}", i);
+        }
+        assert_eq!(b.len(), 3 + 400);
+        assert!(b.as_str().starts_with("abc0123456789"));
+        assert!(b.capacity() >= b.len());
+    }
+
+    #[test]
+    fn push_de_string_vazio_e_noop() {
+        let mut b = TalcBuf::from_str("x").unwrap();
+        let cap = b.capacity();
+        assert!(b.push_str(""));
+        assert_eq!(b.as_str(), "x");
+        assert_eq!(b.capacity(), cap);
+    }
+
+    #[test]
+    fn capacidade_impossivel_falha_fechado() {
+        // `Layout` de usize::MAX é inválido => None, nunca panic/oom.
+        assert!(TalcBuf::with_capacity(usize::MAX).is_none());
+        assert!(TalcBuf::from_str(&"z".repeat(1024)).is_some());
+    }
+
+    #[test]
+    fn shrink_devolve_a_capacidade_sobrando() {
+        let mut b = TalcBuf::with_capacity(64 * 1024).unwrap();
+        assert!(b.push_str("curto"));
+        assert_eq!(b.capacity(), 64 * 1024);
+        assert!(b.shrink_to_fit());
+        assert_eq!(b.capacity(), b.len());
+        assert_eq!(b.as_str(), "curto");
+    }
+
+    #[test]
+    fn drop_nao_panica_e_o_ponteiro_e_zerado() {
+        let mut b = TalcBuf::from_str("some").unwrap();
+        let before = b.bytes();
+        assert!(before > 0);
+        // Substitui por um vazio: o Drop do antigo roda DE VERDADE.
+        b = TalcBuf::new();
+        assert_eq!(b.bytes(), 0);
+        drop(b);
+    }
+
+    #[test]
+    fn buffers_vivos_sao_independentes() {
+        let a = TalcBuf::from_str("primeiro").unwrap();
+        let mut b = TalcBuf::from_str("segundo").unwrap();
+        assert!(b.push_str("!!"));
+        assert_eq!(a.as_str(), "primeiro", "a nao pode ver o crescimento de b");
+        assert_eq!(b.as_str(), "segundo!!");
     }
 }

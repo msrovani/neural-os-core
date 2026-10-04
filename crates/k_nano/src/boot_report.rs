@@ -285,6 +285,12 @@ pub fn emit_phase_banner(n: u8, name: &str, status: &str) {
         name,
         status
     );
+    // E4 (OPCODE-0098): marcador TSC por fase para o harness de bench. Antes da
+    // calibração `now_us()` = 0 → não imprimir um 0 como número real.
+    let us = crate::tsc::now_us();
+    if us != 0 {
+        crate::slog_bin!("BENCH", "ok", "phase n={} us={}", n, us);
+    }
 }
 
 fn class_llm(qemu: bool) -> (&'static str, bool) {

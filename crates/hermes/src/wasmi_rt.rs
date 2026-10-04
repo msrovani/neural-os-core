@@ -39,11 +39,18 @@ const MAX_WASM_ALLOC: usize = 1024 * 1024;
 pub struct HostState {
     pub caps: u32,
     pub out: Vec<u8>,
+    /// E2 (OPCODE-0084): geração de capabilities no momento da construção.
+    /// Se a geração global mudar (revogação), os imports são negados.
+    pub cap_gen: u64,
 }
 
 impl HostState {
     pub fn new(caps: u32) -> Self {
-        Self { caps, out: Vec::new() }
+        Self {
+            caps,
+            out: Vec::new(),
+            cap_gen: k_ai::trust::current_cap_generation(),
+        }
     }
 }
 
@@ -60,7 +67,14 @@ fn check_cap(caller: &wasmi::Caller<'_, HostState>, required: u32, namespace: &s
         k_nano::telemetry::TELEMETRY.push(4, 0, &required.to_ne_bytes());
         return Err(wasmi::Error::new("capability denied (bitmask)"));
     }
-    // 2. Membrane-like verdict from RiskLevel (não hardcode Allow).
+    // 2. E2 (OPCODE-0084): geração de capabilities mudou (revogação) → deny.
+    //    `current_cap_generation()` é um load atômico lock-free (sem lock por
+    //    import); a instância captura a geração em `HostState::new`.
+    if caller.data().cap_gen != k_ai::trust::current_cap_generation() {
+        k_nano::telemetry::TELEMETRY.push(4, 0, &required.to_ne_bytes());
+        return Err(wasmi::Error::new("capability denied (revoked generation)"));
+    }
+    // 3. Membrane-like verdict from RiskLevel (não hardcode Allow).
     let risk = crate::permission_gate::RiskLevel::classify(namespace, name);
     let membrane = match risk {
         crate::permission_gate::RiskLevel::Auto => crate::membrane::Verdict::Allow,

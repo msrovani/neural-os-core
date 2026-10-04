@@ -196,6 +196,25 @@ impl VirtIoBlkModern {
     }
 }
 
+/// Sessao AION: o driver moderno era inicializado mas NAO tinha leitor nenhum —
+/// o Tickv/FileFlash liam so o legado `virtio_blk::VIRTIO_BLK_DEV` (None), entao
+/// o backend caia em RAM e nada persistia entre boots. Este impl liga o moderno
+/// ao `BlockDevice` que o `flash.rs` usa.
+impl crate::block_dev::BlockDevice for VirtIoBlkModern {
+    fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> bool {
+        VirtIoBlkModern::read_sectors(self, lba, buf)
+    }
+    fn write_sectors(&mut self, lba: u64, buf: &[u8]) -> bool {
+        VirtIoBlkModern::write_sectors(self, lba, buf)
+    }
+    fn total_sectors(&self) -> u64 {
+        self.capacity
+    }
+    fn name(&self) -> &str {
+        "vblk0"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Global state
 // ---------------------------------------------------------------------------
