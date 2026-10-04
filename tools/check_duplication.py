@@ -31,7 +31,13 @@ def is_facade(path: str) -> bool:
         stripped = line.strip()
         if not stripped or stripped.startswith("//") or stripped.startswith("/*"):
             continue
-        if stripped.startswith("pub use ") or stripped.startswith("pub(crate) use "):
+        # Sessao AION (§15): uma facade pode ter atributos internos e imports
+        # antes do `pub use` (ex.: #![allow(unused_imports)] + use ...). Sem
+        # ignorar esses, ~20 de 33 paths eram FALSOS positivos (instrumento
+        # desonesto: acusa duplicata onde há facade).
+        if stripped.startswith("#!["):
+            continue
+        if stripped.startswith("use ") or stripped.startswith("pub use ") or stripped.startswith("pub(crate) use "):
             continue
         return False
     return True

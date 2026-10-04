@@ -3124,8 +3124,6 @@ pub struct AutoLearnAgent {
     needs: Vec<LearnNeed>,
     tick_count: u64,
     receiver: Receiver,
-    /// Probe de eficácia (lab): injeta unmatched×3 uma vez e loga METRIC.
-    efficacy_probed: bool,
 }
 
 impl AutoLearnAgent {
@@ -3134,7 +3132,6 @@ impl AutoLearnAgent {
             needs: Vec::new(),
             tick_count: 0,
             receiver: EVENT_BUS.subscribe("TRINITY_UNMATCHED"),
-            efficacy_probed: false,
         }
     }
 
@@ -3281,19 +3278,11 @@ impl Agent for AutoLearnAgent {
     fn manifest(&self) -> &AgentManifest { &AUTOLEARN_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         self.tick_count += 1;
-        // Lab efficacy: injeta 3× unmatched security → dispara learn_topic (threshold≥3).
-        if !self.efficacy_probed && self.tick_count >= 8 {
-            self.efficacy_probed = true;
-            for _ in 0..3 {
-                self.report_unmatched("security cve ataque lab_metric");
-            }
-            k_nano::slog_hermes!(
-                "TRINITY",
-                "ok",
-                "METRIC probe unmatched_injected=3 topic=security needs={}",
-                self.needs.len()
-            );
-        }
+        // Sessao AION (§3): probe de lab REMOVIDO — injetava 3 eventos
+        // "security" FABRICADOS (estado que a producao nunca atinge) para forcar
+        // learn_topic. Era scaffolding de teste dentro do tick de producao e
+        // produzia evidencia falsa ("METRIC probe"). O aprendizado agora so
+        // conta eventos REAIS (TRINITY_UNMATCHED).
         // Recebe eventos de intent nao classificado
         while let Some(event) = self.receiver.try_receive() {
             if let Ok(text) = core::str::from_utf8(&event.payload) {

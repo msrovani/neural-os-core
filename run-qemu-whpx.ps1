@@ -29,7 +29,7 @@ param(
     [switch]$SerialBridge,     # opt-in: start tools\serial_bridge.py (FROZEN for Net gate)
     [switch]$VirtioNet,
     [switch]$VirtioGpu,       # s367: virtio-gpu como vga primária (page flip real)
-    [switch]$AudioBridge = $true, # default ON: dsound duplex (mic + speakers) via intel-hda
+    [switch]$AudioBridge = $false, # sXXX: default OFF (dsound quebrava o boot neste host); opt-in p/ mic+speakers
     [string]$TapName = "",     # TAP adapter name for -Bridge (auto-detect if empty)
     [int]$SerialBridgePort = 4444,
     [int]$RamGB = 6,

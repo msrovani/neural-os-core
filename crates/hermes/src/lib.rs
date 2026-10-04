@@ -27,7 +27,6 @@ pub mod hub;
 pub mod lab_inject;
 pub mod skill_lab; // F1.5 (OPCODE-0063): hook de lab LSK1 @0x02110000 (G gera / E reusa + roda)
 pub mod mcp;
-pub mod mcp_server;
 pub mod net;
 pub mod net_bridge;
 pub mod netdiag;
@@ -108,7 +107,6 @@ pub mod trinity_inject;
 pub mod stream_packet;
 pub mod chat_tree;
 pub mod tls;
-pub mod crdt;
 
 
 

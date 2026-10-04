@@ -1,5 +1,26 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s451] - 2026-10-04 - Forum multi-AI (AION) + F1.5 PROVADO + v4 checkpoint + sec3/sec15
+
+- **F1.5 PASSOU (runtime, QEMU TCG)** - o falsificador da tese: Boot1 `act=gen`
+  model-born (`hash=0x458653425da3b4a5`) + `run(6,7)=52` + checkpoint; power cycle;
+  Boot2 `reuse` do MESMO hash + `act=reuse a=9 b=2 result=82` (sem regenerar);
+  ablacao (disco pristine) reverte para `not_found`. Cadeia destravada: OVMF NVRAM
+  corrompido; static duplicado de virtio-blk (`MODERN_BLK` sem leitor); scan de mount
+  (`append_off` fail-closed + ckpt p/ file); `sys/checkpoint` de ~2 MB > `MAX_VLEN`
+  (`advance_oversized`).
+- **v4 checkpoint** - `SHV4` sem o bitmap PMM (footgun: restaurar PMM stale sem os
+  objetos donos = double-alloc); log do Tickv `4 365 312 -> 171 008 B` (~26x).
+- **F1 instrumentacao de fase** - `note_infer_stage` 1=prefill/2=decode/3=coarse/4=jarbas;
+  corrida 4c/4 GB estavel ~54 min (0 `[SILENCE]`), LLM GATED -> stall INCONCLUSIVO.
+- **sec3/sec15 (auditorias + cleanup)** - 36 modulos legados/planejados ARQUIVADOS
+  (`git mv`, nao delete) em `docs/archive/dead-modules/` + SINAL (neural-sgdb +
+  AGENTS.md) p/ nao re-planejar; `hermes/vfs/path.rs` facadado; `check_duplication.py`
+  com ~20/33 falsos positivos corrigido; probe de lab do `AutoLearnAgent` removido.
+- **sec6 (Recovery)** - `recover_budget_exhausted` (pura) + teste.
+- **Build/testes:** `cargo build --release -p boot` 0 erros; k_nano 282, cortex 126,
+  jarbas 135, hermes 311 + 1 pre-existente (`permission_gate`).
+
 ## [1.9.99-s450] - 2026-10-04 - Reconciliação dos .md da raiz (doc-drift pós-s449)
 
 - **Drift universal:** README/SUMMARY/ROADMAP/TECNOLOGIAS/codemap presos em

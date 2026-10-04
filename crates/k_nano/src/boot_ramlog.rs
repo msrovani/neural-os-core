@@ -414,6 +414,15 @@ pub fn recover_reset_decision(is_bsp: bool, prior_seal_unflushed: bool, already_
     is_bsp && !prior_seal_unflushed && !already_used
 }
 
+/// Anti-loop DURÁVEL (missao §6): o reboot ordenado é permitido enquanto o
+/// contador durável de recuperações (offset 20 do header, sobrevive ao reset)
+/// estiver abaixo de [`MAX_RECOVER_REBOOTS`]. Falha persistente NÃO pode
+/// resetar para sempre — ao esgotar, `reboot_ordered` vira park observável
+/// (heartbeat), não hlt mudo. Pura: testável sem phys/header.
+pub fn recover_budget_exhausted(durable_count: u32) -> bool {
+    durable_count >= MAX_RECOVER_REBOOTS
+}
+
 pub fn prior_seal_unflushed() -> bool {
     PRIOR_SEAL_UNFLUSHED.load(Ordering::Relaxed)
 }
@@ -519,7 +528,7 @@ pub fn reboot_ordered(reason: &str) -> ! {
         true,
         prior_seal_unflushed(),
         RECOVER_RESET_USED.load(Ordering::Relaxed),
-    ) && recover_count_load() < MAX_RECOVER_REBOOTS;
+    ) && !recover_budget_exhausted(recover_count_load());
     if !allow {
         {
             let mut b = SealLine::new();
@@ -668,6 +677,17 @@ mod tests {
         assert!(!recover_reset_decision(false, false, false));
         assert!(!recover_reset_decision(true, true, false));
         assert!(!recover_reset_decision(true, false, true));
+    }
+
+    /// Missao §6: falha persistente NÃO pode causar reboot infinito — o cap
+    /// durável esgota após MAX_RECOVER_REBOOTS e o reset vira park observável.
+    #[test]
+    fn recover_budget_caps_durable_reboots() {
+        assert!(!recover_budget_exhausted(0));
+        assert!(!recover_budget_exhausted(MAX_RECOVER_REBOOTS - 1));
+        assert!(recover_budget_exhausted(MAX_RECOVER_REBOOTS));
+        assert!(recover_budget_exhausted(MAX_RECOVER_REBOOTS + 5));
+        assert!(recover_budget_exhausted(u32::MAX)); // saturação: nunca libera
     }
 
     #[test]

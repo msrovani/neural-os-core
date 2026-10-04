@@ -1,3 +1,29 @@
+# STATE - neural-os-core v1.9.99-s451 TEST - Forum multi-AI (AION) + F1.5 PROVADO + v4 checkpoint + sec3/sec6/sec15
+
+#   [s451] FORUM OPCODE/1 (participante AION) + F1.5 PROVADO + v4 checkpoint +
+#     instrumentacao de fase F1 + auditorias sec3/sec15 + arquivamento de 36
+#     modulos legados.
+#     F1.5 PASSOU (runtime QEMU TCG): Boot1 act=gen model-born hash=0x458653425da3b4a5
+#     + run(6,7)=52 + ckpt -> power cycle -> Boot2 reuse MESMO hash + act=reuse
+#     a=9 b=2 result=82 (SEM act=gen) -> ablacao (pristine) reverte (not_found).
+#     Cadeia destravada: (1) OVMF NVRAM corrompido (serial 0B); (2) static
+#     duplicado virtio-blk (MODERN_BLK sem leitor vs VIRTIO_BLK_DEV vazio ->
+#     backend=RAM silencioso); (3) scan de mount (append_off fail-closed +
+#     ckpt p/ file/nvme + replay da cauda); (4) sys/checkpoint 2097242 B >
+#     MAX_VLEN (90 B) -> advance_oversized (pula pelo total, nao 512-a-512).
+#     v4 checkpoint: SHV4 sem bitmap (footgun de 2MB removido); Tickv 4365312 -> 171008 B.
+#     F1 fase: note_infer_stage 1=prefill/2=decode/3=coarse/4=jarbas; corrida
+#     4c/4GB estavel ~54min (T+58787, 0 SILENCE/OOM) mas LLM GATED -> stall INCONCLUSIVO.
+#     sec3/@explorer + sec15/@oracle: 36 modulos arquivados (git mv, nao delete)
+#     p/ docs/archive/dead-modules/ + SINAL (n-sgdb + AGENTS.md) p/ nao re-planejar;
+#     vfs/path.rs facadado (pub use k_nano); check_duplication.py honesto.
+#     sec6: recover_budget_exhausted + teste.
+#     launcher canonico FLAKY (0B; comando replicado via WMI boota 51-112KB);
+#     AudioBridge default off.
+#     VERIFICADO: cargo build --release -p boot 0 erros; k_nano 282, cortex 126,
+#     jarbas 135, hermes 311 + 1 pre-existente (permission_gate). Forum AION-0001..0025.
+#     Detalhe: docs/memory/SESSION_451.md
+
 # STATE - neural-os-core v1.9.99-s450 TEST - reconciliacao dos .md da raiz (doc-drift pos-s449)
 
 #   [s450] REVISAO DOS 14 .md DA RAIZ (2 lanes explorer) + tools/measure_repo.py.
