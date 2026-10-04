@@ -1,3 +1,144 @@
+# STATE - neural-os-core v1.9.99-s445 TEST - forum CURAIX: recover_count no wipe + reload pos-Tickv; F1.5 aberto
+
+#   [s445] Header do ramlog = 24 B. recover_count u32 no offset 20, mesmo layout
+#     do logwriter-efi (HDR_SIZE = 24). mark_done nao mexe no contador.
+#     append le o u32, zera os 256 KiB quando magic = NEURDONE (ou outro magic
+#     nao-zero que nao seja NEURLOG!), e grava o u32 de volta. Init com magic
+#     desconhecido ainda zera o header inteiro, inclusive magic 0 (efeito nulo
+#     se o header ja era zero). reboot_ordered sela e chama warm_reset so se a
+#     decisao permitir e recover_count < 3. is_bsp esta fixo em true; a exclusao
+#     do AP esta nos callers. try_bsp_recover_reset foi removido.
+#   reload_persisted_wasm_skills: VFS ausente segue o passe Tickv. O fim da
+#     funcao poe RELOAD_DONE=true e RELOAD_SKIPPED=false sempre. with_tickv
+#     devolve None sem mount, e unwrap_or_default vira durable=0 (desconhecido
+#     reportado como zero). 1a chamada em main.rs (~2495) e ANTES de tickv_smoke
+#     (~2744). 2a chamada (~2760) e depois, fora do if.
+#   F1.5: hermes::skill_lab::poll_and_run le 512 B em 0x0211_0000. gen_lsk1.py
+#     grava blobs de 256 B (LSK1 + NUL; o parse cabe). Aritmetica de bancada:
+#     (6^2 + 3*7) - 5 = 52 e (9^2 + 3*2) - 5 = 82, conferida a mao, nao no wasmi.
+#     run-f15.ps1 lanca o QEMU e nao afirma PASS. Hash no log = FNV-1a64 dos
+#     bytes WASM em skill/wasm/, nao do texto-fonte. Magic diferente de LSK1
+#     retorna None sem log e sem CONSUMED.
+#   NAO aplicado: patch RELOAD_RETRIED, pad do gerador para 512, warn unico de
+#     magic nao-zero, parser que junta os dois logs.
+#   MEDIDO no host (antes deste registro, nesta sessao): boot_ramlog 3/3
+#     (nao cobre o wipe: PHYS_MEM_OFFSET == 0 sai cedo); skill_loader 4/4.
+#   UNKNOWN: cargo check --release desta arvore, testes de skill_lab, serial
+#     QEMU, TICKV backend=file, linha [RECOVER] no BOOT.LOG, strings novas no
+#     uefi.img. cargo nk nao regenera uefi.img. 1 h sem #PF. Watchpoint.
+#     Decisao accepted do forum sem from=HUMAN fica proposta.
+#   Working tree ja estava sujo (s441-s444 e target/). Commit do pos-tarefa, se
+#     houver, e so documentacao s445. Sem tag. Sem v2.0.0.
+#   Detalhe: docs/memory/SESSION_445.md
+
+# STATE - neural-os-core v1.9.99-s444 - A lane anti-frag USA o histograma (Dust x Benign)
+
+#   [s444] A s443 criou o histograma de gaps; a lane da s442 decidia so por
+#     `free`/`largest`. Furo honesto: ela pergunta QUE fragmenta e nao DE QUE
+#     JEITO. Em fragmentacao BENIGNA (poucos gaps, todos grandes) gastava job LLM
+#     + HITL humano numa acao sem efeito — a pior forma da loop de feedback da
+#     s429-lab. `anti_frag::FragKind` (`Dust`/`Benign`/`Mixed`, limiares 60%/20% de
+#     gaps <8KB, funcao PURA `frag_kind(hist)`): benigno vira observe-only ANTES
+#     de chamar a IA; poeira segue para o LLM com o histograma no snapshot;
+#     histograma ausente (log pre-s443) => `Mixed` (nao afirma o que nao mediu).
+#     O slog passou a dizer a forma: `fragmentacao Dust detectada (...)`.
+#     `mod anti_frag` agora **28 testes** (+6: 3 de forma + 1 benigno-nao-chega-ao-LLM
+#     + 1 poeira-segue + `limiares_sao_exatos` com 60/20/30% exatos) e
+#     **mutation 13/13** (as 8 da s442 + M9..M13: gate removido, limiar de poeira
+#     60->20, limiar de benigno 20->0, `total==0` sem Mixed, `>=` invertido).
+#     Licao de processo: M13 reproduziu uma corrupcao REAL que entrou no arquivo
+#     durante a bateria de mutacao da s442 e passou pelo `diff -q` — restauracao
+#     por **SHA-256** + reexecutar a suite depois de qualquer bateria. M10 vivia
+#     com fixture que nao distinguia os limiares (67% de poeira = Dust tanto com
+#     60 quanto com 20): teste que nao falha quando o numero muda nao fixa o numero.
+#     Validação: anti_frag **28/28**, hermes **315/316** (falha PRÉ-EXISTENTE de
+#     `permission_gate`, s440), `cargo nk` 0 erros. Detalhe: SESSION_443 §9
+
+# STATE - neural-os-core v1.9.99-s443 - 2º consumer no TALC (ContextWindow) + HISTOGRAMA de fragmentação
+
+#   [s443] A s439 roteou o KV cache. A auditoria achou o 2º consumer pesado de
+#     LONGA VIDA ainda no bump: `k_ai::ContextWindow` (`role`/`content`/
+#     `system_prompt` eram `String`). Não é "só" estar no bump — é VAZAMENTO
+#     MONOTÔNICO: o bump nunca devolve memória (dealloc = no-op) e a janela tem
+#     CHURN (`maybe_compact` remove mensagens), então cada mensagem descartada
+#     retia seus bytes para sempre. Rotear aqui é conserto de vazamento.
+#     `k_nano::allocator::TalcBuf`: buffer POSSUÍDO com `Drop` que devolve o
+#     chunk ao TALC (free real), fail-closed (`None`/`false`, conteúdo intacto),
+#     `Send` sem `Sync`. `grow` NÃO usa `realloc` de propósito (lição s434b: para
+#     chunk TALC-resident, `HybridAllocator::realloc` chama `oom()` = derruba o
+#     kernel); é alloc+copy+free, que devolve NULL honesto. `add()` passou a
+#     retornar `bool` (recusado ≠ "guardei") + `talc_bytes()`.
+#     s443b: **histograma de fragmentação** — `talc_walk_bins` conta gaps por
+#     faixa (`TALC_HIST_BOUNDS` <8KB/8-64KB/64-256KB/256KB-1MB/1-16MB/>=16MB),
+#     sai no slog (`hist=a/b/c/d/e/f`), no snapshot JSON (o LLM ve a distribuição)
+#     e em `HeapObserve`. Totais dizem QUE; o histograma diz DE QUE JEITO — é o
+#     que decide a ação certa (poeira x poucos gaps grandes). `tools/
+#     talc_frag_report.py` lê um log real e classifica (dust-dominant x benigno),
+#     com teste de contrato 3/3 que monta a linha do template real do slog.
+#     Validação: k-nano **276/276** (-t1), k_ai context_window **5/5**,
+#     hermes 309/310 (falha PRÉ-EXISTENTE de `permission_gate`, s440), cortex
+#     126/126, `cargo nk` 0 erros; `hist=`/`TalcBuf` no kernel.elf. PRÉ-EXISTENTE
+#     PROVADO: suite completa de k_ai aborta em `sgdb::bench::d_series_100k`
+#     (STATUS_STACK_BUFFER_OVERRUN) — revertendo meu arquivo para HEAD o abort é
+#     idêntico. Detalhe: SESSION_443.md
+
+# STATE - neural-os-core v1.9.99-s442 - Anti-fragmentacao do TALC: IA-observa -> IA-age (HITL + efeito medido)
+
+#   [s442] A s435 deu o NUMERO do TALC e a s433 deu o CANAL LLM; faltava o MEIO:
+#     a fragmentacao era `Observe` e a "acao" do LLM era texto livre de toast
+#     que nunca chegava a executor. `hermes::anti_frag` fecha o ciclo:
+#     1. **Vocabulário FECHADO** (`AntiFragCmd`): o LLM escolhe uma CHAVE de um
+#        catalogo com seam real -- `evict_kv` (H2O no KV global), `drop_kv`
+#        (`kv_cache_reset`), `reset_moe_cache` (arena), `no_action`. Texto livre
+#        e' rotulo de toast: nao existe caminho de codigo que vire comando.
+#     2. **HITL obrigatorio**: Escalate no ApprovalGate (`/approve <id>` ou
+#        `/deny <id>`); TTL de 10 min (aprovar depois = agir sobre snapshot
+#        velho); `try_lock` com limite de 64 (nunca `lock()` atravessando
+#        publicacao no bus -- como o s438 morreu).
+#     3. **Efeito medido**: a amostra do TALC vem ANTES de agir; `verify` so
+#        chama de `Improved` se o MAIOR GAP cresceu, `Worse` se o uso subiu,
+#        `NoChange` se nem isso; `partial=1` nao afirma nada. Delay de 3s antes
+#        de medir (cache do TALC e' 2 Hz: medir cedo = comparar a amostra
+#        com ela mesma = falso negativo fabricado). Apos agir, cooldown
+#        de 5 min -- hipotese errada nao vira metralhadora de `drop_kv`.
+#     Sem modelo, sem headroom, TALC sem claim ou amostra parcial: segue
+#     observe-only (a lane e' IA+HITL, nao heuristica automatica). Seams novos em
+#     cortex: `kv_h2o_evict_global`/`kv_global_pages`/`kv_global_len` (`None` =
+#     KV em voo = no-op honesto, fail-closed).
+#     `mod anti_frag` (22 testes) + **mutation 8/8** (texto-livre-vira-cmd,
+#     deny-executa, TTL, cooldown, largest-parado, clamp, parcial).
+#     Verificacao: hermes anti_frag 22/22, hermes 309/310 (falha PRE-EXISTENTE de
+#     `permission_gate`, isolada passa), cortex 126/126, `cargo nk` 0 erros
+#     (41.9s); strings `fragmentacao detectada`/`evict_kv`/`hub.antifrag`
+#     presentes no kernel.elf. PENDENTE: prova em QEMU (log `fragmentacao
+#     detectada` -> `HITL #` -> `/approve` -> `efeito:`). Detalhe: SESSION_442.md
+
+# STATE - neural-os-core v1.9.99-s441 - Fuzz host de `talc_walk_bins` (gap-lists corrompidas)
+
+#   [s441] `talc_walk_bins` (k_nano/allocator.rs) é o ÚNICO leitor de metadado do TALC
+#     que NÃO confia no talc — `node < base || node >= acme` não
+#     bastava. DOIS guards novos, ambos load-bearing (provado por mutation 5/5):
+#     G1 `node + TALC_GAP_MIN_FOOTPRINT (24B = MIN_CHUNK_SIZE do talc 4.4.3) <= acme`
+#     — sem isso, `node` perto de `acme` lia `size` FORA do span (`node+16`), ou seja
+#     `#PF` num span demand-paged (a classe rotativa que a s438 caçou 2 sessões);
+#     G2 `node % align_of::<usize>() == 0` — sem isso, `next` desalinhado gerava
+#     `read_volatile` desalinhado (UB; abort do check de debug do Rust).
+#     `mod talc_walk_fuzz` (13 testes): scratch `[span | redzone]` com `size=32` no
+#     redzone (detecta leitura fora do span sem página de guarda); self-loop, ciclo
+#     de 2, 128 bins em loop (CAP é global, não 128×), node fora do span, size
+#     gigante/saturante/0, 4000 gaps válidos com soma > span, desalinhado, bins nulo,
+#     span vazio; fuzz dirigido 400 casos + cauda 2000 (xorshift determinístico) com
+#     budget de 2s por walk = prova de "não pende". Contrapeso obrigatório:
+#     `walk_over_real_talc_is_never_partial` roda `Talc::claim`/`malloc`/`free` DE
+#     VERDADE e exige `partial=0` — os guards não podem rejeitar o allocator de
+#     produção (senão a linha `talc` do HUB vira "nunca medida"). `free` passou a
+#     `saturating_add`: inalcançável hoje (wrap exigiria span de ~4.5 PB) e
+#     documentado como tal, não como testado. M4 (tirar o saturating) PASSA — por
+#     isso ele é cinto-e-suspensório, não cobertura. Verificação: k-nano **265/265**
+#     `-t1`, cortex 126/126 `-t1`, `cargo nk` **0 erros**; hermes 287/288 com a falha
+#     PRÉ-EXISTENTE de `permission_gate` (confirmada de novo via `git show HEAD` —
+#     já registrada na s440). Detalhe: SESSION_441.md.
+
 # STATE - neural-os-core v1.9.99-s440 - Falcon3-3B 1.58bit: fim do gibberish (slim 32 + bypass Falcon + BPE 131k) + wedge terminal do InferQ
 
 #   [s440] Falcon3-3B 1.58bit — saída sem sentido (`andsfaqt...` determinística)

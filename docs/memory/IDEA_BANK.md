@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-09-30 — s431 TALC claim budget completo (#625 cura OOM teto 2030MB); s430 lab estabilidade (#624); s419 H3-revisit (#623 render hints p/ pesos em VRAM via BAR Compute) + federation e2e dual-node (#621 fechada) + heartbeat pós-tick do scheduler; s418 ADR-0112 BAR Compute (#622).
+**Última atualização:** 2026-10-04 — s445 (fórum): contador de recover no header não é durável se o `append` zera o buffer; retry de skill com DONE=true no mesmo return não rearma; parser de um boot que exige gen+reuse no mesmo log falsifica os dois. ⏳ até QEMU + ack humano. Anterior 2026-09-30 — s431 TALC claim budget completo (#625 cura OOM teto 2030MB); s430 lab estabilidade (#624); s419 H3-revisit (#623 render hints p/ pesos em VRAM via BAR Compute) + federation e2e dual-node (#621 fechada) + heartbeat pós-tick do scheduler; s418 ADR-0112 BAR Compute (#622).
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---

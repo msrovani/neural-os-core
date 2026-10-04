@@ -1,11 +1,66 @@
 # 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s435 TEST
-**Data:** 2026-10-01
+**Versão:** v1.9.99-s445 TEST
+**Data:** 2026-10-04
 **Fonte:** SESSION_435 / SESSION_434 / STATE.md + ADRs 0081/0088–0112
 **Legenda:** ✅ feito | 🟡 em andamento | `[~]` parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | `[ ]` pendente
 
 ---
+
+## 🟡 s445 — Forum CURAIX: recover no wipe + reload pos-Tickv (F1.5 aberto)
+
+- [x] Preservar `recover_count` no wipe de `append` (magic `NEURDONE`)
+- [x] 2a chamada `reload_persisted_wasm_skills` depois de `tickv_smoke`
+- [x] Hook `skill_lab` + `tools/run-f15.ps1` + blobs 256 B
+- [x] Host: `boot_ramlog` 3/3 e `skill_loader` 4/4
+- [ ] Patch `RELOAD_RETRIED` antes do reload + campo `durable_unknown=` (slog `durable=` permanece)
+- [ ] Gerador LSK1 com 512 bytes zerados
+- [ ] Warn unico se 4 bytes != 0 e != `LSK1` (nao setar `CONSUMED`; pagina zero continua muda)
+- [ ] Parser que junta os dois logs (hash = FNV do WASM gravado, nao do texto)
+- [ ] `cargo check --release` desta arvore + testes `skill_lab`
+- [ ] QEMU: serial vivo, `TICKV backend=file`, `[RECOVER]` no BOOT.LOG, string nova no `uefi.img`
+- [ ] Ack humano (`from=HUMAN`) nas decisoes `accepted` do forum
+
+## ✅ s444 — A lane anti-fragmentação usa o histograma (Dust x Benign)
+
+- [x] `anti_frag::FragKind` + `frag_kind(hist)` (puro): `Dust` (>=60% de gaps <8KB), `Benign` (<=20%), `Mixed` (sem dominante **ou** sem histograma)
+- [x] Fragmentação **benigna** vira observe-only **antes** de chamar a IA — não gasta job LLM nem HITL humano em ação sem efeito (loop de feedback da s429-lab)
+- [x] Slog passa a declarar a forma: `fragmentacao Dust detectada (...)`
+- [x] 6 testes novos (28 no total) + **mutation 13/13** (M9..M13); `limiares_sao_exatos` fixa 60%/20%/30% exatos
+- [x] Validação: anti_frag **28/28**, hermes **315/316** (pré-existente), `cargo nk` 0 erros; restauração pós-mutation conferida por SHA-256
+
+## ✅ s443 — 2º consumer de longa vida no TALC (`ContextWindow`) + histograma de fragmentação
+
+- [x] `k_nano::allocator::TalcBuf`: buffer POSSUÍDO com `Drop` que devolve o chunk ao TALC (free real), fail-closed (`None`/`false`, conteúdo intacto), `Send` sem `Sync`
+- [x] `grow` **sem `realloc`** (lição s434b: `HybridAllocator::realloc` em chunk TALC-resident chama `oom()` = derruba o kernel) → alloc+copy+free, NULL honesto
+- [x] `ContextWindow` migrado (`role`/`content`/`system_prompt`): fecha o **vazamento monotônico** do bump (churn de compactação nunca devolvia memória); `add()` → `bool`; `talc_bytes()`
+- [x] **Histograma de fragmentação**: `talc_walk_bins` conta gaps por faixa (`TALC_HIST_BOUNDS`), sai no slog (`hist=a/b/c/d/e/f`), no snapshot JSON e em `HeapObserve`
+- [x] `tools/talc_frag_report.py`: lê log real, classifica dust-dominant x benigno, exporta CSV (testado ponta a ponta, `EXIT=0`)
+- [x] Testes: k-nano **276/276** (+11), k_ai context_window **5/5**, `cargo nk` 0 erros; `hist=`/`TalcBuf` no kernel.elf
+- [x] `tools/test_talc_frag_report.py` **3/3**: teste de contrato que monta a linha a partir do template real do slog em `hub_triage.rs` (formato é contrato, SESSION_411) — inclui log pré-s443 (sem hist) e log sem telemetria (`!= 0`, não finge relatório)
+- [ ] **QEMU:** comprovar em runtime que a janela está no TALC (`[CTX] COMPACT` + queda de `hist[0]`) e **quantificar** os bytes de bump que o roteamento devolve
+
+## ✅ s442 — Anti-fragmentação do TALC: IA-observa → IA-age (vocabulário fechado + HITL + efeito medido)
+
+- [x] `hermes::anti_frag` com `AntiFragCmd` (vocabulário FECHADO): `evict_kv` / `drop_kv` / `reset_moe_cache` / `no_action` — texto livre do LLM é rótulo, nunca comando
+- [x] Seams reais em `cortex`: `kv_h2o_evict_global` (H2O no KV global), `kv_global_pages`, `kv_global_len` (`None` = KV em voo → no-op honesto, fail-closed)
+- [x] HITL `Escalate` no `ApprovalGate` (`/approve <id>` / `/deny <id>`), TTL de 10 min, `try_lock` com limite (nunca `lock()` atravessando publicação no bus)
+- [x] `verify(before, after)`: só é `Improved` se o maior gap cresceu; `Worse` se uso subiu; `partial=1` não afirma nada; **delay de 3 s antes de medir** (cache 2 Hz — medir cedo compara a amostra com ela mesma); cooldown de 5 min após agir
+- [x] Gates: mesma régua de fragmentação da s435 (uma só verdade), sem claim/amostra parcial/sem modelo/sem headroom → observe-only
+- [x] 21 testes host + **mutation 8/8**
+- [x] Validação: anti_frag 22/22, hermes 309/310 (pré-existente de `permission_gate`), cortex 126/126, `cargo nk` 0 erros; strings no kernel.elf
+- [ ] **QEMU:** boot com TALC fragmentado de verdade → `fragmentacao detectada` → `HITL #` → `/approve` → `efeito:`
+
+## ✅ s441 — Fuzz host de `talc_walk_bins` (gap-lists corrompidas, guards de memória)
+
+- [x] Módulo `talc_walk_fuzz` (k_nano, 13 testes): scratch `[span | redzone]` com `size=32` no redzone (detecta leitura fora do span sem página de guarda)
+- [x] Classes cobertas: self-loop, ciclo de 2, 128 bins em loop (CAP global), node fora do span (abaixo/acme/`usize::MAX`), `size` gigante/saturante/zero, 4000 gaps sobrepostos (soma > span), desalinhado, bins nulo, span vazio
+- [x] **G1 (achado):** `node` perto de `acme` lia `size` FORA do span (→ `#PF` num span demand-paged) — agora exige `node + 24B (MIN_CHUNK_SIZE) <= acme`
+- [x] **G2 (achado):** `next` desalinhado = `read_volatile` desalinhado (UB) — agora exige `node % align_of::<usize>() == 0`
+- [x] Fuzz dirigido 400 casos + cauda 2000 casos, xorshift determinístico, budget de 2s por walk (prova de "não pende")
+- [x] Contrapeso: `walk_over_real_talc_is_never_partial` — `Talc` real (`claim`/`malloc`/`free`) tem que dar `partial=0` (guards não rejeitam o allocator de produção)
+- [x] **Mutation testing 5/5:** sem footprint → `STATUS_ACCESS_VIOLATION`; sem align → UB check abort; CAP inflado → self-loop FAILED; sem bounds → ACCESS_VIOLATION; sem saturating → passou (**inalcançável**, documentado no código)
+- [x] Validação: k-nano **265/265** `-t1`, cortex 126/126 `-t1`, `cargo nk` 0 erros (hermes 287/288 — falha pré-existente de `permission_gate`, provada com `git show HEAD`)
 
 ## ✅ s435 — Telemetria de uso REAL do TALC (HUB HEALTH + hub_triage, idea #630 residual)
 

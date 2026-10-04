@@ -1,5 +1,133 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s445] - 2026-10-04 - Forum CURAIX: recover_count no wipe + reload pos-Tickv (F1.5 aberto)
+
+- Med: `boot_ramlog::append` preserva `recover_count` (offset 20) quando zera os
+  256 KiB com magic `NEURDONE`. Header 24 B alinhado ao `logwriter-efi`. Teto
+  `MAX_RECOVER_REBOOTS = 3`. `try_bsp_recover_reset` removido (chamava
+  `warm_reset` sem incrementar o contador).
+- Med: `reload_persisted_wasm_skills` segue o passe Tickv se o VFS falta.
+  Segunda chamada em `neural-kernel` `main.rs` depois de `tickv_smoke`. A
+  primeira chamada (antes do mount) ainda imprime `durable=0` e marca
+  `RELOAD_DONE`.
+- Med: hook `hermes::skill_lab` (magic `LSK1`, phys `0x0211_0000`, leitura 512 B)
+  e lancador `tools/run-f15.ps1`. Gerador grava blobs de 256 B.
+- Host: `boot_ramlog` 3/3 (nao cobre o wipe) e `skill_loader` 4/4.
+- Nao medido: `cargo check --release` desta arvore, testes de `skill_lab`,
+  QEMU/serial, `[RECOVER]` no BOOT.LOG, parser PASS/FALSIFIED. Sem tag.
+
+## [1.9.99-s444] - 2026-10-03 - A lane anti-fragmentação usa o histograma (Dust x Benign)
+
+- High: **a lane anti-frag ignorava a forma da fragmentação** — perguntava "existe
+  fragmentação?" (régua da s435) e não "é deste tipo?". Em fragmentação **benigna**
+  (poucos gaps, todos grandes) ela gastava um job LLM **e um HITL humano** numa ação
+  sem efeito: a pior forma da loop de feedback da s429-lab.
+- Med: **`anti_frag::FragKind` / `frag_kind(hist)`** (puro, testável) — `Dust`
+  (>=60% dos gaps abaixo de 8KB), `Benign` (<=20%) e `Mixed` (sem dominante **ou**
+  sem histograma: log pré-s443 não afirma o que não mediu). Benigno vira
+  observe-only **antes** de chamar a IA; poeira segue para o LLM com o histograma
+  no snapshot.
+- Med: slog passa a declarar a forma (`fragmentacao Dust detectada (...)`), para que
+  o log diga *qual* fragmentação a IA encontrou — não só que encontrou.
+- Med: **6 testes novos (28 no total) + mutation 13/13** (M9..M13: gate de benigno
+  removido, limiar de poeira 60->20, limiar de benigno 20->0, `total == 0` sem
+  `Mixed`, `>=` invertido). `limiares_sao_exatos` fixa 60%/20%/30% exatos.
+- Lição de processo: **restaurar arquivo por SHA-256, não por `diff -q`** depois de
+  uma bateria de mutação — M13 reproduziu uma corrupção real que havia passado pelo
+  diff. E fixture que não falha quando o número muda não está fixando o número.
+- Validação: anti_frag **28/28**, hermes **315/316** (falha **pré-existente** de
+  `permission_gate`, s440), `cargo nk` 0 erros.
+
+## [1.9.99-s443] - 2026-10-03 - 2º consumer de longa vida no TALC (`ContextWindow`) + histograma de fragmentação
+
+- High: **`k_ai::ContextWindow` era um vazamento monotônico no bump** — o bump nunca
+  devolve memória (dealloc = no-op) e a janela tem churn: `maybe_compact` remove
+  mensagens, mas seus bytes ficavam retidos para sempre. Rotear `role`/`content`/
+  `system_prompt` para o TALC não é otimização, é conserto de vazamento.
+- High: **novo `k_nano::allocator::TalcBuf`** — buffer POSSUÍDO cujo `Drop` devolve o
+  chunk ao TALC (free real). Fail-closed (`None`/`false`, conteúdo intacto), `Send` sem
+  `Sync`. `grow` **não** usa `realloc`: para chunk TALC-resident, `HybridAllocator::realloc`
+  chama `oom()` (lição s434b) e um tipo fail-closed não pode derrubar o kernel — é
+  alloc+copy+free, que devolve NULL honesto.
+- Med: **`ContextWindow::add` passou a retornar `bool`** (recusado por falta de espaço no
+  TALC ≠ "guardei"), com `kjson!` de recusa e `talc_bytes()` expondo o quanto vive no TALC.
+- High: **histograma de fragmentação** (`talc_walk_bins` conta gaps por faixa:
+  `<8KB / 8-64KB / 64-256KB / 256KB-1MB / 1-16MB / >=16MB`, faixas escolhidas pelos
+  tamanhos reais dos consumers). Totais dizem QUE; o histograma diz DE QUE JEITO — e isso
+  decide a ação certa (poeira → agir nos consumers pequenos; poucos gaps grandes →
+  fragmentação benigna, compactar é desperdício). Sai no slog (`hist=a/b/c/d/e/f`), no
+  snapshot JSON que o LLM lê e em `HeapObserve`.
+- Med: **`tools/talc_frag_report.py`** — lê um log real de QEMU, classifica
+  dust-dominant x benigno e exporta CSV (ASCII puro: o console Windows cp1252 quebra em
+  `→`). Testado ponta a ponta (`EXIT=0`) e com **teste de contrato**
+  (`tools/test_talc_frag_report.py`, 3/3) que monta a linha a partir do template real do slog em
+  `hub_triage.rs` — formato de export é contrato com o produtor (lição SESSION_411).
+- Validação: k-nano **276/276** (-t1, +11), k_ai `context_window` **5/5**, hermes 309/310
+  (falha **pré-existente** de `permission_gate`, s440), cortex 126/126, `cargo nk` 0 erros;
+  `hist=` e `TalcBuf` presentes no `kernel.elf`.
+- Pré-existente **provado**: a suíte completa de `k_ai` aborta em
+  `sgdb::bench::tests::d_series_100k` (`STATUS_STACK_BUFFER_OVERRUN`) — com meu arquivo
+  revertido para HEAD o abort é idêntico (mesmo exit code).
+- Pendente: prova em QEMU (janela no TALC + queda de `hist[0]`) e quantificação dos bytes
+  de bump devolvidos pelo roteamento.
+
+## [1.9.99-s442] - 2026-10-03 - Anti-fragmentação do TALC: IA-observa → IA-age (HITL + efeito medido)
+
+- High: **o ciclo da IA estava aberto no meio** — a s435 deu a telemetria do TALC e a s433
+  deu o canal LLM, mas a fragmentação era `Observe` e a "ação" do LLM era texto livre de
+  toast que **nunca chegava a executor**. Novo `hermes::anti_frag` fecha o elo.
+- High: **vocabulário fechado** (`AntiFragCmd`): o LLM escolhe uma chave de catálogo
+  (`evict_kv`, `drop_kv`, `reset_moe_cache`, `no_action`), cada uma com seam real. Texto
+  livre é rótulo humano: não existe caminho de código que o transforme em comando (teste +
+  mutation próprios).
+- High: **HITL obrigatório** — `Escalate` no `ApprovalGate` (`/approve <id>` / `/deny <id>`),
+  TTL de 10 min (aprovar tarde = agir sobre snapshot velho) e aquisição com `try_lock`
+  limitado (nunca `lock()` atravessando publicação no bus — a lição do freeze do s438).
+- High: **o efeito é medido, não prometido** — a amostra do TALC é colhida antes de agir e
+  `verify` julga no pump seguinte: `Improved` só se o maior gap cresceu, `Worse` se o uso
+  subiu, `NoChange` caso contrário; `partial=1` não afirma nada. Delay de 3 s antes de medir —
+  o cache do TALC é 2 Hz, então medir no pump seguinte compararia a amostra com ela mesma
+  (falso "sem efeito" fabricado). Cooldown de 5 min depois
+  (hipótese errada não vira metralhadora de `drop_kv`).
+- Med: **seams reais em `cortex`** — `kv_h2o_evict_global` (H2O no KV global), `kv_global_pages`,
+  `kv_global_len`. `None` = KV em voo (`global_kv_cache_take`) → no-op honesto: a lane nunca
+  rouba o cache de um prefill/decode em andamento.
+- Med: **22 testes host + mutation 8/8** (texto-livre-vira-cmd, deny-executa, TTL removido,
+  cooldown removido, `largest` parado virando "melhora", clamp dos args, amostra parcial).
+- Med: gates preservam a lição s429-lab — sem modelo, sem headroom, TALC sem claim ou
+  amostra parcial, a fragmentação **segue observe-only**.
+- Validação: `anti_frag` 21/21; hermes 309/310 (falha **pré-existente** de `permission_gate`,
+  passa isolada); cortex 126/126; `cargo nk` 0 erros; strings `fragmentacao detectada`,
+  `evict_kv` e `hub.antifrag` presentes no `kernel.elf`.
+- Pendente: prova em QEMU (boot com TALC de fato fragmentado → `HITL #` → `/approve` → `efeito:`).
+
+## [1.9.99-s441] - 2026-10-03 - Fuzz host de `talc_walk_bins` contra gap-lists corrompidas (+ 2 guards de memória)
+
+- High: **`talc_walk_bins` lia `size` FORA do span** (`k_nano/allocator.rs`) — um `next` corrompido
+  apontando para perto de `acme` (ex. `acme-8`) passava o bound `node < acme` e a leitura de
+  `size` em `node+16` saía do claim → `#PF` num span demand-paged (a classe rotativa da s438).
+  Agora exige `node + TALC_GAP_MIN_FOOTPRINT (24B = MIN_CHUNK_SIZE do talc 4.4.3) <= acme`.
+- High: **`read_volatile` desalinhado = UB** — `next` lixo desalinhado gerava um deref de
+  `*const usize` fora do contrato de alinhamento (abort do check de debug do Rust). Agora exige
+  `node % align_of::<usize>() == 0`.
+- Med: **`mod talc_walk_fuzz` (k_nano, 13 testes)** — scratch `[span | redzone]` com `size=32`
+  no redzone: detecta leitura fora do span **sem página de guarda**. Cobre self-loop, ciclo de 2,
+  128 bins em loop (CAP é global), node fora do span, `size` gigante/saturante/zero, 4000 gaps
+  individualmente válidos com soma > span, desalinhamento, bins nulo e span vazio. Fuzz dirigido
+  de 400 casos + cauda de 2000 casos (xorshift determinístico), budget de 2s por walk (prova de
+  "não pende"); invariantes: `largest_free <= free_bytes`, `gaps <= CAP+1`, `partial=1 ⇒ used=0`,
+  `partial=0 ⇒ used = span − free`.
+- Med: **contrapeso com `Talc` real** — `walk_over_real_talc_is_never_partial` roda
+  `claim`/`malloc`/`free` de verdade e exige `partial=0`: os guards não podem rejeitar o
+  allocator de produção (senão a telemetria da linha `talc` vira "nunca medida" no kernel).
+- Med: **mutation testing 5/5** — sem footprint → `STATUS_ACCESS_VIOLATION`; sem align → UB
+  abort; CAP inflado → self-loop FAILED; sem bounds-check → ACCESS_VIOLATION; `saturating_add`
+  → `+=` **passou** (o wrap exigiria span de ~4.5 PB: guard documentado como inalcançável, não
+  como testado).
+- Validação: k-nano **265/265** `-t1`, cortex 126/126 `-t1`, `cargo nk` **0 erros**. hermes 287/288
+  — `permission_gate::tests::test_risk_level_classify` é falha **pré-existente** (order-dependence
+  de statics; falha igual com `allocator.rs` no HEAD, passa isolado).
+
 ## [1.9.99-s440] - 2026-10-03 - Falcon3-3B 1.58bit: fim do gibberish (slim 32 + bypass Falcon + BPE 131k) + wedge terminal do InferQ
 
 - High: **saída sem sentido do Falcon3-3B 1.58bit (`andsfaqt...`, determinística) NÃO era o tokenizer** — `encode_chat_frame` usava cue Llama-3 fixo de 6 tokens → prompt de 581B colapsava p/ `prompt_len=6`; o fix s437 (`is_falcon_bytelevel`+`encode_falcon_chat`) só trocou 6→8 por causa de `MAX_CHAT=8` + **duplo-slim**. Fix: `MAX_CHAT` 8→**32** + `slim_prompt_tokens_for_heavy` **bypassa** o path Falcon (não re-corta o frame Instruct de 26 tokens).
