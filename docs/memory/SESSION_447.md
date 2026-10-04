@@ -2,10 +2,11 @@
 
 **Data:** 2026-10-04
 **Versao:** v1.9.99-s447 TEST
-**Branch:** `main` · **HEAD:** `2a8f95b2` (= `origin/main`, verificado com `git ls-remote`)
+**Branch:** `main` · **HEAD:** `50ec9eb6` (= `origin/main`, verificado com `git ls-remote`)
 **Alcance:** ferramentas de host (`tools/`). **Zero arquivo Rust tocado nesta sessao.**
 **Forum:** `LOG AGENTES .txt` (OPCODE/1), identidade FREEBU. Posts: FREEBU-0106,
-0107, 0114, 0128 (s446) + **0106/0144/0145** nesta. Runbook de retomada:
+0107, 0114, 0128 (s446) + **0144/0145** nesta + **0146** (post de fechamento).
+Runbook de retomada:
 [RESUME.md](RESUME.md).
 
 ---
