@@ -2,6 +2,11 @@
 # F1.5 lab launcher (ORACLE-0051 / OPCODE-0063) - two-boot ablation for durable skills.
 #   Boot 1 (G): target\lab_skill_boot1.bin -> LSK1 'G' generate + run.
 #   Boot 2 (E): target\lab_skill_boot2.bin -> LSK1 'E' reuse + run (durable Tickv).
+#
+# Braco de ablacao (secao 7): -PreparePristine cria o snapshot (so de fonte
+# LIMPA) e -RestorePristine o devolve ao disco antes do boot 1. restore=1|0 e
+# disk_lab_state_before=0|1 vao para o sidecar .imgid, e o parser reprova quando
+# o boot 1 partiu de um disco que ja tinha a skill.
 # Not run by CI; invoke manually. The pristine copy enables ablation from a clean disk.
 #
 # VEREDITO: depois do run, use tools\f15_parse.ps1 (le 1 log por boot, grava <log>.parse,
@@ -15,6 +20,8 @@ param(
     [int]$Cores = 4,
     [string]$LogPath = "",
     [switch]$PreparePristine,
+    [switch]$RestorePristine,
+    [switch]$ForcePristine,
     [switch]$Whpx,
     [int]$TimeoutSec = 900
 )
@@ -40,9 +47,14 @@ $Prist = Join-Path $Root "target\disk_qemu.pristine.raw"
 $Blob  = Join-Path $Root ("target\lab_skill_boot{0}.bin" -f $Boot)
 if ($LogPath -eq "") { $LogPath = Join-Path $Root ("logs\f15_boot{0}.txt" -f $Boot) }
 
-# Pristine-copy step (ablation): snapshot the clean disk once, restore before a run.
+# Pristine-copy step (ablation): snapshot the clean disk once. A fonte PRECISA
+# estar limpa: um snapshot tirado de um disco que ja tem a skill do lab nao e
+# "pristine" -- o boot 1 passaria a provar nada. Ver tools/f15_pristine.py.
 if ($PreparePristine) {
-    if (-not (Test-Path $Prist)) { Copy-Item $Disk $Prist -Force }
+    $abl = @((Join-Path $Root "tools\f15_pristine.py"), "ensure", "--disk", $Disk, "--pristine", $Prist)
+    if ($ForcePristine) { $abl += "--force" }
+    & python @abl
+    if ($LASTEXITCODE -ne 0) { throw "prepare do pristine falhou ($LASTEXITCODE)" }
     Write-Host "[f15] pristine: $Prist"
     exit 0
 }
@@ -53,6 +65,37 @@ if ($LASTEXITCODE -ne 0) { throw "gen_lsk1.py failed ($LASTEXITCODE)" }
 
 foreach ($p in @($Qemu, $OvmfCode, $OvmfVars, $Uefi, $Disk)) {
     if (-not (Test-Path $p)) { throw "missing: $p" }
+}
+
+# --- [7] BRACO DE ABLACAO: o disco de que o boot parte e uma VARIAVEL ----------
+# O comentario antigo prometia "snapshot the clean disk once, restore before a
+# run" e o codigo so fazia o snapshot: o boot 2 rodava sobre um disco cujo
+# estado ninguem declarava. Agora o estado de partida e MEDIDO e carimbado:
+#   restore=1|0              o pristine voltou para o disco antes deste boot?
+#   disk_lab_state_before=0|1 o disco JA tinha a skill do lab antes deste boot?
+# O segundo campo e o falsificador do boot 1: com a skill la antes, `act=gen`
+# nao prova geracao. E o restore e opt-in de proposito - `target/disk_qemu.raw`
+# e estado compartilhado do lab e sobrescrever 3 GB sem pedir e destruir o
+# trabalho de outra thread.
+$AblPy = Join-Path $Root "tools\f15_pristine.py"
+$restore = 0
+$restoreMotivo = "nao solicitado (-RestorePristine ausente)"
+if ($RestorePristine) {
+    if ($Boot -ne 1) { throw "-RestorePristine so faz sentido no boot 1: no boot 2 ele apaga o estado que o boot 1 deveria ter persistido" }
+    if (-not (Test-Path -LiteralPath $Prist)) { throw "pristine ausente: $Prist (rode -PreparePristine antes)" }
+    & python $AblPy restore --disk $Disk --pristine $Prist
+    if ($LASTEXITCODE -ne 0) { throw "restore do pristine falhou ($LASTEXITCODE)" }
+    $restore = 1
+    $restoreMotivo = "pristine restaurado e verificado byte a byte antes do boot"
+}
+# Estado do lab NO DISCO AGORA (depois de qualquer restore). Medido, nao assumido.
+$scanOut = @(& python $AblPy scan --disk $Disk)
+if ($LASTEXITCODE -ne 0) { throw "scan do disco falhou ($LASTEXITCODE)" }
+$labState = 0
+foreach ($l in $scanOut) { if ($l.StartsWith("lab_state=")) { $labState = [int]($l.Substring(10)) } }
+Write-Host ("[f15] ablacao: restore={0} disk_lab_state_before={1} boot={2}" -f $restore, $labState, $Boot)
+if ($restore -eq 0 -and $labState -eq 1) {
+    Write-Host "[f15] AVISO: o disco JA tinha a skill do lab e nao houve restore -- se este for o boot 1, o act=gen nao prova geracao"
 }
 # --- [14] IDENTIDADE DO ARTEFATO BOOTADO -------------------------------------
 # Regra: nenhuma conclusao de runtime vale sem dizer qual imagem bootou. Gravo
@@ -67,23 +110,50 @@ try {
                           -Pattern $probe -SimpleMatch -Quiet
 } catch { $srcHit = $false }
 $uefiHit = (Select-String -Path $Uefi -Pattern $probe -SimpleMatch -Quiet -ErrorAction SilentlyContinue)
+# Epoch em segundos INTEIROS, truncado. Duas razoes, ambas medidas:
+#  - a string ISO perde 1 ULP entre PowerShell e Python (...651Z vs ...652Z);
+#  - `/` no PowerShell e divisao em DOUBLE e o casting arredonda: com mtime em
+#    757.8 s o PS dava 758 e o Python (int() trunca) dava 757. Alem disso
+#    Ticks sao ~1.8e17, acima de 2^53, entao dividir em double perde o bit.
+#    O desvio do resto antes de dividir e o unico caminho exato nos dois lados.
+$uefiIt = Get-Item $Uefi
+$epochTicks = [int64]$uefiIt.LastWriteTimeUtc.Ticks - 621355968000000000
+$uefiEpoch = [int64](($epochTicks - ($epochTicks % 10000000)) / 10000000)
+# sha dos 16 primeiros hex: o parser compara com o arquivo atual; sem isso,
+# "probe_na_imagem=True" lido no parse prova a imagem de AGORA, nao a que
+# bootou (medido s447: sidecar dizia mtime 00:36, o arquivo era de 00:40).
+# A imagem pode estar TRAVADA por outro QEMU/build (medido s448: Get-FileHash
+# falha com "usado por outro processo"). Nao e para derrubar o run por isso: o
+# carimbo registra que a identidade NAO foi estabelecida e o parser reprova, que
+# e onde a conclusao de runtime acontece.
+try {
+    $uefiSha = (Get-FileHash -LiteralPath $Uefi -Algorithm SHA256).Hash.Substring(0, 16)
+} catch {
+    $uefiSha = "ERRO:lido-em-uso"
+    Write-Host ("[f15] AVISO: nao consegui hashear {0} ({1}) - o sidecar vai marcar a identidade como nao estabelecida e o parser vai reprovar" -f $Uefi, $_.Exception.Message)
+}
 $imgid = @(
     "uefi=$Uefi"
     ("uefi_bytes={0}" -f (Get-Item $Uefi).Length)
     ("uefi_mtime={0}" -f (Get-Item $Uefi).LastWriteTimeUtc.ToString("o"))
-    # epoch em SEGUNDOS INTEIROS: a string ISO perde 1 ULP entre o PowerShell e o
-    # Python e reprovava casos legitimos (medido: ...651Z vs ...652Z).
-    ("uefi_epoch={0}" -f ([int64](([int64](Get-Item $Uefi).LastWriteTimeUtc.Ticks - 621355968000000000) / 10000000)))
-    # sha dos 16 primeiros hex: o parser compara com o arquivo atual; sem isso,
-    # "probe_na_imagem=True" lido no parse prova a imagem de AGORA, nao a que
-    # bootou (medido s447: sidecar dizia mtime 00:36, o arquivo era de 00:40).
-    ("uefi_sha={0}" -f (Get-FileHash -LiteralPath $Uefi -Algorithm SHA256).Hash.Substring(0, 16))
+    # epoch em SEGUNDOS INTEIROS (ver o calculo acima): string ISO perde 1 ULP e
+    # divisao em double arredonda -- os dois reprovavam casos legitimos.
+    ("uefi_epoch={0}" -f $uefiEpoch)
+    ("uefi_sha={0}" -f $uefiSha)
     "disk=$Disk"
     ("disk_bytes={0}" -f (Get-Item $Disk).Length)
     ("disk_mtime={0}" -f (Get-Item $Disk).LastWriteTimeUtc.ToString("o"))
     "probe=$probe"
     "probe_na_fonte=$srcHit"
     "probe_na_imagem=$uefiHit"
+    # --- braco de ablacao (secao 7): de que disco este boot partiu ---
+    "restore=$restore"
+    "restore_motivo=$restoreMotivo"
+    "disk_lab_state_before=$labState"
+    "pristine=$Prist"
+    # $Prist pode ser nulo quando este bloco e executado isolado (testes): o
+    # sidecar registra o que ele sabe, nao o que adivinhar.
+    ("pristine_bytes={0}" -f $(if ($Prist -and (Test-Path -LiteralPath $Prist)) { (Get-Item -LiteralPath $Prist).Length } else { 0 }))
 )
 [System.IO.File]::WriteAllLines($ImgIdPath, $imgid)
 Write-Host ("[f15] imgid: {0} (probe na imagem={1})" -f $ImgIdPath, $uefiHit)

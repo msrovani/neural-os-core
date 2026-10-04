@@ -101,49 +101,87 @@ def _iso_utc(ts):
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(int(ts))) + ".%07dZ" % frac
 
 
-IMGID_OK = [
-    "uefi=" + FAKE.replace("\\", "\\"),
-    "uefi_bytes=%d" % _st.st_size,
-    "uefi_mtime=" + _iso_utc(_st.st_mtime),
-    "uefi_epoch=%d" % int(_st.st_mtime),
-    "uefi_sha=" + hashlib.sha256(_blob).hexdigest()[:16].upper(),
-    "disk=" + os.path.join(D, "fake_disk.raw"),
-    "disk_bytes=4096",
-    "disk_mtime=" + _iso_utc(_st.st_mtime),
-    "probe=SKILL_LAB",
-    "probe_na_fonte=True",
-    "probe_na_imagem=True",
-]
+def _imgid(restore, lab_state, motivo):
+    return [
+        "uefi=" + FAKE.replace("\\", "\\"),
+        "uefi_bytes=%d" % _st.st_size,
+        "uefi_mtime=" + _iso_utc(_st.st_mtime),
+        "uefi_epoch=%d" % int(_st.st_mtime),
+        "uefi_sha=" + hashlib.sha256(_blob).hexdigest()[:16].upper(),
+        "disk=" + os.path.join(D, "fake_disk.raw"),
+        "disk_bytes=4096",
+        "disk_mtime=" + _iso_utc(_st.st_mtime),
+        "probe=SKILL_LAB",
+        "probe_na_fonte=True",
+        "probe_na_imagem=True",
+        "restore=%d" % restore,
+        "restore_motivo=" + motivo,
+        "disk_lab_state_before=%d" % lab_state,
+        "pristine=" + os.path.join(D, "fake_pristine.raw"),
+        "pristine_bytes=4096",
+    ]
+
+
+# Boot 1 parte de um disco limpo (restore=1); boot 2 parte do estado que o boot 1
+# deixou -- que e justamente o que o experimento precisa provar que persistiu.
+IMGID_B1 = _imgid(1, 0, "pristine restaurado e verificado byte a byte antes do boot")
+IMGID_B2 = _imgid(0, 1, "herdado do boot 1: e o estado que o experimento precisa persistir")
 
 # Negativos de proposito (o veredito tem de CAIR):
-#   b1_imgid_stale -> probe_na_imagem=False (imagem sem o literal da fonte)
-#   b1_sem_imgid   -> nenhum sidecar (veredito sobre artefato desconhecido)
-#   b1_imgid_mudou -> identidade do sidecar NAO bate com o arquivo agora
-#                    (medido na s447: sidecar dizia mtime 00:36, o arquivo era
-#                    de 00:40 -- o probe lia a imagem nova e "provava" o codigo
-#                    novo num log antigo)
+#   b1_imgid_stale  -> probe_na_imagem=False (imagem sem o literal da fonte)
+#   b1_sem_imgid    -> nenhum sidecar (veredito sobre artefato desconhecido)
+#   b1_imgid_mudou  -> identidade do sidecar NAO bate com o arquivo agora
+#                      (medido na s447: sidecar dizia mtime 00:36, o arquivo era
+#                      de 00:40 -- o probe lia a imagem nova e "provava" o codigo
+#                      novo num log antigo)
+#   b1_lab_state1   -> o disco JA tinha a skill antes do boot 1 (o act=gen nao
+#                      prova geracao) -- confound REAL medido: em 04/10 o
+#                      disk_qemu.raw tinha skill/wasm/oracle_rt_expr_v1
+#   b2_restore1     -> restore no boot 2 apaga o estado a persistir (rigged)
+#   b1_sem_ablacao  -> sidecar sem restore=/disk_lab_state_before=
 IMGID_STALE = [l if not l.startswith("probe_na_imagem") else "probe_na_imagem=False"
-               for l in IMGID_OK]
+               for l in IMGID_B1]
 # muda SO o epoch (caminho preferido): a string ISO continua a mesma, entao o
 # caso prova que o epoch e o que decide e nao um detalhe cosmetico.
-IMGID_MUDOU = ["uefi_epoch=946684800" if l.startswith("uefi_epoch") else l for l in IMGID_OK]
+IMGID_MUDOU = ["uefi_epoch=946684800" if l.startswith("uefi_epoch") else l for l in IMGID_B1]
+IMGID_LAB1 = ["disk_lab_state_before=1" if l.startswith("disk_lab_state_before") else l
+              for l in IMGID_B1]
+IMGID_RESTORE_B2 = ["restore=1" if l.startswith("restore=") else l for l in IMGID_B2]
+IMGID_SEM_ABLACAO = [l for l in IMGID_B1
+                     if not l.startswith(("restore=", "restore_motivo=", "disk_lab_state_before="))]
+# imagem travada por outro QEMU/build no momento do carimbo (medido na s448:
+# Get-FileHash falha com "usado por outro processo"). O launcher grava
+# uefi_sha=ERRO:lido-em-uso e o parser tem de reprovar: identidade nao estabelecida.
+IMGID_SHA_ERRO = ["uefi_sha=ERRO:lido-em-uso" if l.startswith("uefi_sha") else l
+                  for l in IMGID_B1]
 
-NO_IMGID = {"b1_imgid_stale": IMGID_STALE, "b1_sem_imgid": None,
-            "b1_imgid_mudou": IMGID_MUDOU}
+SIDECAR = {"b1_imgid_stale": IMGID_STALE, "b1_sem_imgid": None,
+           "b1_imgid_mudou": IMGID_MUDOU, "b1_lab_state1": IMGID_LAB1,
+           "b2_restore1": IMGID_RESTORE_B2, "b1_sem_ablacao": IMGID_SEM_ABLACAO,
+           "b1_sha_erro": IMGID_SHA_ERRO}
 fixtures["b1_imgid_stale"] = fixtures["b1_ok"]
 fixtures["b1_sem_imgid"] = fixtures["b1_ok"]
 fixtures["b1_imgid_mudou"] = fixtures["b1_ok"]
+fixtures["b1_lab_state1"] = fixtures["b1_ok"]
+fixtures["b2_restore1"] = fixtures["b2_ok"]
+fixtures["b1_sem_ablacao"] = fixtures["b1_ok"]
+fixtures["b1_sha_erro"] = fixtures["b1_ok"]
+
+
+def sidecar_for(name):
+    if name in SIDECAR:
+        return SIDECAR[name]
+    return IMGID_B1 if name.startswith("b1") else IMGID_B2
+
 
 for name in sorted(fixtures):
     lines = fixtures[name]
     p = os.path.join(D, name + ".log")
     io.open(p, "w", encoding="utf-8", newline="\n").write("\n".join(lines) + "\n")
-    if name not in NO_IMGID:
+    sc = sidecar_for(name)
+    if sc is not None:
         io.open(os.path.splitext(p)[0] + ".imgid", "w", encoding="utf-8",
-                newline="\n").write("\n".join(IMGID_OK) + "\n")
-    elif NO_IMGID[name] is not None:
-        io.open(os.path.splitext(p)[0] + ".imgid", "w", encoding="utf-8",
-                newline="\n").write("\n".join(NO_IMGID[name]) + "\n")
+                newline="\n").write("\n".join(sc) + "\n")
     print("%-20s %d linhas%s" % (name, len(lines),
-          "  [SEM imgid]" if name in NO_IMGID else ""))
+          "  [SEM imgid]" if sc is None else ""))
 print("fixtures em %s (imagem de identidade: %s, %d bytes)" % (D, FAKE, _st.st_size))

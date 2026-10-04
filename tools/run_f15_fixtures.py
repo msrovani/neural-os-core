@@ -33,6 +33,11 @@ CASES = [
     ("b1_imgid_stale", 1, 1, "FALSIFIED", "NAO contem o literal da fonte"),
     ("b1_sem_imgid", 1, 1, "FALSIFIED", "sem identidade do artefato bootado"),
     ("b1_imgid_mudou", 1, 1, "FALSIFIED", "mudou DEPOIS do boot"),
+    ("b1_sha_erro", 1, 1, "FALSIFIED", "identidade NAO foi estabelecida"),
+    # ---- secao 7: braco de ablacao (o disco de partida e uma variavel) ----
+    ("b1_lab_state1", 1, 1, "FALSIFIED", "JA continha a skill do lab"),
+    ("b1_sem_ablacao", 1, 1, "FALSIFIED", "sem o registro de ablacao"),
+    ("b2_restore1", 2, 1, "FALSIFIED", "experimento rigged"),
     ("b1_unknown_true", 1, 1, "FALSIFIED", "UNKNOWN"),
     ("b1_forja_lab", 1, 1, "FALSIFIED", "escalate/FORJA"),
     ("b1_wrong_name", 1, 1, "FALSIFIED", "act=gen"),

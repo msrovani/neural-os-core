@@ -1,8 +1,8 @@
 # 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s447 TEST
+**Versão:** v1.9.99-s448 TEST
 **Data:** 2026-10-04
-**Fonte:** SESSION_447 / SESSION_446 / SESSION_445 / STATE.md + ADRs 0081/0088–0112
+**Fonte:** SESSION_448 / SESSION_447 / SESSION_446 / SESSION_445 / STATE.md + ADRs 0081/0088–0112
 **Retomada:** `docs/memory/RESUME.md` (runbook único — comandos do F1.5, decisões D1–D5, mapa de donos da working tree, armadilhas medidas, UNKNOWN)
 **Legenda:** ✅ feito | 🟡 em andamento | `[~]` parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | `[ ]` pendente
 
@@ -18,7 +18,8 @@
 - [x] Gate `tem_substancia` no watcher (4/4) + supressão contada
 - [x] Encerramento: watcher parado (sem lock órfão), launcher + QEMU parados, log do boot cortado preservado
 - [x] Runbook de retomada: `docs/memory/RESUME.md` + ponteiros em STATE/SESSION_INDEX/TODO/CHANGELOG
-- [ ] **Braço de ablação (§7)** — `-PreparePristine` só faz snapshot; restaurar o disco antes de cada run e registrar `restore=1|0` no sidecar (IDEA #638)
+- [x] **Braco de ablação (§7)** — `tools/f15_pristine.py` + bloco `[7]` no launcher (restore opt-in, scan sempre) + `restore=`/`disk_lab_state_before=` no sidecar + 3 regras fail-closed; fixtures 25/25, ablação 13/13, stamp exit 0 (IDEA #638, s448)
+- [ ] **QEMU com `-RestorePristine`**: um boot 1 real com `restore=1` e `disk_lab_state_before=0` no sidecar — o que falta para sair de IMPLEMENTADO e virar OBSERVED (D2). Só com o disco do lab livre (outra thread estava bootando)
 - [ ] `TICKV backend=file` no QEMU + os 2 boots com veredito **com sidecar e identidade §14b valendo** — dono **AION** (AION-0009/0010); não tocar em `tickv.rs` sem o dono
 - [ ] Perguntar ao maintainer se o loop do OPMUSE (PID 9908) continua — é a única coisa que ainda escreve no fórum encerrado
 - [ ] Sync n-sgdb de SESSION_447 + IDEA #638/#639/#640/#641 (servidor vivo, sem tool MCP nesta sessão)

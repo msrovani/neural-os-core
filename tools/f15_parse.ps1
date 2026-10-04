@@ -145,7 +145,8 @@ function Invoke-Boot($path, $boot) {
             if ($stamp["uefi_bytes"] -ne ("{0}" -f $it.Length)) {
                 $fail += "FALSIFIED boot$boot : a imagem mudou DEPOIS do boot (bytes sidecar=$($stamp['uefi_bytes']) agora=$($it.Length)) - o probe mediu a imagem nova"
             }
-            $epochNow = [int64](([int64]$it.LastWriteTimeUtc.Ticks - 621355968000000000) / 10000000)
+            $epochTicks = [int64]$it.LastWriteTimeUtc.Ticks - 621355968000000000
+            $epochNow = [int64](($epochTicks - ($epochTicks % 10000000)) / 10000000)
             if ($stamp["uefi_epoch"]) {
                 # epoch inteiro: comparacao exata, sem a perda de 1 ULP da string
                 if ([int64]$stamp["uefi_epoch"] -ne $epochNow) {
@@ -158,7 +159,23 @@ function Invoke-Boot($path, $boot) {
             if ($stamp["uefi_sha"]) {
                 $sha = (Get-FileHash -LiteralPath $uefiPath -Algorithm SHA256).Hash.Substring(0, 16)
                 if ($stamp["uefi_sha"] -ne $sha) {
-                    $fail += "FALSIFIED boot$boot : sha da imagem divergente (sidecar=$($stamp['uefi_sha']) agora=$sha) - conteudo diferente com o mesmo tamanho/mtime"
+                    $why = if ($stamp["uefi_sha"].StartsWith("ERRO")) { "a identidade NAO foi estabelecida no boot (sidecar=$($stamp['uefi_sha'])); agora=$sha" } else { "sha divergente (sidecar=$($stamp['uefi_sha']) agora=$sha) - conteudo diferente com o mesmo tamanho/mtime" }
+                    $fail += "FALSIFIED boot$boot : $why"
+                }
+            }
+            # --- [7] braco de ABLACAO: o disco de partida e uma variavel
+            # declarada. Sem estes campos no sidecar nao se sabe de que disco o
+            # boot partiu -- e `act=gen` num disco que JA tinha a skill nao
+            # prova geracao.
+            if (-not $stamp["restore"] -or -not $stamp["disk_lab_state_before"]) {
+                $fail += "FALSIFIED boot$boot : sidecar sem o registro de ablacao (restore=/disk_lab_state_before=) - nao se sabe de que disco o boot partiu"
+            } else {
+                $evid += "ablacao: restore=$($stamp['restore']) disk_lab_state_before=$($stamp['disk_lab_state_before']) ($($stamp['restore_motivo']))"
+                if ($boot -eq 1 -and $stamp["disk_lab_state_before"] -eq "1") {
+                    $fail += "FALSIFIED boot1 : o disco JA continha a skill do lab antes do boot (disk_lab_state_before=1) - act=gen nao prova geracao"
+                }
+                if ($boot -eq 2 -and $stamp["restore"] -eq "1") {
+                    $fail += "FALSIFIED boot2 : restore=1 no boot 2 apaga o estado que o boot 1 deveria ter persistido - experimento rigged"
                 }
             }
         }

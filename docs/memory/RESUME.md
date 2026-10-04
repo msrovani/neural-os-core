@@ -27,9 +27,15 @@ medido** abaixo, nao o hash. · **Registro completo:** [SESSION_447.md](SESSION_
   Dono: **AION** (AION-0009 causa, AION-0010 P0 com falsificador, em review no ORACLE).
 - **Nao tocar** em `crates/k_nano/src/storage/tickv.rs` nem no caminho de storage
   sem o AION — sao 3 arquivos modificados de outra frente, sem commit.
-- **Falta o braco de ablacao (§7)**: `-PreparePristine` so faz snapshot; o comentario
-  em [run-f15.ps1:41](../../tools/run-f15.ps1#L41) promete restore que o codigo nao
-  executa. Sem isso a hipotese nao fecha (criterio de aceite do HUMAN-0009).
+- **Braco de ablacao (§7): IMPLEMENTADO em host (s448)**, falta o boot no metal.
+  `tools/f15_pristine.py` (`ensure`/`restore`/`scan`) + bloco `[7]` do launcher:
+  o disco de partida virou variavel declarada (`restore=`, `disk_lab_state_before=`
+  no sidecar) e o parser reprova 3 situacoes: sidecar sem o registro, boot 1 que
+  partiu de um disco que **ja tinha** a skill, e boot 2 com `restore=1`.
+  Medido: o confound era real — `disk_qemu.raw` chegou a ter
+  `skill/wasm/oracle_rt_expr_v1` em disco, e ~3 min depois estava limpo de novo
+  (outra thread restaurou): o estado do lab e volatil, entao so um carimbo
+  tirado **no boot** responde a pergunta.
 - **Toda decisao do forum sem `from=HUMAN` e proposta** (D1). Quorum nao decide.
 
 ---
@@ -67,8 +73,13 @@ medido** abaixo, nao o hash. · **Registro completo:** [SESSION_447.md](SESSION_
 cargo build --release -p boot
 python tools/build_image.py --bios
 
-# 1) boot 1: gera a skill (LSK1 'G') e roda
-powershell -File tools/run-f15.ps1 -Boot 1 -TimeoutSec 900
+# 0b) braco de ablacao: snapshot do disco LIMPO (so cria se nao existir;
+#     recusa fonte que ja tem a skill do lab -- exit 3)
+powershell -File tools/run-f15.ps1 -PreparePristine
+
+# 1) boot 1: gera a skill (LSK1 'G') e roda. -RestorePristine devolve o
+#    snapshot ao disco ANTES do boot (opt-in: o disco do lab e compartilhado).
+powershell -File tools/run-f15.ps1 -Boot 1 -RestorePristine -TimeoutSec 900
 powershell -File tools/f15_parse.ps1 -Log logs/f15_boot1.txt -Boot 1
 
 # 2) power cycle + boot 2: tenta recordar (LSK1 'E')
@@ -84,6 +95,11 @@ powershell -File tools/f15_parse.ps1 -Compare "logs\f15_boot1.txt,logs\f15_boot2
   virgula` (medido nesta sessao, custou duas rodadas).
 - Exit code do parser: **0 = PASS, 1 = FALSIFIED**. O launcher nao tira veredito:
   ele so entrega log + status (por design).
+- **Ablacao (§7):** `-PreparePristine` cria o snapshot (so de fonte limpa);
+  `-RestorePristine` o devolve ao disco — **so no boot 1** (o launcher recusa no
+  boot 2, porque o restore apagaria justamente o estado a provar). Sem o switch,
+  o launcher roda o `scan` e registra `restore=0` + `disk_lab_state_before=0|1`.
+  Diagnostico do disco: `python tools/f15_pristine.py check --disk target\disk_qemu.raw`.
 - **§14 + §14b (s447):** o veredito so vale com o sidecar `<log>.imgid` ao lado do log.
   Ausente, `probe_na_imagem!=True`, ou **identidade divergente** → **FALSIFIED**.
   A identidade e `uefi_bytes` + `uefi_epoch` + `uefi_sha`: o parser recalcula os tres
@@ -195,6 +211,21 @@ confirmar com o dono (D5).
     (o `sync_us` de 4,2 ms da s412 era ~95% log).
 11. Ferramentas `.ps1`/`.py` **ASCII-only** (PS 5.1 le como cp1252; nao-ASCII vira
     lixo **sem erro de sintaxe**).
+12. **`|` dentro de uma celula de tabela markdown parte a linha.** `O_CREAT|O_EXCL`,
+    `restore=1|0` e `lab_state=0|1` quebraram linhas minhas em tres sessoes. Escapar
+    `\|` e, para conferir, contar colunas com split em `(?<!\\)\|` — o split ingenuo
+    conta um `\|` ja escapado como separador e da o veredito errado (falso
+    "quebrada" numa linha boa).
+13. **Numero de serieo entre duas linguagens e contrato:** string ISO de mtime perde
+    1 ULP (Python vs .NET) **e** `/` no PowerShell e divisao em double com cast
+    arredondando — `Ticks` (~1,8e17) passa de 2^53. Formula exata, igual nos dois
+    lados: `(($ticks - ($ticks % 10000000)) / 10000000)` = truncamento (o Python
+    `int()` trunca).
+14. **Artefato do lab e estado compartilhado e pode estar TRAVADO** por outro
+    QEMU/build: `Get-FileHash target/uefi.img` falha com "usado por outro
+    processo" (medido s448). O carimbo degrada para `uefi_sha=ERRO:lido-em-uso` e
+    o parser reprova; o teste de stamp sai **2 (inconclusivo)**. Nunca tratar
+    "nao consegui ler" como "deu certo".
 
 ---
 
@@ -202,9 +233,11 @@ confirmar com o dono (D5).
 
 | gate | comando | esperado |
 |---|---|---|
-| suite do veredito F1.5 | `python tools/run_f15_fixtures.py` | **22/22**, exit 0 (gerador em `tools/gen_f15_fixtures.py`, versionado) |
+| suite do veredito F1.5 | `python tools/run_f15_fixtures.py` | **26/26**, exit 0 (gerador em `tools/gen_f15_fixtures.py`, versionado) |
+| braco de ablacao | `powershell -File tools\test_f15_ablation.ps1` | **13/13**, exit 0 (executa o bloco `[7]` REAL sobre discos de 4 MB) |
+| carimbo §14 | `powershell -File tools\test_f15_stamp.ps1` | exit 0, 15 campos do sidecar coerentes com os arquivos (roda com `restore=0` de proposito: nao pode mexer no disco compartilhado) |
 | lock do forum | `python tools/test_forum_lock.py` | 0 id dup, 0 linha rasgada |
-| carimbo §14 | `target/test_imgid_stamp.ps1` — **gitignored, nao versionado**: executar o bloco `[14]` do launcher extraido por linha; se o arquivo sumir, recriar | exit 0, `probe_na_imagem=True` |
+| carimbo §14 | (movido p/ a linha de cima: `tools/test_f15_stamp.ps1`) | — |
 | UB host | `cargo miri test -p k_ai --lib trust::tests::revoke_is_transitive_and_bumps_generation -- --test-threads=1` | 1 passed, 72 filtered |
 | build | `touch crates/neural-kernel/src/main.rs && cargo build --release -p boot` | 0 erros (rebuild real ~2m40s) |
 
@@ -214,12 +247,11 @@ confirmar com o dono (D5).
 
 1. **Perguntar ao maintainer** se o loop do OPMUSE (PID 9908) deve continuar — e a
    unica coisa que ainda escreve no log "fechado".
-2. **Braco de ablacao (§7)** — fecha o criterio de aceite do HUMAN-0009 **sem tocar em
-   `tickv.rs`**. Melhor uso do proximo dia: e a unica peca do experimento que ainda e
-   100% minha (D5).
+2. **Um boot 1 de verdade com `-RestorePristine`** — é o que falta para o braco de
+   ablacao sair de IMPLEMENTADO e virar OBSERVED (D2). So com o disco do lab livre:
+   `target/disk_qemu.raw` e estado compartilhado e outra thread bootava nela.
 3. **So depois do fix do AION**: rodar os 2 boots e trazer o veredito **com sidecar
-   `.imgid` e identidade §14b valendo** (bytes+epoch+sha batendo com o arquivo
-   bootado). Sem isso nada fecha (D2).
+   `.imgid`, identidade §14b e registro de ablacao §7 valendo**. Sem isso nada fecha (D2).
 4. **F1** (1h sem `#PF`, writer do wild-write ainda nao localizado) via
    `tools/watch_corruption.ps1` — depois do funil, nunca antes.
 
@@ -234,5 +266,7 @@ confirmar com o dono (D5).
   (o launcher apaga o log no começo), então tem sidecar — e reprova por `§14b` (a imagem
   foi reconstruida depois do boot). Fechado como **UNKNOWN** por não ter Veredito limpo.
 - E1/Kani: sem toolchain neste host. F1: writer nunca localizado (IDEA #632/#633 🟡).
+- **Braco de ablacao no metal**: nenhum boot de QEMU rodou com `-RestorePristine`;
+  o restore de 3 GB tambem nao foi exercitado (os testes usam discos de 4 MB).
 - Sync n-sgdb: servidor vivo mas sem tool nesta sessao → SESSION_447 e as IDEA
   #638/#639/#640/#641 ainda **nao** estao no SGDB.

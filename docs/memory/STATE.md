@@ -1,3 +1,41 @@
+# STATE - neural-os-core v1.9.99-s448 TEST - forum ENCERRADO; F1.5 = carimbo (§14/§14b) + braco de ablacao (§7, IMPLEMENTADO/host)
+
+#   [s448] BRACO DE ABLACAO DO F1.5 (IDEA #638, era a peca 100% da lane FREEBU).
+#     PROBLEMA: -PreparePristine so fazia snapshot; o comentario prometia
+#     "restore before a run". O disco de que cada boot partia era variavel nao
+#     declarada -- e no boot 1 ela decide se act=gen prova alguma coisa.
+#     EVIDENCIA (medida): pristine (03/10 22:47) lab_state=0 (limpo);
+#     disk_qemu.raw (04/10 ~00:57) lab_state=1 com dirents FAT32
+#     skill/wasm/oracle_rt_expr_v1 e skill/wasm_prov/oracle_rt_expr_v1 em
+#     ~1657 MiB. O confound era REAL. ~3 min depois o mesmo arquivo estava
+#     limpo (outra thread restaurou) => o estado do lab e volatil: so um
+#     registro tirado NO BOOT responde "de que disco partiu".
+#     MENOR CORRECAO: tools/f15_pristine.py (ensure/restore/scan/check) +
+#     bloco [7] no launcher (restore OPT-IN, scan SEMPRE) + campos restore=,
+#     restore_motivo=, disk_lab_state_before=, pristine_bytes= no sidecar +
+#     3 regras fail-closed no parser (sem registro / boot1 com lab_state=1 /
+#     boot2 com restore=1). Zero .rs, zero tickv.
+#     CUSTO MEDIDO: varredura de 3 GB = 1,6-4,9 s (mmap+find, 64 MiB/bloco)
+#     contra orcamento de 900 s; 4 MB no teste = 0,03 s.
+#     RESTORE E OPT-IN DE PROPOSITO: target/disk_qemu.raw e estado
+#     COMPARTILHADO (outra thread bootando: mtime 00:45 -> 01:00 durante o
+#     trabalho) e sobrescrever 3 GB sem pedido destruiria o boot dela. O
+#     launcher RECUSA -RestorePristine no boot 2.
+#     BUG DE PRECISAO (2a vez no mesmo arquivo): epoch batia errado em 1 s
+#     (PS 758 vs Python 757) — `/` no PS e divisao em DOUBLE e o cast
+#     arredonda, e Ticks (~1,8e17) passa de 2^53. Formula exata nos dois
+#     lados: (($ticks - ($ticks % 10000000)) / 10000000) = truncamento.
+#     GATES: fixtures 25/25 exit 0 (+b1_lab_state1, b1_sem_ablacao,
+#     b2_restore1); tools/test_f15_ablation.ps1 13/13 exit 0 (bloco [7] REAL
+#     sobre discos de 4 MB); tools/test_f15_stamp.ps1 exit 0 (15 campos do
+#     sidecar, e restore=0 de proposito para nao tocar no disco do lab);
+#     sintaxe OK nos 3 .ps1. O stamp test saiu de target/ (gitignored) para
+#     tools/ versionado.
+#     UNKNOWN (D2): NENHUM boot de QEMU rodou com -RestorePristine. O braco
+#     esta IMPLEMENTADO + verificado em host, nao OBSERVED no metal. Restore de
+#     3 GB tambem nao exercitado (teste usa 4 MB).
+#     Detalhe: docs/memory/SESSION_448.md
+
 # STATE - neural-os-core v1.9.99-s447 TEST - forum ENCERRADO; F1.5 = carimbo de artefato (§14) + ablacao ausente
 
 #   [s447] FORO ENCERRADO (decisao do maintainer; agentes parando). Funcao do

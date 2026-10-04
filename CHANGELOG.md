@@ -1,5 +1,50 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s448] - 2026-10-04 - Braço de ablação do F1.5: o disco de partida vira variável declarada
+
+- **O confound era real, não teórico.** `target/disk_qemu.pristine.raw` (03/10 22:47)
+  está limpo; `target/disk_qemu.raw` chegou a conter dirents FAT32
+  `skill/wasm/oracle_rt_expr_v1` + `skill/wasm_prov/oracle_rt_expr_v1` em ~1657 MiB —
+  e ~3 min depois estava limpo de novo (outra thread restaurou). `run-f15.ps1`
+  prometia `restore before a run` no comentário e **só** fazia o snapshot, então o
+  disco de que cada boot partia era uma variável não declarada — e no boot 1 é ela
+  que decide se `act=gen` prova alguma coisa.
+- **`tools/f15_pristine.py`** (`ensure`/`restore`/`scan`/`check`, mmap + `find` em
+  blocos de 64 MiB: **3 GB = 1,6–4,9 s** contra orçamento de boot de 900 s).
+  `ensure` **recusa (exit 3)** criar um "pristine" a partir de um disco que já tem a
+  skill — um snapshot tirado de disco sujo é um controle que mente sozinho.
+  `restore` copia e **verifica byte a byte**; `scan` diz `lab_state=0|1`.
+- **Launcher:** bloco `[7]` com `-RestorePristine` (**opt-in** e recusado no boot 2,
+  que apagaria justamente o estado a provar) e `scan` sempre; antes de lançar o QEMU
+  loga `restore=1|0 disk_lab_state_before=0|1`. Sidecar ganha `restore`,
+  `restore_motivo`, `disk_lab_state_before`, `pristine_bytes`.
+- **Parser: 3 regras fail-closed** — sidecar sem o registro de ablação; boot 1 com
+  `disk_lab_state_before=1` (`act=gen` não prova geração num disco que já tinha a
+  skill); boot 2 com `restore=1` (experimento rigged).
+- **Restore é opt-in porque `target/disk_qemu.raw` é estado compartilhado** (outra
+  thread bootando: mtime 00:45 → 01:00 durante o trabalho). `tools/test_f15_stamp.ps1`
+  roda com `restore=0` de propósito e **verifica** isso no sidecar.
+- **Bug de precisão (2ª vez no mesmo arquivo):** o epoch batia 1 s errado
+  (`sidecar=…757 agora=…758`) — `/` no PowerShell é divisão em **double** e o cast
+  arredonda, e `Ticks` (~1,8e17) passa de 2^53. Fórmula idêntica no launcher e no
+  parser: `(($ticks - ($ticks % 10000000)) / 10000000)` (truncamento, como `int()`).
+- **Imagem travada por outro QEMU:** `Get-FileHash target/uefi.img` falhou com
+  `FileReadError: "usado por outro processo"` enquanto outra thread rodava o lab —
+  o launcher morria no carimbo. Agora o `try/catch` grava
+  `uefi_sha=ERRO:lido-em-uso` sem derrubar o run, e o parser reprova com
+  `a identidade NAO foi estabelecida no boot` (fixture `b1_sha_erro`). O teste de
+  stamp sai **2 (inconclusivo)** com a imagem travada em vez de fingir veredito.
+  *Degradar no carimbo, reprovar no veredito.*
+- **Gates:** `run_f15_fixtures` **26/26** (+`b1_lab_state1`, `b1_sem_ablacao`,
+  `b2_restore1`, `b1_sha_erro`); `tools/test_f15_ablation.ps1` **13/13** — executa o bloco `[7]`
+  **real** extraído do launcher sobre discos de 4 MB (restore copia, verifica e
+  apaga a skill; sem restore o disco segue sujo; `ensure` recusa fonte suja);
+  `tools/test_f15_stamp.ps1` exit 0 com 15 campos — **versionado**, o antecessor
+  vivia em `target/` (gitignored) e sumia com um `git clean`.
+- **UNKNOWN (D2):** nenhum boot de QEMU rodou com `-RestorePristine` — o braço está
+  IMPLEMENTADO e verificado em host, não OBSERVED no metal; o restore de 3 GB
+  também não foi exercitado. Zero arquivos Rust tocados.
+
 ## [1.9.99-s447] - 2026-10-04 - Carimbo do artefato bootado (§14) + watcher com critério de substância + fórum encerrado
 
 - **§14 — o veredito de runtime só vale se o artefato bootado for identificável**:
