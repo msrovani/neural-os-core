@@ -44,7 +44,7 @@ Sentence-level TTS streaming provides sub-200ms first-phrase latency via Piper.
 
 ## Status
 
-**v1.9.99-s449 TEST** — Jarbas UI live on the framebuffer, P2P mesh across **six QEMU VMs**, and distributed matmul over FRAG — a working AIOS desktop talking to a small cluster, not a slide deck.
+**v1.9.99-s451 TEST** — Jarbas UI live on the framebuffer, P2P mesh across **six QEMU VMs**, and distributed matmul over FRAG — a working AIOS desktop talking to a small cluster, not a slide deck.
 
 The project is honest about what is done and what is not. Anything marked
 "gated" or "pending" below will fail or is disabled at runtime — we prefer an
@@ -321,7 +321,7 @@ list. A recent boot reported ~259 agents at runtime.
 | TTS streaming (sentence-level, Piper sub-200ms) | Done |
 | VirtIO-blk driver (QEMU disk) | Done |
 | neural-sgdb extraction (standalone crate) | Done |
-| v1.9.99 dev line (s449): consolidação E1–E4/F1/storage/dead-weight — `InferQueue` worker off the BSP | Done |
+| v1.9.99 dev line (s451): F1.5 PROVADO (2 boots + ablacao) + v4 checkpoint (SHV4) + 36 modulos arquivados em docs/archive/dead-modules/ | Done |
 | Ring 3 isolation (ADR-0077/0102) | Onda 6 wired in QEMU; native registration gated to metal |
 | WiFi/TLS hardware validation | Pending hardware |
 | v2.0.0 gate (formal review + zero backlog + maintainer OK) | Not passed |
@@ -348,7 +348,7 @@ list. A recent boot reported ~259 agents at runtime.
 |----------|------|
 | [`AGENTS.md`](AGENTS.md) | Agent ontology, boot sequence, operational rules |
 | [`HOWTO.md`](HOWTO.md) | Build + run instructions for all environments |
-| [`TECNOLOGIAS.md`](TECNOLOGIAS.md) | Technology catalog (~160 rows across 15 sections) |
+| [`TECNOLOGIAS.md`](TECNOLOGIAS.md) | Technology catalog (~190 rows across 15 sections) |
 | [`docs/architecture/INDEX.md`](docs/architecture/INDEX.md) | ~110 ADRs with lifecycle tracking |
 | [`docs/memory/STATE.md`](docs/memory/STATE.md) | Current kernel state |
 | [`docs/memory/SESSION_INDEX.md`](docs/memory/SESSION_INDEX.md) | Session log index + lessons learned |

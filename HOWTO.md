@@ -410,7 +410,7 @@ neural-os-core/
 ├── firmware/              # Blobs git-tracked (GPU/WiFi/NIC)
 ├── tools/                 # Scripts Python (build, treino, bridge)
 ├── docs/
-│   ├── architecture/      # ADRs (0041–0047+)
+  +- architecture/      # ADRs (0041-0113+)
 │   └── memory/            # STATE.md, IDEA_BANK, Sessions
 │
 ├── run-qemu-whpx.ps1      # QEMU WHPX + e1000 (SLIP opt-in)
@@ -602,5 +602,5 @@ Código: **AGPL-3.0**. Matriz FW/datasets/recipes: [docs/community/LICENSES.md](
 
 ---
 
-> **AIOS K³CHJ — Neural OS Hermes v1.9.99-s449 TEST / NÃO ESTÁVEL**
+> **AIOS K³CHJ — Neural OS Hermes v1.9.99-s451 TEST / NÃO ESTÁVEL**
 > *"O hardware real não perdoa. O silício obedece."*

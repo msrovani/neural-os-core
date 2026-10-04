@@ -1,8 +1,8 @@
 # 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s448 TEST
+**Versão:** v1.9.99-s451 TEST
 **Data:** 2026-10-04
-**Fonte:** SESSION_448 / SESSION_447 / SESSION_446 / SESSION_445 / STATE.md + ADRs 0081/0088–0112
+**Fonte:** SESSION_451 / SESSION_450 / SESSION_449 / SESSION_448 / STATE.md + ADRs 0081/0088-0113
 **Retomada:** `docs/memory/RESUME.md` (runbook único — comandos do F1.5, decisões D1–D5, mapa de donos da working tree, armadilhas medidas, UNKNOWN)
 **Legenda:** ✅ feito | 🟡 em andamento | `[~]` parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | `[ ]` pendente
 
@@ -30,11 +30,11 @@
 - [x] Encerramento: watcher parado (sem lock órfão), launcher + QEMU parados, log do boot cortado preservado
 - [x] Runbook de retomada: `docs/memory/RESUME.md` + ponteiros em STATE/SESSION_INDEX/TODO/CHANGELOG
 - [x] **Braco de ablação (§7)** — `tools/f15_pristine.py` + bloco `[7]` no launcher (restore opt-in; no boot 2 é a **condição de controle**: run permitido, veredito reprovado; scan sempre) + `restore=`/`disk_lab_state_before=` no sidecar + 3 regras fail-closed; fixtures 26/26, ablação 17/17, stamp exit 0 (IDEA #638, s448)
-- [ ] **QEMU com `-RestorePristine`**: um boot 1 real com `restore=1` e `disk_lab_state_before=0` no sidecar — o que falta para sair de IMPLEMENTADO e virar OBSERVED (D2). Só com o disco do lab livre (outra thread estava bootando)
-- [ ] `TICKV backend=file` no QEMU + os 2 boots com veredito **com sidecar e identidade §14b valendo** — dono **AION** (AION-0009/0010); não tocar em `tickv.rs` sem o dono
+- [x] **QEMU com `-RestorePristine`** - ablacao EXECUTADA s451 (disco pristine -> `escalate=reuse reason=not_found`, comportamento reverte). D2 fechado.
+- [x] `TICKV backend=file` no QEMU + os 2 boots com veredito (sidecar + identidade 14b) - DONE s451: `backend=file dev=virtio`, F1.5 PASSOU.
 - [ ] Perguntar ao maintainer se o loop do OPMUSE (PID 9908) continua — é a única coisa que ainda escreve no fórum encerrado
 - [ ] Sync n-sgdb de SESSION_447 + IDEA #638/#639/#640/#641 (servidor vivo, sem tool MCP nesta sessão)
-- [ ] `cargo check --release` **desta** árvore (o 0-erros é da s446, antes das 36 alterações alheias)
+- [x] `cargo build --release -p boot` desta arvore - 0 erros (s451).
 
 ## 🟡 s445 — Forum CURAIX: recover no wipe + reload pos-Tickv (F1.5 aberto)
 
@@ -457,7 +457,7 @@ ADR + evidência: `docs/architecture/0106-decisoes-calibradas-confianca-abstenca
 
 ## 🧾 DÍVIDA DE DOC/CONSISTÊNCIA
 
-- [ ] Licença: `LICENSE` = **AGPL-3.0**, mas `TECNOLOGIAS.md` declara "código próprio MIT" — decidir a correta e alinhar
+- [x] Licenca alinhada em s450: `TECNOLOGIAS.md` MIT->**AGPL-3.0** (header + tabela); `LICENSE`=AGPL-3.0 confirmado.
 - [x] Métricas alinhadas ao **medido** em `AGENTS.md`, `SUMMARY.md`, `ROADMAP.md`, `codemap.md`, `HOWTO.md` (+ `TECNOLOGIAS.md`/`README.md`): ~169K LOC / ~672 `.rs` (12 crates do workspace) / 41 nativos / v1.9.99-s412 / 829 testes host
 
 ---
@@ -471,10 +471,10 @@ ADR + evidência: `docs/architecture/0106-decisoes-calibradas-confianca-abstenca
 - [x] `run-f15.ps1`: OVMF code+vars + `-cpu` + exit code **funcional** (o check
       anterior era quebrado: `.ExitCode` null sem handle cacheado)
 - [x] `f15_parse.ps1` com escopo por nome da skill + suite `run_f15_fixtures.py` 19/19
-- [x] Boot 1 **PASS** (exit 0) / boot 2 **FALSIFIED** (exit 1, `reason=not_found`)
+- [x] Boot 1 **PASS** (exit 0) / boot 2 **FALSIFIED** (exit 1, `reason=not_found`) - SUPERSEDED s451: F1.5 PASS (boot1 act=gen hash=0x458653425da3b4a5 -> power cycle -> boot2 act=reuse MESMO hash, result=82).
 - [x] Lock de escrita **compartilhado** do forum (py + PS), 0 id dup / 0 rasgada
 - [x] `forum_repair_ids.py` (mode `"w"`) trancado no lock
-- [ ] 🔴 **Backend persistente no QEMU** — Tickv monta em RAM (`[TICKV] backend=RAM`),
+- [x] Backend persistente no QEMU - RESOLVIDO s451: `[TICKV] backend=file dev=virtio` + F1.5 PASSOU (2 boots + ablacao).
       nenhum disco escrito: o eixo de persistência não fecha sem isto
 - [ ] `gen_lsk1.py` com 512 bytes zerados (`BLOB_LEN=512` do `skill_lab` vs 256 do gerador)
 - [ ] Warn único se 4 bytes != 0 e != `LSK1` (não setar `CONSUMED`)

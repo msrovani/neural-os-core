@@ -1,11 +1,11 @@
 # Roadmap — neural-os-core
 
 **Última atualização:** 2026-10-04
-**Versão release:** **v1.9.99-s449 TEST / NÃO ESTÁVEL**
+**Versão release:** **v1.9.99-s451 TEST / NÃO ESTÁVEL**
 **Estado:** ~214K LOC, ~714 arquivos Rust (12 crates do workspace), 41 agentes nativos, 0 erros (`cargo build --release -p boot`)
 **Marco s360:** interface Jarbas **funcional** + rede mesh + computação distribuída em **6 QEMU** (WHPX, hub L2, FRAG matmul, orb/`MESH_HEALTH` por role).
 **Pista ativa:** s449 consolidação do working tree (E1–E4 ADR-0113 + F1 + AION-storage + cleanup dead-weight); F1.5 aberto (TICKV backend=file, dono AION).
-<!-- MEASURED: rs=714 loc=213629 members=12 -->
+<!-- MEASURED: rs=714 loc=213520 members=12 -->
 
 ---
 

@@ -2,7 +2,7 @@
 ## Registro de Propriedade Intelectual e Inovação
 
 **~214.000 LOC, ~714 arquivos Rust (12 crates do workspace), 41 agentes nativos**
-**Versão release:** v1.9.99-s449 TEST / NÃO ESTÁVEL (2026-10-04)
+**Versão release:** v1.9.99-s451 TEST / NÃO ESTÁVEL (2026-10-04)
 **Marco:** UI Jarbas funcional + mesh + compute distribuído em **6 QEMU** (WHPX / hub L2 / FRAG)
 **Build:** `cargo clean -p neural-kernel && cargo nk` = 0 erros (warnings dead-code = política conhecida)
 **Licença:** AGPL-3.0 (código próprio) / MIT, GPL, Apache 2.0 (componentes inspirados/portados)
@@ -333,7 +333,7 @@ $ cargo clean -p neural-kernel && cargo nk
     0 errors
 ```
 
-**Métricas (v1.9.99-s449 TEST):**
+**Métricas (v1.9.99-s451 TEST):**
 
 | Métrica | Valor |
 |---------|-------|
@@ -344,7 +344,7 @@ $ cargo clean -p neural-kernel && cargo nk
 | ADRs (`docs/architecture/`) | ~110 |
 | Firmware blobs | 90 (~13.7 MB) |
 | HWIDs HW Expert v3 (treino) | **61.453 VID/DID** |
-| Tags release | v1.0.0 → **v1.9.99-s440** (dev atual v1.9.99-s449; gate v2.0.0 = review + `por_fazer` + OK humano) |
+| Tags release | v1.0.0 → **v1.9.99-s440** (dev atual v1.9.99-s451; gate v2.0.0 = review + `por_fazer` + OK humano) |
 | Crates K³CHJ wired | k_nano, k_hal, k_ai, cortex, hermes, jarbas |
 | Erros (`cargo nk`) | **0** |
 
@@ -373,7 +373,7 @@ $ cargo clean -p neural-kernel && cargo nk
 
 ---
 
-> **AIOS K³CHJ — Neural OS Hermes v1.9.99-s449 TEST / NÃO ESTÁVEL**
+> **AIOS K³CHJ — Neural OS Hermes v1.9.99-s451 TEST / NÃO ESTÁVEL**
 > *~214.000 LOC, ~714 arquivos Rust (12 crates do workspace), 41 agentes nativos, 6 crates K³CHJ wired, cargo nk = 0 erros.*
 > *"O hardware real não perdoa. O silício obedece."*
 > [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)

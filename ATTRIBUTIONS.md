@@ -28,7 +28,7 @@ Este projeto utiliza conceitos, metodologias ou trechos de código dos seguintes
 
 ## Hermes Agent
 
-**Repo:** conceitos do "Hermes Agent" (sem repo público único; ver AGENTS.md/ADR-0089)  
+**Repo:** conceitos do "Hermes Agent" (sem repo público único; ver docs/architecture/0089-novo-hermes-malha-cognitiva-global.md)  
 **Autor:** Comunidade Hermes (207k★)  
 **Licença:** Inspiração — conceitos extraídos, sem código copiado  
 **Uso:** Conceitos de `/learn`, completion contracts, background fan-out, MoA (Sprint 67). Implementação própria em Rust.

@@ -1,7 +1,7 @@
 # DEAD_WEIGHT AUDIT — neural-os-core Agent Ecosystem
 # Per OPCODE/1 Mission §3 and §15 (maintainer guidelines)
 
-> **STATUS (s449):** findings #1,#2,#3,#5,#6 IMPLEMENTED; #7 INVERTED (E3 added the consumer); #4,#8,#9 NOT done. This file is a pre-fix snapshot.
+> **STATUS (s449 + s451):** #1,#2,#3,#5,#6 IMPLEMENTED (s449); #7 INVERTED; #4,#8,#9 NOT done. **s451:** 36 modulos legados/planejados ARQUIVADOS (git mv, nao delete) em `docs/archive/dead-modules/` + SINAL em AGENTS.md/n-sgdb; `tools/check_duplication.py` corrigido (~20/33 falsos positivos ignorados). This file is a pre-fix snapshot.
 
 ## Audit Scope
 Read-only audit of all crates in `C:\DEV\neural-os-core-latest\crates/` plus `neural-kernel/`, `skills/`, `tools/`. 

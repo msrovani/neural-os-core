@@ -5,12 +5,12 @@
 #   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício ✅
 #   Sprint 100: Code Freeze — 07/2026
 #   Sprints 101→105: v2.0 "Cognição" — Kernel, Cortex, Hermes, K-IA, JARVIS
-#   Sprints 106+: K³CHJ wire + ADR-0042 — base v1.8.0; consolidação v1.8.6 → **v1.9.0 TEST**
+#   Sprints 106+: K³CHJ wire + ADR-0042 — base v1.8.0; consolidação v1.8.6 → **v1.9.0 TEST** (dev line atual: v1.9.99-s451)
 #   v1.8.6 = ADR-0041 H4+/H5+/AS + HalOffer; v1.9.0 = Pós-LAN + Residuals 0–7; v2.0.0 = gate após review
 #   Gate v2.0.0 = N1–N5 + wire + review; v1.8.0 = marco adequação (Jul 2026); não "2.0 completo" sem review
 # K³CHJ = k-nano + k-hal + k-ai + Cortex + Hermes + Jarbas (histórico K²CHJ = sem k-hal na marca)
 # ════════════════════════════════════════════════════════
-<!-- MEASURED: rs=714 loc=213629 members=12 -->
+<!-- MEASURED: rs=714 loc=213520 members=12 -->
 
 # ════════════════════════════════════════════════════════
 #   ⚡ PREMISSA MÁXIMA — IRREVOGÁVEL, IRRETRATÁVEL (ADR-0088)

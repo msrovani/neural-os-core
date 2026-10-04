@@ -37,7 +37,9 @@ Linguagem compartilhada entre humanos e agentes. Este arquivo só fixa **vocabul
 - **Ordem CoW** — dados novos → commit → SÓ ENTÃO reclaim antigos (freeing adiado 1 commit).
 - **SGDB vs FAT** — SGDB = path cognitivo (HANR/Audit/Pkg meta/Skills/Episodic/RAG); FAT = blobs/firmware/WIFI.CFG/BOOT.LOG.
 - **ESP 0xEF** — partição FAT32 real do Limine; GPT GUID é sempre `.bytes_le`. Nunca formatar volume que existe mas não monta (fsck explícito exigido).
-- **Storage cru (TickvLite)** — nunca LBA fixo perto das partições GPT (brick em NVMe real). Região calculada no fim do disco ou partição própria.
+- **Tickv backend** - RAM (`[TICKV] backend=RAM`, volatil) vs file (`[TICKV] backend=file dev=virtio`, persistente - s451); nunca LBA fixo perto das particoes GPT (brick em NVMe real), regiao calculada no fim do disco ou particao propria.
+- **Checkpoint v4 (SHV4)** - serializacao diagnostics-only (~102 B, magic SHV4 + bitmap_hash); NAO restaura o bitmap PMM (v3 restaurar = double-alloc).
+- **Dead-modules** - codigo legado/planejado arquivado em `docs/archive/dead-modules/` (git mv, nao delete); CONSULTAR antes de planejar feature nova (s451).
 - **`NeuralVolume`** — exige `&mut dyn BlockDevice`; cast `let dev: &mut dyn BlockDevice = g;` (nunca `&mut **g`).
 
 ## Rede

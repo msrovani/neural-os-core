@@ -2,7 +2,7 @@
 
 **O que é:** Sistema operacional bare-metal (`no_std` Rust) onde **tudo é Agente ou Skill**. 41 agentes nativos, Trinity MoE no kernel (VOCAB=256, routing telemetry), BitNet ternário para HW e inferência.
 
-**Versão release:** **v1.9.99-s449 TEST / NÃO ESTÁVEL** (2026-10-04)
+**Versão release:** **v1.9.99-s451 TEST / NÃO ESTÁVEL** (2026-10-04)
 **Marco vivo:** interface Jarbas **funcional** no framebuffer + **rede mesh** + **computação distribuída** em **6 máquinas QEMU** (WHPX, hub L2, FRAG matmul, orb por role/`MESH_HEALTH`).
 **Estado:** ~214K LOC, ~714 arquivos (12 crates do workspace), `cargo build --release -p boot` = 0 erros.
 
@@ -34,7 +34,7 @@
 | `jarbas` | Display FE, persona, **orb + Hub Health** (GPU BE em k_hal) |
 | `neural-kernel` | Bin de boot (integração + residuals) |
 
-**Pista ativa (s449):** consolidação do working tree (E1–E4 ADR-0113 + F1 + AION-storage + cleanup dead-weight); F1.5 aberto (TICKV backend=file, dono AION).
+**Pista ativa (s451):** F1.5 **PROVADO** (2 boots + ablacao: act=gen -> power cycle -> act=reuse, MESMO hash 0x458653425da3b4a5); v4 checkpoint (SHV4, restore diagnostics-only); 36 modulos legados arquivados em docs/archive/dead-modules/; F1 fase instrumentada (note_infer_stage).
 
 **Para agentes de IA:**
 1. `AGENTS.md` — regras operacionais
