@@ -1,8 +1,9 @@
 # RESUME — como voltar a desenvolver o neural-os-core (e o forum OPCODE/1)
 
 **Data do registro:** 2026-10-04 · **Estado:** v1.9.99-s447 TEST · **Branch:** `main`
-**HEAD:** `2a8f95b2` (= `origin/main`, conferido com `git ls-remote`, nao so com o
-tracking ref) · **Registro completo:** [SESSION_447.md](SESSION_447.md)
+**Tip verificado:** `556c8c64` = `origin/main` (conferido com `git ls-remote`, nao so
+com o tracking ref). O tip anda a cada commit de doc; o que vale e o **estado
+medido** abaixo, nao o hash. · **Registro completo:** [SESSION_447.md](SESSION_447.md)
 
 > Regra que continua valendo depois de qualquer pausa: **codigo implementado nao e
 > propriedade demonstrada**. `UNKNOWN != 0`, `HOST TEST PASS != RUNTIME PASS`,
@@ -203,7 +204,7 @@ confirmar com o dono (D5).
 |---|---|---|
 | suite do veredito F1.5 | `python tools/run_f15_fixtures.py` | **22/22**, exit 0 (gerador em `tools/gen_f15_fixtures.py`, versionado) |
 | lock do forum | `python tools/test_forum_lock.py` | 0 id dup, 0 linha rasgada |
-| carimbo §14 | `target/test_imgid_stamp.ps1` (executa o bloco real do launcher) | exit 0, `probe_na_imagem=True` |
+| carimbo §14 | `target/test_imgid_stamp.ps1` — **gitignored, nao versionado**: executar o bloco `[14]` do launcher extraido por linha; se o arquivo sumir, recriar | exit 0, `probe_na_imagem=True` |
 | UB host | `cargo miri test -p k_ai --lib trust::tests::revoke_is_transitive_and_bumps_generation -- --test-threads=1` | 1 passed, 72 filtered |
 | build | `touch crates/neural-kernel/src/main.rs && cargo build --release -p boot` | 0 erros (rebuild real ~2m40s) |
 
@@ -216,8 +217,9 @@ confirmar com o dono (D5).
 2. **Braco de ablacao (§7)** — fecha o criterio de aceite do HUMAN-0009 **sem tocar em
    `tickv.rs`**. Melhor uso do proximo dia: e a unica peca do experimento que ainda e
    100% minha (D5).
-3. **So depois do fix do AION**: rodar os 2 boots e trazer o veredito **com `.imgid`**.
-   Sem isso nada fecha (D2).
+3. **So depois do fix do AION**: rodar os 2 boots e trazer o veredito **com sidecar
+   `.imgid` e identidade §14b valendo** (bytes+epoch+sha batendo com o arquivo
+   bootado). Sem isso nada fecha (D2).
 4. **F1** (1h sem `#PF`, writer do wild-write ainda nao localizado) via
    `tools/watch_corruption.ps1` — depois do funil, nunca antes.
 
@@ -232,5 +234,5 @@ confirmar com o dono (D5).
   (o launcher apaga o log no começo), então tem sidecar — e reprova por `§14b` (a imagem
   foi reconstruida depois do boot). Fechado como **UNKNOWN** por não ter Veredito limpo.
 - E1/Kani: sem toolchain neste host. F1: writer nunca localizado (IDEA #632/#633 🟡).
-- Sync n-sgdb: servidor vivo mas sem tool nesta sessao → SESSION_447 e #638/#639
-  ainda **nao** estao no SGDB.
+- Sync n-sgdb: servidor vivo mas sem tool nesta sessao → SESSION_447 e as IDEA
+  #638/#639/#640/#641 ainda **nao** estao no SGDB.

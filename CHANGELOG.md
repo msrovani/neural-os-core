@@ -48,9 +48,11 @@
   do maintainer, comandos exatos do F1.5, mapa de donos dos 36 modificados + 15
   untracked de outras frentes, 11 armadilhas medidas, lista de UNKNOWN). Bloqueio do
   P0 segue com o **AION** (`try_mount_from_ckpt` reconstrói o índice só do último
-  checkpoint; IDEA #638 = braço de ablação ausente; #639 = E1/Kani sem toolchain).
-- **2 commits publicados** (`4ea43987`, `2a8f95b2`), **zero arquivo Rust tocado**,
-  `HEAD == origin/main == 2a8f95b2`.
+  checkpoint; IDEA #638 = braço de ablação ausente; #639 = E1/Kani sem toolchain;
+  #640 = o carimbo media a imagem errada, já fechado nesta sessão; #641 = gerador
+  de fixtures fora do repo, movido para `tools/`).
+- **Commits publicados** (`4ea43987`, `2a8f95b2`, `50ec9eb6` + correções de doc),
+  **zero arquivo Rust tocado**; `HEAD == origin/main` conferido com `git ls-remote`.
 
 ## [1.9.99-s446] - 2026-10-04 - Lock de escrita do forum + veredito F1.5 com exit code
 

@@ -46,8 +46,9 @@
 #     o comentario em run-f15.ps1:41 promete restore que o codigo NAO executa
 #     => o criterio de aceite do HUMAN-0009 nao fecha (IDEA #638). E1/Kani sem
 #     toolchain neste host. F1 (writer do wild-write) segue sem dono (#632/633).
-#   Git: 2 commits publicados (4ea43987 watcher, 2a8f95b2 carimbo §14);
-#     HEAD = origin/main = 2a8f95b2 (git ls-remote). Zero .rs nos 2 commits.
+#     Git: commits publicados nesta frente = 4ea43987 (watcher), 2a8f95b2 (§14),
+#     50ec9eb6 (§14b + fechamento + runbook), 556c8c64 (correcoes de doc);
+#     HEAD = origin/main conferido com git ls-remote. Zero .rs em nenhum deles.
 #     Working tree suja de 4 frentes (36 modificados + 15 untracked) — mapa de
 #     donos em RESUME.md §4; nunca `git add -A`.
 #   UNKNOWN: cargo check --release DESTA arvore (o 0-erros e da s446, antes das

@@ -19,9 +19,9 @@
 - [x] Encerramento: watcher parado (sem lock órfão), launcher + QEMU parados, log do boot cortado preservado
 - [x] Runbook de retomada: `docs/memory/RESUME.md` + ponteiros em STATE/SESSION_INDEX/TODO/CHANGELOG
 - [ ] **Braço de ablação (§7)** — `-PreparePristine` só faz snapshot; restaurar o disco antes de cada run e registrar `restore=1|0` no sidecar (IDEA #638)
-- [ ] `TICKV backend=file` no QEMU + os 2 boots com veredito **com sidecar** — dono **AION** (AION-0009/0010); não tocar em `tickv.rs` sem o dono
+- [ ] `TICKV backend=file` no QEMU + os 2 boots com veredito **com sidecar e identidade §14b valendo** — dono **AION** (AION-0009/0010); não tocar em `tickv.rs` sem o dono
 - [ ] Perguntar ao maintainer se o loop do OPMUSE (PID 9908) continua — é a única coisa que ainda escreve no fórum encerrado
-- [ ] Sync n-sgdb de SESSION_447 + IDEA #638/#639 (servidor vivo, sem tool MCP nesta sessão)
+- [ ] Sync n-sgdb de SESSION_447 + IDEA #638/#639/#640/#641 (servidor vivo, sem tool MCP nesta sessão)
 - [ ] `cargo check --release` **desta** árvore (o 0-erros é da s446, antes das 36 alterações alheias)
 
 ## 🟡 s445 — Forum CURAIX: recover no wipe + reload pos-Tickv (F1.5 aberto)

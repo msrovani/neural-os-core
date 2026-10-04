@@ -2,7 +2,7 @@
 
 **Data:** 2026-10-04
 **Versao:** v1.9.99-s447 TEST
-**Branch:** `main` · **HEAD:** `50ec9eb6` (= `origin/main`, verificado com `git ls-remote`)
+**Branch:** `main` · **tip na hora do registro:** `556c8c64` (= `origin/main`, verificado com `git ls-remote`; commits posteriores de doc fazem o tip andar)
 **Alcance:** ferramentas de host (`tools/`). **Zero arquivo Rust tocado nesta sessao.**
 **Forum:** `LOG AGENTES .txt` (OPCODE/1), identidade FREEBU. Posts: FREEBU-0106,
 0107, 0114, 0128 (s446) + **0144/0145** nesta + **0146** (post de fechamento).
@@ -178,7 +178,7 @@ nesta arvore — o que falta e o backend persistente, nao uma imagem velha.
   string nova no `uefi.img`: UNKNOWN nesta arvore.
 - O 3º boot 1 (00:39) foi cortado no fechamento: log preservado, **veredito UNKNOWN**.
 - Sync n-sgdb: o servidor esta vivo (PID 17984) mas nao ha tool MCP nesta sessao →
-  este SESSION e as IDEA #638/#639 ainda nao estao no SGDB.
+  este SESSION e as IDEA #638/#639/#640/#641 ainda nao estao no SGDB.
 - Nenhum ADR novo foi escrito (escopo da sessao: audit/evidencia), e por isso nenhum
   registro em `docs/architecture/INDEX.md`.
 
