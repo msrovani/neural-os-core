@@ -130,6 +130,38 @@ function Invoke-Boot($path, $boot) {
         if (($ident -join "`n") -notmatch "probe_na_imagem=True") {
             $fail += "FALSIFIED boot$boot : a imagem bootada NAO contem o literal da fonte (probe_na_imagem!=True) - veredito sobre artefato stale"
         }
+        # --- [14b] o artefato de AGORA tem de SER o artefato que bootou -------
+        # O probe acima e lido NO PARSE: se a imagem foi reconstruida depois do
+        # boot, ele mede a imagem nova e "prova" o codigo novo num log antigo.
+        # O sidecar guarda bytes+mtime+sha do instante do boot; se o arquivo
+        # divergir agora, o veredito e sobre uma imagem que nao bootou.
+        $stamp = @{}
+        foreach ($l in $ident) { if ($l -match '^([^=]+)=(.*)$') { $stamp[$matches[1]] = $matches[2] } }
+        $uefiPath = $stamp["uefi"]
+        if (-not $uefiPath -or -not (Test-Path -LiteralPath $uefiPath)) {
+            $fail += "FALSIFIED boot$boot : a imagem do sidecar nao existe mais ($uefiPath) - veredito sobre artefato ausente"
+        } else {
+            $it = Get-Item -LiteralPath $uefiPath
+            if ($stamp["uefi_bytes"] -ne ("{0}" -f $it.Length)) {
+                $fail += "FALSIFIED boot$boot : a imagem mudou DEPOIS do boot (bytes sidecar=$($stamp['uefi_bytes']) agora=$($it.Length)) - o probe mediu a imagem nova"
+            }
+            $epochNow = [int64](([int64]$it.LastWriteTimeUtc.Ticks - 621355968000000000) / 10000000)
+            if ($stamp["uefi_epoch"]) {
+                # epoch inteiro: comparacao exata, sem a perda de 1 ULP da string
+                if ([int64]$stamp["uefi_epoch"] -ne $epochNow) {
+                    $fail += "FALSIFIED boot$boot : a imagem mudou DEPOIS do boot (epoch sidecar=$($stamp['uefi_epoch']) agora=$epochNow)"
+                }
+            } elseif ($stamp["uefi_mtime"] -and $stamp["uefi_mtime"] -ne $it.LastWriteTimeUtc.ToString("o")) {
+                # sidecar antigo, sem epoch: compara a string (fail-closed se divergir)
+                $fail += "FALSIFIED boot$boot : a imagem mudou DEPOIS do boot (mtime sidecar=$($stamp['uefi_mtime']) agora=$($it.LastWriteTimeUtc.ToString('o')))"
+            }
+            if ($stamp["uefi_sha"]) {
+                $sha = (Get-FileHash -LiteralPath $uefiPath -Algorithm SHA256).Hash.Substring(0, 16)
+                if ($stamp["uefi_sha"] -ne $sha) {
+                    $fail += "FALSIFIED boot$boot : sha da imagem divergente (sidecar=$($stamp['uefi_sha']) agora=$sha) - conteudo diferente com o mesmo tamanho/mtime"
+                }
+            }
+        }
     } else {
         $fail += "FALSIFIED boot$boot : sem identidade do artefato bootado (sidecar $imgid ausente) - secao 14 nao permite concluir sobre imagem desconhecida"
     }

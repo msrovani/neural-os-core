@@ -32,6 +32,7 @@ CASES = [
     # ---- secao 14: identidade do artefato bootado (fail-closed) ----
     ("b1_imgid_stale", 1, 1, "FALSIFIED", "NAO contem o literal da fonte"),
     ("b1_sem_imgid", 1, 1, "FALSIFIED", "sem identidade do artefato bootado"),
+    ("b1_imgid_mudou", 1, 1, "FALSIFIED", "mudou DEPOIS do boot"),
     ("b1_unknown_true", 1, 1, "FALSIFIED", "UNKNOWN"),
     ("b1_forja_lab", 1, 1, "FALSIFIED", "escalate/FORJA"),
     ("b1_wrong_name", 1, 1, "FALSIFIED", "act=gen"),
@@ -60,7 +61,9 @@ def run(args):
 
 
 def main():
-    subprocess.run([sys.executable, os.path.join(ROOT, "target", "gen_f15_fixtures.py")],
+    # O gerador mora em tools/ (versionado): em target/ um `git clean` apagava a
+    # suite inteira, porque o runner chamava um arquivo que nao estava no repo.
+    subprocess.run([sys.executable, os.path.join(ROOT, "tools", "gen_f15_fixtures.py")],
                    cwd=ROOT, check=True, capture_output=True)
     bad = 0
     for name, boot, want_exit, want_tok, want_sub in CASES:

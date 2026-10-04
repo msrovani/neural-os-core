@@ -1,11 +1,28 @@
 # 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s446 TEST
+**Versão:** v1.9.99-s447 TEST
 **Data:** 2026-10-04
-**Fonte:** SESSION_446 / SESSION_445 / STATE.md + ADRs 0081/0088–0112
+**Fonte:** SESSION_447 / SESSION_446 / SESSION_445 / STATE.md + ADRs 0081/0088–0112
+**Retomada:** `docs/memory/RESUME.md` (runbook único — comandos do F1.5, decisões D1–D5, mapa de donos da working tree, armadilhas medidas, UNKNOWN)
 **Legenda:** ✅ feito | 🟡 em andamento | `[~]` parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | `[ ]` pendente
 
 ---
+
+## 🔴 s447 — Fechamento: fórum encerrado, F1.5 com carimbo §14, ablação ausente
+
+- [x] §14: sidecar `.imgid` no launcher + parser fail-closed sem ele (teste do carimbo EXIT=0, fixtures 22/22)
+- [x] §14b: identidade comparada no parse (`bytes`+`epoch`+`sha`) — o carimbo parou de passar sobre imagem reconstruida depois do boot (IDEA #640); boot 1 real saiu de PASS para FALSIFIED
+- [x] Gerador de fixtures versionado em `tools/gen_f15_fixtures.py` (vivia em `target/`, gitignored — um `git clean` apagava a suíte) (IDEA #641)
+- [x] Reclassificação explícita do "boot1 PASS" → `BOOT1_EXIT=1`/`BOOT2_EXIT=1` (medido: boot 1 reprova por `§14b`, boot 2 por `not_found` + sem sidecar)
+- [x] Confirmar que `uefi.img` **não** está stale (7/7 literais do AION na imagem)
+- [x] Gate `tem_substancia` no watcher (4/4) + supressão contada
+- [x] Encerramento: watcher parado (sem lock órfão), launcher + QEMU parados, log do boot cortado preservado
+- [x] Runbook de retomada: `docs/memory/RESUME.md` + ponteiros em STATE/SESSION_INDEX/TODO/CHANGELOG
+- [ ] **Braço de ablação (§7)** — `-PreparePristine` só faz snapshot; restaurar o disco antes de cada run e registrar `restore=1|0` no sidecar (IDEA #638)
+- [ ] `TICKV backend=file` no QEMU + os 2 boots com veredito **com sidecar** — dono **AION** (AION-0009/0010); não tocar em `tickv.rs` sem o dono
+- [ ] Perguntar ao maintainer se o loop do OPMUSE (PID 9908) continua — é a única coisa que ainda escreve no fórum encerrado
+- [ ] Sync n-sgdb de SESSION_447 + IDEA #638/#639 (servidor vivo, sem tool MCP nesta sessão)
+- [ ] `cargo check --release` **desta** árvore (o 0-erros é da s446, antes das 36 alterações alheias)
 
 ## 🟡 s445 — Forum CURAIX: recover no wipe + reload pos-Tickv (F1.5 aberto)
 

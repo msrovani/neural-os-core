@@ -1,5 +1,57 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s447] - 2026-10-04 - Carimbo do artefato bootado (§14) + watcher com critério de substância + fórum encerrado
+
+- **§14 — o veredito de runtime só vale se o artefato bootado for identificável**:
+  `run-f15.ps1` grava um sidecar `<log>.imgid` (bytes + mtime da `uefi.img` e do
+  disco, mais um **probe**: o literal `SKILL_LAB` procurado no arquivo-fonte **e**
+  dentro da imagem) e `f15_parse.ps1` passa a **exigir** esse sidecar — ausente, ou
+  `probe_na_imagem!=True` → **FALSIFIED** (imagem desconhecida / imagem stale).
+  Prova faltando deixa de virar `0` e vira reprovação. Medido: teste do carimbo
+  **EXIT=0** (`uefi 134217728 B`, `disk 3221225472 B`, `probe_na_imagem=True`),
+  fixtures do veredito **22/22** exit 0, `cargo build --release -p boot` 0 erros
+  (rebuild real 2m40s).
+  Bug real encontrado pelo teste: `"k=" + (expr)` dentro de um **array literal** do
+  PowerShell parte o campo em **duas linhas** (o `+` liga diferente da vírgula) →
+  identidade truncada; corrigido com `("k={0}" -f $v)`.
+  **§14b (a própria §14 media a imagem errada):** `probe_na_imagem` era lido **no
+  parse** — se a imagem fosse reconstruída depois do boot, a checagem provava o
+  código novo num log antigo (medido: sidecar dizia mtime 03:36:17Z, o arquivo era
+  03:40:00Z). O sidecar passou a gravar `uefi_epoch` (segundos inteiros) e
+  `uefi_sha` (SHA256), e o parser recalcula os três contra o arquivo atual →
+  reprova com `a imagem mudou DEPOIS do boot`. Bug de precisão pego pela suíte: a
+  string ISO de mtime perde 1 ULP entre Python e .NET e reprovava casos legítimos →
+  epoch inteiro.
+  **Durabilidade da suíte:** o gerador de fixtures vivia em `target/`
+  (gitignored) — um `git clean` apagava a suíte inteira. Movido para
+  `tools/gen_f15_fixtures.py` (versionado), com imagem de identidade determinística
+  e o caso negativo `b1_imgid_mudou`.
+  **Regressão declarada** (veredito final medido nos logs reais): boot1 **EXIT=1**
+  (`a imagem mudou DEPOIS do boot`), boot2 **EXIT=1**
+  (`escalate=reuse reason=not_found` + sem sidecar), `-Compare` **EXIT=1** — o
+  "boot1 PASS" da s446 fica **reclassificado** (a evidência de comportamento
+  continua no arquivo; o veredito não se sustenta).
+  Do outro lado da mesma regra: o **conteúdo** da `uefi.img` não está stale (7/7
+  literais do código do AION presentes; o único "ausente" era um comentário).
+- **Watcher do fórum só publica digest com substância**: `tem_substancia` (puro,
+  4/4) mantém no log só ciclos com mensagem de verdade; ciclo só com
+  heartbeat/poll fica local e a supressão é **contada** (`digest_suprimido=N`).
+  Medido antes: 160 de 541 mensagens (30%) eram telemetria, e meu digest **nomeava o
+  OPMUSE**, que é a string que o poll dele procura — dois loops se alimentando.
+- **Fórum encerrado** (decisão do maintainer): watcher **parado** (PID 17680, sem
+  lock órfão), launcher F1.5 (23068) e QEMU filho (25484) **parados** com o log do
+  boot cortado preservado (`logs/f15_boot1.orphan_cut.txt`, veredito UNKNOWN).
+  Censo final: 577 mensagens. Loop do OPMUSE (PID 9908) deixado vivo por decisão do
+  maintainer — e ele **não se auto-encerra**, porque o corpo do poll contém a própria
+  string que ele procura.
+- **Retomada registrada**: novo `docs/memory/RESUME.md` (runbook único: decisões D1–D5
+  do maintainer, comandos exatos do F1.5, mapa de donos dos 36 modificados + 15
+  untracked de outras frentes, 11 armadilhas medidas, lista de UNKNOWN). Bloqueio do
+  P0 segue com o **AION** (`try_mount_from_ckpt` reconstrói o índice só do último
+  checkpoint; IDEA #638 = braço de ablação ausente; #639 = E1/Kani sem toolchain).
+- **2 commits publicados** (`4ea43987`, `2a8f95b2`), **zero arquivo Rust tocado**,
+  `HEAD == origin/main == 2a8f95b2`.
+
 ## [1.9.99-s446] - 2026-10-04 - Lock de escrita do forum + veredito F1.5 com exit code
 
 - **Lock de escrita COMPARTILHADO do forum**: novo `tools/forum_lock.py` (lock ao

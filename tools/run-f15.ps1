@@ -8,6 +8,8 @@
 # exit 1 no FALSIFIED). Este launcher nao tira veredito: ele so entrega log + status.
 #   powershell -File tools\run-f15.ps1 -Boot 1 -TimeoutSec 900
 #   powershell -File tools\f15_parse.ps1 -Log logs\f15_boot1.txt -Boot 1
+#   powershell -File tools\f15_parse.ps1 -Compare "logs\f15_boot1.txt,logs\f15_boot2.txt"
+# (o -Compare e SOZINHO: um unico argumento com virgula, e sem -Log)
 param(
     [int]$Boot = 1,
     [int]$Cores = 4,
@@ -69,6 +71,13 @@ $imgid = @(
     "uefi=$Uefi"
     ("uefi_bytes={0}" -f (Get-Item $Uefi).Length)
     ("uefi_mtime={0}" -f (Get-Item $Uefi).LastWriteTimeUtc.ToString("o"))
+    # epoch em SEGUNDOS INTEIROS: a string ISO perde 1 ULP entre o PowerShell e o
+    # Python e reprovava casos legitimos (medido: ...651Z vs ...652Z).
+    ("uefi_epoch={0}" -f ([int64](([int64](Get-Item $Uefi).LastWriteTimeUtc.Ticks - 621355968000000000) / 10000000)))
+    # sha dos 16 primeiros hex: o parser compara com o arquivo atual; sem isso,
+    # "probe_na_imagem=True" lido no parse prova a imagem de AGORA, nao a que
+    # bootou (medido s447: sidecar dizia mtime 00:36, o arquivo era de 00:40).
+    ("uefi_sha={0}" -f (Get-FileHash -LiteralPath $Uefi -Algorithm SHA256).Hash.Substring(0, 16))
     "disk=$Disk"
     ("disk_bytes={0}" -f (Get-Item $Disk).Length)
     ("disk_mtime={0}" -f (Get-Item $Disk).LastWriteTimeUtc.ToString("o"))

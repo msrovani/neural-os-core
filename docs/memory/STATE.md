@@ -1,3 +1,60 @@
+# STATE - neural-os-core v1.9.99-s447 TEST - forum ENCERRADO; F1.5 = carimbo de artefato (§14) + ablacao ausente
+
+#   [s447] FORO ENCERRADO (decisao do maintainer; agentes parando). Funcao do
+#     FREEBU = memoria/harness/QEMU/runtime (D5/HUMAN-0005). Retomada completa
+#     em docs/memory/RESUME.md (unico ponto de entrada; este bloco e o resumo).
+#   SECAO 14 (carimbo do artefato bootado): run-f15.ps1 grava sidecar
+#     <log>.imgid (bytes/mtime de uefi.img + disco + probe do literal
+#     SKILL_LAB na FONTE e na IMAGEM); f15_parse.ps1 EXIGE o sidecar — ausente
+#     ou probe_na_imagem!=True = FALSIFIED (prova faltando nao e zero).
+#     Medido: test do carimbo EXIT=0 (uefi 134217728 B, disk 3221225472 B,
+#     probe_na_imagem=True); suite run_f15_fixtures 22/22 exit 0; build
+#     -p boot com rebuild forcado 2m40s = 0 erros. Zero .rs tocado.
+#     REGRESSAO DECLARADA (veredito final medido nos logs reais): boot1 EXIT=1
+#     (`a imagem mudou DEPOIS do boot` — sidecar diz mtime 03:36:17Z, o arquivo
+#     era 03:40:00Z), boot2 EXIT=1 (`escalate=reuse reason=not_found` + sem
+#     sidecar), -Compare EXIT=1. O "boot1 PASS" da s446 esta RECLASSIFICADO e o
+#     PASS intermediario que o §14 dava tambem: a evidencia de comportamento
+#     (act=gen + run result=52) continua no log, o veredito nao se sustenta.
+#     Confirmado do outro lado: uefi.img NAO esta stale no conteudo (7/7 literais
+#     do codigo do AION dentro da imagem; o "ausente" era comentario).
+#   SECAO 14b (achado no proprio dia, ja fechado): o probe era lido NO PARSE, ou
+#     seja, se a imagem fosse reconstruida depois do boot ele provava o codigo
+#     novo num log antigo. Sidecar agora grava uefi_epoch (segundos inteiros) e
+#     uefi_sha (16 hex de SHA256); o parser recalcula os tres contra o arquivo
+#     atual e reprova se divergir. Bug de precisao pego pela suite: a string ISO
+#     de mtime perde 1 ULP entre Python e .NET (...651Z vs ...652Z) e reprovava
+#     casos legitimos → epoch inteiro (Ticks - 621355968000000000)/10000000.
+#     DURABILIDADE: run_f15_fixtures.py chamava target/gen_f15_fixtures.py,
+#     GITIGNORED — um git clean apagava o gerador e a suite inteira. Movido para
+#     tools/gen_f15_fixtures.py (versionado), com imagem de identidade
+#     deterministica e o caso negativo b1_imgid_mudou.
+#   Watcher do forum PARADO (PID 17680) no fechamento; religar:
+#     `python -u tools/forum_watch.py --watch 480`. Gate tem_substancia (4/4):
+#     digest so com substancia, supressao CONTADA (digest_suprimido=N).
+#     Meu digest nomeava o OPMUSE e o poll do OPMUSE conta mencao pelo nome
+#     dele: eu alimentava o poll que me notificava. OPMUSE tem self-feed
+#     (o corpo do poll contem "OPMUSE") e NAO se auto-encerra.
+#   Processos do lab mortos no fechamento: launcher 23068 + QEMU 25484 (log do
+#     boot cortado em logs/f15_boot1.orphan_cut.txt, 2954 linhas, veredito
+#     UNKNOWN). Lock do forum SEM orfao (verificado).
+#   F1.5 ABERTO, dono AION: TICKV backend=file. Causa isolada (AION-0009):
+#     try_mount_from_ckpt (tickv.rs:397) reconstroi indice so do ultimo ckpt e
+#     nunca varre a cauda (append final boot1=74752 vs mount boot2=53760).
+#     AION-0010 = P0 com falsificador, em review no ORACLE. NAO tocar em tickv.
+#   FALTA no harness: braco de ABLACAO (§7). -PreparePristine so faz snapshot;
+#     o comentario em run-f15.ps1:41 promete restore que o codigo NAO executa
+#     => o criterio de aceite do HUMAN-0009 nao fecha (IDEA #638). E1/Kani sem
+#     toolchain neste host. F1 (writer do wild-write) segue sem dono (#632/633).
+#   Git: 2 commits publicados (4ea43987 watcher, 2a8f95b2 carimbo §14);
+#     HEAD = origin/main = 2a8f95b2 (git ls-remote). Zero .rs nos 2 commits.
+#     Working tree suja de 4 frentes (36 modificados + 15 untracked) — mapa de
+#     donos em RESUME.md §4; nunca `git add -A`.
+#   UNKNOWN: cargo check --release DESTA arvore (o 0-erros e da s446, antes das
+#     36 alteracoes alheias); testes de skill_lab; serial QEMU; TICKV
+#     backend=file; [RECOVER] no BOOT.LOG; sync n-sgdb (sem tool MCP aqui).
+#   Detalhe: docs/memory/SESSION_447.md
+
 # STATE - neural-os-core v1.9.99-s445 TEST - forum CURAIX: recover_count no wipe + reload pos-Tickv; F1.5 aberto
 
 #   [s445] Header do ramlog = 24 B. recover_count u32 no offset 20, mesmo layout
