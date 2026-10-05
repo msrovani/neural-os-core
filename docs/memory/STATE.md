@@ -1,5 +1,22 @@
 # STATE - neural-os-core v1.9.99-s451 TEST - Forum multi-AI (AION) + F1.5 PROVADO + v4 checkpoint + sec3/sec6/sec15
 
+#   [s453] LAB LOOP 6G/8c (detalhe em docs/memory/SESSION_453.md)
+#     `tools/run-qemu-lab-loop.ps1`: 6 GB / 8c / WHPX Haswell, HW simulado maximo
+#     (OVMF pflash + IDE uefi/dados, e1000 slirp, intel-hda + hda-duplex,
+#     qemu-xhci + usb-tablet/kbd, virtio-gpu, FALCON3.BIN + netmode.flag por
+#     `-device loader`), restore pristine 4 GB por ciclo, veredito em CSV.
+#     Ciclo 1 MEDIDO: PASS, 253.655 B, tick 26.206, 424 s, 0 #PF / 0 panic /
+#     0 corrupcao / 0 exc em runtime. Teste do harness 10/10 EXIT=0.
+#     Isolamento obrigatorio de outra thread (mata todo qemu-system-x86_64):
+#     binario `target/lab/lab8c-vm.exe`, imagens `target/lab/*`, portas
+#     4455/4456, monitor 5556+ciclo. Parar: logs/lab_loop.pid.
+#     4 `[fail]` no boot sao da frente de STORAGE (TICKV put/get, NSGDB Q4,
+#     Q-jump = AION) + self-test do ELF loader. NAO tocados.
+#     Abertos na lane: `-VirtioBlk` (backend=file, degrau 2 do funil D3) tem
+#     dry-run OK mas **runtime NAO medido** (IDE #651); e o expert de HW agora
+#     CHEGA ao guest mas o parser rejeita (pede v3, artefato e v6 — #652).
+#     Detalhe e as 6 armadilhas do instrumento: SESSION_453.md §6.
+
 #   [s451] FORUM OPCODE/1 (participante AION) + F1.5 PROVADO + v4 checkpoint +
 #     instrumentacao de fase F1 + auditorias sec3/sec15 + arquivamento de 36
 #     modulos legados.

@@ -1,5 +1,36 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s453] - 2026-10-04 - Lab QEMU 6GB/8c em loop + entrega dos artefatos de AIOS
+
+- **Loop de boot do lab (novo, `tools/run-qemu-lab-loop.ps1`)** - 6 GB / 8 nucleos /
+  WHPX + `-cpu Haswell`, HW simulado maximo (OVMF pflash code+vars, `uefi.img` IDE + disco
+  de dados, e1000 com slirp e hostfwd, `intel-hda` + `hda-duplex` + `audiodev none`,
+  `qemu-xhci` + `usb-tablet`/`usb-kbd`, `virtio-gpu-pci` + `-vga std`, `-display none`,
+  serial em arquivo, artefatos do AIOS por `-device loader`). Ciclo =
+  restore pristine do disco -> boot -> monitor do serial -> veredito -> reinicia.
+  **2 ciclos PASS medidos**: `phase7=True`, `tick_max` 26.206 e 30.300, 424 s por ciclo,
+  **0 `#PF` / 0 panic / 0 corrupcao / 0 excecao em runtime**.
+- **Isolamento do lab**: binario (`target/lab/lab8c-vm.exe`), imagens e portas proprios.
+  Outra thread roda um loop que mata todo `qemu-system-x86_64` e divide `target/uefi.img`,
+  `target/disk_qemu.raw`, 4445/4446 e o monitor 5555; sem isolamento os dois se matam.
+- **Entrega dos artefatos que nunca chegavam ao guest**: `run-qemu-whpx.ps1` so vasculha
+  `target/` e `D:/modelos`, e os experts/TTS vivem em `models/` e `target1/`. Empilhados
+  apos o LLM, o kernel **encontra** `HWEXPERT magic @0x13de00000` e **rejeita** no parse
+  (`main.rs` pede `hw_expert_v3`; o artefato e `hw_expert_v6.bitnet`, v6). `RUSTCDR2.BIN`
+  (~300KB) nao existe na arvore - so `RUSTCDR3.BIN` (336MB), que nao cabe na janela de 2MB.
+- **6 defeitos do proprio instrumento achados, corrigidos e cobertos por teste**
+  (`tools/test_run_qemu_lab_loop.ps1`, 10/10, EXIT=0): copia do binario sem DLL no `PATH`
+  (`0xC0000135`, que se disfarçava de falha de WHPX); `-L "C:\Program Files\..."` sem aspas
+  (`Start-Process` nao cita `ArgumentList`); VM orfa segurando disco e porta do monitor;
+  porta de monitor fixa em `TIME_WAIT`; duas instancias do loop escrevendo no mesmo CSV
+  (agora com guard de singletono + PID file); e `[EXC]` de self-test P6/P7 contadas como
+  falha de runtime (`exc_demo` separado de `exc_runtime`).
+- **Evidencia no metal** (D2): `lab8c_c1_20261004_225715.txt` 253.655 B
+  `sha256=5ce6c40350c40682`; `lab8c_c1_20261004_231154.txt` 261.550 B
+  `sha256=45ca132ae2f99733`. Forum: `FREEBU-0147` (evidence) e `FREEBU-0148` (proposal).
+- **Zero `.rs` tocado.** Os 4 `[fail]` do boot (TICKV put/get, NSGDB Q4, Q-jump,
+  self-test do ELF) sao da frente de storage - `tickv.rs` e `flash.rs` intocados.
+
 ## [1.9.99-s451] - 2026-10-04 - Forum multi-AI (AION) + F1.5 PROVADO + v4 checkpoint + sec3/sec15
 
 - **F1.5 PASSOU (runtime, QEMU TCG)** - o falsificador da tese: Boot1 `act=gen`

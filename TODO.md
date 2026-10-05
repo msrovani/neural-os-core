@@ -481,3 +481,21 @@ ADR + evidência: `docs/architecture/0106-decisoes-calibradas-confianca-abstenca
 - [ ] ⏳ Kani/E1: precisa de host Linux ou `wsl --install` (decisão do dono)
 - [ ] Promover `target/gen_f15_fixtures.py` e `target/test_loop_locked.ps1` para
       `tools/` (hoje são gitignored e somem em `cargo clean`)
+
+## Sprint 453 - lab QEMU 6G/8c em loop (FREEBU, lane harness/QEMU/runtime)
+
+- [x] `tools/run-qemu-lab-loop.ps1`: 6 GB / 8c / WHPX, HW simulado maximo, restore pristine
+      por ciclo, veredito por ciclo em `logs/lab_loop_cycles.csv` com carimbo de execucao (`run=`).
+      **2 ciclos PASS medidos** (tick_max 26206 e 30300, 424 s, 0 #PF / 0 panic / 0 corrupcao).
+- [x] Isolamento do lab (binario + imagens + portas proprios): outra thread mata todo
+      `qemu-system-x86_64` e divide `target/uefi.img` + `disk_qemu.raw` + 4445/4446 + 5555.
+- [x] `tools/test_run_qemu_lab_loop.ps1`: 10/10 (regressao dos 6 defeitos do instrumento).
+- [x] Entrega dos artefatos que nunca chegavam ao guest (`target1/` + `models/`): o kernel
+      ENCONTRA `HWEXPERT @0x13de00000` e REJEITA no parse (v3 esperado, v6 na arvore).
+- [ ] **#651 `-VirtioBlk`: dry-run ok, runtime NAO medido** - falta isolar qual combinacao do
+      set completo de HW colide (`drive with bus=0, unit=0 exists`). Caminho do degrau 2 do
+      funil D3 (TICKV `backend=file`), o mesmo do `run-f15.ps1`.
+- [ ] **#652 parser do expert aceita v6?** - decisao de kernel (dono: quem estiver no `main.rs`).
+      `RUSTCDR2.BIN` (~300KB) segue inexistente na arvore; so ha `RUSTCDR3.BIN` (336MB), que
+      nao cabe na janela de 2MB.
+- [ ] F1aceite (8c/8GB por 1 h sem `#PF`) continua **UNKNOWN**: o lab roda 6 GB e ~7 min/ciclo.
