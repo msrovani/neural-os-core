@@ -579,9 +579,48 @@ pub fn push_hex_fb(buf: &mut [u8], n: &mut usize, mut v: u64) {
     }
 }
 
+// ── s452 diag: watchpoint de escrita por debug register (DR0/DR7), per-CPU ──
+// O stray heap write (cr2=0x11, wild write no BeiState+0x38) e intermitente e
+// o gdb nao e confiavel sob WHPX. O kernel arma o DR0 no campo; o `#DB`
+// (vector 1) cai em `debug_handler` -> `fatal_exception`, que loga o `ip=`
+// ANTES de parkar — o watchpoint pega o WRITER (o #PF e so a vitima; licao s438).
+static WATCH_ADDR: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+unsafe fn set_dr_watch(addr: u64) {
+    // `addr` = affect_regulator (BeiState+0x38). Layout dos Arc (8 B cada, ordem
+    // do struct): +0x00 cmq, +0x08 bm, +0x10 el, +0x18 cn, +0x20 pc, +0x28 dm,
+    // +0x30 ms, +0x38 ar. Vigia os 4 campos ja vistos como vitima (+0x00,
+    // +0x18 cn, +0x20 pc, +0x38 ar) — 4 slots de DR.
+    let base = addr.wrapping_sub(0x38);
+    let d0 = base.wrapping_add(0x18); // cn
+    let d1 = base.wrapping_add(0x20); // pc
+    let d2 = addr;                    // ar
+    let d3 = base;                    // cmq (inicio do heap/BeiState)
+    core::arch::asm!("mov dr0, {v}", v = in(reg) d0, options(nostack, preserves_flags));
+    core::arch::asm!("mov dr1, {v}", v = in(reg) d1, options(nostack, preserves_flags));
+    core::arch::asm!("mov dr2, {v}", v = in(reg) d2, options(nostack, preserves_flags));
+    core::arch::asm!("mov dr3, {v}", v = in(reg) d3, options(nostack, preserves_flags));
+    // L0..L3=1 | RW=01 (write) | LEN=11 (8 bytes) cada = 0xDDDD0055.
+    core::arch::asm!("mov dr7, {v}", v = in(reg) 0xDDDD0055u64, options(nostack, preserves_flags));
+}
+
+/// Arma o watchpoint NESTA CPU e memoriza o alvo (para os APs).
+pub fn arm_write_watchpoint(addr: u64) {
+    WATCH_ADDR.store(addr, Ordering::Release);
+    unsafe { set_dr_watch(addr); }
+}
+
+/// APs armam o alvo gravado pela BSP (chamar em `ap_entry`).
+pub fn arm_stored_watchpoint() {
+    let a = WATCH_ADDR.load(Ordering::Acquire);
+    if a != 0 {
+        unsafe { set_dr_watch(a); }
+    }
+}
+
 extern "x86-interrupt" fn divide_error_handler(f: InterruptStackFrame) { fatal_exception("#DE", &f, None); }
-extern "x86-interrupt" fn debug_handler(f: InterruptStackFrame) { fatal_exception("#DB", &f, None); }
-extern "x86-interrupt" fn nmi_handler(f: InterruptStackFrame) { fatal_exception("#NMI", &f, None); }
+extern "x86-interrupt" fn debug_handler(f: InterruptStackFrame) { fatal_exception("#DB", &f, None); }extern "x86-interrupt" fn nmi_handler(f: InterruptStackFrame) { fatal_exception("#NMI", &f, None); }
 extern "x86-interrupt" fn breakpoint_handler(_f: InterruptStackFrame) { puts(b"[EXC] #BP Breakpoint\n"); }
 extern "x86-interrupt" fn overflow_handler(f: InterruptStackFrame) { fatal_exception("#OF", &f, None); }
 extern "x86-interrupt" fn bound_range_handler(f: InterruptStackFrame) { fatal_exception("#BR", &f, None); }

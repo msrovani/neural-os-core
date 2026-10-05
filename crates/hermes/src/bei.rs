@@ -220,6 +220,26 @@ impl BeiState {
             static CORRUPT_TICKS: core::sync::atomic::AtomicU32 =
                 core::sync::atomic::AtomicU32::new(0);
             let n = CORRUPT_TICKS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            // s452 diag (one-shot): endereco do BeiState + campos — alimenta o
+            // watchpoint (affect_regulator @ self+0x38; cr2 = ArcInner+0x10).
+            if n == 0 {
+                k_nano::slog_bin!(
+                    "BEI",
+                    "warn",
+                    "corrupt diag self=0x{:x} cmq=0x{:x} bm=0x{:x} el=0x{:x} cn=0x{:x} pc=0x{:x} dm=0x{:x} ms=0x{:x} ar=0x{:x} es=0x{:x} ct=0x{:x}",
+                    self as *const BeiState as usize,
+                    Arc::as_ptr(&self.cell_message_queue) as usize,
+                    Arc::as_ptr(&self.budget_manager) as usize,
+                    Arc::as_ptr(&self.expert_lifecycle) as usize,
+                    Arc::as_ptr(&self.cell_network) as usize,
+                    Arc::as_ptr(&self.plasticity_controller) as usize,
+                    Arc::as_ptr(&self.dynamic_moe) as usize,
+                    Arc::as_ptr(&self.memory_store) as usize,
+                    Arc::as_ptr(&self.affect_regulator) as usize,
+                    Arc::as_ptr(&self.executive_supervisor) as usize,
+                    Arc::as_ptr(&self.current_tick) as usize,
+                );
+            }
             if n % 64 == 0 {
                 k_nano::slog_bin!(
                     "BEI",
@@ -528,6 +548,18 @@ pub fn init_bei() {
 pub fn bei_state() -> Option<&'static BeiState> {
     let ptr = BEI_STATE.load(Ordering::Acquire);
     if ptr.is_null() { None } else { Some(unsafe { &*ptr }) }
+}
+
+/// s452 diag: endereco do campo `affect_regulator` (Arc ptr) do BeiState leakado.
+/// Alvo do watchpoint de escrita (DR0) — o stray write o corrompe e o #PF
+/// resultante tem `cr2 = ArcInner + 0x10 = affect_regulator + 0x10` (0x11).
+pub fn affect_regulator_addr() -> Option<usize> {
+    let ptr = BEI_STATE.load(Ordering::Acquire);
+    if ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { &(*ptr).affect_regulator as *const _ as usize })
+    }
 }
 
 /// BEI tick function (call from scheduler or timer interrupt)

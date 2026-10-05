@@ -1967,6 +1967,14 @@ pub(crate) fn kernel_boot(
     // ADR-0060: Initialize BEI (BitNet Ecosystem Intelligence) — 8 waves
     bei_init::init_bei(); // slog ok|fail inside; OOM → DEGRADED sem panic
 
+    // s452 diag: watchpoint de escrita (DR0) no campo affect_regulator do BeiState.
+    // O #DB loga o RIP do writer do stray heap write (cr2=0x11). DIAGNOSTICO —
+    // remover quando o culpado for capturado/corrigido.
+    if let Some(a) = hermes_crate::bei::affect_regulator_addr() {
+        k_nano::interrupts::arm_write_watchpoint(a as u64);
+        k_nano::slog_bin!("BEI", "warn", "watchpoint DR0 @0x{:x} armed (s452 diag)", a);
+    }
+
     let slab_metrics = { let s = k_nano::slab::SLAB_ALLOCATOR.lock(); (s.metrics().0, s.metrics().1) };
 
     k_nano::slog_bin!("Boot", "ok", "slab metrics: {} {}", slab_metrics.0, slab_metrics.1);

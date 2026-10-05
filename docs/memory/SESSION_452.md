@@ -85,3 +85,46 @@ escreve no heap por cima do `BeiState`/Arc durante/logo após o `a2_proof` — o
 - Serial lossy sob SMP (linhas entrelaçadas `[NESTED]`/`[SILENCE]` no meio) — evidência
   canônica é o BOOT.LOG, não o serial (lição s411).
 - Nada commitado nesta sessão até o commit pós-task.
+
+## 7. Caca do writer — tentativas (s452, continuação)
+
+**gdb watchpoint: não confiável sob WHPX.** 3 variantes: `break` aos 25 s = texto do
+kernel não mapeado; `hbreak` = WHPX não expõe debug registers ("too many"); `break` aos
+60 s (software) = inserido, mas ao hit o guest **resetou** (PC→`0xfffcc3d4`) e gdb não
+leu `BEI_STATE` (hot-path + 4 CPUs + text virando RO). Harness em
+`tools/watch_bei_write.ps1` (pronto, mas não usável aqui).
+
+**Watchpoint NO KERNEL (robusto, sem gdb):** `k_nano::interrupts::arm_write_watchpoint`
+(DR0/DR7 = `0xD0001`, 8 bytes, write) + `arm_stored_watchpoint` (APs em `ap_entry`),
+armado no `main.rs` após `init_bei` no campo `affect_regulator` (`hermes::bei::
+affect_regulator_addr`). O `#DB` cai em `debug_handler` → `fatal_exception`, que loga
+o `ip=` do writer antes de parkar. **Armado e funcionando** (log: `watchpoint DR0
+@0xffffffff811c9c00 armed`) — mas a corrupção é **rara**: 6 runs limpos seguidos.
+
+**2ª vítima (disco fresco, `logs/boot_whpx_20261004_182537.txt`):** crash **durante o
+prefill do `a2_proof`** (`chunk=0/10`) — `#PF cr2=0x18 err=0x0` (READ de ponteiro
+corrompido) → storm → park. RIP `core::sync::atomic::atomic_load::<usize>`; stack
+`MpmcQueue<CellMessage>::len` ← `cortex::cellular::CellNetwork::round_robin`. Ou seja:
+**outra estrutura BEI (early heap)** — mesmo padrão (ponteiro corrompido, cr2 pequeno).
+
+**Conclusão:** o **prefill do LLM (a2_proof) corrompe o heap**; as vítimas são as
+estruturas BEI alocadas no **início do heap** (`BeiState` @ `HEAP_BUFFER`, `CellNetwork`
+logo depois). O `#PF` é sempre a vítima (lição s438) — o writer segue não capturado
+(a 2ª vítima não está em `BeiState+0x38`, então o watchpoint atual não a pega).
+
+**Próximo:** watchpoint num alvo mais largo (o próprio **início do heap**/redzone do
+allocator, ou o `CellNetwork` MPMC) para pegar o writer; ou revisar o path de alocação
+do prefill (`apply_one_layer`/tensor alloc) por overflow. `ponytail:` o diag (DR0 +
+`corrupt diag`) é temporário — reverter quando o culpado for capturado.
+
+**Repro com diag (20:55, `logs/boot_whpx_20261004_205521.txt`):** `a2_proof done
+id=2` → `done id=2 len=1 in_flight=0` → `[BEI] corrupt diag self=0xffffffff811c9c08
+… cn=0x18 pc=0x830 …`. Offsets dos Arc (8 B, ordem do struct, `ar`@+0x38): `cmq`@+0x00,
+`bm`@+0x08, `el`@+0x10, **`cn`@+0x18**, **`pc`@+0x20**, `dm`@+0x28, `ms`@+0x30,
+`ar`@+0x38, `es`@+0x40, `ct`@+0x48. Vítimas desta vez = `cn`/`pc` (+0x18/+0x20);
+`el`/`dm` também suspeitos (`0xffffffffce62e3b8/e3e8`, fora do range `811b…/811c…`).
+O watchpoint (DR0..3 = +0x00/+0x18/+0x20/+0x38) está armado, mas a corrupção é **rara**
+(~1 em 11 runs) — ainda não capturada. **Teardown suspeito:** `finish_job`
+(`logits_recycle`, `heap_aios::verify_job`) roda imediatamente após `done`.
+
+

@@ -100,6 +100,9 @@ pub extern "C" fn ap_entry(_cpu_id: u64) -> ! {
     }
 
     AP_ENTRY_COUNTER.fetch_add(1, Ordering::SeqCst);
+    // s452 diag: arma o watchpoint de escrita (DR0) neste AP, se a BSP ja gravou
+    // o alvo (init_bei roda antes dos APs).
+    crate::interrupts::arm_stored_watchpoint();
     ap_work::ap_idle_loop(cpu_id as usize);
 }
 
