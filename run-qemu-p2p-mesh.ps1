@@ -9,11 +9,13 @@
   OVMF pflash obrigatorio: uefi.img e UEFI-only.
   ASCII puro (PS 5.1).
 .PARAMETER Cores
-  -smp 1|2|4|8 (default 2).
+  -smp 1|2|4|6|8 (default 2).
 .PARAMETER Accel
   whpx|tcg (default tcg). WHPX falha -> cai para TCG.
 .PARAMETER Mem
-  -Mem RAM em GB, ate 8 (default 4). Teto T-047 / SESSION_280: 2x6G estoura host; 4G.
+  -Mem RAM em GB, ate 8 (default 4). s454 medido no host de 15.7 GB: 2x6G cabe
+  no commit limit (18.9 GB livres) mas excede a RAM fisica livre (8.6 GB) -> o
+  host pagina e o tick do guest cai. Teto T-047 / SESSION_280 mantem 4G como default.
 .PARAMETER WithModels
   Liga -device loader (BITNET2B + HWEXPRT*). Default: ligado se nem -NoModels nem -NoDisk.
 .PARAMETER NoModels
@@ -25,7 +27,7 @@
 #>
 
 param(
-    [ValidateSet(1,2,4,8)]
+    [ValidateSet(1,2,4,6,8)]
     [int]$Cores = 2,
 
     [ValidateSet("whpx","tcg")]
@@ -100,12 +102,19 @@ if ($accelChosen -eq "whpx") {
 }
 
 $memStr = "${Mem}G"
-Write-Host "[INFO] Mem=$memStr Cores=$Cores Accel=$accelChosen Models=$useModels Instance=$Instance imgDir=$imgDir" -ForegroundColor Cyan
+# s454: -cpu max sob WHPX expoe APX/MPX que o OVMF do QEMU 11 nao sabe tratar ->
+# #GP em PlatformPei.dll (0x834EEE) em loop, ANTES do Limine: guest nunca boota,
+# serial so com "X64 Exception Type". Bisect de 5 variantes provou que e o -cpu,
+# nao o pflash VARS ausente (Haswell+code-only boota, tick 6514).
+# Mesma politica de run-qemu-whpx.ps1:190 - Haswell estavel + AVX2.
+$cpu = "max"
+if ($accelChosen -eq "whpx") { $cpu = "Haswell" }
+Write-Host "[INFO] Mem=$memStr Cores=$Cores Accel=$accelChosen cpu=$cpu Models=$useModels Instance=$Instance imgDir=$imgDir" -ForegroundColor Cyan
 
 $baseArgs = @(
     "-m", $memStr,
     "-smp", "$Cores",
-    "-cpu", "max",
+    "-cpu", $cpu,
     "-accel", $accelChosen,
     "-drive", "if=pflash,format=raw,file=$ovmf,readonly=on",
     "-drive", "format=raw,file=$uefi,if=ide,index=0",
@@ -123,22 +132,36 @@ $modelDir = Join-Path $Root "target"
 $modelLoaders = @()
 $modelEndAddr = 0x100000000
 if ($useModels) {
-    $loaders = @(
-        @{ file = "BITNET2B.BIN"; addr = 0x100000000 },
-        @{ file = "HWEXPRT.BIN"; addr = 0x129200000 },
-        @{ file = "HWEXPRT4.BIN"; addr = 0x129400000 },
-        @{ file = "hw_expert_v4.bitnet"; addr = 0x129600000 }
-    )
-    foreach ($L in $loaders) {
-        $fp = Join-Path $modelDir $L.file
+    # s454: receita de artefatos provada no lab (s453, 2 ciclos PASS): LLM pinado em
+    # 0x1000_00000 (o kernel procura o modelo por endereco, nao pelo heap) e os
+    # extras empilhados DEPOIS dele, alinhados a 1 MB com folga de 1 MB.
+    # A lista antiga (BITNET2B/HWEXPRT @0x1292_0000) nao existia em target/ e,
+    # quando existia, caia DENTRO da janela do LLM (0x1000_00000..0x13DD_9BAB0) ->
+    # QEMU aborta com "regions overlap" antes de qualquer boot.
+    $llmPath = Join-Path $Root "target\FALCON3.BIN"
+    $llmAddr = [uint64]0x100000000
+    $stack = $llmAddr
+    if (Test-Path $llmPath) {
+        $llmLen = [uint64](Get-Item $llmPath).Length
+        $modelLoaders += @("-device", "loader,file=$llmPath,addr=0x$('{0:X}' -f $llmAddr)")
+        $stack = $llmAddr + [uint64]([math]::Ceiling($llmLen / 0x100000) * 0x100000) + 0x100000
+        Write-Host ("MoE loader: FALCON3.BIN @0x{0:X} size={1} -> extras a partir de 0x{2:X}" -f $llmAddr, $llmLen, $stack) -ForegroundColor Green
+    } else {
+        Write-Host "[AVISO] target\FALCON3.BIN ausente (skip LLM loader)" -ForegroundColor Yellow
+    }
+    $extras = @("target1\ROUTER.BITNET", "models\PIPER_PT_BR.BIN", "models\bpe_vocab.bin", "target1\hw_expert_v6.bitnet")
+    foreach ($rel in $extras) {
+        $fp = Join-Path $Root $rel
         if (Test-Path $fp) {
-            $modelLoaders += @("-device", "loader,file=$fp,addr=0x$('{0:X}' -f $L.addr)")
-            Write-Host "MoE loader: $($L.file) @0x$('{0:X}' -f $L.addr)" -ForegroundColor Green
-            if ($L.addr -ge $modelEndAddr) { $modelEndAddr = $L.addr + 0x200000 }
+            $len = [uint64](Get-Item $fp).Length
+            $modelLoaders += @("-device", "loader,file=$fp,addr=0x$('{0:X}' -f $stack)")
+            Write-Host ("MoE loader: {0} @0x{1:X} size={2}" -f $rel, $stack, $len) -ForegroundColor Green
+            $stack += [uint64]([math]::Ceiling($len / 0x100000) * 0x100000) + 0x100000
         } else {
             Write-Host "[AVISO] modelo ausente (skip): $fp" -ForegroundColor Yellow
         }
     }
+    $modelEndAddr = $stack
     if ($modelLoaders.Count -eq 0) {
         Write-Host "[AVISO] Nenhum modelo loader encontrado; seguindo sem LLM loaders" -ForegroundColor Yellow
         $useModels = $false
@@ -149,7 +172,7 @@ if ($useModels) {
 }
 
 $modelGap = 0x100000
-if (-not $useModels) { $modelEndAddr = 0x100000000 }
+if (-not $useModels) { $modelEndAddr = [uint64]0x100000000 }
 # s402: o kernel le o flag netmode so em CANDIDATES baixas (0x0200_0000 /
 # 0x1640_0000) e exige addr < ram_end. Com guest <= 4G o scan alto nem roda
 # (ram_end <= 0x1_0000_0000 -> User direto). O endereco alto antigo
@@ -226,7 +249,7 @@ if ($disk) { $argsB += @("-drive", "format=raw,file=$disk,if=ide,index=1") }
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  P2P MESH TEST - ADR-0081" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  Accel=$accelChosen smp=$Cores mem=$memStr models=$useModels instance=$Instance" -ForegroundColor Yellow
+Write-Host "  Accel=$accelChosen cpu=$cpu smp=$Cores mem=$memStr models=$useModels instance=$Instance" -ForegroundColor Yellow
 Write-Host "  A=10.0.3.2 listen  B=10.0.3.3 connect  UDP 42069" -ForegroundColor Green
 Write-Host ""
 

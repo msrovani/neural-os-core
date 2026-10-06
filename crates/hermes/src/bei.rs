@@ -226,8 +226,9 @@ impl BeiState {
                 k_nano::slog_bin!(
                     "BEI",
                     "warn",
-                    "corrupt diag self=0x{:x} cmq=0x{:x} bm=0x{:x} el=0x{:x} cn=0x{:x} pc=0x{:x} dm=0x{:x} ms=0x{:x} ar=0x{:x} es=0x{:x} ct=0x{:x}",
+                    "corrupt diag self=0x{:x} pa=0x{:x} cmq=0x{:x} bm=0x{:x} el=0x{:x} cn=0x{:x} pc=0x{:x} dm=0x{:x} ms=0x{:x} ar=0x{:x} es=0x{:x} ct=0x{:x}",
                     self as *const BeiState as usize,
+                    k_nano::memory::page_leaf_phys(self as *const BeiState as u64).unwrap_or(0),
                     Arc::as_ptr(&self.cell_message_queue) as usize,
                     Arc::as_ptr(&self.budget_manager) as usize,
                     Arc::as_ptr(&self.expert_lifecycle) as usize,
@@ -248,6 +249,23 @@ impl BeiState {
                 );
             }
             return;
+        }
+        // s452: detector de REMAP da VA do BeiState (race em map_page_direct).
+        // PA estavel = OK; PA mudou => a VA foi remapeada p/ um frame novo
+        // (nao houve write — por isso o watchpoint de escrita nao dispara).
+        {
+            static BOOT_PA: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+            static CTR: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+            static LOGGED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+            if CTR.fetch_add(1, core::sync::atomic::Ordering::Relaxed) % 512 == 0 {
+                let pa = k_nano::memory::page_leaf_phys(self as *const BeiState as u64).unwrap_or(0);
+                let b = BOOT_PA.load(core::sync::atomic::Ordering::Acquire);
+                if b == 0 {
+                    BOOT_PA.store(pa, core::sync::atomic::Ordering::Release);
+                } else if pa != 0 && pa != b && LOGGED.swap(1, core::sync::atomic::Ordering::AcqRel) == 0 {
+                    k_nano::slog_bin!("BEI", "warn", "REMAP bei pa=0x{:x} != boot 0x{:x} (race map_page_direct?)", pa, b);
+                }
+            }
         }
         let mut tick = self.current_tick.lock();
         *tick += 1;

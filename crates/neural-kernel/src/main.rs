@@ -1972,7 +1972,11 @@ pub(crate) fn kernel_boot(
     // remover quando o culpado for capturado/corrigido.
     if let Some(a) = hermes_crate::bei::affect_regulator_addr() {
         k_nano::interrupts::arm_write_watchpoint(a as u64);
-        k_nano::slog_bin!("BEI", "warn", "watchpoint DR0 @0x{:x} armed (s452 diag)", a);
+        // s452: PA (frame fisico) da VA do BeiState no boot — comparar com o PA
+        // na deteccao da corrupcao. PA diferente => REMAP (race em map_page_direct),
+        // nao um write (o watchpoint de escrita nunca dispara num remap).
+        let pa = k_nano::memory::page_leaf_phys((a - 0x38) as u64).unwrap_or(0);
+        k_nano::slog_bin!("BEI", "warn", "watchpoint DR0 @0x{:x} armed (s452 diag) bei_pa_boot=0x{:x}", a, pa);
     }
 
     let slab_metrics = { let s = k_nano::slab::SLAB_ALLOCATOR.lock(); (s.metrics().0, s.metrics().1) };

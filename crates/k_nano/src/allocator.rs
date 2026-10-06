@@ -1597,7 +1597,22 @@ pub fn resize_heap_to_mb(target_mb: usize) {
     }
 }
 
+/// s452: lock dedicado do walk+set do `map_page_direct` (serializa a criacao de
+/// tabelas de pagina). Ordem: PT_WALK_LOCK -> GLOBAL_ALLOCATOR (via
+/// alloc_pt_frame); os callers soltam GLOBAL_ALLOCATOR antes. Sem ciclo.
+static PT_WALK_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
 unsafe fn map_page_direct(base: VirtAddr, virt: VirtAddr, phys: u64) {
+    // s452: serializa o walk+set. Sem isto, dois cores que veem `!PRESENT`
+    // chamam alloc_pt_frame e um sobrescreve o PDE do outro (frame orfao) -> a
+    // VA do heap inicial (BeiState) e REMAPEADA para um frame novo -> o campo
+    // le lixo (sintoma: cr2 pequeno, ex. 0x11/0x18; watchpoint de escrita nunca
+    // dispara porque nao ha write, ha remap). Callers (grow_bump_auto linha 391,
+    // try_fault_in_heap linha 1724) SOLTAM GLOBAL_ALLOCATOR antes de chamar aqui
+    // -> ordem PT_WALK_LOCK -> GLOBAL_ALLOCATOR (via alloc_pt_frame), sem ciclo.
+    // O walk so toca page tables ja mapeadas (nao re-faulta) e alloc_pt_frame
+    // usa o pool (bitmap em static, nao faulta) -> seguro no handler #PF.
+    let _pt_guard = PT_WALK_LOCK.lock();
     let (l4_frame, _) = x86_64::registers::control::Cr3::read();
     let l4_virt = base + l4_frame.start_address().as_u64();
     let l4_tbl = &mut *(l4_virt.as_mut_ptr::<PageTable>());

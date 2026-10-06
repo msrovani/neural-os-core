@@ -1,5 +1,50 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s455] - 2026-10-05 - MESH 2 instancias 6c/6GB (re-teste pós-fix -cpu Haswell) + monitor 30 min
+
+- **Re-teste pós-fix do `run-qemu-p2p-mesh.ps1`** (SESSION_454): ambas as instâncias
+  bootam até PostRuntime, mesh convergi (peers=1, node_id 2/3, skill broadcast,
+  CRDT v=36, matmul 64x64 ok), estáveis ~27 min. **Zero `.rs`.**
+- **VERIFICADO — o fix resolveu o bloqueio do boot**: `#GP` em PlatformPei.dll sumiu;
+  boot completo SafeHarbor→PostRuntime em ambas.
+- **Achados da janela (logs em `logs/boot_mesh_{a,b}.txt`)**: pf=0, panic=0, silence=0,
+  oom=0, err=0 em ambos; exc=6 (self-test Ring3 demo, conhecido); fail=2 (conhecidos:
+  TICKV RAM + ELF truncado); peers=1 consistente (últimos 5 registros de cada log).
+- **P1 (behavioral, não falha, IDEA #657)**: matmul barrier timeout em T+170/178
+  (pending=5 done=0, ok=false ~8.5s) — provável overhead SMP WHPX 6c; sistema
+  degradou/skipou sem crash e continuou. Não se repetiu na janela de 27 min.
+- **P2 (bug do monitor, não do sistema, IDEA #656)**: parser do `mesh_watch_30min.py`
+  reporta `peers=0` falso-positivo — o canal `[nk][FL]` emite `crdt v=36 peers=0` que
+  o parser pega como último match, mas `MESH_HEALTH peers=1` consistente nos dois logs
+  (prova por grep direto). Falso-positivo de parser, não problema do sistema.
+- **Comparação S454 vs S455**: boot #GP→boot ok; OOM T+6018→não se repetiu; pf 14→0;
+  exc 15/8→6. QEMU vivos ao final (PID 10660/13552).
+- **IDEIAS**: #656 (parser bug peers=0) e #657 (matmul barrier timeout WHPX 6c)
+  registradas no IDEA_BANK, ambas ⏳.
+
+## [1.9.99-s454] - 2026-10-05 - Mesh 2 instancias (6c/6GB) + triage da janela de 30 min
+
+- **`run-qemu-p2p-mesh.ps1` nunca entregava o guest ao kernel** - as 2 instancias morriam
+  em OVMF com `#GP` em `PlatformPei.dll` (RIP 0x834EEE) em loop, serial parado em 6.795 B,
+  sem uma linha do Limine. **Causa = `-cpu max`** (APX/MPX que o OVMF do QEMU 11.1.0 nao
+  trata), provada por bisect de 5 variantes; o pflash VARS ausente era hypothesis plausivel
+  e errada (Haswell+code-only boota). Agora `-cpu Haswell` sob WHPX, `max` so em TCG.
+- **Receita de artefatos do launcher** - a lista antiga (`BITNET2B`/`HWEXPRT` em
+  `0x1292_0000`) nao existe em `target/` e cairia dentro da janela do LLM
+  (`regions overlap`); trocada pela receita provada no lab da s453 (LLM
+  `target/FALCON3.BIN` pinado em `0x100000000` + extras empilhados depois dele).
+- **`tools/mesh_watch_30min.py`** (novo) - monitor read-only das 2 instancias, amostra de
+  30 s, contagem de `pf/panic/silence/oom/exc/err/fail/degraded/timeout` + `peers=`
+  + coluna `qemu_n` (distingue guest travado de QEMU morto por fora) e `free_gb` com
+  ponto decimal.
+- **Achados da janela (logs em `logs/crash_mesh_{a,b}_*.txt`)** - mesh converge
+  (`peers=1`, node_id 2/3, skill broadcast, CRDT publish v=29, matmul 64x64 ok) e depois
+  os 2 nos morrem de OOM no mesmo tick (A `T+6018` `#PF storm`/park, B `OOM/TALC Tier 1`),
+  simbolizado com o `kernel.elf` extraido da propria ESP -> `CellNetwork::sleep_cycle`.
+  Sob WHPX o park vira pause-spin. **matmul mesh e estruturalmente impossivel acima de
+  64.000 B**: o teto e do wire (bitmask `[u8;8]`), nao da RAM que o slog acusa.
+- Forum `FREEBU-0149` (blocker) e `FREEBU-0150` (triage). Zero `.rs`.
+
 ## [1.9.99-s453] - 2026-10-04 - Lab QEMU 6GB/8c em loop + entrega dos artefatos de AIOS
 
 - **Loop de boot do lab (novo, `tools/run-qemu-lab-loop.ps1`)** - 6 GB / 8 nucleos /

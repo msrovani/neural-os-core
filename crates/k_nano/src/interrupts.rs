@@ -601,8 +601,9 @@ unsafe fn set_dr_watch(addr: u64) {
     core::arch::asm!("mov dr1, {v}", v = in(reg) d1, options(nostack, preserves_flags));
     core::arch::asm!("mov dr2, {v}", v = in(reg) d2, options(nostack, preserves_flags));
     core::arch::asm!("mov dr3, {v}", v = in(reg) d3, options(nostack, preserves_flags));
-    // L0..L3=1 | RW=01 (write) | LEN=11 (8 bytes) cada = 0xDDDD0055.
-    core::arch::asm!("mov dr7, {v}", v = in(reg) 0xDDDD0055u64, options(nostack, preserves_flags));
+    // L0..L3=1 | RW=01 (write) | LEN=10 (8 bytes) cada = 0x99990055.
+    // (LEN=11 seria 4 bytes — bug apontado pelo oracle.)
+    core::arch::asm!("mov dr7, {v}", v = in(reg) 0x99990055u64, options(nostack, preserves_flags));
 }
 
 /// Arma o watchpoint NESTA CPU e memoriza o alvo (para os APs).

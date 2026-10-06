@@ -1,5 +1,42 @@
 # STATE - neural-os-core v1.9.99-s451 TEST - Forum multi-AI (AION) + F1.5 PROVADO + v4 checkpoint + sec3/sec6/sec15
 
+#   [s455] MESH 2 instâncias 6c/6GB (re-teste pós-fix -cpu Haswell) + monitor 30 min
+#     (detalhe em docs/memory/SESSION_455.md)
+#     Run pós-S454: ambas bootação até PostRuntime, mesh convergiu (peers=1,
+#     RX/TX ativo, CRDT, skill broadcast, segurança ok) e ficou estável ~27 min.
+#     VERIFICADO: 0 #PF, 0 panic, 0 silence, 0 OOM, 0 [err], exc=6 (self-test
+#     Ring3 demo), fail=2 (conhecidos: TICKV RAM + ELF truncado), peers=1 em
+#     ambos (confirmado por grep direto no log — MESH_HEALTH peers=1 consistente).
+#     P1 (behavioral, não falha): matmul barrier timeout em T+170/178 (pending=5
+#     done=0, ok=false ~8.5s) — provável overhead SMP WHPX 6c; sistema continuou.
+#     P2 (bug do monitor, não do sistema): parser do mesh_watch_30min.py reporta
+#     peers=0 falso-positivo — canal [nk][FL] emite peers=0 que o parser pega
+#     como último match, mas MESH_HEALTH peers=1 (confirmado). IDEA #656.
+#     P3 (IDEA #657): matmul barrier timeout no boot — não se repitiu em 27 min.
+#          Comparação S454 vs S455: boot #GP->boot ok; OOM T+6018->não repetiu;
+#     pf 14->0; exc 15/8->6. QEMU vivos ao final (PID 10660/13552).
+#     PLANO DE CORREÇÕES: docs/plans/plane-correções-mesh-2qemu.md
+#     AÇÕES FERRAMENTA (não kernel): corrigir parser do mesh_watch (IDEA #656);
+#     identificar caminho de shutdown (P1.2 do plano); rodar S455 novamente com
+#     parser corrigido + CSV limpo. Zero .rs tocados.
+#
+#   [s453] LAB LOOP 6G/8c (detalhe em docs/memory/SESSION_453.md)
+#     Run pós-S454: ambas bootação até PostRuntime, mesh convergiu (peers=1,
+#     RX/TX ativo, CRDT, skill broadcast, segurança ok) e ficou estável ~27 min.
+#     VERIFICADO: 0 #PF, 0 panic, 0 silence, 0 OOM, 0 [err], exc=6 (self-test
+#     Ring3 demo), fail=2 (conhecidos: TICKV RAM + ELF truncado), peers=1 em
+#     ambos (confirmado por grep direto no log — MESH_HEALTH peers=1 consistente).
+#     P1 (behavioral, não falha): matmul barrier timeout em T+170/178 (pending=5
+#     done=0, ok=false ~8.5s) — provável overhead SMP WHPX 6c; sistema continuou.
+#     P2 (bug do monitor, não do sistema): parser do mesh_watch_30min.py reporta
+#     peers=0 falso-positivo — canal [nk][FL] emite peers=0 que o parser pega
+#     como último match, mas MESH_HEALTH peers=1 (confirmado). IDEA #656.
+#     P3 (IDEA #657): matmul barrier timeout no boot — não se repitiu em 27 min.
+#     Comparação S454 vs S455: boot #GP->boot ok; OOM T+6018->não repetiu;
+#     pf 14->0; exc 15/8->6. QEMU vivos ao final (PID 10660/13552).
+#     AÇÃO FERRAMENTA (não kernel): corrigir parser do mesh_watch para priorizar
+#     peers do canal P2P/MESH_HEALTH, não do FL. Zero .rs tocados.
+#
 #   [s453] LAB LOOP 6G/8c (detalhe em docs/memory/SESSION_453.md)
 #     `tools/run-qemu-lab-loop.ps1`: 6 GB / 8c / WHPX Haswell, HW simulado maximo
 #     (OVMF pflash + IDE uefi/dados, e1000 slirp, intel-hda + hda-duplex,
