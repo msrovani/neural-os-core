@@ -424,8 +424,10 @@ def populate(path):
         ("LLAMA8B.BIN", find_file("LLAMA8B.BIN") or find_file("LLAMA8B.BITNET")),
         ("RUSTCDR3.BIN", find_file("RUSTCDR3.v6") or find_file("RUSTCDR3.BIN") or find_file("RUSTCDR3.BITNET")),
         ("RERANKER.BIN", find_file("RERANKER.v6") or find_file("RERANKER.BIN") or find_file("RERANKER.BITNET")),
-        ("LEARNER.BIN", (find_falcon3_1b() if "falcon3-1b" in llm else None)
-         or find_file("LEARNER.v6") or find_file("LEARNER.BIN") or find_file("LEARNER.BITNET")),
+        # LEARNER.v6 real tem precedência; Falcon3-1B é só fallback quando não há
+        # arquivo LEARNER (ordem inversa sombreava o modelo real com 544MB errados).
+        ("LEARNER.BIN", find_file("LEARNER.v6") or find_file("LEARNER.BIN") or find_file("LEARNER.BITNET")
+         or (find_falcon3_1b() if "falcon3-1b" in llm else None)),
         ("AGENT.BIN", find_file("AGENT.v6") or find_file("AGENT.BIN") or find_file("AGENT.BITNET")),
         # GOAL3: MicroPython WASM (tools/build_micropython_wasm.py → models/MICROPY.WASM)
         ("MICROPY.WASM", find_file("MICROPY.WASM") or find_file("micropython.wasm")),

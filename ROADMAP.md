@@ -58,6 +58,11 @@
 **Status:** ✅ Concluído (10/10 sub-sprints)
 **Objetivo:** Desacoplamento do monólito bare-metal (v1.0) para ecossistema de anéis lógicos isolados com orquestração IA nativa (WASM + MicroPython sandbox)
 
+### Sprint 106-5: RustPython no_std (Rota Nativa) — OBSOLETO
+- **Status:** ❌ Descartado — RustPython não é no_std-viável (depende de std). Ver SESSION_106_5.md + SPRINT-106-STATUS.md.
+- **Rota real:** MicroPython MVP via WASM (ADR-0059 F6): `tools/build_micropython_wasm.py` → `MICROPY.WASM` no FAT (SESSION_275).
+- **Sprint 106-6:** MicroPython/WASM sandbox ✅ (não confundir S106-5 com S106-6).
+
 ### Sprint 106-1: Estruturar Cargo workspace estrito
 - **Objetivo:** Criar workspace com 5 membros (k_nano, k_ai, cortex, hermes, jarbas)
 - **Status:** ✅ Concluído
@@ -90,22 +95,10 @@
 - **Ações:**
   - Verificar ExpertKind enum (não acessar k_nano)
   - Remover dependência circular Trinity→k_nano
-
-### Sprint 106-5: RustPython no_std (Rota Nativa - Python Bare-Metal)
-- **Objetivo:** Embed RustPython com `#![no_std]`, bridge via `abi_x86_interrupt`
-- **Status:** ✅ Concluído
-- **Ações:**
-  - Criado hermes/src/rustpython_no_std.rs
-  - Embed RustPython com `#![no_std]`
-  - Bridge rust→python via abi_x86_interrupt
-  - Agentes efêmeros Python descartáveis
-
-### Sprint 106-6: MicroPython via WASM (Rota Sandbox)
-- **Objetivo:** Compilar MicroPython para .wasm, sandbox dentro de sandbox
-- **Status:** ✅ Concluído
-- **Ações:**
-  - Compilado MicroPython para .wasm
-  - Hermes: WASM executor com sandbox isolado
+### Sprint 106-5: RustPython no_std (Rota Nativa) — OBSOLETO
+- **Status:** ❌ Descartado — RustPython não é no_std-viável (depende de std). Ver SESSION_106_5.md + SPRINT-106-STATUS.md.
+- **Rota real:** MicroPython MVP via WASM (ADR-0059 F6): `tools/build_micropython_wasm.py` → `MICROPY.WASM` no FAT (SESSION_275).
+- **Sprint 106-6:** MicroPython/WASM sandbox ✅ (não confundir S106-5 com S106-6).
 
 ### Sprint 106-7: Corrigir page faults (ordem de inicialização)
 - **Objetivo:** Inicialização correta: allocator → events → agents
@@ -166,7 +159,7 @@
 | 106-1 | Estruturar workspace estrito | ~100 | ✅ |
 | 106-2 | Renomear crates k_ia→k_ai, jarvis→jarbas | ~200 | ✅ |
 | 106-4 | Corrigir Trinity MoE Router | ~300 | ✅ |
-| 106-5 | RustPython no_std | ~400 | ✅ |
+| 106-5 | RustPython no_std (descartado) | ~400 | ❌ — inválido no_std |  ← S106-5, não confundir com S106-6 |
 | 106-6 | MicroPython/WASM sandbox | ~300 | ✅ |
 | 106-7 | Corrigir page faults | ~200 | ✅ |
 | 106-8 | AIOS API para Python | ~300 | ✅ |
