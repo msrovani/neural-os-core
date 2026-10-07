@@ -88,10 +88,65 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
             "USB",
             "warn",
             "k_hal::usb::hub_msc",
-            "nenhuma porta CCS — stick ausente?"
+            "ccs=0, tentativa hub-first (stick atrás de hub interno?)"
         );
-        fb_usb("USB: nenhuma porta CCS");
-        MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
+        fb_usb("USB: ccs=0, tentativa hub-first");
+        if !msc_budget_ok() {
+            fb_usb("USB: MSC budget abort (ccs=0)");
+            MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
+            return None;
+        }
+        for port in 1..=max_ports {
+            if !msc_budget_ok() {
+                fb_usb("USB: MSC budget abort (hub-first)");
+                MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
+                return None;
+            }
+            if xhci::msc_port_skipped(port) {
+                continue;
+            }
+            match classify_root_port(port, 0) {
+                RootClass::Msc(dev) => {
+                    MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
+                    fb_usb(&alloc::format!(
+                        "USB: MSC OK hub-first root P{} slot={}",
+                        dev.port,
+                        dev.slot
+                    ));
+                    return Some(dev);
+                }
+                RootClass::Hub { slot, mps } => {
+                    if !msc_budget_ok() {
+                        let _ = xhci::host_disable_slot(slot);
+                        MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
+                        return None;
+                    }
+                    let hub_loc = xhci::DevLoc::root(port, 0);
+                    match try_msc_behind_hub(slot, hub_loc, mps) {
+                        Some(dev) => {
+                            MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
+                            fb_usb(&alloc::format!(
+                                "USB: MSC OK hub-first P{} child slot={}",
+                                port,
+                                dev.slot
+                            ));
+                            return Some(dev);
+                        }
+                        None => {
+                            let _ = xhci::host_disable_slot(slot);
+                        }
+                    }
+                }
+                RootClass::Other | RootClass::Fail => {}
+            }
+        }
+        k_nano::slog_hal_home!(
+            "USB",
+            "warn",
+            "k_hal::usb::hub_msc",
+            "hub-first sem MSC — retry deferred"
+        );
+        fb_usb("USB: hub-first sem MSC (retry)");
         return None;
     }
     // SuperSpeed primeiro nas roots; hubs (class 9) tratados em pass 1 abaixo.

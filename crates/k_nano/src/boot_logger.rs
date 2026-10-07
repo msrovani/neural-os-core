@@ -162,7 +162,7 @@ pub fn hub_log_line() -> alloc::string::String {
         if kind == FK_NO_BACKEND {
             let skip = BACKEND_SKIP.load(Ordering::Relaxed);
             return alloc::format!(
-                "fail sem-backend msc={} ata={}",
+                "fail sem-backend msc={} usb_ok={}",
                 crate::globals::USB_MSC.try_lock().map(|g| g.is_some()).unwrap_or(false) as u8,
                 if skip & SKIP_USB == 0 { 1 } else { 0 }
             );
