@@ -16,7 +16,7 @@ pub use bringup::{
     host_ep0_control_in, host_ep0_tr_va, host_mark_hub, host_max_ports, host_port_ccs,
     host_reset_port, host_restore_ep0, host_set_configuration, host_set_msc_port,
     host_ccs_count, host_msc_info, LAST_USB_CC, USB_CMD_TIMEOUTS,
-    msc_port_skipped, parse_msc_config, push_route, register_msc_bringup, DevLoc, MscDevice,
+    msc_port_skipped, parse_msc_config, port_csc_sticky, push_route, register_msc_bringup, DevLoc, MscDevice,
     MscEpInfo,
 };
 pub use hub::{
@@ -540,7 +540,8 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
         return false;
     }
     *XHCI_STATE.lock() = None;
-    clear_msc_port_skips();
+    // M1 DONE_PORTS: failover de HC NUNCA limpa skips — só re-plug (CSC novo)
+    // reabre via clear_msc_port_skips(). Static já nasce 0 no 1º bind.
     let d = cands[index];
     XHCI_LAST_BDF.store(
         ((d.bus as u32) << 8) | ((d.device as u32) << 3) | (d.function as u32),

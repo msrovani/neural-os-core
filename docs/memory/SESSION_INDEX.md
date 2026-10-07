@@ -118,3 +118,4 @@
 | 457 | HW real ccs:0 | s457 | fotos HUD + fix hub-first + usb_ok | usb 16p ccs:0 no msc; storage no dev; BOOT.LOGs zerados; fix hub_msc + label; kernel b870cdfd; retestar no HW |
 | 459 | HW retest WPR | s459 | hub-first TIMEOUT -> reset via protocolo | PP=1 OK; PR frio TIMEOUT PLS=5; protocol_is_ss (Major Rev 3); kernel 433cc607; img 1b3b regen |
 | 460 | Power+oraculo+PRE | s460 | cascata S5/CF9 + veredito oraculo + dump PRE-HCRST | 8042 cego era o hang; S5/CF9/triple/park; HCRST destrutivo 65%; img 1b3b kernel 9c935337 |
+| 461 | Formula+M1 | s461 | oraculo M0-M7 + higiene anti-reset | preservem>resetar; gate CCS/CSC; CSC=bit17; kernel ce471ea5; img 1b3b ok |

@@ -105,6 +105,23 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
             if xhci::msc_port_skipped(port) {
                 continue;
             }
+            // M1 higiene anti-destruição: sem CCS e sem sticky de change (CSC)
+            // a porta nunca teve história elétrica neste boot — reset aqui é
+            // destruição (evidência HW: PORTSC 0x2a0 presa em RxDetect).
+            // CCS=1 ou CSC=1: comportamento idêntico ao anterior.
+            if unsafe { xhci::host_port_ccs(port) }.is_none()
+                && !unsafe { xhci::port_csc_sticky(port) }
+            {
+                k_nano::slog_hal_home!(
+                    "USB",
+                    "warn",
+                    "k_hal::usb::hub_msc",
+                    "skip P{} sem história (sem CCS/CSC) — sem reset",
+                    port
+                );
+                fb_usb(&alloc::format!("USB: skip P{} sem história", port));
+                continue;
+            }
             match classify_root_port(port, 0) {
                 RootClass::Msc(dev) => {
                     MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);

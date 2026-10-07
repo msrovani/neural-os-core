@@ -268,9 +268,23 @@ fn mark_msc_port_skip(port: u8) {
     MSC_SKIP_PORTS.fetch_or(1u32 << port, Ordering::Relaxed);
 }
 
-/// SysInfo/retry: limpa skips p/ nova varredura (stick atrasado / re-plug).
+/// DONE_PORTS (M1): skips persistem entre HCs/retries no mesmo boot — SCSI-fail
+/// ou device não-MSC (câmera/BT) marca done; NUNCA limpa em failover de HC.
+/// Só re-plug físico (CSC novo) reabre a porta. Sem HC bound: no-op.
 pub fn clear_msc_port_skips() {
-    MSC_SKIP_PORTS.store(0, Ordering::Relaxed);
+    let max = match XHCI_STATE.lock().as_ref() {
+        Some(st) => st.max_ports,
+        None => return,
+    };
+    for port in 1..=max {
+        if port == 0 || port > 31 {
+            continue;
+        }
+        // Leitura pura do sticky; NUNCA escreve W1C aqui (só o reset limpa CSC).
+        if unsafe { port_csc_sticky(port) } {
+            MSC_SKIP_PORTS.fetch_and(!(1u32 << port), Ordering::Relaxed);
+        }
+    }
 }
 
 /// SCSI falhou nesta porta — não reincidir no mesmo CCS (webcam/BT).
@@ -1012,7 +1026,7 @@ unsafe fn reset_port(port: u8, speed_hint: u8) -> bool {
             let mut clr = v;
             clr |= if warm { 1 << 19 } else { 1 << 21 };
             w32(st.base, addr - st.base, clr);
-            return ped || reset_change;
+            return ped && !reset_active;
         }
         drop(g);
         core::hint::spin_loop();
@@ -2489,6 +2503,18 @@ pub unsafe fn host_port_ccs(port: u8) -> Option<(u8, u32)> {
     let speed = ((v >> 10) & 0xF) as u8;
     let speed = if speed == 0 { 3 } else { speed };
     Some((speed, v))
+}
+
+/// Sticky de change (CSC, bit 17 do PORTSC xHCI) — leitura PURA, sem W1C.
+/// true = história elétrica nova (plug/unplug desde o último reset, que limpa
+/// os change bits via W1C). Porta vazia `0x2a0` (CCS=0, CSC=0) → false:
+/// NUNCA reseta. (NOTA: CSC no PORTSC xHCI é o bit 17, xHCI §2.2.8; o bit 1
+/// é PED, não CSC — ler bit 1 aqui seria ler "enabled", quebrando o gate.)
+pub unsafe fn port_csc_sticky(port: u8) -> bool {
+    let g = XHCI_STATE.lock();
+    let Some(st) = g.as_ref() else { return false };
+    let Some(addr) = portsc_addr(st, port) else { return false };
+    r32(st.base, addr - st.base) & (1 << 17) != 0
 }
 
 pub unsafe fn host_reset_port(port: u8, speed: u8) -> bool {
