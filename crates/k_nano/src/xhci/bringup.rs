@@ -941,15 +941,22 @@ unsafe fn reset_port(port: u8, speed_hint: u8) -> bool {
     let Some(addr) = portsc_addr(st, port) else { return false };
     let off = addr - st.base;
     let mut v = r32(st.base, off);
+    let portsc_speed = ((v >> 10) & 0xF) as u8;
     let speed = if speed_hint == 0 {
-        ((v >> 10) & 0xF) as u8
+        portsc_speed
     } else {
         speed_hint
     };
     v |= 1 << 9; // Port Power; ignorado por HCs sem PPC.
     // SuperSpeed usa Warm Port Reset (WPR/WRC); PR/PRC é o reset USB2.
     // CAS também exige warm reset para retreinar o link após takeover do UEFI.
-    let warm = speed >= 4 || v & (1 << 24) != 0;
+    // Sem device (CCS=0) o campo speed lê 0 e o PR frio nunca completa em porta
+    // SS presa em RxDetect (evidência HW s459: PORTSC 0x2a0, PLS=5, warm=0).
+    // SS-vs-USB2 decide-se então pelo PROTOCOLO da porta (evidência do HC),
+    // nunca pelo speed do device: warm em protocolo USB3, frio no resto.
+    let proto_ss =
+        speed_hint == 0 && portsc_speed == 0 && protocol_is_ss(st.base, port);
+    let warm = speed >= 4 || v & (1 << 24) != 0 || proto_ss;
     if warm {
         v |= (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21) | (1 << 31);
     } else {
@@ -1050,6 +1057,37 @@ unsafe fn protocol_slot_type(base: u64, port: u8) -> u8 {
         off = if next == 0 { 0 } else { off + next * 4 };
     }
     0
+}
+
+/// Major Revision do Supported Protocol Capability que cobre a porta
+/// (0 = porta fora de qualquer protocolo / walk falhou).
+/// Uso: reset de porta SS sem device — o PORTSC lê speed 0 com CCS=0, mas o
+/// protocolo (evidência do HC, estável) decide WPR vs PR. Espelha o walk de
+/// `protocol_slot_type`; 3 = USB3 (warm), 2 = USB2 (frio, como antes).
+unsafe fn protocol_major_revision(base: u64, port: u8) -> u8 {
+    let hcc1 = r32(base, 0x10);
+    let mut off = (((hcc1 >> 16) & 0xFFFF) as u64) * 4;
+    for _ in 0..64 {
+        if off == 0 {
+            break;
+        }
+        let hdr = r32(base, off);
+        let next = ((hdr >> 8) & 0xFF) as u64;
+        if (hdr & 0xFF) as u8 == 2 {
+            let ports = r32(base, off + 0x08);
+            let first = (ports & 0xFF) as u8;
+            let count = ((ports >> 8) & 0xFF) as u8;
+            if port >= first && port < first.saturating_add(count) {
+                return ((r32(base, off) >> 24) & 0xFF) as u8;
+            }
+        }
+        off = if next == 0 { 0 } else { off + next * 4 };
+    }
+    0
+}
+
+unsafe fn protocol_is_ss(base: u64, port: u8) -> bool {
+    protocol_major_revision(base, port) == 3
 }
 
 unsafe fn cmd_enable_slot(port: u8) -> Option<u8> {
