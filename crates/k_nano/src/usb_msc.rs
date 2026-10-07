@@ -186,15 +186,21 @@ impl UsbMassStorage {
             if scsi_ok {
                 return Some(msc);
             }
+            // M1: INQUIRY + READ_CAPACITY sem resposta = falha de TRANSPORTE
+            // (device enderecou e configurou BOT, mas o SCSI nao respondeu) —
+            // retryable, NUNCA done. DONE so com classe/INQUIRY provando non-MSC.
             crate::slog_nano!(
                 "USB",
                 "warn",
-                "SCSI falhou port={} slot={} — Disable Slot + skip",
+                "retry P{} scsi-transport (slot={} sem resposta) — Disable Slot",
                 msc_dev.port,
                 msc.slot
             );
+            crate::boot_ramlog::append(&alloc::format!(
+                "USB: retry P{} scsi-transport",
+                msc_dev.port
+            ));
             unsafe { xhci::disable_slot(msc.slot) };
-            xhci::mark_msc_port_failed(msc_dev.port);
         }
         crate::slog_nano!("USB", "msc", "SCSI falhou em todas as portas deste HC");
         None

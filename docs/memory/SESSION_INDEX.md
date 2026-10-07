@@ -119,3 +119,4 @@
 | 459 | HW retest WPR | s459 | hub-first TIMEOUT -> reset via protocolo | PP=1 OK; PR frio TIMEOUT PLS=5; protocol_is_ss (Major Rev 3); kernel 433cc607; img 1b3b regen |
 | 460 | Power+oraculo+PRE | s460 | cascata S5/CF9 + veredito oraculo + dump PRE-HCRST | 8042 cego era o hang; S5/CF9/triple/park; HCRST destrutivo 65%; img 1b3b kernel 9c935337 |
 | 461 | Formula+M1 | s461 | oraculo M0-M7 + higiene anti-reset | preservem>resetar; gate CCS/CSC; CSC=bit17; kernel ce471ea5; img 1b3b ok |
+| 462 | Fotos M1+M2M3 | s462 | leitura fotos + pacote companion/CAS/done | RS=0 TBT; ccs3 vivos; twin/CAS/retry; kernel 61698f65; img 1b3b ok |

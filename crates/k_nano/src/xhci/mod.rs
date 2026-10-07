@@ -9,7 +9,8 @@ mod bringup;
 mod hub;
 pub use bringup::{
     bringup_boot_msc, bringup_hid_keyboard, bringup_hid_mouse, bringup_uac, bringup_uvc,
-    clear_msc_port_skips, disable_slot, mark_msc_port_failed, try_deferred_hid_bringup,
+    clear_msc_port_skips, companion_twin, disable_slot, mark_msc_port_done, mark_msc_port_failed,
+    port_has_history, try_deferred_hid_bringup,
     clear_hid_defer_flag, ADDR_FAIL_COUNT,
     address_device_loc, ep0_mps_for_speed, host_address_device, host_configure_msc,
     host_device_class, host_disable_slot, host_enable_slot, host_ep0_class_nodata,

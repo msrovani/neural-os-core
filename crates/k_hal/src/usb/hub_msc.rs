@@ -206,9 +206,9 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
             } => {
                 hubs.push((port, speed, slot, mps));
             }
-            RootClass::Other | RootClass::Fail => {
-                xhci::mark_msc_port_failed(port);
-            }
+            // M1: Other ja marcou done dentro do classify (definitivo);
+            // Fail = transiente, sem mark (retry no proximo ciclo).
+            RootClass::Other | RootClass::Fail => {}
         }
     }
 
@@ -234,7 +234,9 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
             }
             None => {
                 let _ = xhci::host_disable_slot(hub_slot);
-                xhci::mark_msc_port_failed(port);
+                // M1 definitivo: hub totalmente enumerado, sem filho MSC.
+                xhci::mark_msc_port_done(port, "hub-no-msc");
+                fb_usb(&alloc::format!("USB: done P{} hub-no-msc", port));
                 k_nano::slog_hal!(
                     "USB",
                     "warn",
@@ -258,9 +260,57 @@ enum RootClass {
     Fail,
 }
 
+/// M1+M2: wrapper twin-aware. A gemea entra UMA vez, SO se o reset da face
+/// tentada FALHAR e a gemea tiver historia eletrica (CCS=1 ou CSC sticky),
+/// nunca done-stick, sempre com budget. Heuristica 1:1 por ordinal.
 unsafe fn classify_root_port(port: u8, speed: u8) -> RootClass {
+    match classify_root_port_once(port, speed) {
+        RootClass::Fail => {
+            if let Some((twin, ord)) = xhci::companion_twin(port) {
+                if !xhci::msc_port_skipped(twin) && xhci::port_has_history(twin) {
+                    if !msc_budget_ok() {
+                        k_nano::slog_hal!(
+                            "USB",
+                            "warn",
+                            "twin P{}/{} ord={} budget-abort",
+                            port,
+                            twin,
+                            ord
+                        );
+                        fb_usb(&alloc::format!("USB: twin P{}/{} no-budget", port, twin));
+                        return RootClass::Fail;
+                    }
+                    fb_usb(&alloc::format!("USB: twin P{}/{} ord={}", port, twin, ord));
+                    k_nano::slog_hal!(
+                        "USB",
+                        "warn",
+                        "twin P{}/{} ord={} (heuristic) - 1 try",
+                        port,
+                        twin,
+                        ord
+                    );
+                    let ts = xhci::host_port_ccs(twin).map(|(s, _)| s).unwrap_or(0);
+                    return classify_root_port_once(twin, ts);
+                }
+                k_nano::slog_hal!(
+                    "USB",
+                    "warn",
+                    "twin P{}: gemea P{} sem-historia/done - sem try",
+                    port,
+                    twin
+                );
+            }
+            RootClass::Fail
+        }
+        other => other,
+    }
+}
+
+unsafe fn classify_root_port_once(port: u8, speed: u8) -> RootClass {
     if !xhci::host_reset_port(port, speed) {
         k_nano::slog_hal!("USB", "warn", "port {} reset FAIL", port);
+        k_nano::slog_hal!("USB", "warn", "retry P{} reset", port);
+        fb_usb(&alloc::format!("USB: retry P{} reset", port));
         return RootClass::Fail;
     }
     let loc = xhci::DevLoc::root(port, speed);
@@ -268,6 +318,8 @@ unsafe fn classify_root_port(port: u8, speed: u8) -> RootClass {
         Some(s) if s > 0 => s,
         _ => {
             k_nano::slog_hal!("USB", "warn", "Enable Slot FAIL port={}", port);
+            k_nano::slog_hal!("USB", "warn", "retry P{} slot", port);
+            fb_usb(&alloc::format!("USB: retry P{} slot", port));
             return RootClass::Fail;
         }
     };
@@ -281,6 +333,8 @@ unsafe fn classify_root_port(port: u8, speed: u8) -> RootClass {
             port
         );
         let _ = xhci::host_disable_slot(slot);
+        k_nano::slog_hal!("USB", "warn", "retry P{} addr", port);
+        fb_usb(&alloc::format!("USB: retry P{} addr", port));
         return RootClass::Fail;
     }
     crate::unlock_dag::grant(crate::unlock_dag::CapToken::UsbEp0);
@@ -296,25 +350,39 @@ unsafe fn classify_root_port(port: u8, speed: u8) -> RootClass {
             crate::unlock_dag::grant(crate::unlock_dag::CapToken::UsbHubOk);
             RootClass::Hub { slot, mps }
         }
-        _ => {
-            if let Some(dev) = finish_msc(slot, loc, mps) {
-                RootClass::Msc(dev)
-            } else {
+        _ => match finish_msc(slot, loc, mps) {
+            MscFinish::Dev(dev) => RootClass::Msc(dev),
+            MscFinish::NonMsc => {
                 let _ = xhci::host_disable_slot(slot);
+                // M1 definitivo: classe lida OK e != MSC (ex: camera/BT).
+                xhci::mark_msc_port_done(port, "non-msc");
+                fb_usb(&alloc::format!("USB: done P{} non-msc", port));
                 RootClass::Other
             }
-        }
+            MscFinish::Fail(why) => {
+                let _ = xhci::host_disable_slot(slot);
+                k_nano::slog_hal!("USB", "warn", "retry P{} {}", port, why);
+                fb_usb(&alloc::format!("USB: retry P{} {}", port, why));
+                RootClass::Fail
+            }
+        },
     }
 }
 
-unsafe fn finish_msc(slot: u8, loc: xhci::DevLoc, ep0_mps: u16) -> Option<MscDevice> {
+/// M1: veredito do finish MSC. NonMsc (desc lido OK, sem interface BOT) e
+/// DEFINITIVO (done); Fail (transporte: EP0/config) e retryable.
+enum MscFinish {
+    Dev(MscDevice),
+    NonMsc,
+    Fail(&'static str),
+}
+
+unsafe fn finish_msc(slot: u8, loc: xhci::DevLoc, ep0_mps: u16) -> MscFinish {
     let mut cfg = [0u8; 512];
-    let msc_eps = if xhci::host_ep0_control_in(slot, ep0_mps, 0x80, 0x06, 0x0200, 0, &mut cfg)
-    {
-        xhci::parse_msc_config(&cfg)
-    } else {
-        None
-    };
+    if !xhci::host_ep0_control_in(slot, ep0_mps, 0x80, 0x06, 0x0200, 0, &mut cfg) {
+        return MscFinish::Fail("ep0");
+    }
+    let msc_eps = xhci::parse_msc_config(&cfg);
     let (cfg_val, ep_in, ep_out, bulk_mps) = match msc_eps {
         Some(info) => {
             k_nano::slog_hal!(
@@ -348,7 +416,7 @@ unsafe fn finish_msc(slot: u8, loc: xhci::DevLoc, ep0_mps: u16) -> Option<MscDev
                 slot,
                 loc.route
             );
-            return None;
+            return MscFinish::NonMsc;
         }
     };
     let _ = xhci::host_set_configuration(slot, ep0_mps, cfg_val);
@@ -356,10 +424,10 @@ unsafe fn finish_msc(slot: u8, loc: xhci::DevLoc, ep0_mps: u16) -> Option<MscDev
         xhci::host_configure_msc(slot, loc, bulk_mps, ep_in, ep_out)
     else {
         let _ = xhci::host_disable_slot(slot);
-        return None;
+        return MscFinish::Fail("cfg");
     };
     xhci::host_set_msc_port(loc.root_port);
-    Some(MscDevice {
+    MscFinish::Dev(MscDevice {
         slot,
         port: loc.root_port,
         speed: loc.speed,
@@ -525,18 +593,29 @@ unsafe fn try_msc_behind_hub(
             let _ = xhci::host_disable_slot(child_slot);
             continue;
         }
-        if let Some(msc) = finish_msc(child_slot, child_loc, child_mps) {
-            k_nano::slog_hal!(
-                "USB",
-                "ok",
-                "MSC atrás do hub root={} hub_port={} slot={}",
-                hub_loc.root_port,
-                p,
-                msc.slot
-            );
-            return Some(msc);
+        // M1: filho hub nao marca done (o done e da root, apos enum exaurido);
+        // NonMsc aqui = so skip deste filho; Fail = retry no proximo ciclo.
+        match finish_msc(child_slot, child_loc, child_mps) {
+            MscFinish::Dev(msc) => {
+                k_nano::slog_hal!(
+                    "USB",
+                    "ok",
+                    "MSC atrás do hub root={} hub_port={} slot={}",
+                    hub_loc.root_port,
+                    p,
+                    msc.slot
+                );
+                return Some(msc);
+            }
+            MscFinish::NonMsc => {
+                k_nano::slog_hal!("USB", "warn", "hub filho P{} non-msc — skip filho", p);
+                let _ = xhci::host_disable_slot(child_slot);
+            }
+            MscFinish::Fail(why) => {
+                k_nano::slog_hal!("USB", "warn", "hub filho P{} retry {}", p, why);
+                let _ = xhci::host_disable_slot(child_slot);
+            }
         }
-        let _ = xhci::host_disable_slot(child_slot);
     }
     k_nano::slog_hal!("USB", "warn", "hub slot={} sem filho MSC", hub_slot);
     None

@@ -227,7 +227,7 @@ pub unsafe fn bringup_boot_msc_root_only() -> Option<MscDevice> {
 
     for (port, speed) in ccs {
         match try_msc_on_port(port, speed) {
-            Some(dev) => {
+            MscAttempt::Ok(dev) => {
                 crate::slog_nano!(
                     "USB",
                     "ok",
@@ -238,9 +238,11 @@ pub unsafe fn bringup_boot_msc_root_only() -> Option<MscDevice> {
                 );
                 return Some(dev);
             }
-            None => {
-                mark_msc_port_skip(port);
-                crate::slog_nano!("USB", "warn", "MSC bringup FAIL port={} — tenta proxima", port);
+            // M1: transiente NUNCA marca done — retry no proximo ciclo/probe.
+            // (root-only legado nao le classe: todo FAIL aqui e transiente;
+            // o veredito definitivo dessa camada vive no hook R1 + SCSI.)
+            MscAttempt::Transient(why) => {
+                crate::slog_nano!("USB", "warn", "retry P{} {} — tenta proxima", port, why);
             }
         }
     }
@@ -292,7 +294,75 @@ pub fn mark_msc_port_failed(port: u8) {
     mark_msc_port_skip(port);
 }
 
-unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
+/// M1 DONE persistente: SO em classificacao DEFINITIVA (non-MSC / hub exaurido).
+/// Log `done P<n> <motivo>` em warn (visivel serial + foto). Transientes usam
+/// `retry P<n> <motivo>` e NUNCA tocam o skip-set (continuam retryable).
+pub fn mark_msc_port_done(port: u8, why: &str) {
+    mark_msc_port_skip(port);
+    crate::slog_nano!("USB", "warn", "done P{} {}", port, why);
+}
+
+/// M1: resultado classificado da tentativa MSC numa porta root.
+/// Root-only legado nao le classe de device: todo FAIL aqui e transiente
+/// (reset/slot/address/config). O veredito definitivo dessa camada vive no
+/// hook R1 (device class != MSC) e no SCSI (INQUIRY com resposta).
+enum MscAttempt {
+    Ok(MscDevice),
+    /// reset/slot/address/config falhou: retryable, NUNCA marca done.
+    /// Carrega motivo curto p/ `retry P<n> <motivo>`.
+    Transient(&'static str),
+}
+
+/// M1+M2: wrapper twin-aware. Tenta `port`; se o reset FALHAR, tenta a face
+/// gemea (companheira USB2<->SS) UMA vez naquele ciclo — sequencial, nunca os
+/// dois resets simultaneos. Slot/address/config-FAIL nao tentam a gemea.
+unsafe fn try_msc_on_port(port: u8, speed: u8) -> MscAttempt {
+    match try_msc_on_port_once(port, speed) {
+        MscAttempt::Transient(why) => {
+            if why == "reset" {
+                if let Some((twin, ord)) = companion_twin(port) {
+                    // DONE da gemea gruda: porta definitiva nao e re-tentada.
+                    if !msc_port_skipped(twin) && port_has_history(twin) {
+                        crate::slog_nano!(
+                            "USB",
+                            "warn",
+                            "twin P{}/{} ord={} (heuristic) - 1 try",
+                            port,
+                            twin,
+                            ord
+                        );
+                        let ts = portsc_speed_now(twin);
+                        match try_msc_on_port_once(twin, ts) {
+                            MscAttempt::Ok(dev) => return MscAttempt::Ok(dev),
+                            MscAttempt::Transient(twhy) => {
+                                crate::slog_nano!(
+                                    "USB",
+                                    "warn",
+                                    "retry P{} twin-{} {}",
+                                    port,
+                                    twin,
+                                    twhy
+                                );
+                            }
+                        }
+                    } else {
+                        crate::slog_nano!(
+                            "USB",
+                            "warn",
+                            "twin P{}: gemea P{} sem-historia/done - sem try",
+                            port,
+                            twin
+                        );
+                    }
+                }
+            }
+            MscAttempt::Transient(why)
+        }
+        ok => ok,
+    }
+}
+
+unsafe fn try_msc_on_port_once(port: u8, speed: u8) -> MscAttempt {
     if !reset_port(port, speed) {
         let proto = XHCI_STATE
             .lock()
@@ -300,7 +370,7 @@ unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
             .map(|st| port_proto_str(st.base, port))
             .unwrap_or("USB2");
         crate::slog_nano!("USB", "msc", "port {} reset FAIL proto={}", port, proto);
-        return None;
+        return MscAttempt::Transient("reset");
     }
     crate::slog_nano!("USB", "msc", "port {} reset+PED OK", port);
 
@@ -308,7 +378,7 @@ unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
         Some(s) if s > 0 => s,
         _ => {
             crate::slog_nano!("USB", "msc", "Enable Slot FAIL port={}", port);
-            return None;
+            return MscAttempt::Transient("slot");
         }
     };
     crate::slog_nano!("USB", "msc", "Enable Slot → slot={} port={}", slot, port);
@@ -325,7 +395,7 @@ unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
         ADDR_FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
         crate::slog_nano!("USB", "msc", "Address Device FAIL slot={} port={}", slot, port);
         let _ = cmd_disable_slot(slot);
-        return None;
+        return MscAttempt::Transient("addr");
     }
     crate::slog_nano!("USB", "msc", "Address Device OK slot={} port={}", slot, port);
 
@@ -380,7 +450,7 @@ unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
     else {
         crate::slog_nano!("USB", "msc", "Configure Endpoint MSC FAIL port={}", port);
         let _ = cmd_disable_slot(slot);
-        return None;
+        return MscAttempt::Transient("cfg");
     };
 
     {
@@ -390,7 +460,7 @@ unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
         }
     }
 
-    Some(MscDevice {
+    MscAttempt::Ok(MscDevice {
         slot,
         port,
         speed,
@@ -959,7 +1029,55 @@ unsafe fn configure_hid_interrupt_ep(
     true
 }
 
+/// M3 MISSING-CAS (quirk 15%): UM WPR quente curto (budget proprio 100ms TSC)
+/// + re-le CCS. Chamado SO quando CCS==0 && PLS travado em Polling(7) ou
+/// Compliance(10). Fora disso, zero WPR adicional (PLS=5 segue no proto_ss).
+/// Retorna CCS apos o WR. Nao altera budgets/timeouts do reset normal.
+unsafe fn cas_warm_recover(base: u64, off: u64) -> bool {
+    let v = r32(base, off);
+    w32(
+        base,
+        off,
+        v | (1 << 9) | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21) | (1 << 31),
+    );
+    let hz = crate::tsc::tsc_hz();
+    let budget = if hz > 1_000_000 { hz / 10 } else { 0 }; // 100ms
+    let t0 = crate::tsc::rdtsc();
+    let mut spins = 0u32;
+    loop {
+        let v2 = r32(base, off);
+        if v2 & (1 << 19) != 0 || v2 & 1 != 0 {
+            w32(base, off, v2 | (1 << 19)); // clear WRC (W1C)
+            return v2 & 1 != 0;
+        }
+        if budget > 0 && crate::tsc::rdtsc().wrapping_sub(t0) > budget {
+            return r32(base, off) & 1 != 0;
+        }
+        spins = spins.saturating_add(1);
+        if budget == 0 && spins >= 80_000 {
+            return r32(base, off) & 1 != 0;
+        }
+        core::hint::spin_loop();
+    }
+}
+
 unsafe fn reset_port(port: u8, speed_hint: u8) -> bool {
+    let g = XHCI_STATE.lock();
+    let Some(st) = g.as_ref() else { return false };
+    let Some(addr) = portsc_addr(st, port) else { return false };
+    let off = addr - st.base;
+    let base = st.base;
+    let v0 = r32(base, off);
+    // M3: pre-passo antes do reset normal (condicao estrita, sem ELSE adicional).
+    let cas_stuck = {
+        let pls = (v0 >> 5) & 0xF;
+        v0 & 1 == 0 && (pls == 7 || pls == 10)
+    };
+    drop(g);
+    if cas_stuck {
+        let ccs_after = cas_warm_recover(base, off);
+        crate::slog_nano!("USB", "warn", "CAS WR P{} ccs={}", port, ccs_after as u8);
+    }
     let g = XHCI_STATE.lock();
     let Some(st) = g.as_ref() else { return false };
     let Some(addr) = portsc_addr(st, port) else { return false };
@@ -1113,6 +1231,111 @@ unsafe fn protocol_major_revision(base: u64, port: u8) -> u8 {
 
 unsafe fn protocol_is_ss(base: u64, port: u8) -> bool {
     protocol_major_revision(base, port) == 3
+}
+
+/// M2 COMPANION: ranges (first/count) USB2 vs SS das Supported Protocol Caps
+/// (ID=2) do HC bound. Retorna (usb2_first, usb2_count, ss_first, ss_count);
+/// 0 = protocolo ausente. So o PRIMEIRO range por major vale (HCs tipicos
+/// expoem um cap USB2 + um SS); caps sobrepostos = sem pareamento (None).
+unsafe fn proto_companion_ranges(base: u64) -> (u8, u8, u8, u8) {
+    let hcc1 = r32(base, 0x10);
+    let mut off = (((hcc1 >> 16) & 0xFFFF) as u64) * 4;
+    let (mut u2f, mut u2c, mut ssf, mut ssc) = (0u8, 0u8, 0u8, 0u8);
+    for _ in 0..64 {
+        if off == 0 {
+            break;
+        }
+        let hdr = r32(base, off);
+        let next = ((hdr >> 8) & 0xFF) as u64;
+        if (hdr & 0xFF) as u8 == 2 {
+            let ports = r32(base, off + 0x08);
+            let first = (ports & 0xFF) as u8;
+            let count = ((ports >> 8) & 0xFF) as u8;
+            match (hdr >> 24) as u8 {
+                2 if u2c == 0 => {
+                    u2f = first;
+                    u2c = count;
+                }
+                3 if ssc == 0 => {
+                    ssf = first;
+                    ssc = count;
+                }
+                _ => {}
+            }
+        }
+        off = if next == 0 { 0 } else { off + next * 4 };
+    }
+    (u2f, u2c, ssf, ssc)
+}
+
+/// Matematica pura do pareamento (host-testavel): mesmo indice ordinal no
+/// outro protocolo. `max` = max_ports do HC (twin fora do HC = None).
+fn companion_twin_pure(port: u8, u2f: u8, u2c: u8, ssf: u8, ssc: u8, max: u8) -> Option<(u8, u8)> {
+    if port == 0 || port > 31 || u2c == 0 || ssc == 0 {
+        return None;
+    }
+    // Ranges sobrepostos = topologia ambigua: sem pareamento.
+    let u2_end = u2f.saturating_add(u2c);
+    let ss_end = ssf.saturating_add(ssc);
+    let overlap = u2f.max(ssf) < u2_end.min(ss_end);
+    if overlap {
+        return None;
+    }
+    let (ord, twin) = if port >= u2f && port < u2_end {
+        let ord = port - u2f;
+        (ord, ssf.saturating_add(ord))
+    } else if port >= ssf && port < ss_end {
+        let ord = port - ssf;
+        (ord, u2f.saturating_add(ord))
+    } else {
+        return None;
+    };
+    if twin == 0 || twin > 31 || twin > max || twin == port {
+        return None;
+    }
+    // Twin tem que cair DENTRO do outro range (counts diferentes = sem par).
+    let in_other = if port >= u2f && port < u2_end {
+        twin >= ssf && twin < ss_end
+    } else {
+        twin >= u2f && twin < u2_end
+    };
+    if !in_other {
+        return None;
+    }
+    Some((twin, ord))
+}
+
+/// M2: face gemea da porta no HC bound + ordinal. None = sem par no range,
+/// ranges sobrepostos/ausentes, ou twin fora do HC. HEURISTICA documentada no
+/// log (`twin P<a>/<b>`): assume fiação 1:1 por ordinal (padrao Intel).
+pub unsafe fn companion_twin(port: u8) -> Option<(u8, u8)> {
+    let (base, max) = {
+        let g = XHCI_STATE.lock();
+        let st = g.as_ref()?;
+        (st.base, st.max_ports)
+    };
+    let (u2f, u2c, ssf, ssc) = proto_companion_ranges(base);
+    companion_twin_pure(port, u2f, u2c, ssf, ssc, max)
+}
+
+/// Historia eletrica (mesmo gate do skip M1): CCS=1 ou CSC sticky.
+/// Sem historia = sem reset, sem twin-try (preserva budget).
+pub unsafe fn port_has_history(port: u8) -> bool {
+    host_port_ccs(port).is_some() || port_csc_sticky(port)
+}
+
+/// Speed atual do PORTSC sem exigir CCS (0 = campo zerado/sem estado).
+unsafe fn portsc_speed_now(port: u8) -> u8 {
+    let g = XHCI_STATE.lock();
+    let st = match g.as_ref() {
+        Some(s) => s,
+        None => return 0,
+    };
+    let addr = match portsc_addr(st, port) {
+        Some(a) => a,
+        None => return 0,
+    };
+    ((r32(st.base, addr - st.base) >> 10) & 0xF) as u8
 }
 
 /// Rótulo SS/USB2 só-leitura p/ log (bônus oráculo) — nunca escreve MMIO.
@@ -2638,7 +2861,32 @@ pub unsafe fn host_mark_hub(slot: u8, loc: DevLoc, nbr_ports: u8, ttt: u32, mtt:
 
 #[cfg(test)]
 mod msc_desc_tests {
-    use super::{input_context_offset, parse_msc_config, push_route, DevLoc};
+    use super::{companion_twin_pure, input_context_offset, parse_msc_config, push_route, DevLoc};
+
+    #[test]
+    fn twin_pairs_by_ordinal_usb2_ss() {
+        // Layout Intel tipico: USB2 1..8, SS 9..16.
+        assert_eq!(companion_twin_pure(1, 1, 8, 9, 8, 16), Some((9, 0)));
+        assert_eq!(companion_twin_pure(8, 1, 8, 9, 8, 16), Some((16, 7)));
+        assert_eq!(companion_twin_pure(9, 1, 8, 9, 8, 16), Some((1, 0)));
+        assert_eq!(companion_twin_pure(16, 1, 8, 9, 8, 16), Some((8, 7)));
+    }
+
+    #[test]
+    fn twin_absent_without_pair_or_range() {
+        // Sem SS (ssc=0): sem pareamento.
+        assert_eq!(companion_twin_pure(1, 1, 8, 0, 0, 8), None);
+        // Counts diferentes: ordinal sem par no outro range.
+        assert_eq!(companion_twin_pure(8, 1, 8, 9, 4, 16), None);
+        // Porta fora de qualquer range.
+        assert_eq!(companion_twin_pure(17, 1, 8, 9, 8, 16), None);
+        // Twin fora do HC.
+        assert_eq!(companion_twin_pure(8, 1, 8, 9, 8, 10), None);
+        // Ranges sobrepostos = ambiguo.
+        assert_eq!(companion_twin_pure(3, 1, 8, 3, 8, 16), None);
+        // Porta 0 nunca.
+        assert_eq!(companion_twin_pure(0, 1, 8, 9, 8, 16), None);
+    }
 
     #[test]
     fn context_offsets_follow_hccparams_csz() {
