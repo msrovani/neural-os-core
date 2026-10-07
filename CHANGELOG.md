@@ -1,5 +1,19 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s456] - 2026-10-06 - Imagem HW usb_hw.img PACK_LLM=all + rebuild do zero
+
+- **Imagem HW completa** (`target/usb_hw.img`, 12,4 GB, ESP + DATA FAT32 0x0C):
+  todos os degraus Falcon3 (1B/3B/7B/10B) + slots (AGENT/RUSTCDR3/RERANKER/BGE/
+  LEARNER/PIPER/VISION/E5) + HWEXPRT4 + firmware + CONFIG/UPDATE.CFG/BOOT.LOG.
+- **Fix `tools/mkfat32.py` (LEARNER.BIN sombreado)**: fallback `find_falcon3_1b()`
+  vinha antes do arquivo real na cadeia `or` e empacotava 544 MB errados;
+  agora `LEARNER.v6` tem precedência (117,9 MB verificados por walk da FAT).
+- **Rebuild do zero**: `cargo clean` (43 GB) + `cargo build --release -p boot`
+  em 1m58s, 0 erros; `cargo check --release` 0 erros.
+- **Repo `msrovani/neural-sgdb` v1.4.3**: build default + `--all-features`,
+  0 erros 0 warnings (mcp_server.exe vivo não relinkado — trava do SO).
+- Verificação: ESP kernel.elf sha = árvore; DATA 71 entradas (SESSION_456).
+
 ## [1.9.99-s455] - 2026-10-05 - MESH 2 instancias 6c/6GB (re-teste pós-fix -cpu Haswell) + monitor 30 min
 
 - **Re-teste pós-fix do `run-qemu-p2p-mesh.ps1`** (SESSION_454): ambas as instâncias

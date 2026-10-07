@@ -1,4 +1,4 @@
-﻿# Neural OS Hermes — K³CHJ Core
+# Neural OS Hermes — K³CHJ Core
 
 A bare-metal operating system written in Rust (`no_std` + `no_main`), booting from
 UEFI, with an in-kernel ternary (Falcon3-3B-Instruct-1.58bit) inference engine. Networking, storage,
@@ -24,15 +24,15 @@ of twelve workspace members (six product crates + the boot/kernel binaries and s
 
 ```
 k_nano (R0, foundation) ← k_hal (R1, hardware abstraction) ← cortex (R2, inference)
-                                                          ← k_ai (R2, autonomy)
-                                                          ← hermes (R3, orchestration) ← jarbas (R3, interface)
+                                                  ← k_ai (R2, autonomy)
+                                                  ← hermes (R3, orchestration) ← jarbas (R3, interface)
 ```
 
 The core design decision is that **everything is an Agent or a Skill**: drivers,
 daemons and services are all agents with explicit manifests (name, type, schedule,
 trust tokens). Boot is an 8-phase event-driven sequence (SafeHarbor → MemoryCore →
-SystemBringup → Diagnostics → HardwareDiscovery → DriverInit → AgentFleet →
-Runtime) that publishes each phase on an in-kernel event bus.
+SystemBringup → Diagnostics → HardwareDiscovery → DriverInit → AgentFleet → Runtime)
+that publishes each phase on an in-kernel event bus.
 
 The inference engine is a ternary (Falcon3-3B-Instruct-1.58bit) language model — 3B parameters,
 2-bit packed weights, ADD/SUB-only matmul, AVX2/SSE kernels — loaded from disk and
@@ -44,7 +44,12 @@ Sentence-level TTS streaming provides sub-200ms first-phrase latency via Piper.
 
 ## Status
 
-**v1.9.99-s451 TEST** — Jarbas UI live on the framebuffer, P2P mesh across **six QEMU VMs**, and distributed matmul over FRAG — a working AIOS desktop talking to a small cluster, not a slide deck.
+**v1.9.99-s451 TEST** — Jarbas UI live on the framebuffer, P2P mesh across **six QEMU VMs** (the
+**S360 / ADR-0081 / SESSION_360 lab**, 3G/3c + 2G/2c + 4×1G/1c over the L2 hub), and distributed
+matmul over FRAG — a working AIOS desktop talking to a small cluster, not a slide deck. The
+**S455** line (SESSION_455) is a separate, post-fix **2-instance / 6c/6GB re-test**; it proves
+the fix and returns to nothing, nothing is learned from it beyond the parser bug
+(IDEA #656) and the matmul barrier timeout (IDEA #657).
 
 The project is honest about what is done and what is not. Anything marked
 "gated" or "pending" below will fail or is disabled at runtime — we prefer an
@@ -62,7 +67,7 @@ explicit gate over a silent promise.
 | WASM | `wasmi` `no_std` runtime with fuel metering, capability-gated host imports (`aios::*`); self-test `add(2,3)=5` passes |
 | Inference | Falcon3-3B ternary (22 layers, hidden 3072) run off the BSP through the `InferQueue` MPMC worker (ADR-0057 WS-H); Trinity MoE router with on-demand experts; token streaming (`LLM_STREAM`) + per-sentence TTS |
 | Audio/voice | Intel HDA capture + playback (armed in QEMU), Piper TTS (PT-BR/EN), CTC STT (55K params), wake word "Jarvis" |
-| GPU compute | NVIDIA PUSH_BUFFER/GPFIFO submit; HW-real Pascal submit **validated (ADR-0112/HW-reference, not S455)**; VirtIO-GPU 2D (QEMU), Intel GEN ring (canary). Ternary **W2A8 compute kernels are pending** (KernelPack) — matmul runs on the CPU until then |
+| GPU compute | NVIDIA PUSH_BUFFER/GPFIFO submit; **HW-real Pascal submit is an external reference (ADR-0112), not S455**; VirtIO-GPU 2D (QEMU), Intel GEN ring (canary). Ternary **W2A8 compute kernels are pending** (KernelPack) — matmul runs on the CPU until then |
 | SMP | 4-core AP wake (3 APs) via directed sequential SIPI, per-AP stacks |
 | UI (Jarbas) | **Functional desktop**: orb + mesh peer graph (role colors), Hub Health as sole SystemInfo (default open), compositor + HDA; PS/2 soft-enable; power dialog always on top |
 | Security | Ed25519 trust chain, capability gates, fail-closed mesh authentication |

@@ -17,11 +17,11 @@
 | 106-2 | Renomear crates k_ia→k_ai e jarvis→jarbas | ~200 | ✅ Concluído | Backups preservados, nomes atualizados |
 | 106-3 | Corrigir SOUL.md parser (dependência ring2→ring0) | ~300 | ✅ Concluído | jarbas usa `neural_kernel::fs::read_vfs()` (4 arquivos), 0 refs ATA_DRIVER/fat32 |
 | 106-4 | Corrigir Trinity MoE Router | ~300 | ✅ Concluído | Trinity classifica intents — não roteia para hardware |
-| 106-5 | RustPython viabilidade | ~200 | ✅ Concluído | RustPython não é no_std nativo — rota WASM (106-6) é principal |
+| 106-5 | RustPython viabilidade | ~200 | ✅ Concluído — REJEITADO | RustPython **não é no_std nativo** (depende de `std`); viabilidade documentada e aceita (SESSION_106_5). **Não é release-block** (S455-D1): não altera `cargo check --release` 0 erros. Rota WASM (106-6) só. |
 | 106-6 | MicroPython via WASM (Rota Sandbox) | ~300 | ✅ Concluído | `tools/build_micropython_wasm.py`, `hermes/src/micropython_wasm.rs`, bridge WASI→Skill |
 | 106-7 | Corrigir page faults (ordem de inicialização) | ~200 | ✅ Concluído | allocator → events → agents |
 | 106-8 | AIOS API para Python (RAG + System Prompt) | ~300 | ✅ Concluído | aios_net, aios_fs injetadas via RAG |
-| 106-9 | Escalonamento Evolutivo de Código (JIT Cognitivo) | ~500 | ✅ Concluído | Python efêmero → WASM cravado em pedra |
+| 106-9 | Escalonamento Evolutivo de Código (JIT Cognitivo) | ~500 | ✅ Concluído | Python efêmero → WASM cravado em pedra |  ← S455-D1: sprint 106-5 não é release-block; o restante é mainline. |
 | 106-10 | SkillOpt - Tradução Python→Rust no_std | ~400 | ✅ Concluído | Geração Rust no_std via Cortex LLM |
 | 106-11 | Heap address HW real + boot diagnostics | ~100 | ✅ Concluído | Heap `0x4000_0000_0000`, AHCI/SATA verificado |
 
@@ -91,8 +91,8 @@ default-members = ["crates/boot"]
 | `AGENTS.md` | Plano diretor e regras operacionais |
 | `docs/memory/SESSION_INDEX.md` | Catálogo de sessões + lições críticas |
 | `docs/memory/IDEA_BANK.md` | ~416 ideias catalogadas com status |
-| `docs/SPRINT-106.md` | Detalhes de cada sub-sprint da v2.0 |
-| `docs/SPRINT-106-STATUS.md` | Este arquivo |
+| `docs/archive/sprints/SPRINT-106.md` | Detalhes de cada sub-sprint da v2.0 |
+| `docs/archive/sprints/SPRINT-106-STATUS.md` | Este arquivo (106-5 REJEITADO — viabilidade, não release-block) |
 
 ---
 

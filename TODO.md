@@ -223,14 +223,14 @@
 
 ---
 
-## ✅ MARCO s360 — UI + mesh + compute distribuído
+## ✅ MARCO S360 — UI + mesh + compute distribuído
 
-- [x] Desktop Jarbas funcional (orb + Hub Health + compositor) no WHPX
+- [x] Desktop Jarbas funcional (orb + Hub Health + compositor) no WHPX (lab 6-node S360/ADR-0081/SESSION_360)
 - [x] Rede mesh 6 QEMU (3G/3c + 2G/2c + 4×1G/1c) + hub L2 (`tools/qemu_l2_hub.py`)
 - [x] Computação distribuída FRAG matmul Master↔peers (Memory/Compute/Worker)
 - [x] Fail/warn honesty (TLSPINS/Trust/CapGate/mouse soft-F4)
-- [ ] Peer B estável em toda a topologia 6-node (residual)
-- [ ] Re-boot mesh pós-fix s360 (AWAITING operador)
+- [ ] Peer B estável em toda a topologia 6-node (residual S360)
+- [ ] Re-boot mesh pós-fix s360 (AWAITING operador) — S455 (SESSION_455, 2 instâncias 6c/6GB) é re-teste separate, não o lab
 
 ---
 
@@ -244,7 +244,7 @@
 6. **Observabilidade de boot** — 3 canais + `BOOT SCORE` + instrumentos FB (ADR-0092).
 7. **Desktop Jarbas v2** — production-grade (ADR-0090); **s360 = desktop vivo + mesh no orb** ✅ parcial.
 8. **SMP per-CPU runqueue** — feature ON; falta aceite metal (ADR-0089).
-9. **Mesh cluster** — escalar 6-node lab → HW LAN real (ADR-0081).
+9. **Mesh cluster** — escalar 6-node lab (S360) → HW LAN real (ADR-0081).
 
 ---
 

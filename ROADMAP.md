@@ -58,10 +58,12 @@
 **Status:** ✅ Concluído (10/10 sub-sprints)
 **Objetivo:** Desacoplamento do monólito bare-metal (v1.0) para ecossistema de anéis lógicos isolados com orquestração IA nativa (WASM + MicroPython sandbox)
 
-### Sprint 106-5: RustPython no_std (Rota Nativa) — OBSOLETO
-- **Status:** ❌ Descartado — RustPython não é no_std-viável (depende de std). Ver SESSION_106_5.md + SPRINT-106-STATUS.md.
-- **Rota real:** MicroPython MVP via WASM (ADR-0059 F6): `tools/build_micropython_wasm.py` → `MICROPY.WASM` no FAT (SESSION_275).
+### Sprint 106-5: RustPython no_std (Rota Nativa) — OBSOLETO/REJEITADO
+- **Status:** ❌ Descartado — RustPython **não é no_std-viável** (depende de `std`). SESSION_106_5.md + SPRINT-106.md. Registro: **do not re-plan / dead-end, não é release block**; a feature foi reposicionada.
+- **Rota real do Python no kernel:** WASM (ADR-0059 F6): `tools/build_micropython_wasm.py` → `MICROPY.WASM` no FAT (SESSION_275).
 - **Sprint 106-6:** MicroPython/WASM sandbox ✅ (não confundir S106-5 com S106-6).
+
+> **Sprint 106-5 não é release-block (S455-D1):** o descarte é de **viabilidade de produto**, não de mainline — `cargo check --release` segue 0 erros e o compressor/reloader de skills usa Backend::Default. A nota de viabilidade era documentada e aceita; o roadmap a transpõe como "descartado".
 
 ### Sprint 106-1: Estruturar Cargo workspace estrito
 - **Objetivo:** Criar workspace com 5 membros (k_nano, k_ai, cortex, hermes, jarbas)
@@ -95,10 +97,12 @@
 - **Ações:**
   - Verificar ExpertKind enum (não acessar k_nano)
   - Remover dependência circular Trinity→k_nano
-### Sprint 106-5: RustPython no_std (Rota Nativa) — OBSOLETO
-- **Status:** ❌ Descartado — RustPython não é no_std-viável (depende de std). Ver SESSION_106_5.md + SPRINT-106-STATUS.md.
-- **Rota real:** MicroPython MVP via WASM (ADR-0059 F6): `tools/build_micropython_wasm.py` → `MICROPY.WASM` no FAT (SESSION_275).
+### Sprint 106-5: RustPython no_std (Rota Nativa) — OBSOLETO/REJEITADO
+- **Status:** ❌ Descartado — RustPython **não é no_std-viável** (depende de `std`). SESSION_106_5.md + SPRINT-106.md. Registro: **do not re-plan / dead-end, não é release block**; a feature foi reposicionada.
+- **Rota real do Python no kernel:** WASM (ADR-0059 F6): `tools/build_micropython_wasm.py` → `MICROPY.WASM` no FAT (SESSION_275).
 - **Sprint 106-6:** MicroPython/WASM sandbox ✅ (não confundir S106-5 com S106-6).
+
+> **Sprint 106-5 não é release-block (S455-D1):** o descarte é de **viabilidade de produto**, não de mainline — `cargo check --release` segue 0 erros e o compressor/reloader de skills usa Backend::Default. A nota de viabilidade era documentada e aceita; o roadmap a transpõe como "descartado".
 
 ### Sprint 106-7: Corrigir page faults (ordem de inicialização)
 - **Objetivo:** Inicialização correta: allocator → events → agents
@@ -159,7 +163,7 @@
 | 106-1 | Estruturar workspace estrito | ~100 | ✅ |
 | 106-2 | Renomear crates k_ia→k_ai, jarvis→jarbas | ~200 | ✅ |
 | 106-4 | Corrigir Trinity MoE Router | ~300 | ✅ |
-| 106-5 | RustPython no_std (descartado) | ~400 | ❌ — inválido no_std |  ← S106-5, não confundir com S106-6 |
+| 106-5 | RustPython no_std (REJEITADO) | ~400 | ❌ não no_std — depende de std |  ← S106-5 (SESSION_106_5), não confundir com S106-6 (MicroPython MVP).
 | 106-6 | MicroPython/WASM sandbox | ~300 | ✅ |
 | 106-7 | Corrigir page faults | ~200 | ✅ |
 | 106-8 | AIOS API para Python | ~300 | ✅ |

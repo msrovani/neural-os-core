@@ -107,9 +107,9 @@ C:\msys64\ucrt64\bin
 
 ## 4. QEMU — Teste Local
 
-### Lab mesh 6-node (s360) — UI + rede + compute distribuído
+### Lab mesh 6-node (S360 / ADR-0081 / SESSION_360) — UI + rede + compute distribuída
 
-Marco validado em WHPX: **seis VMs** (Master 3G/3c, Worker 2G/2c, quatro peers 1G/1c) falam pelo hub L2, elegem roles, trocam FRAG (matmul) e pintam o orb do Jarbas por `MESH_HEALTH`.
+Marco validado em WHPX: **seis VMs** (Master 3G/3c, Worker 2G/2c, quatro peers 1G/1c) falam pelo hub L2, elegem roles, trocam FRAG (matmul) e pintam o orb do Jarbas por `MESH_HEALTH`. **S455 (SESSION_455) = re-teste de 2 instâncias 6c/6GB pós-fix -cpu Haswell; não é o lab de 6 nós.**
 
 ```powershell
 # 1) Build imagem UEFI (kernel + ESP)

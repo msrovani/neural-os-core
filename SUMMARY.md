@@ -3,7 +3,7 @@
 **O que é:** Sistema operacional bare-metal (`no_std` Rust) onde **tudo é Agente ou Skill**. 41 agentes nativos, Trinity MoE no kernel (VOCAB=256, routing telemetry), BitNet ternário para HW e inferência.
 
 **Versão release:** **v1.9.99-s451 TEST / NÃO ESTÁVEL** (2026-10-04)
-**Marco vivo:** interface Jarbas **funcional** no framebuffer + **rede mesh** + **computação distribuída** em **6 máquinas QEMU** (WHPX, hub L2, FRAG matmul, orb por role/`MESH_HEALTH`).
+**Marco vivo:** interface Jarbas **funcional** no framebuffer + **rede mesh** + **computação distribuída** em **6 máquinas QEMU** (WHPX, hub L2, FRAG matmul, orb por role/`MESH_HEALTH`) — o **S360** lab. O **S455** é um re-teste de 2 instâncias de 6c/6GB (SESSION_455), não o lab.
 **Estado:** ~214K LOC, ~714 arquivos (12 crates do workspace), `cargo build --release -p boot` = 0 erros.
 
 **Base v1.8.0:**

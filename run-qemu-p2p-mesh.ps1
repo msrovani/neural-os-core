@@ -120,6 +120,12 @@ $baseArgs = @(
     "-drive", "format=raw,file=$uefi,if=ide,index=0",
     "-vga", "std",
     "-display", "gtk",
+    # HDA simulado (mesma receita de run-qemu-whpx.ps1:342-344): intel-hda +
+    # hda-duplex com audiodev none = codec/streams enumeram no guest sem usar
+    # os devices de som do Windows (sem one-instance-wins do dsound).
+    "-audiodev", "none,id=snd0",
+    "-device", "intel-hda,id=hda0",
+    "-device", "hda-duplex,id=hda-codec,bus=hda0.0,cad=0,audiodev=snd0",
     "-no-reboot"
 )
 

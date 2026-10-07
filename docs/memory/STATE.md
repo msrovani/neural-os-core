@@ -1,5 +1,12 @@
 # STATE - neural-os-core v1.9.99-s451 TEST - Forum multi-AI (AION) + F1.5 PROVADO + v4 checkpoint + sec3/sec6/sec15
 
+#   [s456] IMAGEM HW usb_hw.img PACK_LLM=all + rebuild do zero (detalhe em docs/memory/SESSION_456.md)
+#     target/usb_hw.img 12,4 GB (ESP + DATA FAT32 0x0C). ESP kernel.elf sha=árvore;
+#     DATA 71 entradas (1B/3B/7B/10B + slots + firmware). FIX tools/mkfat32.py:
+#     LEARNER.BIN vinha com 544MB do Falcon3-1B (fallback antes do arquivo real) —
+#     agora 117,9 MB corretos. Rebuild: cargo clean 43GB + build 1m58s 0 erros;
+#     nsgdb v1.4.3 default+all-features 0 erros (mcp_server.exe vivo não relinkado).
+#
 #   [s455] MESH 2 instâncias 6c/6GB (re-teste pós-fix -cpu Haswell) + monitor 30 min
 #     (detalhe em docs/memory/SESSION_455.md)
 #     Run pós-S454: ambas bootação até PostRuntime, mesh convergiu (peers=1,
