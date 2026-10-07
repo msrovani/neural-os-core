@@ -76,6 +76,10 @@ pub fn pm1a_cnt_port() -> u16 {
 }
 
 /// Escreve S5 em PM1a_CNT. Retorna true se tentou (porta conhecida).
+/// Endurecido p/ HW real: RMW do PM1_CNT (nunca escrita cega), poll de SCI_EN
+/// após SMI_CMD, PM1a+PM1b back-to-back por SLP_TYP, espera TSC entre
+/// tentativas. Se retornar, o HW ignorou (caller segue a cascata) — `true`
+/// aqui significa "tentou", NUNCA "desligou".
 pub fn power_off_s5() -> bool {
     let port = pm1a_cnt_port();
     if port == 0 {
@@ -97,68 +101,86 @@ pub fn power_off_s5() -> bool {
     power_off_s5_try(port, &types[..n])
 }
 
-fn power_off_s5_try(port: u16, types: &[u8]) -> bool {
-    // HW-7 Step 1: Disable SMI via SMI_CMD if available
-    let smi_cmd = SMI_CMD_PORT.load(Ordering::Acquire) as u16;
-    let acpi_enable = ACPI_ENABLE_VAL.load(Ordering::Acquire);
-    if smi_cmd != 0 && acpi_enable != 0 {
-        unsafe {
-            core::arch::asm!("out dx, al", in("dx") smi_cmd, in("al") acpi_enable, options(nostack, preserves_flags));
+fn pm1_cnt_read(port: u16) -> u16 {
+    let v: u16;
+    unsafe {
+        core::arch::asm!("in ax, dx", out("ax") v, in("dx") port, options(nostack, preserves_flags));
+    }
+    v
+}
+
+fn pm1_cnt_write(port: u16, val: u16) {
+    unsafe {
+        core::arch::asm!("out dx, ax", in("dx") port, in("ax") val, options(nostack, preserves_flags));
+    }
+}
+
+/// Espera SCI_EN (PM1_CNT bit0) com budget TSC após SMI_CMD.
+fn wait_sci_en(port: u16, budget_us: u64) -> bool {
+    let t0 = crate::tsc::now_us();
+    loop {
+        if pm1_cnt_read(port) & 1 == 1 {
+            return true;
         }
-        crate::slog_nano!("ACPI", "info", "SMI disabled via SMI_CMD={:#x} val={}", smi_cmd, acpi_enable);
+        if crate::tsc::now_us().wrapping_sub(t0) >= budget_us {
+            return false;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+fn power_off_s5_try(port: u16, types: &[u8]) -> bool {
+    // Step 1: SMI_CMD → poll SCI_EN (bit0) com timeout (era escrita cega).
+    let smi_cmd = SMI_CMD_PORT.load(Ordering::Acquire) as u32;
+    let acpi_enable = ACPI_ENABLE_VAL.load(Ordering::Acquire);
+    if smi_cmd != 0 && acpi_enable != 0 && smi_cmd <= 0xFFFF {
+        unsafe {
+            core::arch::asm!("out dx, al", in("dx") smi_cmd as u16, in("al") acpi_enable, options(nostack, preserves_flags));
+        }
+        if wait_sci_en(port, 1_000_000) {
+            crate::slog_nano!("ACPI", "ok", "SCI_EN set via SMI_CMD={:#x}", smi_cmd);
+        } else {
+            crate::slog_nano!("ACPI", "warn", "SCI_EN timeout após SMI_CMD={:#x} — segue mesmo assim", smi_cmd);
+        }
     }
 
-    // HW-7 Step 2: WBINVD — flush all caches
+    // Step 2: WBINVD — flush all caches
     unsafe {
         core::arch::asm!("wbinvd", options(nostack, preserves_flags));
     }
 
-    // HW-7 Step 3: Write PM1a_CNT with each SLP_TYP
+    // Step 3: PM1a (+PM1b back-to-back, mesmo SLP_TYP) com RMW por tentativa.
+    // PM1_CNT: SCI_EN[0] | SLP_TYP[12:10] | SLP_EN[13] — preserva todo o resto.
+    let pm1b = PM1B_CNT_PORT.load(Ordering::Acquire) as u16;
+    let pm1b_valid = pm1b != 0 && pm1b != port;
     for &typ in types {
-        // PM1_CNT: SLP_TYP[12:10] | SLP_EN[13]
-        let val: u16 = ((typ as u16) << 10) | (1u16 << 13);
+        let cur = pm1_cnt_read(port);
+        let val: u16 = (cur & !0x3C00) | ((typ as u16) << 10) | (1u16 << 13);
         crate::slog_nano!(
             "ACPI",
             "info",
-            "S5 write PM1a={:#x} typ={} val={:#x}",
+            "S5 write PM1a={:#x} typ={} cur={:#x} val={:#x}",
             port,
             typ,
+            cur,
             val
         );
-        unsafe {
-            core::arch::asm!(
-                "out dx, ax",
-                in("dx") port,
-                in("ax") val,
-                options(nostack, preserves_flags)
-            );
+        pm1_cnt_write(port, val);
+        if pm1b_valid {
+            let curb = pm1_cnt_read(pm1b);
+            let valb: u16 = (curb & !0x3C00) | ((typ as u16) << 10) | (1u16 << 13);
+            crate::slog_nano!("ACPI", "info", "S5 write PM1b={:#x} typ={} val={:#x}", pm1b, typ, valb);
+            pm1_cnt_write(pm1b, valb);
         }
-        // delay curto entre tentativas
-        for _ in 0..100_000 {
+        // Janela TSC entre tentativas: S5 real desliga aqui; se voltar, próximo typ.
+        let t0 = crate::tsc::now_us();
+        while crate::tsc::now_us().wrapping_sub(t0) < 100_000 {
             core::hint::spin_loop();
         }
     }
 
-    // HW-7 Step 4: If PM1b_CNT_BLK is valid and different from PM1a, write there too
-    let pm1b = PM1B_CNT_PORT.load(Ordering::Acquire) as u16;
-    if pm1b != 0 && pm1b != port {
-        for &typ in types {
-            let val: u16 = ((typ as u16) << 10) | (1u16 << 13);
-            crate::slog_nano!("ACPI", "info", "S5 write PM1b={:#x} typ={} val={:#x}", pm1b, typ, val);
-            unsafe {
-                core::arch::asm!(
-                    "out dx, ax",
-                    in("dx") pm1b,
-                    in("ax") val,
-                    options(nostack, preserves_flags)
-                );
-            }
-            for _ in 0..100_000 {
-                core::hint::spin_loop();
-            }
-        }
-    }
-
+    // Ainda vivo = HW ignorou S5 (caller segue a cascata).
+    crate::slog_nano!("ACPI", "warn", "S5 timeout — HW ignorou PM1_CNT (segue cascata)");
     true
 }
 

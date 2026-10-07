@@ -280,7 +280,12 @@ pub fn mark_msc_port_failed(port: u8) {
 
 unsafe fn try_msc_on_port(port: u8, speed: u8) -> Option<MscDevice> {
     if !reset_port(port, speed) {
-        crate::slog_nano!("USB", "msc", "port {} reset FAIL", port);
+        let proto = XHCI_STATE
+            .lock()
+            .as_ref()
+            .map(|st| port_proto_str(st.base, port))
+            .unwrap_or("USB2");
+        crate::slog_nano!("USB", "msc", "port {} reset FAIL proto={}", port, proto);
         return None;
     }
     crate::slog_nano!("USB", "msc", "port {} reset+PED OK", port);
@@ -529,7 +534,12 @@ unsafe fn bringup_hid_boot(kind: HidBootKind) -> bool {
         crate::slog_nano!("USB", "hid", "{} tentando porta {} speed={}", tag, port, speed);
 
         if !reset_port(port, speed) {
-            crate::slog_nano!("USB", "warn", "{} port {} reset FAIL (skip)", tag, port);
+            let proto = XHCI_STATE
+                .lock()
+                .as_ref()
+                .map(|st| port_proto_str(st.base, port))
+                .unwrap_or("USB2");
+            crate::slog_nano!("USB", "warn", "{} port {} reset FAIL (skip) proto={}", tag, port, proto);
             continue;
         }
         crate::slog_nano!("USB", "warn", "{} port {} reset OK, EnableSlot...", tag, port);
@@ -1015,8 +1025,9 @@ unsafe fn reset_port(port: u8, speed_hint: u8) -> bool {
                     crate::slog_nano!(
                         "USB",
                         "warn",
-                        "port {} reset TIMEOUT PORTSC={:#x} warm={}",
+                        "port {} reset TIMEOUT proto={} PORTSC={:#x} warm={}",
                         port,
+                        port_proto_str(st.base, port),
                         pv,
                         warm as u8
                     );
@@ -1088,6 +1099,15 @@ unsafe fn protocol_major_revision(base: u64, port: u8) -> u8 {
 
 unsafe fn protocol_is_ss(base: u64, port: u8) -> bool {
     protocol_major_revision(base, port) == 3
+}
+
+/// Rótulo SS/USB2 só-leitura p/ log (bônus oráculo) — nunca escreve MMIO.
+unsafe fn port_proto_str(base: u64, port: u8) -> &'static str {
+    if protocol_major_revision(base, port) == 3 {
+        "SS"
+    } else {
+        "USB2"
+    }
 }
 
 unsafe fn cmd_enable_slot(port: u8) -> Option<u8> {

@@ -117,3 +117,4 @@
 | 456 | Imagem HW | s456 | usb_hw.img PACK_LLM=all + rebuild zero + fix LEARNER.BIN | ESP sha=arvore; DATA 71 entradas; LEARNER 544MB->117.9MB; cargo clean 43GB + build 1m58s 0 erros; nsgdb v1.4.3 0 erros (server vivo nao relinkado) |
 | 457 | HW real ccs:0 | s457 | fotos HUD + fix hub-first + usb_ok | usb 16p ccs:0 no msc; storage no dev; BOOT.LOGs zerados; fix hub_msc + label; kernel b870cdfd; retestar no HW |
 | 459 | HW retest WPR | s459 | hub-first TIMEOUT -> reset via protocolo | PP=1 OK; PR frio TIMEOUT PLS=5; protocol_is_ss (Major Rev 3); kernel 433cc607; img 1b3b regen |
+| 460 | Power+oraculo+PRE | s460 | cascata S5/CF9 + veredito oraculo + dump PRE-HCRST | 8042 cego era o hang; S5/CF9/triple/park; HCRST destrutivo 65%; img 1b3b kernel 9c935337 |

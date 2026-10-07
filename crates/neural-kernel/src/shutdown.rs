@@ -51,8 +51,51 @@ fn qemu_acpi_shutdown() {
 }
 
 fn ps2_reset() {
-    k_nano::slog_bin!("SHUTDOWN", "ok", "ARCH.reboot via 0x64/FE");
+    k_nano::slog_bin!("SHUTDOWN", "ok", "ARCH.reboot via 0x64/FE (IBF-polled)");
     k_nano::hal::ARCH.reboot();
+}
+
+/// S5 primeiro SE pm1a != 0 (budget TSC mora no power_off_s5_try, ~100ms por
+/// SLP_TYP). Se retornar, o HW ignorou — caller segue a cascata.
+fn s5_poweroff_try() -> bool {
+    let pm1a = k_nano::acpi::pm1a_cnt_port();
+    if pm1a == 0 {
+        k_nano::slog_bin!("SHUTDOWN", "warn", "S5 skip — pm1a=0 (sem S5 no FADT)");
+        return false;
+    }
+    k_nano::slog_bin!("SHUTDOWN", "ok", "S5 try pm1a={:#x}", pm1a);
+    let tried = k_nano::acpi::power_off_s5();
+    // power_off_s5_try já esperou; chegar aqui = HW ignorou.
+    k_nano::slog_bin!("SHUTDOWN", "warn", "S5 timeout — HW ignorou (segue cascata)");
+    tried
+}
+
+/// 0x604 gated: só QEMU (hypervisor real); nunca em HW.
+fn qemu_poweroff_gated() -> bool {
+    let sandbox = k_nano::platform_probe::probe_done()
+        && k_nano::platform_probe::hypervisor() != k_nano::platform_probe::HypervisorKind::None;
+    if !sandbox {
+        k_nano::slog_bin!("SHUTDOWN", "warn", "0x604 skip — HW real (QEMU-only)");
+        return false;
+    }
+    k_nano::slog_bin!("SHUTDOWN", "ok", "0x604 try (QEMU)");
+    qemu_acpi_shutdown();
+    k_nano::tsc::sleep_us(20_000);
+    k_nano::slog_bin!("SHUTDOWN", "warn", "0x604 timeout — segue cascata");
+    true
+}
+
+/// CF9: 0x06 depois 0x0E (notebooks Intel honram CF9, não 8042).
+fn cf9_reset_try() {
+    k_nano::slog_bin!("SHUTDOWN", "ok", "CF9 try 0x06→0x0E");
+    k_nano::hal::cf9_reset();
+    k_nano::slog_bin!("SHUTDOWN", "warn", "CF9 timeout — segue 8042");
+}
+
+/// 8042 COM poll de IBF (ARCH.reboot já pola bit1 de 0x64, ~10ms, retries).
+fn ps2_reset_polled() {
+    ps2_reset();
+    k_nano::slog_bin!("SHUTDOWN", "warn", "8042 timeout — EC ignorou (segue triple-fault)");
 }
 
 /// WBINVD — força TODAS as linhas sujas ao DRAM antes de reset/power-off.
@@ -63,23 +106,17 @@ fn flush_caches() {
     }
 }
 
-#[allow(dead_code)] // fallback físico — NÃO usar no shutdown: S5 apaga a DRAM
-                    // antes de a captura acontecer no próximo boot (exp-1).
+#[allow(dead_code)] // fallback físico — S5 frio apaga a DRAM antes de captura.
 fn power_off_cascade() -> ! {
-    let tried_s5 = k_nano::acpi::power_off_s5();
-    if tried_s5 {
-        k_nano::slog_bin!("SHUTDOWN", "warn", "S5 escrito — aguardando HW");
-        k_nano::tsc::sleep_us(100_000);
-    }
-    k_nano::slog_bin!("SHUTDOWN", "warn", "fallback=qemu_0x604");
-    qemu_acpi_shutdown();
-    k_nano::tsc::sleep_us(20_000);
-    ps2_reset();
+    s5_poweroff_try();
+    qemu_poweroff_gated();
+    cf9_reset_try();
+    ps2_reset_polled();
+    k_nano::slog_bin!("SHUTDOWN", "warn", "triple-fault try (último recurso)");
+    k_nano::hal::triple_fault();
     overlay(">>> halted — safe to power off");
     POWER_UI_STATE.store(3, Ordering::Release);
-    loop {
-        x86_64::instructions::hlt();
-    }
+    k_nano::boot_ramlog::park_observable("power_off_cascade: tudo ignorado");
 }
 
 /// Desligamento ordenado (CAD / confirm / EventBus).
@@ -114,10 +151,21 @@ pub fn begin_orderly_shutdown(cause: ShutdownCause) -> ! {
     k_nano::slog_bin!("SHUTDOWN", "ok", "warm-reset p/ captura (logwriter grava BOOT.LOG + power-off)");
     halt_aps();
     flush_caches();
-    ps2_reset();
-    loop {
-        x86_64::instructions::hlt();
-    }
+    // Cascata HW real: S5 → 0x604 (QEMU-only) → reset quente p/ captura
+    // (CF9 → 8042 polled → triple-fault) → park observável.
+    // A captura (logwriter-efi + UEFI Shutdown) exige reset quente: S5 frio
+    // apagaria a DRAM antes dela — por isso S5 vem ANTES (se funcionar, o FAT
+    // já foi flushado acima) e o reset quente DEPOIS; sem ele "desligar" no
+    // HW vira halt mudo e a captura nunca acontece.
+    s5_poweroff_try();
+    qemu_poweroff_gated();
+    k_nano::slog_bin!("SHUTDOWN", "ok", "warm-reset p/ captura (CF9→8042→triple)");
+    cf9_reset_try();
+    ps2_reset_polled();
+    k_nano::slog_bin!("SHUTDOWN", "warn", "triple-fault try (último recurso)");
+    k_nano::hal::triple_fault();
+    k_nano::slog_bin!("SHUTDOWN", "warn", "triple-fault retornou?! park observável");
+    k_nano::boot_ramlog::park_observable("shutdown: reset ignorado");
 }
 
 /// Reinício ordenado.
@@ -144,10 +192,14 @@ pub fn begin_orderly_reboot(cause: ShutdownCause) -> ! {
     k_nano::boot_ramlog::seal_for_next_boot();
     halt_aps();
     flush_caches();
-    ps2_reset();
-    loop {
-        x86_64::instructions::hlt();
-    }
+    // Reboot NUNCA tenta S5/0x604 (são power-off): CF9 → 8042 polled →
+    // triple-fault → park observável.
+    cf9_reset_try();
+    ps2_reset_polled();
+    k_nano::slog_bin!("SHUTDOWN", "warn", "triple-fault try (último recurso)");
+    k_nano::hal::triple_fault();
+    k_nano::slog_bin!("SHUTDOWN", "warn", "triple-fault retornou?! park observável");
+    k_nano::boot_ramlog::park_observable("reboot: reset ignorado");
 }
 
 static RX_SHUTDOWN: spin::Mutex<Option<event_bus::Receiver>> = spin::Mutex::new(None);

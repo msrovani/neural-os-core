@@ -585,6 +585,42 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     let db_off = (r32(base, 0x14) & !0x3) as u64;
     let rtsoff = (r32(base, 0x18) & !0x1F) as u64;
 
+    // PRE-HCRST diagnóstico (só leitura MMIO, zero escrita): 1 linha/porta no
+    // formato canônico do oráculo. Roda aqui = ANTES de qualquer halt/HCRST/
+    // Run neste HC (`claim_firmware_ownership` abaixo já escreve LEGSUP; o
+    // 1º `w32(op, 0, ...)` halt vem depois). Cobre todo HC que chega a
+    // `init_xhci_select` (00:0d.0 e 00:14.0 na mesma ordem do scan PCI).
+    {
+        let usbcmd = r32(op, 0);
+        let rs = (usbcmd & 0x01) as u8;
+        let nports = if max_ports == 0 { 8 } else { max_ports };
+        for p in 1..=nports {
+            let off = 0x400 + (p as u64 - 1) * 0x10;
+            let v = r32(op, off);
+            let proto = if port_protocol_major(base, p) == 3 {
+                "SS"
+            } else {
+                "USB2"
+            };
+            let line = alloc::format!(
+                "PRE HC={:02x}:{:02x}.{} RS={} port={} proto={} PORTSC={:#x} CCS={} PED={} PLS={} SP={}",
+                d.bus,
+                d.device,
+                d.function,
+                rs,
+                p,
+                proto,
+                v,
+                v & 1,
+                (v >> 1) & 1,
+                (v >> 5) & 0xF,
+                (v >> 10) & 0xF
+            );
+            crate::slog_nano!("USB", "ok", "{}", line.as_str());
+            crate::boot_ramlog::append(&line);
+        }
+    }
+
     let fw = claim_firmware_ownership(base, hcc1);
     XHCI_STAGE.store(3, Ordering::Relaxed);
     let fw_sev = if fw == "os_owned" { "ok" } else { "warn" };
