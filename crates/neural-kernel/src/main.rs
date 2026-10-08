@@ -2068,10 +2068,15 @@ pub(crate) fn kernel_boot(
         crate::display::fb::boot_ckpt(182, "early xhci done");
         // R1 hub→MSC (route+TT): obrigatório p/ stick atrás de hub interno (Alienware).
         // Budget 3s no bringup — sem isto: Limine → tela preta (hub EP0).
+        // Gate 0 §5: try_lock no early path, nunca lock(); todo bloqueio USB
+        // entre boot_progress_line antes / boot_ckpt depois.
         k_hal::usb::install_bringup_hooks();
-        if crate::USB_MSC.lock().is_none() {
+        crate::display::fb::boot_progress_line("BOOT: MSC probe (hub-first)...");
+        let early_none = crate::USB_MSC.try_lock().map(|g| g.is_none()).unwrap_or(true);
+        if early_none {
             crate::display::fb::boot_ckpt(183, "early MSC probe");
             let ok = unsafe { k_hal::usb::probe_and_install() };
+            crate::display::fb::boot_ckpt(183, if ok { "early MSC probed OK" } else { "early MSC probed miss" });
             if ok {
                 crate::display::fb::boot_progress_line("BOOT: MSC OK (early)");
                 crate::display::fb::boot_ckpt(18, "early MSC OK");
@@ -2100,8 +2105,12 @@ pub(crate) fn kernel_boot(
             crate::display::fb::boot_progress_line("BOOT: MSC xhci-down (sem controller)");
         }
         crate::boot_logger::log("BOOT: early USB path (pre-NIC)");
-        if crate::USB_MSC.lock().is_some() {
+        // try_lock: early path nunca bloqueia atrás de enumeração xHCI.
+        let early_has_msc = crate::USB_MSC.try_lock().map(|g| g.is_some()).unwrap_or(false);
+        if early_has_msc {
+            crate::display::fb::boot_progress_line("BOOT: BOOT.LOG early flush...");
             let ok = crate::boot_logger::flush();
+            crate::display::fb::boot_ckpt(184, if ok { "early BOOT.LOG flushed" } else { "early BOOT.LOG ramlog" });
             if ok {
                 crate::display::fb::console_print("LOG: BOOT.LOG early OK (USB)");
             }
@@ -2354,7 +2363,13 @@ pub(crate) fn kernel_boot(
     k_nano::slog_bin!("BOOT", "ok", "pos-PS2 — USB-MSC/BOOT.LOG");
     crate::display::fb::boot_ckpt(24, "antes USB-MSC probe");
     {
-        if want_usb {
+        // Gate 0 §4: early path continua plan-gated; só o retry escapa do latch
+        // quando H1 errou o plano (hw_real && limine && MSC.None).
+        let msc_none = crate::USB_MSC.try_lock().map(|g| g.is_none()).unwrap_or(false);
+        let want_usb_late =
+            k_nano::boot_bind::should_probe_usb_late(hw_real, boot_tag.contains("limine"), msc_none);
+        k_nano::slog_nano!("USB", "warn", "want_usb_late={} (want_usb={})", want_usb_late, want_usb);
+        if want_usb_late {
             // Se early path já tem MSC, não re-probe (Address Device de novo quebra BOT).
             // QEMU: Enable Slot em tablet/kbd já timeoutou no early path — retry
             // + HID P24a/b = gap K184→K24 (7× wait_cmd).
@@ -2363,7 +2378,8 @@ pub(crate) fn kernel_boot(
                     k_nano::platform_probe::hypervisor(),
                     k_nano::platform_probe::HypervisorKind::None
                 );
-            if crate::USB_MSC.lock().is_none() {
+            let still_none = crate::USB_MSC.try_lock().map(|g| g.is_none()).unwrap_or(false);
+            if still_none {
                 if qemu_usb {
                     crate::display::fb::boot_ckpt(16, "USB-MSC skip retry (qemu)");
                     k_nano::slog_nano!(
@@ -2372,10 +2388,11 @@ pub(crate) fn kernel_boot(
                         "home=k_hal::usb profile=qemu | skip re-probe apos early FAIL (sem stick MSC — aceite=HW)"
                     );
                 } else {
+                crate::display::fb::boot_progress_line("BOOT: MSC retry (hub-first)...");
                 let ok = unsafe { k_hal::usb::probe_and_install() };
                 if ok {
                     k_nano::slog_nano!("USB", "ok", "stored for FAT model load (hub+root)");
-                    crate::display::fb::boot_ckpt(16, "USB-MSC OK");
+                    crate::display::fb::boot_ckpt(16, "USB-MSC OK (late)");
                 } else {
                     crate::display::fb::boot_ckpt(16, "USB-MSC AUSENTE");
                     k_nano::slog_nano!(

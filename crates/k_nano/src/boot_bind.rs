@@ -297,6 +297,13 @@ pub fn should_probe_usb_host() -> bool {
     storage_includes(StorageKind::UsbHost)
 }
 
+/// Escape tardio p/ retry DriverInit (Gate 0): early path continua plan-gated
+/// via `should_probe_usb_host`; só o retry escapa do latch quando H1 errou o
+/// plano em HW real Limine sem MSC. QEMU nunca escapa (hw_real=false).
+pub fn should_probe_usb_late(hw_real: bool, limine: bool, msc_none: bool) -> bool {
+    should_probe_usb_host() || (hw_real && limine && msc_none)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,5 +370,17 @@ mod tests {
         assert_eq!(n, 2);
         assert_eq!(o[0], StorageKind::Nvme);
         assert_eq!(o[1], StorageKind::Ata);
+    }
+
+    #[test]
+    fn usb_late_escapes_only_hw_limine_no_msc() {
+        // Isola o latch: plano sem UsbHost (H1 errou) → early false.
+        install_storage_plan(&[StorageKind::Ata], 1);
+        assert!(!should_probe_usb_host());
+        // Early path plan-gated; retry escapa só em HW real Limine sem MSC.
+        assert!(should_probe_usb_late(true, true, true));
+        assert!(!should_probe_usb_late(false, true, true));
+        assert!(!should_probe_usb_late(true, false, true));
+        assert!(!should_probe_usb_late(true, true, false));
     }
 }

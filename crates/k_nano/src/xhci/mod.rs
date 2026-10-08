@@ -754,14 +754,16 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
         ppc as u8
     );
 
-    // Port Power em TODAS as portas (padrão Redox flags_preserved + fix PP):
+    // Port Power em TODAS as portas (Gate 0: máscara neutra RO|RWS, nunca RMW cru).
     // HCRST pode deixar PP=0 — sem energia, CCS lê 0 para sempre e o scan MSC
-    // vê "nenhuma porta CCS" no metal (QEMU mantém PP=1 e mascarava). RMW
-    // preserva CCS/PLS/SPEED e escreve 1 nos RW1C (limpa changes stale).
+    // vê "nenhuma porta CCS" no metal (QEMU mantém PP=1 e mascarava).
+    // PP=0+CCS=0 com MMIO ok = assinatura metal esperada, não "sem stick".
     //
     // SESSION_345 F3 (Alienware 8086:a71e/51ed): pós-Limine o stick USB3 fica
     // PORTSC=0x2a0 (PP=1 CCS=0 PLS=RxDetect) — 10ms não basta p/ retrain.
     // Settle longo + RxDetect + WPR + poll CCS até 2s no metal.
+    // HCRST→RUN: re-assert PP=1 nas USB2 gerenciadas após RUN=1/HCH=0 +
+    // 20ms power-stable + readback (Gate 0 §1).
     {
         let metal = crate::platform_probe::probe_done()
             && matches!(
@@ -773,31 +775,57 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
             let off = 0x400 + (p as u64 - 1) * 0x10;
             let v = r32(op, off);
             dump.push_str(alloc::format!("P{}:{:#x} ", p, v).as_str());
-            w32(
-                op,
-                off,
-                v | (1 << 9) // PP
-                    | (1 << 17)
-                    | (1 << 18)
-                    | (1 << 19)
-                    | (1 << 21), // CSC/PEC/WRC/PRC RW1C
-            );
+            // Neutra + intenção PP + clears RW1C (limpa changes stale).
+            let intent = (1 << 9) | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21);
+            w32(op, off, bringup::portsc_neutral(v) | intent);
         }
         crate::slog_nano!("USB", "ok", "xHCI[{}] PORTSC pre-PP: {}", index, dump.as_str());
+        // 20ms power-stable pós-RUN (Gate 0 §1) + readback + re-assert USB2.
+        crate::tsc::sleep_ms(20);
+        for p in 1..=max_ports {
+            let off = 0x400 + (p as u64 - 1) * 0x10;
+            let v = r32(op, off);
+            // Re-assert PP=1 nas gerenciadas (PP=0 → PP=1); PP=1 mantém.
+            if (v >> 9) & 1 == 0 {
+                let intent = (1 << 9) | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21);
+                w32(op, off, bringup::portsc_neutral(v) | intent);
+            }
+        }
+        // Readback: PP=0+CCS=0 com MMIO ok = assinatura metal (não "sem stick").
+        {
+            let mut pp0 = 0u8;
+            for p in 1..=max_ports {
+                let off = 0x400 + (p as u64 - 1) * 0x10;
+                let v = r32(op, off);
+                if (v >> 9) & 1 == 0 && v & 1 == 0 {
+                    pp0 = pp0.saturating_add(1);
+                }
+            }
+            if pp0 > 0 {
+                crate::slog_nano!(
+                    "USB",
+                    "warn",
+                    "xHCI[{}] PP=0+CCS=0 em {} portas (assinatura metal pós-HCRST, não 'sem stick')",
+                    index,
+                    pp0
+                );
+            }
+        }
         crate::tsc::sleep_ms(if metal { 100 } else { 10 });
 
-        // SS escuros: forçar PLS=RxDetect (5) + LWS.
+        // SS escuros: forçar PLS=RxDetect (5) + LWS (neutra; PLS/SPEED fora do reset).
         for p in 1..=max_ports {
             let off = 0x400 + (p as u64 - 1) * 0x10;
             let v = r32(op, off);
             let ccs = v & 1;
             let pp = (v >> 9) & 1;
             if pp == 1 && ccs == 0 && port_protocol_major(base, p) >= 3 {
-                w32(
-                    op,
-                    off,
-                    (v & !(0xF << 5)) | (5 << 5) | (1 << 16) | (1 << 9),
-                );
+                // Neutra + PP + PLS=5 + LWS (preserva resto, zera RW1C).
+                let rxd = (bringup::portsc_neutral(v) & !(0xF << 5))
+                    | (1 << 9)
+                    | (5 << 5)
+                    | (1 << 16);
+                w32(op, off, rxd);
             }
         }
         crate::tsc::sleep_ms(if metal { 100 } else { 10 });
@@ -816,15 +844,12 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
                 if port_protocol_major(base, p) < 3 {
                     continue;
                 }
-                w32(
+                // Neutra + PP + RW1C + WPR (nunca RMW cru).
+                bringup::portsc_write(
                     op,
                     off,
-                    v | (1 << 9)
-                        | (1 << 17)
-                        | (1 << 18)
-                        | (1 << 19)
-                        | (1 << 21)
-                        | (1 << 31), // WPR
+                    v,
+                    (1 << 9) | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21) | (1 << 31),
                 );
                 let t0 = crate::tsc::rdtsc();
                 let hz = crate::tsc::tsc_hz();
@@ -832,8 +857,8 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
                 loop {
                     let v2 = r32(op, off);
                     if v2 & (1 << 19) != 0 || (v2 & 1 != 0) {
-                        // clear WRC
-                        w32(op, off, v2 | (1 << 19));
+                        // clear WRC via neutra
+                        bringup::portsc_write(op, off, v2, 1 << 19);
                         break;
                     }
                     if budget > 0 && crate::tsc::rdtsc().wrapping_sub(t0) > budget {

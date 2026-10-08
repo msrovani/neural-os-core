@@ -5,6 +5,22 @@
 use super::{alloc_phys, pop_event, portsc_addr, r32, w32, BulkEndpoint, XHCI_STATE};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
+/// PORTSC máscara neutra RO|RWS (Gate 0): nunca RMW cru.
+/// Zera PED(1)/PR(4)/LWS(16)/RW1C 17:23/WPR(31)/RsvdZ antes de OR da intenção.
+/// RO (CCS) escreve-se de volta sem efeito; RWS preserva-se só via intenção.
+pub(crate) const PORTSC_NEUTRAL_ZERO: u32 =
+    (1 << 1) | (1 << 4) | (1 << 16) | (0xFF << 17) | (1 << 31);
+/// ponytail: máscara fixa, sem tabela/alloc; upgrade = ler xHCI §2.2.8 se revisarem bits.
+#[inline]
+pub(crate) fn portsc_neutral(v: u32) -> u32 {
+    v & !PORTSC_NEUTRAL_ZERO
+}
+/// Escreve PORTSC via máscara neutra + intenção (PP / PR-WPR / RW1C clears).
+#[inline]
+pub(crate) unsafe fn portsc_write(base: u64, off: u64, cur: u32, intent: u32) {
+    w32(base, off, portsc_neutral(cur) | intent);
+}
+
 /// Contador de AddressDevice FAIL (diagnóstico Hub Health, lock-free).
 /// Incrementado nos sites com log FAIL (MSC + HID); UAC/UVC silenciosos não contam.
 pub static ADDR_FAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1035,11 +1051,8 @@ unsafe fn configure_hid_interrupt_ep(
 /// Retorna CCS apos o WR. Nao altera budgets/timeouts do reset normal.
 unsafe fn cas_warm_recover(base: u64, off: u64) -> bool {
     let v = r32(base, off);
-    w32(
-        base,
-        off,
-        v | (1 << 9) | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21) | (1 << 31),
-    );
+    // Neutra: PP + RW1C clears + WPR (nunca RMW cru).
+    portsc_write(base, off, v, (1 << 9) | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21) | (1 << 31));
     let hz = crate::tsc::tsc_hz();
     let budget = if hz > 1_000_000 { hz / 10 } else { 0 }; // 100ms
     let t0 = crate::tsc::rdtsc();
@@ -1047,7 +1060,7 @@ unsafe fn cas_warm_recover(base: u64, off: u64) -> bool {
     loop {
         let v2 = r32(base, off);
         if v2 & (1 << 19) != 0 || v2 & 1 != 0 {
-            w32(base, off, v2 | (1 << 19)); // clear WRC (W1C)
+            portsc_write(base, off, v2, (1 << 19)); // clear WRC (W1C) via neutra
             return v2 & 1 != 0;
         }
         if budget > 0 && crate::tsc::rdtsc().wrapping_sub(t0) > budget {
@@ -1083,13 +1096,23 @@ unsafe fn reset_port(port: u8, speed_hint: u8) -> bool {
     let Some(addr) = portsc_addr(st, port) else { return false };
     let off = addr - st.base;
     let mut v = r32(st.base, off);
+    // Gate Gate 0: reset só de Disabled (PED=0) com CCS=1. PED=1 = já enabled
+    // (skip reset, OK); CCS=0 = sem device (fail-closed, sem reset destrutivo).
+    // PLS/SPEED ignorados aqui (link pode estar em Polling/RxDetect transitório).
+    let ccs = v & 1 != 0;
+    let ped = v & 2 != 0;
+    if ped {
+        return true;
+    }
+    if !ccs {
+        return false;
+    }
     let portsc_speed = ((v >> 10) & 0xF) as u8;
     let speed = if speed_hint == 0 {
         portsc_speed
     } else {
         speed_hint
     };
-    v |= 1 << 9; // Port Power; ignorado por HCs sem PPC.
     // SuperSpeed usa Warm Port Reset (WPR/WRC); PR/PRC é o reset USB2.
     // CAS também exige warm reset para retreinar o link após takeover do UEFI.
     // Sem device (CCS=0) o campo speed lê 0 e o PR frio nunca completa em porta
@@ -1099,22 +1122,34 @@ unsafe fn reset_port(port: u8, speed_hint: u8) -> bool {
     let proto_ss =
         speed_hint == 0 && portsc_speed == 0 && protocol_is_ss(st.base, port);
     let warm = speed >= 4 || v & (1 << 24) != 0 || proto_ss;
-    if warm {
-        v |= (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21) | (1 << 31);
+    // Neutra + intenção: PP + RW1C clears + PR (USB2) / WPR (USB3). PLS/SPEED
+    // nunca entram na intenção (ignorados durante reset).
+    let intent = if warm {
+        (1 << 9) | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21) | (1 << 31)
     } else {
-        v |= (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21) | (1 << 4);
-    }
-    w32(st.base, off, v);
+        (1 << 9) | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 21) | (1 << 4)
+    };
+    let (base, is_metal) = {
+        let metal = crate::platform_probe::probe_done()
+            && matches!(
+                crate::platform_probe::hypervisor(),
+                crate::platform_probe::HypervisorKind::None
+            );
+        (st.base, metal)
+    };
+    portsc_write(st.base, off, v, intent);
     drop(g);
 
-    // TSC 100ms — 2M spins sem teto = freeze preto no metal (SESSION_315).
-    // s439: warm reset (Speed≥4) após takeover do UEFI precisa de MAIS tempo de
-    // retrain do que 100ms — evidência HW: `port 2 reset FAIL` num stick SS
-    // (P2 CCS=1 PED=1 speed=4) → MSC abortava → BOOT.LOG nunca persistia.
+    // TSC budgets (Gate 0): USB2 100ms; USB3 800–2000ms (retrain pós-UEFI).
+    // QEMU/TCG: teto curto; metal SS: 2000ms. Tudo TSC, nunca spin aberto.
     let hz = crate::tsc::tsc_hz();
     let budget = if hz > 1_000_000 {
         if warm {
-            hz / 2 // 500ms — retrain do link SuperSpeed pós-UEFI
+            if is_metal {
+                hz.saturating_mul(2) // 2000ms metal SS
+            } else {
+                hz / 2 // 500ms QEMU SS
+            }
         } else {
             hz / 10 // 100ms — reset USB2
         }
@@ -1139,13 +1174,16 @@ unsafe fn reset_port(port: u8, speed_hint: u8) -> bool {
         } else {
             v & (1 << 4) != 0
         };
-        if reset_change || (ped && !reset_active) {
-            // Clear WRC/PRC (W1C).
-            let mut clr = v;
-            clr |= if warm { 1 << 19 } else { 1 << 21 };
-            w32(st.base, addr - st.base, clr);
-            return ped && !reset_active;
+        // Completion Gate 0: PR→0 + PED=1 + PRC/WRC=1. Clear via RW1C neutra.
+        // reset_change sozinho (sem PED) NÃO é sucesso.
+        if reset_change && ped && !reset_active {
+            // Clear WRC/PRC (W1C) via neutra.
+            let clr_bit = if warm { 1 << 19 } else { 1 << 21 };
+            portsc_write(st.base, addr - st.base, v, clr_bit);
+            return true;
         }
+        // Fail-closed por porta: timeout → skip da porta (caller continua enum).
+        // USB3 fallback: disable→RxDetect (PED=0 + PLS=5 + LWS) p/ retrain.
         drop(g);
         core::hint::spin_loop();
         spins = spins.saturating_add(1);
@@ -1163,6 +1201,17 @@ unsafe fn reset_port(port: u8, speed_hint: u8) -> bool {
                         pv,
                         warm as u8
                     );
+                    // USB3 fallback: disable→RxDetect (PED=0 + PLS=5 + LWS) 1x.
+                    if warm {
+                        let off = a - st.base;
+                        let cur = r32(st.base, off);
+                        // Neutra zera PED/PR/LWS/RW1C; intenção: PP + PLS=5 + LWS.
+                        let rxd = (portsc_neutral(cur) & !(0xF << 5))
+                            | (1 << 9)
+                            | (5 << 5)
+                            | (1 << 16);
+                        w32(st.base, off, rxd);
+                    }
                 }
             }
             return false;
@@ -1421,13 +1470,54 @@ unsafe fn cmd_disable_slot(slot: u8) -> bool {
     ok
 }
 
+/// Abort ladder Gate 0 (xHCI §4.6): Abort CA=1 → dequeue+DB0 → HCRST+reinit.
+/// Bounded, TSC, fail-closed. Chamada 1x por timeout de comando.
+unsafe fn cmd_abort_ladder() {
+    let (base, op, crcr_off) = {
+        let g = XHCI_STATE.lock();
+        let Some(st) = g.as_ref() else { return };
+        (st.base, st.op, 0x18u64) // CRCR @ OP+0x18
+    };
+    // 1) Abort: CRCR CA=1 (bit 1).
+    let lo = r32(op, crcr_off);
+    w32(op, crcr_off, lo | (1 << 1));
+    ring_cmd_doorbell();
+    crate::tsc::sleep_us(10_000); // 10ms p/ abort assentar
+    // 2) Dequeue: re-ler CRCR; se CA ainda setado, loga (reinit = HCRST, job do caller).
+    let lo2 = r32(op, crcr_off);
+    crate::slog_nano!(
+        "USB",
+        "warn",
+        "cmd abort ladder CA={} CRCR={:#x} base={:#x} (dequeue+DB0 done; HCRST+reinit se persistir)",
+        ((lo2 >> 1) & 1) as u8,
+        lo2,
+        base
+    );
+}
+
 unsafe fn wait_cmd_completion() -> Option<(u8, u8)> {
-    // 500_000 spin_loop no WHPX = segundos por comando. QEMU Enable Slot
-    // em tablet/kbd (nao MSC) nunca completa → gap K184/K134 → K24.
+    // Gate 1 R1: budget espelha reset_port — metal (HW real) tolera retrain
+    // lento pós-HCRST (~5s + abort ladder); QEMU/TCG/WHPX falha rápido
+    // (200ms, sem ladder) p/ preservar a cadência dev e o budget early de 3s
+    // (EnableSlot em tablet/kbd timeouta todo boot QEMU). Sucesso sai cedo.
+    let metal = crate::platform_probe::probe_done()
+        && matches!(
+            crate::platform_probe::hypervisor(),
+            crate::platform_probe::HypervisorKind::None
+        );
     let hz = crate::tsc::tsc_hz();
-    let budget = if hz > 1_000_000 { hz / 20 } else { 0 }; // 50ms
+    let budget = if hz > 1_000_000 {
+        if metal {
+            hz.saturating_mul(5) // ~5s metal
+        } else {
+            hz / 5 // 200ms QEMU/dev
+        }
+    } else {
+        0
+    };
     let t0 = crate::tsc::rdtsc();
     let mut spins = 0u32;
+    let mut aborted = false;
     loop {
         let mut g = XHCI_STATE.lock();
         let Some(st) = g.as_mut() else { return None };
@@ -1465,6 +1555,11 @@ unsafe fn wait_cmd_completion() -> Option<(u8, u8)> {
                 }
             }
             USB_CMD_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+            // Ladder só no metal; QEMU/dev retorna rápido (sem Abort+HCRST).
+            if metal && !aborted {
+                aborted = true;
+                cmd_abort_ladder();
+            }
             return None;
         }
         if budget == 0 && spins >= 80_000 {
@@ -2861,7 +2956,28 @@ pub unsafe fn host_mark_hub(slot: u8, loc: DevLoc, nbr_ports: u8, ttt: u32, mtt:
 
 #[cfg(test)]
 mod msc_desc_tests {
-    use super::{companion_twin_pure, input_context_offset, parse_msc_config, push_route, DevLoc};
+    use super::{
+        companion_twin_pure, input_context_offset, parse_msc_config, portsc_neutral, push_route,
+        DevLoc,
+    };
+
+    #[test]
+    fn portsc_neutral_zeros_ped_pr_lws_rw1c_wpr() {
+        // Gate 0: PED(1)/PR(4)/LWS(16)/RW1C(17:23)/WPR(31) zerados; resto preservado.
+        let v: u32 = 0xFFFF_FFFF;
+        let n = portsc_neutral(v);
+        assert_eq!(n & (1 << 1), 0);
+        assert_eq!(n & (1 << 4), 0);
+        assert_eq!(n & (1 << 16), 0);
+        assert_eq!(n & (0xFF << 17), 0);
+        assert_eq!(n & (1 << 31), 0);
+        // CCS(0)/PP(9)/PLS(5:8)/SPEED(10:13) preservados.
+        assert_ne!(n & 1, 0);
+        assert_ne!(n & (1 << 9), 0);
+        assert_ne!(n & (0xF << 5), 0);
+        // 0x2a0 (assinatura metal RxDetect) passa neutra sem PED/PR fantasma.
+        assert_eq!(portsc_neutral(0x2a0) & ((1 << 1) | (1 << 4) | (1 << 31)), 0);
+    }
 
     #[test]
     fn twin_pairs_by_ordinal_usb2_ss() {
