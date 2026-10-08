@@ -551,14 +551,64 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
     // xHCI usa DMA para DCBAA/rings: Memory Space + Bus Master são obrigatórios.
     crate::pci::enable_pci_bus_master(&d);
     let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
-    let mmio = (d.bar0 & !0xF) as u64;
+    // H3 (HW real): BAR0 64-bit acima de 4GB — d.bar0 já chega full u64 via
+    // read_bar_value (compõe o dword alto), mas o TIPO vem do config space
+    // (bit0=I/O, bits2:1: 0b10=64-bit). Re-lê o dword cru: I/O ou zero =
+    // refuse honesto (fail-closed), nunca truncar silenciosamente.
+    let bar0_low = crate::pci::read_config_dword(d.bus, d.device, d.function, 0x10);
+    if bar0_low & 0x1 != 0 {
+        XHCI_STAGE.store(2, Ordering::Relaxed);
+        crate::slog_nano!(
+            "USB",
+            "warn",
+            "xHCI[{}] {:02x}:{:02x}.{} BAR0 I/O (raw={:#x}) — skip",
+            index,
+            d.bus,
+            d.device,
+            d.function,
+            bar0_low
+        );
+        return false;
+    }
+    let is_64 = (bar0_low & 0x6) == 0x4;
+    let mmio = if is_64 {
+        let hi = crate::pci::read_config_dword(d.bus, d.device, d.function, 0x14) as u64;
+        (hi << 32) | ((bar0_low & !0xF) as u64)
+    } else {
+        (d.bar0 & !0xF) as u64
+    };
+    if mmio == 0 {
+        XHCI_STAGE.store(2, Ordering::Relaxed);
+        crate::slog_nano!(
+            "USB",
+            "warn",
+            "xHCI[{}] {:02x}:{:02x}.{} BAR0 zerada — skip",
+            index,
+            d.bus,
+            d.device,
+            d.function
+        );
+        return false;
+    }
     // xHCI BAR cobre Cap+Op+Runtime+Doorbell (~64KB). Mapeia TODAS as páginas
-    // UC com map_page_uc (cria o mapeamento). set_page_uc só seta flags em
-    // mapeamento EXISTENTE — sem map, o 1º r32() dá #PF (exposto sob TCG;
-    // WHPX mascarava. Ver SESSION_237).
+    // UC com map_page_uc (cria o mapeamento; aceita phys 64-bit via u64).
+    // set_page_uc só seta flags em mapeamento EXISTENTE — sem map, o 1º r32()
+    // dá #PF (exposto sob TCG; WHPX mascarava. Ver SESSION_237).
     for page in 0..16 {
         crate::apic::map_page_uc(mmio + page * 0x1000, pmoff);
     }
+    // Endereço full mapeado na série xHCI[i] existente (mesmo formato/prefixo).
+    crate::slog_nano!(
+        "USB",
+        "ok",
+        "xHCI[{}] {:02x}:{:02x}.{} bar={:#x} is64={}",
+        index,
+        d.bus,
+        d.device,
+        d.function,
+        mmio,
+        is_64 as u8
+    );
     let base = mmio + pmoff;
     let capl = r32(base, 0) as u64 & 0xFF;
     if capl < 0x20 || capl > 0x100 {

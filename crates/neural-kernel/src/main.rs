@@ -2412,6 +2412,16 @@ pub(crate) fn kernel_boot(
             }
         } else {
             crate::display::fb::boot_ckpt(16, "USB-MSC skip (plano)");
+            // Discriminador do gate (@oracle): 4 inputs como números.
+            // Lock-free (try_lock fail-safe), ~1ms, sem MMIO.
+            let msc_none = crate::USB_MSC.try_lock().map(|g| g.is_none()).unwrap_or(false);
+            crate::display::fb::boot_progress_line(&alloc::format!(
+                "USB gate skip hw={} limine={} msc_none={} plan={}",
+                hw_real as u8,
+                boot_tag.contains("limine") as u8,
+                msc_none as u8,
+                want_usb as u8
+            ));
         }
         let live_usb_no_msc = hw_real
             && boot_tag.contains("limine")
