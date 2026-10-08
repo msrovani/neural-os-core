@@ -2926,6 +2926,8 @@ pub(crate) fn kernel_boot(
         if usb_live_fb {
             crate::display::fb::boot_progress_line("BOOT: skip models (no MSC)");
         }
+        // Fase 2: retry tardio quando o MSC chegar (SysInfoAgent, USB-only).
+        crate::agents::sysinfo_agent::note_model_late_needed();
         k_nano::slog_nano!(
             "FAT",
             "info",
