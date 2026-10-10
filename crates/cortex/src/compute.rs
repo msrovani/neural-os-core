@@ -282,15 +282,15 @@ pub(crate) fn gpu_registered() -> bool {
 //   payload = b"MR\0" | shape.0 u32 LE | shape.1 u32 LE | data (f32 LE × N)
 //
 // SESSION_237: payloads grandes são fragmentados pelo transporte
-// (send_fragmented/recv_fragmented). s457: o teto do wire é
-// FRAG_MAX_PARTS(64) × FRAG_MAX_CHUNK(1000) = 64.000 B — o RX dropa
-// total_len > 64.000 em silêncio. Preflight abaixo rejeita o job ANTES de
+// (send_fragmented/recv_fragmented). s463: o teto do wire é
+// FRAG_MAX_PARTS(1024) × FRAG_MAX_CHUNK(1000) = 1.024.000 B (bitmap de
+// reassembly [u64;16]). Preflight abaixo rejeita o job ANTES de
 // qualquer Vec (serialize copiaria MBs e a recusa viria depois).
 
-/// Teto REAL do wire FRAG: FRAG_MAX_PARTS(64) × FRAG_MAX_CHUNK(1000) = 64.000 B
-/// (constantes privadas em `k_nano/src/net/udp_broadcast.rs`). Espelho local —
-/// atualizar os dois juntos se um mudar.
-const MESH_FRAG_WIRE_LIMIT: usize = 64_000;
+/// Teto REAL do wire FRAG: FRAG_MAX_PARTS(1024) × FRAG_MAX_CHUNK(1000) =
+/// 1.024.000 B (constantes privadas em `k_nano/src/net/udp_broadcast.rs`).
+/// Espelho local — atualizar os dois juntos se um mudar.
+const MESH_FRAG_WIRE_LIMIT: usize = 1_024_000;
 
 /// Tamanho no wire de um pacote assinado/selado: header do pacote
 /// (PACKET_HEADER_SIZE) + payload + tag. Tag máxima = Ed25519 64B (HMAC 32B /
@@ -887,10 +887,10 @@ mod mesh_preflight_tests {
         );
     }
 
-    /// Fronteira do teto do wire: 64.000 passa; 64.001 recusa por wire_limit.
-    /// Budget decide abaixo do teto do wire.
+    /// Fronteira do teto do wire: 1.024.000 passa; 1.024.001 recusa por
+    /// wire_limit. Budget decide abaixo do teto do wire.
     #[test]
-    fn fronteira_64k() {
+    fn fronteira_teto_wire() {
         assert_eq!(mesh_frag_gate(MESH_FRAG_WIRE_LIMIT, usize::MAX), None);
         assert_eq!(
             mesh_frag_gate(MESH_FRAG_WIRE_LIMIT + 1, usize::MAX),
@@ -904,7 +904,7 @@ mod mesh_preflight_tests {
     /// serialize — o Vec real só é construído aqui p/ provar byte-exatidão).
     #[test]
     fn oversized_recusado_pre_serialize() {
-        // w 512×512 packed = 64KB + x 512×512 f32 = 1MB → est ≫ 64.000.
+        // w 512×512 packed = 64KB + x 512×512 f32 = 1MB → est ≫ 1.024.000.
         let w = mk_w(512, 512);
         let x = Tensor::zero((512, 512));
         let est = estimate_mesh_request_wire_size(&w, &x).unwrap();
@@ -923,9 +923,9 @@ mod mesh_preflight_tests {
         );
     }
 
-    /// Fronteira exata no teto: shapes montadas p/ est == 64.000 passam.
+    /// Fronteira exata no teto: shapes montadas p/ est == 1.024.000 passam.
     #[test]
-    fn request_na_fronteira_exata_64k() {
+    fn request_na_fronteira_exata() {
         // wire = ovh + (hdr + wbytes + 4*xlen); ovh = header pacote + assinatura.
         let ovh = k_nano::net::noproto::PACKET_HEADER_SIZE + k_nano::identity::SIGNATURE_LEN;
         let hdr = 19usize; // "MW\0" + 2 shapes u32 (byte-exato c/ serialize)
@@ -935,7 +935,7 @@ mod mesh_preflight_tests {
         let w = mk_w(4, wbytes);
         let x = Tensor::zero((xlen, 1));
         let est = estimate_mesh_request_wire_size(&w, &x).unwrap();
-        assert_eq!(est, MESH_FRAG_WIRE_LIMIT, "est deve cravar 64.000");
+        assert_eq!(est, MESH_FRAG_WIRE_LIMIT, "est deve cravar o teto do wire");
         assert_eq!(mesh_frag_gate(est, usize::MAX), None);
     }
 

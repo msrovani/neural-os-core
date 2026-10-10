@@ -486,10 +486,10 @@ const FRAG_HEADER_SIZE: usize = 5 + 16;
 const FRAG_MAX_CHUNK: usize = 1000;
 /// Payloads ≤ 1200B seguem o caminho direto (frame ≤ 1242B, sem fragmentar).
 const FRAG_DIRECT_MAX: usize = 1200;
-/// Máximo de fragmentos por mensagem (bitmask [u8; 8] = 64 bits).
-const FRAG_MAX_PARTS: u32 = 64;
-/// Teto de payload fragmentável = FRAG_MAX_PARTS × FRAG_MAX_CHUNK (64.000B).
-/// Acima disso o TX emitiria total_frags > 64, que TODO receptor dropa no
+/// Máximo de fragmentos por mensagem (bitmap [u64; 16] = 1024 bits).
+const FRAG_MAX_PARTS: u32 = 1024;
+/// Teto de payload fragmentável = FRAG_MAX_PARTS × FRAG_MAX_CHUNK (1.024.000B).
+/// Acima disso o TX emitiria total_frags > 1024, que TODO receptor dropa no
 /// guard de header — mensagem indeliverável (SESSION_354: sucesso falso é
 /// pior que falha honesta).
 const FRAG_MAX_PAYLOAD: usize = (FRAG_MAX_PARTS as usize) * FRAG_MAX_CHUNK;
@@ -497,12 +497,35 @@ const FRAG_MAX_PAYLOAD: usize = (FRAG_MAX_PARTS as usize) * FRAG_MAX_CHUNK;
 /// Contador global de frag_id (único por boot — suficiente em broadcast LAN).
 static FRAG_ID: AtomicU32 = AtomicU32::new(1);
 
+// ── Contadores de medida FRAG (SESSION_463, decisão do mantenedor) ──────
+// RX: custo de reassembly (ops de inserção por mensagem); TX: fragmentos
+// por mensagem. Wiring do slog NÃO está no escopo desta lane — um agente
+// lê `frag_stats()` e sloga.
+static FRAG_RX_MSGS: AtomicU64 = AtomicU64::new(0);
+static FRAG_RX_OPS: AtomicU64 = AtomicU64::new(0);
+static FRAG_TX_MSGS: AtomicU64 = AtomicU64::new(0);
+static FRAG_TX_FRAGS: AtomicU64 = AtomicU64::new(0);
+
+/// Snapshot dos contadores de medida FRAG: `(rx_msgs, rx_ops, tx_msgs, tx_frags)`.
+/// - `rx_msgs`/`rx_ops`: remontagens completas / inserções de fragmento
+///   (custo por mensagem = rx_ops ÷ rx_msgs).
+/// - `tx_msgs`/`tx_frags`: mensagens fragmentadas / frames FRAG emitidos
+///   (fragmentos por mensagem = tx_frags ÷ tx_msgs). Acumulativos desde o boot.
+pub fn frag_stats() -> (u64, u64, u64, u64) {
+    (
+        FRAG_RX_MSGS.load(Ordering::Relaxed),
+        FRAG_RX_OPS.load(Ordering::Relaxed),
+        FRAG_TX_MSGS.load(Ordering::Relaxed),
+        FRAG_TX_FRAGS.load(Ordering::Relaxed),
+    )
+}
+
 /// Envia payload; fragmenta se > 1200B. O payload deve ser o blob JÁ assinado
 /// (NoProto+payload+assinatura) — a fragmentação é ANTES do wire, o reassembly
 /// é DEPOIS do wire e ANTES do verify_packet no receptor.
 pub fn send_fragmented(payload: &[u8], port: u16) -> bool {
-    // Guard honesto no TX: payload > 64.000B emitiria total_frags > 64, que
-    // todo receptor dropa — retornar true seria mentira de sucesso.
+    // Guard honesto no TX: payload > 1.024.000B emitiria total_frags > 1024,
+    // que todo receptor dropa — retornar true seria mentira de sucesso.
     if payload.len() > FRAG_MAX_PAYLOAD {
         crate::slog_nano!(
             "P2P", "warn",
@@ -516,6 +539,8 @@ pub fn send_fragmented(payload: &[u8], port: u16) -> bool {
     }
     let id = FRAG_ID.fetch_add(1, Ordering::Relaxed);
     let total_frags = ((payload.len() + FRAG_MAX_CHUNK - 1) / FRAG_MAX_CHUNK) as u32;
+    FRAG_TX_MSGS.fetch_add(1, Ordering::Relaxed);
+    FRAG_TX_FRAGS.fetch_add(total_frags as u64, Ordering::Relaxed);
     let total_len = payload.len() as u32;
     let mut ok = true;
     let mut off = 0usize;
@@ -545,8 +570,8 @@ struct FragReassembly {
     total_frags: u32,
     received: u32,
     total_len: usize,
-    /// bitmask de fragmentos recebidos (64 bits — FRAG_MAX_PARTS).
-    seen: [u8; 8],
+    /// bitmask de fragmentos recebidos (1024 bits — FRAG_MAX_PARTS).
+    seen: [u64; 16],
     /// pedaços por índice (fora de ordem ok — concatenação por índice).
     chunks: Vec<Vec<u8>>,
     /// TIMER_TICKS da última atualização (timeout simples).
@@ -660,18 +685,18 @@ pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
                 total_frags,
                 received: 0,
                 total_len,
-                seen: [0u8; 8],
+                seen: [0u64; 16],
                 chunks: Vec::new(),
                 last_tick: now,
             });
         }
-        let byte = (idx / 8) as usize;
-        let bit = 1u8 << (idx % 8);
+        let word = (idx / 64) as usize;
+        let bit = 1u64 << (idx % 64);
         let rs = table[slot_pos].as_mut().unwrap();
-        if (rs.seen[byte] & bit) != 0 {
+        if (rs.seen[word] & bit) != 0 {
             continue; // fragmento duplicado — ignora
         }
-        rs.seen[byte] |= bit;
+        rs.seen[word] |= bit;
         if rs.chunks.len() <= idx as usize {
             rs.chunks.resize(idx as usize + 1, Vec::new());
         }
@@ -692,6 +717,7 @@ pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
             dest.extend_from_slice(chunk);
         }
         rs.received += 1;
+        FRAG_RX_OPS.fetch_add(1, Ordering::Relaxed);
         rs.last_tick = now;
 
         // Completo? Concatena por índice e libera o slot.
@@ -719,6 +745,7 @@ pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
                 "P2P", "ok",
                 "frag RX id={} partes={} len={}", complete_id, complete_parts, complete_len
             );
+            FRAG_RX_MSGS.fetch_add(1, Ordering::Relaxed);
             return Some(out);
         }
         // Ainda incompleto — continua drenando.
@@ -768,7 +795,7 @@ static UCAST_STASH: Mutex<Vec<(Vec<u8>, [u8; 6])>> = Mutex::new(Vec::new());
 /// reassembly é DEPOIS do wire e ANTES do verify_packet no receptor.
 /// Phase 2: stop-and-wait com ACK seletivo por fragmento.
 pub fn send_fragmented_unicast(payload: &[u8], dest_mac: [u8; 6], port: u16) -> bool {
-    // Guard honesto no TX (mesmo contrato do send_fragmented): > 64.000B é
+    // Guard honesto no TX (mesmo contrato do send_fragmented): > 1.024.000B é
     // indeliverável — recusa antes de qualquer frame/ACK-wait.
     if payload.len() > FRAG_MAX_PAYLOAD {
         crate::slog_nano!(
@@ -783,6 +810,8 @@ pub fn send_fragmented_unicast(payload: &[u8], dest_mac: [u8; 6], port: u16) -> 
     }
     let id = FRAG_ID.fetch_add(1, Ordering::Relaxed);
     let total_frags = ((payload.len() + FRAG_MAX_CHUNK - 1) / FRAG_MAX_CHUNK) as u32;
+    FRAG_TX_MSGS.fetch_add(1, Ordering::Relaxed);
+    FRAG_TX_FRAGS.fetch_add(total_frags as u64, Ordering::Relaxed);
     let total_len = payload.len() as u32;
     let mut ok = true;
     let mut off = 0usize;
@@ -944,21 +973,21 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
                 total_frags,
                 received: 0,
                 total_len,
-                seen: [0u8; 8],
+                seen: [0u64; 16],
                 chunks: Vec::new(),
                 last_tick: now,
             });
         }
-        let byte = (idx / 8) as usize;
-        let bit = 1u8 << (idx % 8);
+        let word = (idx / 64) as usize;
+        let bit = 1u64 << (idx % 64);
         let rs = table[slot_pos].as_mut().unwrap();
-        if (rs.seen[byte] & bit) != 0 {
+        if (rs.seen[word] & bit) != 0 {
             // Fragmento duplicado — envia ACK mesmo assim (idempotente).
             drop(table);
             let _ = send_frack(src_mac, port, id, idx);
             continue;
         }
-        rs.seen[byte] |= bit;
+        rs.seen[word] |= bit;
         if rs.chunks.len() <= idx as usize {
             rs.chunks.resize(idx as usize + 1, Vec::new());
         }
@@ -979,6 +1008,7 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
             dest.extend_from_slice(chunk);
         }
         rs.received += 1;
+        FRAG_RX_OPS.fetch_add(1, Ordering::Relaxed);
         rs.last_tick = now;
         
         // Envia ACK automático para o remetente.
@@ -1013,6 +1043,7 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
                 "P2P", "info",
                 "frag-unicast RX id={} partes={} len={}", complete_id, complete_parts, complete_len
             );
+            FRAG_RX_MSGS.fetch_add(1, Ordering::Relaxed);
             return Some(out);
         }
         // Ainda incompleto — continua drenando.
@@ -1021,7 +1052,8 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
 
 // ─── Testes host — protocolo FRAG/FRACK (LOG AGENTES step 3) ────────────────
 // Propriedades: remontagem (in/out-of-order), truncamento, duplicação, perda,
-// boundary 64.000, formato FRACK, chunking TX, prioridade da stash M10.
+// boundary 1.024.000 (teto novo) + 64.000 legado, formato FRACK, chunking TX,
+// prioridade da stash M10, contadores de medida.
 //
 // Como dirigir no host (padrão p2p_sim: statics dirigidos direto — o PIT não
 // corre no host, TIMER_TICKS é um AtomicUsize que o teste store()a):
@@ -1050,7 +1082,7 @@ mod tests {
     /// TOTAL_RAM_MB: o default no host é 512 → budget de reassembly = 1200B
     /// (nó frugal DEGRADED — produção correta, mas droparia os payloads de
     /// teste >1200B no guard `can_afford_frag`). 0 = "RAM desconhecida" →
-    /// budget pleno 64.000 (ramo `ram_mb == 0` de `frag_reassembly_budget_bytes`).
+    /// budget pleno 1.024.000 (ramo `ram_mb == 0` de `frag_reassembly_budget_bytes`).
     /// Nenhum outro teste host lê TOTAL_RAM_MB (memory tests = allocator only).
     fn reset_frag_state() {
         for slot in REASSEMBLY.lock().iter_mut() {
@@ -1233,12 +1265,12 @@ mod tests {
         TIMER_TICKS.store(0, Ordering::Relaxed);
     }
 
-    /// Propriedade 6 (boundary): exatamente 64.000B (64 chunks × 1000) é
-    /// aceito — teto = FRAG_MAX_PARTS × FRAG_MAX_CHUNK = max_legit_len e
-    /// também o budget de reassembly no host (RAM=0 → 64.000); 64.001 é
-    /// rejeitado (o RX dropa em silêncio — guard de header sem slog).
+    /// Propriedade 6 (boundary legado + teto novo): 64.000B (64 chunks) segue
+    /// aceito; 64.001B (65 partes) agora é LEGÍTIMO — o teto subiu para
+    /// FRAG_MAX_PARTS(1024) × FRAG_MAX_CHUNK(1000) = 1.024.000B e o bitmap
+    /// [u64;16] cobre bits além do 64 (word 1).
     #[test]
-    fn frag_boundary_64000_accepted_64001_rejected() {
+    fn frag_boundary_64000_accepted_65_parts_now_deliverable() {
         let _g = TEST_LOCK.lock();
         reset_frag_state();
         setup_nic_config();
@@ -1253,12 +1285,19 @@ mod tests {
         assert_eq!(out.len(), 64_000);
         assert_eq!(out, payload);
 
-        // 64.001B: total_frags=65 > FRAG_MAX_PARTS(64) E total_len > 64.000 —
-        // os dois guards rejeitam. O TX agora recusa esse tamanho no entry
-        // (guard honesto — ver send_fragmented_oversize_rejected_no_frames),
-        // então esse header só chega ao RX de um par desatualizado/malicioso.
-        inject(make_frag(0x60_02, 65, 0, 64_001, &pattern(1000)));
-        assert!(recv_fragmented(TEST_PORT).is_none(), "64.001B deve ser rejeitado");
+        // 64.001B = 65 partes (64 × 1000 + 1): antes total_frags=65 > 64 era
+        // dropado no guard de header; agora passa (65 ≤ 1024) e reassembla —
+        // exercita o bitmap além do bit 64.
+        let payload65 = pattern(64_001);
+        let id65 = 0x60_02;
+        for i in 0..64u32 {
+            let off = (i as usize) * 1000;
+            inject(make_frag(id65, 65, i, 64_001, &payload65[off..off + 1000]));
+        }
+        inject(make_frag(id65, 65, 64, 64_001, &payload65[64_000..64_001]));
+        let out =
+            recv_fragmented(TEST_PORT).expect("64.001B = 65 partes deve reassemblar (teto novo)");
+        assert_eq!(out, payload65);
     }
 
     /// Propriedade 7 (formato FRACK): build_frag_ack produz o wire format de
@@ -1303,11 +1342,11 @@ mod tests {
         assert_eq!(k_nano_tx_count() - base, 3, "2500B = ceil(2500/1000) = 3 fragmentos");
     }
 
-    /// Propriedade TX (guard honesto de oversize): payload > 64.000B
+    /// Propriedade TX (guard honesto de oversize): payload > 1.024.000B
     /// (FRAG_MAX_PARTS × FRAG_MAX_CHUNK) é recusado com `false` ANTES de
     /// emitir qualquer frame (NET_TX_COUNT delta 0) — tanto no broadcast
-    /// quanto no unicast. Antes do guard, o TX emitia total_frags > 64 que
-    /// todo receptor dropa (true = mentira de sucesso, classe SESSION_354).
+    /// quanto no unicast. Antes do guard, o TX emitiria total_frags > 1024
+    /// que todo receptor dropa (true = mentira de sucesso, classe SESSION_354).
     /// O ramo unicast é seguro no host: o guard dispara antes do loop
     /// stop-and-wait (que executa `hlt` — não testável em user-mode).
     #[test]
@@ -1316,21 +1355,21 @@ mod tests {
         reset_frag_state();
         setup_nic_config();
 
-        // 64.001B = 1 byte acima do teto — o caso mínimo indeliverável.
+        // 1.024.001B = 1 byte acima do teto — o caso mínimo indeliverável.
         let base = k_nano_tx_count();
-        assert!(!send_fragmented(&pattern(64_001), TEST_PORT), "oversize broadcast deve recusar");
+        assert!(!send_fragmented(&pattern(1_024_001), TEST_PORT), "oversize broadcast deve recusar");
         assert_eq!(k_nano_tx_count() - base, 0, "nenhum frame pode ser emitido no oversize");
 
         let base = k_nano_tx_count();
         assert!(
-            !send_fragmented_unicast(&pattern(64_001), PEER_MAC, TEST_PORT),
+            !send_fragmented_unicast(&pattern(1_024_001), PEER_MAC, TEST_PORT),
             "oversize unicast deve recusar"
         );
         assert_eq!(k_nano_tx_count() - base, 0, "nenhum frame unicast no oversize");
 
         // Bem acima do teto também recusa (não é só o caso limítrofe).
         let base = k_nano_tx_count();
-        assert!(!send_fragmented(&pattern(100_000), TEST_PORT));
+        assert!(!send_fragmented(&pattern(2_000_000), TEST_PORT));
         assert_eq!(k_nano_tx_count() - base, 0);
     }
 
@@ -1379,5 +1418,117 @@ mod tests {
         );
         // 2ª chamada: agora o FRAG (recv_unicast_with_mac → injeção).
         assert_eq!(recv_fragmented_unicast(TEST_PORT), Some(frag_payload));
+    }
+
+    /// Propriedade (teto novo): exatamente 1.024.000B (1024 chunks × 1000) é
+    /// aceito — bitmap [u64;16] completo (todos os 1024 bits); 1.024.001B
+    /// (1025 partes) é rejeitado no guard de header (total_frags >
+    /// FRAG_MAX_PARTS) e não envenena a tabela.
+    #[test]
+    fn frag_new_ceiling_1024_chunks_accepted_1025_rejected() {
+        let _g = TEST_LOCK.lock();
+        reset_frag_state();
+        setup_nic_config();
+
+        let payload = pattern(1_024_000);
+        let id = 0xA0_01;
+        for i in 0..1024u32 {
+            let off = (i as usize) * 1000;
+            inject(make_frag(id, 1024, i, 1_024_000, &payload[off..off + 1000]));
+        }
+        let out = recv_fragmented(TEST_PORT).expect("1.024.000B = 1024 chunks deve reassemblar");
+        assert_eq!(out.len(), 1_024_000);
+        assert_eq!(out, payload);
+
+        // 1025 partes = 1.024.001B: total_frags > FRAG_MAX_PARTS(1024) —
+        // guard de header dropa (silencioso); a tabela não é envenenada.
+        inject(make_frag(0xA0_02, 1025, 0, 1_024_001, &pattern(1000)));
+        assert!(recv_fragmented(TEST_PORT).is_none(), "1025 partes deve ser rejeitado");
+
+        let ok = pattern(100);
+        inject(make_frag(0xA0_03, 1, 0, 100, &ok));
+        assert_eq!(recv_fragmented(TEST_PORT), Some(ok));
+    }
+
+    /// Propriedade (bitmap além do bit 64, fora de ordem + duplicação em
+    /// escala): 100 partes × 500B com ordem embaralhada e um duplicado —
+    /// bits 64..99 caem no word 1 do [u64;16]; o dup é idempotente.
+    #[test]
+    fn frag_out_of_order_dup_beyond_64_parts() {
+        let _g = TEST_LOCK.lock();
+        reset_frag_state();
+        setup_nic_config();
+
+        let payload = pattern(50_000); // 100 × 500
+        let id = 0xB0_01;
+        // Ordem embaralhada determinística: começa no 97, passo 7 (mod 100;
+        // gcd(7,100)=1 → permutação de 0..99). idx 97 cai no word 1.
+        for k in 0..100u32 {
+            let idx = (97 + 7 * k) % 100;
+            let off = (idx as usize) * 500;
+            inject(make_frag(id, 100, idx, 50_000, &payload[off..off + 500]));
+            if k == 40 {
+                // Duplicado no meio (spot-check de duplicação em escala).
+                inject(make_frag(id, 100, idx, 50_000, &payload[off..off + 500]));
+            }
+        }
+        let out =
+            recv_fragmented(TEST_PORT).expect("100 partes fora de ordem devem reassemblar");
+        assert_eq!(out.len(), 50_000);
+        assert_eq!(out, payload);
+    }
+
+    /// Propriedade (perda em escala): 100 partes com 1 perdida → None (nunca
+    /// parcial); o slot é retido — a parte perdida chegando completa a
+    /// mensagem (byte-exato).
+    #[test]
+    fn frag_loss_at_scale_beyond_64_parts() {
+        let _g = TEST_LOCK.lock();
+        reset_frag_state();
+        setup_nic_config();
+
+        let payload = pattern(50_000); // 100 × 500
+        let id = 0xC0_01;
+        for i in 0..100u32 {
+            if i == 73 { continue; } // perdida (word 1, bit 9)
+            let off = (i as usize) * 500;
+            inject(make_frag(id, 100, i, 50_000, &payload[off..off + 500]));
+        }
+        assert!(recv_fragmented(TEST_PORT).is_none(), "com perda: nunca completa");
+
+        // Parte perdida chega → completa com o payload exato (slot retido).
+        inject(make_frag(id, 100, 73, 50_000, &payload[73 * 500..74 * 500]));
+        let out = recv_fragmented(TEST_PORT).expect("parte perdida completa a remontagem");
+        assert_eq!(out, payload);
+    }
+
+    /// Propriedade (contadores de medida): TX fragmentado incrementa
+    /// tx_msgs/tx_frags; RX completo incrementa rx_msgs/rx_ops. Deltas
+    /// (contadores são acumulativos desde o boot — sem reset, padrão
+    /// NET_TX_COUNT).
+    #[test]
+    fn frag_measurement_counters_increment() {
+        let _g = TEST_LOCK.lock();
+        reset_frag_state();
+        setup_nic_config();
+
+        let (m0, o0, tm0, tf0) = frag_stats();
+
+        // TX: 2500B = 3 fragmentos.
+        assert!(send_fragmented(&pattern(2500), TEST_PORT));
+        let (_, _, tm1, tf1) = frag_stats();
+        assert_eq!(tm1 - tm0, 1, "1 mensagem fragmentada");
+        assert_eq!(tf1 - tf0, 3, "3 frames FRAG emitidos");
+
+        // RX: 3 inserções → 1 remontagem completa.
+        let payload = pattern(2500);
+        let id = 0xD0_01;
+        inject(make_frag(id, 3, 0, 2500, &payload[0..1000]));
+        inject(make_frag(id, 3, 1, 2500, &payload[1000..2000]));
+        inject(make_frag(id, 3, 2, 2500, &payload[2000..2500]));
+        assert_eq!(recv_fragmented(TEST_PORT), Some(payload));
+        let (m1, o1, _, _) = frag_stats();
+        assert_eq!(m1 - m0, 1, "1 remontagem completa");
+        assert_eq!(o1 - o0, 3, "3 ops de inserção (custo da mensagem)");
     }
 }

@@ -684,7 +684,7 @@ pub fn heap_piso_mb(ram_mb: u64) -> usize {
 /// Acima disso o RX dropa o payload (slog warn) em vez de OOM/halt.
 pub fn frag_reassembly_budget_bytes(ram_mb: u64) -> usize {
     if ram_mb == 0 {
-        return 64 * 1000;
+        return 1024 * 1000;
     }
     if ram_mb < 1280 {
         // ~1G: só pacotes ≤ MTU — matmul 64×64 (~17KB) é recusado honestamente.
@@ -693,7 +693,8 @@ pub fn frag_reassembly_budget_bytes(ram_mb: u64) -> usize {
         // ~1.5–2G: cabe matmul FRAG (~17.5KB) com margem.
         24 * 1024
     } else {
-        64 * 1000
+        // Teto do wire FRAG (SESSION_463): 1024 partes × 1000B = 1.024.000B.
+        1024 * 1000
     }
 }
 
