@@ -901,7 +901,7 @@ dependencies = [
 
 [[package]]
 name = "neural-sgdb"
-version = "1.4.3"
+version = "1.4.6"
 dependencies = [
  "serde_json",
 ]

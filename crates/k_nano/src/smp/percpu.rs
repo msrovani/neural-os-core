@@ -125,15 +125,30 @@ pub unsafe fn set_gs_base(base: u64) {
 }
 
 pub fn this_cpu() -> &'static PerCpu {
-    let ptr: u64;
-    unsafe {
-        core::arch::asm!(
-            "mov {0}, gs:[0]",
-            out(reg) ptr,
-            options(nostack, preserves_flags, readonly)
-        );
+    #[cfg(not(target_os = "none"))]
+    {
+        // Host/teste: sem PerCpu de kernel — BSP estático (is_bsp=true).
+        unsafe { &*core::ptr::addr_of!(BSP_PCPU) }
     }
-    unsafe { &*(ptr as *const PerCpu) }
+    #[cfg(target_os = "none")]
+    {
+        // Fail-closed (mesh_a/b tick ~20, #PF cr2=8 em cpu_id): sem
+        // init_bsp_percpu (ex: SMP ignorado sem APIC) o GS base é 0 e
+        // `mov gs:[0]` daria #PF cr2=0. Pré-PerCpu só o BSP executa.
+        if read_gs_base() < 0xffff_8000_0000_0000 {
+            unsafe { &*core::ptr::addr_of!(BSP_PCPU) }
+        } else {
+            let ptr: u64;
+            unsafe {
+                core::arch::asm!(
+                    "mov {0}, gs:[0]",
+                    out(reg) ptr,
+                    options(nostack, preserves_flags, readonly)
+                );
+            }
+            unsafe { &*(ptr as *const PerCpu) }
+        }
+    }
 }
 
 /// Lê IA32_GS_BASE (MSR 0xC0000101) sem dereferenciar `gs:[0]`.
@@ -177,15 +192,30 @@ pub fn fault_context_is_bsp() -> bool {
 }
 
 pub fn cpu_id() -> u64 {
-    let id: u64;
-    unsafe {
-        core::arch::asm!(
-            "mov {0}, gs:[8]",
-            out(reg) id,
-            options(nostack, preserves_flags, readonly)
-        );
+    #[cfg(not(target_os = "none"))]
+    {
+        // Host/teste: sem GS de kernel — BSP=0 determinístico.
+        return 0;
     }
-    id
+    #[cfg(target_os = "none")]
+    {
+        // Fail-closed (#PF ip=cpu_id+1 cr2=8, mesh_a/b tick ~20): sem
+        // init_bsp_percpu o GS base é 0 e `mov gs:[8]` falta em VA 8.
+        // Mesmo padrão P0.3 de fault_context_is_bsp: MSR, nunca gs:[]. 
+        // Pré-PerCpu só o BSP executa ⇒ id 0 honesto, sem warn (caminho quente).
+        if read_gs_base() < 0xffff_8000_0000_0000 {
+            return 0;
+        }
+        let id: u64;
+        unsafe {
+            core::arch::asm!(
+                "mov {0}, gs:[8]",
+                out(reg) id,
+                options(nostack, preserves_flags, readonly)
+            );
+        }
+        id
+    }
 }
 
 #[cfg(test)]

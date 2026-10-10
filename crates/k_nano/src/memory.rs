@@ -17,6 +17,12 @@ pub const LOWMEM_RESERVE_FRAMES: usize = 256;
 pub const HEAP_FLOOR_SMALL_MB: usize = 128;
 pub const HEAP_FLOOR_MB: usize = 256;
 
+/// ora-1: slots do registro de spans reservados (detector de double-use).
+/// Callers atuais: kernel image + heap + stack + ramlog (bin) + ramlog (init,
+/// merged) ≤5 — 16 dá folga p/ callers futuros. Cheio → warn + descarta o
+/// novo (bitmap continua protegido; só a cobertura do detector perde).
+pub const MAX_RESERVED_SPANS: usize = 16;
+
 // Fix (SESSION_233): section .data para evitar que o bump heap estendido
 // sobrescreva estas statics — HEAP_BUFFER (512MB) em .bss é seguido por
 // outras statics; estender HEAP_LIMIT alem de HEAP_SIZE corrompe total_frames.
@@ -65,6 +71,15 @@ pub struct BitmapFrameAllocator {
     pub pt_pool_base: usize,
     /// Nº de frames na pool (0 = não iniciada).
     pub pt_pool_frames: usize,
+    /// ora-1 detector: spans reservados (índices de frame 4KiB, inclusivos).
+    /// allocate_frame consulta antes de devolver — frame dentro de span
+    /// registrado = reserva perdida (re-init/wipe) → warn 1x (tripwire que
+    /// teria pego o #PF-storm do mesh 2-instâncias em 1 run). Sobrevive a
+    /// re-init (spans EVER reservados não podem reabrir).
+    pub reserved_spans: [(usize, usize); MAX_RESERVED_SPANS],
+    pub reserved_count: usize,
+    /// Detector já disparou nesta vida do alocador (warn 1x por boot).
+    double_use_warned: bool,
 }
 
 impl BitmapFrameAllocator {
@@ -79,6 +94,9 @@ impl BitmapFrameAllocator {
             pt_pool: [0u8; PT_POOL_BITMAP_BYTES],
             pt_pool_base: 0,
             pt_pool_frames: 0,
+            reserved_spans: [(0usize, 0usize); MAX_RESERVED_SPANS],
+            reserved_count: 0,
+            double_use_warned: false,
         }
     }
 
@@ -93,6 +111,10 @@ impl BitmapFrameAllocator {
         self.pt_pool.fill(0);
         self.pt_pool_base = 0;
         self.pt_pool_frames = 0;
+        // ora-1: o REGISTRO de spans NÃO reseta — spans ever-reservados não
+        // podem reabrir (re-init que perde as reservas = exatamente o bug que
+        // o detector pegaria). Só o flag do warn recomeça (1x por init).
+        self.double_use_warned = false;
         let mut last_end: u64 = 0;
         let mut usable_count: usize = 0;
 
@@ -128,6 +150,45 @@ impl BitmapFrameAllocator {
         self.usable_frames = usable_count;
         self.allocated_count = 0;
         self.next_free_bit = LOWMEM_RESERVE_FRAMES;
+
+        // ─── ora-1: reservas de boot no init (defesa em profundidade) ──────
+        // O bin (main.rs with_pmm) reserva kernel/heap/stack/ramlog DEPOIS do
+        // init — mas o init em si limpava TUDO que o Limine reporta usable.
+        // Re-init (ou caller futuro sem os reserves explícitos) reabriria
+        // frames vivos → PMM entrega frame do kernel/heap → corrupção
+        // silenciosa (mesh 2-instâncias: #PF-storm ×3 → BSP park, ~300
+        // ticks). O init aplica o que conhece AQUI e registra os spans p/ o
+        // detector de double-use:
+
+        // (a) Kernel image [KERNEL_PHYS_BASE, KERNEL_PHYS_BASE + (KERNEL_END
+        //     − KERNEL_VIRT_BASE)) — statics do allocator (kernel_phys_virt)
+        //     + símbolo de linker KERNEL_END, lidos (não redefinidos). No
+        //     path principal do boot as statics são setadas DEPOIS do init
+        //     (o reserve_range explícito do bin cobre o span exato); este
+        //     reserve vale p/ re-init e p/ callers que registram o kernel
+        //     antes do init.
+        self.reserve_kernel_image_init();
+
+        // (b) boot_ramlog @ phys 0x1000_0000, 256KB — consts de boot_ramlog
+        //     (nunca hardcode: o valor vive em boot_ramlog.rs).
+        self.reserve_range(
+            crate::boot_ramlog::BOOT_RAMLOG_PHYS,
+            crate::boot_ramlog::BOOT_RAMLOG_CAP as u64,
+        );
+
+        // (c) Page tables — política documentada (NÃO skip silencioso):
+        //     - PTs de runtime vêm DESTE PMM (allocate_frame/alloc_pt_frame →
+        //       set_bit): ocupadas por construção, nunca re-entregues; o span
+        //       da PT pool é registrado em init_pt_pool p/ o detector.
+        //     - PTs de boot (HHDM do Limine) vivem em estruturas do
+        //       bootloader FORA de MEMMAP_USABLE (limine.rs copia só o tipo
+        //       0) → nunca cleared → nunca entregues.
+        //     - O memmap do Limine não reporta span de page tables — não há
+        //       span a cobrir; um range cego desperdiçaria RAM sem proteger
+        //       nada enumerável. Se um dia o PMM enumerar PTs, reservar aqui.
+        crate::slog_nano!("MEM", "info",
+            "PMM init: PTs por construção (runtime=busy-marked, boot=fora USABLE) — sem span cego");
+
         // Armazena RAM total para hw_profiler
         let ram_mb = (last_end / (1024 * 1024)) as u64;
         if ram_mb > 0 {
@@ -161,15 +222,72 @@ impl BitmapFrameAllocator {
             return;
         }
         let end = base.saturating_add(len);
-        let start_idx = (base / FRAME_SIZE) as usize;
-        let end_idx = ((end.saturating_sub(1)) / FRAME_SIZE) as usize;
-        for i in start_idx..=end_idx {
-            if (i as usize) < BITMAP_SIZE * BITS_PER_BYTE {
-                self.set_bit(i as usize);
+        // ora-1: math pura (clip ao bitmap) + registro p/ o detector de
+        // double-use. Span além do bitmap → sem bits a marcar (como antes) e
+        // sem registro (nunca seria entregue). Overflow u64 → None (o código
+        // antigo iterava ~4.5e15 vezes = hang latente).
+        if let Some((s, e)) = frame_span(base, len, BITMAP_SIZE * BITS_PER_BYTE) {
+            for i in s..=e {
+                self.set_bit(i);
+            }
+            if !span_insert(&mut self.reserved_spans, &mut self.reserved_count, s, e) {
+                crate::slog_nano!("MEM", "warn",
+                    "registro de spans cheio ({}): {:#x}..{:#x} sem tripwire de double-use",
+                    MAX_RESERVED_SPANS, base, end);
             }
         }
         crate::slog_nano!("MEM", "ok", "frame allocator reserva {:#x}..{:#x} ({} KB)", base, end, len / 1024);
     }
+
+    /// ora-1 detector: frame `idx` dentro de span reservado? Dispara o warn
+    /// 1x por vida do alocador. true = warn emitido nesta chamada (testável).
+    /// O tripwire que teria pego o #PF-storm do mesh 2-instâncias em 1 run
+    /// (PMM entregou frame do kernel/heap/PT → corrupção silenciosa).
+    fn check_double_use(&mut self, idx: usize) -> bool {
+        for i in 0..self.reserved_count {
+            let (s, e) = self.reserved_spans[i];
+            if idx >= s && idx <= e {
+                if self.double_use_warned {
+                    return false;
+                }
+                self.double_use_warned = true;
+                crate::slog_nano!("MEM", "warn",
+                    "DOUBLE-USE: frame {:#x} entregue dentro de span reservado {:#x}..{:#x} — reserva perdida (re-init?)",
+                    (idx as u64) * FRAME_SIZE,
+                    (s as u64) * FRAME_SIZE,
+                    (e as u64) * FRAME_SIZE + FRAME_SIZE);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// ora-1 (a): reserva a imagem do kernel no init — span físico
+    /// [KERNEL_PHYS_BASE, KERNEL_PHYS_BASE + (KERNEL_END − KERNEL_VIRT_BASE)).
+    /// Statics do allocator (kernel_phys_virt) + símbolo de linker KERNEL_END
+    /// (limine.ld) — lidos, não redefinidos. No-op no boot principal antes do
+    /// registro (statics (0,0) — o bin cobre com reserve_range explícito) e
+    /// no host (sem símbolo de linker).
+    #[cfg(target_os = "none")]
+    fn reserve_kernel_image_init(&mut self) {
+        let (kphys, kvirt) = crate::allocator::kernel_phys_virt();
+        if kphys == 0 || kvirt == 0 {
+            return; // ainda não registrado — bin cobre pós-init (honesto)
+        }
+        extern "C" {
+            static KERNEL_END: u8;
+        }
+        let virt_end = unsafe { core::ptr::addr_of!(KERNEL_END) as u64 };
+        let image_len = virt_end.saturating_sub(kvirt);
+        if image_len == 0 {
+            return;
+        }
+        self.reserve_range(kphys, image_len);
+    }
+
+    /// Host: sem símbolo de linker/bootinfo — no-op (o branch real é boot-only).
+    #[cfg(not(target_os = "none"))]
+    fn reserve_kernel_image_init(&mut self) {}
 
     /// Marca `count` frames a partir de `start` como ENTREGUES (ownership).
     #[inline]
@@ -352,6 +470,17 @@ impl BitmapFrameAllocator {
             i += 1;
         }
         self.pt_pool_frames = carved;
+        // ora-1 (c): registra o span da pool p/ o detector de double-use —
+        // frames de PT vivos não podem reabrir sem o tripwire disparar.
+        if carved > 0 {
+            let s = self.pt_pool_base;
+            let e = s + carved - 1;
+            if !span_insert(&mut self.reserved_spans, &mut self.reserved_count, s, e) {
+                crate::slog_nano!("MEM", "warn",
+                    "registro de spans cheio: PT pool {:#x}..{:#x} sem tripwire",
+                    s as u64 * FRAME_SIZE, (e as u64 + 1) * FRAME_SIZE);
+            }
+        }
         crate::slog_nano!(
             "MEM",
             "info",
@@ -422,6 +551,53 @@ impl BitmapFrameAllocator {
     }
 }
 
+/// Math pura de reserva (ora-1, testável no host): span físico `[base,
+/// base+len)` → range de índices de frame 4KiB (inclusivo), clipado à região
+/// gerenciada (`max_frames`). None = vazio/overflow/totalmente fora do
+/// bitmap — nunca panic (len=0, base alto, overflow u64).
+fn frame_span(base: u64, len: u64, max_frames: usize) -> Option<(usize, usize)> {
+    if len == 0 || max_frames == 0 {
+        return None;
+    }
+    let end = base.checked_add(len)?;
+    let start_idx = (base / FRAME_SIZE) as usize;
+    if start_idx >= max_frames {
+        return None;
+    }
+    let end_idx = ((end - 1) / FRAME_SIZE) as usize;
+    Some((start_idx, core::cmp::min(end_idx, max_frames - 1)))
+}
+
+/// Math pura (testável): insere span `[start, end]` (índices de frame,
+/// inclusivos) numa lista fixa com merge de overlap/adjacência. false =
+/// lista cheia (span descartado — o bitmap continua protegido; só a
+/// cobertura do detector perde). Precondição: start <= end (frame_span
+/// garante). Sem panic em entrada vazia.
+fn span_insert(spans: &mut [(usize, usize)], count: &mut usize, start: usize, end: usize) -> bool {
+    let mut start = start;
+    let mut end = end;
+    let mut i = 0;
+    while i < *count {
+        let (s, e) = spans[i];
+        // Overlap ou adjacência: novo encosta no existente.
+        if start <= e.saturating_add(1) && end.saturating_add(1) >= s {
+            start = core::cmp::min(s, start);
+            end = core::cmp::max(e, end);
+            *count -= 1;
+            spans[i] = spans[*count]; // swap com o último; slot re-checado
+        } else {
+            i += 1;
+        }
+    }
+    if *count < spans.len() {
+        spans[*count] = (start, end);
+        *count += 1;
+        true
+    } else {
+        false
+    }
+}
+
 unsafe impl FrameAllocator<Size4KiB> for BitmapFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
         let idx = self.find_free_frame(self.next_free_bit)?;
@@ -429,6 +605,11 @@ unsafe impl FrameAllocator<Size4KiB> for BitmapFrameAllocator {
         self.mark_delivered(idx, 1);
         self.next_free_bit = idx + 1;
         self.allocated_count += 1;
+        // ora-1 tripwire: frame devolvido dentro de span reservado = reserva
+        // perdida (re-init/wipe/caller sem reserve) → warn 1x por boot. O
+        // #PF-storm do mesh 2-instâncias (PMM entregou frame do kernel/heap/
+        // PT → corrupção → #PF ×3 → BSP park) teria sido pego AQUI em 1 run.
+        self.check_double_use(idx);
         Some(PhysFrame::containing_address(PhysAddr::new(idx as u64 * FRAME_SIZE)))
     }
 }
@@ -1110,5 +1291,131 @@ mod tests {
         // ensure fora do range = false sem tocar nas page tables.
         assert!(!ensure_loader_page_ro(0));
         assert!(!ensure_loader_page_ro(LOADER_REGION_END));
+    }
+
+    // ─── ora-1: reservas de boot + detector de double-use ──────────────────
+
+    /// Math pura de reserva: clip à região gerenciada, rejeita vazio/overflow,
+    /// sem panic.
+    #[test]
+    fn frame_span_math_clips_and_rejects_empty() {
+        let max = BITMAP_SIZE * BITS_PER_BYTE; // 16M frames (64GiB)
+        // Vazio/zero → None, sem panic.
+        assert_eq!(frame_span(0x1000, 0, max), None);
+        assert_eq!(frame_span(0x1000, 0x1000, 0), None);
+        // Overflow u64 → None, sem panic.
+        assert_eq!(frame_span(u64::MAX - 0x800, 0x1000, max), None);
+        // Span normal: [base, base+len) → índices inclusivos.
+        assert_eq!(frame_span(0x1000, 0x1000, max), Some((1, 1)));
+        assert_eq!(frame_span(0x1000, 0x2001, max), Some((1, 3))); // 2 frames + 1 byte
+        // Clip: span além do bitmap → end clipado ao último frame gerenciado.
+        let last = max - 1;
+        assert_eq!(
+            frame_span(last as u64 * FRAME_SIZE, 0x10000, max),
+            Some((last, last))
+        );
+        // Totalmente fora do bitmap → None.
+        assert_eq!(frame_span(max as u64 * FRAME_SIZE, 0x1000, max), None);
+    }
+
+    /// Math pura do registro: merge de overlap/adjacência, cheio → false.
+    #[test]
+    fn span_insert_merges_overlap_and_adjacency() {
+        let mut spans = [(0usize, 0usize); MAX_RESERVED_SPANS];
+        let mut count = 0usize;
+        // Overlap: [10,12] + [11,14] → [10,14].
+        assert!(span_insert(&mut spans, &mut count, 10, 12));
+        assert!(span_insert(&mut spans, &mut count, 11, 14));
+        assert_eq!(count, 1);
+        assert_eq!(spans[0], (10, 14));
+        // Adjacência: [15,16] encosta em [10,14] → [10,16].
+        assert!(span_insert(&mut spans, &mut count, 15, 16));
+        assert_eq!(count, 1);
+        assert_eq!(spans[0], (10, 16));
+        // Disjunto: novo slot.
+        assert!(span_insert(&mut spans, &mut count, 20, 21));
+        assert_eq!(count, 2);
+        // Merge que fecha lacuna: [17,19] encosta nos dois → [10,21].
+        assert!(span_insert(&mut spans, &mut count, 17, 19));
+        assert_eq!(count, 1);
+        assert_eq!(spans[0], (10, 21));
+        // Cheio: descarta o novo (false), sem panic. (count=1 pós-merge →
+        // cabem MAX-1 spans disjuntos.)
+        for i in 0..MAX_RESERVED_SPANS - 1 {
+            assert!(span_insert(&mut spans, &mut count, 100 + i * 10, 101 + i * 10));
+        }
+        assert_eq!(count, MAX_RESERVED_SPANS);
+        assert!(!span_insert(&mut spans, &mut count, 9999, 10000));
+    }
+
+    /// Detector: dispara dentro de span reservado (1x), silencioso fora.
+    #[test]
+    fn double_use_detector_fires_inside_reserved_span_only() {
+        run_with_big_stack(|| {
+            let mut a = make_allocator();
+            // Reserva 16 frames @ 0x0100_0000 (span registrado).
+            a.reserve_range(0x0100_0000, 0x10000);
+            let idx = (0x0100_0000 / FRAME_SIZE) as usize;
+            // Simula reserva perdida (re-init/wipe): bit limpo à mão.
+            a.clear_bit(idx);
+            // 1ª entrega dentro do span → detector dispara (warn 1x).
+            assert!(a.check_double_use(idx), "detector dispara no 1º double-use");
+            // Once: 2ª ocorrência silenciosa.
+            assert!(!a.check_double_use(idx), "warn é 1x por boot");
+            // Fora de span reservado → silencioso (sem falso positivo).
+            let outside = (0x0300_0000 / FRAME_SIZE) as usize;
+            assert!(!a.check_double_use(outside));
+        });
+    }
+
+    /// Caminho real: allocate_frame devolvendo frame de reserva perdida arma
+    /// o tripwire (o que teria pego o #PF-storm do mesh em 1 run).
+    #[test]
+    fn allocate_frame_trips_detector_on_lost_reservation() {
+        run_with_big_stack(|| {
+            let mut a = make_allocator();
+            a.reserve_range(0x0100_0000, 0x10000);
+            let idx = (0x0100_0000 / FRAME_SIZE) as usize;
+            a.clear_bit(idx); // reserva perdida
+            let f = a.allocate_frame().expect("frame do span perdido");
+            assert_eq!(f.start_address().as_u64(), 0x0100_0000);
+            assert!(a.double_use_warned, "tripwire armado pela entrega");
+        });
+    }
+
+    /// Init reserva o ramlog (consts reais de boot_ramlog — nunca hardcode):
+    /// frames ocupados + span registrado + nenhuma alocação cai nele.
+    /// (O branch do kernel image é boot-only — statics/símbolo de linker
+    /// ausentes no host; o no-op roda no init acima sem panic.)
+    #[test]
+    fn init_reserves_ramlog_region() {
+        run_with_big_stack(|| {
+            // Usable 16MB..272MB cobre o ramlog @ 256MB.
+            let mut a = Box::new(BitmapFrameAllocator::empty());
+            a.init_from_usable_ranges(&[(0x0100_0000u64, 0x1000_0000u64)]);
+            let rl_phys = crate::boot_ramlog::BOOT_RAMLOG_PHYS;
+            let rl_cap = crate::boot_ramlog::BOOT_RAMLOG_CAP as u64;
+            let rl_start = (rl_phys / FRAME_SIZE) as usize;
+            let rl_end = ((rl_phys + rl_cap - 1) / FRAME_SIZE) as usize;
+            for i in rl_start..=rl_end {
+                assert!(a.test_bit(i), "frame do ramlog idx={} deve ficar ocupado", i);
+            }
+            // Span registrado p/ o detector.
+            let hit = a.reserved_spans[..a.reserved_count]
+                .iter()
+                .any(|&(s, e)| rl_start >= s && rl_end <= e);
+            assert!(hit, "span do ramlog deve estar no registro do detector");
+            // Nenhuma alocação cai no ramlog.
+            for _ in 0..64 {
+                let f = a.allocate_frame().expect("frame");
+                let pa = f.start_address().as_u64();
+                assert!(
+                    !(rl_phys..rl_phys + rl_cap).contains(&pa),
+                    "PMM entregou frame do ramlog {:#x}",
+                    pa
+                );
+            }
+            assert!(!a.double_use_warned, "sem falso positivo fora de span");
+        });
     }
 }

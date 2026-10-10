@@ -23,9 +23,17 @@ impl Drop for DmaBuf {
                 use x86_64::PhysAddr;
                 let mut guard = GLOBAL_ALLOCATOR.lock();
                 if let Some(alloc) = (*guard).as_mut() {
+                    let mut failed = 0usize;
                     for i in 0..pages {
-                        let f = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(self.phys + i as u64 * 4096));
+                        let Some(addr) = (i as u64).checked_mul(4096)
+                            .and_then(|o| self.phys.checked_add(o)) else { failed += 1; continue; };
+                        let f = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(addr));
                         alloc.deallocate_frame(f);
+                    }
+                    if failed > 0 {
+                        crate::slog_nano!("DMA", "warn",
+                            "drop: {}/{} paginas com overflow phys={:#x} - skip sem wrap",
+                            failed, pages, self.phys);
                     }
                 }
             }
@@ -40,43 +48,53 @@ impl DmaBuf {
     pub unsafe fn as_mut_slice(&mut self) -> &mut [u8] { core::slice::from_raw_parts_mut(self.virt, self.size) }
 }
 
+/// Teto fail-closed de alocação DMA coalescente (64MB = 16384 páginas).
+/// Acima disso = None honesto (chamador faz chunking); sem cap, um pedido
+/// gigante esgota o frame allocator e derruba drivers inocentes.
+pub const DMA_MAX_BYTES: usize = 64 * 1024 * 1024;
+
 /// Aloca páginas de DMA coalescentes (contíguas) para burst máximo PCIe.
 /// Usa allocate_contiguous() para frames contíguos → permite burst DMA sem gaps.
 pub fn dma_alloc_coalesced(size: usize) -> Option<DmaBuf> {
+    if size == 0 || size > DMA_MAX_BYTES { return None; }
     let pages = (size + 4095) / 4096;
     if pages == 0 { return None; }
+    // Aloca sob lock, zera FORA do lock (write_bytes de até 64MB com o
+    // allocator travado mata a latência de todos os outros alocadores).
     let pa = unsafe {
-        let mut guard = GLOBAL_ALLOCATOR.lock();
-        let alloc = (*guard).as_mut()?;
-        let frame = alloc.allocate_contiguous(pages)?;
-        let pa = frame.start_address().as_u64();
+        let frame_pa = {
+            let mut guard = GLOBAL_ALLOCATOR.lock();
+            let alloc = (*guard).as_mut()?;
+            alloc.allocate_contiguous(pages)?.start_address().as_u64()
+        };
         // Mapa páginas coalescentes como UC (uncacheable) para DMA
-        mark_uc_or_warn(pa, pages, "dma_alloc_coalesced");
-        let va = (pa + PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut u8;
-        core::ptr::write_bytes(va, 0, pages * 4096);
-        pa
+        mark_uc_or_warn(frame_pa, pages, "dma_alloc_coalesced");
+        frame_pa
     };
-    let virt = (pa + PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut u8;
-    Some(DmaBuf { phys: pa, virt, size: pages * 4096 })
+    let pm = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+    let va = pa.checked_add(pm)? as *mut u8;
+    unsafe { core::ptr::write_bytes(va, 0, pages * 4096); }
+    Some(DmaBuf { phys: pa, virt: va, size: pages * 4096 })
 }
 
 /// Aloca páginas de DMA uncacheable. Usa `set_page_uc` do apic para marcar cada página.
 pub fn dma_alloc(size: usize) -> Option<DmaBuf> {
+    if size == 0 || size > DMA_MAX_BYTES { return None; }
     let pages = (size + 4095) / 4096;
     if pages == 0 { return None; }
     let pa = unsafe {
-        
-        let mut guard = GLOBAL_ALLOCATOR.lock();
-        let alloc = (*guard).as_mut()?;
-        let frame = alloc.allocate_contiguous(pages)?;
-        let pa = frame.start_address().as_u64();
-        mark_uc_or_warn(pa, pages, "dma_alloc");
-        let va = (pa + PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut u8;
-        core::ptr::write_bytes(va, 0, pages * 4096);
-        pa
+        let frame_pa = {
+            let mut guard = GLOBAL_ALLOCATOR.lock();
+            let alloc = (*guard).as_mut()?;
+            alloc.allocate_contiguous(pages)?.start_address().as_u64()
+        };
+        mark_uc_or_warn(frame_pa, pages, "dma_alloc");
+        frame_pa
     };
-    let virt = (pa + PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut u8;
-    Some(DmaBuf { phys: pa, virt, size: pages * 4096 })
+    let pm = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+    let va = pa.checked_add(pm)? as *mut u8;
+    unsafe { core::ptr::write_bytes(va, 0, pages * 4096); }
+    Some(DmaBuf { phys: pa, virt: va, size: pages * 4096 })
 }
 
 /// Marca `pages` páginas como UC e loga se alguma não estava mapeada.
@@ -88,7 +106,8 @@ fn mark_uc_or_warn(phys: u64, pages: usize, who: &str) {
     let pm = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     let mut failed = 0usize;
     for i in 0..pages {
-        let addr = phys + i as u64 * 4096;
+        let Some(addr) = (i as u64).checked_mul(4096)
+            .and_then(|o| phys.checked_add(o)) else { failed += 1; continue; };
         // Primeiro garante que a página está mapeada via HHDM (map_page_uc cria
         // o mapeamento se não existir). Depois marca como UC.
         // Sem map_page_uc, set_page_uc retorna false → cache stale silencioso.
@@ -109,7 +128,8 @@ fn restore_page_wb(phys: u64, pages: usize) {
     let pm = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     let mut failed = 0usize;
     for i in 0..pages {
-        let addr = phys + i as u64 * 4096;
+        let Some(addr) = (i as u64).checked_mul(4096)
+            .and_then(|o| phys.checked_add(o)) else { failed += 1; continue; };
         if !unsafe { crate::apic::set_page_wb(addr, pm) } {
             failed += 1;
         }

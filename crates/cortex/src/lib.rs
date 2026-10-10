@@ -55,6 +55,7 @@ pub mod kv_h2o;
 pub mod structured_decode;
 pub mod moe;
 pub mod gguf;
+pub mod gguf_proof; // lane-4 formal harness: GGUF truncation/version/cap proofs (no logic)
 pub mod hnsw;
 pub mod mesh_distrib;
 pub mod federated;

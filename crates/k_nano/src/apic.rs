@@ -1,6 +1,6 @@
 use crate::acpi::AcpiInfo;
 use crate::{println};
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use core::ptr::{read_volatile, write_volatile};
 use x86_64::structures::paging::{PageTable, PageTableFlags};
 use x86_64::VirtAddr;
@@ -8,6 +8,224 @@ use x86_64::VirtAddr;
 pub static USING_APIC: AtomicBool = AtomicBool::new(false);
 pub static USING_X2APIC: AtomicBool = AtomicBool::new(false);
 pub static LAPIC_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
+
+/// Plan lane 1 (audit §A): explicit init state machine for APIC mode
+/// selection. Replaces bare-boolean reasoning (`USING_APIC` set / early
+/// `return`) with Uninit → Init → Ready | Degraded | FailedRetryable |
+/// FailedPermanent. `USING_APIC`/`USING_X2APIC` stay as the live hardware
+/// flags (other crates read them); this state records the init outcome.
+///
+/// Concurrency (reviewer refinement): entry is claimed atomically via
+/// [`apic_claim_init`] (CAS Uninit|FailedRetryable → Init). A concurrent second
+/// caller while state == Init gets `Busy` (= AlreadyRunning) and returns
+/// WITHOUT touching LAPIC/IOAPIC/PIC — never two inits. Terminal states get
+/// `Skip(state)`.
+///
+/// Degraded semantics: Degraded = fail-closed BSP-only (firmware left EXTD=1
+/// but the hypervisor does not emulate x2APIC → LAPIC untouched, PIC fallback,
+/// BSP alive). It is TERMINAL — `apic_should_init()` is false. It does NOT
+/// auto-retry. Re-entry after Degraded (or FailedPermanent) requires the
+/// explicit HITL handle [`apic_reset_for_retry`] back to Uninit. Ready is never
+/// reset.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum ApicInitState {
+    Uninit = 0,
+    Init = 1,
+    Ready = 2,
+    Degraded = 3,
+    FailedRetryable = 4,
+    FailedPermanent = 5,
+}
+
+impl ApicInitState {
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => ApicInitState::Init,
+            2 => ApicInitState::Ready,
+            3 => ApicInitState::Degraded,
+            4 => ApicInitState::FailedRetryable,
+            5 => ApicInitState::FailedPermanent,
+            _ => ApicInitState::Uninit,
+        }
+    }
+}
+
+/// Reason codes for [`apic_init_reason`]. u8 keeps the store lock-free.
+pub const APIC_R_NONE: u8 = 0;
+pub const APIC_R_OK_X2: u8 = 1;
+pub const APIC_R_OK_XAPIC: u8 = 2;
+/// Proven fix path (Defect 3): firmware left EXTD=1 but the hypervisor does
+/// not emulate x2APIC → LAPIC untouched, PIC fallback, BSP-only.
+pub const APIC_R_FW_EXTD_HV_NO_X2: u8 = 3;
+
+static APIC_INIT_STATE: AtomicU8 = AtomicU8::new(0); // ApicInitState::Uninit
+static APIC_INIT_REASON: AtomicU8 = AtomicU8::new(APIC_R_NONE);
+
+/// Current init state (lock-free snapshot).
+pub fn apic_init_state() -> ApicInitState {
+    ApicInitState::from_u8(APIC_INIT_STATE.load(Ordering::Acquire))
+}
+
+/// Machine-readable reason for the current state (static string, no alloc).
+pub fn apic_init_reason() -> &'static str {
+    match APIC_INIT_REASON.load(Ordering::Acquire) {
+        APIC_R_OK_X2 => "ok_x2apic",
+        APIC_R_OK_XAPIC => "ok_xapic",
+        APIC_R_FW_EXTD_HV_NO_X2 => "fw_extd_hv_no_x2",
+        _ => "none",
+    }
+}
+
+/// Gate: only Uninit or FailedRetryable may (re-)run `init_apic`. Second call
+/// after Ready/Degraded/FailedPermanent is a no-op skip; Init guards re-entry.
+/// Pure predicate (no claim). The live entry path uses [`apic_claim_init`];
+/// this stays for diagnostics and tests.
+pub(crate) fn apic_should_init() -> bool {
+    matches!(
+        apic_init_state(),
+        ApicInitState::Uninit | ApicInitState::FailedRetryable
+    )
+}
+
+/// Result of the atomic init claim. `Busy` == AlreadyRunning.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ApicClaim {
+    /// Caller owns the init. Exactly one claimant; programs the LAPIC/IOAPIC.
+    Run,
+    /// Init already in flight (state == Init). Return immediately, touch
+    /// nothing — fail-closed, never a second concurrent init.
+    Busy,
+    /// Terminal state reached (Ready | Degraded | FailedPermanent). No-op skip.
+    Skip(ApicInitState),
+}
+
+/// Atomic Init claim: CAS Uninit|FailedRetryable → Init. Spin-bounded (16
+/// tries); on contention loss the loser re-reads and is classified Busy/Skip —
+/// contention NEVER grants a second `Run`. Immediate fail-closed otherwise.
+pub(crate) fn apic_claim_init() -> ApicClaim {
+    for _ in 0..16 {
+        let cur = apic_init_state();
+        match cur {
+            ApicInitState::Uninit | ApicInitState::FailedRetryable => {
+                match APIC_INIT_STATE.compare_exchange(
+                    cur as u8,
+                    ApicInitState::Init as u8,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        APIC_INIT_REASON.store(APIC_R_NONE, Ordering::Release);
+                        return ApicClaim::Run;
+                    }
+                    Err(_) => continue, // lost the race; re-read (bounded)
+                }
+            }
+            ApicInitState::Init => return ApicClaim::Busy,
+            s => return ApicClaim::Skip(s),
+        }
+    }
+    // Bounded spins exhausted under contention: fail closed, never Run.
+    ApicClaim::Busy
+}
+
+/// Allowed transitions (pure, host-testable). The claim owns Uninit →
+/// FailedRetryable → Init; only the claim holder (state == Init) may land a
+/// terminal state. No edge INTO Ready except from Init — no premature Ready.
+/// No edge OUT of a terminal state except via [`apic_reset_for_retry`].
+pub(crate) fn apic_transition_allowed(from: ApicInitState, to: ApicInitState) -> bool {
+    match (from, to) {
+        (ApicInitState::Uninit, ApicInitState::Init)
+        | (ApicInitState::FailedRetryable, ApicInitState::Init) => true,
+        (ApicInitState::Init, ApicInitState::Ready)
+        | (ApicInitState::Init, ApicInitState::Degraded)
+        | (ApicInitState::Init, ApicInitState::FailedRetryable)
+        | (ApicInitState::Init, ApicInitState::FailedPermanent) => true,
+        _ => false,
+    }
+}
+
+/// Checked store: enforces [`apic_transition_allowed`]. Returns false and stores
+/// NOTHING on an invalid transition (premature Ready, terminal overwrite,
+/// double-Init). All `init_apic` terminal sites route through here; the raw
+/// [`apic_state_store`] remains as the test-setup seam only.
+pub(crate) fn apic_state_store_checked(s: ApicInitState, reason: u8) -> bool {
+    if !apic_transition_allowed(apic_init_state(), s) {
+        return false;
+    }
+    apic_state_store(s, reason);
+    true
+}
+
+/// Explicit HITL retry handle: Degraded | FailedRetryable | FailedPermanent →
+/// Uninit (reason cleared). Rejected (false, nothing stored) from
+/// Uninit | Init | Ready — never yank a running init, never demote a live
+/// APIC. FailedRetryable does not NEED this (next claim auto-retries);
+/// accepting it here just normalizes the state.
+pub(crate) fn apic_reset_for_retry() -> bool {
+    for _ in 0..16 {
+        let cur = apic_init_state();
+        match cur {
+            ApicInitState::Degraded
+            | ApicInitState::FailedRetryable
+            | ApicInitState::FailedPermanent => {
+                match APIC_INIT_STATE.compare_exchange(
+                    cur as u8,
+                    ApicInitState::Uninit as u8,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        APIC_INIT_REASON.store(APIC_R_NONE, Ordering::Release);
+                        return true;
+                    }
+                    Err(_) => continue,
+                }
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Raw unchecked store — test-setup seam ONLY (lets tests place any state).
+/// Production paths must use [`apic_state_store_checked`].
+pub(crate) fn apic_state_store(s: ApicInitState, reason: u8) {
+    APIC_INIT_REASON.store(reason, Ordering::Release);
+    APIC_INIT_STATE.store(s as u8, Ordering::Release);
+}
+
+#[cfg(test)]
+pub(crate) fn apic_state_test_reset() {
+    APIC_INIT_REASON.store(APIC_R_NONE, Ordering::Release);
+    APIC_INIT_STATE.store(ApicInitState::Uninit as u8, Ordering::Release);
+}
+
+/// Pure mode-selection contract (host-testable, no MSR/MMIO). Truth table
+/// mirrors the proven `init_apic` logic: `(firmware_x2 || cpuid_x2) &&
+/// hv_allows_x2` tries x2APIC; `firmware_x2 && !hv_allows_x2` fail-closes to
+/// BSP-only BEFORE any MMIO (Defect 3 / SESSION_243: MMIO 0xFEE00000 would
+/// #GP and wrmsr is forbidden under such hypervisors).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ApicModeDecision {
+    TryX2,
+    UseMmio,
+    FailClosedBspOnly,
+}
+
+pub(crate) fn decide_apic_mode(
+    firmware_x2: bool,
+    hv_allows_x2: bool,
+    cpuid_x2: bool,
+) -> ApicModeDecision {
+    if firmware_x2 && !hv_allows_x2 {
+        return ApicModeDecision::FailClosedBspOnly;
+    }
+    if (firmware_x2 || cpuid_x2) && hv_allows_x2 {
+        return ApicModeDecision::TryX2;
+    }
+    ApicModeDecision::UseMmio
+}
 /// Log do IA32_PAT uma única vez (init_pat é chamado por página WC).
 static PAT_LOGGED: AtomicBool = AtomicBool::new(false);
 
@@ -826,6 +1044,34 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
     crate::slog_nano!("APIC", "info", "Inicializando APIC...");
     println!("[APIC] Inicializando APIC...");
 
+    // Plan lane 1 (audit §A): second call after a terminal
+    // Ready/Degraded/FailedPermanent is a no-op skip; FailedRetryable re-runs.
+    // Atomic CAS claim: exactly one caller gets Run; a concurrent second
+    // caller while Init is in flight gets Busy (AlreadyRunning, touches no
+    // LAPIC/IOAPIC/PIC registers).
+    match apic_claim_init() {
+        ApicClaim::Skip(s) => {
+            crate::slog_nano!(
+                "APIC",
+                "info",
+                "init_apic skip (estado {:?} razao={})",
+                s,
+                apic_init_reason()
+            );
+            return;
+        }
+        ApicClaim::Busy => {
+            crate::slog_nano!(
+                "APIC",
+                "warn",
+                "init_apic busy (init em voo, razao={}) — sem double-init",
+                apic_init_reason()
+            );
+            return;
+        }
+        ApicClaim::Run => {}
+    }
+
     // PAT entry 4 = WC (pré-requisito do FB Write-Combining). BSP boot path.
     init_pat();
 
@@ -853,15 +1099,17 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
 
     // Candidato a x2APIC (firmware já EXTD ou CPUID bit21), gated por hypervisor.
     // NÃO liga USING_X2APIC — só dispara a tentativa de enable (read-back abaixo).
-    let mut x2apic_candidate = firmware_x2 && hv_allows_x2;
+    // Pure contract (host-tested): (firmware_x2 || cpuid_x2) && hv_allows_x2.
     #[cfg(target_arch = "x86_64")]
-    {
+    let cpuid_x2 = {
         let result = core::arch::x86_64::__cpuid(0x0000_0001);
-        if (result.ecx & (1 << 21)) != 0 {
-            x2apic_candidate = true;
-        }
-    }
-    x2apic_candidate &= hv_allows_x2; // SESSION_281: gate hypervisor tambem no CPUID.
+        (result.ecx & (1 << 21)) != 0
+    };
+    #[cfg(not(target_arch = "x86_64"))]
+    let cpuid_x2 = false;
+    // SESSION_281: gate hypervisor tambem no CPUID.
+    let mode = decide_apic_mode(firmware_x2, hv_allows_x2, cpuid_x2);
+    let x2apic_candidate = mode == ApicModeDecision::TryX2;
 
     // SESSION_328: USING_X2APIC é derivado do READ-BACK verificado em
     // enable_x2apic_this_cpu — nunca do flag pré-latchado. Se o write não
@@ -884,6 +1132,16 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
             Lapic::new(lapic_virt_base)
         }
     } else {
+        if firmware_x2 && !hv_allows_x2 {
+            // Defect 3: firmware deixou EXTD=1 mas o hv não emula x2APIC —
+            // MMIO 0xFEE00000 daria #GP e wrmsr é proibido (SESSION_243).
+            // Fail-closed: LAPIC intocado (PIC fallback, BSP-only). Outcome
+            // recorded as Degraded (BSP path alive), never a bare boolean.
+            USING_X2APIC.store(false, Ordering::Release);
+            crate::slog_nano!("APIC", "warn", "firmware EXTD=1 sob hv nao-x2 — LAPIC intocado (fail-closed, PIC fallback)");
+            let _ = apic_state_store_checked(ApicInitState::Degraded, APIC_R_FW_EXTD_HV_NO_X2);
+            return;
+        }
         // MMIO 0xFEE00000 é #GP se o firmware já deixou EXTD=1 (240H comum);
         // hv gated acima garante que este path só roda em xAPIC.
         USING_X2APIC.store(false, Ordering::Release);
@@ -915,6 +1173,20 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
     lapic_timer_diag();
 
     USING_APIC.store(true, Ordering::Release);
+    // Plan lane 1 (audit §A) + reviewer refinement: the ONLY Ready store in
+    // init_apic, behind the final gate — SVR programmed, PIC disabled, IOAPIC
+    // (timer/kbd/mouse) + LAPIC timer + calibrate + diag all ran above, and
+    // USING_APIC=true is already live. No early Ready exists: the sole other
+    // terminal exit (firmware EXTD fail-closed) lands Degraded, and the
+    // checked store rejects Ready from anything but Init (claim holder).
+    let _ = apic_state_store_checked(
+        ApicInitState::Ready,
+        if USING_X2APIC.load(Ordering::Acquire) {
+            APIC_R_OK_X2
+        } else {
+            APIC_R_OK_XAPIC
+        },
+    );
     // STI adiado para depois de init_smp — ver neural-kernel SESSION_139.
     crate::slog_nano!(
         "APIC",
@@ -1341,5 +1613,195 @@ mod x2apic_icr_tests {
         assert_eq!(v & 0xFF, 0x08);
         assert_eq!((v >> 8) & 7, 6);
         assert_eq!(v & X2APIC_ICR_RESERVED_MASK, 0);
+    }
+}
+
+#[cfg(test)]
+mod apic_state_tests {
+    use super::*;
+    use spin::Mutex;
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn apic_fail_closed_proven_fix() {
+        let _g = LOCK.lock();
+        // firmware EXTD=1 + hv sem emulacao x2 => BSP-only ANTES de qualquer MMIO.
+        assert_eq!(
+            decide_apic_mode(true, false, false),
+            ApicModeDecision::FailClosedBspOnly
+        );
+        // hv gate cobre tambem o path CPUID (SESSION_281): cpuid x2 nao
+        // sobrepoe o hv — sem isto, wrmsr daria #GP sob TCG/WHPX.
+        assert_eq!(
+            decide_apic_mode(true, false, true),
+            ApicModeDecision::FailClosedBspOnly
+        );
+        assert_eq!(
+            decide_apic_mode(false, false, true),
+            ApicModeDecision::UseMmio
+        );
+        // hv permite: firmware ou CPUID elegem a tentativa x2 (read-back decide).
+        assert_eq!(
+            decide_apic_mode(true, true, false),
+            ApicModeDecision::TryX2
+        );
+        assert_eq!(
+            decide_apic_mode(false, true, true),
+            ApicModeDecision::TryX2
+        );
+        assert_eq!(
+            decide_apic_mode(false, true, false),
+            ApicModeDecision::UseMmio
+        );
+        assert_eq!(
+            decide_apic_mode(false, false, false),
+            ApicModeDecision::UseMmio
+        );
+    }
+
+    #[test]
+    fn apic_retry_after_early_fail_reruns() {
+        let _g = LOCK.lock();
+        apic_state_test_reset();
+        assert!(apic_should_init());
+        // Early fail fica FailedRetryable — nunca envenena: retry permitido.
+        apic_state_store(ApicInitState::FailedRetryable, APIC_R_NONE);
+        assert!(apic_should_init(), "FailedRetryable must allow a later valid retry");
+        // Run valido posterior completa.
+        apic_state_store(ApicInitState::Ready, APIC_R_OK_XAPIC);
+        assert!(!apic_should_init());
+        assert_eq!(apic_init_state(), ApicInitState::Ready);
+        assert_eq!(apic_init_reason(), "ok_xapic");
+        apic_state_test_reset();
+    }
+
+    #[test]
+    fn apic_double_terminal_skips_and_degraded_bsp() {
+        let _g = LOCK.lock();
+        apic_state_test_reset();
+        // Degraded (fail-closed BSP-only): MMIO intocado, BSP segue vivo —
+        // lapic_id() == 0 sem tocar hardware (base 0 no host = mesma garantia).
+        apic_state_store(ApicInitState::Degraded, APIC_R_FW_EXTD_HV_NO_X2);
+        assert!(!apic_should_init(), "Degraded is terminal: second call skips");
+        assert_eq!(lapic_id(), 0, "Degraded keeps BSP path: fail-closed, base untouched");
+        assert!(!USING_APIC.load(Ordering::Relaxed));
+        assert_eq!(apic_init_reason(), "fw_extd_hv_no_x2");
+        apic_state_store(ApicInitState::Ready, APIC_R_OK_X2);
+        assert!(!apic_should_init());
+        apic_state_store(ApicInitState::FailedPermanent, APIC_R_NONE);
+        assert!(!apic_should_init());
+        apic_state_test_reset();
+    }
+
+    // Reviewer refinement: concurrent double-init. Sequential simulation of the
+    // Init race via the state API: first claim wins Run, second sees Init and
+    // gets Busy (AlreadyRunning) — never a second Run, no LAPIC double-touch.
+    #[test]
+    fn apic_claim_race_second_caller_busy() {
+        let _g = LOCK.lock();
+        apic_state_test_reset();
+        assert_eq!(apic_claim_init(), ApicClaim::Run, "first claimant runs");
+        assert_eq!(apic_init_state(), ApicInitState::Init);
+        assert_eq!(apic_claim_init(), ApicClaim::Busy, "second caller must not double-init");
+        assert_eq!(apic_claim_init(), ApicClaim::Busy, "third caller also Busy");
+        assert_eq!(apic_init_state(), ApicInitState::Init, "race leaves Init intact");
+        assert!(!apic_should_init(), "in-flight init not re-runnable via predicate");
+        // Holder finishes honestly; late callers now Skip.
+        assert!(apic_state_store_checked(ApicInitState::Ready, APIC_R_OK_XAPIC));
+        assert_eq!(apic_claim_init(), ApicClaim::Skip(ApicInitState::Ready));
+        assert_eq!(apic_claim_init(), ApicClaim::Skip(ApicInitState::Ready));
+        apic_state_test_reset();
+    }
+
+    // Reviewer refinement: timeout/partial-fail path (firmware EXTD fail-closed).
+    // Degraded records the outcome, BSP stays alive, no auto-retry — only the
+    // explicit reset handle re-opens the gate for a later valid run.
+    #[test]
+    fn apic_timeout_partial_fail_needs_explicit_reset() {
+        let _g = LOCK.lock();
+        apic_state_test_reset();
+        assert_eq!(apic_claim_init(), ApicClaim::Run);
+        assert!(apic_state_store_checked(ApicInitState::Degraded, APIC_R_FW_EXTD_HV_NO_X2));
+        assert!(!apic_should_init(), "Degraded does not auto-retry");
+        assert_eq!(apic_claim_init(), ApicClaim::Skip(ApicInitState::Degraded));
+        assert_eq!(apic_init_reason(), "fw_extd_hv_no_x2");
+        assert!(apic_reset_for_retry(), "Degraded allows explicit reset");
+        assert_eq!(apic_init_state(), ApicInitState::Uninit);
+        assert!(apic_should_init());
+        assert_eq!(apic_claim_init(), ApicClaim::Run, "post-reset claim re-runs");
+        apic_state_test_reset();
+    }
+
+    // Reviewer refinement: retry-after-FailedRetryable re-runs through the
+    // claim, and the claim clears the stale reason.
+    #[test]
+    fn apic_retry_after_failed_retryable_reruns_via_claim() {
+        let _g = LOCK.lock();
+        apic_state_test_reset();
+        assert_eq!(apic_claim_init(), ApicClaim::Run);
+        assert!(apic_state_store_checked(ApicInitState::FailedRetryable, APIC_R_NONE));
+        assert!(apic_should_init());
+        assert_eq!(apic_claim_init(), ApicClaim::Run, "FailedRetryable claim re-runs");
+        assert_eq!(apic_init_reason(), "none", "claim clears stale retryable reason");
+        assert!(apic_state_store_checked(ApicInitState::Ready, APIC_R_OK_X2));
+        assert!(!apic_should_init());
+        assert_eq!(apic_claim_init(), ApicClaim::Skip(ApicInitState::Ready));
+        apic_state_test_reset();
+    }
+
+    // Reviewer refinement: invalid-transition rejection — premature Ready,
+    // terminal overwrite, and double-Init all bounce with state untouched.
+    #[test]
+    fn apic_invalid_transitions_rejected() {
+        let _g = LOCK.lock();
+        apic_state_test_reset();
+        assert!(!apic_state_store_checked(ApicInitState::Ready, APIC_R_OK_XAPIC));
+        assert_eq!(apic_init_state(), ApicInitState::Uninit);
+        assert!(!apic_state_store_checked(ApicInitState::Degraded, APIC_R_FW_EXTD_HV_NO_X2));
+        assert!(!apic_state_store_checked(ApicInitState::FailedPermanent, APIC_R_NONE));
+        assert_eq!(apic_init_state(), ApicInitState::Uninit);
+        assert_eq!(apic_claim_init(), ApicClaim::Run);
+        assert!(!apic_state_store_checked(ApicInitState::Init, APIC_R_NONE));
+        assert_eq!(apic_init_state(), ApicInitState::Init);
+        assert!(apic_state_store_checked(ApicInitState::Ready, APIC_R_OK_X2));
+        assert!(!apic_state_store_checked(ApicInitState::Degraded, APIC_R_FW_EXTD_HV_NO_X2));
+        assert!(!apic_state_store_checked(ApicInitState::FailedRetryable, APIC_R_NONE));
+        assert_eq!(apic_init_state(), ApicInitState::Ready);
+        apic_state_test_reset();
+    }
+
+    // Reviewer refinement: no-Ready-before-invariants. Ready is reachable ONLY
+    // from Init (claim holder that programmed SVR/PIC/IOAPIC/timer and set
+    // USING_APIC live). Uninit/FailedRetryable can never land Ready.
+    #[test]
+    fn apic_no_ready_before_invariants() {
+        let _g = LOCK.lock();
+        apic_state_test_reset();
+        assert!(!apic_state_store_checked(ApicInitState::Ready, APIC_R_OK_XAPIC));
+        apic_state_store(ApicInitState::FailedRetryable, APIC_R_NONE);
+        assert!(!apic_state_store_checked(ApicInitState::Ready, APIC_R_OK_XAPIC));
+        assert_eq!(apic_init_state(), ApicInitState::FailedRetryable);
+        assert_eq!(apic_claim_init(), ApicClaim::Run);
+        assert!(apic_state_store_checked(ApicInitState::Ready, APIC_R_OK_XAPIC));
+        assert_eq!(apic_init_state(), ApicInitState::Ready);
+        apic_state_test_reset();
+    }
+
+    // Reset gate: Ready is never demoted, Init is never yanked.
+    #[test]
+    fn apic_reset_for_retry_gate() {
+        let _g = LOCK.lock();
+        apic_state_test_reset();
+        assert!(!apic_reset_for_retry(), "Uninit has nothing to reset");
+        assert_eq!(apic_claim_init(), ApicClaim::Run);
+        assert!(!apic_reset_for_retry(), "never yank a running init");
+        assert!(apic_state_store_checked(ApicInitState::FailedPermanent, APIC_R_NONE));
+        assert!(apic_reset_for_retry(), "FailedPermanent allows explicit reset");
+        assert_eq!(apic_init_state(), ApicInitState::Uninit);
+        assert_eq!(apic_claim_init(), ApicClaim::Run);
+        assert!(apic_state_store_checked(ApicInitState::Ready, APIC_R_OK_X2));
+        assert!(!apic_reset_for_retry(), "never demote a live APIC");
+        assert_eq!(apic_init_state(), ApicInitState::Ready);
+        apic_state_test_reset();
     }
 }

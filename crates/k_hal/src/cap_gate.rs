@@ -177,7 +177,8 @@ pub fn check(host_fn: &str, held: Cap) -> Result<(), &'static str> {
 }
 pub fn host_send_tcp(held: Cap, _host: &str, _port: u16) -> Result<u64, &'static str> {
     check(HOST_FN_SEND_TCP, held)?;
-    Ok(0)
+    // Validation-only: zero TX installed. Ok(0) != sent — fail closed.
+    Err("ENOSYS: send_tcp TX not implemented")
 }
 fn parse_dotted_ipv4(s: &str) -> Option<[u8; 4]> {
     let mut out = [0u8; 4];
@@ -195,7 +196,8 @@ pub fn allow_count() -> u64 { ALLOW_COUNT.load(Ordering::Relaxed) }
 pub fn demo_hermes_caps() -> Result<(), &'static str> {
     k_nano::slog_hal!("Cap", "p3", "CapabilityGate demo (Hermes host Caps)");
     if host_send_tcp(Cap::EMPTY, "127.0.0.1", 80).is_ok() { return Err("p3: Cap vazia nao deveria enviar tcp"); }
-    host_send_tcp(Cap::RING_OP, "127.0.0.1", 80)?;
+    // send_tcp TX unimplemented: Cap válida passa no check mas falha com ENOSYS.
+    if host_send_tcp(Cap::RING_OP, "127.0.0.1", 80) != Err("ENOSYS: send_tcp TX not implemented") { return Err("p3: send_tcp deveria dar ENOSYS"); }
     if host_write_ring(Cap::EMPTY).is_ok() { return Err("p3: Cap vazia nao deveria write_ring"); }
     host_write_ring(Cap::RING_OP)?;
     k_nano::slog_hal!("Cap", "ok", "SUCCESS CapGate allow={} deny={}", allow_count(), deny_count());
@@ -205,6 +207,8 @@ pub fn demo_hermes_caps() -> Result<(), &'static str> {
 // ─── Syscall dispatch (R1 Cap validation + R0 paging allocation) ───────────
 
 /// Dispatch capability-gated. Allocates L3/L2 frames via k_nano::paging when needed.
+/// Contract: Ok(0) != mapped/sent. Validation-only paths return ENOSYS
+/// (no mapping installed); only paths that truly install state return Ok.
 pub fn dispatch(nr: u64, arg: u64, cap: Cap) -> Result<u64, &'static str> {
     // Sandbox deny (R0 helper)
     k_nano::paging::dispatch_check_sandbox(nr, cap)?;
@@ -228,19 +232,23 @@ pub fn dispatch(nr: u64, arg: u64, cap: Cap) -> Result<u64, &'static str> {
         }
         SYS_PRESENT_FB => {
             if !cap.contains(Cap::WRITE_FB) { return Err("EPERM: Cap::WRITE_FB"); }
-            Ok(0)
+            // Validation-only: no present performed. Ok(0) != presented.
+            Err("ENOSYS: present_fb not implemented")
         }
         SYS_PIN_DMA => {
             if !cap.contains(Cap::PIN_DMA) { return Err("EPERM: Cap::PIN_DMA"); }
-            Ok(0)
+            // Validation-only: no pin installed. Ok(0) != pinned.
+            Err("ENOSYS: pin_dma not implemented")
         }
         SYS_MAP_DMA => {
             if !cap.contains(Cap::MAP_DMA) { return Err("EPERM: Cap::MAP_DMA"); }
-            Ok(0)
+            // Validation-only: no mapping installed. Ok(0) != mapped.
+            Err("ENOSYS: map_dma not implemented")
         }
         SYS_MAP_WEIGHTS => {
             if !cap.contains(Cap::MAP_WEIGHTS) { return Err("EPERM: Cap::MAP_WEIGHTS"); }
-            Ok(0)
+            // Validation-only: no mapping installed. Ok(0) != mapped.
+            Err("ENOSYS: map_weights not implemented")
         }
         SYS_EXIT_USER => {
             if !cap.contains(Cap::ENTER_USER) { return Err("EPERM: Cap::ENTER_USER"); }
@@ -249,12 +257,13 @@ pub fn dispatch(nr: u64, arg: u64, cap: Cap) -> Result<u64, &'static str> {
         SYS_DEMAND_PAGE => {
             if !cap.contains(Cap::DEMAND_PAGE) { return Err("EPERM: Cap::DEMAND_PAGE"); }
             // Real allocation lives in k_nano::paging::install_present_leaf_current via #PF;
-            // dispatch here just validates Cap.
-            Ok(0)
+            // dispatch here just validates Cap — no mapping installed here.
+            Err("ENOSYS: demand_page not implemented here (see #PF path)")
         }
         SYS_MAP_FILE => {
             if !cap.contains(Cap::MAP_FILE) { return Err("EPERM: Cap::MAP_FILE"); }
-            Ok(0)
+            // Validation-only: no mapping installed. Ok(0) != mapped.
+            Err("ENOSYS: map_file not implemented")
         }
         _ => Err("ENOSYS"),
     }

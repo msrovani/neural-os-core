@@ -1770,7 +1770,6 @@ pub(crate) fn kernel_boot(
         crate::display::fb::boot_ckpt(130, "hw-lite smokes");
         k_hal::hw_gate::mark_boot_smoke(boot_tag);
         k_hal::hw_gate::emit_all();
-        // DEAD CODE: let _ = hermes_crate::ipc_bus::boot_smoke(); // (HERMES_AUDIT.md)
         let _ = hermes_crate::async_io::boot_smoke();
         k_nano::async_rt::init_async_rt();
         crate::display::fb::boot_ckpt(135, "smokes hw-lite ok");
@@ -1783,24 +1782,18 @@ pub(crate) fn kernel_boot(
     k_hal::hw_gate::emit_all();
 
     // Labor 9: MessageBus A→B smoke (ADR-0068) — pós-heap
-    // DEAD CODE: 130, "ipc_bus:boot_smoke" (HERMES_AUDIT.md)
-    // DEAD CODE: let _ = hermes_crate::ipc_bus::boot_smoke(); // (HERMES_AUDIT.md)
 
     // Labor 11: async I/O híbrido smoke (ADR-0070) — pós-heap
     crate::display::fb::boot_ckpt(130, "async_io:boot_smoke");
     let _ = hermes_crate::async_io::boot_smoke();
 
     // Labor 16: Git thin parse smoke (ADR-0074) — net opcional
-    // DEAD CODE: 130, "git_thin:boot_smoke" (HERMES_AUDIT.md)
-    // DEAD CODE: let _ = hermes_crate::git_thin::boot_smoke(); // (HERMES_AUDIT.md)
     crate::display::fb::boot_ckpt(131, "smokes1 ok");
 
     // Labor 22 SoftMAC
     crate::display::fb::boot_ckpt(131, "wifi_softmac:boot_smoke");
     crate::wifi_softmac::boot_smoke();
     // Labor 30 WPA2 + Labor 31 wifi net path
-    // DEAD CODE: 131, "wpa2_hs:boot_smoke" (HERMES_AUDIT.md)
-    // DEAD CODE: hermes_crate::wpa2_hs::boot_smoke(); // (HERMES_AUDIT.md)
     crate::display::fb::boot_ckpt(131, "wifi_softmac:dhcp_http_path_smoke");
     crate::wifi_softmac::dhcp_http_path_smoke();
     crate::display::fb::boot_ckpt(132, "smokes2 ok");
@@ -1840,8 +1833,6 @@ pub(crate) fn kernel_boot(
     // Initialize async runtime (P16)
     crate::display::fb::boot_ckpt(134, "async_rt:init_async_rt");
     k_nano::async_rt::init_async_rt();
-    // DEAD CODE: 134, "cf_challenge:boot_smoke" (HERMES_AUDIT.md)
-    // DEAD CODE: hermes_crate::cf_challenge::boot_smoke(); // (HERMES_AUDIT.md)
     crate::display::fb::boot_ckpt(134, "xhci:hub_address_boot_smoke");
     k_nano::xhci::hub_address_boot_smoke();
             crate::display::fb::boot_ckpt(134, "ext4_multiblock_smoke");
@@ -1856,12 +1847,8 @@ pub(crate) fn kernel_boot(
     labor_smokes::hda_multistream_smoke();
     crate::display::fb::boot_ckpt(134, "acpi_s3_smoke");
     labor_smokes::acpi_s3_smoke();
-        // DEAD CODE: 134, "ipc_bus:capgate_boot_smoke" (HERMES_AUDIT.md)
-    // DEAD CODE: let _ = hermes_crate::ipc_bus::capgate_boot_smoke(); // (HERMES_AUDIT.md)
     crate::display::fb::boot_ckpt(134, "bt_hci_smoke");
     labor_smokes::bt_hci_smoke();
-    // DEAD CODE: 134, "elf_loader:elf_thin_boot_smoke" (HERMES_AUDIT.md)
-    // DEAD CODE: let _ = hermes_crate::elf_loader::elf_thin_boot_smoke(); // (HERMES_AUDIT.md)
     crate::display::fb::boot_ckpt(134, "gsp_conditional_smoke");
     labor_smokes::gsp_conditional_smoke();
     crate::display::fb::boot_ckpt(135, "smokes5 ok");
@@ -2746,7 +2733,6 @@ pub(crate) fn kernel_boot(
     k33_step!("wasm_build...");
     let _ = hermes_crate::wasm_build::self_test(); // F4: op-IR→wasm→wasmi
     k33_step!("wasm_build");
-    // DEAD CODE: let _ = hermes_crate::app_factory::self_test(); // F3: gera→monta→sandbox // (HERMES_AUDIT.md)
     k33_step!("app_factory");
     // ADR-0059 F7: arena W^X — execução de código nativo gerado on-device (base JIT).
     k33_step!("exec_arena...");
@@ -3839,12 +3825,6 @@ pub(crate) fn kernel_boot(
     crate::display::fb::boot_ckpt(49, "AudioMixer OK");
     k_nano::slog_bin!("Sched", "ok", "urgency+affinity UI/voz ring0 apos register");
 
-    // DEAD CODE: let mut cron = cron::CronAgent::new(); // (HERMES_AUDIT.md)
-
-    // DEAD CODE: cron.init_defaults(); // (HERMES_AUDIT.md)
-
-    // DEAD CODE: registry.register(Box::new(cron)); // (HERMES_AUDIT.md)
-
     registry.register(Box::new(mcp::McpAgent::new()));
     registry.register(Box::new(security::SecurityAgent::new()));
     registry.set_urgency("security", 140); // Continuous+Pending — evita starvation
@@ -3853,10 +3833,7 @@ pub(crate) fn kernel_boot(
     registry.register(Box::new(safety::SafetyAgent::new()));
     registry.set_urgency("safety", 130);
     let _ = registry.set_affinity_ring("safety", 0);
-    // DEAD CODE: registry.register(Box::new(optimizer::OptimizerAgent::new())); // (HERMES_AUDIT.md)
     registry.register(Box::new(browser_agent::BrowserAgent::new()));
-    // DEAD CODE: registry.register(Box::new(sgdb_agent::SgdbAgent::new())); // (HERMES_AUDIT.md)
-    // DEAD CODE: registry.register(Box::new(wifi_agent::WifiAgent::new())); // (HERMES_AUDIT.md)
     // ADR-0086 I6: AutoInstallerAgent — EventDriven no tópico SYS_INSTALL
     // (mensageiro: instala o sistema no HD alvo; orquestra HwProfiler+SysInstaller).
     registry.register(Box::new(k_nano::installer_agent::AutoInstallerAgent::new()));
@@ -5438,6 +5415,10 @@ pub(crate) fn kernel_boot(
 
     publish_boot_phase(BootPhase::Runtime, "Entrando no AgentScheduler");
 
+    // TALC-first pós-boot (fix OOM mesh T+37xxx): a partir daqui o churn de
+    // alocação do runtime vai para o TALC (dealloc real); bump fica só p/ boot.
+    k_nano::allocator::set_boot_phase_done();
+
     // SESSION_345 F1: pins FAT só após Runtime vivo (overwrite-only se TLSPINS prealloc).
     crate::tls_trust::persist_pins_to_fat();
 
@@ -5542,8 +5523,6 @@ pub fn register_builtin_skills() {
     reg.register(alloc::boxed::Box::new(HardwareInfoSkill));
     reg.register(alloc::boxed::Box::new(net::NetDiagnosticSkill));
     reg.register(alloc::boxed::Box::new(HwIdentifySkill));
-    // DEAD CODE: reg.register(alloc::boxed::Box::new(hermes_crate::expert_skills::DiskDiagSkill)); // (HERMES_AUDIT.md)
-    // DEAD CODE: reg.register(alloc::boxed::Box::new(hermes_crate::expert_skills::SecuritySkill)); // (HERMES_AUDIT.md)
     reg.register(alloc::boxed::Box::new(hermes_crate::self_update::UpdateCheckSkill));
     reg.register(alloc::boxed::Box::new(audio::skills::TtsSkill));
     reg.register(alloc::boxed::Box::new(audio::skills::SttSkill));

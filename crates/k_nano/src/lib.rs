@@ -23,7 +23,9 @@ pub mod block_dev;
 pub mod boot_chime;
 pub mod boot_handoff;
 pub mod boot_bind;
+pub mod boot_err;
 pub mod boot_logger;
+pub mod boot_metrics;
 pub mod boot_mode;
 pub mod boot_report;
 pub mod bench_stats; // E4 (OPCODE-0098): stats puras do bench (P50/P99/mean/stddev)
@@ -120,6 +122,7 @@ pub mod virtio_modern;
 pub mod audio;
 pub mod xhci;
 pub mod paging;
+pub mod pf_classify_proof; // lane-4 formal harness: #PF decision-table model (no logic)
 pub mod ring3;
 
 // Macros (serial_println!, println!, kjson!, klogc!, slog_bin!) are exported via

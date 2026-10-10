@@ -608,6 +608,27 @@ fn scan_and_load_bpb1(phys_off: u64, start: u64, end: u64, step: u64) -> bool {
                     addr = addr.saturating_add(step);
                     continue;
                 }
+                // Fail-closed: valida TODAS as páginas 4K de [va, va+total)
+                // antes de expor via from_raw_parts (hole além da RAM = #PF).
+                {
+                    let va_u64 = va as u64;
+                    let end_va = va_u64.saturating_add(total as u64);
+                    let mut p = va_u64 & !0xFFF;
+                    let mut hole = false;
+                    while p < end_va {
+                        if !k_nano::memory::is_page_present(p) {
+                            hole = true;
+                            break;
+                        }
+                        p = p.saturating_add(0x1000);
+                    }
+                    if hole {
+                        k_nano::slog_bin!("BPE", "warn",
+                            "BPB1 hole @0x{:x} total={} — skip", addr, total);
+                        addr = addr.saturating_add(step);
+                        continue;
+                    }
+                }
                 let slice = core::slice::from_raw_parts(va, total);
                 match init_from_bpb1(slice) {
                     Ok(()) => return true,

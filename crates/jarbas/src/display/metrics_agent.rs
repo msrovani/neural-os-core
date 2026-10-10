@@ -1,20 +1,18 @@
-//! MetricsAgent — amostra CPU/MEM/GPU/HD a cada ~0,5s para o HUD Jarbas.
+//! MetricsAgent — amostra inicial p/ o HUD Jarbas (Oneshot).
+//! O refresh periódico (~0,5s) vive no tick do compositor (`render_inner`),
+//! que chama `gauges::refresh_snapshot` a cada METRICS_POLL_TICKS.
 //! Compositor só lê o snapshot (sem amostrar no hot path de frame).
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use core::sync::atomic::Ordering;
 
-/// ~18 Hz PIT → 0,5 s ≈ 9 ticks de scheduler (halt/tick alinhado ao timer).
+/// Tick do compositor entre refreshes (~18 Hz PIT → 0,5 s ≈ 9 ticks).
 pub const METRICS_POLL_TICKS: u64 = 9;
-/// Gate wall-clock extra (TIMER_TICKS / 18 ≈ segundos).
-const METRICS_PERIOD_TIMER: usize = 9; // 0.5 * 18
-/// Log serial a cada N amostras (~10s) — evita flood COM no HW.
-const LOG_EVERY_N: u32 = 20;
 
 const METRICS_MANIFEST: AgentManifest = AgentManifest {
     name: "sys_metrics",
     kind: AgentKind::System,
-    schedule: ScheduleKind::PollEvery(METRICS_POLL_TICKS),
+    schedule: ScheduleKind::Oneshot,
     auto_start: true,
     persist: true,
 };
@@ -43,18 +41,12 @@ impl Agent for MetricsAgent {
         crate::display::gauges::refresh_snapshot(true);
         self.last_timer = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
         self.samples = 1;
-        k_nano::slog_jarbas!("Metrics", "ok", "MetricsAgent ativo — refresh a cada ~0.5s");
+        k_nano::slog_jarbas!("Metrics", "ok", "MetricsAgent ativo — 1a amostra ok (refresh no tick do compositor)");
     }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        let now = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
-        if self.last_timer != 0 && now.wrapping_sub(self.last_timer) < METRICS_PERIOD_TIMER {
-            return AgentTickResult::Pending;
-        }
-        self.last_timer = now;
-        self.samples = self.samples.wrapping_add(1);
-        let log = self.samples % LOG_EVERY_N == 0;
-        crate::display::gauges::refresh_snapshot(log);
-        AgentTickResult::Pending
+        // Oneshot: a 1ª amostra já saiu no on_activate; o refresh periódico
+        // é feito pelo tick do compositor. Done imediato (sem Pending eterno).
+        AgentTickResult::Done
     }
 }

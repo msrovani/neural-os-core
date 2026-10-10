@@ -33,17 +33,18 @@ pub struct ModelHeader {
 
 impl ModelHeader {
     /// Params estimados: embed + unembed + per_layer * num_layers.
+    /// Saturates to u64::MAX on overflow (never wraps).
     pub fn estimated_params(&self) -> u64 {
-        let embed = (self.hidden * self.vocab) as u64;
-        let kv_dim = self.kv_heads * (self.q_dim / self.num_heads.max(1));
-        let ffn_group = self.intermediate * self.q_dim / self.hidden.max(1);
-        let per_layer = (self.hidden * self.q_dim       // q
-            + self.hidden * kv_dim * 2                   // k + v
-            + self.q_dim * self.hidden                   // o
-            + self.hidden * ffn_group * 2                 // gate + up
-            + self.intermediate * self.q_dim) as u64;    // down
+        let embed = self.hidden.checked_mul(self.vocab).unwrap_or(usize::MAX) as u64;
+        let kv_dim = self.kv_heads.checked_mul(self.q_dim.checked_div(self.num_heads.max(1)).unwrap_or(0)).unwrap_or(usize::MAX);
+        let ffn_group = self.intermediate.checked_mul(self.q_dim).unwrap_or(usize::MAX).checked_div(self.hidden.max(1)).unwrap_or(usize::MAX);
+        let per_layer = (self.hidden.checked_mul(self.q_dim).unwrap_or(usize::MAX))
+            .saturating_add(self.hidden.checked_mul(kv_dim).unwrap_or(usize::MAX).saturating_mul(2))
+            .saturating_add(self.q_dim.checked_mul(self.hidden).unwrap_or(usize::MAX))
+            .saturating_add(self.hidden.checked_mul(ffn_group).unwrap_or(usize::MAX).saturating_mul(2))
+            .saturating_add(self.intermediate.checked_mul(self.q_dim).unwrap_or(usize::MAX)) as u64;
         let unembed = if !self.tie { embed } else { 0 };
-        embed + per_layer * self.num_layers as u64 + unembed
+        embed.saturating_add(per_layer.saturating_mul(self.num_layers as u64)).saturating_add(unembed)
     }
 
     /// Tamanho em MB (arredondado).
@@ -72,36 +73,42 @@ pub fn parse_model_header(data: &[u8]) -> Option<ModelHeader> {
     let num_medusa = u32::from_le_bytes([data[36], data[37], data[38], data[39]]) as usize;
     let tie = &data[40..44] == b"TIED";
     let tok_len = u32::from_le_bytes([data[45], data[46], data[47], data[48]]) as usize;
-    let hdr_end = 49 + tok_len + 3;
+    if tok_len > 65536 { return None; }
+    let hdr_end = 49usize.checked_add(tok_len)?.checked_add(3)?;
     if hdr_end > data.len() { return None; }
-    let embed_type = data[49 + tok_len + 1];
-    let feat = data[49 + tok_len + 2];
+    let embed_type = *data.get(hdr_end.checked_sub(2)?)?;
+    let feat = *data.get(hdr_end.checked_sub(1)?)?;
 
     // Calculate file size from header (same logic as the old v6_file_size)
-    let kv_head_dim = q_dim / num_heads.max(1);
-    let k_dim = kv_heads * kv_head_dim;
-    let ffn_group = intermediate * q_dim / hidden.max(1);
+    let kv_head_dim = q_dim.checked_div(num_heads.max(1))?;
+    let k_dim = kv_heads.checked_mul(kv_head_dim)?;
+    let ffn_group = intermediate.checked_mul(q_dim)?.checked_div(hidden.max(1))?;
     let down_out = q_dim;
     let mut size = hdr_end;
-    size += match embed_type {
-        0 => (hidden * vocab + 3) / 4 + 4,
-        1 => ((hidden * vocab + 255) / 256) * 210 + 4,
-        _ => hidden * vocab * 2 + 4,
-    };
-    let per_layer_norms = hidden * 4 * 2
-        + if feat & 1 != 0 { hidden * 4 } else { 0 }
-        + if feat & 2 != 0 { intermediate * 4 } else { 0 };
-    let per_layer_tern = (hidden * q_dim + 3) / 4
-        + 2 * ((hidden * k_dim + 3) / 4)
-        + (q_dim * hidden + 3) / 4
-        + 2 * ((hidden * ffn_group + 3) / 4)
-        + (intermediate * down_out + 3) / 4
-        + 7 * 4;
-    size += num_layers * (per_layer_norms + per_layer_tern);
-    size += hidden * 4; // rms_final
-    if !tie { size += (hidden * vocab + 3) / 4 + 4; }
-    size += num_medusa * ((hidden * vocab + 3) / 4 + 4);
-    if feat & 4 != 0 { size += 4; }
+    size = size.checked_add(match embed_type {
+        0 => hidden.checked_mul(vocab)?.checked_add(3)?.checked_div(4)?.checked_add(4)?,
+        1 => hidden.checked_mul(vocab)?.checked_add(255)?.checked_div(256)?.checked_mul(210)?.checked_add(4)?,
+        _ => hidden.checked_mul(vocab)?.checked_mul(2)?.checked_add(4)?,
+    })?;
+    let per_layer_norms = hidden.checked_mul(4)?.checked_mul(2)?
+        .checked_add(if feat & 1 != 0 { hidden.checked_mul(4)? } else { 0 })?
+        .checked_add(if feat & 2 != 0 { intermediate.checked_mul(4)? } else { 0 })?;
+    let q_term = hidden.checked_mul(q_dim)?.checked_add(3)?.checked_div(4)?;
+    let kv_term = hidden.checked_mul(k_dim)?.checked_add(3)?.checked_div(4)?;
+    let o_term = q_dim.checked_mul(hidden)?.checked_add(3)?.checked_div(4)?;
+    let ff_term = hidden.checked_mul(ffn_group)?.checked_add(3)?.checked_div(4)?;
+    let down_term = intermediate.checked_mul(down_out)?.checked_add(3)?.checked_div(4)?;
+    let per_layer_tern = q_term
+        .checked_add(kv_term.checked_mul(2)?)?
+        .checked_add(o_term)?
+        .checked_add(ff_term.checked_mul(2)?)?
+        .checked_add(down_term)?
+        .checked_add(7usize.checked_mul(4)?)?;
+    size = size.checked_add(num_layers.checked_mul(per_layer_norms.checked_add(per_layer_tern)?)?)?;
+    size = size.checked_add(hidden.checked_mul(4)?)?; // rms_final
+    if !tie { size = size.checked_add(hidden.checked_mul(vocab)?.checked_add(3)?.checked_div(4)?.checked_add(4)?)?; }
+    size = size.checked_add(num_medusa.checked_mul(hidden.checked_mul(vocab)?.checked_add(3)?.checked_div(4)?.checked_add(4)?)?)?;
+    if feat & 4 != 0 { size = size.checked_add(4)?; }
 
     Some(ModelHeader { hidden, num_layers, num_heads, vocab, max_seq, intermediate,
         kv_heads, q_dim, num_medusa, tie, feat, embed_type, file_size: size })

@@ -912,8 +912,31 @@ fn build_mmap_view_inner(
     if !k_nano::memory::is_page_present(tail & !0xFFF) {
         return None;
     }
-    let _ = k_nano::memory::ensure_loader_page_ro(d.phys);
-    let _ = k_nano::memory::ensure_loader_page_ro(d.phys + (d.packed_len as u64).saturating_sub(1));
+    // Fail-closed: valida TODAS as páginas 4K interiores, não só first+last.
+    {
+        let mut p = (va & !0xFFF).saturating_add(0x1000);
+        let tail_page = tail & !0xFFF;
+        while p < tail_page {
+            if !k_nano::memory::is_page_present(p) {
+                return None;
+            }
+            p = p.saturating_add(0x1000);
+        }
+    }
+    // Fail-closed: propaga erros RO (antes: `let _ =` ignorava hole/1GB).
+    {
+        let end_phys = d.phys.saturating_add((d.packed_len as u64).saturating_sub(1));
+        let mut c = d.phys;
+        loop {
+            if !k_nano::memory::ensure_loader_page_ro(c) {
+                return None;
+            }
+            if c >= end_phys {
+                break;
+            }
+            c = c.saturating_add(0x20_0000);
+        }
+    }
     let bytes: Vec<u8> =
         unsafe { alloc::vec::Vec::from_raw_parts(va as *mut u8, d.packed_len, d.packed_len) };
     let tensor = PackedTernaryTensor {

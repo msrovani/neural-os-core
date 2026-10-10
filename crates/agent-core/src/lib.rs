@@ -991,21 +991,30 @@ pub fn tick_stage(n: u8) {
 /// (manifestos de agente — vivem no .rodata do binário); a leitura reconstrói
 /// o &str sem cópia. Fora de tick (stamp 0) retorna None.
 pub fn tick_in_progress() -> Option<(&'static str, u64)> {
-    let entered = TICK_ENTERED_MS.load(core::sync::atomic::Ordering::Relaxed);
+    let entered = TICK_ENTERED_MS.load(core::sync::atomic::Ordering::Acquire);
     if entered == 0 {
         return None;
     }
-    let ptr = CUR_AGENT_PTR.load(core::sync::atomic::Ordering::Relaxed) as *const u8;
-    let len = CUR_AGENT_LEN.load(core::sync::atomic::Ordering::Relaxed);
-    if ptr.is_null() || len == 0 || len > 64 {
-        return None;
+    // ponytail: torn-read guard — writer stores ptr then len; len1==len2 narrows the window
+    for _ in 0..2 {
+        let len1 = CUR_AGENT_LEN.load(core::sync::atomic::Ordering::Acquire);
+        let ptr = CUR_AGENT_PTR.load(core::sync::atomic::Ordering::Acquire) as *const u8;
+        let len2 = CUR_AGENT_LEN.load(core::sync::atomic::Ordering::Acquire);
+        if len1 != len2 {
+            continue;
+        }
+        let len = len1;
+        if ptr.is_null() || len == 0 || len > 64 {
+            return None;
+        }
+        return Some(unsafe {
+            (
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len)),
+                entered,
+            )
+        });
     }
-    Some(unsafe {
-        (
-            core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len)),
-            entered,
-        )
-    })
+    None
 }
 
 /// Label p/ OOM/refuse: tick corrente → último tick → "?".
@@ -1013,12 +1022,21 @@ pub fn oom_agent_label() -> &'static str {
     if let Some((n, _)) = tick_in_progress() {
         return n;
     }
-    let ptr = LAST_AGENT_PTR.load(core::sync::atomic::Ordering::Relaxed) as *const u8;
-    let len = LAST_AGENT_LEN.load(core::sync::atomic::Ordering::Relaxed);
-    if ptr.is_null() || len == 0 || len > 64 {
-        return "?";
+    // ponytail: same torn-read guard for the LAST_* pair; fail-closed to "?" on tear
+    for _ in 0..2 {
+        let len1 = LAST_AGENT_LEN.load(core::sync::atomic::Ordering::Acquire);
+        let ptr = LAST_AGENT_PTR.load(core::sync::atomic::Ordering::Acquire) as *const u8;
+        let len2 = LAST_AGENT_LEN.load(core::sync::atomic::Ordering::Acquire);
+        if len1 != len2 {
+            continue;
+        }
+        let len = len1;
+        if ptr.is_null() || len == 0 || len > 64 {
+            return "?";
+        }
+        return unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len)) };
     }
-    unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len)) }
+    "?"
 }
 
 /// SESSION_351: stamp OOM p/ trabalho fora de AGENT_TICK_BUSY (InferWorker AP idle).

@@ -386,40 +386,33 @@ impl Agent for CortexAgent {
                 }
             }
             agent_core::tick_stage(2);
-            // Freeze s323/s324: watchdog pré-lock. TicketLock layout:
-            // {ticket: AtomicUsize, serving: AtomicUsize, data}. Se a lock já
-            // está disputada (serving != ticket) ALGUÉM segura — estampa o
-            // estado no FB e degrada p/ fallback (o tick sobrevive, AIOS).
-            // s324: &TRINITY apontava pro wrapper ZST do lazy_static (leu
-            // estáticas adjacentes — t=0xffffffff807f293d era lixo). Deref
-            // real: &*TRINITY → &TicketLock.
-            let trinity_ptr = &*crate::globals::TRINITY as *const _ as *const u64;
-            let (tk, sv) = unsafe {
-                (
-                    core::ptr::read_volatile(trinity_ptr),
-                    core::ptr::read_volatile(trinity_ptr.add(1)),
-                )
-            };
-            let expert = if tk != sv {
-                let mut buf = [0u8; 64];
-                let mut n = 0usize;
-                for &b in b"TRINITY BUSY t=" {
-                    if n < buf.len() { buf[n] = b; n += 1; }
+            // Freeze s323/s324: watchdog pré-lock via try_lock (gate atômico
+            // único — sem read_volatile/layout assumido). None = disputada,
+            // estampa no FB e degrada p/ fallback (o tick sobrevive, AIOS).
+            let expert = match crate::globals::TRINITY.try_lock() {
+                Some(t) => {
+                    agent_core::tick_stage(3); // lock adquirido
+                    let e = t.classify_intent(user_text).name;
+                    drop(t);
+                    agent_core::tick_stage(4); // classify feito
+                    e
                 }
-                k_nano::interrupts::push_hex_fb(&mut buf, &mut n, tk as u64);
-                for &b in b" s=" {
-                    if n < buf.len() { buf[n] = b; n += 1; }
+                None => {
+                    let tk = crate::globals::TRINITY.ticket();
+                    let sv = crate::globals::TRINITY.serving();
+                    let mut buf = [0u8; 64];
+                    let mut n = 0usize;
+                    for &b in b"TRINITY BUSY t=" {
+                        if n < buf.len() { buf[n] = b; n += 1; }
+                    }
+                    k_nano::interrupts::push_hex_fb(&mut buf, &mut n, tk as u64);
+                    for &b in b" s=" {
+                        if n < buf.len() { buf[n] = b; n += 1; }
+                    }
+                    k_nano::interrupts::push_hex_fb(&mut buf, &mut n, sv as u64);
+                    k_nano::interrupts::exception_fb_stamp(&buf[..n]);
+                    "generator"
                 }
-                k_nano::interrupts::push_hex_fb(&mut buf, &mut n, sv as u64);
-                k_nano::interrupts::exception_fb_stamp(&buf[..n]);
-                "generator"
-            } else {
-                let t = crate::globals::TRINITY.lock();
-                agent_core::tick_stage(3); // lock adquirido
-                let e = t.classify_intent(user_text).name;
-                drop(t);
-                agent_core::tick_stage(4); // classify feito
-                e
             };
             k_nano::slog_cortex!(
                 "LLM",

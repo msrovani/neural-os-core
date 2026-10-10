@@ -500,6 +500,9 @@ pub struct JarbasDesktop {
     pub soul_mirror: SoulMirrorRenderer,
     // Diálogo de confirmação de desligamento (None = fechado).
     pub power_dialog: bool,
+    /// Tela de energia (shutdown/reboot): fundo já pintado de preto?
+    /// Evita fill_rect fullscreen a cada frame — só na entrada (dirty-rects depois).
+    power_full_done: bool,
 
     // Drag/resize state
     pub drag_state: Option<DragState>,
@@ -588,6 +591,7 @@ impl JarbasDesktop {
             resizing_card_id: None,
             soul_mirror: SoulMirrorRenderer::new(w, h), 
             power_dialog: false,
+            power_full_done: false,
             drag_state: None,
             mouse_x: 0,
             mouse_y: 0,
@@ -670,7 +674,13 @@ impl JarbasDesktop {
         };
 
         if floating {
-            ws.add_window_floating(crate::display::workspaces::FloatingWindow::new(id, rect, window.content.clone()));
+            // Caminho legacy-App: o conteúdo é `App(AppId)` (Copy) — reconstrói
+            // sem clonar o `WindowContent` (Card/Tiled carregam Vecs/Strings).
+            let fw_content = match &window.content {
+                WindowContent::App(a) => WindowContent::App(*a),
+                other => other.clone(),
+            };
+            ws.add_window_floating(crate::display::workspaces::FloatingWindow::new(id, rect, fw_content));
         } else {
             ws.add_window_tiled(id, SplitDirection::Right);
         }
@@ -938,6 +948,12 @@ impl JarbasDesktop {
         if !self.power_dialog || self.dirty_dialog {
             self.dirty_orb = true;
         }
+        // ── Metrics 2 Hz via tick do compositor (MetricsAgent é Oneshot:
+        // só a 1ª amostra; o refresh periódico vive aqui, fora do hot path).
+        if tick % crate::display::metrics_agent::METRICS_POLL_TICKS == 0 {
+            crate::display::gauges::refresh_snapshot(false);
+            self.dirty_hud = true;
+        }
         // HUD + dock clock: ~1s @18Hz (PIT) / ~0.5s @64Hz. Sem dirty_hud o
         // present_frame não apresenta o dock e o relógio fica 00:00.
         if tick % 16 == 0 {
@@ -1036,20 +1052,36 @@ impl JarbasDesktop {
                 || *pstate == PowerState::Rebooting
             {
                 drop(pstate);
-                self.fb.fill_rect(0, 0, w, h, 0, 0, 0);
+                // Fullscreen só na entrada (ou 1º frame/vcon via full_swap_pending);
+                // depois só o rect da mensagem + cursor (dirty-rects, sem 1M px/frame).
                 let msg = if let Some(banner) = *POWER_BANNER.lock() { banner } else { "" };
+                if !self.power_full_done {
+                    self.fb.fill_rect(0, 0, w, h, 0, 0, 0);
+                    self.damage.push(0, 0, w, h, w, h);
+                    self.power_full_done = true;
+                } else if !msg.is_empty() {
+                    let tw = msg.len() * 8; // approx pixel width
+                    let tx = w.saturating_sub(tw) / 2;
+                    self.damage.push(tx, (h / 2).saturating_sub(8), tw, 16, w, h);
+                }
                 if !msg.is_empty() {
                     let tw = msg.len() * 8; // approx pixel width
                     let tx = w.saturating_sub(tw) / 2;
                     draw_text(&mut self.fb, tx, h / 2 - 8, msg, w, 255, 200, 80);
                 }
                 if !k_hal::gpu::intel_display::hw_cursor_active() {
-                    draw_mouse_cursor(&mut self.fb, MOUSE_X.load(core::sync::atomic::Ordering::Relaxed), MOUSE_Y.load(core::sync::atomic::Ordering::Relaxed), w, h);
+                    let mx = MOUSE_X.load(core::sync::atomic::Ordering::Relaxed);
+                    let my = MOUSE_Y.load(core::sync::atomic::Ordering::Relaxed);
+                    draw_mouse_cursor(&mut self.fb, mx, my, w, h);
+                    self.damage.push(mx, my, CURSOR_UNDER_W, CURSOR_UNDER_H, w, h);
                 }
-                self.fb.swap();
+                let dmg = self.damage;
+                self.present_frame(false, dmg);
                 return;
             }
         }
+        // Fora do estado de energia: permite novo fullscreen na próxima entrada.
+        self.power_full_done = false;
 
         // ═════════════════════════════════════════════════════════════
         // CAMADA 0: Fundo escuro + Orb responsivo (tela inteira)
@@ -1858,9 +1890,9 @@ impl JarbasDesktop {
         self.windows[idx].rect = rect;
         self.windows[idx].focused = true;
         if !self.window_in_active_ws(id) {
-            let content = self.windows[idx].content.clone();
+            // show_app só lida com AppId (Copy) — sem clone() do conteúdo.
             self.workspaces.active_mut().add_window_floating(
-                crate::display::window::FloatingWindow::new(id, rect, content),
+                crate::display::window::FloatingWindow::new(id, rect, WindowContent::App(app_id)),
             );
         } else {
             self.sync_floating_rect(id, rect);
@@ -1985,49 +2017,65 @@ impl JarbasDesktop {
             if !self.windows[i].visible {
                 continue;
             }
-            let content = self.windows[i].content.clone();
-            if let WindowContent::Card(ref decl) = content {
-                if cx >= decl.x && cx < decl.x + decl.w && cy >= decl.y && cy < decl.y + decl.h {
-                    let card_id = decl.id;
-                    let win_id = self.windows[i].id;
-                    // Interacao com card e mudanca de estado: repaint das janelas.
-                    self.invalidate_windows();
-                    // Close button
-                    let (crx, cry, crw, crh) = decl.close_rect();
-                    if decl.closable && cx >= crx && cx < crx + crw && cy >= cry && cy < cry + crh {
-                        self.workspaces.active_mut().remove_window(win_id);
-                        self.windows.remove(i);
-                        return "close";
+            // Borrow-only: copia só escalares/rects p/ fora do borrow (sem clone
+            // do body/widgets — hit_test aloca 1 Vec pequeno por CLIQUE, não/frame).
+            let hit = match &self.windows[i].content {
+                WindowContent::Card(decl) => {
+                    if cx >= decl.x && cx < decl.x + decl.w && cy >= decl.y && cy < decl.y + decl.h {
+                        Some((
+                            decl.id,
+                            self.windows[i].id,
+                            decl.x,
+                            decl.y,
+                            decl.w,
+                            decl.h,
+                            decl.closable,
+                            decl.close_rect(),
+                            crate::display::card::hit_test_buttons(decl),
+                        ))
+                    } else {
+                        None
                     }
-                    // Resize handle (bottom-right corner)
-                    let hx = decl.x + decl.w - 10;
-                    let hy = decl.y + decl.h - 10;
-                    if cx >= hx && cx < hx + 10 && cy >= hy && cy < hy + 10 {
-                        self.resizing_card_id = Some(win_id);
-                        return "resize";
-                    }
-                    // Title bar drag
-                    if cy < decl.y + 22 {
-                        self.dragging_card_id = Some(win_id);
-                        self.card_drag_off = (cx - decl.x, cy - decl.y);
-                        return "drag";
-                    }
-                    let hits = crate::display::card::hit_test_buttons(decl);
-                    for btn in &hits {
-                        if cx >= btn.x && cx < btn.x + btn.w && cy >= btn.y && cy < btn.y + btn.h {
-                            self.card_hit_button = Some((card_id, btn.index));
-                            let payload = alloc::format!("{}:{}", card_id, btn.index);
-                            let _ = EVENT_BUS.publish(event_bus::Event {
-                                id: 0,
-                                topic: String::from(TOPIC_CARD_ACTION),
-                                payload: payload.into_bytes(),
-                                token: event_bus::CapabilityToken::Legacy(1),
-                            });
-                            return "btn";
-                        }
-                    }
-                    return "focus";
                 }
+                _ => None,
+            };
+            if let Some((card_id, win_id, dx, dy, dw, dh, closable, close_r, hits)) = hit {
+                // Interacao com card e mudanca de estado: repaint das janelas.
+                self.invalidate_windows();
+                // Close button
+                let (crx, cry, crw, crh) = close_r;
+                if closable && cx >= crx && cx < crx + crw && cy >= cry && cy < cry + crh {
+                    self.workspaces.active_mut().remove_window(win_id);
+                    self.windows.remove(i);
+                    return "close";
+                }
+                // Resize handle (bottom-right corner)
+                let hx = dx + dw - 10;
+                let hy = dy + dh - 10;
+                if cx >= hx && cx < hx + 10 && cy >= hy && cy < hy + 10 {
+                    self.resizing_card_id = Some(win_id);
+                    return "resize";
+                }
+                // Title bar drag
+                if cy < dy + 22 {
+                    self.dragging_card_id = Some(win_id);
+                    self.card_drag_off = (cx - dx, cy - dy);
+                    return "drag";
+                }
+                for btn in &hits {
+                    if cx >= btn.x && cx < btn.x + btn.w && cy >= btn.y && cy < btn.y + btn.h {
+                        self.card_hit_button = Some((card_id, btn.index));
+                        let payload = alloc::format!("{}:{}", card_id, btn.index);
+                        let _ = EVENT_BUS.publish(event_bus::Event {
+                            id: 0,
+                            topic: String::from(TOPIC_CARD_ACTION),
+                            payload: payload.into_bytes(),
+                            token: event_bus::CapabilityToken::Legacy(1),
+                        });
+                        return "btn";
+                    }
+                }
+                return "focus";
             }
         }
         "miss"

@@ -100,7 +100,6 @@ pub fn vfs_storage_bridge_smoke() {
 /// HW real pendrive: MSC costuma aparecer tarde; labor completo trava antes do Runtime.
 pub fn run_deferred_usb_live(boot_tag: &str) {
     k_hal::hw_gate::emit_all();
-    // DEAD CODE: let _ = hermes_crate::ipc_bus::boot_smoke(); // (HERMES_AUDIT.md)
     let _ = hermes_crate::async_io::boot_smoke();
     limine_esp_evidence_smoke(boot_tag);
     k_nano::slog_bin!(
@@ -116,10 +115,8 @@ pub fn run_deferred(boot_tag: &str) {
 
     let _ = hermes_crate::ipc_bus::boot_smoke(); // IPC roundtrip (M6 message_bus fix)
     let _ = hermes_crate::async_io::boot_smoke();
-    // DEAD CODE: let _ = hermes_crate::git_thin::boot_smoke(); // (HERMES_AUDIT.md)
 
     crate::wifi_softmac::boot_smoke();
-    // DEAD CODE: hermes_crate::wpa2_hs::boot_smoke(); // (HERMES_AUDIT.md)
     crate::wifi_softmac::dhcp_http_path_smoke();
 
     limine_esp_evidence_smoke(boot_tag);
@@ -134,7 +131,6 @@ pub fn run_deferred(boot_tag: &str) {
     let _ = hermes_crate::manpages::boot_smoke();
     let _ = jarbas_crate::image_viewer::boot_smoke();
     let _ = k_nano::fts_search::boot_smoke();
-    // DEAD CODE: hermes_crate::cf_challenge::boot_smoke(); // (HERMES_AUDIT.md)
     k_nano::xhci::hub_address_boot_smoke();
     ext4_multiblock_smoke();
     vfs_storage_bridge_smoke();
@@ -142,9 +138,7 @@ pub fn run_deferred(boot_tag: &str) {
     note_gpu_or_i225_smoke();
     hda_multistream_smoke();
     acpi_s3_smoke();
-    // DEAD CODE: let _ = hermes_crate::ipc_bus::capgate_boot_smoke(); // (HERMES_AUDIT.md)
     bt_hci_smoke();
-    // DEAD CODE: let _ = hermes_crate::elf_loader::elf_thin_boot_smoke(); // (HERMES_AUDIT.md)
     gsp_conditional_smoke();
 
     k_nano::slog_bin!(

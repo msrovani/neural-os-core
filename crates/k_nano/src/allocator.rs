@@ -108,7 +108,10 @@ unsafe impl GlobalAlloc for LazyBumpAllocator {
                 Ordering::SeqCst,
                 Ordering::Relaxed,
             ) {
-                Ok(_) => return aligned_ptr as *mut u8,
+                Ok(_) => {
+                    note_bump_alloc(size);
+                    return aligned_ptr as *mut u8;
+                }
                 Err(actual) => current_offset = actual,
             }
         }
@@ -116,6 +119,36 @@ unsafe impl GlobalAlloc for LazyBumpAllocator {
 
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
         // bump allocator — sem free
+    }
+}
+
+// ─── s460: churn do bump (instrumentação) ───────────────────────────────────
+// Evidência (QEMU 2-instance mesh, boot_mesh_a.txt): o bump-first torna TODO
+// churn (vivo + transitivo) PERMANENTE — dealloc no-op → ~31.9KB/tick:
+// 512→768→1024→1179MB até PMM esgotar → #PF storm → park. O counter acumula
+// o total alocado no bump; a cada 1000ª alloc 1 linha slog nomeia o agente no
+// topo do tick (tick_in_progress, lock-free). Zero alloc no path: só atomics
+// + slog de stack buffer (emit_tagged, SEM heap).
+pub static ALLOC_BYTES: AtomicU64 = AtomicU64::new(0);
+static ALLOC_BYTES_LOGGED: AtomicU64 = AtomicU64::new(0);
+static ALLOC_CALLS: AtomicU64 = AtomicU64::new(0);
+
+/// Chama no SUCESSO do path bump. Barato: 2 atomics; o slog é 1/1000.
+#[inline]
+fn note_bump_alloc(size: usize) {
+    ALLOC_BYTES.fetch_add(size as u64, Ordering::Relaxed);
+    if ALLOC_CALLS.fetch_add(1, Ordering::Relaxed) % 1000 == 999 {
+        let total = ALLOC_BYTES.load(Ordering::Relaxed);
+        let delta_kb = total
+            .saturating_sub(ALLOC_BYTES_LOGGED.swap(total, Ordering::Relaxed))
+            / 1024;
+        let agent = match agent_core::tick_in_progress() {
+            Some((n, _)) => n,
+            None => "boot/idle",
+        };
+        crate::slog_nano!("HEAP", "BUMP",
+            "ALLOC offset={}MB delta={}KB top_agent={}",
+            heap_used_bytes() / (1024 * 1024), delta_kb, agent);
     }
 }
 
@@ -445,6 +478,56 @@ struct HybridAllocator;
 
 static TALC_READY: AtomicBool = AtomicBool::new(false);
 
+// ─── s460: gate de roteamento bump↔TALC ─────────────────────────────────────
+// O comentário histórico "TALC-first stallou o boot" era o claim SEM gate de
+// fase: o stall vinha do claim demand-pagado antes do IDT/demand-page prontos
+// (boot cedo), não do TALC-first em si. Gate correto: pós-boot (Runtime) +
+// TALC pronto + layout cabe no claim → TALC-first (dealloc real, churn
+// reciclado); caso contrário → bump (comportamento de boot intacto, fail-safe
+// — sem o call de set_boot_phase_done o gate nunca escolhe TALC e nada muda).
+
+/// Backend escolhido pelo gate (puro, host-testável).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AllocBackend {
+    /// Bump (boot / fallback — dealloc no-op, ponteiros vivem e morrem).
+    Bump,
+    /// TALC (pós-boot — dealloc REAL, churn é reciclado).
+    Talc,
+}
+
+/// True quando o boot completou as fases (Runtime). Setado pelo boot
+/// (`set_boot_phase_done`, 1 linha no Runtime do bin); default false.
+static BOOT_PHASE_DONE: AtomicBool = AtomicBool::new(false);
+
+/// Marca o fim das fases de boot (chamar 1× no Runtime). Idempotente.
+pub fn set_boot_phase_done() {
+    BOOT_PHASE_DONE.store(true, Ordering::Release);
+}
+
+pub fn boot_phase_done() -> bool {
+    BOOT_PHASE_DONE.load(Ordering::Acquire)
+}
+
+/// Gate de roteamento (PURO — só atomics, nunca locks/alloc: roda dentro do
+/// path de alloc). Pós-boot + TALC pronto + layout cabe no claim → TALC;
+/// caso contrário → bump (fail-safe = comportamento atual).
+///
+/// Contrato de consistência alloc/dealloc: o dealloc NÃO usa este gate — usa
+/// `ptr_in_talc` (range do ponteiro), que identifica o backend de QUALQUER
+/// ponteiro com 2 comparações lock-free (bump e TALC vivem em ranges VA
+/// disjuntos). Assim um dealloc sempre libera no backend que alocou, mesmo
+/// com o gate mudando entre alloc e dealloc (ex.: TALC cheio → fallback bump).
+pub fn route_alloc(layout: Layout) -> AllocBackend {
+    if boot_phase_done()
+        && TALC_READY.load(Ordering::Acquire)
+        && layout.size() <= talc_capacity_bytes()
+    {
+        AllocBackend::Talc
+    } else {
+        AllocBackend::Bump
+    }
+}
+
 // ─── Diagnóstico TALC NULL (idea #630, s434) ────────────────────────────────
 // O OOM `infer_worker` com span de 6911MB é o residual de 3 sessões. O counter
 // TALC_OVERFLOW_NULL diz QUE falhou, não POR QUÊ. Candidatas distinguíveis:
@@ -518,6 +601,40 @@ pub fn talc_null_avail_snapshot() -> (u64, u64) {
         TALC_NULL_AVAIL_LOW.load(Ordering::Relaxed),
         TALC_NULL_AVAIL_HIGH.load(Ordering::Relaxed),
     )
+}
+
+/// Diagnóstico zero-alloc do NULL do TALC (counter + snapshot one-shot dos
+/// bins + FB stamp nas 3 primeiras). Fatorado do alloc/alloc_zeroed/realloc
+/// (s460: os 3 paths compartilham o MESMO counter sem duplicação de código).
+fn note_talc_null(size: usize) {
+    let n = TALC_OVERFLOW_NULL.fetch_add(1, Ordering::Relaxed);
+    // #630: snapshot one-shot dos bins no 1º NULL — distingue fragmentação
+    // (bins não-vazios) de span nunca materializado (vazio: demand-page
+    // falhou ou claim sem gaps). Zero-alloc.
+    if n == 0 {
+        snapshot_talc_bins(&TALC_ALLOC.lock());
+        TALC_NULL_REQ_SIZE.store(size, Ordering::Relaxed);
+        TALC_NULL_REQ_CHUNK.store(
+            size + 3 * core::mem::size_of::<usize>(),
+            Ordering::Relaxed,
+        );
+    }
+    // 3 primeiras ocorrências: serial direto, zero-alloc (path de OOM).
+    if n < 3 {
+        let mut buf = [0u8; 96];
+        let mut n2 = 0usize;
+        for &b in b"ALLOC null bump+TALC size=" { if n2 < buf.len() { buf[n2] = b; n2 += 1; } }
+        let mut v = size;
+        let mut digits = [0u8; 20];
+        let mut d = 0usize;
+        if v == 0 { digits[0] = b'0'; d = 1; }
+        while v > 0 && d < 20 { digits[d] = b'0' + (v % 10) as u8; v /= 10; d += 1; }
+        while d > 0 { d -= 1; if n2 < buf.len() { buf[n2] = digits[d]; n2 += 1; } }
+        for &b in b" agente=" { if n2 < buf.len() { buf[n2] = b; n2 += 1; } }
+        let agent = agent_core::oom_agent_label();
+        for &b in agent.as_bytes() { if n2 < buf.len() { buf[n2] = b; n2 += 1; } }
+        crate::interrupts::exception_fb_stamp(&buf[..n2]);
+    }
 }
 
 // ─── s435: Telemetria de uso REAL do TALC (idea #630 residual) ─────────────
@@ -720,57 +837,47 @@ impl HybridAllocator {
 
 unsafe impl GlobalAlloc for HybridAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // Bump PRIMEIRO (comportamento de boot intacto — TALC-first stallou o
-        // boot no SMP bring-up: claim demanda páginas do span antes do IDT/
-        // demand-page prontos). TALC é OVERFLOW: só entra quando o bump recusa
-        // (janela esgotada) e o claim já existe — aí dealloc do TALC é real.
-        let p = LazyBumpAllocator::alloc(&BUMP_ALLOC, layout);
-        if !p.is_null() {
-            return p;
-        }
-        if TALC_READY.load(Ordering::Acquire) {
+        // s460: gate de roteamento — pós-boot TALC-first (dealloc real, churn
+        // reciclado); boot/sem TALC → bump-first (comportamento de boot
+        // intacto — o claim demand-pagado antes do IDT era o stall histórico).
+        let talc_first = route_alloc(layout) == AllocBackend::Talc;
+        if talc_first {
             let q = TALC_ALLOC.alloc(layout);
             if !q.is_null() {
                 return q;
             }
-            let n = TALC_OVERFLOW_NULL.fetch_add(1, Ordering::Relaxed);
-            // #630: snapshot one-shot dos bins no 1º NULL — distingue
-            // fragmentação (bins não-vazios) de span nunca materializado
-            // (vazio: demand-page falhou ou claim sem gaps). Zero-alloc.
-            if n == 0 {
-                snapshot_talc_bins(&TALC_ALLOC.lock());
-                TALC_NULL_REQ_SIZE.store(layout.size(), Ordering::Relaxed);
-                TALC_NULL_REQ_CHUNK.store(
-                    layout.size() + 3 * core::mem::size_of::<usize>(),
-                    Ordering::Relaxed,
-                );
+            // TALC cheio: diag + cai no bump (fail-safe de vivência; o dealloc
+            // desse ponteiro é no-op do bump — classe pré-existente, e o
+            // counter TALC_OVERFLOW_NULL flag o evento).
+            note_talc_null(layout.size());
+        }
+        let p = LazyBumpAllocator::alloc(&BUMP_ALLOC, layout);
+        if !p.is_null() {
+            return p;
+        }
+        // Bump recusou: TALC como overflow (comportamento atual), a menos que
+        // o gate já tenha tentado o TALC acima (sem dupla tentativa/contador).
+        if !talc_first && TALC_READY.load(Ordering::Acquire) {
+            let q = TALC_ALLOC.alloc(layout);
+            if !q.is_null() {
+                return q;
             }
-            // 3 primeiras ocorrências: serial direto, zero-alloc (path de OOM).
-            if n < 3 {
-                let mut buf = [0u8; 96];
-                let mut n2 = 0usize;
-                for &b in b"ALLOC null bump+TALC size=" { if n2 < buf.len() { buf[n2] = b; n2 += 1; } }
-                let mut v = layout.size();
-                let mut digits = [0u8; 20];
-                let mut d = 0usize;
-                if v == 0 { digits[0] = b'0'; d = 1; }
-                while v > 0 && d < 20 { digits[d] = b'0' + (v % 10) as u8; v /= 10; d += 1; }
-                while d > 0 { d -= 1; if n2 < buf.len() { buf[n2] = digits[d]; n2 += 1; } }
-                for &b in b" agente=" { if n2 < buf.len() { buf[n2] = b; n2 += 1; } }
-                let agent = agent_core::oom_agent_label();
-                for &b in agent.as_bytes() { if n2 < buf.len() { buf[n2] = b; n2 += 1; } }
-                crate::interrupts::exception_fb_stamp(&buf[..n2]);
-            }
+            note_talc_null(layout.size());
         }
         core::ptr::null_mut()
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // s460: consistência por PONTEIRO (não pelo gate de fase) — o range
+        // identifica o backend de qualquer ponteiro com 2 comparações
+        // lock-free (nunca lock aqui: dealloc de IRQ + TicketLock =
+        // deadlock, SESSION_438). Pós-boot, os allocs TALC-first caem no
+        // span → free REAL; ponteiros de boot vivem e morrem (no-op).
         if Self::ptr_in_talc(ptr) {
             TALC_ALLOC.dealloc(ptr, layout);
             return;
         }
-        // Bump: no-op (sempre foi) — ponteiros de boot vivem e morrem.
+        // Bump: no-op (sempre foi).
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
@@ -781,40 +888,26 @@ unsafe impl GlobalAlloc for HybridAllocator {
             }
             // s434b (#630): o realloc do Talck chama o malloc INTERNO (não o
             // nosso GlobalAlloc::alloc) — um NULL aqui chegava ao
-            // alloc_error_handler SEM counter/snapshot (os 3 OOM do log
-            // 140959 com nulls=0: era realloc de chunk já-residente no TALC
-            // crescendo com o bump cheio). Caminho: grow_in_place falha →
-            // malloc falha (fragmentação no espaço do talc) → null direto.
+            // alloc_error_handler SEM counter/snapshot. Caminho: grow_in_place
+            // falha → malloc falha (fragmentação no espaço do talc) → null.
             // FAIL-CLOSED CORRETO: o dado continua válido no ponteiro velho;
             // propagar null = UB no caller (realloc embutido), então
             // oom() de verdade com diag completo.
-            snapshot_talc_bins(&TALC_ALLOC.lock());
-            TALC_NULL_REQ_SIZE.store(new_size, Ordering::Relaxed);
-            TALC_NULL_REQ_CHUNK.store(
-                new_size + 3 * core::mem::size_of::<usize>(),
-                Ordering::Relaxed,
-            );
-            TALC_OVERFLOW_NULL.fetch_add(1, Ordering::Relaxed);
+            note_talc_null(new_size);
             oom(Layout::from_size_align_unchecked(new_size, layout.align()))
         }
         // s434c (#630): chunk bump-residente crescendo — o default realloc
         // (alloc+copy+dealloc) do BUMP retornava NULL SEM tocar o TALC: o
         // alloc novo era do bump puro (sem overflow!) e morria com a janela
         // cheia mesmo com talc de 6911MB (os OOM com nulls=0 persistiam no
-        // log 142925: era ESTE path). Cai no híbrido: TALC dá o espaço novo
-        // (bump cheio), copy manual; o ponteiro velho segue no bump (sem
-        // free — sempre foi assim) e a memória nova tem free real.
+        // log 142925: era ESTE path). Cai no híbrido: s460 — o DESTINO roteia
+        // pelo gate (pós-boot TALC-first, free real na memória nova), copy
+        // manual; o ponteiro velho segue no bump (sem free — sempre foi assim).
         let new_layout = Layout::from_size_align_unchecked(new_size, layout.align());
         let q = GlobalAlloc::alloc(self, new_layout);
         if q.is_null() {
             // OOM real do híbrido (talc também recusou) — diag completo.
-            snapshot_talc_bins(&TALC_ALLOC.lock());
-            TALC_NULL_REQ_SIZE.store(new_size, Ordering::Relaxed);
-            TALC_NULL_REQ_CHUNK.store(
-                new_size + 3 * core::mem::size_of::<usize>(),
-                Ordering::Relaxed,
-            );
-            TALC_OVERFLOW_NULL.fetch_add(1, Ordering::Relaxed);
+            note_talc_null(new_size);
             oom(new_layout);
         }
         // s437: copia o MENOR tamanho — `realloc` pode ENCOLHER
@@ -825,24 +918,27 @@ unsafe impl GlobalAlloc for HybridAllocator {
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        // s460: mesmo gate do alloc (rota consistente entre os dois entrys).
+        let talc_first = route_alloc(layout) == AllocBackend::Talc;
+        if talc_first {
+            let q = TALC_ALLOC.alloc_zeroed(layout);
+            if !q.is_null() {
+                return q;
+            }
+            note_talc_null(layout.size());
+        }
         let p = LazyBumpAllocator::alloc_zeroed(&BUMP_ALLOC, layout);
         if !p.is_null() {
             return p;
         }
-        if TALC_READY.load(Ordering::Acquire) {
+        if !talc_first && TALC_READY.load(Ordering::Acquire) {
             let q = TALC_ALLOC.alloc_zeroed(layout);
             if !q.is_null() {
                 return q;
             }
             // s434b: mesmo gap do realloc — o alloc_zeroed do Talck cai no
             // malloc interno; NULL aqui também não passava pelo counter.
-            snapshot_talc_bins(&TALC_ALLOC.lock());
-            TALC_NULL_REQ_SIZE.store(layout.size(), Ordering::Relaxed);
-            TALC_NULL_REQ_CHUNK.store(
-                layout.size() + 3 * core::mem::size_of::<usize>(),
-                Ordering::Relaxed,
-            );
-            TALC_OVERFLOW_NULL.fetch_add(1, Ordering::Relaxed);
+            note_talc_null(layout.size());
         }
         core::ptr::null_mut()
     }
@@ -1676,7 +1772,15 @@ unsafe fn map_page_direct(base: VirtAddr, virt: VirtAddr, phys: u64) {
 ///    KERNEL_END that code accesses (e.g., ATA buffers, statics).
 ///    Derives physical address from HHDM (identity map) so the
 ///    ORIGINAL frame is mapped (not a fresh allocation).
-pub fn try_fault_in_heap(cr2: u64) -> bool {
+/// `err` = #PF error code (bit0 P, bit1 W): protection-violation write
+/// (P|W) recusa cura — TLB flush nunca cura RO-write (loop infinito).
+pub fn try_fault_in_heap(cr2: u64, err: u64) -> bool {
+    // Defect 1: RO-write em página PRESENTE não é stale-TLB — recusar
+    // fail-closed (nunca `true` silencioso que desvia o contador do handler).
+    if (err & 0x3) == 0x3 {
+        PF_DIAG_NO_RANGE.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
     let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     if pmoff == 0 {
         PF_DIAG_PMOFF_ZERO.fetch_add(1, Ordering::Relaxed);
@@ -1714,7 +1818,12 @@ pub fn try_fault_in_heap(cr2: u64) -> bool {
     let hhdm_phys = cr2.wrapping_sub(pmoff);
     let kphys_check = KERNEL_PHYS_BASE.load(Ordering::Relaxed);
     let kvirt_check = KERNEL_VIRT_BASE.load(Ordering::Relaxed);
-    let in_kernel_virt = if kphys_check != 0 && kvirt_check != 0 {
+    let in_kernel_virt = if kphys_check != 0 && kvirt_check != 0 && kvirt_end != 0 {
+        // Defect 2: bound superior obrigatório — sem ele, qualquer VA acima
+        // da imagem caía no fresh-map abaixo (fail-open no high-half).
+        cr2 >= kvirt_check && cr2 < kvirt_end
+    } else if kphys_check != 0 && kvirt_check != 0 {
+        // Janela transitória do boot (END ainda não registrado): bound física.
         let phys_k = kphys_check.wrapping_add(cr2.wrapping_sub(kvirt_check));
         cr2 >= kvirt_check && phys_k < 8 * 1024 * 1024 * 1024
     } else {
@@ -1771,15 +1880,13 @@ pub fn try_fault_in_heap(cr2: u64) -> bool {
     // 1. If within kernel image range (kphys..KERNEL_END), use kernel_phys+offset
     // 2. Otherwise, allocate a fresh frame
     let kvirt_end = KERNEL_VIRT_END.load(Ordering::Relaxed);
-    let use_identity = kphys != 0 && kvirt != 0 && cr2 >= kvirt && cr2 < kvirt_end;
-    let p = if use_identity {
-        target_phys & !0xFFF
-    } else if let Some(f) = crate::memory::alloc_physical_frame() {
-        f.start_address().as_u64()
-    } else {
-        // Last resort: use kernel_phys+offset even outside kernel image
-        target_phys & !0xFFF
-    };
+    let use_identity = kphys != 0 && kvirt != 0 && kvirt_end != 0 && cr2 >= kvirt && cr2 < kvirt_end;
+    if !use_identity {
+        // Defect 2: fora da imagem = sem fresh-map no high-half (fail-closed).
+        PF_DIAG_NO_RANGE.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    let p = target_phys & !0xFFF;
     if p == 0 {
         PF_DIAG_P0.fetch_add(1, Ordering::Relaxed);
         return false;
@@ -2711,5 +2818,190 @@ mod talc_buf_tests {
         assert!(b.push_str("!!"));
         assert_eq!(a.as_str(), "primeiro", "a nao pode ver o crescimento de b");
         assert_eq!(b.as_str(), "segundo!!");
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// s460 — Testes host do gate de roteamento bump↔TALC + instrumentação
+// ═══════════════════════════════════════════════════════════════════════════
+// Padrão statics compartilhados (SESSION_346): os testes mutam
+// BOOT_PHASE_DONE/TALC_READY (estado global do gate) — rodar com
+// --test-threads=1; cada teste salva/restaura os statics que toca (nunca
+// vazar estado p/ o teste seguinte).
+#[cfg(test)]
+mod allocator_routing_tests {
+    use super::*;
+    use std::alloc::{alloc, dealloc, realloc};
+
+    /// Guard de estado do gate: salva na entrada, restaura no drop (o teste
+    /// seguinte herda o estado de boot, não o do teste anterior).
+    struct GateGuard {
+        boot_done: bool,
+        talc_ready: bool,
+    }
+
+    impl GateGuard {
+        fn new() -> Self {
+            let g = GateGuard {
+                boot_done: boot_phase_done(),
+                talc_ready: TALC_READY.load(Ordering::Acquire),
+            };
+            // Reset para o estado de boot conhecido (host: nada pronto).
+            BOOT_PHASE_DONE.store(false, Ordering::Release);
+            TALC_READY.store(false, Ordering::Release);
+            g
+        }
+    }
+
+    impl Drop for GateGuard {
+        fn drop(&mut self) {
+            BOOT_PHASE_DONE.store(self.boot_done, Ordering::Release);
+            TALC_READY.store(self.talc_ready, Ordering::Release);
+        }
+    }
+
+    fn small_layout() -> Layout {
+        Layout::from_size_align(128, 8).unwrap()
+    }
+
+    #[test]
+    fn route_boot_goes_bump() {
+        let _g = GateGuard::new();
+        // Boot (fase não done) → bump, MESMO com TALC pronto (o claim
+        // demand-pagado antes do IDT era o stall histórico).
+        TALC_READY.store(true, Ordering::Release);
+        assert_eq!(route_alloc(small_layout()), AllocBackend::Bump);
+        // Nem TALC pronto nem boot done → bump (default host).
+        TALC_READY.store(false, Ordering::Release);
+        assert_eq!(route_alloc(small_layout()), AllocBackend::Bump);
+    }
+
+    #[test]
+    fn route_post_boot_ready_goes_talc_and_huge_falls_back() {
+        let _g = GateGuard::new();
+        BOOT_PHASE_DONE.store(true, Ordering::Release);
+        TALC_READY.store(true, Ordering::Release);
+        // Pós-boot + pronto + layout cabe no claim → TALC (dealloc real).
+        assert_eq!(route_alloc(small_layout()), AllocBackend::Talc);
+        // Layout maior que o claim → bump (fail-safe).
+        let huge = Layout::from_size_align(talc_capacity_bytes() + 1, 8).unwrap();
+        assert_eq!(route_alloc(huge), AllocBackend::Bump);
+    }
+
+    #[test]
+    fn route_post_boot_without_talc_goes_bump() {
+        let _g = GateGuard::new();
+        BOOT_PHASE_DONE.store(true, Ordering::Release);
+        assert_eq!(route_alloc(small_layout()), AllocBackend::Bump);
+    }
+
+    #[test]
+    fn set_boot_phase_done_flips_the_gate() {
+        let _g = GateGuard::new();
+        TALC_READY.store(true, Ordering::Release);
+        assert!(!boot_phase_done());
+        set_boot_phase_done();
+        assert!(boot_phase_done());
+        assert_eq!(route_alloc(small_layout()), AllocBackend::Talc);
+    }
+
+    #[test]
+    fn alloc_bytes_accumulates_on_bump_path() {
+        let _g = GateGuard::new();
+        // Host: TALC não pronto → todo alloc do global vai no bump (contado).
+        let before = ALLOC_BYTES.load(Ordering::Relaxed);
+        let layout = Layout::from_size_align(4096, 8).unwrap();
+        let p = unsafe { alloc(layout) };
+        assert!(!p.is_null());
+        let after = ALLOC_BYTES.load(Ordering::Relaxed);
+        assert!(
+            after >= before + 4096,
+            "ALLOC_BYTES tem que acumular o bump path: before={} after={}",
+            before, after
+        );
+        unsafe { dealloc(p, layout) };
+    }
+
+    #[test]
+    fn dealloc_routes_by_pointer_range() {
+        // Contrato de consistência: o dealloc identifica o backend pelo RANGE
+        // do ponteiro (lock-free, 2 comparações) — não pelo gate de fase.
+        // TALC span (kernel VA) → TALC; bump (.kheap) → bump.
+        assert!(HybridAllocator::ptr_in_talc(LARGE_HEAP_START as *mut u8));
+        assert!(HybridAllocator::ptr_in_talc(
+            (TALC_SPAN_END.load(Ordering::Acquire) - 1) as *mut u8
+        ));
+        assert!(!HybridAllocator::ptr_in_talc(unsafe { HEAP_BUFFER.as_mut_ptr() }));
+        assert!(!HybridAllocator::ptr_in_talc(core::ptr::null_mut()));
+    }
+
+    #[test]
+    fn realloc_routes_consistently_and_preserves_content() {
+        let _g = GateGuard::new();
+        // Host (boot): alloc bump → realloc maior → destino bump (gate Bump),
+        // cópia preservada, dealloc do velho no-op (comportamento conhecido).
+        let layout = Layout::from_size_align(64, 8).unwrap();
+        let p = unsafe { alloc(layout) };
+        assert!(!p.is_null());
+        for i in 0..64usize {
+            unsafe { *p.add(i) = i as u8; }
+        }
+        let q = unsafe { realloc(p, layout, 256) };
+        assert!(!q.is_null(), "realloc tem que suceder no host (bump)");
+        for i in 0..64usize {
+            assert_eq!(unsafe { *q.add(i) }, i as u8, "conteúdo preservado no realloc");
+        }
+        unsafe { dealloc(q, Layout::from_size_align(256, 8).unwrap()) };
+    }
+
+    #[test]
+    fn realloc_post_boot_routes_destination_to_talc_first() {
+        // Pós-boot + TALC pronto: o realloc de um chunk bump-residente roteia
+        // o DESTINO pelo gate (TALC-first). No host o TALC_ALLOC não tem claim
+        // → NULL honesto → fallback bump (fail-safe) — o teste prova a rota
+        // sem faking: sucesso + conteúdo preservado mostram o fallback.
+        let _g = GateGuard::new();
+        BOOT_PHASE_DONE.store(true, Ordering::Release);
+        TALC_READY.store(true, Ordering::Release);
+        let layout = Layout::from_size_align(64, 8).unwrap();
+        let p = unsafe { alloc(layout) };
+        assert!(!p.is_null());
+        for i in 0..64usize {
+            unsafe { *p.add(i) = i as u8; }
+        }
+        let q = unsafe { realloc(p, layout, 256) };
+        assert!(!q.is_null(), "fallback bump do realloc pós-boot tem que suceder");
+        for i in 0..64usize {
+            assert_eq!(unsafe { *q.add(i) }, i as u8);
+        }
+        unsafe { dealloc(q, Layout::from_size_align(256, 8).unwrap()) };
+    }
+
+    /// TALC-free path (dealloc pós-boot libera DE VERDADE no TALC): o span do
+    /// TALC vive em VA de kernel (0x4000_0000_0000) — não exercitável no host
+    /// (o range check do dealloc é o range do kernel; um claim host cairia
+    /// fora dele). QEMU prova: pós-boot alloc → chunk no span → dealloc →
+    /// talc_usage().free_bytes recupera (gap registrado no walk s435).
+    #[test]
+    #[ignore = "needs-QEMU: TALC span em VA de kernel (0x4000_0000_0000), nao exercitavel no host"]
+    fn dealloc_post_boot_frees_in_talc() {
+        let _g = GateGuard::new();
+        BOOT_PHASE_DONE.store(true, Ordering::Release);
+        TALC_READY.store(true, Ordering::Release);
+        let layout = Layout::from_size_align(4096, 8).unwrap();
+        let p = unsafe { alloc(layout) };
+        assert!(!p.is_null());
+        assert!(
+            HybridAllocator::ptr_in_talc(p),
+            "pós-boot o chunk tem que ser TALC-residente"
+        );
+        let free_before = talc_usage().free_bytes;
+        unsafe { dealloc(p, layout) };
+        let free_after = talc_usage().free_bytes;
+        assert!(
+            free_after >= free_before + 4096,
+            "dealloc pós-boot tem que liberar no TALC: before={} after={}",
+            free_before, free_after
+        );
     }
 }

@@ -91,6 +91,22 @@ pub struct EventBus {
 /// E3: stamps dropados por falha do lock bounded do anel (best-effort).
 static AUDIT_SKIPPED: AtomicU64 = AtomicU64::new(0);
 
+/// s455-audit: churn de clones por assinante. Cada `publish` clona o payload
+/// N× (1 por subscriber vivo) — bump backend: dealloc é no-op, então clone
+/// churn = leak permanente. Medição only (QEMU mesh: P2P_PACKET 6 subs →
+/// 6 clones/RX). Bytes = Σ payload.len() por clone; count = nº de clones.
+static CLONED_BYTES: AtomicU64 = AtomicU64::new(0);
+static CLONED_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Snapshot (bytes, count) do churn de clones — um agente pode slogar
+/// periódico (wiring do caller fora do escopo desta medição).
+pub fn clone_churn_snapshot() -> (u64, u64) {
+    (
+        CLONED_BYTES.load(Ordering::Relaxed),
+        CLONED_COUNT.load(Ordering::Relaxed),
+    )
+}
+
 impl EventBus {
     pub fn new() -> Self {
         EventBus {
@@ -183,6 +199,8 @@ impl EventBus {
             for q in queues.iter() {
                 if let Some(mut g) = lock_bounded(q) {
                     push_bounded(&mut g, event.clone(), depth);
+                    CLONED_BYTES.fetch_add(event.payload.len() as u64, Ordering::Relaxed);
+                    CLONED_COUNT.fetch_add(1, Ordering::Relaxed);
                     delivered = delivered.saturating_add(1);
                 }
             }
@@ -308,5 +326,46 @@ mod tests {
         let rx = bus.subscribe("CARD_ACTION");
         bus.unsubscribe(&rx);
         assert_eq!(bus.publish(ev("CARD_ACTION", b"c")).unwrap(), 0);
+    }
+
+    // s455-audit: contadores globais compartilhados entre testes — medir por
+    // DELTA (antes/depois dentro do teste), nunca valor absoluto.
+    #[test]
+    fn clone_churn_grows_per_subscriber() {
+        let bus = EventBus::new();
+        let (b0, c0) = clone_churn_snapshot();
+        let rxs: Vec<Receiver> = (0..3).map(|_| bus.subscribe("P2P_PACKET")).collect();
+        let payload = b"0123456789ABCDE"; // 15 bytes
+        assert_eq!(bus.publish(ev("P2P_PACKET", payload)).unwrap(), 3);
+        let (b1, c1) = clone_churn_snapshot();
+        assert_eq!(b1 - b0, 3 * payload.len() as u64);
+        assert_eq!(c1 - c0, 3);
+        drop(rxs);
+    }
+
+    #[test]
+    fn clone_churn_zero_subscribers_no_growth() {
+        let bus = EventBus::new();
+        let (b0, c0) = clone_churn_snapshot();
+        assert_eq!(bus.publish(ev("P2P_PACKET", b"xyz")).unwrap(), 0);
+        let (b1, c1) = clone_churn_snapshot();
+        assert_eq!(b1, b0);
+        assert_eq!(c1, c0);
+    }
+
+    #[test]
+    fn clone_churn_snapshot_returns_counters() {
+        let bus = EventBus::new();
+        let (b0, c0) = clone_churn_snapshot();
+        let rx = bus.subscribe("T2");
+        assert_eq!(bus.publish(ev("T2", b"ab")).unwrap(), 1);
+        let (b1, c1) = clone_churn_snapshot();
+        assert_eq!(b1 - b0, 2);
+        assert_eq!(c1 - c0, 1);
+        assert_eq!(bus.publish(ev("T2", b"abcdef")).unwrap(), 1);
+        let (b2, c2) = clone_churn_snapshot();
+        assert_eq!(b2 - b1, 6);
+        assert_eq!(c2 - c1, 1);
+        drop(rx);
     }
 }

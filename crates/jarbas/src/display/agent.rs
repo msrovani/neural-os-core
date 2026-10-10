@@ -196,6 +196,31 @@ pub fn fleet_health_snapshot() -> Option<(alloc::string::String, Option<alloc::s
     FLEET_SNAPSHOT.lock().clone()
 }
 
+/// ponytail: copy-out sem alloc do worst-of da frota p/ o fill 2 Hz
+/// (`refresh_hub_health`) — copia overall + 1ª reason p/ bufs da stack.
+/// Retorna `(overall_len, reason_len|None)`. O `fleet_health_snapshot()`
+/// (clone) fica p/ testes/diagnóstico on-demand.
+pub fn fleet_health_copy_out(
+    overall: &mut [u8; 16],
+    reason: &mut [u8; 64],
+) -> Option<(usize, Option<usize>)> {
+    let g = FLEET_SNAPSHOT.lock();
+    let (o, r) = g.as_ref()?;
+    let ob = o.as_bytes();
+    let on = ob.len().min(overall.len());
+    overall[..on].copy_from_slice(&ob[..on]);
+    let rn = match r {
+        Some(s) => {
+            let b = s.as_bytes();
+            let n = b.len().min(reason.len());
+            reason[..n].copy_from_slice(&b[..n]);
+            Some(n)
+        }
+        None => None,
+    };
+    Some((on, rn))
+}
+
 const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
     name: "display",
     kind: AgentKind::Console,
@@ -559,10 +584,10 @@ impl DisplayAgent {
         if json.contains("\"body\"") {
             if let Some(decl) = crate::display::card::parse_card(json) {
                 if let Some(ref mut desktop) = *COMPOSITOR.lock() {
-                    let title = decl.title.clone();
+                    // Borrow p/ o log ANTES do move p/ spawn (clone só no insert).
+                    k_nano::slog_jarbas!("UI", "ok", "card spawn title={} (ADR-0058)", decl.title.as_str());
                     desktop.spawn_card(decl);
                     ui_spec::mark_ui_ok();
-                    k_nano::slog_jarbas!("UI", "ok", "card spawn title={} (ADR-0058)", title);
                 }
                 return;
             }

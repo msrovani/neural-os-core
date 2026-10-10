@@ -10,7 +10,9 @@ pub mod latent;
 pub mod message_bus;
 pub mod stamp;
 
-pub use bus::{EventBus, Receiver, DEFAULT_QUEUE_DEPTH, STREAM_QUEUE_DEPTH};
+pub use bus::{
+    clone_churn_snapshot, EventBus, Receiver, DEFAULT_QUEUE_DEPTH, STREAM_QUEUE_DEPTH,
+};
 pub use capability::CapabilityToken;
 pub use channel::BoundedChannel;
 pub use event::Event;

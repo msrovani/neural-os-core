@@ -1509,6 +1509,118 @@ pub fn peer_p99_rtt(node_id: u8) -> u64 {
     0
 }
 
+// ─── Estado do peer (fonte única de verdade p/ dispatch de compute) ─────────
+// Problema (LOG AGENTES (4).txt): telemetria dizia peer ativo enquanto o
+// compute não achava peer disponível — e o worker insistia em retries após
+// recusas sucessivas (CPU/RAM alimentando OOM). Derivação explícita
+// Available/Degraded/Unavailable a partir dos sinais EXISTENTES de
+// PeerHealth (reachable / consecutive_failures / last_activity_ticks).
+// Sem statics novos — estado é derivado, nunca armazenado (runtime-hygiene).
+
+/// Estado de disponibilidade de um peer para dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerState {
+    /// Saudável: reachable, sem falhas, atividade recente.
+    Available,
+    /// Aceita trabalho, mas com backoff: falhas recentes ou atividade envelhecida.
+    Degraded,
+    /// NÃO despachar: circuit breaker, unreachable, ou morto (fora do TTL).
+    Unavailable,
+}
+
+/// Limiar de "envelhecido" (ticks sem atividade) — metade do TTL de cleanup.
+/// Consistente com `cleanup_peer_health_ttl`: entrada prestes a expirar = Degraded.
+const PEER_DEGRADED_TICKS: u64 = PEER_HEALTH_TTL_TICKS / 2;
+
+/// Deriva o estado a partir dos sinais de health. Predicado puro (testável
+/// sem statics): `now` vem de TIMER_TICKS no wrapper. Ordem: Unavailable >
+/// Degraded > Available (pior vence — fail-closed).
+/// - Unavailable: `!reachable` OU `consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD`
+///   OU sem atividade por > PEER_HEALTH_TTL_TICKS (mesmo corte do TTL cleanup).
+/// - Degraded: qualquer falha consecutiva (>0) OU sem atividade por
+///   > PEER_DEGRADED_TICKS.
+/// - Available: resto.
+#[must_use]
+pub fn peer_state_from_health(h: &PeerHealth, now: u64) -> PeerState {
+    let since = now.wrapping_sub(h.last_activity_ticks);
+    if !h.reachable
+        || h.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD
+        || since > PEER_HEALTH_TTL_TICKS
+    {
+        return PeerState::Unavailable;
+    }
+    if h.consecutive_failures > 0 || since > PEER_DEGRADED_TICKS {
+        return PeerState::Degraded;
+    }
+    PeerState::Available
+}
+
+/// Estado atual de um peer (lê PEER_HEALTH + TIMER_TICKS). `None` = desconhecido.
+#[must_use]
+pub fn peer_state(node_id: u8) -> Option<PeerState> {
+    let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    peer_health(node_id).map(|h| peer_state_from_health(&h, now))
+}
+
+/// Fonte única de verdade de disponibilidade p/ o compute: Available |
+/// Degraded → true (Degraded aceita trabalho, com backoff); Unavailable ou
+/// desconhecido → false. O lane de wiring chama isto ANTES de despachar.
+#[must_use]
+pub fn peer_available(node_id: u8) -> bool {
+    matches!(
+        peer_state(node_id),
+        Some(PeerState::Available | PeerState::Degraded)
+    )
+}
+
+// ─── Backoff exponencial com jitter + limite de tentativas por tarefa ───────
+// Política de retry p/ recusas sucessivas (pure fns, aritmética inteira,
+// sem f32::ceil — padrão SESSION_242 p99). O caller (lane de wiring) usa:
+// `attempt_allowed(attempts, MAX_TASK_ATTEMPTS)` como stop-condition e
+// `refusal_backoff_ticks(attempt, base, seed)` como delay entre retries.
+
+/// Backoff base entre recusas (ticks) — mesma escala do probe (50 ticks).
+pub const REFUSAL_BACKOFF_BASE_TICKS: u64 = PROBE_BASE_TIMEOUT_TICKS;
+/// Teto do backoff (ticks) — mesmo teto do probe exponencial (3200).
+pub const REFUSAL_BACKOFF_MAX_TICKS: u64 = PROBE_MAX_TIMEOUT_TICKS;
+/// Default de tentativas por tarefa antes de desistir (alinha com o
+/// circuit breaker: 3 falhas consecutivas → Unavailable).
+pub const MAX_TASK_ATTEMPTS: u32 = 3;
+
+/// Delay exponencial puro: `base * 2^attempt`, capado em
+/// REFUSAL_BACKOFF_MAX_TICKS. `attempt` clampado a 31 (sem panic de shift).
+#[must_use]
+pub fn backoff_delay_ticks(attempt: u32, base_ticks: u64) -> u64 {
+    let exp = attempt.min(31) as u64;
+    base_ticks
+        .saturating_mul(1u64 << exp)
+        .min(REFUSAL_BACKOFF_MAX_TICKS)
+}
+
+/// Backoff com jitter determinístico por seed: subtrai até 25% do delay
+/// (`[delay - delay/4, delay]`). Mesmo (attempt, base, seed) → mesmo valor.
+/// Jitter só subtrai — o teto do cap é preservado e o crescimento 2x entre
+/// tentativas domina o jitter de 25%.
+#[must_use]
+pub fn refusal_backoff_ticks(attempt: u32, base_ticks: u64, seed: u64) -> u64 {
+    let delay = backoff_delay_ticks(attempt, base_ticks);
+    let span = delay / 4;
+    if span == 0 {
+        return delay;
+    }
+    // LCG barato (Knuth) → jitter uniforme o suficiente em [0, span].
+    let jitter = (seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407) >> 33)
+        % (span + 1);
+    delay - jitter
+}
+
+/// Limite de tentativas por tarefa (puro): `attempts` já feitos vs máximo.
+/// `attempts == max` → deny (a próxima tentativa NÃO é permitida).
+#[must_use]
+pub fn attempt_allowed(attempts: u32, max_attempts: u32) -> bool {
+    attempts < max_attempts
+}
+
 // ─── Tier cripto (ADR-0081): Relativizado (HMAC) vs Full (Ed25519) ──────────
 // Modelo de confiança: mesmo range/datacenter provisiona uma chave de
 // segmento (`set_segment_key`) → DADOS autenticados por HMAC-SHA256 (~1.3µs/
@@ -2319,5 +2431,213 @@ mod kani_proofs {
         let count: usize = kani::any();
         kani::assume(count >= 1 && count <= 32);
         assert!(p99_index(count) < count);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serializa testes que mutam statics compartilhados (SESSION_346 race).
+    static TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
+    /// Limpa a tabela de health (reset pattern — statics entre testes).
+    fn reset_peer_health() {
+        let mut table = PEER_HEALTH.lock();
+        for slot in table.iter_mut() {
+            *slot = None;
+        }
+    }
+
+    fn health(reachable: bool, failures: u8, last_activity: u64) -> PeerHealth {
+        PeerHealth {
+            last_rtt_ticks: 0,
+            consecutive_failures: failures,
+            tx_count: 1,
+            ack_count: if reachable { 1 } else { 0 },
+            unreachable_since: 0,
+            reachable,
+            probe_failures: 0,
+            probe_timeout_ticks: PROBE_BASE_TIMEOUT_TICKS,
+            last_activity_ticks: last_activity,
+            avg_rtt_ticks: 0,
+            rtt_samples: [0u64; 32],
+            rtt_sample_idx: 0,
+            rtt_sample_count: 0,
+        }
+    }
+
+    #[test]
+    fn state_fresh_is_available() {
+        // Fresh: reachable, 0 falhas, atividade agora (since=0).
+        assert_eq!(
+            peer_state_from_health(&health(true, 0, 100), 100),
+            PeerState::Available
+        );
+        // Dentro do limiar degraded (since == PEER_DEGRADED_TICKS → ainda Available).
+        assert_eq!(
+            peer_state_from_health(&health(true, 0, 100), 100 + PEER_DEGRADED_TICKS),
+            PeerState::Available
+        );
+    }
+
+    #[test]
+    fn state_stale_is_degraded() {
+        // Envelhecido: sem falhas, mas since > PEER_DEGRADED_TICKS (≤ TTL).
+        assert_eq!(
+            peer_state_from_health(&health(true, 0, 100), 100 + PEER_DEGRADED_TICKS + 1),
+            PeerState::Degraded
+        );
+        // No limite do TTL (since == TTL) ainda Degraded — só > TTL vira Unavailable.
+        assert_eq!(
+            peer_state_from_health(&health(true, 0, 100), 100 + PEER_HEALTH_TTL_TICKS),
+            PeerState::Degraded
+        );
+    }
+
+    #[test]
+    fn state_dead_is_unavailable() {
+        // Morto: sem atividade por > TTL — mesmo reachable=true (sinal mente).
+        assert_eq!(
+            peer_state_from_health(&health(true, 0, 100), 100 + PEER_HEALTH_TTL_TICKS + 1),
+            PeerState::Unavailable
+        );
+    }
+
+    #[test]
+    fn state_unreachable_is_unavailable() {
+        // Circuit breaker: reachable=false → Unavailable independente do resto.
+        assert_eq!(
+            peer_state_from_health(&health(false, 0, 100), 100),
+            PeerState::Unavailable
+        );
+        // Falhas >= CIRCUIT_BREAKER_THRESHOLD mesmo com reachable=true.
+        assert_eq!(
+            peer_state_from_health(&health(true, CIRCUIT_BREAKER_THRESHOLD, 100), 100),
+            PeerState::Unavailable
+        );
+        assert_eq!(
+            peer_state_from_health(&health(true, 255, 100), 100),
+            PeerState::Unavailable
+        );
+    }
+
+    #[test]
+    fn state_partial_failures_are_degraded() {
+        // 1-2 falhas consecutivas (abaixo do breaker) → Degraded.
+        assert_eq!(
+            peer_state_from_health(&health(true, 1, 100), 100),
+            PeerState::Degraded
+        );
+        assert_eq!(
+            peer_state_from_health(&health(true, CIRCUIT_BREAKER_THRESHOLD - 1, 100), 100),
+            PeerState::Degraded
+        );
+    }
+
+    #[test]
+    fn backoff_growth_and_cap() {
+        let base = REFUSAL_BACKOFF_BASE_TICKS;
+        assert_eq!(backoff_delay_ticks(0, base), base);
+        assert_eq!(backoff_delay_ticks(1, base), base * 2);
+        assert_eq!(backoff_delay_ticks(2, base), base * 4);
+        // Crescimento exponencial até o cap.
+        assert!(backoff_delay_ticks(3, base) > backoff_delay_ticks(2, base));
+        assert_eq!(
+            backoff_delay_ticks(6, base),
+            REFUSAL_BACKOFF_MAX_TICKS
+        );
+        // Cap: tentativas além do teto não crescem mais.
+        assert_eq!(
+            backoff_delay_ticks(20, base),
+            REFUSAL_BACKOFF_MAX_TICKS
+        );
+        // Shift overflow guard: attempt gigante não panica.
+        assert_eq!(
+            backoff_delay_ticks(u32::MAX, base),
+            REFUSAL_BACKOFF_MAX_TICKS
+        );
+    }
+
+    #[test]
+    fn backoff_jitter_bounds_and_determinism() {
+        let base = REFUSAL_BACKOFF_BASE_TICKS;
+        for attempt in 0..8u32 {
+            let delay = backoff_delay_ticks(attempt, base);
+            let min = delay - delay / 4;
+            for seed in 0..1000u64 {
+                let d = refusal_backoff_ticks(attempt, base, seed);
+                assert!(d >= min && d <= delay, "attempt={} seed={} d={} fora [{},{}]",
+                    attempt, seed, d, min, delay);
+            }
+            // Determinismo: mesma seed → mesmo valor.
+            assert_eq!(
+                refusal_backoff_ticks(attempt, base, 42),
+                refusal_backoff_ticks(attempt, base, 42)
+            );
+        }
+        // Jitter não quebra o crescimento entre tentativas (2x > 25% de jitter):
+        // pior caso do attempt N (delay - 25%) > melhor caso do attempt N-1... só
+        // vale acima do cap; no cap ambos = MAX. Verifica monotonia do mínimo.
+        assert!(backoff_delay_ticks(1, base) - backoff_delay_ticks(1, base) / 4
+            > backoff_delay_ticks(0, base));
+    }
+
+    #[test]
+    fn attempt_limit_deny() {
+        assert!(attempt_allowed(0, MAX_TASK_ATTEMPTS));
+        assert!(attempt_allowed(1, MAX_TASK_ATTEMPTS));
+        assert!(attempt_allowed(2, MAX_TASK_ATTEMPTS));
+        // attempts == max → deny (não há "mais uma").
+        assert!(!attempt_allowed(3, MAX_TASK_ATTEMPTS));
+        assert!(!attempt_allowed(5, MAX_TASK_ATTEMPTS));
+        // max=0 → deny sempre.
+        assert!(!attempt_allowed(0, 0));
+    }
+
+    #[test]
+    fn peer_state_wrapper_unknown_none() {
+        let _g = TEST_LOCK.lock();
+        reset_peer_health();
+        // Peer desconhecido → None / não disponível (fail-closed).
+        assert_eq!(peer_state(200), None);
+        assert!(!peer_available(200));
+    }
+
+    #[test]
+    fn peer_state_wrapper_paths() {
+        let _g = TEST_LOCK.lock();
+        reset_peer_health();
+        // TIMER_TICKS = 0 no host: now=0, last_activity=0 → since=0 → fresh.
+        record_peer_success(7, 10);
+        assert_eq!(peer_state(7), Some(PeerState::Available));
+        assert!(peer_available(7));
+        // Falha consecutiva → Degraded (ainda aceita trabalho).
+        record_peer_failure(7);
+        assert_eq!(peer_state(7), Some(PeerState::Degraded));
+        assert!(peer_available(7));
+        // Breaker (3 falhas) → Unavailable.
+        record_peer_failure(7);
+        record_peer_failure(7);
+        assert_eq!(peer_state(7), Some(PeerState::Unavailable));
+        assert!(!peer_available(7));
+        // Sucesso recupera → Available.
+        record_peer_success(7, 5);
+        assert_eq!(peer_state(7), Some(PeerState::Available));
+        assert!(peer_available(7));
+        // Dead via wrap: last_activity=1, now=0 → since=u64::MAX > TTL.
+        {
+            let mut table = PEER_HEALTH.lock();
+            for slot in table.iter_mut() {
+                if let Some((nid, h)) = slot {
+                    if *nid == 7 {
+                        h.last_activity_ticks = 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(peer_state(7), Some(PeerState::Unavailable));
+        assert!(!peer_available(7));
+        reset_peer_health();
     }
 }

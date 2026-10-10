@@ -200,7 +200,7 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     if crate::demand_page::try_handle_fault(cr2.as_u64()) {
         return;
     }    // Heap Tier-1 + kernel demand-page — cura 4KiB e retry.
-    if crate::allocator::try_fault_in_heap(cr2.as_u64()) {
+    if crate::allocator::try_fault_in_heap(cr2.as_u64(), code.bits()) {
         return;
     }
     // Debug: show why try_fault_in_heap failed + diagnostic counters

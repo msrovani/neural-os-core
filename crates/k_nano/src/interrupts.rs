@@ -654,7 +654,8 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     // (allocator::try_fault_in_heap cobre HEAP_BUFFER + LARGE_HEAP + kernel virt),
     // 2) seam registrável por camadas superiores (demand-page Ring3/sandbox,
     // ADR-0077 — `register_pf_cure_fn`). Sem cura = todo #PF era "+1 no contador".
-    if crate::allocator::try_fault_in_heap(cr2.as_u64()) {
+    if crate::allocator::try_fault_in_heap(cr2.as_u64(), code.bits()) {
+        crate::boot_metrics::note_fault_in(true, 0); // lane 3: mirror (PF_DIAG_OK lives in allocator)
         puts(b"[#PF] cured (demand-map)\n");
         return;
     }
@@ -663,6 +664,8 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
         return;
     }
     let count = PAGE_FAULT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    crate::boot_metrics::note_pf(0); // lane 3: mirror (existing counter above)
+    crate::boot_metrics::note_fault_in(false, 0); // lane 3: uncured fault-in
     if count <= 3 {
         return;
     }
@@ -682,9 +685,16 @@ pub fn register_pf_cure_fn(f: fn(u64) -> bool) {
     PF_CURE_FN.store(f as usize as u64, Ordering::Release);
 }
 
+/// s437-pattern: hook só é chamado se estiver no range .text do kernel
+/// (high-half); fora = fail-closed false (stray write nunca vira jump p/ lixo).
+#[inline]
+fn pf_cure_ptr_ok(p: u64) -> bool {
+    p >= 0xffff_ffff_8000_0000 && p < 0xffff_ffff_c000_0000
+}
+
 fn cr2_is_cured(cr2: u64) -> bool {
     let p = PF_CURE_FN.load(Ordering::Acquire);
-    if p == 0 {
+    if p == 0 || !pf_cure_ptr_ok(p) {
         return false;
     }
     let f: fn(u64) -> bool = unsafe { core::mem::transmute::<usize, fn(u64) -> bool>(p as usize) };

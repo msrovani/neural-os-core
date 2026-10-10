@@ -159,6 +159,9 @@ fn parse_dhcp_mac(payload: &str) -> Option<[u8; 6]> {
 
 // ── SecurityAgent ───────────────────────────────────────────────────────────
 
+/// Cap do buffer de correlação (higiene runtime — SESSION_410 checklist).
+const ALERTS_CAP: usize = 64;
+
 pub struct SecurityAgent {
     net_receiver: event_bus::Receiver,
     sys_receiver: event_bus::Receiver,
@@ -168,7 +171,7 @@ pub struct SecurityAgent {
     ping_flood: k_ai::security_detectors::PingFloodDetector,
     dhcp_starvation: k_ai::security_detectors::DhcpStarvationDetector,
     timer_anomaly: k_ai::security_detectors::TimerAnomalyDetector,
-    // Correlation buffer
+    // Correlation buffer (capped — ALERTS_CAP + drop-oldest, ver push_alert)
     alerts: Vec<k_ai::security_detectors::SecurityAlert>,
     /// s390b: I1–I4 também no Security (belt se SafetyAgent falhar / dual observe).
     runtime_inv: k_ai::safety_invariants::SafetyInvariants,
@@ -215,6 +218,17 @@ impl SecurityAgent {
         });
     }
 
+    /// s460 hygiene (SESSION_410 checklist): CAP + evicção determinística
+    /// (drop-oldest FIFO, mesma semântica do EventBus). Vec alimentado por
+    /// eventos de runtime não cresce sem teto; correlate lê as mais recentes,
+    /// então evict da mais antiga não quebra detecção de padrões recentes.
+    fn push_alert(&mut self, alert: k_ai::security_detectors::SecurityAlert) {
+        if self.alerts.len() >= ALERTS_CAP {
+            self.alerts.remove(0);
+        }
+        self.alerts.push(alert);
+    }
+
     /// Feed a NET_EVENT payload to the appropriate real detector.
     /// Returns Some(alert) if the detector found something suspicious.
     fn feed_net_event(&mut self, payload: &[u8], tick: u64) {
@@ -230,7 +244,7 @@ impl SecurityAgent {
                 let dst_port = parse_dst_port(rest).unwrap_or(0);
                 if let Some(alert) = self.port_scan.feed(ip_u32, dst_port, tick) {
                     self.publish_alert(&alert);
-                    self.alerts.push(alert);
+                    self.push_alert(alert);
                 }
             }
         } else if let Some(rest) = text.strip_prefix("ICMP ") {
@@ -239,7 +253,7 @@ impl SecurityAgent {
                 let ip_u32 = u32::from_be_bytes(src_ip);
                 if let Some(alert) = self.ping_flood.feed(ip_u32, tick) {
                     self.publish_alert(&alert);
-                    self.alerts.push(alert);
+                    self.push_alert(alert);
                 }
             }
         } else if let Some(rest) = text.strip_prefix("ARP ") {
@@ -249,7 +263,7 @@ impl SecurityAgent {
                 let mac = parse_src_mac(rest).unwrap_or([0u8; 6]);
                 if let Some(alert) = self.arp_spoof.feed(ip_u32, mac, tick) {
                     self.publish_alert(&alert);
-                    self.alerts.push(alert);
+                    self.push_alert(alert);
                 }
             }
         } else if let Some(rest) = text.strip_prefix("DHCP_DISCOVER ") {
@@ -257,7 +271,7 @@ impl SecurityAgent {
             if let Some(mac) = parse_dhcp_mac(rest) {
                 if let Some(alert) = self.dhcp_starvation.feed(mac, tick) {
                     self.publish_alert(&alert);
-                    self.alerts.push(alert);
+                    self.push_alert(alert);
                 }
             }
         }
@@ -274,13 +288,13 @@ impl SecurityAgent {
             // TimerAnomalyDetector: call with tick
             if let Some(alert) = self.timer_anomaly.feed(tick) {
                 self.publish_alert(&alert);
-                self.alerts.push(alert);
+                self.push_alert(alert);
             }
         } else if text.starts_with("DHCP_LEASE") {
             // DhcpStarvationDetector: track lease frequency
             if let Some(alert) = self.dhcp_starvation.feed_lease(tick) {
                 self.publish_alert(&alert);
-                self.alerts.push(alert);
+                self.push_alert(alert);
             }
         }
     }
@@ -349,7 +363,7 @@ impl Agent for SecurityAgent {
         if tick > 1000 && tick % 1000 == 0 {
             if let Some(alert) = self.timer_anomaly.feed(tick) {
                 self.publish_alert(&alert);
-                self.alerts.push(alert);
+                self.push_alert(alert);
             }
         }
 
@@ -470,3 +484,63 @@ pub static SECURITY_POLICY: PathPolicy = PathPolicy::new(
     &["/system/secure/", "/system/keys/", "//"],
     &["sk-", "-----BEGIN", "AKIA", "ghp_"],
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k_ai::security_detectors::{AlertSeverity, SecurityAlert};
+
+    fn alert(sev: AlertSeverity, ts: u64) -> SecurityAlert {
+        SecurityAlert {
+            detector: "test",
+            severity: sev,
+            message: alloc::format!("alert-{}", ts),
+            source: None,
+            timestamp: ts,
+        }
+    }
+
+    #[test]
+    fn alerts_cap_drop_oldest() {
+        let mut ag = SecurityAgent::new();
+        for i in 0..(ALERTS_CAP + 5) as u64 {
+            ag.push_alert(alert(AlertSeverity::Low, i));
+        }
+        // cap exato: len nunca passa de ALERTS_CAP
+        assert_eq!(ag.alerts.len(), ALERTS_CAP);
+        // oldest evicted: ts 0..4 sumiram; primeiro restante é ts=5
+        assert_eq!(ag.alerts[0].timestamp, 5);
+        assert_eq!(ag.alerts.last().unwrap().timestamp, (ALERTS_CAP + 4) as u64);
+    }
+
+    #[test]
+    fn correlate_fires_with_recent_alerts_after_eviction() {
+        let mut ag = SecurityAgent::new();
+        // enche o cap com Low
+        for i in 0..ALERTS_CAP as u64 {
+            ag.push_alert(alert(AlertSeverity::Low, i));
+        }
+        // 3 High recentes evictam as 3 Low mais antigas
+        for i in 0..3u64 {
+            ag.push_alert(alert(AlertSeverity::Medium, 1000 + i));
+        }
+        assert_eq!(ag.alerts.len(), ALERTS_CAP);
+        // exatamente 3 oldest evictadas: primeiro restante é Low ts=3;
+        // as 3 Medium recentes estão no fim (FIFO preservado)
+        assert_eq!(ag.alerts[0].timestamp, 3);
+        assert_eq!(ag.alerts[ALERTS_CAP - 3].severity, AlertSeverity::Medium);
+        assert_eq!(ag.alerts[ALERTS_CAP - 1].timestamp, 1002);
+        // correlate dispara com >=3 (limpa o buffer)
+        ag.correlate(0);
+        assert!(ag.alerts.is_empty());
+    }
+
+    #[test]
+    fn correlate_below_threshold_keeps_alerts() {
+        let mut ag = SecurityAgent::new();
+        ag.push_alert(alert(AlertSeverity::Medium, 1));
+        ag.push_alert(alert(AlertSeverity::Medium, 2));
+        ag.correlate(0);
+        assert_eq!(ag.alerts.len(), 2);
+    }
+}

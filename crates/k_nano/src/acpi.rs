@@ -478,12 +478,29 @@ pub unsafe fn has_tpm2_table(physical_memory_offset: u64) -> bool {
     false
 }
 
+/// Span de `len` bytes a partir de `addr` cabe nas páginas presentes?
+/// A primeira página o chamador já provou via `is_page_present(addr)`; se o
+/// span cruza a fronteira, a segunda página precisa de prova própria antes
+/// de qualquer `read_volatile`/`from_raw_parts` (fail-closed None).
+#[inline]
+fn rsdp_span_present(addr: u64, len: usize) -> bool {
+    let off_in_page = addr & 0xFFF;
+    if off_in_page + len as u64 <= 4096 {
+        return true;
+    }
+    crate::memory::is_page_present((addr & !0xFFFu64).wrapping_add(4096))
+}
+
 unsafe fn find_rsdp(physical_memory_offset: u64) -> Option<u64> {
     let boot_rsdp = BOOT_RSDP_PHYS.load(Ordering::Acquire);
     if boot_rsdp != 0 {
         let addr = VirtAddr::new(physical_memory_offset + boot_rsdp).as_u64();
         // HC5: nunca ler a página sem prova de mapeamento (HHDM pode ter holes).
         if !crate::memory::is_page_present(addr) {
+            return None;
+        }
+        // Fronteira de página: descritor (até 36B) pode invadir a próxima.
+        if !rsdp_span_present(addr, 36) {
             return None;
         }
         let ptr = addr as *const u8;
@@ -517,6 +534,11 @@ unsafe fn find_rsdp(physical_memory_offset: u64) -> Option<u64> {
             addr += 16;
             continue;
         }
+        // Fronteira de página: span de 36B pode invadir a próxima página.
+        if !rsdp_span_present(addr, 36) {
+            addr += 16;
+            continue;
+        }
         let ptr = addr as *const u8;
         if read_volatile(ptr.add(0)) == b'R'
             && read_volatile(ptr.add(1)) == b'S'
@@ -540,6 +562,11 @@ unsafe fn find_rsdp(physical_memory_offset: u64) -> Option<u64> {
     addr = bios_start.as_u64();
     while addr < bios_end.as_u64() {
         if !crate::memory::is_page_present(addr) {
+            addr += 16;
+            continue;
+        }
+        // Fronteira de página: span de 36B pode invadir a próxima página.
+        if !rsdp_span_present(addr, 36) {
             addr += 16;
             continue;
         }

@@ -1,5 +1,40 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s463] - 2026-10-10 - Mesh reliability: OOM root-cause + fixes estruturais + validação 2/4 nós
+
+- **OOM root-caused (residual ora-1 FECHADO)**: `HybridAllocator` bump-first +
+  bump `dealloc` no-op = churn de alocação vira permanente (~31,9KB/tick; heap
+  512→1179MB em 34min) + PMM duplo-uso (frames de page-table entregues ao heap)
+  → `String::clone`→`memcpy` #PF → storm → park BSP em T+37384/37067.
+- **TALC-first pós-boot** (`allocator.rs`): `route_alloc()` gate
+  (`boot_phase_done && TALC_READY && fits`) — churn do runtime vai para o TALC
+  (dealloc real); dealloc roteado por range de ponteiro; `set_boot_phase_done()`
+  no Runtime phase. Bump em produção: **12MB vs 1.155GB** (~96× menos).
+- **PMM reserve** (`memory.rs`): kernel image + boot_ramlog reservados no init;
+  detector de duplo-uso em `allocate_frame` (warn one-shot); hang latente do
+  `reserve_range` corrigido (iterava ~4,5e15× em overflow).
+- **M1 preflight mesh** (`cortex/compute.rs`): estimativa zero-alloc antes de
+  serializar; gate wire 64.000B + budget RAM (request E resposta); antigo gate
+  pós-serialize (que já tinha copiado MBs para o Vec) removido.
+- **M2/M2b peer states + backoff** (`k_nano/net/mesh.rs` + `compute.rs`):
+  `PeerState {Available,Degraded,Unavailable}` de `PeerHealth`; backoff
+  exponencial com jitter (cap 3200); `MAX_TASK_ATTEMPTS=3`; dispatch gated por
+  `peer_available()` (fonte única — o gate antigo ignorava o circuit breaker).
+- **M4a FRAG/FRACK**: 9 testes host (remontagem in/out-of-order, truncamento,
+  duplicação, perda, boundary 64.000, wire FRACK, chunking, stash M10) + TX
+  guard honesto (payload >64.000B → `false`; antes `true` com mensagem
+  indeliverável).
+- **M3c demand-page honesty** (`try_fault_in_heap`): P|W recusa cura; fresh-map
+  fora da imagem do kernel removido (fail-open do high-half).
+- **Higiene**: EventBus `CLONED_BYTES/COUNT` (6 assinantes no P2P_PACKET);
+  `SecurityAgent::alerts` cap 64 + drop-oldest; GGUF payload gate (payload
+  curto = `Err`, antes `Ok` com `file.data` curto).
+- **Validação runtime**: M5 (2 instâncias 2c/2G) **T+79k (~72min) ZERO
+  anomalias**; Mesh4 (4 nós × 4c/2G via hub L2, `tools/run-mesh4-lab.ps1` novo)
+  **marco M3 cruzado, zero anomalias, peers=3 estável**. Logs:
+  `logs/boot_mesh_{a,b}_m5.txt` + `boot_mesh_{a..d}.txt`.
+- Detalhe: `docs/memory/SESSION_463.md`.
+
 ## [1.9.99-s456] - 2026-10-06 - Imagem HW usb_hw.img PACK_LLM=all + rebuild do zero
 
 - **Imagem HW completa** (`target/usb_hw.img`, 12,4 GB, ESP + DATA FAT32 0x0C):

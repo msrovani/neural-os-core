@@ -1,5 +1,23 @@
-# STATE - neural-os-core v1.9.99-s451 TEST - Forum multi-AI (AION) + F1.5 PROVADO + v4 checkpoint + sec3/sec6/sec15
+# STATE - neural-os-core v1.9.99-s463 - Mesh reliability: OOM root-cause + TALC-first + PMM reserve + validação 2/4 nós
 
+#   [s463] CAMPANHA DE CONFIABILIDADE DO MESH (detalhe em docs/memory/SESSION_463.md)
+#     OOM root-caused: bump-first + dealloc no-op = churn permanente (~31,9KB/tick;
+#     heap 512->1179MB em 34min) + PMM duplo-uso (residual SESSION_252 ora-1 FECHADO)
+#     -> String::clone->memcpy #PF -> storm -> park BSP em T+37384/37067.
+#     FIXES (todos com testes host): M1 preflight 64KB antes de serializar; M2/M2b
+#     PeerState+backoff+retry limitado; M4a 9 testes FRAG/FRACK + TX guard honesto
+#     (>64KB = false, era true mentiroso); M3c demand-page honesty (P|W recusa,
+#     fail-open high-half removido); TALC-first pós-boot (route_alloc gate +
+#     set_boot_phase_done no Runtime) = bump 12MB vs 1.155GB; PMM reserve (kernel
+#     image + boot_ramlog) + detector duplo-uso + hang reserve_range corrigido;
+#     EventBus CLONED_BYTES; SecurityAgent::alerts cap 64; GGUF payload gate
+#     (payload curto = Err, era Ok).
+#     VALIDAÇÃO: M5 2 instâncias T+79k (~72min) ZERO anomalias; Mesh4 4 nós × 4c/2G
+#     via hub L2 (tools/run-mesh4-lab.ps1 NOVO) marco M3 cruzado, zero anomalias,
+#     peers=3 estável. Logs: logs/boot_mesh_{a,b}_m5.txt + boot_mesh_{a..d}.txt.
+#     PENDENTE: M4b transporte payloads grandes (teste direcionado); cap engine
+#     neural-sgdb (fora do workspace); lanes 6-7 adiadas.
+#
 #   [s456] IMAGEM HW usb_hw.img PACK_LLM=all + rebuild do zero (detalhe em docs/memory/SESSION_456.md)
 #     target/usb_hw.img 12,4 GB (ESP + DATA FAT32 0x0C). ESP kernel.elf sha=árvore;
 #     DATA 71 entradas (1B/3B/7B/10B + slots + firmware). FIX tools/mkfat32.py:

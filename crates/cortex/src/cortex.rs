@@ -3440,10 +3440,9 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
         act_type, embed_type,
         rope_theta: theta, rope_cos, rope_sin,
     };
-    // Honesty s387: se register_bytes não passou (load direto), ainda Observe.
-    if crate::model::loaded_model_header().is_none() {
-        crate::model::note_header_from_bytes(data);
-    }
+    // Honesty s387: load direto também Observe — incondicional: swap de modelo
+    // não pode manter header stale do primeiro (fail-closed: header == último build ok).
+    crate::model::note_header_from_bytes(data);
     k_nano::slog_cortex!("LLM", "ok", "v6 model OK L={} {}KB", num_layers, data.len()/1024);
     Some(model)
 }

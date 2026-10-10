@@ -10,6 +10,11 @@ use alloc::vec::Vec;
 use crate::tensor::{PackedTernaryTensor, Tensor};
 const GGUF_MAGIC: u32 = 0x46554747; // "GGUF" little-endian
 const GGUF_VERSION: u32 = 3;
+// ponytail: fixed caps, GGUF spec arrays/strings are KB-scale; raise if a real file trips them.
+const MAX_GGUF_STRING: usize = 1 << 20; // 1MB
+const MAX_GGUF_ARRAY: u64 = 4096;
+const MAX_GGUF_KV: u64 = 65536;
+const MAX_GGUF_TENSORS: u64 = 65536;
 
 /// Super-block size for K-quants (llama.cpp QK_K).
 pub(crate) const QK_K: usize = 256;
@@ -201,181 +206,213 @@ pub struct GgufFile {
 }
 
 /// Le u32 little-endian de um slice
-fn read_u32(data: &[u8], offset: &mut usize) -> u32 {
-    if *offset + 4 > data.len() { return 0; }
+fn read_u32(data: &[u8], offset: &mut usize) -> Result<u32, &'static str> {
+    let end = offset.checked_add(4).ok_or("GGUF: truncado")?;
+    if end > data.len() { return Err("GGUF: truncado"); }
     let val = u32::from_le_bytes([
         data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3],
     ]);
-    *offset += 4;
-    val
+    *offset = end;
+    Ok(val)
 }
 
 /// Le u64 little-endian de um slice
-fn read_u64(data: &[u8], offset: &mut usize) -> u64 {
-    if *offset + 8 > data.len() { return 0; }
+fn read_u64(data: &[u8], offset: &mut usize) -> Result<u64, &'static str> {
+    let end = offset.checked_add(8).ok_or("GGUF: truncado")?;
+    if end > data.len() { return Err("GGUF: truncado"); }
     let val = u64::from_le_bytes([
         data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3],
         data[*offset + 4], data[*offset + 5], data[*offset + 6], data[*offset + 7],
     ]);
-    *offset += 8;
-    val
+    *offset = end;
+    Ok(val)
 }
 
 /// Le string (length-prefixed) de um slice
-fn read_string(data: &[u8], offset: &mut usize) -> String {
-    if *offset + 8 > data.len() { return String::new(); }
-    let len = read_u64(data, offset) as usize;
-    let end = core::cmp::min(*offset + len, data.len());
+fn read_string(data: &[u8], offset: &mut usize) -> Result<String, &'static str> {
+    let len = read_u64(data, offset)? as usize;
+    if len > MAX_GGUF_STRING { return Err("GGUF: string muito longa"); }
+    let end = offset.checked_add(len).ok_or("GGUF: string truncada")?;
+    if end > data.len() { return Err("GGUF: string truncada"); }
     let s = core::str::from_utf8(&data[*offset..end]).unwrap_or("(invalid utf8)");
-    *offset += len;
-    String::from(s)
+    let out = String::from(s);
+    *offset = end;
+    Ok(out)
 }
 
 /// Le metadata value (string or array) como string
 /// GGUFValueType (gguf-py constants.py / ggml.h):
 ///   0=UINT8 1=INT8 2=UINT16 3=INT16 4=UINT32 5=INT32
 ///   6=FLOAT32 7=BOOL 8=STRING 9=ARRAY 10=FLOAT64
-fn read_metadata_value(data: &[u8], offset: &mut usize) -> String {
-    let val_type = read_u32(data, offset);
+fn read_metadata_value(data: &[u8], offset: &mut usize) -> Result<String, &'static str> {
+    let val_type = read_u32(data, offset)?;
     match val_type {
         0 => { // UINT8
-            if *offset >= data.len() { return String::new(); }
+            let end = offset.checked_add(1).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
             let v = data[*offset];
-            *offset += 1;
-            alloc::format!("{}", v)
+            *offset = end;
+            Ok(alloc::format!("{}", v))
         }
         1 => { // INT8
-            if *offset >= data.len() { return String::new(); }
+            let end = offset.checked_add(1).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
             let v = data[*offset] as i8;
-            *offset += 1;
-            alloc::format!("{}", v)
+            *offset = end;
+            Ok(alloc::format!("{}", v))
         }
         2 => { // UINT16
-            if *offset + 2 > data.len() { return String::new(); }
+            let end = offset.checked_add(2).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
             let v = u16::from_le_bytes([data[*offset], data[*offset + 1]]);
-            *offset += 2;
-            alloc::format!("{}", v)
+            *offset = end;
+            Ok(alloc::format!("{}", v))
         }
         3 => { // INT16
-            if *offset + 2 > data.len() { return String::new(); }
+            let end = offset.checked_add(2).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
             let v = i16::from_le_bytes([data[*offset], data[*offset + 1]]);
-            *offset += 2;
-            alloc::format!("{}", v)
+            *offset = end;
+            Ok(alloc::format!("{}", v))
         }
         4 => { // UINT32
-            let v = read_u32(data, offset);
-            alloc::format!("{}", v)
+            let v = read_u32(data, offset)?;
+            Ok(alloc::format!("{}", v))
         }
         5 => { // INT32
-            if *offset + 4 > data.len() { return String::new(); }
+            let end = offset.checked_add(4).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
             let v = i32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]]);
-            *offset += 4;
-            alloc::format!("{}", v)
+            *offset = end;
+            Ok(alloc::format!("{}", v))
         }
         6 => { // FLOAT32
-            if *offset + 4 > data.len() { return String::new(); }
+            let end = offset.checked_add(4).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
             let v = f32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]]);
-            *offset += 4;
-            alloc::format!("{:.6}", v)
+            *offset = end;
+            Ok(alloc::format!("{:.6}", v))
         }
         7 => { // BOOL
-            if *offset >= data.len() { return String::new(); }
+            let end = offset.checked_add(1).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
             let v = data[*offset] != 0;
-            *offset += 1;
-            String::from(if v { "true" } else { "false" })
+            *offset = end;
+            Ok(String::from(if v { "true" } else { "false" }))
         }
         8 => { // STRING
             read_string(data, offset)
         }
         9 => { // ARRAY
-            let arr_type = read_u32(data, offset);
-            let arr_len = read_u64(data, offset) as usize;
+            let arr_type = read_u32(data, offset)?;
+            let arr_len = read_u64(data, offset)?;
+            if arr_len > MAX_GGUF_ARRAY { return Err("GGUF: array muito longo"); }
+            let arr_len = arr_len as usize;
             let mut items = Vec::new();
+            items.try_reserve(arr_len).map_err(|_| "GGUF: array muito longo")?;
             for _ in 0..arr_len {
-                items.push(read_metadata_value_inner(data, offset, arr_type));
+                items.push(read_metadata_value_inner(data, offset, arr_type, 0)?);
             }
-            alloc::format!("[{}]", items.join(", "))
+            Ok(alloc::format!("[{}]", items.join(", ")))
         }
         10 => { // FLOAT64
-            if *offset + 8 > data.len() { return String::new(); }
+            let end = offset.checked_add(8).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
             let v = f64::from_le_bytes([
                 data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3],
                 data[*offset + 4], data[*offset + 5], data[*offset + 6], data[*offset + 7],
             ]);
-            *offset += 8;
-            alloc::format!("{:.6}", v)
+            *offset = end;
+            Ok(alloc::format!("{:.6}", v))
         }
         _ => {
             // Unknown type: skip 8 bytes (conservative)
-            if *offset + 8 <= data.len() { *offset += 8; }
-            alloc::format!("(unknown_type_{})", val_type)
+            let end = offset.checked_add(8).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
+            *offset = end;
+            Ok(alloc::format!("(unknown_type_{})", val_type))
         }
     }
 }
 
-fn read_metadata_value_inner(data: &[u8], offset: &mut usize, val_type: u32) -> String {
+fn read_metadata_value_inner(data: &[u8], offset: &mut usize, val_type: u32, depth: u32) -> Result<String, &'static str> {
+    // Fail-closed: ARRAY aninhado sem limite = recursão profunda em input de arquivo.
+    if depth > 8 { return Err("GGUF: array aninhado profundo"); }
     match val_type {
         0 => { // UINT8
-            if *offset >= data.len() { return String::new(); }
-            let v = data[*offset]; *offset += 1;
-            alloc::format!("{}", v)
+            let end = offset.checked_add(1).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
+            let v = data[*offset]; *offset = end;
+            Ok(alloc::format!("{}", v))
         }
         1 => { // INT8
-            if *offset >= data.len() { return String::new(); }
-            let v = data[*offset] as i8; *offset += 1;
-            alloc::format!("{}", v)
+            let end = offset.checked_add(1).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
+            let v = data[*offset] as i8; *offset = end;
+            Ok(alloc::format!("{}", v))
         }
         2 => { // UINT16
-            if *offset + 2 > data.len() { return String::new(); }
-            let v = u16::from_le_bytes([data[*offset], data[*offset + 1]]); *offset += 2;
-            alloc::format!("{}", v)
+            let end = offset.checked_add(2).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
+            let v = u16::from_le_bytes([data[*offset], data[*offset + 1]]); *offset = end;
+            Ok(alloc::format!("{}", v))
         }
         3 => { // INT16
-            if *offset + 2 > data.len() { return String::new(); }
-            let v = i16::from_le_bytes([data[*offset], data[*offset + 1]]); *offset += 2;
-            alloc::format!("{}", v)
+            let end = offset.checked_add(2).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
+            let v = i16::from_le_bytes([data[*offset], data[*offset + 1]]); *offset = end;
+            Ok(alloc::format!("{}", v))
         }
         4 => { // UINT32
-            let v = read_u32(data, offset);
-            alloc::format!("{}", v)
+            let v = read_u32(data, offset)?;
+            Ok(alloc::format!("{}", v))
         }
         5 => { // INT32
-            if *offset + 4 > data.len() { return String::new(); }
-            let v = i32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]]); *offset += 4;
-            alloc::format!("{}", v)
+            let end = offset.checked_add(4).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
+            let v = i32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]]); *offset = end;
+            Ok(alloc::format!("{}", v))
         }
         6 => { // FLOAT32
-            if *offset + 4 > data.len() { return String::new(); }
-            let v = f32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]]); *offset += 4;
-            alloc::format!("{:.6}", v)
+            let end = offset.checked_add(4).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
+            let v = f32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]]); *offset = end;
+            Ok(alloc::format!("{:.6}", v))
         }
         7 => { // BOOL
-            if *offset >= data.len() { return String::new(); }
-            let v = data[*offset] != 0; *offset += 1;
-            String::from(if v { "true" } else { "false" })
+            let end = offset.checked_add(1).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
+            let v = data[*offset] != 0; *offset = end;
+            Ok(String::from(if v { "true" } else { "false" }))
         }
         8 => { // STRING
             read_string(data, offset)
         }
         9 => { // ARRAY (nested)
-            let arr_type = read_u32(data, offset);
-            let arr_len = read_u64(data, offset) as usize;
+            let arr_type = read_u32(data, offset)?;
+            let arr_len = read_u64(data, offset)?;
+            if arr_len > MAX_GGUF_ARRAY { return Err("GGUF: array muito longo"); }
+            let arr_len = arr_len as usize;
             let mut items = Vec::new();
+            items.try_reserve(arr_len).map_err(|_| "GGUF: array muito longo")?;
             for _ in 0..arr_len {
-                items.push(read_metadata_value_inner(data, offset, arr_type));
+                items.push(read_metadata_value_inner(data, offset, arr_type, depth + 1)?);
             }
-            alloc::format!("[{}]", items.join(", "))
+            Ok(alloc::format!("[{}]", items.join(", ")))
         }
         10 => { // FLOAT64
-            if *offset + 8 > data.len() { return String::new(); }
+            let end = offset.checked_add(8).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
             let v = f64::from_le_bytes([data[*offset], data[*offset+1], data[*offset+2], data[*offset+3],
-                data[*offset+4], data[*offset+5], data[*offset+6], data[*offset+7]]); *offset += 8;
-            alloc::format!("{:.6}", v)
+                data[*offset+4], data[*offset+5], data[*offset+6], data[*offset+7]]); *offset = end;
+            Ok(alloc::format!("{:.6}", v))
         }
         _ => {
             // Unknown inner type: skip conservatively
-            if *offset + 8 <= data.len() { *offset += 8; }
-            String::from("?")
+            let end = offset.checked_add(8).ok_or("GGUF: truncado")?;
+            if end > data.len() { return Err("GGUF: truncado"); }
+            *offset = end;
+            Ok(String::from("?"))
         }
     }
 }
@@ -392,35 +429,41 @@ pub fn load_gguf(data: &[u8]) -> Result<GgufFile, &'static str> {
     if data.len() < 24 { return Err("GGUF: dados muito curtos"); }
 
     let mut offset = 0;
-    let magic = read_u32(data, &mut offset);
+    let magic = read_u32(data, &mut offset)?;
     if magic != GGUF_MAGIC { return Err("GGUF: magic invalido"); }
 
-    let version = read_u32(data, &mut offset);
-    let tensor_count = read_u64(data, &mut offset);
-    let metadata_kv_count = read_u64(data, &mut offset);
+    let version = read_u32(data, &mut offset)?;
+    if version != GGUF_VERSION { return Err("GGUF: versao nao suportada"); }
+    let tensor_count = read_u64(data, &mut offset)?;
+    let metadata_kv_count = read_u64(data, &mut offset)?;
+    if tensor_count > MAX_GGUF_TENSORS || metadata_kv_count > MAX_GGUF_KV {
+        return Err("GGUF: contagem absurda");
+    }
 
     let header = GgufHeader { magic, version, tensor_count, metadata_kv_count };
     k_nano::slog_bin!("GGUF", "ok", "Header: version={} tensors={} metadata={}", version, tensor_count, metadata_kv_count);
 
     // Metadata
     let mut metadata = Vec::new();
+    metadata.try_reserve(metadata_kv_count as usize).map_err(|_| "GGUF: metadata grande")?;
     for _ in 0..metadata_kv_count {
-        if offset + 8 > data.len() {
+        if offset.checked_add(8).ok_or("GGUF: metadata truncado")? > data.len() {
             return Err("GGUF: metadata truncado");
         }
-        let key = read_string(data, &mut offset);
-        let value = read_metadata_value(data, &mut offset);
+        let key = read_string(data, &mut offset)?;
+        let value = read_metadata_value(data, &mut offset)?;
         metadata.push(GgufMetadata { key, value });
     }
 
     // Tensor info
     let mut tensors = Vec::new();
+    tensors.try_reserve(tensor_count as usize).map_err(|_| "GGUF: muitos tensores")?;
     for _ in 0..tensor_count {
-        if offset + 8 > data.len() {
+        if offset.checked_add(8).ok_or("GGUF: tensor info truncado")? > data.len() {
             return Err("GGUF: tensor info truncado");
         }
-        let name = read_string(data, &mut offset);
-        let n_dims = read_u32(data, &mut offset);
+        let name = read_string(data, &mut offset)?;
+        let n_dims = read_u32(data, &mut offset)?;
         // GGUF spec: n_dims ∈ 1..=4 — valida antes de with_capacity/dims[0]
         // (n_dims malformado = panic/OOM em dados de arquivo).
         if n_dims == 0 || n_dims > 4 {
@@ -428,21 +471,40 @@ pub fn load_gguf(data: &[u8]) -> Result<GgufFile, &'static str> {
         }
         // need 8*n_dims + 4(type) + 8(offset)
         let need = (n_dims as usize).saturating_mul(8).saturating_add(12);
-        if offset + need > data.len() {
+        if offset.checked_add(need).ok_or("GGUF: tensor dims truncado")? > data.len() {
             return Err("GGUF: tensor dims truncado");
         }
         let mut dims = Vec::with_capacity(n_dims as usize);
         for _ in 0..n_dims {
-            dims.push(read_u64(data, &mut offset));
+            dims.push(read_u64(data, &mut offset)?);
         }
-        let tensor_type = GgufType::from_u32(read_u32(data, &mut offset));
-        let tensor_offset = read_u64(data, &mut offset);
+        let tensor_type = GgufType::from_u32(read_u32(data, &mut offset)?);
+        let tensor_offset = read_u64(data, &mut offset)?;
         tensors.push(GgufTensorInfo { name, n_dims, dims, tensor_type, offset: tensor_offset });
     }
 
     // Padding to alignment (GGUF alinha a 32 bytes)
-    let data_start = (offset + 31) & !31;
+    let data_start = offset.checked_add(31).ok_or("GGUF: offset overflow")? & !31;
     if data_start > data.len() { return Err("GGUF: dados insuficientes para tensor data"); }
+
+    // Payload lower bound: os bytes dos tensores precisam estar presentes.
+    // (Antes, data[data_start..] era tomado unchecked: truncamento dentro do
+    // payload dava Ok com file.data curto, e consumidores diretos de
+    // file.data viam payload incompleto. Fail-closed aqui em vez disso.)
+    let mut expected: usize = 0;
+    for t in &tensors {
+        let mut ne: usize = 1;
+        for &d in &t.dims {
+            ne = ne.checked_mul(d as usize).ok_or("GGUF: tensor data overflow")?;
+        }
+        expected = expected
+            .checked_add(t.tensor_type.nbytes_for_elements(ne))
+            .ok_or("GGUF: tensor data overflow")?;
+    }
+    // data_start <= data.len() garantido acima.
+    if data.len() - data_start < expected {
+        return Err("GGUF: tensor data truncado");
+    }
 
     let raw_data = data[data_start..].to_vec();
 
@@ -1241,6 +1303,39 @@ mod tests {
             });
         assert_eq!(tok, 2, "argmax token");
     }
+
+    /// Payload gate: truncamento DENTRO da regiao de tensor-data ⇒ Err
+    /// (antes dava Ok com file.data curto); arquivo cheio ⇒ Ok + payload exato.
+    #[test]
+    fn gguf_payload_truncation_is_err() {
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(b"GGUF");
+        buf.extend_from_slice(&3u32.to_le_bytes());      // version 3
+        buf.extend_from_slice(&1u64.to_le_bytes());      // tensor_count = 1
+        buf.extend_from_slice(&0u64.to_le_bytes());      // metadata_kv_count = 0
+        let name = b"w";
+        buf.extend_from_slice(&(name.len() as u64).to_le_bytes());
+        buf.extend_from_slice(name);
+        buf.extend_from_slice(&1u32.to_le_bytes());      // n_dims = 1
+        buf.extend_from_slice(&4u64.to_le_bytes());      // dims[0] = 4
+        buf.extend_from_slice(&0u32.to_le_bytes());      // type 0 = F32
+        buf.extend_from_slice(&0u64.to_le_bytes());      // tensor offset = 0
+        let pad = (32 - (buf.len() % 32)) % 32;
+        buf.resize(buf.len() + pad, 0);
+        for w in [0.5f32, -1.0, 2.0, 0.25] {
+            buf.extend_from_slice(&w.to_le_bytes());
+        }
+
+        let full = load_gguf(&buf).expect("arquivo cheio deve dar Ok");
+        assert_eq!(full.data.len(), 16, "payload exato: 4×f32");
+        let boundary = full.data_start as usize;
+        // Todo prefixo estrito — inclusive dentro do payload — ⇒ Err.
+        for n in 0..buf.len() {
+            assert!(load_gguf(&buf[..n]).is_err(), "prefixo {} deve ser Err", n);
+        }
+        // Fronteira exata do payload vazio agora tambem recusa.
+        assert_eq!(load_gguf(&buf[..boundary]).unwrap_err(), "GGUF: tensor data truncado");
+    }
 }
 pub fn dequantize_raw(qtype: GgufType, data: &[u8], rows: usize, cols: usize) -> Option<Vec<f32>> {
     let ne = rows * cols;
@@ -1716,27 +1811,33 @@ pub fn load_gguf_meta_only(data: &[u8]) -> Result<GgufFile, &'static str> {
     if data.len() < 24 { return Err("GGUF: dados muito curtos"); }
 
     let mut offset = 0;
-    let magic = read_u32(data, &mut offset);
+    let magic = read_u32(data, &mut offset)?;
     if magic != GGUF_MAGIC { return Err("GGUF: magic invalido"); }
 
-    let version = read_u32(data, &mut offset);
-    let tensor_count = read_u64(data, &mut offset);
-    let metadata_kv_count = read_u64(data, &mut offset);
+    let version = read_u32(data, &mut offset)?;
+    if version != GGUF_VERSION { return Err("GGUF: versao nao suportada"); }
+    let tensor_count = read_u64(data, &mut offset)?;
+    let metadata_kv_count = read_u64(data, &mut offset)?;
+    if tensor_count > MAX_GGUF_TENSORS || metadata_kv_count > MAX_GGUF_KV {
+        return Err("GGUF: contagem absurda");
+    }
     let header = GgufHeader { magic, version, tensor_count, metadata_kv_count };
 
     let mut metadata = Vec::new();
+    metadata.try_reserve(metadata_kv_count as usize).map_err(|_| "GGUF: metadata grande")?;
     for _ in 0..metadata_kv_count {
-        if offset + 8 > data.len() { return Err("GGUF: metadata truncado"); }
-        let key = read_string(data, &mut offset);
-        let value = read_metadata_value(data, &mut offset);
+        if offset.checked_add(8).ok_or("GGUF: metadata truncado")? > data.len() { return Err("GGUF: metadata truncado"); }
+        let key = read_string(data, &mut offset)?;
+        let value = read_metadata_value(data, &mut offset)?;
         metadata.push(GgufMetadata { key, value });
     }
 
     let mut tensors = Vec::new();
+    tensors.try_reserve(tensor_count as usize).map_err(|_| "GGUF: muitos tensores")?;
     for _ in 0..tensor_count {
-        if offset + 8 > data.len() { return Err("GGUF: tensor info truncado"); }
-        let name = read_string(data, &mut offset);
-        let n_dims = read_u32(data, &mut offset);
+        if offset.checked_add(8).ok_or("GGUF: tensor info truncado")? > data.len() { return Err("GGUF: tensor info truncado"); }
+        let name = read_string(data, &mut offset)?;
+        let n_dims = read_u32(data, &mut offset)?;
         // GGUF spec: n_dims ∈ 1..=4 — valida antes de with_capacity/dims[0]
         // (n_dims malformado = panic/OOM em dados de arquivo).
         if n_dims == 0 || n_dims > 4 {
@@ -1744,14 +1845,14 @@ pub fn load_gguf_meta_only(data: &[u8]) -> Result<GgufFile, &'static str> {
         }
         let mut dims = Vec::with_capacity(n_dims as usize);
         for _ in 0..n_dims {
-            dims.push(read_u64(data, &mut offset));
+            dims.push(read_u64(data, &mut offset)?);
         }
-        let tensor_type = GgufType::from_u32(read_u32(data, &mut offset));
-        let tensor_offset = read_u64(data, &mut offset);
+        let tensor_type = GgufType::from_u32(read_u32(data, &mut offset)?);
+        let tensor_offset = read_u64(data, &mut offset)?;
         tensors.push(GgufTensorInfo { name, n_dims, dims, tensor_type, offset: tensor_offset });
     }
 
-    let data_start = ((offset + 31) & !31) as u64;
+    let data_start = (offset.checked_add(31).ok_or("GGUF: offset overflow")? & !31) as u64;
     Ok(GgufFile {
         header,
         metadata,

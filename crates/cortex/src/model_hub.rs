@@ -139,6 +139,8 @@ pub fn register_bytes(slot: ModelSlot, data: &[u8]) -> bool {
     let view = match view {
         Some(v) => v,
         None => {
+            // Fail-closed: header observado no início não pode sobreviver a load falho.
+            crate::model::clear_model_header();
             k_nano::slog_bin!("MODEL", "warn", "register_bytes: formato desconhecido slot={}", slot.name());
             return false;
         }

@@ -271,19 +271,35 @@ pub fn hud_line(mem_mb: u64, net: &str) -> String {
 }
 
 pub fn emit_phase_banner(n: u8, name: &str, status: &str) {
+    emit_phase_banner_with_err(n, name, status, crate::boot_err::BootErr::Unknown);
+}
+
+/// Classified PHASE banner: identical text to [`emit_phase_banner`] except a
+/// stable `[CODE]` tag from [`crate::boot_err::BootErr`] on fail/warn lines
+/// (`ok` lines stay byte-identical legacy, untagged).
+pub fn emit_phase_banner_with_err(n: u8, name: &str, status: &str, err: crate::boot_err::BootErr) {
+    crate::boot_metrics::note_phase_entry(n); // lane 3: entry TSC stamp (lock-free, no alloc)
     // ADR-0092: 4º campo = ok|warn|fail|trace — espelha o status da fase.
     let sev = match status {
         "fail" => "fail",
         "warn" | "degraded" => "warn",
         _ => "ok",
     };
+    let body = crate::boot_err::maybe_tagged_phase_body(n, name, status, err);
     crate::slog_bin!(
         "BOOT",
         sev,
-        "home=nk::boot ref=ADR-0039 | === PHASE n={} name={} status={} ===",
-        n,
-        name,
-        status
+        "home=nk::boot ref=ADR-0039 | {}",
+        body
+    );
+    // Typed event (additive): deterministic serialization of the same
+    // banner facts; legacy banner above stays byte-identical for parsers.
+    // cpu_id=0: banner path runs on the BSP pre-SMP/active-BSP context.
+    crate::slog_bin!(
+        "BOOT",
+        sev,
+        "home=k_nano::boot_err ref=ADR-0092 | {}",
+        crate::boot_err::emit_event(n, status, err, 0)
     );
     // E4 (OPCODE-0098): marcador TSC por fase para o harness de bench. Antes da
     // calibração `now_us()` = 0 → não imprimir um 0 como número real.
@@ -513,6 +529,7 @@ pub fn finalize_and_publish() -> BootReport {
     r.score = build_score_text();
     *LAST_SCORE.lock() = r.score.clone();
     publish_score_serial(&r.score);
+    crate::boot_metrics::publish_metrics_score(); // lane 3: slowest phase + top-3 via slog
     // ADR-0100 T-001: também publica BOOT_AI final (visível) para telemetria IA
     publish_boot_ai();
     store(r.clone());
@@ -626,5 +643,34 @@ k3chj         k-nano=R0 k-hal=R1\n\
         assert!(note_phase_status(5, "fail"));
         assert_eq!(phase_0_7_label(), "fail");
         reset_phases();
+    }
+
+    #[test]
+    fn every_banner_event_parses_back() {
+        // Every event the banner emit-path can produce (same `emit_event`
+        // constructor the banner calls) must parse back — no unparseable
+        // emissions. Uses only classified codes, so the unknown counter
+        // must stay 0 throughout.
+        let _g = TEST_LOCK.lock();
+        crate::boot_err::reset_unknown_events();
+        let statuses = ["ok", "warn", "fail", "degraded", "info"];
+        let mut count = 0u32;
+        for n in 0..=8u8 {
+            for s in statuses {
+                for e in crate::boot_err::BootErr::all() {
+                    let line = crate::boot_err::emit_event(n, s, e, 0);
+                    let back = crate::boot_err::parse_event(&line).unwrap_or_else(|| {
+                        panic!("unparseable banner event n={} s={} e={:?}: {}", n, s, e, line)
+                    });
+                    assert_eq!(back.code, e);
+                    assert_eq!(back.phase, n);
+                    assert_eq!(back.severity, crate::boot_err::severity_of_status(s));
+                    count += 1;
+                }
+            }
+        }
+        assert!(count > 0);
+        assert_eq!(crate::boot_err::unknown_events(), 0);
+        crate::boot_err::reset_unknown_events();
     }
 }

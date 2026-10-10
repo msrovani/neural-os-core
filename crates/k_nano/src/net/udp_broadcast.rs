@@ -364,10 +364,31 @@ pub fn send_unicast(payload: &[u8], dest_mac: [u8; 6], port: u16) -> bool {
     true
 }
 
+// ── Test-only RX injection (host) ───────────────────────────────────────────
+// Host tests não têm NIC (`nic_recv_k` → None sempre): sem este ponto de
+// injeção, `recv_fragmented`/`recv_fragmented_unicast` são intestáveis no
+// host — a remontagem FRAG só era provada em QEMU (LOG AGENTES step 3).
+// Compilado FORA de builds não-test (#[cfg(test)]): o binário bare-metal
+// fica idêntico e nenhum comportamento de produção muda.
+#[cfg(test)]
+static TEST_RX_INJECT: Mutex<Vec<(Vec<u8>, [u8; 6])>> = Mutex::new(Vec::new());
+
+/// Pop FIFO de um pacote injetado — só existe em builds de teste.
+#[cfg(test)]
+fn test_rx_inject_pop() -> Option<(Vec<u8>, [u8; 6])> {
+    let mut q = TEST_RX_INJECT.lock();
+    if q.is_empty() { None } else { Some(q.remove(0)) }
+}
+
 /// Recebe um payload UDP (dst_port == port) do RX do NIC, filtrando por
 /// destino MAC != broadcast (unicast). Não bloqueia.
 /// Retorna (payload, src_mac) para permitir ACK direto.
 pub fn recv_unicast_with_mac(port: u16) -> Option<(Vec<u8>, [u8; 6])> {
+    // Test-only: host tests injetam pacotes aqui (host não tem NIC).
+    #[cfg(test)]
+    if let Some(inj) = test_rx_inject_pop() {
+        return Some(inj);
+    }
     // Drena até achar um pacote UDP unicast para nossa porta (ou esvazia o RX).
     for _ in 0..16 {
         let pkt = unsafe { nic_recv_k()? };
@@ -408,6 +429,11 @@ pub fn recv_unicast_with_mac(port: u16) -> Option<(Vec<u8>, [u8; 6])> {
 /// Recebe um payload UDP (dst_port == port) do RX do NIC.
 /// Retorna (payload, src_mac) para popular cache ARP.
 pub fn udp_broadcast_recv_with_mac(port: u16) -> Option<(Vec<u8>, [u8; 6])> {
+    // Test-only: host tests injetam pacotes aqui (host não tem NIC).
+    #[cfg(test)]
+    if let Some(inj) = test_rx_inject_pop() {
+        return Some(inj);
+    }
     // Drena até achar um pacote UDP para nossa porta (ou esvazia o RX).
     for _ in 0..16 {
         let pkt = unsafe { nic_recv_k()? };
@@ -462,6 +488,11 @@ const FRAG_MAX_CHUNK: usize = 1000;
 const FRAG_DIRECT_MAX: usize = 1200;
 /// Máximo de fragmentos por mensagem (bitmask [u8; 8] = 64 bits).
 const FRAG_MAX_PARTS: u32 = 64;
+/// Teto de payload fragmentável = FRAG_MAX_PARTS × FRAG_MAX_CHUNK (64.000B).
+/// Acima disso o TX emitiria total_frags > 64, que TODO receptor dropa no
+/// guard de header — mensagem indeliverável (SESSION_354: sucesso falso é
+/// pior que falha honesta).
+const FRAG_MAX_PAYLOAD: usize = (FRAG_MAX_PARTS as usize) * FRAG_MAX_CHUNK;
 
 /// Contador global de frag_id (único por boot — suficiente em broadcast LAN).
 static FRAG_ID: AtomicU32 = AtomicU32::new(1);
@@ -470,6 +501,16 @@ static FRAG_ID: AtomicU32 = AtomicU32::new(1);
 /// (NoProto+payload+assinatura) — a fragmentação é ANTES do wire, o reassembly
 /// é DEPOIS do wire e ANTES do verify_packet no receptor.
 pub fn send_fragmented(payload: &[u8], port: u16) -> bool {
+    // Guard honesto no TX: payload > 64.000B emitiria total_frags > 64, que
+    // todo receptor dropa — retornar true seria mentira de sucesso.
+    if payload.len() > FRAG_MAX_PAYLOAD {
+        crate::slog_nano!(
+            "P2P", "warn",
+            "frag TX REJECT reason=oversize len={} limit={}",
+            payload.len(), FRAG_MAX_PAYLOAD
+        );
+        return false;
+    }
     if payload.len() <= FRAG_DIRECT_MAX {
         return udp_broadcast_send(payload, port);
     }
@@ -702,13 +743,19 @@ const FRACK_TIMEOUT_TICKS: u64 = 9;
 /// Max retransmissões por fragmento.
 const FRACK_MAX_RETRIES: u8 = 3;
 
-/// Envia ACK de fragmento via unicast.
-fn send_frack(dest_mac: [u8; 6], port: u16, frag_id: u32, idx: u32) -> bool {
+/// Monta o payload do ACK de fragmento (wire format): "FRACK\0" (6B)
+/// + frag_id u32 LE + idx u32 LE = 14 bytes (FRACK_HEADER_SIZE).
+fn build_frag_ack(frag_id: u32, idx: u32) -> Vec<u8> {
     let mut ack = Vec::with_capacity(FRACK_HEADER_SIZE);
     ack.extend_from_slice(b"FRACK\0");
     ack.extend_from_slice(&frag_id.to_le_bytes());
     ack.extend_from_slice(&idx.to_le_bytes());
-    send_unicast(&ack, dest_mac, port)
+    ack
+}
+
+/// Envia ACK de fragmento via unicast.
+fn send_frack(dest_mac: [u8; 6], port: u16, frag_id: u32, idx: u32) -> bool {
+    send_unicast(&build_frag_ack(frag_id, idx), dest_mac, port)
 }
 
 /// Stash de pacotes não-FRACK consumidos no ACK-wait do
@@ -721,6 +768,16 @@ static UCAST_STASH: Mutex<Vec<(Vec<u8>, [u8; 6])>> = Mutex::new(Vec::new());
 /// reassembly é DEPOIS do wire e ANTES do verify_packet no receptor.
 /// Phase 2: stop-and-wait com ACK seletivo por fragmento.
 pub fn send_fragmented_unicast(payload: &[u8], dest_mac: [u8; 6], port: u16) -> bool {
+    // Guard honesto no TX (mesmo contrato do send_fragmented): > 64.000B é
+    // indeliverável — recusa antes de qualquer frame/ACK-wait.
+    if payload.len() > FRAG_MAX_PAYLOAD {
+        crate::slog_nano!(
+            "P2P", "warn",
+            "frag-unicast TX REJECT reason=oversize len={} limit={}",
+            payload.len(), FRAG_MAX_PAYLOAD
+        );
+        return false;
+    }
     if payload.len() <= FRAG_DIRECT_MAX {
         return send_unicast(payload, dest_mac, port);
     }
@@ -959,5 +1016,368 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
             return Some(out);
         }
         // Ainda incompleto — continua drenando.
+    }
+}
+
+// ─── Testes host — protocolo FRAG/FRACK (LOG AGENTES step 3) ────────────────
+// Propriedades: remontagem (in/out-of-order), truncamento, duplicação, perda,
+// boundary 64.000, formato FRACK, chunking TX, prioridade da stash M10.
+//
+// Como dirigir no host (padrão p2p_sim: statics dirigidos direto — o PIT não
+// corre no host, TIMER_TICKS é um AtomicUsize que o teste store()a):
+// - TX: `nic_send_k` é no-op (sem NIC) — a evidência é o contador NET_TX_COUNT.
+// - RX: pacotes injetados em TEST_RX_INJECT (seam cfg(test) acima) / UCAST_STASH.
+//
+// NÃO testável no host: o loop stop-and-wait do `send_fragmented_unicast`
+// (espera TIMER_TICKS avançar — PIT IRQ — e executa `hlt`, instrução
+// privilegiada em user-mode host → crash do processo de teste). Esse caminho
+// continua provado em QEMU (SESSION_242).
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::interrupts::TIMER_TICKS;
+    use alloc::vec::Vec;
+    use core::sync::atomic::Ordering;
+
+    /// Serializa testes que mutam statics compartilhados (SESSION_346):
+    /// REASSEMBLY, UCAST_STASH, TEST_RX_INJECT, TIMER_TICKS, NET_CONFIG.
+    static TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
+    const TEST_PORT: u16 = 42069;
+    const PEER_MAC: [u8; 6] = [0x02, 0xAA, 0xBB, 0xCC, 0xDD, 0x01];
+
+    /// Reset completo do estado FRAG entre testes (statics compartilhados).
+    /// TOTAL_RAM_MB: o default no host é 512 → budget de reassembly = 1200B
+    /// (nó frugal DEGRADED — produção correta, mas droparia os payloads de
+    /// teste >1200B no guard `can_afford_frag`). 0 = "RAM desconhecida" →
+    /// budget pleno 64.000 (ramo `ram_mb == 0` de `frag_reassembly_budget_bytes`).
+    /// Nenhum outro teste host lê TOTAL_RAM_MB (memory tests = allocator only).
+    fn reset_frag_state() {
+        for slot in REASSEMBLY.lock().iter_mut() {
+            *slot = None;
+        }
+        UCAST_STASH.lock().clear();
+        TEST_RX_INJECT.lock().clear();
+        TIMER_TICKS.store(0, Ordering::Relaxed);
+        crate::memory::TOTAL_RAM_MB.store(0, Ordering::Relaxed);
+    }
+
+    /// MAC/IP p/ build_udp_*_frame (nic_send_k é no-op no host — o frame é
+    /// descartado; sem MAC não-zero o build do frame recusa).
+    fn setup_nic_config() {
+        crate::nic_globals::set_nic_config([0x02, 0x00, 0x00, 0x00, 0x00, 0x01], [10, 0, 2, 15]);
+    }
+
+    /// Monta um fragmento no wire format: "FRAG\0" + id/total/idx/len u32 LE + chunk.
+    fn make_frag(id: u32, total_frags: u32, idx: u32, total_len: u32, chunk: &[u8]) -> Vec<u8> {
+        let mut f = Vec::with_capacity(FRAG_HEADER_SIZE + chunk.len());
+        f.extend_from_slice(b"FRAG\0");
+        f.extend_from_slice(&id.to_le_bytes());
+        f.extend_from_slice(&total_frags.to_le_bytes());
+        f.extend_from_slice(&idx.to_le_bytes());
+        f.extend_from_slice(&total_len.to_le_bytes());
+        f.extend_from_slice(chunk);
+        f
+    }
+
+    /// Payload determinístico de n bytes (padrão reconhecível, não-zeros).
+    fn pattern(n: usize) -> Vec<u8> {
+        (0..n).map(|i| (i % 251) as u8).collect()
+    }
+
+    /// Injeta um pacote UDP (payload, não frame) no RX — consumido por
+    /// recv_fragmented (broadcast) e recv_fragmented_unicast (via
+    /// recv_unicast_with_mac, após a stash).
+    fn inject(pkt: Vec<u8>) {
+        TEST_RX_INJECT.lock().push((pkt, PEER_MAC));
+    }
+
+    /// Propriedade 1 (remontagem in-order): fragmentos inseridos em ordem →
+    /// payload exato reassemblado; mensagem de 1 fragmento completa sozinha.
+    #[test]
+    fn frag_reassembly_in_order_exact_payload() {
+        let _g = TEST_LOCK.lock();
+        reset_frag_state();
+        setup_nic_config();
+
+        // 2500B = 3 chunks (1000 + 1000 + 500).
+        let payload = pattern(2500);
+        let id = 0x10_01;
+        inject(make_frag(id, 3, 0, 2500, &payload[0..1000]));
+        inject(make_frag(id, 3, 1, 2500, &payload[1000..2000]));
+        inject(make_frag(id, 3, 2, 2500, &payload[2000..2500]));
+        let out = recv_fragmented(TEST_PORT).expect("3 frags em ordem devem reassemblar");
+        assert_eq!(out.len(), 2500);
+        assert_eq!(out, payload, "payload reassemblado deve ser byte-exato");
+
+        // Mensagem de 1 fragmento (≤ FRAG_MAX_CHUNK) completa imediatamente.
+        let small = pattern(800);
+        inject(make_frag(0x10_02, 1, 0, 800, &small));
+        let out = recv_fragmented(TEST_PORT).expect("1 frag deve completar sozinho");
+        assert_eq!(out, small);
+    }
+
+    /// Propriedade 2 (remontagem out-of-order): leituras intermediárias
+    /// retornam None (nunca parcial); completa só quando o último pedaço
+    /// chega — e os anteriores são retidos, não descartados.
+    #[test]
+    fn frag_reassembly_out_of_order_never_partial() {
+        let _g = TEST_LOCK.lock();
+        reset_frag_state();
+        setup_nic_config();
+
+        let payload = pattern(2500);
+        let id = 0x20_01;
+        // Fora de ordem: idx 2 e idx 0 — falta idx 1.
+        inject(make_frag(id, 3, 2, 2500, &payload[2000..2500]));
+        inject(make_frag(id, 3, 0, 2500, &payload[0..1000]));
+        assert!(recv_fragmented(TEST_PORT).is_none(), "2/3 frags: nunca parcial");
+
+        // Último pedaço → completa com o payload exato.
+        inject(make_frag(id, 3, 1, 2500, &payload[1000..2000]));
+        let out = recv_fragmented(TEST_PORT).expect("último frag completa a remontagem");
+        assert_eq!(out, payload);
+    }
+
+    /// Propriedade 3 (truncamento): cabeçalhos mentirosos são rejeitados.
+    /// ⚠️ O RX dropa em silêncio hoje — os guards de header/chunk fazem
+    /// `continue` sem slog; o drop só é observável pela ausência de
+    /// reassembly (documentado aqui, conforme pedido).
+    #[test]
+    fn frag_rejects_oversized_chunk_and_bad_totals() {
+        let _g = TEST_LOCK.lock();
+        reset_frag_state();
+        setup_nic_config();
+
+        // chunk.len() > FRAG_MAX_CHUNK (1000): header promete total_len=1500
+        // num fragmento único — guard M10 dropa antes de criar slot.
+        inject(make_frag(0x30_01, 1, 0, 1500, &pattern(1500)));
+        assert!(recv_fragmented(TEST_PORT).is_none(), "chunk > FRAG_MAX_CHUNK deve ser dropado");
+
+        // chunk vazio (header sem payload) — mesmo guard do M10.
+        inject(make_frag(0x30_02, 2, 0, 5, &[]));
+        assert!(recv_fragmented(TEST_PORT).is_none(), "chunk vazio deve ser dropado");
+
+        // total_len == 0: header inválido.
+        inject(make_frag(0x30_03, 1, 0, 0, b"x"));
+        assert!(recv_fragmented(TEST_PORT).is_none(), "total_len=0 deve ser dropado");
+
+        // total_frags == 0 e idx >= total_frags: mesmos guards de header.
+        inject(make_frag(0x30_04, 0, 0, 10, b"x"));
+        assert!(recv_fragmented(TEST_PORT).is_none(), "total_frags=0 deve ser dropado");
+        inject(make_frag(0x30_05, 2, 2, 10, b"x"));
+        assert!(recv_fragmented(TEST_PORT).is_none(), "idx >= total_frags deve ser dropado");
+
+        // Nenhum drop acima pode ter envenenado a tabela: mensagem válida
+        // seguinte reassembla normalmente.
+        let ok = pattern(100);
+        inject(make_frag(0x30_06, 1, 0, 100, &ok));
+        assert_eq!(recv_fragmented(TEST_PORT), Some(ok));
+    }
+
+    /// Propriedade 4 (duplicação): o mesmo idx inserido 2× é idempotente —
+    /// bitmask não conta 2× e o payload não corrompe. Se o duplicado fosse
+    /// contado, a conclusão dispararia cedo (received==total_frags com 2
+    /// chunks) → len_mismatch → drop → None em vez do payload exato.
+    /// Caminho unicast de propósito: cobre também o branch de dup que
+    /// re-envia FRACK (idempotente).
+    #[test]
+    fn frag_duplicate_is_idempotent() {
+        let _g = TEST_LOCK.lock();
+        reset_frag_state();
+        setup_nic_config();
+
+        let payload = pattern(2500);
+        let id = 0x40_01;
+        inject(make_frag(id, 3, 0, 2500, &payload[0..1000]));
+        inject(make_frag(id, 3, 0, 2500, &payload[0..1000])); // duplicado
+        inject(make_frag(id, 3, 1, 2500, &payload[1000..2000]));
+        inject(make_frag(id, 3, 2, 2500, &payload[2000..2500]));
+        let out =
+            recv_fragmented_unicast(TEST_PORT).expect("dup não deve corromper a remontagem");
+        assert_eq!(out, payload, "payload byte-exato apesar do duplicado");
+    }
+
+    /// Propriedade 5 (perda): fragmento que nunca chega → remontagem fica
+    /// incompleta (None) e o slot não vaza — mensagem NOVA reassembla
+    /// normalmente; o slot velho expira por timeout (>2000 ticks) e não
+    /// completa tarde (o fragmento atrasado inicia slot novo 1/3 → None).
+    #[test]
+    fn frag_loss_incomplete_slot_reusable_and_expiry() {
+        let _g = TEST_LOCK.lock();
+        reset_frag_state();
+        setup_nic_config();
+
+        let payload = pattern(2500);
+        let lost_id = 0x50_01;
+        // idx 2 nunca chega (perda).
+        inject(make_frag(lost_id, 3, 0, 2500, &payload[0..1000]));
+        inject(make_frag(lost_id, 3, 1, 2500, &payload[1000..2000]));
+        assert!(recv_fragmented(TEST_PORT).is_none(), "com perda: nunca completa");
+
+        // Slot não vaza: mensagem nova (outro id) reassembla normalmente.
+        let fresh = pattern(600);
+        inject(make_frag(0x50_02, 1, 0, 600, &fresh));
+        assert_eq!(recv_fragmented(TEST_PORT), Some(fresh));
+
+        // Expiry: avança TIMER_TICKS > 2000 (PIT não corre no host — o teste
+        // dirige o static direto, padrão p2p_sim). O sweep de entrada descarta
+        // o slot velho; o fragmento que faltava NÃO completa a mensagem antiga.
+        // Se o slot tivesse sobrevivido, retornaria Some(payload antigo).
+        TIMER_TICKS.store(2001, Ordering::Relaxed);
+        inject(make_frag(lost_id, 3, 2, 2500, &payload[2000..2500]));
+        assert!(
+            recv_fragmented(TEST_PORT).is_none(),
+            "slot expirado não deve completar tarde"
+        );
+        TIMER_TICKS.store(0, Ordering::Relaxed);
+    }
+
+    /// Propriedade 6 (boundary): exatamente 64.000B (64 chunks × 1000) é
+    /// aceito — teto = FRAG_MAX_PARTS × FRAG_MAX_CHUNK = max_legit_len e
+    /// também o budget de reassembly no host (RAM=0 → 64.000); 64.001 é
+    /// rejeitado (o RX dropa em silêncio — guard de header sem slog).
+    #[test]
+    fn frag_boundary_64000_accepted_64001_rejected() {
+        let _g = TEST_LOCK.lock();
+        reset_frag_state();
+        setup_nic_config();
+
+        let payload = pattern(64_000);
+        let id = 0x60_01;
+        for i in 0..64u32 {
+            let off = (i as usize) * 1000;
+            inject(make_frag(id, 64, i, 64_000, &payload[off..off + 1000]));
+        }
+        let out = recv_fragmented(TEST_PORT).expect("64.000B = 64 chunks deve reassemblar");
+        assert_eq!(out.len(), 64_000);
+        assert_eq!(out, payload);
+
+        // 64.001B: total_frags=65 > FRAG_MAX_PARTS(64) E total_len > 64.000 —
+        // os dois guards rejeitam. O TX agora recusa esse tamanho no entry
+        // (guard honesto — ver send_fragmented_oversize_rejected_no_frames),
+        // então esse header só chega ao RX de um par desatualizado/malicioso.
+        inject(make_frag(0x60_02, 65, 0, 64_001, &pattern(1000)));
+        assert!(recv_fragmented(TEST_PORT).is_none(), "64.001B deve ser rejeitado");
+    }
+
+    /// Propriedade 7 (formato FRACK): build_frag_ack produz o wire format de
+    /// 14B ("FRACK\0" + frag_id u32 LE + idx u32 LE) — round-trip parse igual
+    /// ao feito no ACK-wait do send_fragmented_unicast (rx[6..10]/rx[10..14]).
+    #[test]
+    fn frack_ack_wire_format_roundtrip() {
+        assert_eq!(FRACK_HEADER_SIZE, 14, "FRACK = 6B magic + 8B campos");
+        let (fid, idx) = (0xDEAD_BEEFu32, 42u32);
+        let ack = build_frag_ack(fid, idx);
+        assert_eq!(ack.len(), 14);
+        assert_eq!(&ack[0..6], b"FRACK\0");
+        let parsed_id = u32::from_le_bytes([ack[6], ack[7], ack[8], ack[9]]);
+        let parsed_idx = u32::from_le_bytes([ack[10], ack[11], ack[12], ack[13]]);
+        assert_eq!(parsed_id, fid);
+        assert_eq!(parsed_idx, idx);
+    }
+
+    /// Propriedade TX (chunking do send_fragmented): ≤1200B vai direto (1
+    /// frame); acima, ceil(len/1000) fragmentos. Evidência = delta de
+    /// NET_TX_COUNT (nic_send_k é no-op no host — frame descartado).
+    #[test]
+    fn send_fragmented_frame_counts_match_chunking() {
+        let _g = TEST_LOCK.lock();
+        reset_frag_state();
+        setup_nic_config();
+
+        let base = k_nano_tx_count();
+        assert!(send_fragmented(&pattern(100), TEST_PORT), "payload pequeno: caminho direto");
+        assert_eq!(k_nano_tx_count() - base, 1, "≤1200B = 1 frame (sem fragmentar)");
+
+        let base = k_nano_tx_count();
+        assert!(send_fragmented(&pattern(1200), TEST_PORT));
+        assert_eq!(k_nano_tx_count() - base, 1, "1200B = limite direto (≤ FRAG_DIRECT_MAX)");
+
+        let base = k_nano_tx_count();
+        assert!(send_fragmented(&pattern(1201), TEST_PORT));
+        assert_eq!(k_nano_tx_count() - base, 2, "1201B = 2 fragmentos");
+
+        let base = k_nano_tx_count();
+        assert!(send_fragmented(&pattern(2500), TEST_PORT));
+        assert_eq!(k_nano_tx_count() - base, 3, "2500B = ceil(2500/1000) = 3 fragmentos");
+    }
+
+    /// Propriedade TX (guard honesto de oversize): payload > 64.000B
+    /// (FRAG_MAX_PARTS × FRAG_MAX_CHUNK) é recusado com `false` ANTES de
+    /// emitir qualquer frame (NET_TX_COUNT delta 0) — tanto no broadcast
+    /// quanto no unicast. Antes do guard, o TX emitia total_frags > 64 que
+    /// todo receptor dropa (true = mentira de sucesso, classe SESSION_354).
+    /// O ramo unicast é seguro no host: o guard dispara antes do loop
+    /// stop-and-wait (que executa `hlt` — não testável em user-mode).
+    #[test]
+    fn send_fragmented_oversize_rejected_no_frames() {
+        let _g = TEST_LOCK.lock();
+        reset_frag_state();
+        setup_nic_config();
+
+        // 64.001B = 1 byte acima do teto — o caso mínimo indeliverável.
+        let base = k_nano_tx_count();
+        assert!(!send_fragmented(&pattern(64_001), TEST_PORT), "oversize broadcast deve recusar");
+        assert_eq!(k_nano_tx_count() - base, 0, "nenhum frame pode ser emitido no oversize");
+
+        let base = k_nano_tx_count();
+        assert!(
+            !send_fragmented_unicast(&pattern(64_001), PEER_MAC, TEST_PORT),
+            "oversize unicast deve recusar"
+        );
+        assert_eq!(k_nano_tx_count() - base, 0, "nenhum frame unicast no oversize");
+
+        // Bem acima do teto também recusa (não é só o caso limítrofe).
+        let base = k_nano_tx_count();
+        assert!(!send_fragmented(&pattern(100_000), TEST_PORT));
+        assert_eq!(k_nano_tx_count() - base, 0);
+    }
+
+    /// Propriedade TX (boundary): exatamente 64.000B ainda é entregável —
+    /// 64 fragmentos, todos emitidos, retorno true. O caminho de 1 frame
+    /// (≤ FRAG_DIRECT_MAX) permanece inalterado.
+    #[test]
+    fn send_fragmented_boundary_64000_still_delivers() {
+        let _g = TEST_LOCK.lock();
+        reset_frag_state();
+        setup_nic_config();
+
+        // Caminho de 1 frame inalterado (≤1200B → direto, sem fragmentar).
+        let base = k_nano_tx_count();
+        assert!(send_fragmented(&pattern(1200), TEST_PORT));
+        assert_eq!(k_nano_tx_count() - base, 1, "≤1200B continua 1 frame");
+
+        // Boundary: 64.000B = 64 chunks exatos → 64 frames, true.
+        let base = k_nano_tx_count();
+        assert!(send_fragmented(&pattern(64_000), TEST_PORT), "64.000B é entregável");
+        assert_eq!(
+            k_nano_tx_count() - base, 64,
+            "64.000B = ceil(64000/1000) = 64 fragmentos emitidos"
+        );
+    }
+
+    /// Propriedade M10 (stash): recv_fragmented_unicast drena UCAST_STASH
+    /// (pacotes não-FRACK capturados durante o ACK-wait do TX) ANTES do NIC.
+    #[test]
+    fn unicast_stash_drained_before_nic() {
+        let _g = TEST_LOCK.lock();
+        reset_frag_state();
+        setup_nic_config();
+
+        // Stash: pacote não-FRACK (o tipo que o ACK-wait stashou).
+        UCAST_STASH.lock().push((b"PLAINTEXT-DATA".to_vec(), PEER_MAC));
+        // Fila de injeção: mensagem FRAG completa de 1 fragmento.
+        let frag_payload = pattern(300);
+        inject(make_frag(0x90_01, 1, 0, 300, &frag_payload));
+
+        // 1ª chamada: stash primeiro — retorna o pacote não-FRACK.
+        assert_eq!(
+            recv_fragmented_unicast(TEST_PORT),
+            Some(b"PLAINTEXT-DATA".to_vec()),
+            "stash (não-FRACK) deve ser drenada antes do NIC"
+        );
+        // 2ª chamada: agora o FRAG (recv_unicast_with_mac → injeção).
+        assert_eq!(recv_fragmented_unicast(TEST_PORT), Some(frag_payload));
     }
 }

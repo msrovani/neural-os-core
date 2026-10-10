@@ -11,14 +11,231 @@ pub mod runqueue;
 
 use crate::apic;
 use crate::memory;
-use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use spin::Mutex;
 
 static AP_BOOT_LOCK: Mutex<()> = Mutex::new(());
 static AP_ENTRY_COUNTER: AtomicU64 = AtomicU64::new(0);
-/// init_platform_sync (T+0) e PlatformAgent (T+21) ambos chamavam init_smp:
-/// 2ª onda re-SIPI + CorePools total=1 + panic TSS (ap_index >= n).
-static SMP_INIT_DONE: AtomicBool = AtomicBool::new(false);
+/// Plan lane 1 (audit §A): explicit init state machine. Replaces the
+/// `SMP_INIT_DONE` boolean (swap-at-top) with Uninit → Init → Ready |
+/// Degraded | FailedRetryable | FailedPermanent. Second call after a terminal
+/// Ready/Degraded/FailedPermanent is a no-op skip; the two transient early
+/// gates (SMP disallowed, APIC unavailable) record FailedRetryable so a later
+/// valid call re-runs instead of hitting a poisoned flag.
+///
+/// Concurrency (reviewer refinement): entry is claimed atomically via
+/// [`smp_claim_init`] (CAS Uninit|FailedRetryable → Init). A concurrent second
+/// caller that lands while state == Init gets `Busy` (= AlreadyRunning) and
+/// returns WITHOUT touching hardware — never two inits. Terminal states get
+/// `Skip(state)`.
+///
+/// Degraded semantics: Degraded = BSP-only bring-up COMPLETE (bsp percpu +
+/// corepools live), no APs. It is TERMINAL — `smp_should_init()` is false and
+/// `smp_init_done()` is true. It does NOT auto-retry. Re-entry after Degraded
+/// (or FailedPermanent) requires the explicit HITL handle
+/// [`smp_reset_for_retry`], which moves the state back to Uninit. FailedRetryable
+/// (transient early gates only) auto-retries via the next claim. Ready is never
+/// reset (a good bring-up is never demoted without a reboot).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum SmpInitState {
+    Uninit = 0,
+    Init = 1,
+    Ready = 2,
+    Degraded = 3,
+    FailedRetryable = 4,
+    FailedPermanent = 5,
+}
+
+impl SmpInitState {
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => SmpInitState::Init,
+            2 => SmpInitState::Ready,
+            3 => SmpInitState::Degraded,
+            4 => SmpInitState::FailedRetryable,
+            5 => SmpInitState::FailedPermanent,
+            _ => SmpInitState::Uninit,
+        }
+    }
+}
+
+/// Reason codes for [`smp_init_reason`]. u8 keeps the store lock-free.
+pub const SMP_R_NONE: u8 = 0;
+pub const SMP_R_OK: u8 = 1;
+pub const SMP_R_SMP_DISALLOWED: u8 = 2;
+pub const SMP_R_APIC_UNAVAIL: u8 = 3;
+pub const SMP_R_NO_APS: u8 = 4;
+pub const SMP_R_NO_MEM: u8 = 5;
+pub const SMP_R_BAD_TRAMP: u8 = 6;
+pub const SMP_R_NO_MADT: u8 = 7;
+pub const SMP_R_NO_PERCPU: u8 = 8;
+pub const SMP_R_GDT_FAIL: u8 = 9;
+
+static SMP_INIT_STATE: AtomicU8 = AtomicU8::new(0); // SmpInitState::Uninit
+static SMP_INIT_REASON: AtomicU8 = AtomicU8::new(SMP_R_NONE);
+
+/// Current init state (lock-free snapshot).
+pub fn smp_init_state() -> SmpInitState {
+    SmpInitState::from_u8(SMP_INIT_STATE.load(Ordering::Acquire))
+}
+
+/// Machine-readable reason for the current state (static string, no alloc).
+pub fn smp_init_reason() -> &'static str {
+    match SMP_INIT_REASON.load(Ordering::Acquire) {
+        SMP_R_OK => "ok",
+        SMP_R_SMP_DISALLOWED => "smp_disallowed",
+        SMP_R_APIC_UNAVAIL => "apic_unavailable",
+        SMP_R_NO_APS => "no_aps_madt",
+        SMP_R_NO_MEM => "no_mem_tramp",
+        SMP_R_BAD_TRAMP => "bad_tramp_vector",
+        SMP_R_NO_MADT => "no_madt_ids",
+        SMP_R_NO_PERCPU => "no_percpu_slots",
+        SMP_R_GDT_FAIL => "gdt_expand_fail",
+        _ => "none",
+    }
+}
+
+/// Gate: only Uninit or FailedRetryable may (re-)run `init_smp`.
+/// Pure predicate (no claim). The live entry path uses [`smp_claim_init`];
+/// this stays for diagnostics and tests.
+pub(crate) fn smp_should_init() -> bool {
+    matches!(
+        smp_init_state(),
+        SmpInitState::Uninit | SmpInitState::FailedRetryable
+    )
+}
+
+/// Result of the atomic init claim. `Busy` == AlreadyRunning.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SmpClaim {
+    /// Caller owns the init. Exactly one claimant; runs the bring-up.
+    Run,
+    /// Init already in flight (state == Init). Return immediately, touch
+    /// nothing — fail-closed, never a second concurrent init.
+    Busy,
+    /// Terminal state reached (Ready | Degraded | FailedPermanent). No-op skip.
+    Skip(SmpInitState),
+}
+
+/// Atomic Init claim: CAS Uninit|FailedRetryable → Init. Spin-bounded (16
+/// tries); on contention loss the loser re-reads and is classified Busy/Skip —
+/// contention NEVER grants a second `Run`. Immediate fail-closed otherwise.
+pub(crate) fn smp_claim_init() -> SmpClaim {
+    for _ in 0..16 {
+        let cur = smp_init_state();
+        match cur {
+            SmpInitState::Uninit | SmpInitState::FailedRetryable => {
+                match SMP_INIT_STATE.compare_exchange(
+                    cur as u8,
+                    SmpInitState::Init as u8,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        SMP_INIT_REASON.store(SMP_R_NONE, Ordering::Release);
+                        return SmpClaim::Run;
+                    }
+                    Err(_) => continue, // lost the race; re-read (bounded)
+                }
+            }
+            SmpInitState::Init => return SmpClaim::Busy,
+            s => return SmpClaim::Skip(s),
+        }
+    }
+    // Bounded spins exhausted under contention: fail closed, never Run.
+    SmpClaim::Busy
+}
+
+/// Allowed transitions (pure, host-testable). The claim owns Uninit →
+/// FailedRetryable → Init; only the claim holder (state == Init) may land a
+/// terminal state. No edge INTO Ready except from Init — no premature Ready.
+/// No edge OUT of a terminal state except via [`smp_reset_for_retry`].
+pub(crate) fn smp_transition_allowed(from: SmpInitState, to: SmpInitState) -> bool {
+    match (from, to) {
+        (SmpInitState::Uninit, SmpInitState::Init)
+        | (SmpInitState::FailedRetryable, SmpInitState::Init) => true,
+        (SmpInitState::Init, SmpInitState::Ready)
+        | (SmpInitState::Init, SmpInitState::Degraded)
+        | (SmpInitState::Init, SmpInitState::FailedRetryable)
+        | (SmpInitState::Init, SmpInitState::FailedPermanent) => true,
+        _ => false,
+    }
+}
+
+/// Checked store: enforces [`smp_transition_allowed`]. Returns false and stores
+/// NOTHING on an invalid transition (premature Ready, terminal overwrite,
+/// double-Init). All `init_smp` terminal sites route through here; the raw
+/// [`smp_state_store`] remains as the test-setup seam only.
+pub(crate) fn smp_state_store_checked(s: SmpInitState, reason: u8) -> bool {
+    if !smp_transition_allowed(smp_init_state(), s) {
+        return false;
+    }
+    smp_state_store(s, reason);
+    true
+}
+
+/// Explicit HITL retry handle: Degraded | FailedRetryable | FailedPermanent →
+/// Uninit (reason cleared). Rejected (false, nothing stored) from
+/// Uninit | Init | Ready — never yank a running init, never demote a good
+/// bring-up. FailedRetryable does not NEED this (next claim auto-retries);
+/// accepting it here just normalizes the state.
+pub(crate) fn smp_reset_for_retry() -> bool {
+    for _ in 0..16 {
+        let cur = smp_init_state();
+        match cur {
+            SmpInitState::Degraded
+            | SmpInitState::FailedRetryable
+            | SmpInitState::FailedPermanent => {
+                match SMP_INIT_STATE.compare_exchange(
+                    cur as u8,
+                    SmpInitState::Uninit as u8,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        SMP_INIT_REASON.store(SMP_R_NONE, Ordering::Release);
+                        return true;
+                    }
+                    Err(_) => continue,
+                }
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Raw unchecked store — test-setup seam ONLY (lets tests place any state).
+/// Production paths must use [`smp_state_store_checked`].
+pub(crate) fn smp_state_store(s: SmpInitState, reason: u8) {
+    SMP_INIT_REASON.store(reason, Ordering::Release);
+    SMP_INIT_STATE.store(s as u8, Ordering::Release);
+}
+
+#[cfg(test)]
+pub(crate) fn smp_state_test_reset() {
+    SMP_INIT_REASON.store(SMP_R_NONE, Ordering::Release);
+    SMP_INIT_STATE.store(SmpInitState::Uninit as u8, Ordering::Release);
+}
+
+/// Pure early-gate contract for `init_smp` (host-testable): both transient
+/// gates must fail retryable, never poison a later valid call.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SmpGateFail {
+    SmpDisallowed,
+    ApicUnavailable,
+}
+
+pub(crate) fn decide_smp_gate(allow_smp: bool, apic_available: bool) -> Result<(), SmpGateFail> {
+    if !allow_smp {
+        return Err(SmpGateFail::SmpDisallowed);
+    }
+    if !apic_available {
+        return Err(SmpGateFail::ApicUnavailable);
+    }
+    Ok(())
+}
 
 /// Set by PlatformAgent before calling init_smp().
 pub static AP_COUNT: AtomicU16 = AtomicU16::new(0);
@@ -428,44 +645,82 @@ pub unsafe fn wake_aps_sequential(
     woke
 }
 
+/// True once the BSP path is up (Ready, or Degraded BSP-only). False for
+/// Uninit/Init/FailedRetryable/FailedPermanent — a retryable early fail never
+/// reports done, so a later valid `init_smp` still re-runs.
 pub fn smp_init_done() -> bool {
-    SMP_INIT_DONE.load(Ordering::Acquire)
+    matches!(smp_init_state(), SmpInitState::Ready | SmpInitState::Degraded)
 }
 
 pub unsafe fn init_smp() {
-    if SMP_INIT_DONE.swap(true, Ordering::SeqCst) {
-        crate::slog_nano!(
-            "SMP",
-            "ok",
-            "init_smp skip (ja rodou) APs_counter={} ONLINE={} cores={}",
-            AP_ENTRY_COUNTER.load(Ordering::Acquire),
-            percpu::AP_ONLINE.load(Ordering::Acquire),
-            percpu::CPU_COUNT.load(Ordering::Acquire)
-        );
-        return;
+    // Plan lane 1 (audit §A): init_platform_sync (T+0) e PlatformAgent (T+21)
+    // ambos chamavam init_smp — 2ª onda re-SIPI + CorePools total=1 + panic
+    // TSS (ap_index >= n). Entry is an atomic CAS claim: exactly one caller
+    // gets Run; a concurrent second caller while Init is in flight gets Busy
+    // (AlreadyRunning, touches nothing); terminal states get Skip.
+    match smp_claim_init() {
+        SmpClaim::Skip(s) => {
+            crate::slog_nano!(
+                "SMP",
+                "ok",
+                "init_smp skip (estado {:?} razao={}) APs_counter={} ONLINE={} cores={}",
+                s,
+                smp_init_reason(),
+                AP_ENTRY_COUNTER.load(Ordering::Acquire),
+                percpu::AP_ONLINE.load(Ordering::Acquire),
+                percpu::CPU_COUNT.load(Ordering::Acquire)
+            );
+            return;
+        }
+        SmpClaim::Busy => {
+            crate::slog_nano!(
+                "SMP",
+                "warn",
+                "init_smp busy (init em voo, razao={}) — sem double-init",
+                smp_init_reason(),
+            );
+            return;
+        }
+        SmpClaim::Run => {}
     }
     crate::display::fb::boot_ckpt(220, "smp: enter");
     crate::slog_nano!("SMP", "trace", "Inicializando SMP...");
     crate::display::fb::boot_ckpt(221, "smp: allow check");
 
-    if !crate::platform_probe::allow_smp() {
-        crate::slog_nano!(
-            "SMP",
-            "ok",
-            "BSP-only (FeatureGate allow_smp=false hv={})",
-            crate::platform_probe::hypervisor().name()
-        );
-        let bsp = apic::lapic_id();
-        percpu::init_bsp_percpu(bsp);
-        corepools::init_from_boot(bsp, 0);
-        return;
-    }
-
-    crate::display::fb::boot_ckpt(222, "smp: apic ok");
-    if !apic::USING_APIC.load(Ordering::Relaxed) {
-        crate::slog_nano!("SMP", "warn", "APIC nao disponivel — SMP ignorado.");
-        crate::display::fb::boot_ckpt(222, "smp: no apic bsp-only");
-        return;
+    // Transient early gates: BSP-only bring-up runs, state goes back to
+    // FailedRetryable — never poisoned, a later valid call re-runs.
+    match decide_smp_gate(
+        crate::platform_probe::allow_smp(),
+        apic::USING_APIC.load(Ordering::Relaxed),
+    ) {
+        Err(SmpGateFail::SmpDisallowed) => {
+            crate::slog_nano!(
+                "SMP",
+                "ok",
+                "BSP-only (FeatureGate allow_smp=false hv={})",
+                crate::platform_probe::hypervisor().name()
+            );
+            let bsp = apic::lapic_id();
+            percpu::init_bsp_percpu(bsp);
+            corepools::init_from_boot(bsp, 0);
+            let _ = smp_state_store_checked(SmpInitState::FailedRetryable, SMP_R_SMP_DISALLOWED);
+            return;
+        }
+        Err(SmpGateFail::ApicUnavailable) => {
+            crate::slog_nano!("SMP", "warn", "APIC nao disponivel — SMP ignorado.");
+            crate::display::fb::boot_ckpt(222, "smp: no apic bsp-only");
+            // Root-cause do #PF cr2=8 em cpu_id (mesh_a/b tick ~20): este return
+            // pulava init_bsp_percpu ⇒ GS base 0 ⇒ `mov gs:[8]` falta. Espelha o
+            // ramo allow_smp=false acima; lapic_id() sem APIC devolve 0 (fail-closed).
+            let bsp = apic::lapic_id();
+            percpu::init_bsp_percpu(bsp);
+            corepools::init_from_boot(bsp, 0);
+            let _ = smp_state_store_checked(SmpInitState::FailedRetryable, SMP_R_APIC_UNAVAIL);
+            return;
+        }
+        Ok(()) => {
+            crate::display::fb::boot_ckpt(222, "smp: apic ok");
+        }
     }
 
     crate::display::fb::boot_ckpt(223, "smp: cr3 read");
@@ -510,6 +765,7 @@ pub unsafe fn init_smp() {
         corepools::init_from_boot(bsp_lapic_id, 0);
         #[cfg(feature = "smp-runqueue")]
         runqueue::init_roles_from_pools(1);
+        let _ = smp_state_store_checked(SmpInitState::Degraded, SMP_R_NO_APS);
         return;
     }
 
@@ -520,6 +776,7 @@ pub unsafe fn init_smp() {
             crate::slog_nano!("SMP", "warn", "sem frame alloc — BSP-only");
             crate::display::fb::boot_ckpt(228, "smp: no alloc bsp-only");
             corepools::init_from_boot(bsp_lapic_id, 0);
+            let _ = smp_state_store_checked(SmpInitState::Degraded, SMP_R_NO_MEM);
             return;
         };
         match alloc.allocate_below_1mb() {
@@ -529,6 +786,7 @@ pub unsafe fn init_smp() {
                 crate::slog_nano!("SMP", "warn", "sem lowmem tramp — BSP-only");
                 crate::display::fb::boot_ckpt(228, "smp: no lowmem bsp-only");
                 corepools::init_from_boot(bsp_lapic_id, 0);
+                let _ = smp_state_store_checked(SmpInitState::Degraded, SMP_R_NO_MEM);
                 return;
             }
         }
@@ -557,6 +815,7 @@ pub unsafe fn init_smp() {
     if tramp_phys >= 0x100000 || tramp_vector == 0 {
         crate::slog_nano!("SMP", "warn", "bad tramp vector — BSP-only");
         corepools::init_from_boot(bsp_lapic_id, 0);
+        let _ = smp_state_store_checked(SmpInitState::Degraded, SMP_R_BAD_TRAMP);
         return;
     }
 
@@ -571,6 +830,7 @@ pub unsafe fn init_smp() {
         if ids.is_empty() {
             crate::slog_nano!("SMP", "info", "MADT sem IDs — BSP-only (sem guess sequencial)");
             corepools::init_from_boot(bsp_lapic_id, 0);
+            let _ = smp_state_store_checked(SmpInitState::Degraded, SMP_R_NO_MADT);
             return;
         }
         for &id in ids.iter() {
@@ -579,10 +839,14 @@ pub unsafe fn init_smp() {
             }
         }
     }
+    // Defect 4a: o cap max_aps (AP_COUNT) era ignorado aqui — truncar a
+    // lista do silício antes de derivar n_aps/AP_EXPECTED.
+    ap_ids.truncate(ap_expected as usize);
     let n_madt = ap_ids.len();
     if n_madt == 0 {
         crate::slog_nano!("SMP", "info", "MADT sem APs Enabled — BSP-only");
         corepools::init_from_boot(bsp_lapic_id, 0);
+        let _ = smp_state_store_checked(SmpInitState::Degraded, SMP_R_NO_MADT);
         return;
     }
     let n_aps = n_madt;
@@ -591,11 +855,13 @@ pub unsafe fn init_smp() {
     if !percpu::alloc_slots(n_aps) {
         crate::slog_nano!("SMP", "warn", "PerCpu heap fail — BSP-only");
         corepools::init_from_boot(bsp_lapic_id, 0);
+        let _ = smp_state_store_checked(SmpInitState::Degraded, SMP_R_NO_PERCPU);
         return;
     }
     if !crate::interrupts::expand_gdt_aps(n_aps) {
         crate::slog_nano!("SMP", "warn", "GDT expand fail — BSP-only");
         corepools::init_from_boot(bsp_lapic_id, 0);
+        let _ = smp_state_store_checked(SmpInitState::Degraded, SMP_R_GDT_FAIL);
         return;
     }
 
@@ -663,6 +929,21 @@ pub unsafe fn init_smp() {
         );
     }
 
+    // Defect 4b: barreira ready==expected do ap_entry nunca dispara se menos
+    // APs chegaram que o esperado — assenta no que chegou (>=1) em vez de
+    // deixar ap_pollable=false para sempre. Fail-closed: 0 => off.
+    let idt_ready = AP_IDT_READY.load(Ordering::Acquire);
+    if idt_ready >= 1 && !ap_pollable() {
+        AP_EXPECTED.store(idt_ready, Ordering::Release);
+        set_ap_pollable(true);
+        crate::slog_nano!(
+            "SMP",
+            "ok",
+            "settle: {} AP(s) IDT-ready — AP_EXPECTED ajustado, ap_pollable=true",
+            idt_ready
+        );
+    }
+
     corepools::init_from_boot(bsp_lapic_id, ap_woke as u16);
     #[cfg(feature = "smp-runqueue")]
     {
@@ -680,6 +961,12 @@ pub unsafe fn init_smp() {
     }
     let workers = (ap_woke as usize).saturating_add(1);
     work_stealing::init_global_pool(workers);
+    // Plan lane 1 (audit §A) + reviewer refinement: the ONLY Ready store in
+    // init_smp, behind the final gate — wake settle + corepools + runqueue +
+    // work-stealing pool all ran above. No early Ready exists on any path:
+    // every BSP-only exit lands Degraded/FailedRetryable, and the checked
+    // store rejects Ready from anything but Init (claim holder).
+    let _ = smp_state_store_checked(SmpInitState::Ready, SMP_R_OK);
 
     // Hybrid Intel 0x1A: honesty — E-cores só em metal/KVM com allow_ep_core_detect.
     if crate::platform_probe::gate().allow_ep_core_detect {
@@ -753,5 +1040,188 @@ mod host_tests {
         if !ap_pollable() {
             assert!(!gate, "sem ap_pollable=true, parallel_* deve cair no BSP");
         }
+    }
+
+    // Plan lane 1 (audit §A): state-machine contract tests.
+    #[test]
+    fn sm_retry_after_early_fail_reruns() {
+        let _g = LOCK.lock();
+        smp_state_test_reset();
+        assert!(!smp_init_done());
+        assert!(smp_should_init());
+        // Pure gate truth table: cada early fail é transitório.
+        assert_eq!(decide_smp_gate(false, true), Err(SmpGateFail::SmpDisallowed));
+        assert_eq!(decide_smp_gate(false, false), Err(SmpGateFail::SmpDisallowed));
+        assert_eq!(decide_smp_gate(true, false), Err(SmpGateFail::ApicUnavailable));
+        assert_eq!(decide_smp_gate(true, true), Ok(()));
+        // Early-fail path armazena FailedRetryable — nunca envenena.
+        smp_state_store(SmpInitState::FailedRetryable, SMP_R_APIC_UNAVAIL);
+        assert!(!smp_init_done(), "retryable early fail must not report done");
+        assert!(smp_should_init(), "FailedRetryable must allow a later valid retry");
+        assert_eq!(smp_init_reason(), "apic_unavailable");
+        // Run valido posterior completa.
+        smp_state_store(SmpInitState::Ready, SMP_R_OK);
+        assert!(smp_init_done());
+        assert!(!smp_should_init());
+        smp_state_test_reset();
+    }
+
+    #[test]
+    fn sm_double_terminal_skips() {
+        let _g = LOCK.lock();
+        smp_state_test_reset();
+        smp_state_store(SmpInitState::Ready, SMP_R_OK);
+        assert!(!smp_should_init(), "second call after Ready skips");
+        assert!(smp_init_done());
+        smp_state_store(SmpInitState::Degraded, SMP_R_NO_APS);
+        assert!(!smp_should_init(), "second call after Degraded skips");
+        assert!(smp_init_done());
+        smp_state_store(SmpInitState::FailedPermanent, SMP_R_NONE);
+        assert!(!smp_should_init());
+        assert!(!smp_init_done());
+        smp_state_test_reset();
+    }
+
+    #[test]
+    fn sm_degraded_keeps_bsp_path() {
+        let _g = LOCK.lock();
+        smp_state_test_reset();
+        // Degraded = BSP-only bring-up feito (bsp percpu + corepools), sem APs.
+        smp_state_store(SmpInitState::Degraded, SMP_R_NO_MADT);
+        assert!(smp_init_done(), "Degraded still reports BSP path up");
+        assert!(!smp_should_init(), "Degraded is terminal: second call skips");
+        assert_eq!(smp_init_reason(), "no_madt_ids");
+        smp_state_test_reset();
+    }
+
+    // Reviewer refinement: concurrent double-init. Sequential simulation of the
+    // Init race via the state API: first claim wins Run, second sees Init and
+    // gets Busy (AlreadyRunning) — never a second Run, never two inits.
+    #[test]
+    fn sm_claim_race_second_caller_busy() {
+        let _g = LOCK.lock();
+        smp_state_test_reset();
+        assert_eq!(smp_claim_init(), SmpClaim::Run, "first claimant runs");
+        assert_eq!(smp_init_state(), SmpInitState::Init);
+        // Second concurrent caller lands while Init is in flight.
+        assert_eq!(smp_claim_init(), SmpClaim::Busy, "second caller must not double-init");
+        assert_eq!(smp_claim_init(), SmpClaim::Busy, "third caller also Busy");
+        assert_eq!(smp_init_state(), SmpInitState::Init, "race leaves Init intact");
+        assert!(!smp_init_done(), "in-flight init never reports done");
+        // Holder finishes honestly; late callers now Skip.
+        assert!(smp_state_store_checked(SmpInitState::Ready, SMP_R_OK));
+        assert_eq!(smp_claim_init(), SmpClaim::Skip(SmpInitState::Ready));
+        assert_eq!(smp_claim_init(), SmpClaim::Skip(SmpInitState::Ready));
+        smp_state_test_reset();
+    }
+
+    // Reviewer refinement: timeout/partial-fail path. A wake timeout (or any
+    // BSP-only fallback) lands Degraded — BSP path up, no auto-retry — and the
+    // ONLY way back to a re-run is the explicit reset handle.
+    #[test]
+    fn sm_timeout_partial_fail_needs_explicit_reset() {
+        let _g = LOCK.lock();
+        smp_state_test_reset();
+        assert_eq!(smp_claim_init(), SmpClaim::Run);
+        // Simulated AP wake timeout: holder records the partial-fail outcome.
+        assert!(smp_state_store_checked(SmpInitState::Degraded, SMP_R_NO_MADT));
+        assert!(smp_init_done(), "Degraded keeps BSP path up");
+        assert!(!smp_should_init(), "Degraded does not auto-retry");
+        assert_eq!(smp_claim_init(), SmpClaim::Skip(SmpInitState::Degraded));
+        // Explicit HITL reset re-opens the gate; then a fresh claim re-runs.
+        assert!(smp_reset_for_retry(), "Degraded allows explicit reset");
+        assert_eq!(smp_init_state(), SmpInitState::Uninit);
+        assert!(smp_should_init());
+        assert_eq!(smp_claim_init(), SmpClaim::Run, "post-reset claim re-runs");
+        smp_state_test_reset();
+    }
+
+    // Reviewer refinement: retry-after-FailedRetryable re-runs through the
+    // claim (not the raw store), and the claim clears the stale reason.
+    #[test]
+    fn sm_retry_after_failed_retryable_reruns_via_claim() {
+        let _g = LOCK.lock();
+        smp_state_test_reset();
+        assert_eq!(smp_claim_init(), SmpClaim::Run);
+        assert!(smp_state_store_checked(SmpInitState::FailedRetryable, SMP_R_APIC_UNAVAIL));
+        assert!(!smp_init_done());
+        assert!(smp_should_init());
+        assert_eq!(smp_claim_init(), SmpClaim::Run, "FailedRetryable claim re-runs");
+        assert_eq!(smp_init_reason(), "none", "claim clears stale retryable reason");
+        // Second transient fail, then a valid run completes.
+        assert!(smp_state_store_checked(SmpInitState::FailedRetryable, SMP_R_SMP_DISALLOWED));
+        assert_eq!(smp_claim_init(), SmpClaim::Run);
+        assert!(smp_state_store_checked(SmpInitState::Ready, SMP_R_OK));
+        assert!(smp_init_done());
+        assert_eq!(smp_claim_init(), SmpClaim::Skip(SmpInitState::Ready));
+        smp_state_test_reset();
+    }
+
+    // Reviewer refinement: invalid-transition rejection. The checked store is
+    // the enforcement point — premature Ready, terminal overwrite, and
+    // double-Init all bounce with state untouched.
+    #[test]
+    fn sm_invalid_transitions_rejected() {
+        let _g = LOCK.lock();
+        smp_state_test_reset();
+        // Premature Ready straight from Uninit: rejected.
+        assert!(!smp_state_store_checked(SmpInitState::Ready, SMP_R_OK));
+        assert_eq!(smp_init_state(), SmpInitState::Uninit);
+        // Uninit -> Degraded / FailedPermanent without a claim: rejected.
+        assert!(!smp_state_store_checked(SmpInitState::Degraded, SMP_R_NO_APS));
+        assert!(!smp_state_store_checked(SmpInitState::FailedPermanent, SMP_R_NONE));
+        assert_eq!(smp_init_state(), SmpInitState::Uninit);
+        // Claim, then Init -> Init (double claim via store): rejected.
+        assert_eq!(smp_claim_init(), SmpClaim::Run);
+        assert!(!smp_state_store_checked(SmpInitState::Init, SMP_R_NONE));
+        assert_eq!(smp_init_state(), SmpInitState::Init);
+        // Terminal overwrite: Ready -> Degraded without reset: rejected.
+        assert!(smp_state_store_checked(SmpInitState::Ready, SMP_R_OK));
+        assert!(!smp_state_store_checked(SmpInitState::Degraded, SMP_R_NO_APS));
+        assert!(!smp_state_store_checked(SmpInitState::FailedRetryable, SMP_R_APIC_UNAVAIL));
+        assert_eq!(smp_init_state(), SmpInitState::Ready);
+        smp_state_test_reset();
+    }
+
+    // Reviewer refinement: no-Ready-before-invariants. Ready is reachable ONLY
+    // from Init (claim holder that ran the full bring-up: bsp percpu,
+    // corepools, settle, pools). Uninit/FailedRetryable can never land Ready.
+    #[test]
+    fn sm_no_ready_before_invariants() {
+        let _g = LOCK.lock();
+        smp_state_test_reset();
+        assert!(!smp_init_done());
+        assert!(!smp_state_store_checked(SmpInitState::Ready, SMP_R_OK));
+        // A bare FailedRetryable (early gate, bring-up never ran) can neither
+        // land Ready directly nor report done.
+        smp_state_store(SmpInitState::FailedRetryable, SMP_R_APIC_UNAVAIL);
+        assert!(!smp_init_done());
+        assert!(!smp_state_store_checked(SmpInitState::Ready, SMP_R_OK));
+        assert_eq!(smp_init_state(), SmpInitState::FailedRetryable);
+        // Only the claim (Init) opens the Ready edge.
+        assert_eq!(smp_claim_init(), SmpClaim::Run);
+        assert!(!smp_init_done(), "Init in flight is not done");
+        assert!(smp_state_store_checked(SmpInitState::Ready, SMP_R_OK));
+        assert!(smp_init_done());
+        smp_state_test_reset();
+    }
+
+    // Reset gate: Ready is never demoted, Init is never yanked; only
+    // non-Ready non-running states reset.
+    #[test]
+    fn sm_reset_for_retry_gate() {
+        let _g = LOCK.lock();
+        smp_state_test_reset();
+        assert!(!smp_reset_for_retry(), "Uninit has nothing to reset");
+        assert_eq!(smp_claim_init(), SmpClaim::Run);
+        assert!(!smp_reset_for_retry(), "never yank a running init");
+        assert!(smp_state_store_checked(SmpInitState::FailedPermanent, SMP_R_NONE));
+        assert!(smp_reset_for_retry(), "FailedPermanent allows explicit reset");
+        assert_eq!(smp_init_state(), SmpInitState::Uninit);
+        assert_eq!(smp_claim_init(), SmpClaim::Run);
+        assert!(smp_state_store_checked(SmpInitState::Ready, SMP_R_OK));
+        assert!(!smp_reset_for_retry(), "never demote a good bring-up");
+        assert_eq!(smp_init_state(), SmpInitState::Ready);
+        smp_state_test_reset();
     }
 }

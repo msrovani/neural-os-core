@@ -120,3 +120,4 @@
 | 460 | Power+oraculo+PRE | s460 | cascata S5/CF9 + veredito oraculo + dump PRE-HCRST | 8042 cego era o hang; S5/CF9/triple/park; HCRST destrutivo 65%; img 1b3b kernel 9c935337 |
 | 461 | Formula+M1 | s461 | oraculo M0-M7 + higiene anti-reset | preservem>resetar; gate CCS/CSC; CSC=bit17; kernel ce471ea5; img 1b3b ok |
 | 462 | Fotos M1+M2M3 | s462 | leitura fotos + pacote companion/CAS/done | RS=0 TBT; ccs3 vivos; twin/CAS/retry; kernel 61698f65; img 1b3b ok |
+| 463 | Mesh reliability | s463 | OOM root-cause + fixes estruturais + validação 2/4 nós | bump-first+dealloc no-op = churn permanente (~31,9KB/tick); PMM duplo-uso (ora-1 FECHADO); TALC-first pós-boot (bump 12MB vs 1.155GB); preflight 64KB; PeerState+backoff; FRAG/FRACK 9 testes + TX guard; PMM reserve + detector; M5 2 nós T+79k zero anomalias; Mesh4 4 nós × 4c/2G hub L2 marco M3 cruzado; run-mesh4-lab.ps1 novo |

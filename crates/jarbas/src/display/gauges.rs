@@ -1,5 +1,6 @@
 //! Relógios de medição (HUD) — CPU/MEM/GPU/HD com dados honestos do K³CHJ.
-//! Amostragem: MetricsAgent (~0,5s). Compositor só desenha o snapshot.
+//! Amostragem: tick do compositor ~2 Hz (1ª via MetricsAgent Oneshot).
+//! Compositor só desenha o snapshot.
 
 use alloc::string::String;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -31,28 +32,6 @@ pub struct GaugeSnapshot {
     pub trinity_keyword: u64,
     pub trinity_fallback: u64,
     pub expert_resident_kb: usize,
-}
-
-impl GaugeSnapshot {
-    fn empty() -> Self {
-        GaugeSnapshot {
-            cpu_pct: 0.0,
-            mem_pct: 0.0,
-            gpu_pct: 0.0,
-            hd_pct: 0.0,
-            cpu_val: String::from("-"),
-            mem_val: String::from("-"),
-            gpu_val: String::from("-"),
-            hd_val: String::from("-"),
-            timer_at: 0,
-            per_core_load: [0.0; 32],
-            core_count: 0,
-            trinity_neural: 0,
-            trinity_keyword: 0,
-            trinity_fallback: 0,
-            expert_resident_kb: 0,
-        }
-    }
 }
 
 static SNAPSHOT: Mutex<GaugeSnapshot> = Mutex::new(GaugeSnapshot {
@@ -143,7 +122,8 @@ fn sample_hd() -> (f32, String) {
     (0.0, alloc::format!("{}G", gb))
 }
 
-/// Chamado pelo MetricsAgent (~0,5s) — amostra e publica snapshot.
+/// Chamado a ~2 Hz pelo tick do compositor (e 1x pelo MetricsAgent Oneshot
+/// no boot) — amostra e publica snapshot.
 /// `log_serial`: true só na 1ª amostra / periodicamente (HW sem serial satura COM).
 
 /// Amostra load por-core via runqueue CpuStats (até 32 cores no HUD).
@@ -171,6 +151,12 @@ pub fn refresh_snapshot(log_serial: bool) {
     let (gpu_pct, gpu_val) = sample_gpu();
     let (hd_pct, hd_val) = sample_hd();
     let now = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
+    let (per_core_load, core_count) = sample_per_core_load();
+    let mut expert_bytes = 0usize;
+    for kind in &[cortex::trinity::ExpertKind::HwIdentify, cortex::trinity::ExpertKind::RustCoder] {
+        expert_bytes += cortex::trinity::expert_resident_bytes_kind(*kind);
+    }
+    let expert_kb = expert_bytes / 1024;
     let snap = GaugeSnapshot {
         cpu_pct,
         mem_pct,
@@ -181,18 +167,12 @@ pub fn refresh_snapshot(log_serial: bool) {
         gpu_val: gpu_val.clone(),
         hd_val: hd_val.clone(),
         timer_at: now,
-        per_core_load: sample_per_core_load().0,
-        core_count: sample_per_core_load().1,
+        per_core_load,
+        core_count,
         trinity_neural: 0,
         trinity_keyword: 0,
         trinity_fallback: 0,
-        expert_resident_kb: {
-            let mut total = 0usize;
-            for kind in &[cortex::trinity::ExpertKind::HwIdentify, cortex::trinity::ExpertKind::RustCoder] {
-                total += cortex::trinity::expert_resident_bytes_kind(*kind);
-            }
-            total / 1024
-        },
+        expert_resident_kb: expert_kb,
     };
     *SNAPSHOT.lock() = snap;
     SNAPSHOT_READY.store(true, Ordering::Release);
@@ -207,15 +187,36 @@ pub fn refresh_snapshot(log_serial: bool) {
             (mem_pct * 100.0) as u32,
             gpu_val,
             hd_val,
-            {
-                let mut total = 0usize;
-                for kind in &[cortex::trinity::ExpertKind::HwIdentify, cortex::trinity::ExpertKind::RustCoder] {
-                    total += cortex::trinity::expert_resident_bytes_kind(*kind);
-                }
-                total / 1024
-            }
+            expert_kb
         );
     }
+}
+
+/// Copia bytes ASCII p/ buf da stack (trunca sem quebrar UTF-8 ASCII). Retorna len.
+fn copy_ascii(src: &str, dst: &mut [u8]) -> usize {
+    let b = src.as_bytes();
+    let n = b.len().min(dst.len());
+    dst[..n].copy_from_slice(&b[..n]);
+    n
+}
+
+/// Decimal u64 sem alloc em buf. Retorna len (trunca dígitos altos se cheio).
+fn push_u64(mut v: u64, buf: &mut [u8]) -> usize {
+    let mut tmp = [0u8; 20];
+    let mut i = 20usize;
+    if v == 0 {
+        i -= 1;
+        tmp[i] = b'0';
+    } else {
+        while v > 0 && i > 0 {
+            i -= 1;
+            tmp[i] = (v % 10) as u8 + b'0';
+            v /= 10;
+        }
+    }
+    let n = (20 - i).min(buf.len());
+    buf[..n].copy_from_slice(&tmp[i..i + n]);
+    n
 }
 
 /// Desenha a barra a partir do snapshot (sem reamostrar).
@@ -223,24 +224,51 @@ pub fn draw_status_gauges(fb: &mut DoubleBuffer, screen_w: usize) {
     let theme = crate::display::theme::current_theme();
     fb.fill_rect(0, 0, screen_w, STATUS_BAR_H, theme.bg.0, theme.bg.1, theme.bg.2);
 
-    let snap = if SNAPSHOT_READY.load(Ordering::Acquire) {
-        SNAPSHOT.lock().clone()
-    } else {
-        GaugeSnapshot::empty()
+    // ponytail: copy-out sob 1 lock p/ bufs na stack — sem clone() de Strings no paint.
+    let mut cpu_b = [0u8; 24];
+    let mut mem_b = [0u8; 24];
+    let mut gpu_b = [0u8; 24];
+    let mut hd_b = [0u8; 24];
+    let (cpu_pct, mem_pct, gpu_pct, hd_pct, expert_kb, cpu_n, mem_n, gpu_n, hd_n) = {
+        let g = SNAPSHOT.lock();
+        let r = SNAPSHOT_READY.load(Ordering::Acquire);
+        let (cp, mp, gp, hp, ek) = if r {
+            (g.cpu_pct, g.mem_pct, g.gpu_pct, g.hd_pct, g.expert_resident_kb)
+        } else {
+            (0.0, 0.0, 0.0, 0.0, 0)
+        };
+        let cn = if r { copy_ascii(&g.cpu_val, &mut cpu_b) } else { copy_ascii("-", &mut cpu_b) };
+        let mn = if r { copy_ascii(&g.mem_val, &mut mem_b) } else { copy_ascii("-", &mut mem_b) };
+        let gn = if r { copy_ascii(&g.gpu_val, &mut gpu_b) } else { copy_ascii("-", &mut gpu_b) };
+        let hn = if r { copy_ascii(&g.hd_val, &mut hd_b) } else { copy_ascii("-", &mut hd_b) };
+        (cp, mp, gp, hp, ek, cn, mn, gn, hn)
     };
+    let cpu_s = core::str::from_utf8(&cpu_b[..cpu_n]).unwrap_or("-");
+    let mem_s = core::str::from_utf8(&mem_b[..mem_n]).unwrap_or("-");
+    let gpu_s = core::str::from_utf8(&gpu_b[..gpu_n]).unwrap_or("-");
+    let hd_s = core::str::from_utf8(&hd_b[..hd_n]).unwrap_or("-");
 
     let readings: [(&str, f32, &str); 4] = [
-        ("CPU", snap.cpu_pct, snap.cpu_val.as_str()),
-        ("MEM", snap.mem_pct, snap.mem_val.as_str()),
-        ("GPU", snap.gpu_pct, snap.gpu_val.as_str()),
-        ("HD", snap.hd_pct, snap.hd_val.as_str()),
+        ("CPU", cpu_pct, cpu_s),
+        ("MEM", mem_pct, mem_s),
+        ("GPU", gpu_pct, gpu_s),
+        ("HD", hd_pct, hd_s),
     ];
 
-    // Trinity info (após gauges, à direita)
-    if snap.expert_resident_kb > 0 {
-        let trinity_text = alloc::format!("TRI {}KB", snap.expert_resident_kb);
+    // Trinity info (após gauges, à direita) — "TRI {kb}KB" sem alloc.
+    if expert_kb > 0 {
+        let mut tri_b = [0u8; 28];
+        tri_b[..4].copy_from_slice(b"TRI ");
+        let dn = push_u64(expert_kb as u64, &mut tri_b[4..26]);
+        let mut tl = 4 + dn;
+        if tl + 2 <= tri_b.len() {
+            tri_b[tl] = b'K';
+            tri_b[tl + 1] = b'B';
+            tl += 2;
+        }
+        let trinity_text = core::str::from_utf8(&tri_b[..tl]).unwrap_or("");
         let tx = screen_w.saturating_sub(trinity_text.len() * 6 + 8);
-        draw_text(fb, tx, 0, &trinity_text, screen_w, 0, 255, 200);
+        draw_text(fb, tx, 0, trinity_text, screen_w, 0, 255, 200);
     }
 
     let n = readings.len();
@@ -265,16 +293,24 @@ pub fn draw_status_gauges(fb: &mut DoubleBuffer, screen_w: usize) {
         );
     }
 
-    // Uptime ao vivo (barato); métricas dos gauges vêm do snapshot 0,5s.
+    // Uptime ao vivo (barato, sem alloc); métricas dos gauges vêm do snapshot 0,5s.
     let ticks = k_nano::interrupts::wall_ticks() as usize;
     let hz = k_nano::interrupts::TIMER_HZ.load(Ordering::Relaxed).max(1) as usize;
     let secs = ticks / hz;
-    let up = alloc::format!("T{}s", secs);
+    let mut up_b = [0u8; 24];
+    up_b[0] = b'T';
+    let dn = push_u64(secs as u64, &mut up_b[1..23]);
+    let mut ul = 1 + dn;
+    if ul < up_b.len() {
+        up_b[ul] = b's';
+        ul += 1;
+    }
+    let up = core::str::from_utf8(&up_b[..ul]).unwrap_or("");
     draw_text(
         fb,
         screen_w.saturating_sub(up.len() * 8 + 4),
         10,
-        &up,
+        up,
         screen_w,
         100,
         140,
@@ -333,7 +369,8 @@ fn gauge_color(pct: f32) -> (u8, u8, u8) {
     }
 }
 
-/// Retorna copia do snapshot (compositor per-core). Preferir `core_bar_data` no hot path.
+/// Retorna copia do snapshot (uso on-demand/diagnóstico — fora do paint).
+/// Hot paths usam `core_bar_data` / copy-out sob lock (sem clone no paint).
 pub fn snapshot() -> GaugeSnapshot {
     SNAPSHOT.lock().clone()
 }
@@ -784,19 +821,27 @@ pub fn refresh_hub_health() {
     // próprio MCH via mesh) → linha honestamente sem dado, nunca fake.
     // UNKNOWN de frota = sem evidência → WARN fora do pill (não puxa header),
     // mesmo padrão do n/a ≠ 0 e do worst-of com UNKNOWN contaminante (s417).
-    let (st, val, pill) = match crate::display::agent::fleet_health_snapshot() {
+    // ponytail: copy-out sob lock p/ bufs da stack (sem clone de Strings no fill).
+    let mut f_overall = [0u8; 16];
+    let mut f_reason = [0u8; 64];
+    let fleet = crate::display::agent::fleet_health_copy_out(&mut f_overall, &mut f_reason);
+    let (st, val, pill) = match fleet {
         None => (HubState::Na, alloc::string::String::from("n/a"), false),
-        Some((overall, reason)) => {
+        Some((olen, rlen)) => {
+            let overall = core::str::from_utf8(&f_overall[..olen]).unwrap_or("");
             let nodes = hermes::fleet_health::tracked_nodes();
-            let verdict = k_nano::sys_health::Verdict::from_label(&overall);
+            let verdict = k_nano::sys_health::Verdict::from_label(overall);
             let st = match verdict {
                 k_nano::sys_health::Verdict::Go => HubState::Ok,
                 k_nano::sys_health::Verdict::NoGo => HubState::Fail,
                 k_nano::sys_health::Verdict::Unknown => HubState::Warn,
             };
             let pill = matches!(verdict, k_nano::sys_health::Verdict::Go | k_nano::sys_health::Verdict::NoGo);
-            let val = match reason {
-                Some(r) => alloc::format!("{} {}n {}", verdict.label(), nodes, r),
+            let val = match rlen {
+                Some(n) => {
+                    let r = core::str::from_utf8(&f_reason[..n]).unwrap_or("");
+                    alloc::format!("{} {}n {}", verdict.label(), nodes, r)
+                }
                 None => alloc::format!("{} {}n", verdict.label(), nodes),
             };
             (st, val, pill)

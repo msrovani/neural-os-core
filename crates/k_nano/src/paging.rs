@@ -1194,3 +1194,290 @@ pub fn ring3_self_test_iretq() -> bool {
         }
     }
 }
+
+// ─── Pure permission decisions (host-testable, plan lane 5) ───────────────
+// These fns decide on flag BITS only — they never touch CR3, page tables,
+// TLB or CPL. They mirror the decision tables used by map_user_page /
+// jit_write_exec_user / ro_flags paths above so host tests can pin those
+// tables without HW. Anything that needs REAL page tables/TLB/CR3/CPL3 is
+// covered by the #[ignore = "needs-HW"] tests in the mod below, NOT here.
+
+/// NX enforcement decision: executable ⟺ PRESENT && !NO_EXECUTE.
+#[inline]
+pub fn exec_allowed(flags: PageTableFlags) -> bool {
+    flags.contains(PageTableFlags::PRESENT) && !flags.contains(PageTableFlags::NO_EXECUTE)
+}
+
+/// RO-write refusal decision: writable ⟺ PRESENT && WRITABLE.
+/// `ro_flags()` (PRESENT only) and `ro_huge_2mb_flags()` must deny.
+#[inline]
+pub fn write_allowed(flags: PageTableFlags) -> bool {
+    flags.contains(PageTableFlags::PRESENT) && flags.contains(PageTableFlags::WRITABLE)
+}
+
+/// User/supervisor bit check: CPL3 may access ⟺ PRESENT && USER_ACCESSIBLE.
+#[inline]
+pub fn user_accessible_flag(flags: PageTableFlags) -> bool {
+    flags.contains(PageTableFlags::PRESENT) && flags.contains(PageTableFlags::USER_ACCESSIBLE)
+}
+
+/// Supervisor-only decision: kernel leaf ⟺ PRESENT && !USER_ACCESSIBLE.
+#[inline]
+pub fn supervisor_only_flag(flags: PageTableFlags) -> bool {
+    flags.contains(PageTableFlags::PRESENT) && !flags.contains(PageTableFlags::USER_ACCESSIBLE)
+}
+
+/// W^X decision: simultaneous write+exec on one leaf is a violation.
+/// Both arena writers flip to PRESENT-only (RX) / PRESENT|USER (USER RX)
+// — never PRESENT|WRITABLE|executable.
+#[inline]
+pub fn wx_violation(flags: PageTableFlags) -> bool {
+    write_allowed(flags) && exec_allowed(flags)
+}
+
+/// Syscall/WASM ptr+len validation against a caller-owned region.
+/// Rejects: null base, u64 wrap of base+len, out-of-range. Returns `end` on
+/// accept. `len == 0` is accepted iff `base` itself is in range (empty slice);
+/// null base is rejected even with `len == 0`.
+pub fn validate_user_range(
+    base: u64,
+    len: u64,
+    region_base: u64,
+    region_len: u64,
+) -> Result<u64, &'static str> {
+    if base == 0 {
+        return Err("ptr: null");
+    }
+    let end = base.checked_add(len).ok_or("ptr: wrap")?;
+    let region_end = region_base.checked_add(region_len).ok_or("ptr: bad region")?;
+    if base < region_base || end > region_end {
+        return Err("ptr: out-of-range");
+    }
+    Ok(end)
+}
+
+/// Host model of the CoW API contract: two handles start shared; a write via
+/// one handle unshares so it is NOT observable via the other. This models the
+/// API-level guarantee only — real frame unsharing needs HW (see ignored test).
+pub struct CowApiModel {
+    left: u64,
+    right: u64,
+    shared: bool,
+}
+
+impl CowApiModel {
+    pub fn new_shared(v: u64) -> Self {
+        Self { left: v, right: v, shared: true }
+    }
+    pub fn read_left(&self) -> u64 { self.left }
+    pub fn read_right(&self) -> u64 { self.right }
+    pub fn is_shared(&self) -> bool { self.shared }
+    pub fn write_left(&mut self, v: u64) {
+        self.left = v;
+        self.shared = false;
+    }
+    pub fn write_right(&mut self, v: u64) {
+        self.right = v;
+        self.shared = false;
+    }
+}
+
+#[cfg(test)]
+mod paging_decision_tests {
+    use super::*;
+
+    // ── NX enforcement ──
+
+    #[test]
+    fn prop_nx_exec_needs_present_and_nx_clear() {
+        let rx = PageTableFlags::PRESENT;
+        assert!(exec_allowed(rx));
+        let nx = PageTableFlags::PRESENT | PageTableFlags::NO_EXECUTE;
+        assert!(!exec_allowed(nx));
+        let not_present = PageTableFlags::NO_EXECUTE;
+        assert!(!exec_allowed(not_present));
+        assert!(!exec_allowed(PageTableFlags::empty()));
+    }
+
+    #[test]
+    fn prop_nx_wx_simultaneous_write_exec_is_violation() {
+        let wx = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+        assert!(wx_violation(wx));
+        // Both arena end-states (Ring0 RX, USER RX) must NOT violate W^X.
+        assert!(!wx_violation(PageTableFlags::PRESENT));
+        assert!(!wx_violation(PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE));
+        // NX data page is fine too.
+        let ro_nx = PageTableFlags::PRESENT | PageTableFlags::NO_EXECUTE;
+        assert!(!wx_violation(ro_nx));
+    }
+
+    // ── RO-write refusal ──
+
+    #[test]
+    fn prop_ro_write_refused_for_ro_flags() {
+        assert!(!write_allowed(ro_flags()));
+        assert!(!write_allowed(ro_huge_2mb_flags()));
+        assert!(!write_allowed(PageTableFlags::empty()));
+        assert!(!write_allowed(PageTableFlags::WRITABLE)); // not present
+    }
+
+    #[test]
+    fn prop_rw_flags_allow_write() {
+        assert!(write_allowed(rw_flags()));
+        assert!(write_allowed(user_data_flags()));
+        assert!(!write_allowed(user_code_flags())); // RX: no WRITABLE
+    }
+
+    // ── User/supervisor bit ──
+
+    #[test]
+    fn prop_user_bit_user_pages_accessible() {
+        assert!(user_accessible_flag(user_data_flags()));
+        assert!(user_accessible_flag(user_code_flags()));
+        assert!(!supervisor_only_flag(user_data_flags()));
+    }
+
+    #[test]
+    fn prop_user_bit_supervisor_pages_reject_user() {
+        assert!(supervisor_only_flag(rw_flags()));
+        assert!(supervisor_only_flag(ro_flags()));
+        assert!(!user_accessible_flag(rw_flags()));
+        assert!(!user_accessible_flag(ro_flags()));
+    }
+
+    #[test]
+    fn prop_flag_constructors_match_decision_table() {
+        // Pins the full decision table of every flag constructor in this file:
+        // (exec, write, user, supervisor_only, wx_violation).
+        let table: &[(PageTableFlags, (bool, bool, bool, bool, bool))] = &[
+            (rw_flags(), (true, true, false, true, true)),
+            (ro_flags(), (true, false, false, true, false)),
+            (ro_huge_2mb_flags(), (true, false, false, true, false)),
+            (user_code_flags(), (true, false, true, false, false)),
+            (user_data_flags(), (true, true, true, false, true)),
+        ];
+        for (f, want) in table {
+            let got = (
+                exec_allowed(*f),
+                write_allowed(*f),
+                user_accessible_flag(*f),
+                supervisor_only_flag(*f),
+                wx_violation(*f),
+            );
+            assert_eq!(got, *want, "decision table drift for flags {:?}", f);
+        }
+    }
+
+    // ── CoW API-level no-cross-write ──
+
+    #[test]
+    fn prop_cow_api_reads_share_before_write() {
+        let m = CowApiModel::new_shared(0xCAFE);
+        assert!(m.is_shared());
+        assert_eq!(m.read_left(), m.read_right());
+    }
+
+    #[test]
+    fn prop_cow_api_write_via_one_handle_not_observable_via_other() {
+        let mut m = CowApiModel::new_shared(1);
+        m.write_left(2);
+        assert!(!m.is_shared());
+        assert_eq!(m.read_left(), 2);
+        assert_eq!(m.read_right(), 1);
+        m.write_right(3);
+        assert_eq!(m.read_right(), 3);
+        assert_eq!(m.read_left(), 2);
+    }
+
+    // ── Syscall/WASM ptr+len validation ──
+
+    const REGION_BASE: u64 = 0x0000_7000_0000_0000;
+    const REGION_LEN: u64 = 0x10_0000;
+
+    #[test]
+    fn prop_syscall_ptr_null_rejected() {
+        assert!(validate_user_range(0, 0, REGION_BASE, REGION_LEN).is_err());
+        assert!(validate_user_range(0, 64, REGION_BASE, REGION_LEN).is_err());
+    }
+
+    #[test]
+    fn prop_syscall_ptr_wrap_rejected() {
+        assert!(validate_user_range(u64::MAX, 1, REGION_BASE, REGION_LEN).is_err());
+        assert!(validate_user_range(u64::MAX - 7, 16, REGION_BASE, REGION_LEN).is_err());
+    }
+
+    #[test]
+    fn prop_syscall_ptr_out_of_range_rejected() {
+        // Before region, straddling end, and past region.
+        assert!(validate_user_range(REGION_BASE - 0x1000, 8, REGION_BASE, REGION_LEN).is_err());
+        assert!(validate_user_range(REGION_BASE + REGION_LEN - 4, 8, REGION_BASE, REGION_LEN).is_err());
+        assert!(validate_user_range(REGION_BASE + REGION_LEN, 1, REGION_BASE, REGION_LEN).is_err());
+    }
+
+    #[test]
+    fn prop_syscall_ptr_in_range_accepted() {
+        let end = validate_user_range(REGION_BASE, 64, REGION_BASE, REGION_LEN).unwrap();
+        assert_eq!(end, REGION_BASE + 64);
+        let end = validate_user_range(REGION_BASE + REGION_LEN - 8, 8, REGION_BASE, REGION_LEN).unwrap();
+        assert_eq!(end, REGION_BASE + REGION_LEN);
+        // Empty slice with in-range base is accepted.
+        assert_eq!(
+            validate_user_range(REGION_BASE + 16, 0, REGION_BASE, REGION_LEN).unwrap(),
+            REGION_BASE + 16
+        );
+    }
+
+    // ── Existing pure dispatch decisions ──
+
+    #[test]
+    fn prop_syscall_ping_requires_ping_cap() {
+        DEMO_ACTIVE.store(false, Ordering::SeqCst);
+        ABORTING.store(false, Ordering::SeqCst);
+        assert!(krate_dispatch(SYS_PING, 0, Cap::EMPTY).is_err());
+        assert!(krate_dispatch(SYS_PING, 0, Cap::PING).is_ok());
+    }
+
+    #[test]
+    fn prop_sandbox_dispatch_denies_dma_mmio_while_active() {
+        DEMO_ACTIVE.store(true, Ordering::SeqCst);
+        let dma = dispatch_check_sandbox(SYS_PIN_DMA, Cap::PIN_DMA);
+        let mmio = dispatch_check_sandbox(SYS_MAP_FB, Cap::MAP_FB);
+        let ping = dispatch_check_sandbox(SYS_PING, Cap::PING);
+        DEMO_ACTIVE.store(false, Ordering::SeqCst);
+        assert!(dma.is_err());
+        assert!(mmio.is_err());
+        assert!(ping.is_ok());
+    }
+
+    // ── HW-only properties: MUST stay #[ignore], never faked on host ──
+
+    #[test]
+    #[ignore = "needs-HW: NX enforcement by the CPU (real #PF on exec of NO_EXECUTE leaf)"]
+    fn hw_nx_bit_traps_exec_of_no_execute_leaf() {
+        unimplemented!("needs-HW: run on bare metal with a NO_EXECUTE leaf + #PF handler");
+    }
+
+    #[test]
+    #[ignore = "needs-HW: RO enforcement by the CPU (real #PF on store to PRESENT-only leaf)"]
+    fn hw_ro_leaf_store_traps_instead_of_succeeding() {
+        unimplemented!("needs-HW: run on bare metal with a PRESENT-only leaf + #PF handler");
+    }
+
+    #[test]
+    #[ignore = "needs-HW: U/S enforcement by the CPU (supervisor leaf faults from CPL3)"]
+    fn hw_supervisor_leaf_faults_from_cpl3() {
+        unimplemented!("needs-HW: requires iretq to CPL3 on bare metal");
+    }
+
+    #[test]
+    #[ignore = "needs-HW: CoW unshares the physical frame (two AddressSpaces + CR3 switch)"]
+    fn hw_cow_write_unshares_physical_frame() {
+        unimplemented!("needs-HW: requires clone_current_shallow_shared + demand-page #PF path");
+    }
+
+    #[test]
+    #[ignore = "needs-HW: TLB flush required after leaf flag change (stale TLB observable)"]
+    fn hw_tlb_flush_required_after_flag_change() {
+        unimplemented!("needs-HW: requires real TLB + INVLPG/timing on bare metal");
+    }
+}
