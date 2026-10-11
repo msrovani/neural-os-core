@@ -78,3 +78,38 @@ O lab de 4 nós (com `-device qemu-xhci + usb-tablet + usb-kbd`) produziu sem cu
   (WifiAgent A-023 = ORPHAN); `regulatory.db` = download do s102 sem leitor.
   Empacotar = arquivo morto na imagem (dívida ADR-0113). Se o WifiAgent
   reviver, o pack ganha os dois junto com o consumer.
+
+## 8. Imagem HW s467 — regenerada com todos os artefatos
+
+`target\usb_hw.img` 8.319MB (`PACK_LLM=falcon3-1b,falcon3`, política s458):
+
+- **Verificação ESP:** `tools\verify_usb_esp.py` PASS — kernel.elf sha256=8b0bb7b896363ea1...
+  - image vs tree: MATCH
+  - uefi.img vs tree: MATCH
+- **BOOT.LOG dedup:** `tools\count_bootlog_dirents.py` PASS — data partition (LBA 262144)
+  tem exatamente 1 BOOT.LOG. Guard corrigido para auto-detectar MBR + nome exato.
+- **Paridade packed==source:** todos os 14 modelos/experts verificados (FALCON3.V6,
+  FALCON1B.v6, AGENT.BIN, BGE.BIN, PIPER.BIN, etc.) — tamanhos correspondem.
+- **Smoke WHPX:** SKIP no Windows (sem OVMF.fd). Evidência: s466 smoke PASS válido
+  (mesma receita, kernel idêntico, BOOT.LOG dedup corrigido).
+
+**Model Hub:** FALCON3.V6 (3B 1.58bit) + FALCON1B.v6 (1B 1.58bit) presentes no data partition.
+**Firmware:** 36 blobs (NVIDIA/AMD/Intel/ath10k/ACR) empacotados.
+
+## 9. Guard corrigido (`tools/count_bootlog_dirents.py`)
+
+Bug: script fixava `part_lba=2048` (ESP) e casava substring `"BOOT"` → false-positive
+com o diretório `boot` (alias `BOOT~1`). Fix:
+- Auto-detecta a partição via MBR (slot0 = data FAT32 @262144)
+- Conta por nome 8.3 EXATO (`"BOOT    LOG"`), não substring
+- Resultado: PASS em data partition (1 BOOT.LOG) + PASS em ESP (1 BOOT.LOG)
+
+## 10. Pendências (atualizadas)
+
+- Foto PRE/POST do `00:14.0` em HW real (usuário; passo 1 do plano do reviewer).
+- Mass Storage Reset ainda deferido (exige HW p/ provar).
+- Push dos commits `edc61ac4` + docs s467 (não solicitado).
+
+---
+
+**Commits da rodada:** `e2d79925` → `f57b2eff` → `3dd54a63` → `9d2c276c` (s467d: AGENTS.md) → `09cc86b3` (s467e: ADR-0114) → **s467f: guard fix + verdict** (este commit).
