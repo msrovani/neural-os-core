@@ -206,6 +206,7 @@ pub(crate) fn apic_state_test_reset() {
 /// hv_allows_x2` tries x2APIC; `firmware_x2 && !hv_allows_x2` fail-closes to
 /// BSP-only BEFORE any MMIO (Defect 3 / SESSION_243: MMIO 0xFEE00000 would
 /// #GP and wrmsr is forbidden under such hypervisors).
+/// `firmware_x2` = IA32_APIC_BASE EXTD (bit 10) already set by firmware.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ApicModeDecision {
     TryX2,
@@ -226,6 +227,17 @@ pub(crate) fn decide_apic_mode(
     }
     ApicModeDecision::UseMmio
 }
+
+/// IA32_APIC_BASE "firmware already put us in x2APIC" bit, per Intel SDM
+/// Vol 3A 10.4.4: bit 10 = EXTD (x2APIC mode enable). Bit 11 = EN (xAPIC
+/// global enable) is set on every healthy machine, so reading bit 11 here
+/// made the s463 fail-closed early-return fire on every TCG/WHPX boot
+/// (MSR baseline 0xfee00900 = EN=1, EXTD=0 = plain xAPIC, MMIO safe).
+#[inline]
+pub(crate) const fn apic_base_extd(msr: u64) -> bool {
+    (msr >> 10) & 1 != 0
+}
+
 /// Log do IA32_PAT uma única vez (init_pat é chamado por página WC).
 static PAT_LOGGED: AtomicBool = AtomicBool::new(false);
 
@@ -498,7 +510,8 @@ pub(crate) unsafe fn read_apic_base_raw() -> u64 {
     x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR).read()
 }
 
-/// Snapshot observacional (não muda modo). Bits 10=EN, 11=EXTD.
+/// Snapshot observacional (nao muda modo). Bits SDM Vol 3A 10.4.4:
+/// 11=EN (xAPIC global enable), 10=EXTD (x2APIC mode enable).
 pub unsafe fn smp_trace_apic_mode(bsp_id: u32) {
     let msr = read_apic_base_raw();
     crate::slog_nano!(
@@ -506,8 +519,8 @@ pub unsafe fn smp_trace_apic_mode(bsp_id: u32) {
         "trace",
         "APIC_BASE={:#x} EN={} EXTD={} USING_X2={} BSP_APIC_ID={:#x}",
         msr,
-        (msr >> 10) & 1,
         (msr >> 11) & 1,
+        (msr >> 10) & 1,
         USING_X2APIC.load(Ordering::Relaxed) as u8,
         bsp_id
     );
@@ -517,7 +530,9 @@ pub unsafe fn smp_trace_apic_mode(bsp_id: u32) {
 /// não habilita o AP. Retorna se EXTD já estava ligado antes do write.
 pub unsafe fn enable_x2apic_this_cpu() -> bool {
     let apic_base = read_apic_base_raw();
-    let was_x2 = (apic_base & (1 << 11)) != 0;
+    // "Ja em x2APIC antes do write" = EXTD (bit 10). Bit 11 = EN, que esta
+    // sempre 1 em maquina saudavel e diria sempre true (SDM Vol 3A 10.4.4).
+    let was_x2 = (apic_base & (1 << 10)) != 0;
     // SESSION_281: TCG/WHPX nao emulam x2APIC via MSR 0x1B como writeable.
     // wrmsr EN+EXTD da #GP no QEMU (mesmo sendo "bare-metal" reporta None).
     // Consistente com init_syscall_fast_path (paging.rs) e cpufreq (gate hv).
@@ -534,8 +549,8 @@ pub unsafe fn enable_x2apic_this_cpu() -> bool {
     // latched true e TODA acesso LAPIC (SVR/LVT/INIT/EOI) ia por MSR com a
     // LAPIC real em MMIO → timer nunca armado (TIMER_TICKS=0 no metal).
     let readback = read_apic_base_raw();
-    let en = (readback >> 10) & 1 != 0;
-    let extd = (readback >> 11) & 1 != 0;
+    let en = (readback >> 11) & 1 != 0;
+    let extd = (readback >> 10) & 1 != 0;
     let ok = en && extd;
     USING_X2APIC.store(ok, Ordering::Release);
     crate::slog_nano!(
@@ -557,8 +572,9 @@ pub unsafe fn enable_x2apic_this_cpu() -> bool {
 /// duas vezes para mostrar o contador a andar).
 pub unsafe fn lapic_timer_diag() {
     let msr = read_apic_base_raw();
-    let en = (msr >> 10) & 1;
-    let extd = (msr >> 11) & 1;
+    // SDM Vol 3A 10.4.4: bit 11 = EN, bit 10 = EXTD (labels were swapped).
+    let en = (msr >> 11) & 1;
+    let extd = (msr >> 10) & 1;
     let x2 = USING_X2APIC.load(Ordering::Acquire) as u8;
     let svr = lapic_read_reg(LAPIC_SVR);
     let lvt = lapic_read_reg(LAPIC_LVT_TIMER);
@@ -1090,10 +1106,16 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
     LAPIC_VIRT_BASE.store(lapic_virt_base, Ordering::Release);
 
     let apic_base_now = read_apic_base_raw();
-    let firmware_x2 = (apic_base_now & (1 << 11)) != 0;
-    // SESSION_281: sob hypervisor (TCG/WHPX) o MSR x2APIC não é emulado como
-    // writeable — se o firmware reporta EXTD=1 mas o QEMU não suporta, wrmsr daria
-    // #GP. Sempre checar hypervisor mesmo quando firmware_x2 (detect via CPUID direto).
+    // IA32_APIC_BASE per Intel SDM Vol 3A 10.4.4: bit 8 = BSP,
+    // bit 10 = EXTD (x2APIC mode enable), bit 11 = EN (xAPIC global enable).
+    // EN=1 on every healthy machine (QEMU baseline 0xfee00900 = EN=1 EXTD=0),
+    // so only EXTD says "firmware already in x2APIC". Reading bit 11 here made
+    // firmware_x2 always true and fail-closed the LAPIC (smp_online=1) on
+    // every TCG/WHPX boot.
+    let firmware_x2 = apic_base_extd(apic_base_now);
+    // SESSION_281: sob hypervisor (TCG/WHPX) o MSR x2APIC nao e emulado como
+    // writeable - se o firmware reporta EXTD=1 mas o QEMU nao suporta, wrmsr daria
+    // #GP. Sempre checar hypervisor mesmo quando firmware EXTD=1 (detect via CPUID direto).
     let hv = crate::platform_probe::detect_hypervisor();
     let hv_allows_x2 = matches!(hv, crate::platform_probe::HypervisorKind::None | crate::platform_probe::HypervisorKind::Kvm);
 
@@ -1656,6 +1678,35 @@ mod apic_state_tests {
         assert_eq!(
             decide_apic_mode(false, false, false),
             ApicModeDecision::UseMmio
+        );
+    }
+
+    // REGRESSION guard (s463): EN = bit 11, EXTD = bit 10 (SDM Vol 3A 10.4.4).
+    // The healthy QEMU/metal baseline MSR is 0xfee00900 (EN=1, EXTD=0 = xAPIC,
+    // MMIO safe). Reading EN as "firmware x2" fail-closed the LAPIC on every
+    // TCG/WHPX boot (smp_online=1). hv_allows_x2=false covers TCG and WHPX alike.
+    #[test]
+    fn apic_base_extd_reads_bit10_not_en() {
+        let _g = LOCK.lock();
+        // EN=1 EXTD=0: the QEMU baseline must NOT read as x2APIC.
+        assert!(!apic_base_extd(0xfee0_0900), "EN (bit 11) must not read as EXTD");
+        // EN=0 EXTD=0 and EN=1 EXTD=1 edge shapes.
+        assert!(!apic_base_extd(0xfee0_0100));
+        assert!(apic_base_extd(0xfee0_0d00), "EXTD (bit 10) = firmware already in x2APIC");
+        // EN=1/EXTD=0 + hv nao-x2 -> xAPIC/MMIO path, never FailClosed.
+        assert_eq!(
+            decide_apic_mode(apic_base_extd(0xfee0_0900), false, false),
+            ApicModeDecision::UseMmio
+        );
+        // Policy guard kept: EXTD=1 + hv nao-x2 still fail-closes BSP-only.
+        assert_eq!(
+            decide_apic_mode(apic_base_extd(0xfee0_0d00), false, false),
+            ApicModeDecision::FailClosedBspOnly
+        );
+        // Same EXTD=1 but hv allows x2 -> TryX2 (fail-closed must not shadow it).
+        assert_eq!(
+            decide_apic_mode(apic_base_extd(0xfee0_0d00), true, false),
+            ApicModeDecision::TryX2
         );
     }
 
