@@ -10,11 +10,11 @@
 
 ## 📌 s467 — Pendências abertas (pós-tarefa s466b)
 
-- [ ] ▶️ Foto **PRE/POST do xHCI `00:14.0`** em HW real (passo 1 do reviewer): boot do notebook a partir de `target\usb_hw.img` → serial COM1 → pares `PRE HC=00:14.0 … PORTSC=… CCS=…` (pré-halt/HCRST) + `xHCI[..] PORTSC pre-PP:` + `PORTSC settled` (pós-PP); colar aqui antes de qualquer mudança de reset
+- [x] ▶️ Foto **PRE/POST do xHCI `00:14.0`** em HW real — **POST capturada (HUD, 2 fotos 11/10, Core 7 240H)**: `xhci c2 st10 00:14.0` (2 candidatos, stage 10=OK, BDF 00:14.0) + `usb 16p ccs4 no msc cc4 to0 dbc0 fo0 af2` + `bootlog fail sem-backend msc=0 usb_ok=1`. **Diagnóstico metal novo:** Address Device falha 2× (af2) com USB Transaction Error (cc4) — 4 portas com CCS=1 mas slot nunca endereçado → MSC None → BOOT.LOG sem backend (bate com pendrive: placeholder intacto, SESSION_467 §11). **PRE por-porta ainda pendente** (ramlog perdido no power-off; capturar via 2-boots logwriter-efi ou UART) — SESSION_467 §12
 - [x] `mkfat32.py`: BOOT.LOG empacotado **2×** — **FIXADO** (entrada zeros do audit s402 removida; fica só o append com header). Prova: `python tools/count_bootlog_dirents.py <img>` → `PASS: exatamente 1 BOOT.LOG`
 - [x] `regulatory.db`/`WIFI.CFG` "ausentes" do FAT32 — **NÃO empacotar** (evidência: zero consumidores em crates vivas; `WIFI.CFG` só em `docs/archive/dead-modules/hermes/wifi_agent.rs` ORPHAN; `regulatory.db` = download s102 órfão). Arquivo morto na imagem = dívida; se o WifiAgent reviver, o pack ganha o consumer junto
-- [ ] Mass Storage Reset (s465): ainda deferido — exige HW p/ provar
-- [ ] Push dos commits `edc61ac4` (s466b) + docs s467 (não pedido pelo maintainer)
+- [ ] Mass Storage Reset (s465): ainda deferido — **agora com dado real de metal**: cc4 (USB Transaction Error) no Address Device (af2); investigar speed context/route string/TT de hub interno antes de MSG reset
+- [x] Push dos commits `edc61ac4` (s466b) + docs s467 — **pushado** (pedido do maintainer 11/10; `dfaa17d6..30934e79` + tags s466/s467)
 
 ## 🔥 s449 — Consolidação do working tree: E1–E4 (ADR-0113) + F1 + storage AION + cleanup dead-weight
 

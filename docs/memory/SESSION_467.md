@@ -142,3 +142,38 @@ a RAM). Evidência de runtime metal = **UNKNOWN** (ADR-0113).
 3. Boot metal #3: logwriter-efi stage-0 despeja o ramlog do boot #2 na ESP
    (`D:\BOOT.LOG`).
 4. Windows: ler `D:\BOOT.LOG` → linhas do `00:14.0` = a "foto" textual do reviewer.
+
+## 12. Fotos do metal (Core 7 240H) — POST do 00:14.0 capturada + diagnóstico do MSC
+
+Usuário conseguiu 2 fotos (HUD JARBAS, T+69s, 2560x1600). Transcrição + decodificação
+contra o código (`gauges.rs:548/576`, `boot_logger.rs:165`):
+
+**Card "Hardware Detectado" — 22 dispositivos PCI:**
+- `nic: ausente` · `wifi: unknown 14c3:7925 Network sem driver` (MediaTek MT7925 WiFi 7)
+- `gpu: nvidia_gpu 10de:25a0 sem backend` (RTX 3050 Mobile — AWAITING W2A8, esperado)
+- `storage: 8086:a77f sem driver` (Intel VMD — por isso o NVMe interno é invisível)
+- `usb: xhci 16p st10` · "Sem driver (9)": 8086:a71d/a74f/51fc/51ef/51e8/51e0/51a3 + 14c3:7925
+
+**HUB HEALTH (FAIL honesto):**
+| Linha HUD | Decodificação (fonte) | Leitura |
+|---|---|---|
+| `xhci c2 st10 00:14.0` | `cands=2 stage=10 bdf` (gauges.rs:548) | **2 candidatos xHCI; stage 10=OK; BDF 00:14.0 = PCH** ✅ |
+| `usb 16p ccs4 no msc cc4 to0 dbc0 fo0 af2` | `maxp=16 ccs=4 cc=4 to=0 dbc=0 fo=0 af=2` (gauges.rs:576) | 16 portas, **4 com CCS=1**, **CC=4 = USB Transaction Error**, **af2 = Address Device falhou 2×** |
+| `bootlog fail sem-backend msc=0 usb_ok=1` | `USB_MSC=None`, `SKIP_USB` não setado (boot_logger.rs:165) | caminho USB **tentado** e sem device MSC — bate com §11 (placeholder intacto) |
+| `storage no dev` · `kv ram volatile` | sem BlockDevice | NVMe atrás do VMD (a77f) sem driver |
+| `timer 50Hz lapic*` · `frame 9.1ms` · `fault none` | — | **zero faults**, timer vivo, UI 30Hz |
+| `ram 10600M` · `heap 18/512M` · `talc 27M/14000M` | — | memória saudável |
+| `agents 65p` · `mesh n/a` · `infer ap idle` | — | fleet viva, sem 2º nó |
+
+**Achado técnico novo (input s468):** o xHCI 00:14.0 em metal enumera 16 portas com
+4 dispositivos conectados (CCS=1), mas o **Address Device falha 2× com USB
+Transaction Error (completion code 4)** — slot nunca endereçado → sem MSC → sem
+storage → BOOT.LOG sem backend. Sem timeouts (to0) = o comando completa com erro,
+não trava. Hipóteses a investigar ANTES de qualquer MSG reset: speed context
+(MaxExitLatency/BRR do hub interno), route string, TT do hub (stick atrás de hub
+Dell — lição s313/314). O QEMU aceita Address Device; o metal recusa com cc4 —
+exatamente o residual "BOT nunca provado em metal" da auditoria USB.
+
+**Estado do reviewer (passo 1):** foto POST ✅ (HUD); PRE por-porta (PORTSC pre-PP/
+settled) segue pendente — ramlog perdido no power-off; capturar via 2-boots
+logwriter-efi (§11) ou UART.
