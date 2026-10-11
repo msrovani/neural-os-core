@@ -50,6 +50,8 @@ if (-not (Test-Path (Join-Path $imgDir "uefi.img"))) { $imgDir = Join-Path $Root
 $target = Join-Path $Root "target"
 $logDir = Join-Path $Root "logs"
 
+. (Join-Path $Root "tools\qemu_mem_preflight.ps1")
+
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 New-Item -ItemType Directory -Path $target -Force | Out-Null
 
@@ -97,6 +99,7 @@ if (-not (Test-Path $ovmf)) {
 }
 
 $accelChosen = $Accel
+$accelRequested = $Accel
 if ($accelChosen -eq "whpx") {
     Write-Host "[INFO] Tentando WHPX; se falhar no launch, cai para TCG" -ForegroundColor Yellow
 }
@@ -194,12 +197,38 @@ function Start-MeshInstance {
         [string[]]$QemuArgs,
         [string]$LogPath
     )
+    # Rotate: archive the previous serial run; stable boot_mesh_<name>.txt stays for THIS run
+    if (Test-Path $LogPath) {
+        $archTs = Get-Date -Format "yyyyMMdd_HHmmss"
+        $logBase = [System.IO.Path]::GetFileNameWithoutExtension($LogPath)
+        $logExt = [System.IO.Path]::GetExtension($LogPath)
+        $archive = Join-Path (Split-Path $LogPath -Parent) ("{0}_{1}{2}" -f $logBase, $archTs, $logExt)
+        Move-Item -LiteralPath $LogPath -Destination $archive -Force -ErrorAction SilentlyContinue
+    }
     if (Test-Path $LogPath) { Remove-Item $LogPath -Force -ErrorAction SilentlyContinue }
+
+    # ARGS DUMP before launch (record the command line before any bisect)
+    $dumpPath = Join-Path $logDir ("mesh_{0}_{1}.args.txt" -f $Name, (Get-Date -Format "yyyyMMdd_HHmmss"))
+    $dumpLines = @(
+        "timestamp=" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss"),
+        "host_free_gb=" + (Get-QemuHostFreeGB).ToString([System.Globalization.CultureInfo]::InvariantCulture),
+        "accel_requested=$accelRequested",
+        "accel_used=$accelChosen",
+        "cpu=$cpu",
+        "mem_gb=$Mem",
+        "smp=$Cores",
+        "--- argv ---"
+    )
+    $dumpLines += $QemuArgs
+    Set-Content -LiteralPath $dumpPath -Value $dumpLines -Encoding ASCII
+
+    $p = $null
     try {
         $p = Start-Process -FilePath $qemu -ArgumentList $QemuArgs -NoNewWindow -PassThru -ErrorAction Stop
         Start-Sleep -Seconds 2
         if ($p.HasExited -and $accelChosen -eq "whpx") {
-            Write-Host "[AVISO] WHPX falhou no launch de $Name (exit=$($p.ExitCode)); caindo para TCG" -ForegroundColor Yellow
+            $exitCode = $p.ExitCode
+            Write-Host "[AVISO] WHPX falhou no launch de $Name (exit=$exitCode); caindo para TCG" -ForegroundColor Yellow
             $script:accelChosen = "tcg"
             $fixed = @()
             for ($i = 0; $i -lt $QemuArgs.Count; $i++) {
@@ -209,10 +238,10 @@ function Start-MeshInstance {
                     $fixed += $QemuArgs[$i]
                 }
             }
+            Add-Content -LiteralPath $dumpPath -Encoding ASCII -Value @(
+                "FALLBACK whpx->tcg exit=$exitCode", "accel_used=tcg")
             $p = Start-Process -FilePath $qemu -ArgumentList $fixed -NoNewWindow -PassThru
-            return $p
         }
-        return $p
     } catch {
         if ($accelChosen -eq "whpx") {
             Write-Host "[AVISO] WHPX exception: $($_.Exception.Message) - retry TCG" -ForegroundColor Yellow
@@ -225,10 +254,20 @@ function Start-MeshInstance {
                     $fixed += $QemuArgs[$i]
                 }
             }
-            return (Start-Process -FilePath $qemu -ArgumentList $fixed -NoNewWindow -PassThru)
+            Add-Content -LiteralPath $dumpPath -Encoding ASCII -Value @(
+                "FALLBACK whpx->tcg exit=exception", "accel_used=tcg")
+            $p = Start-Process -FilePath $qemu -ArgumentList $fixed -NoNewWindow -PassThru
+        } else {
+            throw
         }
-        throw
     }
+
+    if ($accelChosen -eq "tcg") {
+        Write-Host "[ACCEL] node=$Name accel=TCG cpu=$cpu mem=$memStr smp=$Cores (TCG e o default deste launcher; use -Accel whpx p/ aceleracao de HW)" -ForegroundColor Yellow
+    } else {
+        Write-Host "[ACCEL] node=$Name accel=WHPX cpu=$cpu mem=$memStr smp=$Cores" -ForegroundColor Green
+    }
+    return $p
 }
 
 $logA = Join-Path $logDir "boot_mesh_a.txt"
@@ -258,6 +297,10 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Accel=$accelChosen cpu=$cpu smp=$Cores mem=$memStr models=$useModels instance=$Instance" -ForegroundColor Yellow
 Write-Host "  A=10.0.3.2 listen  B=10.0.3.3 connect  UDP 42069" -ForegroundColor Green
 Write-Host ""
+
+$instCount = 1
+if ($Instance -eq "Both") { $instCount = 2 }
+Assert-QemuMemFree -NeededGB ($instCount * $Mem + 1.0) -Label ("p2p-mesh " + $instCount + "x" + $Mem + "G")
 
 $procA = $null
 $procB = $null

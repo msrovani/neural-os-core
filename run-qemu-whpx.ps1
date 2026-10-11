@@ -28,7 +28,7 @@ param(
     [switch]$NoSerialBridge,   # default behavior; kept for scripts
     [switch]$SerialBridge,     # opt-in: start tools\serial_bridge.py (FROZEN for Net gate)
     [switch]$VirtioNet,
-    [switch]$VirtioGpu,       # s367: virtio-gpu como vga primária (page flip real)
+    [switch]$VirtioGpu,       # s367: virtio-gpu como vga primaria (page flip real)
     [switch]$AudioBridge = $false, # sXXX: default OFF (dsound quebrava o boot neste host); opt-in p/ mic+speakers
     [string]$TapName = "",     # TAP adapter name for -Bridge (auto-detect if empty)
     [int]$SerialBridgePort = 4444,
@@ -38,6 +38,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
+. (Join-Path $Root "tools\qemu_mem_preflight.ps1")
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $logDir = Join-Path $Root "logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -254,12 +255,12 @@ try {
             "-drive", "format=raw,file=$uefi,if=ide,index=0"
         )
         if ($disk) { $a += @("-drive", "format=raw,file=$disk,if=ide,index=1") }
-        # ─── MoE Model Loaders — AUTO-SCAN da pasta target/ ───
+        # --- MoE Model Loaders - AUTO-SCAN da pasta target/ ---
         # Descobre TODOS os arquivos .bitnet / .BIN / .bin na pasta target/
-        # e os carrega em endereços sequenciais (gap de 1MB entre modelos).
-        # O usuário só precisa colocar o arquivo na pasta — o script descobre.
+        # e os carrega em enderecos sequenciais (gap de 1MB entre modelos).
+        # O usuario so precisa colocar o arquivo na pasta - o script descobre.
         # Prioridade: arquivos maiores primeiro (LLM base), depois os pequenos (experts).
-        # Endereço base: 0x100000000 (4GB), sobe em passos de 0x100000 (1MB) + tamanho.
+        # Endereco base: 0x100000000 (4GB), sobe em passos de 0x100000 (1MB) + tamanho.
         # SESSION_275: modelos em D:\modelos (repo externo) + target/ (legado)
         $extModelDir = "D:\modelos"
         $modelDirs = @((Join-Path $Root "target"))
@@ -270,7 +271,7 @@ try {
                             @(Get-ChildItem -Path $d -Filter "*.BIN" -ErrorAction SilentlyContinue) +
                             @(Get-ChildItem -Path $d -Filter "*.bin" -ErrorAction SilentlyContinue)
         }
-        # Remove duplicatas (mesmo nome, extensões diferentes) e ordena por tamanho decrescente
+        # Remove duplicatas (mesmo nome, extensoes diferentes) e ordena por tamanho decrescente
         $seen = @{}
         $unique = @()
         foreach ($f in $modelFiles) {
@@ -281,7 +282,7 @@ try {
             }
         }
         $unique = $unique | Sort-Object -Property Length -Descending
-        # Só filtra placeholders vazios (<10KB). Modelos grandes carregam todos;
+        # So filtra placeholders vazios (<10KB). Modelos grandes carregam todos;
         # kernel ajusta heap dinamicamente (fix: total_needed = file + estimated).
         $unique = @($unique | Where-Object { $_.Length -gt 10240 })
         $modelAddr = 0x100000000  # 4GB base
@@ -324,12 +325,12 @@ try {
         }
         $a += $netArgs
         # HW simulado (QEMU device emulation docs):
-        #   intel-hda + hda-duplex (ICH HDA; i440fx-safe — ich9 precisa q35)
+        #   intel-hda + hda-duplex (ICH HDA; i440fx-safe - ich9 precisa q35)
         #   qemu-xhci + usb-tablet/kbd (input)
         #   virtio-gpu-pci (DeviceTree / k-hal VirtIO path; UEFI GOP continua em -vga)
         # Ref: https://qemu.readthedocs.io/en/latest/system/device-emulation.html
         # Audio: default none; -AudioBridge = dsound duplex (mic+speakers do Windows).
-        # QEMU 11 Win build: wasapi indisponivel — usar dsound.
+        # QEMU 11 Win build: wasapi indisponivel - usar dsound.
         if ($AudioBridge) {
             $audioDev = "dsound,id=snd0,out.mixing-engine=on,in.mixing-engine=on"
             Write-Host "AudioBridge: dsound duplex (mic+speakers) -> hda-duplex" -ForegroundColor Green
@@ -346,11 +347,11 @@ try {
             "-device", "usb-tablet,bus=xhci.0",
             "-device", "usb-kbd,bus=xhci.0"
         )
-        # s367: VirtIO-GPU como vga primária (page flip real via GOP/virtio).
+        # s367: VirtIO-GPU como vga primaria (page flip real via GOP/virtio).
         # -vga std criava DOIS devices de display: o GOP apontava pro VGA bochs
         # (linear fb sem flip) e o virtio-gpu ficava D3 idle (Dstate=255).
         # Com -device virtio-gpu-pci,vga=off -vga virtio, o GOP assenta no
-        # virtio e o display sai pelo mesmo device — sem segundo FB fantasma.
+        # virtio e o display sai pelo mesmo device - sem segundo FB fantasma.
         if ($VirtioGpu) {
             $a += @("-device", "virtio-gpu-pci,id=vgpu")
             if ($Window) {
@@ -369,12 +370,31 @@ try {
         return $a
     }
 
+    Assert-QemuMemFree -NeededGB ($RamGB + 1.0) -Label ("run-qemu-whpx " + $RamGB + "G")
+
     $ok = $false
     foreach ($smpN in $smpTry) {
         $qemuArgs = Build-QemuArgs -Acc $accel -Cpu $cpu -SmpN $smpN
         Write-Host "QEMU: -smp $smpN accel=$accel net=$netMode audio=$(if ($AudioBridge) {'dsound'} else {'none'}) serial-tcp=client:$SerialBridgePort" -ForegroundColor Gray
+
+        # ARGS DUMP (record the exact command line per attempt)
+        $dumpPath = Join-Path $logDir ("boot_whpx_{0}.args.txt" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
+        $dumpLines = @(
+            "timestamp=" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss"),
+            "host_free_gb=" + (Get-QemuHostFreeGB).ToString([System.Globalization.CultureInfo]::InvariantCulture),
+            "accel=$accel",
+            "cpu=$cpu",
+            "ram_gb=$RamGB",
+            "smp=$smpN",
+            "--- argv ---"
+        )
+        $dumpLines += $qemuArgs
+        Set-Content -LiteralPath $dumpPath -Value $dumpLines -Encoding ASCII
+
         try {
             & $qemu @qemuArgs
+            # PS 5.1 does not throw on native exe non-zero exit - check explicitly
+            if ($LASTEXITCODE -ne 0) { throw "qemu exit=$LASTEXITCODE" }
             $ok = $true
             break
         } catch {
@@ -386,8 +406,8 @@ try {
                 try {
                     $qemuArgs = Build-QemuArgs -Acc $accel -Cpu $cpu -SmpN $smpN
                     & $qemu @qemuArgs
-                    $ok = $true
-                    break
+                    if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+                    Write-Host "WARN: TCG exit=$LASTEXITCODE smp=$smpN" -ForegroundColor Yellow
                 } catch {
                     Write-Host "WARN: TCG tambem falhou: $_" -ForegroundColor Yellow
                 }

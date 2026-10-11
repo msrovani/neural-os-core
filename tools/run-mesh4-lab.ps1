@@ -6,6 +6,8 @@ param(
     [string]$Accel = "whpx"
 )
 
+. (Join-Path $PSScriptRoot "qemu_mem_preflight.ps1")
+
 $ErrorActionPreference = "Stop"
 $Root = Split-Path $PSScriptRoot -Parent
 if (-not (Test-Path (Join-Path $Root "Cargo.toml"))) { $Root = $PSScriptRoot }
@@ -25,6 +27,7 @@ Start-Sleep -Seconds 2
 
 $free = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 1)
 Write-Host "freeGB=$free (4x2G commit - overcommit esperado)" -ForegroundColor Yellow
+Assert-QemuMemFree -NeededGB 9.0 -Label "mesh4 4x2G"
 
 $qemu = "C:\Program Files\qemu\qemu-system-x86_64.exe"
 if (-not (Test-Path $qemu)) {
