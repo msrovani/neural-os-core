@@ -1,5 +1,12 @@
 # STATE - neural-os-core v1.9.99-s464 - Regressão APIC EXTD (s463) corrigida + evidência QEMU honesta
 
+#   [s465] FOLLOW-UP USB EP0/BOT (detalhe em docs/memory/SESSION_465.md)
+#     Correlação EP0 (TRB+slot+DCI+CC, drain pré-doorbell, tr_pa no XhciState);
+#     CDB explícito 6/10 (7 callers); DMA persistente 1 página (free removido);
+#     BOT loga estágio+opcode+CC. Mass Storage Reset DEFERIDO (sem HW p/ provar).
+#     HOST: check 0 erros; k-nano 386 passed (sem testes novos — bare-metal/MMIO).
+#     HW itens 1/5 (PRE/POST, USB 2.0) são procedimentos, sem código.
+#
 #   [s464] AUDITORIA USB BOOT.LOG (detalhe em docs/memory/SESSION_464.md)
 #     Verificação estática de auditoria externa + 9 fixes (working tree, sem HW).
 #     P0 bulk_transfer deadlock (guard XHCI_STATE escopado ao doorbell); FAT exige

@@ -37,6 +37,21 @@
 - xHCI reset + `CCS=0` deliberadamente intocados (pendente HW).
 - Detalhe: `docs/memory/SESSION_464.md`.
 
+### s465 — Follow-up USB: correlação EP0 + CDB + DMA reutilizável + log BOT
+
+- **`wait_transfer_event(slot, status_pa)`** (`xhci/bringup.rs`): casa TRB
+  pointer + slot + DCI 1 + CC; alheios roteados (isoc) ou ignorados; falha loga
+  slot/CC/residual. `drain_stale_ep0_events` pré-doorbell (anel EP0 reutilizado
+  em offset fixo ⇒ mesmo PA; sem dreno, obsoleto vira falso positivo).
+  `tr_pa` no `XhciState`; `route_isoc_event` virou `pub(crate)`.
+- **CDB explícito** (`usb_msc.rs`): TUR/INQUIRY/SENSE=6,
+  CAPACITY/READ10/WRITE10/SYNC=10 (7 callers).
+- **DMA persistente**: `dma_pa` por dispositivo (1 página, lazy alloc);
+  `free_dma` removido (superado) — verify 256 KiB com 0 churn.
+- **BOT loga estágio** (cbw/data-in/data-out/csw/csw-content + opcode + CC).
+- Mass Storage Reset deferido (exige EP0 mps/interface + HW p/ validar).
+- Detalhe: `docs/memory/SESSION_465.md`.
+
 ## [1.9.99-s463] - 2026-10-10 - Mesh reliability: OOM root-cause + fixes estruturais + validação 2/4 nós
 
 - **OOM root-caused (residual ora-1 FECHADO)**: `HybridAllocator` bump-first +

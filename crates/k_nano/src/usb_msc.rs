@@ -22,6 +22,10 @@ pub struct UsbMassStorage {
     pub max_lba: u64,
     pub sector_size: u16,
     pub model: [u8; 36],
+    /// Buffer DMA persistente (1 página p/ CBW+setor+CSW = 556 B): alocado 1×
+    /// sob demanda, reusado em todas as BOT. Sem churn no PMM e sem vazamento
+    /// progressivo (auditoria USB §4). 0 = ainda não alocado.
+    dma_pa: u64,
 }
 
 unsafe impl Send for UsbMassStorage {}
@@ -152,6 +156,7 @@ impl UsbMassStorage {
                 bulk_in: msc_dev.ep_in,
                 bulk_out: msc_dev.ep_out,
                 model: [0u8; 36],
+                dma_pa: 0,
             };
 
             // Flash drives: TUR + sense antes de INQUIRY (Unit Attention).
@@ -206,7 +211,16 @@ impl UsbMassStorage {
         None
     }
 
-    unsafe fn bot_transfer(&mut self, cbw_data: &[u8], dir_in: bool, data_buf: &mut [u8]) -> bool {
+    /// CDB válido tem 6 ou 10 bytes (nunca 16): TUR/INQUIRY/SENSE=6,
+    /// READ_CAPACITY/READ10/WRITE10/SYNC=10 (auditoria USB §3). Anunciar 16
+    /// pode travar unidades pouco tolerantes pós-enumeração.
+    unsafe fn bot_transfer(
+        &mut self,
+        cbw_data: &[u8],
+        cdb_len: u8,
+        dir_in: bool,
+        data_buf: &mut [u8],
+    ) -> bool {
         let tag = self.tag.wrapping_add(1);
         self.tag = tag;
 
@@ -216,24 +230,26 @@ impl UsbMassStorage {
         cbw[8..12].copy_from_slice(&(data_buf.len() as u32).to_le_bytes());
         cbw[12] = if dir_in { 0x80 } else { 0x00 };
         cbw[13] = 0;
-        cbw[14] = cbw_data.len() as u8;
-        cbw[15..15 + cbw_data.len()].copy_from_slice(cbw_data);
+        cbw[14] = cdb_len.min(16);
+        let clen = cbw[14] as usize;
+        cbw[15..15 + clen].copy_from_slice(&cbw_data[..clen.min(cbw_data.len())]);
 
         let data_len = data_buf.len();
-        let total = 31 + data_len.max(13);
-        let dma_pa = match Self::alloc_dma(total) {
-            Some(p) => p,
-            None => return false,
-        };
-        // Fases BOT sobre a região DMA; libera SEMPRE (antes: vazava ~2 MiB por
-        // regravação de 256 KiB — 512 setores × 1 página).
-        let ok = self.bot_transfer_dma(tag, &cbw, dir_in, data_buf, dma_pa, data_len);
-        Self::free_dma(dma_pa, total);
-        ok
+        // Buffer DMA persistente (1 página cobre CBW 31 + setor 512 + CSW 13).
+        if self.dma_pa == 0 {
+            match Self::alloc_dma(4096) {
+                Some(p) => self.dma_pa = p,
+                None => return false,
+            }
+        }
+        let dma_pa = self.dma_pa;
+        self.bot_transfer_dma(tag, &cbw, dir_in, data_buf, dma_pa, data_len)
     }
 
     /// Fases BOT (CBW → dados → CSW) sobre a região DMA já alocada.
-    /// `dma_pa` é liberado pelo caller (`bot_transfer`).
+    /// `dma_pa` é o buffer persistente do dispositivo (`bot_transfer`).
+    /// Falha registra estágio + opcode + CC (auditoria USB §3) — sem isso,
+    /// "SCSI não respondeu" não diz ONDE o BOT morreu.
     unsafe fn bot_transfer_dma(
         &mut self,
         tag: u32,
@@ -243,6 +259,7 @@ impl UsbMassStorage {
         dma_pa: u64,
         data_len: usize,
     ) -> bool {
+        let op = cbw[15];
         let pmoff = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         let dma_va = (dma_pa + pmoff) as *mut u8;
         core::ptr::copy_nonoverlapping(cbw.as_ptr(), dma_va, 31);
@@ -251,12 +268,14 @@ impl UsbMassStorage {
         }
 
         if !xhci::bulk_transfer(self.slot, 1, &mut self.bulk_out, dma_pa, 31, 0) {
+            crate::slog_nano!("USB", "warn", "BOT fail slot={} op={:#x} stage=cbw", self.slot, op);
             return false;
         }
 
         if dir_in && data_len > 0 {
             if !xhci::bulk_transfer(self.slot, 1, &mut self.bulk_in, dma_pa + 31, data_len as u32, 1)
             {
+                crate::slog_nano!("USB", "warn", "BOT fail slot={} op={:#x} stage=data-in", self.slot, op);
                 return false;
             }
             for i in 0..data_len {
@@ -265,6 +284,7 @@ impl UsbMassStorage {
         } else if !dir_in && data_len > 0 {
             if !xhci::bulk_transfer(self.slot, 1, &mut self.bulk_out, dma_pa + 31, data_len as u32, 0)
             {
+                crate::slog_nano!("USB", "warn", "BOT fail slot={} op={:#x} stage=data-out", self.slot, op);
                 return false;
             }
         }
@@ -272,6 +292,7 @@ impl UsbMassStorage {
         let csw_off = 31 + data_len;
         if !xhci::bulk_transfer(self.slot, 1, &mut self.bulk_in, dma_pa + csw_off as u64, 13, 1)
         {
+            crate::slog_nano!("USB", "warn", "BOT fail slot={} op={:#x} stage=csw", self.slot, op);
             return false;
         }
         let mut csw_raw = [0u8; 13];
@@ -284,7 +305,20 @@ impl UsbMassStorage {
         let csw_residue = u32::from_le_bytes([csw_raw[8], csw_raw[9], csw_raw[10], csw_raw[11]]);
         let csw_status = csw_raw[12];
         // Tag deve casar o CBW; resíduo 0 = payload inteiro transferido.
-        csw_sig == CSW_SIGNATURE && csw_tag == tag && csw_status == 0 && csw_residue == 0
+        let ok =
+            csw_sig == CSW_SIGNATURE && csw_tag == tag && csw_status == 0 && csw_residue == 0;
+        if !ok {
+            crate::slog_nano!(
+                "USB",
+                "warn",
+                "BOT fail slot={} op={:#x} stage=csw-content status={} residue={}",
+                self.slot,
+                op,
+                csw_status,
+                csw_residue
+            );
+        }
+        ok
     }
 
     pub unsafe fn read_sector(&mut self, lba: u64, data: &mut [u8; 512]) -> bool {
@@ -297,7 +331,7 @@ impl UsbMassStorage {
         cmd[0] = SCSI_READ10;
         cmd[2..6].copy_from_slice(&(lba as u32).to_be_bytes());
         cmd[8] = 1;
-        self.bot_transfer(&cmd, true, data)
+        self.bot_transfer(&cmd, 10, true, data)
     }
 
     pub unsafe fn write_sector(&mut self, lba: u64, data: &[u8; 512]) -> bool {
@@ -311,7 +345,7 @@ impl UsbMassStorage {
         cmd[2..6].copy_from_slice(&(lba as u32).to_be_bytes());
         cmd[8] = 1;
         let mut buf = *data;
-        self.bot_transfer(&cmd, false, &mut buf)
+        self.bot_transfer(&cmd, 10, false, &mut buf)
     }
 
     unsafe fn scsi_inquiry(&mut self) -> Option<[u8; 36]> {
@@ -319,7 +353,7 @@ impl UsbMassStorage {
         let mut cmd = [0u8; 16];
         cmd[0] = SCSI_INQUIRY;
         cmd[4] = 36;
-        if self.bot_transfer(&cmd, true, &mut buf) {
+        if self.bot_transfer(&cmd, 6, true, &mut buf) {
             Some(buf)
         } else {
             None
@@ -330,7 +364,7 @@ impl UsbMassStorage {
         let mut buf = [0u8; 8];
         let mut cmd = [0u8; 16];
         cmd[0] = SCSI_READ_CAPACITY;
-        if !self.bot_transfer(&cmd, true, &mut buf) {
+        if !self.bot_transfer(&cmd, 10, true, &mut buf) {
             return None;
         }
         let lba = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
@@ -342,7 +376,7 @@ impl UsbMassStorage {
         let mut cmd = [0u8; 16];
         cmd[0] = SCSI_TEST_UNIT_READY;
         let mut empty = [0u8; 0];
-        self.bot_transfer(&cmd, false, &mut empty)
+        self.bot_transfer(&cmd, 6, false, &mut empty)
     }
 
     unsafe fn scsi_request_sense(&mut self) -> bool {
@@ -350,7 +384,7 @@ impl UsbMassStorage {
         let mut cmd = [0u8; 16];
         cmd[0] = SCSI_REQUEST_SENSE;
         cmd[4] = 18;
-        self.bot_transfer(&cmd, true, &mut buf)
+        self.bot_transfer(&cmd, 6, true, &mut buf)
     }
 
     /// SCSI SYNCHRONIZE_CACHE (0x35) — flushes device write cache to media.
@@ -367,7 +401,7 @@ impl UsbMassStorage {
         cmd[8] = 0;
         cmd[9] = 0;
         let mut empty = [0u8; 0];
-        self.bot_transfer(&cmd, false, &mut empty)
+        self.bot_transfer(&cmd, 10, false, &mut empty)
     }
 
     unsafe fn alloc_dma(size: usize) -> Option<u64> {
@@ -376,17 +410,5 @@ impl UsbMassStorage {
         let a = g.as_mut()?;
         let f = a.allocate_contiguous(pages)?;
         Some(f.start_address().as_u64())
-    }
-
-    /// Libera a região DMA alocada por `alloc_dma` (mesmo nº de páginas).
-    unsafe fn free_dma(pa: u64, size: usize) {
-        use x86_64::structures::paging::{FrameDeallocator, PhysFrame, Size4KiB};
-        let pages = (size + 4095) / 4096;
-        let mut g = crate::memory::GLOBAL_ALLOCATOR.lock();
-        let Some(a) = g.as_mut() else { return };
-        let start = PhysFrame::<Size4KiB>::containing_address(x86_64::PhysAddr::new(pa));
-        for i in 0..pages {
-            a.deallocate_frame(start + i as u64);
-        }
     }
 }

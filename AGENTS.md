@@ -908,3 +908,10 @@ For deep work on a specific folder, also read that folder's `codemap.md`.
 - **Booleano ambíguo reintroduz bug de ordem** - `ramlog_flushed` sugeria "RAM preparada" quando `try_flush_ramlog()==true` significa "backend gravou+verificou em não-volátil". Renomear para `persisted_to_storage`; o selo em RAM (`seal_for_next_boot`) é outro estado e NÃO autoriza S5.
 - **Contrato de retorno de `write` varia por crate** - uefi 0.35 `RegularFile::write` é `Result<(), usize>` (todo-ou-erro), não `Result<usize>`; provar quantidade via `get_position()==len` independe do contrato e sobrevive a upgrade de API.
 - **FAT32 mínima mockável em ~40 linhas** - MBR 0x0C + BPB (spc=1) + FAT + root com dirent bastam para exercitar write/verify (parcial, 0/511/512/513, truncada, read-error) sem HW. `MemDisk` em `boot_logger.rs::tests`.
+
+**SESSION_465 (follow-up USB EP0/BOT — correlação + CDB + DMA):**
+
+- **Anel reutilizado em offset fixo invalida correlação só-por-PA** - EP0 reusa os mesmos TRBs a cada transferência; evento antigo casa por PA e vira falso positivo. `drain_stale_ep0_events` pré-doorbell é o que torna o match válido, não o match em si. Status offsets por layout (+16 no-data/set-config, +32 control-in).
+- **Comprimento anunciado ≠ tamanho do buffer** - CBW carrega bloco de 16 B mas `bCBWCBLength` diz o válido (6/10); anunciar 16 é comando malformado p/ unidade estrita. API explícita `cdb_len`, nunca `cbw_data.len()`.
+- **Reuso supera alloc/free em caminho quente** - 1 página persistente por dispositivo elimina churn e vazamento de uma vez; `free` por-transferência era remendo. Remover o superado (dead-code vira erro sob `deny(warnings)`).
+- **Log de estágio antes de recovery** - "SCSI não respondeu" sem estágio (cbw/data/csw) não diagnostica; Mass Storage Reset sem diagnóstico validado é roleta (muda estado do device, exige HW). Ordem: observar → correlacionar → só então recuperar.

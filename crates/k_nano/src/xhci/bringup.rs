@@ -2,7 +2,9 @@
 //! Address Device → Configure Endpoint (bulk) → devolve slot+EPs para BOT/SCSI.
 //! Sem isto, `usb_msc::probe` usava slot=2 fantasma e BOOT.LOG nunca gravava.
 
-use super::{alloc_phys, pop_event, portsc_addr, r32, w32, BulkEndpoint, XHCI_STATE};
+use super::{
+    alloc_phys, pop_event, portsc_addr, r32, route_isoc_event, w32, BulkEndpoint, XHCI_STATE,
+};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 /// PORTSC máscara neutra RO|RWS (Gate 0): nunca RMW cru.
@@ -48,11 +50,50 @@ unsafe fn input_context_entry(base: *mut u8, dci: u32) -> *mut u32 {
     base.add(input_context_offset(dci, hc_context_size())) as *mut u32
 }
 
-/// Espera um Transfer Event (type 32) no anel de eventos, varrendo a partir de
-/// `er_dequeue` (padrão wait_cmd_completion) e avançando o ERDP. O poll antigo
-/// lia o índice 0 fixo — nunca via eventos depois do 1º comando consumido.
-/// Retorna true se CC == Success (1) ou Short Packet (13).
-unsafe fn wait_transfer_event(timeout: u32) -> bool {
+/// (VA, PA) do anel EP0 compartilhado. PA necessário p/ correlacionar o Transfer
+/// Event do Status Stage (auditoria USB §2) — o evento carrega PA, não VA.
+fn ep0_ring() -> Option<(u64, u64)> {
+    let g = XHCI_STATE.lock();
+    let st = g.as_ref()?;
+    if st.tr_va == 0 || st.tr_pa == 0 {
+        return None;
+    }
+    Some((st.tr_va, st.tr_pa))
+}
+
+/// Descarta Transfer Events EP0 obsoletos deste slot (de transferência anterior
+/// que expirou ou foi mal atribuída). Chamar ANTES do doorbell: o anel EP0 é
+/// reutilizado em slots fixos, então o PA do Status é idêntico entre
+/// transferências — sem dreno, um evento antigo casa por PA e vira falso positivo.
+unsafe fn drain_stale_ep0_events(slot: u8) {
+    let mut g = XHCI_STATE.lock();
+    let Some(st) = g.as_mut() else { return };
+    for _ in 0..256 {
+        let Some([dw0, dw1, dw2, dw3]) = pop_event(st) else {
+            break;
+        };
+        if ((dw3 >> 10) & 0x3F) != 32 {
+            continue;
+        }
+        let eslot = ((dw3 >> 24) & 0xFF) as u8;
+        let epid = ((dw3 >> 16) & 0x1F) as u8;
+        if eslot == slot && epid == 1 {
+            continue; // obsoleto nosso — descarta
+        }
+        let ev_ptr = (dw0 as u64) | ((dw1 as u64) << 32);
+        let actual_len = (dw2 & 0xFF_FFFF) as u16;
+        let _ = route_isoc_event(eslot, epid, ev_ptr, actual_len);
+    }
+}
+
+/// Espera o Transfer Event do Status Stage de uma transferência EP0, varrendo a
+/// partir de `er_dequeue` e avançando o ERDP. Correlaciona por TRB pointer +
+/// slot + endpoint (DCI 1) — aceitar qualquer type-32 com CC ok atribuía evento
+/// antigo ou de outra transferência ao request atual (auditoria USB §2).
+/// Eventos alheios são roteados (isoc) ou ignorados, nunca atribuídos aqui.
+/// Retorna true se CC == Success (1) ou Short Packet (13). Falha registra
+/// slot, CC e residual; timeout registra timeout.
+unsafe fn wait_transfer_event(slot: u8, status_pa: u64, timeout: u32) -> bool {
     // Metal Alienware: spin puro × N EP0 hub = minutos de tela preta pós-Limine.
     // Budget TSC 50ms (igual wait_cmd_completion); `timeout` = teto de spins se TSC=0.
     let hz = crate::tsc::tsc_hz();
@@ -64,23 +105,45 @@ unsafe fn wait_transfer_event(timeout: u32) -> bool {
         let mut g = XHCI_STATE.lock();
         let Some(st) = g.as_mut() else { return false };
         for _ in 0..256 {
-            let Some([_, _, dw2, dw3]) = pop_event(st) else {
+            let Some([dw0, dw1, dw2, dw3]) = pop_event(st) else {
                 break;
             };
             let trb_type = (dw3 >> 10) & 0x3F;
             if trb_type != 32 {
                 continue;
             }
+            let ev_ptr = (dw0 as u64) | ((dw1 as u64) << 32);
+            let eslot = ((dw3 >> 24) & 0xFF) as u8;
+            let epid = ((dw3 >> 16) & 0x1F) as u8;
+            if ev_ptr != status_pa || eslot != slot || epid != 1 {
+                let actual_len = (dw2 & 0xFF_FFFF) as u16;
+                let _ = route_isoc_event(eslot, epid, ev_ptr, actual_len);
+                continue;
+            }
             let cc = ((dw2 >> 24) & 0xFF) as u8;
-            return cc == 1 || cc == 13;
+            let residual = dw2 & 0xFF_FFFF;
+            if cc == 1 || cc == 13 {
+                return true;
+            }
+            crate::slog_nano!(
+                "USB",
+                "warn",
+                "EP0 slot={} CC={} residual={} (esperava Status)",
+                slot,
+                cc,
+                residual
+            );
+            return false;
         }
         drop(g);
         core::hint::spin_loop();
         spins = spins.saturating_add(1);
         if budget > 0 && crate::tsc::rdtsc().wrapping_sub(t0) > budget {
+            crate::slog_nano!("USB", "warn", "EP0 slot={} timeout (sem Status)", slot);
             return false;
         }
         if budget == 0 && spins >= spin_cap {
+            crate::slog_nano!("USB", "warn", "EP0 slot={} timeout (sem Status)", slot);
             return false;
         }
     }
@@ -837,9 +900,9 @@ unsafe fn ep0_class_no_data(
         0,
     ];
     core::ptr::copy_nonoverlapping(pkt.as_ptr(), setup_pa.1, 8);
-    let tr_va = {
-        let g = XHCI_STATE.lock();
-        match g.as_ref() { Some(s) => s.tr_va, None => return false }
+    let (tr_va, tr_pa) = match ep0_ring() {
+        Some(p) => p,
+        None => return false,
     };
     let trb0 = tr_va as *mut u32;
     trb0.add(0).write_volatile(u32::from_le_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]));
@@ -851,13 +914,15 @@ unsafe fn ep0_class_no_data(
     trb1.add(1).write_volatile(0);
     trb1.add(2).write_volatile(0);
     trb1.add(3).write_volatile((4u32 << 10) | (1 << 16) | (1 << 5) | 1);
+    drain_stale_ep0_events(slot);
     core::arch::asm!("sfence", options(nostack, preserves_flags));
     {
         let g = XHCI_STATE.lock();
         let st = match g.as_ref() { Some(s) => s, None => return false };
         w32(st.base, st.db_off + (slot as u64) * 4, 1);
     }
-    let _ = wait_transfer_event(100_000);
+    // Status Stage = trb1 (+16 B). Correlaciona o evento (§2).
+    let _ = wait_transfer_event(slot, tr_pa + 16, 100_000);
     true // best-effort — alguns devices ignoram SET_PROTOCOL
 }
 
@@ -927,9 +992,9 @@ unsafe fn ep0_control_in(
         (len >> 8) as u8,
     ];
 
-    let tr_va = {
-        let g = XHCI_STATE.lock();
-        match g.as_ref() { Some(s) => s.tr_va, None => return false }
+    let (tr_va, tr_pa) = match ep0_ring() {
+        Some(p) => p,
+        None => return false,
     };
     let trb0 = tr_va as *mut u32;
     // Setup Stage, TRT=IN data (3), IDT=1
@@ -952,13 +1017,15 @@ unsafe fn ep0_control_in(
     trb2.add(2).write_volatile(0);
     trb2.add(3).write_volatile((4u32 << 10) | (1 << 5) | 1);
 
+    drain_stale_ep0_events(slot);
     core::arch::asm!("sfence", options(nostack, preserves_flags));
     {
         let g = XHCI_STATE.lock();
         let st = match g.as_ref() { Some(s) => s, None => return false };
         w32(st.base, st.db_off + (slot as u64) * 4, 1);
     }
-    let ok = wait_transfer_event(200_000);
+    // Status Stage = trb2 (+32 B). Correlaciona o evento (§2).
+    let ok = wait_transfer_event(slot, tr_pa + 32, 200_000);
     if ok {
         core::ptr::copy_nonoverlapping(data_pa.1, data.as_mut_ptr(), data.len());
     }
@@ -1931,9 +1998,9 @@ unsafe fn ep0_set_configuration(slot: u8, ep0_mps: u16, config: u8) -> bool {
     let pkt: [u8; 8] = [0x00, 0x09, config, 0, 0, 0, 0, 0];
     core::ptr::copy_nonoverlapping(pkt.as_ptr(), setup_pa.1, 8);
 
-    let tr_va = {
-        let g = XHCI_STATE.lock();
-        match g.as_ref() { Some(s) => s.tr_va, None => return false }
+    let (tr_va, tr_pa) = match ep0_ring() {
+        Some(p) => p,
+        None => return false,
     };
 
     // Setup Stage TRB (type 2), IDT=1, TRT=No Data (0)
@@ -1951,6 +2018,7 @@ unsafe fn ep0_set_configuration(slot: u8, ep0_mps: u16, config: u8) -> bool {
     trb1.add(3).write_volatile((4u32 << 10) | (1 << 16) | (1 << 5) | 1); // Status, DIR, IOC, C
 
     let _ = (ep0_mps, setup_pa);
+    drain_stale_ep0_events(slot);
     core::arch::asm!("sfence", options(nostack, preserves_flags));
     {
         let g = XHCI_STATE.lock();
@@ -1958,7 +2026,8 @@ unsafe fn ep0_set_configuration(slot: u8, ep0_mps: u16, config: u8) -> bool {
         w32(st.base, st.db_off + (slot as u64) * 4, 1); // EP0 DCI=1
     }
 
-    wait_transfer_event(200_000)
+    // Status Stage = trb1 (+16 B). Correlaciona o evento (§2).
+    wait_transfer_event(slot, tr_pa + 16, 200_000)
 }
 
 // ── UAC bring-up (ADR-0045) — isócrono ─────────────────────────────────────
