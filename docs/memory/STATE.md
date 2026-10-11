@@ -1,5 +1,17 @@
 # STATE - neural-os-core v1.9.99-s463 - Mesh reliability: OOM root-cause + TALC-first + PMM reserve + validação 2/4 nós
 
+#   [s464] AUDITORIA USB BOOT.LOG (detalhe em docs/memory/SESSION_464.md)
+#     Verificação estática de auditoria externa + 9 fixes (working tree, sem HW).
+#     P0 bulk_transfer deadlock (guard XHCI_STATE escopado ao doorbell); FAT exige
+#     written==write_len + verify_written_chain (readback pela cadeia, falha=IoFail);
+#     sync_cache USB/virtio conferido; CSW tag+resíduo; free_dma; EFI set_position+
+#     get_position==len+flush; S5 gated persisted_to_storage (try_flush==true é
+#     "gravado em disco", não "RAM selada"); flags=0 ao consumir selo.
+#     HOST: MemDisk+FAT32 mínima, 13 testes boot_logger (parcial/corrupção/0/511/
+#     512/513/truncada/read-error); check 0 erros; k-nano 381 passed (serializado).
+#     xHCI reset + CCS=0/00:14.0 INTOCADOS (sem evidência pré-HCRST). Encerramento
+#     pendente de HW: gravação conhecida + readback + flush + recovery + origem.
+#
 #   [s463] CAMPANHA DE CONFIABILIDADE DO MESH (detalhe em docs/memory/SESSION_463.md)
 #     OOM root-caused: bump-first + dealloc no-op = churn permanente (~31,9KB/tick;
 #     heap 512->1179MB em 34min) + PMM duplo-uso (residual SESSION_252 ora-1 FECHADO)

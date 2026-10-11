@@ -485,6 +485,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> Overwrit
                 let mut fc = ((fc_hi as u32) << 16) | fc_lo as u32;
                 let write_len = data.len().min(capacity);
                 let mut written = 0usize;
+                let start_fc = fc;
 
                 while fc >= 2 && fc < 0x0FFF_FFF8 && written < write_len {
                     let fc_lba = data_lba + (fc - 2) * spc;
@@ -545,8 +546,19 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> Overwrit
                     BOOT_LOG_NAME,
                     lba_start
                 ));
-                if written > 0 || write_len == 0 {
-                    return OverwriteResult::Ok;
+                // Só Ok com o payload INTEIRO gravado (written == write_len).
+                // `written > 0` aceitava cadeia FAT curta / escrita parcial como
+                // sucesso — FAT_READY mentia (auditoria USB).
+                if written == write_len {
+                    // Readback: relê a cadeia e compara — o contador prova que o
+                    // laço andou, não que o meio gravou. Falha = IoFail (tenta ESP).
+                    if verify_written_chain(
+                        dev, fat_lba, data_lba, spc, bps, start_fc, &data[..write_len],
+                    ) {
+                        return OverwriteResult::Ok;
+                    }
+                    saw_io = true;
+                    break;
                 }
                 // Tudo pronto mas 0 bytes gravados = falha de I/O — segue p/ ESP.
                 saw_io = true;
@@ -578,6 +590,52 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> Overwrit
     } else {
         OverwriteResult::NoFatParts
     }
+}
+
+/// Readback da cadeia FAT recém-escrita: relê `expect` a partir do cluster `fc`
+/// e compara byte a byte. Auditoria USB §4 — o contador `written` prova que o
+/// laço de escrita andou; só o readback prova que o meio gravou. Usa
+/// `BlockDevice::read_sectors` + `READ(10)` já existentes (nada novo no
+/// transporte). False em qualquer divergência ou I/O — o caller trata como
+/// IoFail e tenta a próxima partição/ESP.
+unsafe fn verify_written_chain(
+    dev: &mut dyn BlockDevice,
+    fat_lba: u32,
+    data_lba: u32,
+    spc: u32,
+    bps: u32,
+    mut fc: u32,
+    expect: &[u8],
+) -> bool {
+    let mut off = 0usize;
+    while fc >= 2 && fc < 0x0FFF_FFF8 && off < expect.len() {
+        let fc_lba = data_lba + (fc - 2) * spc;
+        for s in 0..spc {
+            if off >= expect.len() {
+                break;
+            }
+            let mut sector = [0u8; 512];
+            if !dev.read_sectors((fc_lba + s) as u64, &mut sector) {
+                return false;
+            }
+            // Mesma granularidade da escrita (setor de 512 B, take parcial no fim).
+            let take = (expect.len() - off).min(512);
+            if sector[..take] != expect[off..off + take] {
+                return false;
+            }
+            off += take;
+        }
+        let fat_off = fc as usize * 4;
+        let fat_sec = fat_lba + (fat_off as u32 / bps);
+        let mut fsec = [0u8; 512];
+        if !dev.read_sectors(fat_sec as u64, &mut fsec) {
+            return false;
+        }
+        let boff = fat_off % bps as usize;
+        fc = u32::from_le_bytes([fsec[boff], fsec[boff + 1], fsec[boff + 2], fsec[boff + 3]])
+            & 0x0FFF_FFFF;
+    }
+    off == expect.len()
 }
 
 pub fn build_session_bytes() -> Vec<u8> {
@@ -725,8 +783,8 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
                     last_name = "USB-MSC";
                     last = unsafe { overwrite_boot_log(msc, &content) };
                     if last.is_ok() {
-                        msc.sync_cache();
-                        ok = true;
+                        // Flush é parte do contrato: sem confirmação, não é sucesso.
+                        ok = msc.sync_cache();
                     } else if last == OverwriteResult::NoFatParts {
                         // Só "sem partição FAT32" desliga o MSC em definitivo.
                         // BOOT.LOG ausente pode ser transitório (FAT pronto antes
@@ -746,8 +804,7 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
                     last_name = "virtio-blk";
                     last = unsafe { overwrite_boot_log(vb, &content) };
                     if last.is_ok() {
-                        vb.sync_cache();
-                        ok = true;
+                        ok = vb.sync_cache();
                     }
                 }
             }
@@ -1278,6 +1335,192 @@ mod tests {
         NEXT_RETRY_TICK.store(u64::MAX, Ordering::Relaxed);
         assert!(!ensure_persisted());
         NEXT_RETRY_TICK.store(0, Ordering::Relaxed);
+    }
+
+    /// Mock BlockDevice em RAM (setores de 512 B) p/ exercitar
+    /// `overwrite_boot_log` sem hardware.
+    struct MemDisk {
+        sectors: alloc::vec::Vec<[u8; 512]>,
+    }
+
+    impl MemDisk {
+        fn new(n: usize) -> Self {
+            Self { sectors: alloc::vec![[0u8; 512]; n] }
+        }
+    }
+
+    impl crate::block_dev::BlockDevice for MemDisk {
+        fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> bool {
+            let i = lba as usize;
+            if i >= self.sectors.len() || buf.len() != 512 {
+                return false;
+            }
+            buf.copy_from_slice(&self.sectors[i]);
+            true
+        }
+        fn write_sectors(&mut self, lba: u64, buf: &[u8]) -> bool {
+            let i = lba as usize;
+            if i >= self.sectors.len() || buf.len() != 512 {
+                return false;
+            }
+            self.sectors[i].copy_from_slice(buf);
+            true
+        }
+    }
+
+    fn fat_test_disk() -> MemDisk {
+        fat_test_disk_n(1)
+    }
+
+    /// FAT32 mínima com N clusters de dados (cl3..cl(3+N-1), último=EOC):
+    /// MBR 0x0C @LBA1, BPB (spc=1), FAT, root com BOOT.LOG (cluster 3, 256 KiB).
+    fn fat_test_disk_n(data_clusters: usize) -> MemDisk {
+        let n = data_clusters.max(1);
+        let mut d = MemDisk::new(4 + n);
+        {
+            let mbr = &mut d.sectors[0];
+            mbr[0x1BE + 4] = 0x0C;
+            mbr[0x1BE + 8..0x1BE + 12].copy_from_slice(&1u32.to_le_bytes());
+            mbr[0x1BE + 12..0x1BE + 16].copy_from_slice(&(3 + n as u32).to_le_bytes());
+            mbr[0x1FE] = 0x55;
+            mbr[0x1FF] = 0xAA;
+        }
+        {
+            let bpb = &mut d.sectors[1];
+            bpb[3..11].copy_from_slice(b"MSDOS5.0");
+            bpb[0x0B..0x0D].copy_from_slice(&512u16.to_le_bytes());
+            bpb[0x0D] = 1;
+            bpb[0x0E..0x10].copy_from_slice(&1u16.to_le_bytes());
+            bpb[0x10] = 1;
+            bpb[0x24..0x28].copy_from_slice(&1u32.to_le_bytes());
+            bpb[0x2C..0x30].copy_from_slice(&2u32.to_le_bytes());
+        }
+        {
+            let fat = &mut d.sectors[2];
+            fat[0..4].copy_from_slice(&0x0FFF_FFF8u32.to_le_bytes());
+            fat[4..8].copy_from_slice(&0x0FFF_FFFFu32.to_le_bytes());
+            fat[8..12].copy_from_slice(&0x0FFF_FFFFu32.to_le_bytes());
+            for i in 0..n {
+                let v = if i + 1 == n {
+                    0x0FFF_FFFFu32
+                } else {
+                    (4 + i) as u32
+                };
+                let o = (3 + i) * 4;
+                fat[o..o + 4].copy_from_slice(&v.to_le_bytes());
+            }
+        }
+        {
+            let dir = &mut d.sectors[3];
+            let want = encode_83(BOOT_LOG_NAME);
+            dir[0..11].copy_from_slice(&want);
+            dir[11] = 0x20;
+            dir[26..28].copy_from_slice(&3u16.to_le_bytes());
+            dir[28..32].copy_from_slice(&(256u32 * 1024).to_le_bytes());
+            dir[32] = 0;
+        }
+        d
+    }
+
+    /// Auditoria USB: cadeia FAT com 1 cluster (512 B) + payload de 1024 B.
+    /// `written > 0` retornava Ok — agora exige o payload INTEIRO.
+    #[test]
+    fn overwrite_boot_log_rejects_partial_write() {
+        let mut d = fat_test_disk();
+        let data = alloc::vec![0xABu8; 1024];
+        let r = unsafe { overwrite_boot_log(&mut d, &data) };
+        assert_ne!(r, OverwriteResult::Ok, "parcial não é sucesso");
+    }
+
+    #[test]
+    fn overwrite_boot_log_accepts_full_write() {
+        let mut d = fat_test_disk();
+        let data = alloc::vec![0xABu8; 512];
+        let r = unsafe { overwrite_boot_log(&mut d, &data) };
+        assert_eq!(r, OverwriteResult::Ok);
+        assert_eq!(&d.sectors[4][..], &data[..]);
+    }
+
+    /// Readback detecta 1 byte corrompido na cadeia (prova que o verify compara
+    /// o conteúdo, não só que o laço andou).
+    #[test]
+    fn verify_written_chain_catches_corruption() {
+        let mut d = fat_test_disk();
+        let payload = alloc::vec![0x5Au8; 512];
+        d.sectors[4].copy_from_slice(&payload);
+        let ok = unsafe { verify_written_chain(&mut d, 2, 3, 1, 512, 3, &payload) };
+        assert!(ok);
+        d.sectors[4][100] ^= 0xFF;
+        let bad = unsafe { verify_written_chain(&mut d, 2, 3, 1, 512, 3, &payload) };
+        assert!(!bad, "readback deve reprovar conteúdo divergente");
+    }
+
+    /// Payloads de 0/511/512 B cabem em 1 cluster; 513 B exige 2 (cruza limite).
+    #[test]
+    fn overwrite_boot_log_sizes_across_sector_boundary() {
+        for (len, nclus, expect_ok) in [
+            (0usize, 1usize, true),
+            (511, 1, true),
+            (512, 1, true),
+            (513, 1, false),
+            (513, 2, true),
+        ] {
+            let mut d = fat_test_disk_n(nclus);
+            let data = alloc::vec![0xCDu8; len];
+            let r = unsafe { overwrite_boot_log(&mut d, &data) };
+            assert_eq!(
+                r == OverwriteResult::Ok,
+                expect_ok,
+                "len={} nclus={} → {:?}",
+                len,
+                nclus,
+                r
+            );
+            if expect_ok && len > 0 {
+                let mut off = 0usize;
+                for s in 0..nclus {
+                    if off >= len {
+                        break;
+                    }
+                    let take = (len - off).min(512);
+                    assert_eq!(&d.sectors[4 + s][..take], &data[off..off + take]);
+                    off += take;
+                }
+            }
+        }
+    }
+
+    /// Cadeia FAT truncada (1 cluster p/ 1024 B) reprova no verify direto.
+    #[test]
+    fn verify_written_chain_rejects_truncated_chain() {
+        let mut d = fat_test_disk_n(1);
+        let payload = alloc::vec![0x5Au8; 1024];
+        d.sectors[4].copy_from_slice(&payload[..512]);
+        let ok = unsafe { verify_written_chain(&mut d, 2, 3, 1, 512, 3, &payload) };
+        assert!(!ok, "cadeia curta não satisfaz expect longo");
+    }
+
+    /// Mock que serve metadados mas falha na leitura do cluster de dados.
+    struct DataFailDisk(MemDisk);
+    impl crate::block_dev::BlockDevice for DataFailDisk {
+        fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> bool {
+            if lba == 4 {
+                return false;
+            }
+            self.0.read_sectors(lba, buf)
+        }
+        fn write_sectors(&mut self, lba: u64, buf: &[u8]) -> bool {
+            self.0.write_sectors(lba, buf)
+        }
+    }
+
+    /// Erro de leitura no readback → não-Ok (integração via overwrite).
+    #[test]
+    fn overwrite_boot_log_rejects_read_error_on_verify() {
+        let mut d = DataFailDisk(fat_test_disk_n(1));
+        let data = alloc::vec![0xABu8; 512];
+        let r = unsafe { overwrite_boot_log(&mut d, &data) };
+        assert_ne!(r, OverwriteResult::Ok, "falha de leitura não é sucesso");
     }
 }
 

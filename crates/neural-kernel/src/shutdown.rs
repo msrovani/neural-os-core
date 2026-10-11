@@ -16,7 +16,7 @@ fn now_tick() -> u64 {
     crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64
 }
 
-fn dump_boot_log_sector() {
+fn dump_boot_log_sector() -> bool {
     // Honesty s389b: canal A = FAT BOOT.LOG. NÃO escrever LBA 2048 (ESP GPT).
     let flushed = k_nano::boot_logger::flush();
     if flushed {
@@ -33,6 +33,7 @@ fn dump_boot_log_sector() {
     if n > 0 {
         k_nano::slog_bin!("SHUTDOWN", "ok", "BOOT_LOG ring ~{} bytes (FAT=fonte)", n);
     }
+    flushed
 }
 
 fn overlay(msg: &str) {
@@ -138,8 +139,12 @@ pub fn begin_orderly_shutdown(cause: ShutdownCause) -> ! {
         now_tick(),
         k_nano::acpi::pm1a_cnt_port()
     );
-    dump_boot_log_sector();
-    let _ = k_nano::boot_logger::try_flush_ramlog();
+    // §1 revisão: `try_flush_ramlog() == true` significa "backend gravou +
+    // verificou em armazenamento não-volátil" (via flush→persist_now). NÃO
+    // significa "RAMLOG selado em RAM" — o selo é `seal_for_next_boot` abaixo.
+    // Só o primeiro autoriza S5.
+    let persisted_to_storage =
+        dump_boot_log_sector() || k_nano::boot_logger::try_flush_ramlog();
     // F1 anti-loop (OPCODE-0054): shutdown ordenado = estado limpo — zera o
     // contador DURÁVEL de recover-reboots (um crash futuro não herda a conta).
     k_nano::boot_ramlog::clear_recover_count();
@@ -157,8 +162,19 @@ pub fn begin_orderly_shutdown(cause: ShutdownCause) -> ! {
     // apagaria a DRAM antes dela — por isso S5 vem ANTES (se funcionar, o FAT
     // já foi flushado acima) e o reset quente DEPOIS; sem ele "desligar" no
     // HW vira halt mudo e a captura nunca acontece.
-    s5_poweroff_try();
-    qemu_poweroff_gated();
+    // S5 frio apaga a DRAM: só é seguro se o log JÁ está no disco. Se a
+    // persistência direta falhou, o warm-reset p/ o logwriter-efi é o único
+    // caminho — S5 aqui mataria a captura (auditoria USB).
+    if persisted_to_storage {
+        s5_poweroff_try();
+        qemu_poweroff_gated();
+    } else {
+        k_nano::slog_bin!(
+            "SHUTDOWN",
+            "warn",
+            "S5 skip — persistência direta falhou; warm-reset p/ captura"
+        );
+    }
     k_nano::slog_bin!("SHUTDOWN", "ok", "warm-reset p/ captura (CF9→8042→triple)");
     cf9_reset_try();
     ps2_reset_polled();
@@ -185,7 +201,7 @@ pub fn begin_orderly_reboot(cause: ShutdownCause) -> ! {
         label(cause),
         now_tick()
     );
-    dump_boot_log_sector();
+    let _ = dump_boot_log_sector();
     let _ = k_nano::boot_logger::try_flush_ramlog();
     // F1 anti-loop (OPCODE-0054): reboot ordenado = estado limpo.
     k_nano::boot_ramlog::clear_recover_count();

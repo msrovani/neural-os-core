@@ -144,6 +144,9 @@ pub unsafe fn init_from_phys() {
         }
         core::ptr::write_volatile(&mut (*hdr_mut()).magic, 0);
         core::ptr::write_volatile(&mut (*hdr_mut()).len, 0);
+        // Flag de power-off pós-captura é one-shot: limpar ao consumir o selo
+        // evita que um warm-reset futuro (recovery) vire power-off indevido.
+        core::ptr::write_volatile(&mut (*hdr_mut()).flags, 0);
         crate::slog_nano!(
             "RAMLOG",
             "ok",
@@ -162,6 +165,7 @@ pub unsafe fn init_from_phys() {
         PRIOR_SEAL_UNFLUSHED.store(true, Ordering::Relaxed);
         // Marca consumido localmente (não depende de UEFI fantasma).
         core::ptr::write_volatile(&mut (*hdr_mut()).magic, MAGIC_FLUSHED);
+        core::ptr::write_volatile(&mut (*hdr_mut()).flags, 0);
         crate::slog_nano!(
             "RAMLOG",
             "warn",

@@ -225,6 +225,24 @@ impl UsbMassStorage {
             Some(p) => p,
             None => return false,
         };
+        // Fases BOT sobre a região DMA; libera SEMPRE (antes: vazava ~2 MiB por
+        // regravação de 256 KiB — 512 setores × 1 página).
+        let ok = self.bot_transfer_dma(tag, &cbw, dir_in, data_buf, dma_pa, data_len);
+        Self::free_dma(dma_pa, total);
+        ok
+    }
+
+    /// Fases BOT (CBW → dados → CSW) sobre a região DMA já alocada.
+    /// `dma_pa` é liberado pelo caller (`bot_transfer`).
+    unsafe fn bot_transfer_dma(
+        &mut self,
+        tag: u32,
+        cbw: &[u8; 31],
+        dir_in: bool,
+        data_buf: &mut [u8],
+        dma_pa: u64,
+        data_len: usize,
+    ) -> bool {
         let pmoff = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         let dma_va = (dma_pa + pmoff) as *mut u8;
         core::ptr::copy_nonoverlapping(cbw.as_ptr(), dma_va, 31);
@@ -262,8 +280,11 @@ impl UsbMassStorage {
         }
 
         let csw_sig = u32::from_le_bytes([csw_raw[0], csw_raw[1], csw_raw[2], csw_raw[3]]);
+        let csw_tag = u32::from_le_bytes([csw_raw[4], csw_raw[5], csw_raw[6], csw_raw[7]]);
+        let csw_residue = u32::from_le_bytes([csw_raw[8], csw_raw[9], csw_raw[10], csw_raw[11]]);
         let csw_status = csw_raw[12];
-        csw_sig == CSW_SIGNATURE && csw_status == 0
+        // Tag deve casar o CBW; resíduo 0 = payload inteiro transferido.
+        csw_sig == CSW_SIGNATURE && csw_tag == tag && csw_status == 0 && csw_residue == 0
     }
 
     pub unsafe fn read_sector(&mut self, lba: u64, data: &mut [u8; 512]) -> bool {
@@ -280,6 +301,11 @@ impl UsbMassStorage {
     }
 
     pub unsafe fn write_sector(&mut self, lba: u64, data: &[u8; 512]) -> bool {
+        if self.sector_size != 0 && self.sector_size != 512 {
+            crate::slog_nano!("USB", "warn", "MSC 4Kn sector_size={} — recusa write LBA 512 (honest)",
+                self.sector_size);
+            return false;
+        }
         let mut cmd = [0u8; 16];
         cmd[0] = SCSI_WRITE10;
         cmd[2..6].copy_from_slice(&(lba as u32).to_be_bytes());
@@ -350,5 +376,17 @@ impl UsbMassStorage {
         let a = g.as_mut()?;
         let f = a.allocate_contiguous(pages)?;
         Some(f.start_address().as_u64())
+    }
+
+    /// Libera a região DMA alocada por `alloc_dma` (mesmo nº de páginas).
+    unsafe fn free_dma(pa: u64, size: usize) {
+        use x86_64::structures::paging::{FrameDeallocator, PhysFrame, Size4KiB};
+        let pages = (size + 4095) / 4096;
+        let mut g = crate::memory::GLOBAL_ALLOCATOR.lock();
+        let Some(a) = g.as_mut() else { return };
+        let start = PhysFrame::<Size4KiB>::containing_address(x86_64::PhysAddr::new(pa));
+        for i in 0..pages {
+            a.deallocate_frame(start + i as u64);
+        }
     }
 }

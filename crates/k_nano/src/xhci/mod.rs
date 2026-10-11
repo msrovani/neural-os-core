@@ -1744,9 +1744,6 @@ pub unsafe fn bulk_transfer(
     len: u32,
     _direction: u8,
 ) -> bool {
-    let state = XHCI_STATE.lock();
-    let st = match state.as_ref() { Some(s) => s, None => return false };
-
     let idx = ep.enqueue_idx as usize;
     let max = ep.max_entries as usize;
 
@@ -1779,9 +1776,15 @@ pub unsafe fn bulk_transfer(
     ep.enqueue_idx = if next == max - 1 { 0 } else { next as u16 };
     if next == max - 1 { ep.cycle = !ep.cycle; }
 
-    // Ring doorbell[Slot] = DCI do endpoint real (não EP1 fixo)
-    let dci = if ep.dci == 0 { 2u32 } else { ep.dci as u32 };
-    w32(st.base, st.db_off + (slot as u64) * 4, dci);
+    // Ring doorbell[Slot] = DCI do endpoint real (não EP1 fixo).
+    // Guard SÓ aqui: `spin::Mutex` não é reentrante — mantê-lo vivo até o laço
+    // de poll abaixo re-lockava o MESMO mutex = deadlock eterno na 1ª BOT.
+    {
+        let state = XHCI_STATE.lock();
+        let st = match state.as_ref() { Some(s) => s, None => return false };
+        let dci = if ep.dci == 0 { 2u32 } else { ep.dci as u32 };
+        w32(st.base, st.db_off + (slot as u64) * 4, dci);
+    }
 
     // Wait for completion event: varre de er_dequeue (padrão wait_cmd_completion)
     // e casa o TRB pointer do evento com o TRB postado (coexiste com eventos

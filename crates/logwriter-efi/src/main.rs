@@ -130,12 +130,20 @@ fn try_write_regular(
     let Ok(FileType::Regular(mut f)) = handle.into_type() else {
         return false;
     };
-    let _ = f.set_position(0);
+    if f.set_position(0).is_err() {
+        return false;
+    }
+    // `RegularFile::write` garante todo-ou-erro (Ok(()) = buffer inteiro;
+    // Err(n) = parcial com n bytes). Critério de quantidade EXPLÍCITO via
+    // posição final — independe do contrato de retorno do `write`.
     if f.write(payload).is_err() {
         return false;
     }
-    let _ = f.flush();
-    true
+    match f.get_position() {
+        Ok(pos) if pos == payload.len() as u64 => {}
+        _ => return false,
+    }
+    f.flush().is_ok()
 }
 
 /// `true` se o volume for a ESP (partição de sistema).

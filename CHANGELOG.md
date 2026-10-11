@@ -1,5 +1,25 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [Unreleased] - Auditoria USB BOOT.LOG: 9 fixes + readback + regressão host
+
+- **P0 `bulk_transfer` deadlock** (`xhci/mod.rs`): guard `XHCI_STATE` escopado só ao
+  doorbell; poll re-locka limpo (spin::Mutex não-reentrante; guard vivia até fim
+  da função = spin eterno na 1ª BOT).
+- **FAT exige `written == write_len`** (`boot_logger.rs`): parcial não é mais Ok.
+- **`verify_written_chain`** (`boot_logger.rs`): readback pela cadeia FAT via
+  `read_sectors` existente; divergência/I/O = IoFail (tenta ESP).
+- **Flush conferido**: `ok = msc.sync_cache()` / `ok = vb.sync_cache()`;
+  EFI confere `set_position` + `write` + `get_position()==len` + `flush()`.
+- **BOT/MSC** (`usb_msc.rs`): guarda 4Kn no write; CSW tag + resíduo 0; `free_dma`
+  sempre (antes vazava ~2 MiB/256 KiB).
+- **Shutdown** (`shutdown.rs`): S5/0x604 só se `persisted_to_storage`
+  (dump || try_flush); senão warm-reset p/ captura EFI.
+- **RAMLOG** (`boot_ramlog.rs`): `flags=0` ao consumir `NEURDONE`/`NEURLOG!`.
+- **Testes host**: `MemDisk` + FAT32 mínima; 13 testes `boot_logger`
+  (parcial, full, corrupção, 0/511/512/513, truncada, read-error).
+- xHCI reset + `CCS=0` deliberadamente intocados (pendente HW).
+- Detalhe: `docs/memory/SESSION_464.md`.
+
 ## [1.9.99-s463] - 2026-10-10 - Mesh reliability: OOM root-cause + fixes estruturais + validação 2/4 nós
 
 - **OOM root-caused (residual ora-1 FECHADO)**: `HybridAllocator` bump-first +
