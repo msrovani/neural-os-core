@@ -7,8 +7,9 @@
 #     Imagem HW usb_hw.img 8319MB (PACK_LLM=falcon3-1b,falcon3) 10/10+smoke.
 #     Auditoria reviewer externo: 9/9 fechada no working tree (0 codigo novo;
 #     testes boot_logger 13/13). edc61ac4: lab imgDir target-first + -Force +
-#     disco FAT32 snapshot + intel-hda/xHCI. Pendente: foto PRE/POST 00:14.0
-#     em metal; BOOT.LOG dup no pack; regulatory.db/WIFI.CFG ausentes.
+#     disco FAT32 snapshot + intel-hda/xHCI. f57b2eff: BOOT.LOG dedup (1 dirent,
+#     guard count_bootlog_dirents.py); regulatory.db/WIFI.CFG = sem consumidor,
+#     nao empacotar. Pendente: foto PRE/POST 00:14.0 em metal; MSG reset (HW).
 
 #   [s466] MESH REPRISE 4G/4c PÓS-S464 (detalhe em docs/memory/SESSION_466.md)
 #     Raiz do "1 core" no mesh: run-qemu-p2p-mesh.ps1 preferia target1\uefi.img

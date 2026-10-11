@@ -22,6 +22,11 @@
 - **`edc61ac4` lab launcher:** `run-mesh4-lab.ps1` imgDir `target\` primeiro
   (contrato de freshness s466), `-Force` no preflight, disco FAT32
   `snapshot=on` (4 writers seguros), HW sim `intel-hda`+`qemu-xhci` i440fx-safe.
+- **`f57b2eff` follow-up:** `mkfat32.py` BOOT.LOG dedup (audit s402 zeros +
+  SESSION_139 header = 2 dirents; fica só o header) + guard
+  `tools/count_bootlog_dirents.py` (walk do root, LBA 2048, anti-loop);
+  `regulatory.db`/`WIFI.CFG` = zero consumidores em crates vivas → não
+  empacotar (veredito com evidência em SESSION_467 §8).
 
 ## [1.9.99-s466] - 2026-10-11 - Mesh 4G/4c reprise: raiz do "1 core" = kernel stale em target1/
 
