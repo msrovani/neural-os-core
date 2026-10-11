@@ -1066,12 +1066,12 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
             k_nano::slog_bin!("BENCH", "ok", "runtime_start_us={}", us);
         }
     }
-    // Consumer de SYSTEM_SHUTDOWN/SYSTEM_REBOOT (botão OFF do dock): assina
-    // uma vez e drena a cada ciclo do scheduler — nunca dentro de IRQ.
-    // HITL BOOT.LOG: não há handler de tecla/comando no bin hoje. Quando houver
-    // um gatilho (tecla dedicada ou comando shell), chamar
-    // `k_nano::boot_ramlog::seal_now()` — sela o ramlog sob demanda p/ o
-    // logwriter-efi gravar o BOOT.LOG no próximo reset, sem shutdown ordenado.
+    // Consumer de SYSTEM_SHUTDOWN/SYSTEM_REBOOT/SYSTEM_HIBERNATE (power dialog
+    // do dock): assina uma vez e drena a cada ciclo do scheduler — nunca dentro
+    // de IRQ. HITL BOOT.LOG: os 3 botões do power dialog (jarbas display agent)
+    // chamam `k_nano::boot_ramlog::seal_now()` NO CLIQUE — sela o ramlog sob
+    // demanda p/ o logwriter-efi gravar o BOOT.LOG no próximo reset, mesmo se
+    // o cascade ordenado falhar depois (o seal de begin_orderly_* é idempotente).
     crate::shutdown::init_power_drain();
     registry.run(
         || {

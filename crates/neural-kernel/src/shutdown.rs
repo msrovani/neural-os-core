@@ -220,18 +220,25 @@ pub fn begin_orderly_reboot(cause: ShutdownCause) -> ! {
 
 static RX_SHUTDOWN: spin::Mutex<Option<event_bus::Receiver>> = spin::Mutex::new(None);
 static RX_REBOOT: spin::Mutex<Option<event_bus::Receiver>> = spin::Mutex::new(None);
+static RX_HIBERNATE: spin::Mutex<Option<event_bus::Receiver>> = spin::Mutex::new(None);
 
 /// Assina os tópicos de energia UMA vez (chamar no boot, fora de IRQ).
 pub fn init_power_drain() {
     *RX_SHUTDOWN.lock() = Some(crate::EVENT_BUS.subscribe(TOPIC_SYSTEM_SHUTDOWN));
     *RX_REBOOT.lock() = Some(crate::EVENT_BUS.subscribe(TOPIC_SYSTEM_REBOOT));
-    k_nano::slog_bin!("SHUTDOWN", "ok", "power drain subscribed (SYSTEM_SHUTDOWN/REBOOT)");
+    *RX_HIBERNATE.lock() = Some(crate::EVENT_BUS.subscribe(TOPIC_SYSTEM_HIBERNATE));
+    k_nano::slog_bin!(
+        "SHUTDOWN",
+        "ok",
+        "power drain subscribed (SYSTEM_SHUTDOWN/REBOOT/HIBERNATE)"
+    );
 }
 
 /// Drena os receivers assinados — chamar do loop do scheduler (idle closure).
 pub fn power_drain_tick() {
     let mut rx_s = RX_SHUTDOWN.lock();
     let mut rx_r = RX_REBOOT.lock();
+    let mut rx_h = RX_HIBERNATE.lock();
     if let Some(rx) = rx_s.as_mut() {
         if rx.try_receive().is_some() {
             begin_orderly_shutdown(ShutdownCause::Triggered);
@@ -240,6 +247,18 @@ pub fn power_drain_tick() {
     if let Some(rx) = rx_r.as_mut() {
         if rx.try_receive().is_some() {
             begin_orderly_reboot(ShutdownCause::Scheduled);
+        }
+    }
+    if let Some(rx) = rx_h.as_mut() {
+        if rx.try_receive().is_some() {
+            // S4 não implementado (hibernate_stub): honesto — não reboota, não
+            // parka. O ramlog já foi selado NO CLIQUE (jarbas power dialog →
+            // seal_now); a captura acontece no próximo reset do usuário.
+            k_nano::slog_bin!(
+                "SHUTDOWN",
+                "warn",
+                "HIBERNATE S4 stub — sem implementacao; ramlog selado no clique (captura no proximo reset)"
+            );
         }
     }
 }

@@ -473,7 +473,13 @@ impl DisplayAgent {
                     COMPOSITOR.lock().as_mut().map(|d| d.close_power_dialog());
                     *POWER_STATE.lock() = PowerState::ShuttingDown;
                     *POWER_BANNER.lock() = Some("Desligando...");
-                    k_nano::slog_jarbas!("JARBAS", "ok", "POWER DESLIGAR — publicando SYSTEM_SHUTDOWN");
+                    // HITL BOOT.LOG: sela o ramlog NO CLIQUE (seal_now =
+                    // seal_for_next_boot, idempotente; HARD seal — appends
+                    // pós-selo são dropados, snapshot congelado). Assim o
+                    // logwriter-efi captura no próximo reset mesmo se o
+                    // cascade ordenado falhar antes do seal de begin_orderly_*.
+                    k_nano::boot_ramlog::seal_now();
+                    k_nano::slog_jarbas!("JARBAS", "ok", "POWER DESLIGAR — ramlog selado + publicando SYSTEM_SHUTDOWN");
                     let _ = EVENT_BUS.publish(event_bus::Event {
                         id: 0,
                         topic: alloc::string::String::from("SYSTEM_SHUTDOWN"),
@@ -487,7 +493,12 @@ impl DisplayAgent {
                     COMPOSITOR.lock().as_mut().map(|d| d.close_power_dialog());
                     *POWER_STATE.lock() = PowerState::Hibernating;
                     *POWER_BANNER.lock() = Some("Hibernando...");
-                    k_nano::slog_jarbas!("JARBAS", "ok", "POWER HIBERNAR — publicando SYSTEM_HIBERNATE");
+                    // S4 não implementado (hibernate_stub): o seal no clique é
+                    // a ÚNICA ação efetiva — garante a captura do log no
+                    // próximo reset que o usuário fizer (consumer do tópico
+                    // só loga honesto, não reboota).
+                    k_nano::boot_ramlog::seal_now();
+                    k_nano::slog_jarbas!("JARBAS", "ok", "POWER HIBERNAR — ramlog selado + publicando SYSTEM_HIBERNATE");
                     let _ = EVENT_BUS.publish(event_bus::Event {
                         id: 0,
                         topic: alloc::string::String::from("SYSTEM_HIBERNATE"),
@@ -501,7 +512,10 @@ impl DisplayAgent {
                     COMPOSITOR.lock().as_mut().map(|d| d.close_power_dialog());
                     *POWER_STATE.lock() = PowerState::Rebooting;
                     *POWER_BANNER.lock() = Some("Reiniciando...");
-                    k_nano::slog_jarbas!("JARBAS", "ok", "POWER REINICIAR — publicando SYSTEM_REBOOT");
+                    // Mesmo seal-no-clique do Desligar: idempotente com o
+                    // seal de begin_orderly_reboot; congela o snapshot já.
+                    k_nano::boot_ramlog::seal_now();
+                    k_nano::slog_jarbas!("JARBAS", "ok", "POWER REINICIAR — ramlog selado + publicando SYSTEM_REBOOT");
                     let _ = EVENT_BUS.publish(event_bus::Event {
                         id: 0,
                         topic: alloc::string::String::from("SYSTEM_REBOOT"),
