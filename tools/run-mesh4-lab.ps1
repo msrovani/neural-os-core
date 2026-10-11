@@ -3,7 +3,8 @@
 # Uso: .\tools\run-mesh4-lab.ps1 [-Accel whpx|tcg]
 param(
     [ValidateSet("whpx", "tcg")]
-    [string]$Accel = "whpx"
+    [string]$Accel = "whpx",
+    [switch]$Force
 )
 
 . (Join-Path $PSScriptRoot "qemu_mem_preflight.ps1")
@@ -27,7 +28,7 @@ Start-Sleep -Seconds 2
 
 $free = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 1)
 Write-Host "freeGB=$free (4x2G commit - overcommit esperado)" -ForegroundColor Yellow
-Assert-QemuMemFree -NeededGB 9.0 -Label "mesh4 4x2G"
+Assert-QemuMemFree -NeededGB 9.0 -Label "mesh4 4x2G" -Force:$Force
 
 $qemu = "C:\Program Files\qemu\qemu-system-x86_64.exe"
 if (-not (Test-Path $qemu)) {
@@ -36,9 +37,13 @@ if (-not (Test-Path $qemu)) {
 }
 $ovmf = "C:\PROGRA~1\qemu\share\edk2-x86_64-code.fd"
 if (-not (Test-Path $ovmf)) { $ovmf = Join-Path $Root "target\ovmf.fd" }
-$uefi = Join-Path $Root "target1\uefi.img"
-if (-not (Test-Path $uefi)) { $uefi = Join-Path $Root "target\uefi.img" }
+# s466: target/ primeiro (freshness contract - target1/ e staging de modelos, nunca de imagem)
+$uefi = Join-Path $Root "target\uefi.img"
+if (-not (Test-Path $uefi)) { $uefi = Join-Path $Root "target1\uefi.img" }
 if (-not (Test-Path $uefi)) { Write-Host "[ERRO] uefi.img ausente" -ForegroundColor Red; exit 1 }
+# FAT32 data disk (modelos+firmware) - snapshot=on: 4 writers nunca corrompem a base
+$disk = Join-Path $Root "target\disk_qemu.raw"
+if (-not (Test-Path $disk)) { Write-Host "[ERRO] disk_qemu.raw ausente (python tools/build_image.py)" -ForegroundColor Red; exit 1 }
 
 # 4 nos x 2G/4c - IPs 10.0.3.2..5 (node_id unico por ip[3], licao SESSION_411)
 $nodes = @(
@@ -93,9 +98,17 @@ foreach ($n in $nodes) {
         "-accel", $accelArg,
         "-drive", "if=pflash,format=raw,file=$ovmf,readonly=on",
         "-drive", "format=raw,file=$uefi,if=ide,index=0,snapshot=on",
+        "-drive", "format=raw,file=$disk,if=ide,index=1,snapshot=on",
         "-device", "loader,file=$flag,addr=0x2000000",
         "-netdev", "socket,id=n0,udp=127.0.0.1:19000,localaddr=127.0.0.1:$($n.Port)",
         "-device", "e1000,netdev=n0,mac=$mac",
+        # HW sim (combo provado run-qemu-whpx.ps1:328-348, i440fx-safe)
+        "-audiodev", "none,id=snd0",
+        "-device", "intel-hda,id=hda0",
+        "-device", "hda-duplex,id=hda-codec,bus=hda0.0,cad=0,audiodev=snd0",
+        "-device", "qemu-xhci,id=xhci",
+        "-device", "usb-tablet,bus=xhci.0",
+        "-device", "usb-kbd,bus=xhci.0",
         "-serial", "file:$log",
         "-no-reboot",
         "-name", ("mesh4-{0}" -f $n.Name.ToUpper()),
