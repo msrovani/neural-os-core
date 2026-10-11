@@ -1,5 +1,26 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s466] - 2026-10-11 - Mesh 4G/4c reprise: raiz do "1 core" = kernel stale em target1/
+
+- **FIX launcher (raiz do smp_online=1 no mesh):** `run-qemu-p2p-mesh.ps1` preferia
+  `target1\uefi.img` (stale, kernel sha `0617d4c8` pré-s464 com o bug bit-11 do gate
+  EXTD → fail-closed incondicional → LAPIC intocado → `smp_online=1`). Discriminador
+  FAT: `target\uefi.img` = `8b0bb7b8` = árvore ✅. **imgDir flip**: `target\` primeiro
+  (saída fresca do cargo), `target1\` só fallback. `-Force` plumbing no preflight
+  (overcommit 2×4G WARN). `target1\uefi.img` ressincronizado (protege mesh3/4/6-lab).
+- **Modelos em guest 4G:** `-WithModels -NoDisk` (WithModels vence o acoplamento
+  NoDisk→no-models). **CORREÇÃO de análise:** `-m 4G` derrama high RAM em
+  `0x100000000..0x140000000` — FALCON3.BIN (989 MiB, termina `0x13DD9BAB0`) **cabe**;
+  PIPER/bpe/hw_expert estouram e são honest-skipped (`is_page_present`). "Modelos
+  exigem ≥5 GB" está retirado.
+- **Prova (WHPX Haswell 4c/4G ×2, `logs\mesh4c_v2_verdict.txt`):** M1 `smp_online=4`
+  nos **2 nós** (A `[T+9]`, B `[T+16]`, zero `fw_extd_hv_no_x2`) · M2 Runtime/SCHED ·
+  M3 `LLM LOADED` size=1012764KB (= FALCON3; label `llama8b.bin` é display do slot) ·
+  M4 `MESH_HEALTH peers=1` Master+Worker. Fim: GUEST_DEAD **externo** ~00:57 (dumps
+  saudáveis `aps=3 pf=0`; sem panic/#PF/triple/OOM). SILENCE log stall = residual
+  SESSION_411/438/419. Lições em `SESSION_466.md` (preferência de imagem = contrato
+  de freshness; provar hash do artefato BOOTADO).
+
 ## [1.9.99-s464] - 2026-10-10 - Regressão APIC EXTD (s463) corrigida + integridade de evidência QEMU
 
 - **FIX regressão s463**: o gate fail-closed novo em `apic.rs` testava IA32_APIC_BASE

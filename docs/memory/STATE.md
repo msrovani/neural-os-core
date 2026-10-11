@@ -1,5 +1,16 @@
-# STATE - neural-os-core v1.9.99-s464 - Regressão APIC EXTD (s463) corrigida + evidência QEMU honesta
+# STATE - neural-os-core v1.9.99-s466 - Mesh reprise 4G/4c: smp_online=4 PROVADO (kernel stale em target1/ era a raiz)
 
+#   [s466] MESH REPRISE 4G/4c PÓS-S464 (detalhe em docs/memory/SESSION_466.md)
+#     Raiz do "1 core" no mesh: run-qemu-p2p-mesh.ps1 preferia target1\uefi.img
+#     STALE (kernel sha 0617d4c8 pré-s464, bug bit-11 EXTD) -> fail-closed ->
+#     LAPIC intocado -> smp_online=1. Discriminador FAT: target\ = 8b0bb7b8 =
+#     arvore. FIX: imgDir flip (target/ primeiro, target1/ fallback) + -Force.
+#     Modelos: -WithModels -NoDisk; FALCON3 cabe em 4G (high RAM ate 0x140000000;
+#     PIPER+ honest-skip). PROVA WHPX 2x4G/4c: M1-M4 PASS nos 2 nos (smp_online=4,
+#     LLM LOADED 1012764KB, peers=1 Master/Worker). GUEST_DEAD externo 00:57,
+#     nao crash. Li: preferencia de imagem = contrato de freshness; provar o
+#     artefato BOOTADO (FAT walk), nao o da arvore.
+#
 #   [s465] FOLLOW-UP USB EP0/BOT (detalhe em docs/memory/SESSION_465.md)
 #     Correlação EP0 (TRB+slot+DCI+CC, drain pré-doorbell, tr_pa no XhciState);
 #     CDB explícito 6/10 (7 callers); DMA persistente 1 página (free removido);

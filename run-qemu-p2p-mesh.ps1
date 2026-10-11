@@ -24,6 +24,8 @@
   A|B|Both (default Both). A=listen, B=connect.
 .PARAMETER NoDisk
   Omite segundo drive FAT32 (boot rapido mesh).
+.PARAMETER Force
+  Permite overcommit de RAM no preflight (WARN ruidoso; QEMU commit lazy).
 #>
 
 param(
@@ -41,12 +43,20 @@ param(
     [switch]$NoDisk,
 
     [ValidateSet("A","B","Both")]
-    [string]$Instance = "Both"
+    [string]$Instance = "Both",
+
+    [switch]$Force
 )
 
 $Root = $PSScriptRoot
-$imgDir = Join-Path $Root "target1"
-if (-not (Test-Path (Join-Path $imgDir "uefi.img"))) { $imgDir = Join-Path $Root "target" }
+# s465: target/ PRIMEIRO (saida fresca do cargo build); target1/ so como
+# fallback. A ordem antiga preferia target1/uefi.img, que ficou STALE
+# (kernel.elf sha 0617d4c8 != arvore 8b0bb7b8): o mesh boota o kernel
+# antigo pre-s464 (bug bit-11 do gate EXTD) -> fail-closed incondicional
+# -> LAPIC intocado -> smp_online=1 em TODAS as runs. O smoke (que usava
+# target/) provou smp_online=4 no mesmo host/OVMF.
+$imgDir = Join-Path $Root "target"
+if (-not (Test-Path (Join-Path $imgDir "uefi.img"))) { $imgDir = Join-Path $Root "target1" }
 $target = Join-Path $Root "target"
 $logDir = Join-Path $Root "logs"
 
@@ -300,7 +310,7 @@ Write-Host ""
 
 $instCount = 1
 if ($Instance -eq "Both") { $instCount = 2 }
-Assert-QemuMemFree -NeededGB ($instCount * $Mem + 1.0) -Label ("p2p-mesh " + $instCount + "x" + $Mem + "G")
+Assert-QemuMemFree -NeededGB ($instCount * $Mem + 1.0) -Label ("p2p-mesh " + $instCount + "x" + $Mem + "G") -Force:$Force
 
 $procA = $null
 $procB = $null
