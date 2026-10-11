@@ -14,6 +14,7 @@
 - [x] `mkfat32.py`: BOOT.LOG empacotado **2×** — **FIXADO** (entrada zeros do audit s402 removida; fica só o append com header). Prova: `python tools/count_bootlog_dirents.py <img>` → `PASS: exatamente 1 BOOT.LOG`
 - [x] `regulatory.db`/`WIFI.CFG` "ausentes" do FAT32 — **NÃO empacotar** (evidência: zero consumidores em crates vivas; `WIFI.CFG` só em `docs/archive/dead-modules/hermes/wifi_agent.rs` ORPHAN; `regulatory.db` = download s102 órfão). Arquivo morto na imagem = dívida; se o WifiAgent reviver, o pack ganha o consumer junto
 - [ ] Mass Storage Reset (s465): ainda deferido — **agora com dado real de metal**: cc4 (USB Transaction Error) no Address Device (af2); investigar speed context/route string/TT de hub interno antes de MSG reset
+- [x] **Soft off de tela sela o ramlog no clique** (`f56a5907`): os 3 botões do power dialog chamam `seal_now()` (HARD seal, idempotente) + consumer `SYSTEM_HIBERNATE` (era clique morto). Imagem regenerada (kernel `7069d285`). Re-teste metal: regravar → boot → [Reiniciar] no dialog → boot seguinte despeja BOOT.LOG (SESSION_467 §13)
 - [x] Push dos commits `edc61ac4` (s466b) + docs s467 — **pushado** (pedido do maintainer 11/10; `dfaa17d6..30934e79` + tags s466/s467)
 
 ## 🔥 s449 — Consolidação do working tree: E1–E4 (ADR-0113) + F1 + storage AION + cleanup dead-weight

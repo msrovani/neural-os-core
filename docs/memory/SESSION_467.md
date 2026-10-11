@@ -177,3 +177,37 @@ exatamente o residual "BOT nunca provado em metal" da auditoria USB.
 **Estado do reviewer (passo 1):** foto POST ✅ (HUD); PRE por-porta (PORTSC pre-PP/
 settled) segue pendente — ramlog perdido no power-off; capturar via 2-boots
 logwriter-efi (§11) ou UART.
+
+## 13. Fix: power dialog sela o ramlog NO CLIQUE (`f56a5907`)
+
+O re-boot do usuário via Ctrl+Alt+Del → "Reiniciar" NÃO produziu dump (pendrive
+byte-idêntico, §11). Análise do fluxo de energia:
+
+- **Desligar/Reiniciar** já selavam — mas só no FIM do cascade
+  (`begin_orderly_*`, `shutdown.rs:151/208`); se o cascade morrer antes (firmware
+  CAD reset, panic no caminho), o seal nunca acontece.
+- **Hibernar** publicava `SYSTEM_HIBERNATE` **sem consumidor nenhum** — clique
+  morto (banner eterno, nada acontece). `init_power_drain` só assinava
+  SHUTDOWN/REBOOT.
+- `seal_now()` (= `seal_for_next_boot`, idempotente, HARD seal — appends pós-selo
+  são dropados) existia exatamente para este gatilho, sem wire
+  (`boot_ramlog.rs:408`: "quando houver um gatilho, chamar seal_now()").
+
+**Fix (`f56a5907`):**
+1. `jarbas/display/agent.rs`: os 3 botões do power dialog chamam
+   `k_nano::boot_ramlog::seal_now()` NO CLIQUE, antes de publicar o evento —
+   snapshot congelado em DRAM independente do que o cascade fizer depois.
+2. `neural-kernel/src/shutdown.rs`: `RX_HIBERNATE` + consumer honesto (S4 stub —
+   loga warn, não reboota, não parka; captura no próximo reset do usuário).
+3. `main.rs`: comentário stale atualizado ("não há handler hoje" → descreve o wire).
+
+`cargo check --release` 0 erros (1m44s). Imagem regenerada: kernel sha
+`7069d2854f6998e8` (antes `8b0bb7b8…`), `verify_usb_esp` match=True,
+`count_bootlog_dirents` PASS (1 BOOT.LOG).
+
+**Re-teste metal (usuário):** regravar o pendrive → bootar → no desktop abrir o
+power dialog → **[Reiniciar]** (ou Desligar) → o reboot ordenado leva o seal → no
+boot seguinte o logwriter-efi despeja o BOOT.LOG (prefere a partição de dados) →
+ler no Windows. Se AINDA assim não capturar, o firmware do notebook zera o
+ramlog no warm-reset (cf. Note 1050, `boot_ramlog.rs:4`) — aí a única via é UART
+ou o fix do MSC (cc4/af2, §12).
