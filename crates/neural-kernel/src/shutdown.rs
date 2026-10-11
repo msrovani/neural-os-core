@@ -272,12 +272,13 @@ pub fn power_drain_tick() {
     if let Some(rx) = rx_h.as_mut() {
         if rx.try_receive().is_some() {
             // S4 não implementado (hibernate_stub): honesto — não reboota, não
-            // parka. O ramlog já foi selado NO CLIQUE (jarbas power dialog →
-            // seal_now); a captura acontece no próximo reset do usuário.
+            // parka. O seal só acontece via power dialog (seal_now no clique);
+            // via frase, sem seal — a captura depende do S5 falhar e do
+            // warm-reset preservar a DRAM (nem todo firmware preserva, §14).
             k_nano::slog_bin!(
                 "SHUTDOWN",
                 "warn",
-                "HIBERNATE S4 stub — sem implementacao; ramlog selado no clique (captura no proximo reset)"
+                "HIBERNATE S4 stub — sem implementacao (seal apenas via dialog; captura best-effort)"
             );
         }
     }

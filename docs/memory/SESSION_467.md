@@ -240,3 +240,47 @@ funcionado (aí é bug no write).
 **Caminho estratégico:** o fix REAL é o MSC (cc4/af2 do §12) — com o
 Address Device funcionando, o kernel grava o BOOT.LOG DIRETAMENTE via USB no
 shutdown (`persist_now`), sem a dança ramlog→logwriter. É a frente s468.
+
+## 15. [Desligar] reiniciava (boot-loop) — fix S5-first + logwriter POFF (`5de274ac`)
+
+Usuário reportou: [Desligar] **reinicializou** em vez de desligar. Causa: o
+design exp-1 pulava o S5 quando a persistência falhava (`persisted_to_storage=false`
+→ "S5 skip — warm-reset p/ captura") — mas neste firmware o ramlog morre no
+warm-reset (§14) → logwriter não captura, não power-offa, chainloada o OS =
+boot-loop que parece "reiniciou".
+
+**Fix:**
+1. `begin_orderly_shutdown`: em HW real, **S5 PRIMEIRO** (intenção do usuário —
+   [Desligar] tem que desligar); captura vira best-effort (só se o S5 falhar).
+   Em QEMU/sandbox mantém o exp-1 (warm reset preserva a DRAM → captura → UEFI
+   Shutdown). Split pelo `platform_probe::hypervisor()`.
+2. `logwriter-efi`: no ramo `None` (sem captura), se `POFF` armado no header →
+   **UEFI Shutdown mesmo assim** (anti-boot-loop p/ corrupção parcial do payload).
+
+## 16. Validação QEMU do [Desligar] — input morto (4 caminhos), boot e persistência PROVADOS
+
+Tentativa de validar o clique no QEMU (WHPX, usb_hw.img IDE, OVMF pflash):
+
+**PROVADO (evidência `logs/qemu_shutdown_test*.txt`, `qemu_linj_hib*.txt`):**
+- Imagem nova (kernel `7069d285`+S5-first+logwriter POFF) boota limpo: 8 fases,
+  `desktop_ready`, scheduler vivo (agents=54 polled=19), mesh heartbeat.
+- **Persistência ATA funciona no QEMU**: `bootlog: OK 3823 bytes em BOOT.LOG
+  (LBA 262144)` — o caminho `persist_now` grava de verdade.
+- **ACPI S5 parseado**: `DSDT _S5_ SLP_TYPa=11` — o S5-first tem o que precisa.
+- `power drain subscribed (SYSTEM_SHUTDOWN/REBOOT/HIBERNATE)` — consumer novo ok.
+
+**NÃO testável no QEMU (input stack morto — gaps documentados):**
+1. **USB tablet/kbd**: `EP0 slot=1 timeout (sem Status)` — command ring do
+   qemu-xhci não processa (SESSION_290 conhecido; PORTSC CCS=1 só prova porta).
+2. **PS/2 teclado**: `sendkey` HMP aceito pelo QEMU (erro "invalid parameter"
+   em key inválida prova o canal), mas 900× `L` densos não produziram o marcador
+   ADR-0100 ("tecla L -> Live") — cadeia IRQ1→InputAgent morta sob WHPX.
+3. **PS/2 mouse (QMP rel)**: eventos aceitos, zero reação (F4 timeout no boot).
+4. **LINJ**: gated em `model_is_loaded()` (`lab_inject.rs:25`); sob WHPX os
+   modelos são honest-deferidos do FAT-PIO; loader do Falcon3-1B @0x100000000
+   não foi pegos pelo scan (carregou o smoke 1MB) — investigar depois.
+
+**Consequência:** o clique do power dialog só é testável em **metal** — onde o
+touchpad do usuário FUNCIONA (provado: ele clicou [Reiniciar] no §14). Aceite =
+HW real (ADR-0113). Gaps novos para o IDEA_BANK: teclado sob WHPX (IRQ1?),
+loader-scan do Falcon3-1B, smoke de shutdown p/ CI (LPWR?).
