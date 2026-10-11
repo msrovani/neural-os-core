@@ -211,3 +211,32 @@ boot seguinte o logwriter-efi despeja o BOOT.LOG (prefere a partição de dados)
 ler no Windows. Se AINDA assim não capturar, o firmware do notebook zera o
 ramlog no warm-reset (cf. Note 1050, `boot_ramlog.rs:4`) — aí a única via é UART
 ou o fix do MSC (cc4/af2, §12).
+
+## 14. Re-teste #2: captura FALHOU — selo não sobrevive ao warm reset deste Dell
+
+Usuário regravou + bootou + [Reiniciar]. Pendrive após o ciclo:
+
+| Artefato | Estado | Leitura |
+|---|---|---|
+| `E:\BOOT.LOG` | placeholder intacto | `write_bootlog` não rodou → `take_pending()` = **None** |
+| `D:\BOOT.LOG` | **zerado** | artefato do RE-FLASH (imagem nova traz ESP BOOT.LOG zeros) — não é writer misterioso |
+| `D:\NEURAL\BOOT.LOG` | stamp 49 B intacto | fallback com payload NÃO rodou (senão o payload teria sobrescrito o stamp) → confirma `None` |
+
+**Diagnóstico:** o seal no clique executou (o reboot só acontece via
+`begin_orderly_reboot`, que é posterior ao `seal_now()`), mas o ramlog em
+`0x1000000` não tinha `NEURLOG!` válido no boot seguinte → **o firmware do
+notebook zera/clobber a região no warm-reset** (classe conhecida —
+`boot_ramlog.rs:4`, Note 1050). Alternativa: CF9 `0x0E` fez reset frio (DRAM
+re-treinada). Em ambos, o caminho ramlog→logwriter está MORTO neste hardware —
+nenhum fix de software preserva DRAM através do POST.
+
+**Instrumento novo (`19711aad`):** o stamp do stage-0 agora registra o que ele
+viu em `0x1000000` — `ramlog magic={:#x} len={} crc_ok={}` em
+`NEURAL\BOOT.LOG`. Próximo ciclo de metal dá o veredito definitivo:
+`magic=0x0` = firmware zerou (ou seal nunca escrito); `magic=NEURLOG!` +
+`crc_ok=false` = corrupção parcial; `crc_ok=true` = captura deveria ter
+funcionado (aí é bug no write).
+
+**Caminho estratégico:** o fix REAL é o MSC (cc4/af2 do §12) — com o
+Address Device funcionando, o kernel grava o BOOT.LOG DIRETAMENTE via USB no
+shutdown (`persist_now`), sem a dança ramlog→logwriter. É a frente s468.
