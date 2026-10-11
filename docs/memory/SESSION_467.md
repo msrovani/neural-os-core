@@ -113,3 +113,32 @@ com o diretório `boot` (alias `BOOT~1`). Fix:
 ---
 
 **Commits da rodada:** `e2d79925` → `f57b2eff` → `3dd54a63` → `9d2c276c` (s467d: AGENTS.md) → `09cc86b3` (s467e: ADR-0114) → **s467f: guard fix + verdict** (este commit).
+
+## 11. Metal boot #1 (Core 7 240H) — persistência NÃO ocorreu (verificado no pendrive)
+
+Usuário bootou o `usb_hw.img` em metal real (Core 7 240H) — sem celular, sem foto.
+Verificação do pendrive no Windows (dados = `E:`, ESP = `D:`):
+
+| Artefato | Estado | Significado |
+|---|---|---|
+| `E:\BOOT.LOG` (dados) | placeholder DEV/TEST intacto (173 B não-zero, 0.1%) | kernel **NÃO gravou** via USB-MSC |
+| `D:\BOOT.LOG` (ESP) | tail de log QEMU mesh antigo (44.778 B; `node=3`, MKTP; **0 hits** de `smp_online`/`BOOT SCORE`/`PORTSC`/`xHCI`) | logwriter-efi não despejou — ramlog vazio no 1º boot metal (esperado) |
+| `D:\NEURAL\BOOT.LOG` | `[S] neural-logwriter stage-0 OK (chainload next)` (49 B) | **UEFI + stage-0 + chainload Limine OK** — boot de verdade |
+| `E:\NSGDB.BIN` | 100% zeros | Tickv não persistiu (mesma causa) |
+
+**Diagnóstico:** boot metal #1 rodou (stage-0 OK + claim HITL do usuário), mas a
+persistência falhou em TODOS os caminhos: USB-MSC/BOT (residual conhecido — BOT
+nunca provado em metal, QEMU usa virtio-blk; stick possivelmente atrás de hub
+interno Dell — lição s313/314), ATA/AHCI ausentes no alvo (o BOOT.LOG alvo é o
+próprio stick), e o ramlog do boot #1 perdeu-se no power-off (Windows sobrescreveu
+a RAM). Evidência de runtime metal = **UNKNOWN** (ADR-0113).
+
+**Plano para capturar a evidência (substituto da foto 00:14.0) — mecanismo de
+2 boots documentado no próprio placeholder:**
+1. Boot metal #2: deixar rodar 1–2 min (ramlog enche — inclui `PRE HC=00:14.0
+   PORTSC=…` + `PORTSC settled` que o kernel loga via slog).
+2. **Reboot ordenado** pelo neural-os (dispara `seal_for_next_boot()`,
+   `shutdown.rs:151/208`).
+3. Boot metal #3: logwriter-efi stage-0 despeja o ramlog do boot #2 na ESP
+   (`D:\BOOT.LOG`).
+4. Windows: ler `D:\BOOT.LOG` → linhas do `00:14.0` = a "foto" textual do reviewer.
