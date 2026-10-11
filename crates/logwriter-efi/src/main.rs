@@ -364,6 +364,19 @@ fn main() -> Status {
         }
         None => {
             info!("ramlog ausente/vazio — 1o boot ou ja consumido");
+            // Anti-boot-loop (SESSION_467 §15): se o kernel armou power-off
+            // pós-captura e o header sobreviveu (parcialmente — payload
+            // corrompido), DESLIGA mesmo sem captura. Sem isto, [Desligar] em
+            // firmware que corrompe o payload mas preserva o header vira
+            // reboot infinito.
+            if unsafe { poweroff_requested() } {
+                info!("logwriter: sem captura + POFF armado → power-off");
+                uefi::runtime::reset(
+                    uefi::runtime::ResetType::SHUTDOWN,
+                    Status::SUCCESS,
+                    None,
+                );
+            }
         }
     }
 

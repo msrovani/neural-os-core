@@ -169,11 +169,31 @@ pub fn begin_orderly_shutdown(cause: ShutdownCause) -> ! {
         s5_poweroff_try();
         qemu_poweroff_gated();
     } else {
-        k_nano::slog_bin!(
-            "SHUTDOWN",
-            "warn",
-            "S5 skip — persistência direta falhou; warm-reset p/ captura"
-        );
+        let sandbox = k_nano::platform_probe::probe_done()
+            && k_nano::platform_probe::hypervisor()
+                != k_nano::platform_probe::HypervisorKind::None;
+        if sandbox {
+            // QEMU/sandbox: warm reset preserva a DRAM → captura primeiro
+            // (exp-1 original: logwriter grava + UEFI Shutdown).
+            k_nano::slog_bin!(
+                "SHUTDOWN",
+                "ok",
+                "sandbox: warm-reset p/ captura (logwriter grava BOOT.LOG + power-off)"
+            );
+        } else {
+            // HW real: firmware pode zerar o ramlog no warm-reset (SESSION_467
+            // §14 — Dell Core 7 240H medido) → captura via warm-reset vira
+            // BOOT-LOOP (logwriter não captura, não desliga, chainloada o OS).
+            // [Desligar] tem que DESLIGAR: S5 primeiro; a captura vira
+            // best-effort (só se o HW ignorar o S5) — o caminho de evidência
+            // canônico em HW é o MSC (persist_now), não o ramlog.
+            k_nano::slog_bin!(
+                "SHUTDOWN",
+                "warn",
+                "HW real: S5 primeiro — [Desligar] desliga (captura best-effort)"
+            );
+            s5_poweroff_try();
+        }
     }
     k_nano::slog_bin!("SHUTDOWN", "ok", "warm-reset p/ captura (CF9→8042→triple)");
     cf9_reset_try();
