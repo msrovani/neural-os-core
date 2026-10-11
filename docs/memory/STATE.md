@@ -1,4 +1,4 @@
-# STATE - neural-os-core v1.9.99-s463 - Mesh reliability: OOM root-cause + TALC-first + PMM reserve + validação 2/4 nós
+# STATE - neural-os-core v1.9.99-s464 - Regressão APIC EXTD (s463) corrigida + evidência QEMU honesta
 
 #   [s464] AUDITORIA USB BOOT.LOG (detalhe em docs/memory/SESSION_464.md)
 #     Verificação estática de auditoria externa + 9 fixes (working tree, sem HW).
@@ -11,6 +11,18 @@
 #     512/513/truncada/read-error); check 0 erros; k-nano 381 passed (serializado).
 #     xHCI reset + CCS=0/00:14.0 INTOCADOS (sem evidência pré-HCRST). Encerramento
 #     pendente de HW: gravação conhecida + readback + flush + recovery + origem.
+#
+#   [s464] REGRESSÃO APIC EXTD CORRIGIDA + EVIDÊNCIA QEMU (detalhe em docs/memory/SESSION_464.md)
+#     apic.rs (s463) testava IA32_APIC_BASE bit 11 (EN, sempre 1) como EXTD (bit 10,
+#     SDM §10.4.4) -> fail-closed em TODO boot QEMU -> smp_online=1 (M5/mesh4/QEMU3
+#     rodaram BSP-only; 10-04/05 = 4..6). FIX apic_base_extd() bit 10 + labels
+#     EN/EXTD + teste regressão (k-nano 12/12, check 0 erros). EVIDÊNCIA smoke WHPX:
+#     LAPIC inicializado + AP LAPIC 1..3 online + CorePools total=4 + smp_online=4
+#     (logs/boot_whpx_20261010_221534.txt). Launchers: qemu_mem_preflight.ps1 novo
+#     (RAM gate -Force/exit1 + WHPX probe); args dump por spawn (argv+host_free);
+#     rotação de serial; run-qemu-whpx retry por $LASTEXITCODE (catch era dead code).
+#     REFUTADO: "fallback WHPX→TCG sob pressão" — TCG era o default do p2p-mesh.
+#     PENDENTE: reprise M5/mesh4 com APs online; x2APIC real se EXTD=1; lanes 6-7.
 #
 #   [s463] CAMPANHA DE CONFIABILIDADE DO MESH (detalhe em docs/memory/SESSION_463.md)
 #     OOM root-caused: bump-first + dealloc no-op = churn permanente (~31,9KB/tick;

@@ -1,5 +1,22 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s464] - 2026-10-10 - Regressão APIC EXTD (s463) corrigida + integridade de evidência QEMU
+
+- **FIX regressão s463**: o gate fail-closed novo em `apic.rs` testava IA32_APIC_BASE
+  **bit 11** (EN — xAPIC enable, sempre 1) como EXTD (bit 10, SDM Vol 3A §10.4.4) →
+  LAPIC intocado em **todo boot QEMU** (WHPX e TCG) → `smp_online=1` em todas as runs de
+  10-10 (M5/mesh4/QEMU3 rodaram BSP-only; 10-04/05 tinham 4..6). `apic_base_extd()`
+  bit 10 + labels EN/EXTD corrigidos + teste regressão (k-nano apic 12/12, check 0 erros).
+  Evidência: **`smp_online=4`** no smoke WHPX (`logs/boot_whpx_20261010_221534.txt`,
+  AP LAPIC 1..3 online, CorePools total=4).
+- **Evidência QEMU honesta**: `tools/qemu_mem_preflight.ps1` novo (`Assert-QemuMemFree`
+  com -Force/exit1 + probe WHPX); **args dump por spawn** (argv completa + host_free +
+  FALLBACK); **rotação de serial logs** (runs consecutivos não se sobrescrevem mais);
+  `run-qemu-whpx.ps1` retry ladder acionável por `$LASTEXITCODE` (o catch era dead code —
+  PS 5.1 não lança em exit≠0 de exe nativo).
+- **Refutado**: a história de "fallback WHPX→TCG sob pressão de memória" — TCG era o
+  default do p2p-mesh (`-Accel tcg`); sem args dump era invisível.
+
 ## [Unreleased] - Auditoria USB BOOT.LOG: 9 fixes + readback + regressão host
 
 - **P0 `bulk_transfer` deadlock** (`xhci/mod.rs`): guard `XHCI_STATE` escopado só ao
