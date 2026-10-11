@@ -431,10 +431,10 @@ def populate(path):
         ("AGENT.BIN", find_file("AGENT.v6") or find_file("AGENT.BIN") or find_file("AGENT.BITNET")),
         # GOAL3: MicroPython WASM (tools/build_micropython_wasm.py → models/MICROPY.WASM)
         ("MICROPY.WASM", find_file("MICROPY.WASM") or find_file("micropython.wasm")),
-        # R2 (audit s402): BOOT.LOG pré-alocado (256KB zeros = BOOT_LOG_CAP).
-        # Sem dirent o flush falha sempre ("BOOT.LOG ausente no root"); com
-        # dirent o kernel sobrescreve só dados (data-only, sem rasgar dir).
-        ("BOOT.LOG", b"\x00" * (256 * 1024)),
+        # BOOT.LOG: único dirent, pré-alocado com header (append p/ CONFIG.TXT).
+        # s467: a entrada zeros duplicada (audit s402) gerava 2 dirents BOOT.LOG
+        # no root — lookup_file_size/overwrite achavam o primeiro; o segundo era
+        # peso morto. Ver boot_log logo abaixo.
         # R6 (audit run-R2): stub de knowledge por tópico p/ AutoLearn
         # (learn_topic usa bytes só p/ is_empty/len; treino real vem de
         # traces R3 — precedente MICROPY.WASM 71B). Conteúdo real via SDIO.

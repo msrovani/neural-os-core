@@ -59,6 +59,22 @@ O lab de 4 nós (com `-device qemu-xhci + usb-tablet + usb-kbd`) produziu sem cu
 ## 7. Pendências
 
 - Foto PRE/POST do `00:14.0` em HW real (usuário; passo 1 do plano do reviewer).
-- `mkfat32.py`: BOOT.LOG empacotado 2× (inventory FAT); `regulatory.db` e `WIFI.CFG` fora do pack.
+- ~~`mkfat32.py`: BOOT.LOG 2×; `regulatory.db`/`WIFI.CFG` fora do pack~~ — ver §8.
 - Mass Storage Reset ainda deferido (exige HW p/ provar).
 - Push dos commits `edc61ac4` + docs s467 (não pedido).
+
+## 8. Follow-up (mesma sessão): BOOT.LOG dedup + veredito dos "ausentes"
+
+- **BOOT.LOG 2× — bug real, fixado:** `populate()` tinha DUAS entradas na
+  mesma lista: zeros 256KB (audit s402, `2658291b`) + append com header
+  (SESSION_139, `437ff4c7`). FAT writer não dedup → 2 dirents no root; o
+  kernel (first-match) usava o zeros, o header era peso morto. Fix: removeu a
+  entrada zeros, ficou o append (256KB idêntico, header autodocumenta o
+  placeholder DEV/TEST). **Prova:** imagem 512MB gerada + walk do root →
+  `PASS: exatamente 1 BOOT.LOG` (guard em `tools/count_bootlog_dirents.py`,
+  anti-loop + offset de partição LBA 2048).
+- **`regulatory.db`/`WIFI.CFG` — NÃO empacotar:** zero consumidores em crates
+  vivas. `WIFI.CFG` só em `docs/archive/dead-modules/hermes/wifi_agent.rs`
+  (WifiAgent A-023 = ORPHAN); `regulatory.db` = download do s102 sem leitor.
+  Empacotar = arquivo morto na imagem (dívida ADR-0113). Se o WifiAgent
+  reviver, o pack ganha os dois junto com o consumer.

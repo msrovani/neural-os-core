@@ -11,8 +11,8 @@
 ## 📌 s467 — Pendências abertas (pós-tarefa s466b)
 
 - [ ] ▶️ Foto **PRE/POST do xHCI `00:14.0`** em HW real (passo 1 do reviewer): boot do notebook a partir de `target\usb_hw.img` → serial COM1 → pares `PRE HC=00:14.0 … PORTSC=… CCS=…` (pré-halt/HCRST) + `xHCI[..] PORTSC pre-PP:` + `PORTSC settled` (pós-PP); colar aqui antes de qualquer mudança de reset
-- [ ] `mkfat32.py`: BOOT.LOG empacotado **2×** no FAT32 (inventory da imagem)
-- [ ] Pack HW: `regulatory.db` e `WIFI.CFG` ausentes do FAT32 (imagens s466)
+- [x] `mkfat32.py`: BOOT.LOG empacotado **2×** — **FIXADO** (entrada zeros do audit s402 removida; fica só o append com header). Prova: `python tools/count_bootlog_dirents.py <img>` → `PASS: exatamente 1 BOOT.LOG`
+- [x] `regulatory.db`/`WIFI.CFG` "ausentes" do FAT32 — **NÃO empacotar** (evidência: zero consumidores em crates vivas; `WIFI.CFG` só em `docs/archive/dead-modules/hermes/wifi_agent.rs` ORPHAN; `regulatory.db` = download s102 órfão). Arquivo morto na imagem = dívida; se o WifiAgent reviver, o pack ganha o consumer junto
 - [ ] Mass Storage Reset (s465): ainda deferido — exige HW p/ provar
 - [ ] Push dos commits `edc61ac4` (s466b) + docs s467 (não pedido pelo maintainer)
 
