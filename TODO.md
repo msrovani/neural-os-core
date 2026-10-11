@@ -8,6 +8,14 @@
 
 ---
 
+## 📌 s467 — Pendências abertas (pós-tarefa s466b)
+
+- [ ] ▶️ Foto **PRE/POST do xHCI `00:14.0`** em HW real (passo 1 do reviewer): boot do notebook a partir de `target\usb_hw.img` → serial COM1 → pares `PRE HC=00:14.0 … PORTSC=… CCS=…` (pré-halt/HCRST) + `xHCI[..] PORTSC pre-PP:` + `PORTSC settled` (pós-PP); colar aqui antes de qualquer mudança de reset
+- [ ] `mkfat32.py`: BOOT.LOG empacotado **2×** no FAT32 (inventory da imagem)
+- [ ] Pack HW: `regulatory.db` e `WIFI.CFG` ausentes do FAT32 (imagens s466)
+- [ ] Mass Storage Reset (s465): ainda deferido — exige HW p/ provar
+- [ ] Push dos commits `edc61ac4` (s466b) + docs s467 (não pedido pelo maintainer)
+
 ## 🔥 s449 — Consolidação do working tree: E1–E4 (ADR-0113) + F1 + storage AION + cleanup dead-weight
 
 - [x] Commit de consolidação dos 41 modificados + untracked desde a s441 (E1–E4 + F1 + AION-storage + dead-weight + s441–s445)

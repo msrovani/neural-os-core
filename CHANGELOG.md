@@ -1,5 +1,28 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s467] - 2026-10-11 - Pós-tarefa s466b: lab 4 nós PASS + imagem HW + auditoria USB 9/9
+
+- **Lab mesh 4×(2G/4c) OVERALL PASS** (`logs\mesh4lab_verdict.txt`, 40min): `peers=3`
+  completo, A=Master / B/C/D=Worker, `smp_online=4` nos 4 nós; LLM ausente =
+  **honest-skip esperado** (`-m 2G` sem high-RAM — janela de modelos exige ≥~3G);
+  xHCI com `usb-tablet`+`usb-kbd` enumera (P5/P6 CCS=1) e entrega de graça a foto
+  **PRE HC=** completa do único HC do QEMU (`00:05.0`); HDA PARTIAL (widgets =
+  residual). 0 anomalias reais; lab limpo pós-run.
+- **Imagem HW:** `target\usb_hw.img` 8.319MB (`PACK_LLM=falcon3-1b,falcon3`) 10/10 +
+  smoke PASS (`logs\hw_image_s466_verdict.txt`). Inventario FAT: 63 entradas,
+  MBR `0x0C` canônico. Pendências: BOOT.LOG 2×, `regulatory.db`/`WIFI.CFG` fora.
+- **Auditoria USB (reviewer externo): 9/9 fechados sem código novo** — relatório
+  escrito contra a `main` pública antiga; verificação `file:line` confirmou tudo
+  já commitado (`e2d79925`/`85d7f632`): `persisted_to_storage` gate S5, EFI
+  `get_position()==len`, EP0 correlação ptr+slot+DCI, CDB 6/10, CSW tag+residue,
+  DMA 1 página persistente, eventos não-isoc com warn one-shot. Testes
+  `boot_logger` **13/13** (0/511/512/513, erro de leitura, cadeia truncada,
+  escrita parcial, corrupção). Pendente único: foto PRE/POST do `00:14.0` em
+  metal (procedimento HW, passo 1 do reviewer).
+- **`edc61ac4` lab launcher:** `run-mesh4-lab.ps1` imgDir `target\` primeiro
+  (contrato de freshness s466), `-Force` no preflight, disco FAT32
+  `snapshot=on` (4 writers seguros), HW sim `intel-hda`+`qemu-xhci` i440fx-safe.
+
 ## [1.9.99-s466] - 2026-10-11 - Mesh 4G/4c reprise: raiz do "1 core" = kernel stale em target1/
 
 - **FIX launcher (raiz do smp_online=1 no mesh):** `run-qemu-p2p-mesh.ps1` preferia

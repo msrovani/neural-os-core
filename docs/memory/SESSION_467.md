@@ -1,0 +1,64 @@
+# SESSION_467 — Pós-tarefa s466b: lab 4 nós OVERALL PASS + imagem HW PASS + auditoria USB 9/9 fechada
+
+**Data:** 2026-10-11
+**Commits da rodada:** `e2d79925` (s465, follow-up USB — outra frente), `dfaa17d6` (s466, tag `v1.9.99-s466`), `edc61ac4` (s466b, lab mesh4). Docs desta sessão = commit seguinte, tag `v1.9.99-s467`.
+
+## 1. Lab mesh 4 nós (4×2G/4c, HDA+xHCI sim) — OVERALL PASS
+
+Launcher `tools/run-mesh4-lab.ps1` (hub L2 `qemu_l2_hub.py` :19000; nós 10.0.3.2-.5, MACs únicos, `-m 2G -smp 4`). Veredito: `logs\mesh4lab_verdict.txt` (monitor 40min, hook-driven, 4/4 nós).
+
+| Marca | Resultado |
+|---|---|
+| M1 SMP | `smp_online=4` nos 4 nós (ticks 161824/171840/170944/170816) |
+| M2 Runtime | scheduler vivo nos 4 |
+| M3 FS | FAT32 3GB montada; LLM **ausente = honest-skip esperado** (`-m 2G` sem high-RAM em `0x100000000..`; janela de modelos exige ≥~3G — não é regressão) |
+| M4 Mesh | `peers=3` completo; A=Master, B/C/D=Worker |
+| M5 Periféricos | HDA PARTIAL (widgets=residual conhecida); **xHCI enumera tablet+kbd**: PORTSC CCS=1 nas ports P5/P6 (foto PRE grátis, ver §4) |
+| M6 Anomalias | 0 reais (9 matches de regex por nó = benévolos; o FAIL inicial do monitor foi over-matching, re-grep = 0) |
+| M7 Recursos | 4/4 QEMU + hub vivo; RAM 7085-7265MB; lab limpo pós-run (qemu_n=0, hub_n=0, free 7.6GB) |
+| M8 Silêncio | nenhum |
+
+Follow-ups anotados: node D `badsig=4 replay=573` (baixo, observar); `ELF segment data truncated` = known-acceptable (SESSION_455 legacy).
+
+## 2. Imagem HW — PASS
+
+`target\usb_hw.img` 8.319MB (`PACK_LLM=falcon3-1b,falcon3`, política s458): veredito `logs\hw_image_s466_verdict.txt` 10/10 + smoke PASS. Inventario FAT32: 63 entradas, MBR slot0 `0x0C` @LBA2048 canônico. Pendências do pack em §6.
+
+## 3. Auditoria USB (reviewer externo) — 9/9 confirmados, 0 linhas de código novas
+
+Reviewer escreveu contra a `main` pública antiga; verificação por `file:line` no working tree fechou tudo (já commitado em `e2d79925`/`85d7f632`):
+
+| Item | Estado | Evidência |
+|---|---|---|
+| `ramlog_flushed` → semântica | ✅ | `shutdown.rs:146` `persisted_to_storage = dump_boot_log_sector() \|\| try_flush_ramlog()`; só escrita não-volátil autoriza S5; `seal_for_next_boot()` separado |
+| EFI exige quantidade exata | ✅ | `logwriter-efi/src/main.rs:121-147` `set_position(0)` + `write()` + `get_position()==payload.len()` + `flush()` |
+| Testes 0/511/512/513, erro leitura, cadeia truncada, parcial, fronteira | ✅ 13/13 | `boot_logger.rs::tests` (s464): `sizes_across_sector_boundary`, `rejects_read_error_on_verify` (mock `DataFailDisk`), `rejects_truncated_chain`, `rejects_partial_write`, `catches_corruption` |
+| `wait_transfer_event()` correlação | ✅ | `bringup.rs:96` TRB ptr+slot+DCI 1; CC+residual logados; budget TSC 50ms |
+| Eventos alheios não-silenciosos | ✅ | isoc roteados (`route_isoc_event`); não-isoc → warn one-shot `mod.rs:1360` |
+| CDB length | ✅ | `usb_msc.rs:220-235` `cdb_len: u8` + `.min(16)`, só 6/10 |
+| CSW validado | ✅ | `usb_msc.rs:304-319` sig+tag+status+residue |
+| DMA reutilizável | ✅ | `usb_msc.rs:238-245` página 4KiB persistente por dispositivo; callers SCSI tipados `≤512` → overflow impossível |
+| Consolidar commit | ✅ | USB já em `e2d79925`; lab em `edc61ac4` |
+
+## 4. Foto xHCI — grátis no QEMU, metal pendente
+
+O lab de 4 nós (com `-device qemu-xhci + usb-tablet + usb-kbd`) produziu sem custo a foto do único HC do QEMU (`00:05.0`): `PRE HC=00:05.0 PORTSC=… CCS=… PED=… PLS=… SP=…` por porta (1-4 SS CCS=0; 5-6 USB2 **CCS=1 PED=1** = tablet+kbd) + `xHCI[0] PORTSC pre-PP:` + `PORTSC settled ccs=2`. Loop `for index in 0..n` cobre múltiplos HCs (`xHCI[{}/{}]`) → no metal `00:14.0` sai na mesma corrida. **Pendente do usuário:** par PRE/POST do `00:14.0` em HW real (passo 1 do reviewer; ver TODO s467).
+
+## 5. Fix do lab (`edc61ac4`)
+
+`run-mesh4-lab.ps1` +17/-4: `[switch]$Force` no preflight; **imgDir flip** `target\uefi.img` primeiro (contrato de freshness s466 — `target1/` é staging de modelos, nunca de imagem); disco FAT32 `target\disk_qemu.raw` anexado `if=ide,index=1,snapshot=on` (4 writers nunca corrompem a base); HW sim i440fx-safe `-audiodev none` + `intel-hda`+`hda-duplex` + `qemu-xhci`+`usb-tablet`+`usb-kbd` (combo provado `run-qemu-whpx.ps1:328-348`). PARSE OK; run de aceitação = o próprio lab §1.
+
+## 6. Lições
+
+- **Auditoria escrita contra main pública antiga ≠ trabalho pendente:** confirmar cada ponto por `file:line` no working tree ANTES de escrever código — 9/9 já estavam fechados; tentativa de "consertar" teria churnado código saudável.
+- **Testes pedidos já existiam:** consultar `SESSION_INDEX`/`SESSION_*` antes de criar trabalho — SESSION_464 já registrava os 13 testes `boot_logger` com exatamente os casos pedidos.
+- **Guest 2G sem LLM = honest-skip, não regressão:** a janela de modelos vive na high-RAM (`≥~3G`); lab de mesh em 2G prova SMP/mesh/periféricos, não inferência.
+- **Foto de xHCI é de graça em QEMU quando o device está no comando:** adicionar `qemu-xhci`+HID ao lab multi-nó deu a foto PRE completa do `00:05.0` sem nenhum boot extra.
+- **`route_isoc_event` retorna `true` incondicionalmente** (`mod.rs:1373`; nenhum caller lê o retorno). Se algum dia passarem a checar, corrigir para `routed`.
+
+## 7. Pendências
+
+- Foto PRE/POST do `00:14.0` em HW real (usuário; passo 1 do plano do reviewer).
+- `mkfat32.py`: BOOT.LOG empacotado 2× (inventory FAT); `regulatory.db` e `WIFI.CFG` fora do pack.
+- Mass Storage Reset ainda deferido (exige HW p/ provar).
+- Push dos commits `edc61ac4` + docs s467 (não pedido).

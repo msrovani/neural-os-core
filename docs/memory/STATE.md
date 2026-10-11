@@ -1,4 +1,14 @@
-# STATE - neural-os-core v1.9.99-s466 - Mesh reprise 4G/4c: smp_online=4 PROVADO (kernel stale em target1/ era a raiz)
+# STATE - neural-os-core v1.9.99-s467 - Pós-tarefa s466b: lab 4 nós PASS + imagem HW PASS + auditoria USB 9/9 fechada
+
+#   [s467] PÓS-TAREFA s466b (detalhe em docs/memory/SESSION_467.md)
+#     Lab mesh4 4x2G/4c com HDA+xHCI sim: OVERALL PASS (peers=3, A Master,
+#     B/C/D Worker, smp_online=4; LLM ausente = honest-skip esperado @2G sem
+#     high-RAM; xHCI P5/P6 CCS=1 = tablet+kbd; foto PRE 00:05.0 gratis).
+#     Imagem HW usb_hw.img 8319MB (PACK_LLM=falcon3-1b,falcon3) 10/10+smoke.
+#     Auditoria reviewer externo: 9/9 fechada no working tree (0 codigo novo;
+#     testes boot_logger 13/13). edc61ac4: lab imgDir target-first + -Force +
+#     disco FAT32 snapshot + intel-hda/xHCI. Pendente: foto PRE/POST 00:14.0
+#     em metal; BOOT.LOG dup no pack; regulatory.db/WIFI.CFG ausentes.
 
 #   [s466] MESH REPRISE 4G/4c PÓS-S464 (detalhe em docs/memory/SESSION_466.md)
 #     Raiz do "1 core" no mesh: run-qemu-p2p-mesh.ps1 preferia target1\uefi.img
