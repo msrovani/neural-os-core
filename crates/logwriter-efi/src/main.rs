@@ -288,9 +288,31 @@ fn chainload_limine() -> Result<(), &'static str> {
 }
 
 /// Marca no ESP que o stage-0 rodou (evidência metal sem serial).
+///
+/// Inclui o DIAGNÓSTICO do ramlog em `0x1000000` (magic/len/crc): distingue
+/// "seal não sobreviveu ao warm-reset (firmware zerou DRAM)" (magic=0) de
+/// "seal presente mas CRC fail" (corrupção parcial) de "captura ok". Sem isto
+/// cada ciclo de metal às cegas custa um reboot sem resposta.
 fn write_stage0_marker() {
-    let marker = b"[S] neural-logwriter stage-0 OK (chainload next)\n";
-    let _ = write_bootlog_on_esp(marker);
+    let (magic, len, crc_ok) = unsafe {
+        let hdr = &*(RAMLOG_PHYS as *const RamLogHeader);
+        let len = hdr.len;
+        let want = hdr.crc_and_ckpt & 0x00FF_FFFF;
+        let ok = if hdr.magic == MAGIC_NEED && len > 0 {
+            let n = (len as usize).min(RAMLOG_CAP.saturating_sub(HDR_SIZE));
+            let data =
+                core::slice::from_raw_parts((RAMLOG_PHYS + HDR_SIZE) as *const u8, n);
+            crc32_24(data) == want
+        } else {
+            false
+        };
+        (hdr.magic, len, ok)
+    };
+    let marker = format!(
+        "[S] neural-logwriter stage-0 OK (chainload next)\nramlog magic={:#018x} len={} crc_ok={}\n",
+        magic, len, crc_ok
+    );
+    let _ = write_bootlog_on_esp(marker.as_bytes());
 }
 
 fn build_payload(body: &[u8], ckpt: u8) -> Vec<u8> {
