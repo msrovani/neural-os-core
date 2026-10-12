@@ -138,7 +138,10 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
                         MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
                         return None;
                     }
-                    let hub_loc = xhci::DevLoc::root(port, 0);
+                    // Speed real pós-address (hint 0 nunca entra no Slot Context).
+                    let hub_speed =
+                        xhci::host_port_ccs(port).map(|(s, _)| s).unwrap_or(3);
+                    let hub_loc = xhci::DevLoc::root(port, hub_speed);
                     match try_msc_behind_hub(slot, hub_loc, mps) {
                         Some(dev) => {
                             MSC_TSC_DEADLINE.store(0, Ordering::Relaxed);
@@ -313,6 +316,21 @@ unsafe fn classify_root_port_once(port: u8, speed: u8) -> RootClass {
         fb_usb(&alloc::format!("USB: retry P{} reset", port));
         return RootClass::Fail;
     }
+    // Speed do PORTSC pós-reset quando o hint é 0 (hub-first): Slot Context
+    // Speed=0 nunca vai ao Address Device (cc=4 documentado, OSDev t=57945;
+    // o decode 0→3 vive em host_port_ccs). Sem CCS pós-reset = fail-closed.
+    let speed = if speed == 0 {
+        match xhci::host_port_ccs(port) {
+            Some((s, _)) => s,
+            None => {
+                k_nano::slog_hal!("USB", "warn", "port {} sem CCS pos-reset — sem try", port);
+                fb_usb(&alloc::format!("USB: P{} sem CCS pos-reset", port));
+                return RootClass::Fail;
+            }
+        }
+    } else {
+        speed
+    };
     let loc = xhci::DevLoc::root(port, speed);
     let slot = match xhci::host_enable_slot(port) {
         Some(s) if s > 0 => s,

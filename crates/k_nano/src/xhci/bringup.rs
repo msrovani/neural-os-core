@@ -1163,14 +1163,15 @@ unsafe fn reset_port(port: u8, speed_hint: u8) -> bool {
     let Some(addr) = portsc_addr(st, port) else { return false };
     let off = addr - st.base;
     let mut v = r32(st.base, off);
-    // Gate Gate 0: reset só de Disabled (PED=0) com CCS=1. PED=1 = já enabled
-    // (skip reset, OK); CCS=0 = sem device (fail-closed, sem reset destrutivo).
+    // Gate 0: CCS=0 = sem device (fail-closed, sem reset destrutivo).
+    // PED=1 NÃO pula o reset: Address Device exige Default state (xHCI §4.3.1).
+    // O skip anterior deixava o device no endereço do UEFI → SET_ADDRESS p/
+    // addr 0 sem resposta → cc=4 USB Transaction Error no metal (evidência
+    // s468: settle PED=1 + af2). wasabi/Linux resetam incondicionalmente
+    // (wasabi PortSc::reset, Linux hub_port_reset); o retry ladder do hub-child
+    // também era derrotado pelo skip (reset nunca acontecia no retry).
     // PLS/SPEED ignorados aqui (link pode estar em Polling/RxDetect transitório).
     let ccs = v & 1 != 0;
-    let ped = v & 2 != 0;
-    if ped {
-        return true;
-    }
     if !ccs {
         return false;
     }
