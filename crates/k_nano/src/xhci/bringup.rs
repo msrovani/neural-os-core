@@ -1693,6 +1693,54 @@ fn tt_think_time_wait(loc: &DevLoc) {
     );
 }
 
+/// Diagnóstico s468 (cc4 = USB Transaction Error no metal): no FAIL do
+/// Address Device, dumpa o que NÓS construímos (input ctx), o que o xHCI
+/// DEVOLVEU (output ctx — estado parcial pós-comando) e o estado da porta/HC
+/// (PORTSC cru, HCCPARAMS1/CSZ, CC). Visível no FB console em metal (serial
+/// não existe) — 1 boot decide a causa. Lock-free o suficiente: 1 lock curto.
+unsafe fn log_addr_fail_diag(in_ctx_va: *mut u8, out_ctx_va: *mut u8, port: u8, loc: &DevLoc) {
+    let (context_size, portsc, hcc1) = {
+        let g = XHCI_STATE.lock();
+        let Some(st) = g.as_ref() else { return };
+        let psa = portsc_addr(st, port);
+        let ps = match psa {
+            Some(addr) => r32(st.base, addr - st.base),
+            None => 0,
+        };
+        (st.context_size, ps, r32(st.base, 0x10))
+    };
+    let rd = |va: *mut u8, byte_off: usize| -> u32 {
+        core::ptr::read_volatile(va.add(byte_off) as *const u32)
+    };
+    // input: [ctl ctx][slot ctx][ep0 ctx] — cada um context_size bytes.
+    let in_slot = context_size;
+    let in_ep0 = 2 * context_size;
+    let cc = LAST_USB_CC.load(Ordering::Relaxed);
+    crate::slog_nano!(
+        "USB",
+        "warn",
+        "addr FAIL diag: in slot DW0={:#x} DW1={:#x} DW2={:#x} ep0 DW1={:#x} | out slot DW0={:#x} DW1={:#x}",
+        rd(in_ctx_va, in_slot),
+        rd(in_ctx_va, in_slot + 4),
+        rd(in_ctx_va, in_slot + 8),
+        rd(in_ctx_va, in_ep0 + 4),
+        rd(out_ctx_va, 0),
+        rd(out_ctx_va, 4)
+    );
+    crate::slog_nano!(
+        "USB",
+        "warn",
+        "addr FAIL hc: portsc={:#x} hcc1={:#x} csz64={} cc={} port={} speed={} route={:#x}",
+        portsc,
+        hcc1,
+        (hcc1 >> 2) & 1,
+        cc,
+        port,
+        loc.speed,
+        loc.route
+    );
+}
+
 /// Address Device com route string + TT (hub children — k_hal::usb).
 pub unsafe fn address_device_loc(slot: u8, loc: DevLoc, ep0_mps: u16) -> bool {
     // (2) TT think-time — no-op fora de hub child LS/FS sob HS Multi-TT.
@@ -1768,7 +1816,11 @@ pub unsafe fn address_device_loc(slot: u8, loc: DevLoc, ep0_mps: u16) -> bool {
 
     // (3) Root-only: 1 tentativa — path QEMU qemu-xhci inalterado.
     if !loc.is_hub_child() {
-        return issue_address_or_config_cmd(ctx.0, slot, 11); // Address Device
+        let ok = issue_address_or_config_cmd(ctx.0, slot, 11); // Address Device
+        if !ok {
+            log_addr_fail_diag(ctx.1, out_ctx.1, loc.root_port, &loc);
+        }
+        return ok;
     }
     // Hub child (hook R1): até 3 tentativas; antes de cada retry, re-executa o
     // port-reset sequencing xHCI §4.3.1 na root port (USB2 PR vs USB3 WPR +
@@ -1776,8 +1828,8 @@ pub unsafe fn address_device_loc(slot: u8, loc: DevLoc, ep0_mps: u16) -> bool {
     // Reset downstream do hub é job do R1 (class request, já feito no hook);
     // aqui o reset só re-estabelece o path como último recurso — o próximo
     // bringup re-enumera o hub do zero. Falha final = false, como antes.
-    if issue_address_or_config_cmd(ctx.0, slot, 11) {
-        return true;
+    if !issue_address_or_config_cmd(ctx.0, slot, 11) {
+        log_addr_fail_diag(ctx.1, out_ctx.1, loc.root_port, &loc); // 1ª falha só (retries spamam)
     }
     for attempt in 1..3 {
         crate::slog_nano!(
