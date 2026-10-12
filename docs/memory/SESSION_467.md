@@ -315,3 +315,34 @@ relevante para o s468.
 
 **Pendente do usuário:** o teste do **[Desligar]** (S5-first, `5de274ac`) — as
 fotos mostram o boot (T+45s), não o shutdown.
+
+## 18. [Desligar] em metal: DESLIGOU ✅ + correção do §11-§17 (E:\BOOT.LOG era resíduo QEMU)
+
+**Usuário clicou [Desligar] no soft-off e a máquina DESLIGOU** (sem boot-loop) —
+o fix S5-first + logwriter POFF validado em metal pelo operador.
+
+**CORREÇÃO (importante):** o `E:\BOOT.LOG` com 24KB (§11/§14/§17 discutiram como
+"metal") é **resíduo dos testes QEMU desta sessão** — prova no conteúdo:
+`Desktop iniciado @ 1280x800` + `ram=5120MB` + **zero hits** de `00:14`/`Haswell`/
+`Microsoft`/`2560` (metal = 2560x1600, 18.7GB, 00:14.0). Causa: os 7 boots QEMU
+de validação rodaram com `usb_hw.img` em IDE **sem `snapshot=on`** — o guest
+gravou o log dele na imagem via ATA (`bootlog: OK 3823 bytes`), e a imagem
+contaminada foi o que o usuário gravou no pendrive. **Lição violada:** edc61ac4
+já mandava `snapshot=on` no disco do lab. **Regra:** QEMU sobre o artefato de
+flash SEMPRE com `snapshot=on` (ou cópia) — o artefato é imutável fora do build.
+
+**Silver lining:** as linhas `Hibernacao ainda nao disponivel` (T+308) +
+`HIBERNATE S4 stub` (T+319) no resíduo = **o teste LINJ "hibernar" FUNCIONOU no
+QEMU** (`qemu_linj_hib2`): LINJ → USER_INTENT → Hermes → `handle_power_phrase` →
+SYSTEM_HIBERNATE → consumer. A wire da frase está validada ponta a ponta
+(o gate era `model_is_loaded()` — o smoke 1MB carregado satisfez).
+
+**Estado metal real (com imagem contaminada — kernel ERA o novo, o QEMU só
+tocou a partição de dados):** boot ok (fotos §17), [Desligar] → off ✅, MSC
+`msc=0` no HUD (o stick não recebeu escrita do kernel — o BOOT.LOG do pendrive
+era resíduo QEMU). **A persistência MSC em metal segue NÃO PROVADA** — o cc4/af2
+(s468) continua a frente.
+
+**Imagem regenerada LIMPA** (kernel `5f918e32` = + fix da msg do consumer;
+`count_bootlog_dirents` PASS). **Usuário: RE-GRAVAR o pendrive** antes do
+próximo teste metal.
