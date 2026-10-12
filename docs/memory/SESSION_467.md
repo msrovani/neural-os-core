@@ -284,3 +284,34 @@ Tentativa de validar o clique no QEMU (WHPX, usb_hw.img IDE, OVMF pflash):
 touchpad do usuário FUNCIONA (provado: ele clicou [Reiniciar] no §14). Aceite =
 HW real (ADR-0113). Gaps novos para o IDEA_BANK: teclado sob WHPX (IRQ1?),
 loader-scan do Falcon3-1B, smoke de shutdown p/ CI (LPWR?).
+
+## 17. Metal boot #2 (imagem nova) — **PRE/POST do 00:14.0 CAPTURADO na tela** (passo 1 do reviewer FECHADO)
+
+Usuário bootou o `usb_hw.img` novo (kernel `7069d285` + S5-first + logwriter POFF)
+no Core 7 240H e fotografou a TELA — o dump completo do xHCI saiu no FB console
+(a "escada de instrumentos" do SESSION_316 entregando em metal, onde serial não
+existe). **O passo 1 do reviewer está fechado com evidência textual em metal:**
+
+**PRE (pré-halt/HCRST), `PRE HC=00:14.0 RS=0 port=N`:**
+| Portas | Proto | PORTSC | Estado |
+|---|---|---|---|
+| 1-4 | SS | 0x2a0 CCS=0 PED=0 PLS=5 | Rx.Detect (nada conectado) |
+| **5-6** | USB2 | **0xe03 CCS=1 PED=1 PLS=0** | **U0, habilitadas (dispositivos)** |
+| 7-16 | USB2 | 0x2a0 CCS=0 | vazias |
+
+**POST (`xHCI[0] settle ccs=2 metal=1`):** idêntico ao PRE — **PP=1 preservado em
+todas as 16 portas**, P5/P6 estáveis em U0. A preocupação HCRST→PP=0
+(SESSION_316/327) **não se materializou** neste PCH.
+
+**HUD (T+45s):** `xhci c2 st10 00:14.0` · `usb 16p ccs4 no msc cc4 to0 dbc0 fo0
+af2` · `bootlog fail sem-backend msc=0 usb_ok=1` · `storage no dev` · `fault
+none` · `frame 8.9ms` · `ram 18680M` · `talc 29M/14009M`. O diagnóstico do §12
+se mantém: **Address Device falha 2× (cc4 = USB Transaction Error, to0 = sem
+timeout)** — 4 portas com dispositivo, slot nunca endereçado. Duas observações
+novas do boot log: (a) o bring-up USB roda DUAS vezes (PHASE 4 + PHASE 5
+"run early()"); (b) `c2` = 2 candidatos xHCI com BARs distintos
+(0x60420000/0x60421000) — confirmar BDF real do 2º (foto borrada) se for
+relevante para o s468.
+
+**Pendente do usuário:** o teste do **[Desligar]** (S5-first, `5de274ac`) — as
+fotos mostram o boot (T+45s), não o shutdown.
