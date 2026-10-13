@@ -349,6 +349,10 @@ pub struct TransformerModel {
     // Embedding Q6_K bruto (210B/256 pesos) quando embed_type==1 — decode row-wise
     // no embed_lookup (evita materializar ~1.31GB f32 do vocab 128256).
     pub embed_q6k: Option<Vec<u8>>,
+    // Unembed Q6_K bruto (210B/256 pesos) quando feat&0x08 — decode row-wise
+    // no unembed_logits via q6k_matmul_row (mesmo layout do embed Q6_K).
+    // None em todos os arquivos feat&8==0 (comportamento ternário intacto).
+    pub unembed_q6k: Option<Vec<u8>>,
     // RoPE
     pub rope_theta: f32,
     pub rope_cos: Vec<f32>,
@@ -1481,6 +1485,7 @@ impl TransformerModel {
             act_type: 0,
             embed_type: 0,
             embed_q6k: None,
+            unembed_q6k: None,
             rope_theta: 10000.0,
             rope_cos,
             rope_sin,
@@ -1505,6 +1510,16 @@ impl TransformerModel {
         if data.try_reserve_exact(self.hidden).is_err() {
             k_nano::slog_cortex!("FWD", "fail", "unembed_lookup reserve refuse h={}", self.hidden);
             return Tensor::zero((0, 0));
+        }
+        // Unembed Q6_K (feat&0x08): decode elemento por elemento (espelha embed_lookup).
+        if !self.tie_embeddings {
+            if let Some(q6k) = &self.unembed_q6k {
+                let cols = self.unembed.shape.1;
+                for row in 0..self.hidden {
+                    data.push(crate::gguf::q6k_get(q6k, row * cols + t) * self.unembed_scale);
+                }
+                return Tensor::from_row_major((1, self.hidden), data).unwrap_or_else(|| Tensor::zero((0, 0)));
+            }
         }
         for row in 0..self.hidden {
             let idx = row * self.unembed.shape.1 + t;
@@ -1556,6 +1571,7 @@ impl TransformerModel {
     }
 
     /// Logits de unembed (tied usa embed). Q6_K tied → q6k_matmul_row (ADR-0085 D6).
+    /// Unembed Q6_K (feat&0x08, untied) → q6k_matmul_row sobre unembed_q6k.
     fn unembed_logits(&self, hidden: &Tensor, vocab: usize) -> Tensor {
         if self.tie_embeddings && self.embed_type == 1 {
             if let Some(q6k) = &self.embed_q6k {
@@ -1567,6 +1583,19 @@ impl TransformerModel {
                     return t;
                 }
                 t.mul_scalar(self.embed_scale);
+                return t;
+            }
+        }
+        if !self.tie_embeddings {
+            if let Some(q6k) = &self.unembed_q6k {
+                let data = crate::gguf::q6k_matmul_row(q6k, self.hidden, vocab, &hidden.data);
+                let mut t = Tensor::from_row_major((1, vocab), data)
+                    .unwrap_or_else(|| Tensor::zero((0, 0)));
+                if !t.is_valid() {
+                    k_nano::slog_cortex!("FWD", "fail", "unembed q6k from_row refuse");
+                    return t;
+                }
+                t.mul_scalar(self.unembed_scale);
                 return t;
             }
         }
@@ -1609,7 +1638,11 @@ impl TransformerModel {
             return None;
         }
         // Q6K tied tem dequant próprio (temp) — pool não economiza lá.
+        // Unembed Q6_K (feat&0x08) idem: SSE2 ternário não serve — legado.
         if self.tie_embeddings && self.embed_type == 1 && self.embed_q6k.is_some() {
+            return None;
+        }
+        if self.unembed_q6k.is_some() {
             return None;
         }
         if !hidden.is_valid() || hidden.shape.0 != 1 || hidden.shape.1 == 0 {
@@ -2787,6 +2820,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             act_type: 0,
             embed_type: 0,
             embed_q6k: None,
+            unembed_q6k: None,
             rope_theta: theta,
             rope_cos, rope_sin,
         };
@@ -2996,6 +3030,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         act_type: 0,
         embed_type: 0,
         embed_q6k: None,
+        unembed_q6k: None,
         rope_theta: theta,
         rope_cos,
         rope_sin,
@@ -3172,6 +3207,8 @@ pub const RESIDENT_RUNTIME_RESERVE_MB: usize = 256;
 /// partir do offset atual: corpo restante do arquivo (packed + scales + rms,
 /// copiados 1:1) + zeros do unembed tied (`vec![0; …]`) + tabelas RoPE.
 /// Autodescritivo (header/tamanho) — zero shape hardcoded.
+/// v7: body_off já é pós-provenance/tok (header pulado antes do gate), então
+/// tok+prov (~3MB+~170B, nunca copiados) ficam fora da conta sem termo extra.
 pub fn estimate_resident_bytes(
     file_len: usize,
     body_off: usize,
@@ -3248,7 +3285,9 @@ fn resident_fits_bump_heap(
     false
 }
 
-/// Carrega modelo .bitnet v6. Retorna None em erro de parse.
+/// Carrega modelo .bitnet v6/v7. Retorna None em erro de parse.
+/// v7 = v6 + provenance após feat + tok_data BPB1 embutido (ADR-0115 §2.2);
+/// corpo (embed/layers/unembed/medusa/theta) é idêntico ao v6.
 pub fn load_model_v6(data: &[u8]) -> Option<TransformerModel> {
     let mut off = 0;
     let magic = read_u32(data, &mut off)?;
@@ -3260,23 +3299,54 @@ pub fn load_model_v6(data: &[u8]) -> Option<TransformerModel> {
         if version == 5 { return None; } // HWExpert v5 handled separately
         return load_model(data); // v3/v4 fallback
     }
-    if version > 6 { return None; }
-    // v6 preamble
+    if version != 6 && version != 7 {
+        k_nano::slog_cortex!("LLM", "fail",
+            "unsupported model version v{} (want v6/v7) — refuse, never misparse", version);
+        return None;
+    }
+    // v6/v7 preamble
     let _num_params = read_u64(data, &mut off)?;
     let model_type = read_u8(data, &mut off)?;
     if off + 3 > data.len() { return None; }
     if data[off] != 0 || data[off+1] != 0 || data[off+2] != 0 { return None; }
     off += 3;
     match model_type {
-        0 => load_llm_v6(data, &mut off),
+        0 => load_llm_v6(data, &mut off, version),
         1 => { k_nano::slog_cortex!("LLM", "ok", "v6 HWExpert"); None }
         2 => { k_nano::slog_cortex!("LLM", "ok", "v6 Router"); None }
         _ => None
     }
 }
 
-/// Parse LLM body (model_type=0) from v6 format.
-fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
+/// Provenance v7 (ADR-0115 §2.2, espelha write_provenance_v7):
+/// repo_len u16 + repo + rev 40B + conv_len u16 + conv + git 40B + 4B codes.
+/// Só existe em ver==7. Loga (como o [prov] do chat_v6) e avança o offset.
+/// Truncado/longo-demais ⇒ None (fail-closed, nunca misparse).
+fn skip_provenance_v7(data: &[u8], off: &mut usize) -> Option<()> {
+    let repo_len = read_u16(data, off)? as usize;
+    if repo_len > 4096 { return None; }
+    if *off + repo_len > data.len() { return None; }
+    *off += repo_len;
+    if *off + 40 > data.len() { return None; }
+    *off += 40; // rev ASCII
+    let conv_len = read_u16(data, off)? as usize;
+    if conv_len > 4096 { return None; }
+    if *off + conv_len > data.len() { return None; }
+    *off += conv_len;
+    if *off + 40 + 4 > data.len() { return None; }
+    *off += 40; // git ASCII
+    let scale_conv = data[*off];
+    let unpack_conv = data[*off + 1];
+    *off += 4;
+    k_nano::slog_cortex!("LLM", "ok", "v7 prov repo_len={} conv_len={} scale_conv={} unpack_conv={}",
+        repo_len, conv_len, scale_conv, unpack_conv);
+    Some(())
+}
+
+/// Parse LLM body (model_type=0) from v6/v7 format.
+/// v7 delta (ADR-0115 §2.2): provenance após feat + tok_data BPB1 embutido
+/// (só pulado aqui — wiring do BPE embutido fora de escopo, BPE.BIN/QEMU-loader intactos).
+fn load_llm_v6(data: &[u8], off: &mut usize, version: u16) -> Option<TransformerModel> {
     let hidden = read_u16(data, off)? as usize;
     let num_layers = read_u16(data, off)? as usize;
     let num_heads = read_u16(data, off)? as usize;
@@ -3292,15 +3362,22 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
     *off += 4;
     let _tok_type = read_u8(data, off)?;
     let tok_len = read_u32(data, off)? as usize;
+    // v6: tok_len=0; v7: tok BPB1 embutido (~3MB) — só pula (BPE sourcing intacto).
     *off = off.saturating_add(tok_len);
+    if *off > data.len() { return None; }
     let act_type = read_u8(data, off)?;
     let embed_type = read_u8(data, off)?;
     let feat = read_u8(data, off)?;
-    if feat & 0xF8 != 0 { return None; } // bits 3-7 must be 0
+    if feat & 0xF0 != 0 { return None; } // bits 4-7 must be 0 (bit3 = unembed Q6_K)
     let has_inner = (feat & 0x01) != 0;
     let has_ffn = (feat & 0x02) != 0;
     let has_theta = (feat & 0x04) != 0;
+    let has_unembed_q6k = (feat & 0x08) != 0;
     if act_type > 1 || embed_type > 2 { return None; }
+    // v7: provenance após feat (v6 não tem — corpo começa aqui).
+    if version == 7 {
+        skip_provenance_v7(data, off)?;
+    }
 
     let kv_head_dim = q_dim / num_heads.max(1);
     let k_dim = num_kv_heads * kv_head_dim;
@@ -3320,8 +3397,8 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
     }
 
     k_nano::slog_cortex!("LLM", "ok",
-        "v6 LLM h={} L={} q_dim={} vocab={} act={} emb={} feat=0x{:02x} max_seq={}",
-        hidden, num_layers, q_dim, vocab_size, act_type, embed_type, feat, max_seq);
+        "v{} LLM h={} L={} q_dim={} vocab={} act={} emb={} feat=0x{:02x} max_seq={} tok_len={}",
+        version, hidden, num_layers, q_dim, vocab_size, act_type, embed_type, feat, max_seq, tok_len);
 
     // Heap: NÃO estimar/resize aqui (premissa AIOS — self-adapting heap).
     // O bump allocator global cresce sozinho via grow_bump_auto quando a
@@ -3400,14 +3477,28 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
 
     let rms_final = read_f32_vec(data, off, hidden)?;
 
-    // Unembed — tied ⇒ ZERO bytes (ADR-0085 D3)
-    let (unembed, unembed_scale) = if !tie_embeddings {
-        read_ternary_tensor_with_scale(data, off, hidden, vocab_size as usize)?
-    } else {
+    // Unembed — tied ⇒ ZERO bytes (ADR-0085 D3); feat&0x08 ⇒ Q6_K bruto
+    // (mesmo layout do embed Q6_K: 210B/bloco de 256 + f32 scale).
+    let (unembed, unembed_scale, unembed_q6k) = if tie_embeddings {
         (PackedTernaryTensor {
             shape: (hidden, vocab_size as usize),
             packed_data: vec![0u8; (hidden * vocab_size as usize + 3) / 4],
-        }, 1.0)
+        }, 1.0, None)
+    } else if has_unembed_q6k {
+        let n_elems = hidden * vocab_size as usize;
+        let n_blocks = (n_elems + 255) / 256;
+        let expected = n_blocks * crate::gguf::Q6_K_BLOCK_BYTES;
+        if *off + expected > data.len() {
+            k_nano::slog_cortex!("LLM", "warn", "v6 Q6_K unembed truncated: need {}B have {}B", expected, data.len().saturating_sub(*off));
+            return None;
+        }
+        let raw = data[*off..*off + expected].to_vec();
+        *off += expected;
+        let scale = read_f32(data, off)?;
+        (PackedTernaryTensor { shape: (hidden, vocab_size as usize), packed_data: vec![] }, scale, Some(raw))
+    } else {
+        let (t, s) = read_ternary_tensor_with_scale(data, off, hidden, vocab_size as usize)?;
+        (t, s, None)
     };
 
     // Medusa heads
@@ -3432,7 +3523,7 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
     let (rope_cos, rope_sin) = rope_precompute(rope_seq, kv_head_dim, theta);
 
     let model = TransformerModel {
-        embed, embed_scale, embed_q6k, layers, rms_final, unembed, unembed_scale, medusa_heads,
+        embed, embed_scale, embed_q6k, layers, rms_final, unembed, unembed_scale, unembed_q6k, medusa_heads,
         vocab_size, hidden, num_layers, max_seq,
         num_heads, num_kv_heads, head_dim: kv_head_dim, kv_dim: q_dim,
         intermediate_size, ffn_group_size: ffn_group,
@@ -3456,6 +3547,9 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
 // - scales SEMPRE presentes em todo tensor quantizado
 
 /// Serializa o modelo no formato .bitnet v6 — byte-exato com bitnet_writer.py.
+/// ASSIMETRIA INTENCIONAL: writer é v6-only (kernel nunca salva modelos;
+/// não existe save-v7 — provenance/tok embutido são produzidos pelo
+/// conversor host). Round-trip de teste cobre só v6.
 pub fn save_model_v6(model: &TransformerModel) -> Option<Vec<u8>> {
     const U16MAX: usize = u16::MAX as usize;
     if model.hidden == 0 || model.num_heads == 0 || model.vocab_size == 0
@@ -3484,6 +3578,8 @@ pub fn save_model_v6(model: &TransformerModel) -> Option<Vec<u8>> {
     let has_ffn_layernorm = !(l0.rms_ffn_norm.len() == model.intermediate_size
         && l0.rms_ffn_norm.iter().all(|&x| x == 1.0));
     let has_theta = model.rope_theta > 1.0;
+    // bit3 = unembed Q6_K presente (só conta quando untied — tied ⇒ zero bytes).
+    let has_unembed_q6k = !model.tie_embeddings && model.unembed_q6k.is_some();
 
     // num_params: soma de todos os elementos de todos os tensores (informativo)
     let num_params = {
@@ -3504,7 +3600,8 @@ pub fn save_model_v6(model: &TransformerModel) -> Option<Vec<u8>> {
         n
     };
 
-    let feat = compute_feat(has_inner_attn_ln, has_ffn_layernorm, has_theta);
+    let feat = compute_feat(has_inner_attn_ln, has_ffn_layernorm, has_theta)
+        | ((has_unembed_q6k as u8) << 3);
 
     let mut out = Vec::new();
     // header v6
@@ -3585,13 +3682,21 @@ pub fn save_model_v6(model: &TransformerModel) -> Option<Vec<u8>> {
     // rms_final
     write_f32_vec_clamped(&mut out, &model.rms_final, hidden);
 
-    // unembed — tied ⇒ ZERO bytes (ADR-0085 D3)
+    // unembed — tied ⇒ ZERO bytes (ADR-0085 D3); feat&0x08 ⇒ Q6_K bruto + scale
     if !model.tie_embeddings {
-        if model.unembed.packed_data.len() != tern_packed_len(hidden, vocab) {
-            return None;
+        if let Some(q6k) = &model.unembed_q6k {
+            let n_elems = hidden * vocab;
+            let expected = ((n_elems + 255) / 256) * crate::gguf::Q6_K_BLOCK_BYTES;
+            if q6k.len() != expected { return None; }
+            out.extend_from_slice(q6k);
+            write_f32(&mut out, model.unembed_scale);
+        } else {
+            if model.unembed.packed_data.len() != tern_packed_len(hidden, vocab) {
+                return None;
+            }
+            out.extend_from_slice(&model.unembed.packed_data);
+            write_f32(&mut out, model.unembed_scale);
         }
-        out.extend_from_slice(&model.unembed.packed_data);
-        write_f32(&mut out, model.unembed_scale);
     }
 
     // medusa heads
@@ -3710,6 +3815,7 @@ pub fn model_save_roundtrip_self_test() -> bool {
         act_type: 0,
         embed_type: 0,
         embed_q6k: None,
+        unembed_q6k: None,
         rope_theta: 10000.0,
         rope_cos: alloc::vec![0.0; max_seq * kv_head_dim / 2],
         rope_sin: alloc::vec![0.0; max_seq * kv_head_dim / 2],
@@ -3919,6 +4025,7 @@ fn v6_writer_parity() {
         act_type: 0,
         embed_type: 0,
         embed_q6k: None,
+        unembed_q6k: None,
         rope_theta: 10000.0,
         rope_cos: alloc::vec![0.0; max_seq * kv_head_dim / 2],
         rope_sin: alloc::vec![0.0; max_seq * kv_head_dim / 2],
@@ -4008,7 +4115,7 @@ fn v6_roundtrip_load() {
         num_heads, num_kv_heads, head_dim: kv_head_dim, kv_dim: q_dim,
         intermediate_size, ffn_group_size: ffn_group,
         tie_embeddings: false,
-        act_type: 0, embed_type: 0, embed_q6k: None,
+        act_type: 0, embed_type: 0, embed_q6k: None, unembed_q6k: None,
         rope_theta: 10000.0,
         rope_cos: alloc::vec![0.0; max_seq * kv_head_dim / 2],
         rope_sin: alloc::vec![0.0; max_seq * kv_head_dim / 2],
@@ -5868,6 +5975,7 @@ fn vocab_shortlist_parity_unembed_logits() {
             act_type: 0,
             embed_type: 0,
             embed_q6k: None,
+            unembed_q6k: None,
             rope_theta: 10000.0,
             rope_cos: Vec::new(),
             rope_sin: Vec::new(),
@@ -5937,6 +6045,7 @@ fn p1_logits_pool_reuse_parity_and_kv_ratio() {
             act_type: 0,
             embed_type: 0,
             embed_q6k: None,
+            unembed_q6k: None,
             rope_theta: 10000.0,
             rope_cos: Vec::new(),
             rope_sin: Vec::new(),

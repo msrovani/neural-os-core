@@ -53,14 +53,15 @@ impl ModelHeader {
     }
 }
 
-/// Parse the v6 header without loading the full model — lightweight.
-/// Returns None if data is too short or not v6 LLM.
+/// Parse the v6/v7 header without loading the full model — lightweight.
+/// Returns None if data is too short or not v6/v7 LLM.
+/// v7 delta (ADR-0115 §2.2): tok BPB1 embutido + provenance após feat entram no size.
 pub fn parse_model_header(data: &[u8]) -> Option<ModelHeader> {
     if data.len() < 52 { return None; }
     let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
     if magic != 0xBE11BE11 { return None; }
     let version = u16::from_le_bytes([data[4], data[5]]);
-    if version != 6 || data[14] != 0 { return None; } // LLM only
+    if (version != 6 && version != 7) || data[14] != 0 { return None; } // LLM only
 
     let hidden = u16::from_le_bytes([data[18], data[19]]) as usize;
     let num_layers = u16::from_le_bytes([data[20], data[21]]) as usize;
@@ -73,11 +74,25 @@ pub fn parse_model_header(data: &[u8]) -> Option<ModelHeader> {
     let num_medusa = u32::from_le_bytes([data[36], data[37], data[38], data[39]]) as usize;
     let tie = &data[40..44] == b"TIED";
     let tok_len = u32::from_le_bytes([data[45], data[46], data[47], data[48]]) as usize;
-    if tok_len > 65536 { return None; }
-    let hdr_end = 49usize.checked_add(tok_len)?.checked_add(3)?;
+    // v6: tok vazio (cap histórico); v7: tok BPB1 embutido (~3MB).
+    let tok_cap = if version == 7 { 8 * 1024 * 1024 } else { 65536 };
+    if tok_len > tok_cap { return None; }
+    let mut hdr_end = 49usize.checked_add(tok_len)?.checked_add(3)?;
     if hdr_end > data.len() { return None; }
     let embed_type = *data.get(hdr_end.checked_sub(2)?)?;
     let feat = *data.get(hdr_end.checked_sub(1)?)?;
+    // v7: provenance após feat (repo_len + repo + rev40 + conv_len + conv + git40 + 4B).
+    if version == 7 {
+        let rl = u16::from_le_bytes(*data.get(hdr_end..hdr_end.checked_add(2)?)?.first_chunk::<2>()?) as usize;
+        if rl > 4096 { return None; }
+        let mut p = hdr_end.checked_add(2)?.checked_add(rl)?.checked_add(40)?;
+        if p > data.len() { return None; }
+        let cl = u16::from_le_bytes(*data.get(p..p.checked_add(2)?)?.first_chunk::<2>()?) as usize;
+        if cl > 4096 { return None; }
+        p = p.checked_add(2)?.checked_add(cl)?.checked_add(40)?.checked_add(4)?;
+        if p > data.len() { return None; }
+        hdr_end = p;
+    }
 
     // Calculate file size from header (same logic as the old v6_file_size)
     let kv_head_dim = q_dim.checked_div(num_heads.max(1))?;
@@ -106,7 +121,13 @@ pub fn parse_model_header(data: &[u8]) -> Option<ModelHeader> {
         .checked_add(7usize.checked_mul(4)?)?;
     size = size.checked_add(num_layers.checked_mul(per_layer_norms.checked_add(per_layer_tern)?)?)?;
     size = size.checked_add(hidden.checked_mul(4)?)?; // rms_final
-    if !tie { size = size.checked_add(hidden.checked_mul(vocab)?.checked_add(3)?.checked_div(4)?.checked_add(4)?)?; }
+    if !tie {
+        size = size.checked_add(if feat & 0x08 != 0 {
+            hidden.checked_mul(vocab)?.checked_add(255)?.checked_div(256)?.checked_mul(210)?.checked_add(4)?
+        } else {
+            hidden.checked_mul(vocab)?.checked_add(3)?.checked_div(4)?.checked_add(4)?
+        })?;
+    }
     size = size.checked_add(num_medusa.checked_mul(hidden.checked_mul(vocab)?.checked_add(3)?.checked_div(4)?.checked_add(4)?)?)?;
     if feat & 4 != 0 { size = size.checked_add(4)?; }
 
@@ -238,7 +259,7 @@ pub fn load_model_v6(data: &[u8]) -> Option<ModelView> {
     }
     let version = u16::from_le_bytes([data[4], data[5]]);
     match version {
-        6 => match data[14] {
+        6 | 7 => match data[14] {
             0 => crate::cortex::load_model_v6(data).map(ModelView::Llm),
             1 => crate::cortex::load_hwexpert_v6(data).map(ModelView::HwExpert),
             _ => {
@@ -324,5 +345,67 @@ mod tests {
     #[test]
     fn ppl_empty_is_max() {
         assert_eq!(ppl_estimate(""), u32::MAX);
+    }
+
+    /// v7 sintético: version-gate + provenance skip no size math.
+    /// Header mínimo (hidden=8, L=1, vocab=16, tok vazio, feat=0x04 theta).
+    /// Nunca include_bytes de modelo real (690MB+).
+    fn synth_header(version: u16, provenance: bool) -> alloc::vec::Vec<u8> {
+        let mut b = alloc::vec::Vec::new();
+        let u16le = |b: &mut alloc::vec::Vec<u8>, v: u16| b.extend_from_slice(&v.to_le_bytes());
+        let u32le = |b: &mut alloc::vec::Vec<u8>, v: u32| b.extend_from_slice(&v.to_le_bytes());
+        b.extend_from_slice(&0xBE11BE11u32.to_le_bytes());
+        u16le(&mut b, version);
+        b.extend_from_slice(&0u64.to_le_bytes()); // num_params
+        b.push(0); // model_type LLM
+        b.extend_from_slice(&[0, 0, 0]); // reserved
+        u16le(&mut b, 8); // hidden
+        u16le(&mut b, 1); // layers
+        u16le(&mut b, 2); // heads
+        u32le(&mut b, 16); // vocab
+        u16le(&mut b, 64); // max_seq
+        u16le(&mut b, 16); // intermediate
+        u16le(&mut b, 1); // kv_heads
+        u16le(&mut b, 8); // q_dim
+        u32le(&mut b, 0); // medusa
+        b.extend_from_slice(&[0, 0, 0, 0]); // tie_flag
+        b.push(0); // tok_type
+        u32le(&mut b, 0); // tok_len
+        b.push(0); // act
+        b.push(0); // embed_type ternary
+        b.push(0x04); // feat theta
+        if provenance {
+            u16le(&mut b, 1); // repo_len
+            b.push(b'r'); // repo
+            b.extend_from_slice(&[b'v'; 40]); // rev
+            u16le(&mut b, 0); // conv_len
+            b.extend_from_slice(&[b'g'; 40]); // git
+            b.extend_from_slice(&[1, 1, 0, 0]); // codes
+        }
+        b
+    }
+
+    #[test]
+    fn v7_provenance_skip_and_version_gate() {
+        // ver=8: parse None + load None (refuse explícito, nunca misparse).
+        let mut bad = synth_header(6, false);
+        bad[4] = 8; bad[5] = 0;
+        assert!(parse_model_header(&bad).is_none());
+        assert!(load_model_v6(&bad).is_none());
+        // v6 sem provenance: baseline.
+        let v6 = synth_header(6, false);
+        let h6 = parse_model_header(&v6).expect("v6 header");
+        assert_eq!(h6.hidden, 8);
+        // v7 com provenance (repo=1B): size = v6 + 89B exatos.
+        let v7 = synth_header(7, true);
+        let h7 = parse_model_header(&v7).expect("v7 header");
+        assert_eq!(h7.hidden, 8);
+        assert_eq!(h7.file_size - h6.file_size, 2 + 1 + 40 + 2 + 0 + 40 + 4);
+        // v7 sem provenance mas truncado no corpo: load None (fail-closed).
+        assert!(load_model_v6(&v7).is_none());
+        // v6 com tok_len acima do cap histórico: None (comportamento intacto).
+        let mut bigtok = synth_header(6, false);
+        bigtok[45] = 0x70; bigtok[46] = 0x11; bigtok[47] = 0x01; bigtok[48] = 0x00; // 70000
+        assert!(parse_model_header(&bigtok).is_none());
     }
 }

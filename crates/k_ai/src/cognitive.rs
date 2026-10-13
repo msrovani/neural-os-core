@@ -1410,6 +1410,7 @@ impl TransformerTrainer {
             act_type: 0,
             embed_type: 0,
             embed_q6k: None,
+            unembed_q6k: None,
             rope_theta: 10000.0,
             rope_cos: rc,
             rope_sin: rs,

@@ -19,12 +19,12 @@ import numpy as np
 
 try:
     from tools.bitnet_writer import (
-        write_header_v6, write_embed, write_rms, write_ternary, compute_feat,
+        write_header_v6, write_header_v7, write_embed, write_rms, write_ternary, write_q6k, compute_feat,
         MODEL_LLM, ACT_SILU, EMBED_Q6K,
     )
 except ImportError:
     from bitnet_writer import (
-        write_header_v6, write_embed, write_rms, write_ternary, compute_feat,
+        write_header_v6, write_header_v7, write_embed, write_rms, write_ternary, write_q6k, compute_feat,
         MODEL_LLM, ACT_SILU, EMBED_Q6K,
     )
 
@@ -54,15 +54,22 @@ def absmean_quantize(mat_f: np.ndarray) -> tuple[np.ndarray, float]:
 
 
 def unpack_hf_oi(u8: np.ndarray) -> np.ndarray:
-    """HF (out/4, in) uint8 -> int8 (out,in). Packing ao longo de out."""
+    """HF (out/4, in) uint8 -> int8 (out,in). Layout ESTRIDADO (transformers
+    integrations/bitnet.py pack/unpack_weights): byte (r,c) guarda as linhas
+    r, r+R, r+2R, r+3R (R=out/4) nos pares de bits 0,2,4,6 (LSb-first).
+    Mapa codigo->trit: valor = codigo - 1 (00->-1, 01->0, 10->+1);
+    codigo 3 (reservado, pack nunca emite) -> 0.
+    (A versao consecutiva byte r <-> linhas 4r..4r+3 permutava tudo: pesos
+    validos mas semanticamente errados -> salada de palavras.)"""
     out4, inn = u8.shape
-    flat = u8.astype(np.uint8).reshape(-1)
-    codes = np.empty((flat.size, 4), dtype=np.uint8)
-    for i in range(4):
-        codes[:, i] = (flat >> (2 * i)) & 3
-    lut = np.array([0, 1, -1, 0], dtype=np.int8)
-    trits = lut[codes]
-    return trits.reshape(out4, inn, 4).transpose(0, 2, 1).reshape(out4 * 4, inn)
+    out = out4 * 4
+    codes = (u8.reshape(-1, 1) >> (2 * np.arange(4))) & 3  # (out4*inn, 4)
+    lut = np.array([-1, 0, 1, 0], dtype=np.int8)
+    v = lut[codes].reshape(out4, inn, 4)
+    res = np.empty((out, inn), dtype=np.int8)
+    for j in range(4):
+        res[j * out4:(j + 1) * out4, :] = v[:, :, j]
+    return res
 
 
 def load_state_dict(src_dir: Path) -> tuple[dict, dict]:
@@ -118,27 +125,48 @@ def get_proj_tensor(state: dict, key: str, native: bool, rows: int, cols: int):
         q, scale = absmean_quantize(np.zeros((rows, cols), dtype=np.float32))
         return q, scale
 
-    # caso packed HF uint8 (out/4, in)
+    # escala nativa do checkpoint (BitNet weight_scale = 1/mean|w|; o forward
+    # BitLinear DIVIDE por ela: y = (x_q @ signs)/(x_scale*w_scale)).
+    # O .v6/kernel usa a convencao oposta (scale = mean|w|, forward MULTIPLICA;
+    # mesma dos arquivos absmean) -> grava o RECIPROCO. Sem isto, matmuls
+    # explodem ~256x (scores ~1e4, h ~1e8) e os logits saturam em uniforme.
+    # Ausente -> 1.0 (comportamento antigo).
+    def _src_scale(default=1.0):
+        s = state.get(key.replace(".weight", ".weight_scale"))
+        try:
+            return 1.0 / float(np.asarray(s).flat[0])
+        except Exception:
+            return default
+
+    # caso packed HF uint8 (out/4, in). O forward HF faz x@W.T e o .v6 guarda
+    # (in,out) com forward x@stored (sem transpose) -> SEMPRE transpor apos
+    # o unpack, inclusive no caso quadrado (out,in)==(rows,cols), onde o shape
+    # nao acusa e a falta so aparece como cos~0 com mesmo RMS (q/o do 1B).
     if native and arr.dtype == np.uint8:
-        # HF packed along out: shape (out/4, in) -> unpack to (out, in)
-        if arr.ndim == 2 and arr.shape[0] * 4 == rows and arr.shape[1] == cols:
+        # Projecoes retangulares (k/v/gate/up/down) e quadradas (q/o):
+        # HF (out/4, in) com (out,in)==(cols,rows) -> unpack + transpor.
+        if arr.ndim == 2 and arr.shape[0] * 4 == cols and arr.shape[1] == rows:
             q = unpack_hf_oi(arr)
-            return q.astype(np.int8), 1.0
+            return q.astype(np.int8).T.copy(), _src_scale()
         # fallback 1D packed
         if arr.ndim == 1:
             u8 = arr.reshape(rows // 4, cols)
             q = unpack_hf_oi(u8)
-            return q.astype(np.int8), 1.0
+            return q.astype(np.int8), _src_scale()
 
     # se ja ternario int8 {-1,0,1}
     if arr.dtype == np.int8 or (arr.dtype.kind in "iu" and set(np.unique(arr).tolist()) <= {-1, 0, 1}):
         q = arr.astype(np.int8).reshape(rows, cols)
         return q, 1.0
-    # se valores ja ternarios mas em float
-    if arr.dtype.kind == "f" and arr.size == rows * cols:
-        uniq = set(np.unique(np.round(arr).astype(int).ravel().tolist()))
-        if uniq <= {-1, 0, 1} and native:
-            return np.round(arr).astype(np.int8).reshape(rows, cols), 1.0
+    # se valores JA ternarios em float (trits exatos -1.0/0.0/1.0).
+    # Exige integralidade EXATA: denso arredondavel (ex. lm_head BF16 std~0.02)
+    # arredonda p/ {-1,0,1} mas NAO e ternario — passava aqui e virava ~100%
+    # zeros com scale 1.0 (FALCON3_1B.V6: unembed morto -> logits uniformes).
+    # Denso cai no absmean abaixo (correto).
+    if arr.dtype.kind == "f" and arr.size == rows * cols and native:
+        r = np.round(arr)
+        if np.abs(arr - r).max() == 0.0 and set(np.unique(r.astype(np.int8))).issubset({-1, 0, 1}):
+            return r.astype(np.int8).reshape(rows, cols), _src_scale()
 
     # denso BF16/f32 -> ternariza
     mat = arr.astype(np.float32)
@@ -156,7 +184,7 @@ def get_proj_tensor(state: dict, key: str, native: bool, rows: int, cols: int):
     return q, scale
 
 
-def convert(source: Path, output: Path, native: bool) -> None:
+def convert(source: Path, output: Path, native: bool, repo: str = "") -> None:
     state, cfg = load_state_dict(source)
 
     hidden = int(cfg.get("hidden_size", FALCON_HIDDEN))
@@ -187,6 +215,59 @@ def convert(source: Path, output: Path, native: bool) -> None:
     has_theta = True
     feat = compute_feat(has_inner, has_ffn, has_theta)
 
+    # unembed Q6K (feat bit3 0x08): se lm_head existe e e DENSO (float),
+    # preserva em Q6_K em vez de ternarizar. Ternarizar o unembed derruba a
+    # coerencia aberta (loops): prova em tools/probe_dense_unembed.py, onde
+    # Q6K empata caractere-a-caractere com o denso. Arquivos antigos (bit
+    # limpo) continuam ternarios; o loader le pelo bit (kernel + chat_v6).
+    FEAT_UNEMBED_Q6K = 0x08
+    _lm_probe = state.get("lm_head.weight", state.get("model.lm_head.weight"))
+    if _lm_probe is None:
+        for k in state:
+            if "lm_head" in k:
+                _lm_probe = state[k]
+                break
+    unembed_q6k = (not tie) and _lm_probe is not None and np.asarray(_lm_probe).dtype.kind == "f"
+    if unembed_q6k:
+        feat |= FEAT_UNEMBED_Q6K
+        print(f"  unembed=Q6_K (lm_head denso preservado, feat|=0x08)")
+
+    # --- v7: provenance + tokenizer embutido (ADR-0115 §2.2) ---
+    # So quando output termina em .V7 (.v6 ignora: write_header_v6 intacto).
+    prov = None
+    tok_bpb1 = b""
+    if output.suffix.upper() == ".V7":
+        import subprocess as _sp
+        try:
+            _git = _sp.run(["git", "rev-parse", "HEAD"], capture_output=True,
+                           text=True, cwd=str(ROOT)).stdout.strip()
+        except Exception:
+            _git = ""
+        prov = {"repo": repo or "unknown", "revision": "main",
+                "conv": "convert_falcon3_to_v6.py native+Q6K-unembed",
+                "git": _git or "unknown",
+                "scale_conv": 1, "unpack_conv": 1}
+        _tok_json = source / "tokenizer.json"
+        if _tok_json.is_file():
+            try:
+                from tools.export_bpe_bin import export as _bpe_export
+            except ImportError:
+                from export_bpe_bin import export as _bpe_export
+            import tempfile as _tf
+            with _tf.NamedTemporaryFile(suffix=".bin", delete=False) as _fh:
+                _tmp = Path(_fh.name)
+            try:
+                _rc = _bpe_export(_tok_json, _tmp, sp32=False)
+                if _rc == 0:
+                    tok_bpb1 = _tmp.read_bytes()
+                    print(f"  [T] tok embutido {len(tok_bpb1) // 1024}KB <- {_tok_json.name}")
+                else:
+                    print(f"  [WARN] export BPB1 rc={_rc} — tok vazio")
+            finally:
+                _tmp.unlink(missing_ok=True)
+        else:
+            print(f"  [WARN] {_tok_json} ausente — tok vazio")
+
     num_params = hidden * vocab_size  # embed
     if has_ffn:
         num_params += intermediate_size * num_layers  # rms_ffn_norm
@@ -198,25 +279,29 @@ def convert(source: Path, output: Path, native: bool) -> None:
     # medusa 0
 
     output.parent.mkdir(parents=True, exist_ok=True)
+    _is_v7 = output.suffix.upper() == ".V7"
     with open(output, "wb") as f:
-        write_header_v6(
-            f,
-            model_type=MODEL_LLM,
-            num_params=num_params,
-            hidden=hidden,
-            layers=num_layers,
-            heads=num_heads,
-            vocab=vocab_size,
-            max_seq=min(max_seq, 65535),
-            intermediate=intermediate_size,
-            kv_heads=num_kv_heads,
-            q_dim=q_dim,
-            medusa=0,
-            tie=tie,
-            act_type=ACT_SILU,
-            embed_type=EMBED_Q6K,
-            feat=feat,
-        )
+        _hdr = {
+            "model_type": MODEL_LLM,
+            "num_params": num_params,
+            "hidden": hidden,
+            "layers": num_layers,
+            "heads": num_heads,
+            "vocab": vocab_size,
+            "max_seq": min(max_seq, 65535),
+            "intermediate": intermediate_size,
+            "kv_heads": num_kv_heads,
+            "q_dim": q_dim,
+            "medusa": 0,
+            "tie": tie,
+            "act_type": ACT_SILU,
+            "embed_type": EMBED_Q6K,
+            "feat": feat,
+        }
+        if _is_v7:
+            write_header_v7(f, tok_bpb1=tok_bpb1, provenance=prov, **_hdr)
+        else:
+            write_header_v6(f, **_hdr)
         # embed (vocab, hidden) BF16 -> Q6_K (hidden, vocab) row-major
         emb_key = "model.embed_tokens.weight"
         if emb_key not in state:
@@ -291,6 +376,15 @@ def convert(source: Path, output: Path, native: bool) -> None:
                 print("  [WARN] lm_head ausente -> zeros")
                 q, scale = absmean_quantize(np.zeros((hidden, vocab_size), dtype=np.float32))
                 write_ternary(f, q.ravel(), scale)
+            elif unembed_q6k:
+                lm = np.asarray(lm, dtype=np.float32)
+                if lm.shape == (vocab_size, hidden):
+                    lm = lm.T
+                elif lm.shape != (hidden, vocab_size):
+                    lm = lm.reshape(hidden, vocab_size)
+                write_q6k(f, np.ascontiguousarray(lm), hidden, vocab_size)
+                f.write(struct.pack("<f", 1.0))
+                print(f"  [T] unembed {(hidden, vocab_size)} -> Q6_K {((hidden * vocab_size + 255) // 256) * 210} bytes")
             else:
                 lm = lm.astype(np.float32)
                 if lm.shape == (vocab_size, hidden):
@@ -307,23 +401,29 @@ def convert(source: Path, output: Path, native: bool) -> None:
 
     sz = os.path.getsize(output)
     print(f"\n[OK] {output}: {sz:,} bytes ({sz/1024/1024:.1f} MB)")
-    print(f"  v6: act=SILU embed=Q6_K feat=0x{feat:02x} tie={tie} theta={rope_theta}")
-    # Espelha para models/ (SESSION_280: modelos devem ficar em target1 E models)
-    try:
-        mirror = ROOT / "models" / "FALCON3.V6"
-        mirror.parent.mkdir(parents=True, exist_ok=True)
-        if mirror.resolve() != output.resolve():
-            import shutil
-            shutil.copy2(output, mirror)
-            print(f"[MIRROR] {mirror}: {sz:,} bytes (espelho de {output.name})")
-        # Alias .BIN para compat mkfat32 find_falcon3()
-        for alias in [ROOT / "target1" / "FALCON3.BIN", ROOT / "models" / "FALCON3.BIN"]:
-            if not alias.exists():
+    _ver = "v7" if output.suffix.upper() == ".V7" else "v6"
+    print(f"  {_ver}: act=SILU embed=Q6_K feat=0x{feat:02x} tie={tie} theta={rope_theta}")
+    # Espelha para models/ (SESSION_280) — SOMENTE no fluxo default
+    # (output FALCON3.V6). Saídas .V7/nomeadas nunca espelham: evita
+    # clobberar models/FALCON3.V6 com outro SKU.
+    if output.name != "FALCON3.V6":
+        print(f"  [MIRROR] skip (output nomeado {output.name})")
+    else:
+        try:
+            mirror = ROOT / "models" / "FALCON3.V6"
+            mirror.parent.mkdir(parents=True, exist_ok=True)
+            if mirror.resolve() != output.resolve():
                 import shutil
-                shutil.copy2(output, alias)
-                print(f"[MIRROR] {alias}: alias .BIN")
-    except Exception as e:
-        print(f"[MIRROR] WARN espelho falhou: {e}")
+                shutil.copy2(output, mirror)
+                print(f"[MIRROR] {mirror}: {sz:,} bytes (espelho de {output.name})")
+            # Alias .BIN para compat mkfat32 find_falcon3()
+            for alias in [ROOT / "target1" / "FALCON3.BIN", ROOT / "models" / "FALCON3.BIN"]:
+                if not alias.exists():
+                    import shutil
+                    shutil.copy2(output, alias)
+                    print(f"[MIRROR] {alias}: alias .BIN")
+        except Exception as e:
+            print(f"[MIRROR] WARN espelho falhou: {e}")
 
 
 def main():
@@ -332,6 +432,7 @@ def main():
     ap.add_argument("--output", type=Path, default=DEFAULT_OUT, help="arquivo .bitnet v6 saida (FALCON3.V6)")
     ap.add_argument("--native", action="store_true", help="entrada ja ternaria (1.58bit): so transpor/unpack, sem re-ternarizar")
     ap.add_argument("--hf-repo", type=str, default=None, help="atalho: baixa via download_falcon3.py e converte")
+    ap.add_argument("--repo", type=str, default="", help="repo fonte p/ provenance v7 (ex.: tiiuae/Falcon3-1B-Instruct-1.58bit)")
     args = ap.parse_args()
     src = args.source
     if args.hf_repo:
@@ -341,7 +442,7 @@ def main():
         variant = "1.58bit" if args.native else "base"
         subprocess.run([sys.executable, str(dl), "--variant", variant], check=True)
         src = DEFAULT_SRC
-    convert(src, args.output, args.native)
+    convert(src, args.output, args.native, repo=args.repo)
 
 
 if __name__ == "__main__":

@@ -725,6 +725,7 @@
 | posture FAIL de 1 amostra | OK - `POSTURE_MIN_SAMPLES=4` -> `n/a` |
 | 2o token (forward de decode) | residual (max_gen>1) |
 | prefill 3B ~7 s/layer (SMP) | alavanca: W2A8/GPU/AP-IDT |
+| Decode host .V7 (rig torch, greedy + rep 1.15 + mask 2137) | OK - 1B.V7 Q1+Q6 pass, 2.2-3.6 tok/s (~3-4x fonte); W2A8-host refutado; 7B/10B HYPOTHESIS (ferro insuficiente) |
 
 ## Lab vivo (s410)
 

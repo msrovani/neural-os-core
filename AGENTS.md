@@ -797,6 +797,12 @@ build/run continuam em `HOWTO.md`; aqui ficam só as ressalvas do ambiente Linux
 - Boot OK ⇒ `logs/boot.txt` mostra as 8 fases, `[ATA] ... slave FAT32`,
   `AgentFleet] 259 agents`, `[SCHEDULER] 259 runtime agents` e `[TIMER] ... tick=`
   incrementando (scheduler vivo).
+- **`Select-Object -First` mata produtores vivos (SESSION_468):** `comando | Select -First N` fecha o pipe e o produtor morre com erro de escrita ("erro de programa desconhecido") — o teste some do relatório sem deixar rastro. Em comandos longos, stream direto ou `Tee-Object`; nunca `-First`/`-Last` no meio do pipe.
+- **BF16 lido como FP16 vira viés determinístico (SESSION_468):** scales ~1e-5 com média −4,6M = sintoma de DTYPE, não de modelo ruim. Desconfie do dtype antes da matemática — valide o decode contra 1 valor conhecido (primeiro elemento do tensor) antes de julgar pesos.
+- **Direção da escala vem do FORWARD de referência, não do nome do campo (SESSION_468):** `scale` pode significar "multiplique" (BitNet: `w = q*scale/127`, divide por convenção da doc). Paridade elemento-a-elemento contra a referência em bytes reais decide; teste de invariante (média/desvio) não pega inversão.
+- **Docstring pode contradizer o próprio código (SESSION_468):** exemplo "4 bytes consecutivos" vs unpack estridado real. Desempatar sempre com paridade contra a referência nos BYTES reais, nunca com a doc.
+- **Erro-relativo-médio com piso de épsilon mente em saída esparsa (SESSION_468):** rel-err ~1,0 com logits idênticos a menos de escala. Use coseno + RMS; e top-1 que flipa (`eos` 0,43 vs `+` 0,29) pede distribuição top-k, não veredito binário.
+- **W2A8-host no CPU foi 6x pior que fonte (SESSION_468):** 0,3-0,7 vs 0,7-1,0 tok/s com vereditos idênticos. Quantizar o PESO sem acelerar o MATMUL é custo sem ganho — meça tok/s antes de adotar formato "otimizado".
 
 ## Repository Map
 

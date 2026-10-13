@@ -101,6 +101,69 @@ def write_header_v6(f, *, model_type, num_params, hidden, layers, heads, vocab,
         f.write(struct.pack('<H', layers))       # 23  (n_experts)
 
 
+# ── Header v7 (ADR-0115 §2.2): igual ao v6 + provenance após feat ──────
+VERSION7 = 7
+
+# scale_conv: 0=absmean, 1=reciproca-nativa; unpack_conv: 0=kernel-consecutivo, 1=estridado-HF
+SCALE_ABSMEAN = 0
+SCALE_RECIPROCAL_NATIVE = 1
+UNPACK_KERNEL = 0
+UNPACK_HF_STRIDED = 1
+
+
+def write_provenance_v7(f, *, repo="", revision="main", conv="", git="",
+                        scale_conv=SCALE_RECIPROCAL_NATIVE,
+                        unpack_conv=UNPACK_HF_STRIDED):
+    """Secao provenance (~170B): repo/rev/conv/git + convencoes. So em ver==7.
+    Lida pelo chat_v6 (print) e pulada pelo kernel. Fim da arqueologia."""
+    rb = repo.encode("utf-8")
+    f.write(struct.pack("<H", len(rb)))
+    f.write(rb)
+    f.write(revision.encode("ascii", "replace")[:40].ljust(40, b"\x00"))
+    cb = conv.encode("utf-8")
+    f.write(struct.pack("<H", len(cb)))
+    f.write(cb)
+    f.write(git.encode("ascii", "replace")[:40].ljust(40, b"\x00"))
+    f.write(struct.pack("<BBBB", scale_conv, unpack_conv, 0, 0))
+
+
+def write_header_v7(f, *, model_type, num_params, hidden, layers, heads, vocab,
+                    max_seq, intermediate, kv_heads, q_dim, medusa, tie,
+                    tok_bpb1=b"", act_type=ACT_SILU, embed_type=EMBED_TERNARY,
+                    feat=0, provenance=None):
+    """Header v7: layout v6 com version=7 + tok_data BPB1 + provenance.
+    write_header_v6 intocado (golden paridade)."""
+    f.write(struct.pack('<I', MAGIC))
+    f.write(struct.pack('<H', VERSION7))
+    f.write(struct.pack('<Q', num_params))
+    f.write(struct.pack('<B', model_type))
+    f.write(b'\x00\x00\x00')
+    if model_type in (MODEL_LLM, MODEL_HWEXPERT):
+        f.write(struct.pack('<H', hidden))
+        f.write(struct.pack('<H', layers))
+        f.write(struct.pack('<H', heads))
+        f.write(struct.pack('<I', vocab))
+        f.write(struct.pack('<H', max_seq))
+        f.write(struct.pack('<H', intermediate))
+        f.write(struct.pack('<H', kv_heads))
+        f.write(struct.pack('<H', q_dim))
+        f.write(struct.pack('<I', medusa))
+        f.write(b'TIED' if tie else b'\x00' * 4)
+        f.write(struct.pack('<B', 1 if tok_bpb1 else 0))
+        f.write(struct.pack('<I', len(tok_bpb1)))
+        if tok_bpb1:
+            f.write(tok_bpb1)
+        f.write(struct.pack('<B', act_type))
+        f.write(struct.pack('<B', embed_type))
+        f.write(struct.pack('<B', feat))
+        if provenance:
+            write_provenance_v7(f, **provenance)
+    elif model_type == MODEL_ROUTER:
+        f.write(struct.pack('<I', vocab))
+        f.write(struct.pack('<H', hidden))
+        f.write(struct.pack('<H', layers))
+
+
 # ── Body writers ────────────────────────────────────────────────────────
 
 def write_embed(f, vals: np.ndarray, embed_type: int, scale: float):

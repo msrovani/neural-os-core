@@ -1671,6 +1671,7 @@ impl GgufBackedModel {
             act_type: 0, // silu (Falcon3 default)
             embed_type: 0,
             embed_q6k: None,
+            unembed_q6k: None,
             rope_theta: theta,
             rope_cos,
             rope_sin,
