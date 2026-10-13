@@ -68,6 +68,79 @@ pub fn w2a8_ternary_matmul_scalar(w: &PackedTernaryTensor, x: &Tensor) -> Option
     w2a8_reference_quantized(w, x)
 }
 
+// ── I2_S scalar GEMV (W1.58A8): rollout gated, default OFF ──
+
+/// Rollout flag do GEMV I2_S (default OFF — FP legado até medida QEMU).
+/// Liga via `set_i2s_enabled(true)`; `matmul_hybrid` roteia p/ `i2s_ternary_gemv`.
+pub static I2S_ENABLED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+pub fn i2s_enabled() -> bool {
+    I2S_ENABLED.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn set_i2s_enabled(v: bool) {
+    I2S_ENABLED.store(v, core::sync::atomic::Ordering::Relaxed);
+    k_nano::slog_cortex!("I2S", "ok", "i2s set enabled={}", v as u8);
+}
+
+/// Só-testes: serializa o teste que alterna I2S_ENABLED contra testes que
+/// consomem `matmul_hybrid` (paridades/shortlist/router/bughunt) sob o
+/// harness paralelo (mesmo padrão de BPE_TEST_LOCK / ROUTER_TEST_LOCK).
+#[cfg(test)]
+pub(crate) static MATMUL_TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
+/// GEMV ternário escalar I2_S: ativações INT8 per-token (absmax/127 — mesma
+/// convenção de `w2a8_reference_quantized`) × pesos 2-bit via sign-select em
+/// int32 (`+a/-a/skip`), um único `×si` f32 por linha no fim. Sem LUT/SIMD.
+/// Espelha o path FP (`y[i,j] = Σ_t W[t,j]·x[i,t]`, sem bias; escala do caller
+/// via mul_scalar, como no legado). `|acc| ≤ 127·k` — exato em int32/f32 p/
+/// k real (≤23040 « 2^24).
+pub fn i2s_ternary_gemv(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
+    let (k, n) = w.shape;
+    let (m, k2) = x.shape;
+    if k != k2 || k == 0 || n == 0 || m == 0 || !x.is_valid() {
+        return None;
+    }
+    let mut out = Tensor::new((m, n));
+    if !out.is_valid() {
+        return None;
+    }
+    // xq é invariante em j — quantiza a linha UMA vez (O(m·k), não O(m·n·k)).
+    let mut xq = Vec::new();
+    if xq.try_reserve_exact(k).is_err() {
+        return None;
+    }
+    xq.resize(k, 0i32);
+    for i in 0..m {
+        let base = i * k;
+        let mut max_abs = 0.0f32;
+        for &v in &x.data[base..base + k] {
+            let a = v.abs();
+            if a > max_abs {
+                max_abs = a;
+            }
+        }
+        let si = if max_abs > 1e-9 { max_abs / 127.0 } else { 1.0 };
+        let inv_si = 1.0 / si;
+        for t in 0..k {
+            xq[t] = unsafe { libm::roundf(x.data[base + t] * inv_si) } as i32;
+        }
+        for j in 0..n {
+            let mut acc = 0i32;
+            for t in 0..k {
+                match w.get_weight(t * n + j) {
+                    1 => acc += xq[t],
+                    -1 => acc -= xq[t],
+                    _ => {}
+                }
+            }
+            out.data[i * n + j] = acc as f32 * si;
+        }
+    }
+    Some(out)
+}
+
 /// W2A8: out[m,n] = quantized(x) @ w_ternary.
 /// Host: AVX2 maddubs. Bare-metal: scalar quantizado.
 pub unsafe fn w2a8_ternary_matmul(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
@@ -383,6 +456,96 @@ mod tests {
             let denom = want.data[i].abs().max(1e-3);
             let rel = ((got.data[i] - want.data[i]).abs() / denom).min(1.0);
             assert!(rel < 0.01, "maddubs tail idx={} rel={:.4}", i, rel);
+        }
+    }
+
+    /// I2_S parity gate (W1.58A8): sign-select int32 vs ref quantizada (mesmo
+    /// contrato → tolerância 1e-6) + vs FP puro (cosine > 0.999 e maxdiff sob
+    /// o bound analítico err ≤ k·si/2, si ≤ max_abs/127) + rollout (default
+    /// OFF; `matmul_hybrid` roteia com flag ON e restaura OFF no fim).
+    #[test]
+    fn i2s_gemv_parity_and_rollout() {
+        let _g = MATMUL_TEST_LOCK.lock(); // série com consumidores de matmul_hybrid
+        assert!(!i2s_enabled(), "I2_S rollout default OFF");
+        // (k, n, m, seed): cauda n%4 + k=1/n=1 + forma média.
+        for (k, n, m, seed) in [(256usize, 17usize, 3usize, 11u32), (64, 9, 2, 4242), (1, 1, 1, 5), (32, 4, 4, 7)] {
+            let w = tern(k, n, seed);
+            let mut xdata = Vec::with_capacity(m * k);
+            for i in 0..m {
+                for t in 0..k {
+                    xdata.push(((i * 31 + t * 7 + seed as usize) % 11) as f32 * 0.25 - 1.25);
+                }
+            }
+            let x = Tensor::from_row_major((m, k), xdata).unwrap();
+            let got = i2s_ternary_gemv(&w, &x).expect("i2s None");
+            let qref = w2a8_reference_quantized(&w, &x).expect("qref None");
+            assert_eq!(got.shape, (m, n));
+            for i in 0..m * n {
+                assert!(
+                    (got.data[i] - qref.data[i]).abs() < 1e-6,
+                    "i2s vs quant k={} n={} m={} idx={} got={} want={}",
+                    k, n, m, i, got.data[i], qref.data[i]
+                );
+            }
+            let pure = w2a8_reference_scalar(&w, &x).expect("pure None");
+            let (mut dot, mut aa, mut bb, mut maxdiff) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+            for i in 0..m * n {
+                let (g, p) = (got.data[i], pure.data[i]);
+                dot += g * p;
+                aa += g * g;
+                bb += p * p;
+                let d = (g - p).abs();
+                if d > maxdiff {
+                    maxdiff = d;
+                }
+            }
+            let cos = dot / (aa.sqrt() * bb.sqrt()).max(1e-9);
+            if aa < 1e-12 && bb < 1e-12 {
+                // Saída degenerada (p.ex. peso 0 em k=1): cosine indefinido —
+                // vale igualdade aproximada direta.
+                assert!(maxdiff < 1e-6, "i2s zero-case k={}: {}", k, maxdiff);
+            } else {
+                assert!(cos > 0.999, "i2s cosine k={} n={} m={}: {:.6}", k, n, m, cos);
+            }
+            // xdata ∈ [-1.25, 1.5] ⇒ max_abs ≤ 1.5 ⇒ bound = k·1.5/254.
+            let bound = k as f32 * 1.5 / 254.0 + 1e-6;
+            assert!(maxdiff <= bound, "i2s maxdiff k={}: {} > bound {}", k, maxdiff, bound);
+        }
+        // Linha zerada → si=1.0, saída exata zero.
+        {
+            let w = tern(16, 4, 3);
+            let x = Tensor::from_row_major((1, 16), vec![0.0f32; 16]).unwrap();
+            let got = i2s_ternary_gemv(&w, &x).expect("i2s zero");
+            for &v in &got.data {
+                assert_eq!(v, 0.0);
+            }
+        }
+        // Rollout pelo funil: OFF → FP legado; ON → i2s bit-exato.
+        {
+            let w = tern(64, 9, 4242);
+            let mut xdata = Vec::with_capacity(2 * 64);
+            for i in 0..2 {
+                for t in 0..64 {
+                    xdata.push(((i * 31 + t * 7) % 11) as f32 * 0.25 - 1.25);
+                }
+            }
+            let x = Tensor::from_row_major((2, 64), xdata).unwrap();
+            let fp = w.matmul_hybrid(&x).expect("hybrid OFF None");
+            let pure = w2a8_reference_scalar(&w, &x).expect("pure None");
+            for i in 0..fp.data.len() {
+                let denom = pure.data[i].abs().max(1e-3);
+                let rel = ((fp.data[i] - pure.data[i]).abs() / denom).min(1.0);
+                assert!(rel < 0.01, "hybrid OFF ≠ FP idx={} rel={:.4}", i, rel);
+            }
+            set_i2s_enabled(true);
+            let routed = w.matmul_hybrid(&x).expect("hybrid ON None");
+            let direct = i2s_ternary_gemv(&w, &x).expect("direct None");
+            assert_eq!(routed.shape, direct.shape);
+            for i in 0..routed.data.len() {
+                assert_eq!(routed.data[i].to_bits(), direct.data[i].to_bits(), "rota ON idx={}", i);
+            }
+            set_i2s_enabled(false);
+            assert!(!i2s_enabled(), "flag restaurada OFF");
         }
     }
 }

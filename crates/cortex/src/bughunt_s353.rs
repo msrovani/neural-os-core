@@ -102,6 +102,8 @@ fn embed_for_kv_mask_never_one_by_one() {
 
 #[test]
 fn apply_one_layer_refuses_bad_mask() {
+    // I2S rollout: apply_one_layer alcança matmul_hybrid — série com o toggle.
+    let _gm = crate::bitnet_w2a8::MATMUL_TEST_LOCK.lock();
     let model = TransformerModel::new();
     let mut cache = KvCache::new(model.layers.len(), model.layers[0].k.shape.1, model.kv_dim);
     let mut x = Tensor::new((2, model.hidden));
@@ -118,6 +120,8 @@ fn soft_stride_pad_keeps_all_layers_aligned() {
     // Segura o lock durante set+forward+assert — set/clear públicos também
     // usam TEST_LOCK; usar *_inner para não deadlock (spin não-reentrante).
     let _g = difficulty_gate::TEST_LOCK.lock();
+    // I2S rollout: forward_with_kv consome matmul_hybrid — série com o toggle.
+    let _gm = crate::bitnet_w2a8::MATMUL_TEST_LOCK.lock();
     difficulty_gate::clear_soft_stride_override_inner();
     let model = TransformerModel::new();
     difficulty_gate::set_soft_stride_override_inner(2); // skip odd layers

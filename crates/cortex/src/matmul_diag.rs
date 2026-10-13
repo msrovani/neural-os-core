@@ -63,7 +63,7 @@ static CALL_LOG: [AtomicU64; 8] = [
 
 /// Caminho tomado dentro do wrapper ternário (campo `path` do registro).
 /// 0=guard  1=avx512 2=avx512-invalid  3=baremetal-sse2  4=host-avx2
-/// 5=x86-sse2 (sem counter de sse2)  6=lane4  7=scalar
+/// 5=x86-sse2 (sem counter de sse2)  6=lane4  7=scalar  8=i2s-gemv (gated)
 pub fn note_call(k: usize, n: usize, m: usize, path: u32, valid: bool) {
     let idx = (CALLS.fetch_add(1, Ordering::Relaxed) as usize) & 7;
     let packed = (k.min(0xFFFF) as u64)

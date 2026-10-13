@@ -1317,6 +1317,8 @@ mod tests {
 
     #[test]
     fn untrained_lcg_is_not_moe_and_keywords_win() {
+        // I2S rollout: classify alcança matmul_hybrid — série com o toggle.
+        let _gm = crate::bitnet_w2a8::MATMUL_TEST_LOCK.lock();
         let r = init_trinity();
         assert!(!r.moe_router_loaded());
         assert_eq!(r.classify_intent("mute volume").name, "hw_control");
@@ -1341,6 +1343,8 @@ mod tests {
     fn router_encode_and_decision_match_python_reference() {
         use core::sync::atomic::Ordering;
         let _g = ROUTER_TEST_LOCK.lock();
+        // I2S rollout: rota neural consome matmul_hybrid — série com o toggle.
+        let _gm = crate::bitnet_w2a8::MATMUL_TEST_LOCK.lock();
         const FIXTURE: &str = include_str!("../../../tools/router_parity_fixture.txt");
         // Cópia RASTREADA do artefato: `target1/` é gitignored, então include_bytes!
         // nele quebraria o compile num clone limpo. O par artefato+fixture fica

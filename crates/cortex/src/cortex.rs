@@ -5978,6 +5978,8 @@ impl Intent {
 #[cfg(test)]
 #[test]
 fn vocab_shortlist_parity_unembed_logits() {
+    // I2S rollout: consome matmul_hybrid — série com o teste que alterna a flag.
+    let _g = crate::bitnet_w2a8::MATMUL_TEST_LOCK.lock();
     let hidden = 16usize;
     let vocab_size = 32u32;
 
@@ -6050,6 +6052,8 @@ fn vocab_shortlist_parity_unembed_logits() {
 #[cfg(test)]
 #[test]
 fn p1_logits_pool_reuse_parity_and_kv_ratio() {
+    // I2S rollout: consome matmul_hybrid — série com o teste que alterna a flag.
+    let _g = crate::bitnet_w2a8::MATMUL_TEST_LOCK.lock();
     let hidden = 16usize;
     let tern = |rows: usize, cols: usize, seed: u64| -> PackedTernaryTensor {
         let mut s = seed;

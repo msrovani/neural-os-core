@@ -410,6 +410,19 @@ impl PackedTernaryTensor {
         if !input.is_valid() {
             return None;
         }
+        // I2_S gated rollout (default OFF): mesmo contrato, inner loop inteiro.
+        // Falha aqui cai no FP legado (flag experimental nunca quebra o boot).
+        if crate::bitnet_w2a8::i2s_enabled() {
+            let (k, n) = self.shape;
+            let (m, _) = input.shape;
+            if let Some(r) = crate::bitnet_w2a8::i2s_ternary_gemv(self, input) {
+                if r.is_valid() {
+                    crate::matmul_diag::note_call(k, n, m, 8, true);
+                    return Some(r);
+                }
+                crate::matmul_diag::note_call(k, n, m, 8, false);
+            }
+        }
         crate::bitnet_avx2::ternary_matmul(self, input)
     }
 }
