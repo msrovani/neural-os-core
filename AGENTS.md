@@ -803,6 +803,7 @@ build/run continuam em `HOWTO.md`; aqui ficam só as ressalvas do ambiente Linux
 - **Docstring pode contradizer o próprio código (SESSION_468):** exemplo "4 bytes consecutivos" vs unpack estridado real. Desempatar sempre com paridade contra a referência nos BYTES reais, nunca com a doc.
 - **Erro-relativo-médio com piso de épsilon mente em saída esparsa (SESSION_468):** rel-err ~1,0 com logits idênticos a menos de escala. Use coseno + RMS; e top-1 que flipa (`eos` 0,43 vs `+` 0,29) pede distribuição top-k, não veredito binário.
 - **W2A8-host no CPU foi 6x pior que fonte (SESSION_468):** 0,3-0,7 vs 0,7-1,0 tok/s com vereditos idênticos. Quantizar o PESO sem acelerar o MATMUL é custo sem ganho — meça tok/s antes de adotar formato "otimizado".
+- **Dispatch com falha de transporte pode ter executado server-side (SESSION_469):** `getaddrinfo ENOTFOUND` no dispatch + resume recusado (owned) = a geração fantasma FEZ o trabalho. Antes de re-despachar em sessão fresca: 1 `task_status` (read-only); se sem live entry, despachar fresca com ordem de *verificar-antes-de-refazer* — a fresca validou a extensão em vez de duplicar.
 
 ## Repository Map
 
