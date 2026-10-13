@@ -4271,6 +4271,25 @@ pub fn set_coherence(enabled: bool, temp: f32, top_k: usize, repeat: f32) {
         enabled as u8, temp, top_k, repeat);
 }
 
+// ── IDEA #692: decode policy do rig no path Falcon ──
+
+/// Janela da penalidade: cauda de (prompt+gerados), igual ao rig
+/// `(ids+out)[-penalty_last_n:]` (chat_v6.py `generate`, default 64).
+pub const PENALTY_LAST_N: usize = 64;
+/// Repetition penalty estilo llama no path Falcon, default ON 1.15 (rig-proven).
+/// Tunável em runtime via `set_repetition_penalty` (1.0 = off).
+pub static REPETITION_PENALTY_BITS: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(f32::to_bits(1.15));
+
+pub fn repetition_penalty() -> f32 {
+    f32::from_bits(REPETITION_PENALTY_BITS.load(core::sync::atomic::Ordering::Relaxed))
+}
+
+pub fn set_repetition_penalty(rep: f32) {
+    REPETITION_PENALTY_BITS.store(f32::to_bits(rep), core::sync::atomic::Ordering::Relaxed);
+    k_nano::slog_cortex!("GEN", "ok", "repetition_penalty set rep={}", rep);
+}
+
 struct SampleRng(u32);
 impl SampleRng {
     fn seed() -> Self {
@@ -4340,23 +4359,42 @@ pub fn sample_token_coherence(logits: &Tensor, row: usize, recent: &[u32]) -> u3
     best
 }
 
-/// Argmax puro sobre HF vocab (ora-1 bullet3): logits crus, sem score_piece /
-/// weather_bias / coherence. As funções de bias seguem existindo p/ o path
-/// clima dedicado (`argmax_row_weather_only`); o path Falcon nunca as chama.
-pub fn argmax_row_hf_vocab(logits: &Tensor, row: usize, recent: &[u32]) -> u32 {
+/// Argmax puro sobre HF vocab (ora-1 bullet3) + decode policy do rig (IDEA #692):
+/// repetition penalty llama-style (v>0 → v/rep, v<0 → v*rep, v==0 intacto)
+/// sobre ids distintos da cauda `hist` (prompt+gerados, últimos PENALTY_LAST_N)
+/// e máscara estendida `is_forbidden_id` (eos/eot seguem geráveis = parada
+/// deliberada). `recent` mantém o hard-skip legado (anti-stutter ≤4).
+/// Sem alloc no hot path (janela distinta em stack + sort/binary_search).
+pub fn argmax_row_hf_vocab(logits: &Tensor, row: usize, recent: &[u32], hist: &[u32]) -> u32 {
     let cols = logits.shape.1;
     let start = row * cols;
     // ora-1 bullet2: vocab full (Falcon3 131072 pode emitir ids>128k).
     let hi = cols;
+    let rep = repetition_penalty();
+    let apply_rep = (rep - 1.0).abs() > 0.0001;
+    let mut seen: [u32; PENALTY_LAST_N] = [u32::MAX; PENALTY_LAST_N];
+    let mut nseen = 0usize;
+    if apply_rep {
+        let h0 = hist.len().saturating_sub(PENALTY_LAST_N);
+        for &t in &hist[h0..] {
+            if (t as usize) >= hi { continue; }
+            if seen[..nseen].contains(&t) { continue; }
+            if nseen < PENALTY_LAST_N { seen[nseen] = t; nseen += 1; }
+        }
+        seen[..nseen].sort_unstable();
+    }
     let mut best = crate::bpe::eos_id();
     let mut best_val = NEG_INFINITY;
     let mut any = false;
     for j in 0..hi {
         let id = j as u32;
         if recent.iter().any(|&p| p == id) { continue; }
-        if crate::bpe::is_special_id(id) { continue; }
-        let v = logits.data[start + j];
+        if crate::bpe::is_forbidden_id(id) { continue; }
+        let mut v = logits.data[start + j];
         if v.is_nan() { continue; }
+        if apply_rep && v != 0.0 && seen[..nseen].binary_search(&id).is_ok() {
+            v = if v > 0.0 { v / rep } else { v * rep };
+        }
         if !any || v > best_val { best_val = v; best = id; any = true; }
     }
     if any { best } else { crate::bpe::eos_id() }
@@ -4647,7 +4685,7 @@ pub fn generate_speculative_with_ctx(
             sample_token_coherence(&last_logits, 0, &recent_u16)
         } else if use_bpe {
             // Full-vocab argmax puro (greeting/weather canned pools removidos — Audit 7.5).
-            argmax_row_hf_vocab(&last_logits, 0, &recent_u16)
+            argmax_row_hf_vocab(&last_logits, 0, &recent_u16, &tokens)
         } else {
             let prev_u16 = recent_u16.last().copied().map(|v| v as u16);
             argmax_row_char_vocab(&last_logits, 0, prev_u16)
@@ -4736,7 +4774,7 @@ pub fn generate_speculative_with_ctx(
                     d.mask_logits(&mut mlogits.data);
                 }
                 let t = if use_bpe {
-                    argmax_row_hf_vocab(&mlogits, 0, &recent_u16)
+                    argmax_row_hf_vocab(&mlogits, 0, &recent_u16, &tokens)
                 } else {
                     let prev_u16 = recent_u16.last().copied().map(|v| v as u16);
                     argmax_row_char_vocab(&mlogits, 0, prev_u16)
@@ -6115,4 +6153,78 @@ fn p1_logits_pool_reuse_parity_and_kv_ratio() {
     let f32b = kv_bytes_f32(1, n, kd);
     assert_eq!(f32b, 8 * n * kd);
     assert_eq!(int8 * 100 / f32b, 26, "ratio int8/f32={} (esperado ~26.5% = 1/3.76)", int8 * 100 / f32b);
+}
+
+/// IDEA #692 — decode policy do rig no sampler Falcon: penalty llama-style
+/// (divide/multiplica, zero intacto) sobre cauda-64 + máscara estendida com
+/// eos gerável + hard-skip legado retido. BPE sintético instalado/limpo aqui.
+#[cfg(test)]
+#[test]
+fn falcon_sampler_rig_policy() {
+    // BPE global é compartilhado: série com outros installers de teste.
+    let _g = crate::bpe::BPE_TEST_LOCK.lock();
+    // BPB1 mínimo (mesmo layout do synthetic_bpb1 dos testes de bpe).
+    let pieces: [(u32, &str); 10] = [
+        (0, "<bos>"), (1, "e"), (2, "x"), (3, "aa"), (4, "bb"),
+        (5, "cc"), (6, "<zz>"), (7, "dd"), (8, "ee"), (9, "ff"),
+    ];
+    let vocab_n = 10u32;
+    let mut offs = alloc::vec![0u32; vocab_n as usize + 1];
+    let mut heap = alloc::vec::Vec::new();
+    let mut sorted: alloc::vec::Vec<(u32, &str)> = pieces.to_vec();
+    sorted.sort_by_key(|(i, _)| *i);
+    let (mut pi, mut cur) = (0usize, 0u32);
+    for id in 0..vocab_n {
+        while pi < sorted.len() && sorted[pi].0 < id { pi += 1; }
+        offs[id as usize] = cur;
+        if pi < sorted.len() && sorted[pi].0 == id {
+            heap.extend_from_slice(sorted[pi].1.as_bytes());
+            cur += sorted[pi].1.len() as u32;
+        }
+    }
+    offs[vocab_n as usize] = cur;
+    let mut d = alloc::vec::Vec::new();
+    d.extend_from_slice(b"BPB1");
+    d.extend_from_slice(&1u16.to_le_bytes());
+    d.extend_from_slice(&0u32.to_le_bytes());
+    d.extend_from_slice(&1u32.to_le_bytes());
+    d.extend_from_slice(&2u32.to_le_bytes());
+    d.extend_from_slice(&vocab_n.to_le_bytes());
+    for o in &offs { d.extend_from_slice(&o.to_le_bytes()); }
+    d.extend_from_slice(&heap);
+    crate::bpe::init_from_bpb1(&d).expect("BPB1");
+    assert_eq!(repetition_penalty(), 1.15, "default ON 1.15");
+
+    let mk = |vals: [f32; 10]| Tensor::from_row_major((1, 10), vals.to_vec()).unwrap();
+    let ni = NEG_INFINITY;
+    // mask: <bos>(0) e <zz>(6) nunca vencem mesmo com logit máximo.
+    let t = mk([100.0, 0.0, 0.0, 1.0, 1.0, 1.0, 99.0, 1.0, 1.0, 1.0]);
+    assert_eq!(argmax_row_hf_vocab(&t, 0, &[], &[]), 3);
+    // eos gerável (parada deliberada do rig).
+    let t = mk([ni, 50.0, 0.0, 1.0, 1.0, 1.0, ni, 1.0, 1.0, 1.0]);
+    assert_eq!(argmax_row_hf_vocab(&t, 0, &[], &[]), 1);
+    // penalty positiva flipa: 2.3/1.15=2.0 < 2.1.
+    let t = mk([ni, ni, ni, 2.3, ni, ni, ni, 2.1, ni, ni]);
+    assert_eq!(argmax_row_hf_vocab(&t, 0, &[], &[3]), 7);
+    // off (1.0): sem flip.
+    set_repetition_penalty(1.0);
+    assert_eq!(argmax_row_hf_vocab(&t, 0, &[], &[3]), 3);
+    set_repetition_penalty(1.15);
+    // penalty negativa: -1.0*1.15=-1.15 < -1.1.
+    let t = mk([ni, ni, ni, ni, -1.0, ni, ni, -1.1, ni, ni]);
+    assert_eq!(argmax_row_hf_vocab(&t, 0, &[], &[4]), 7);
+    // zero intacto: 0.0 visto vence -0.5.
+    let t = mk([ni, ni, ni, ni, ni, 0.0, ni, -0.5, ni, ni]);
+    assert_eq!(argmax_row_hf_vocab(&t, 0, &[], &[5]), 5);
+    // janela: id3 antes dos últimos 64 → sem penalty.
+    let mut hist = alloc::vec![3u32];
+    hist.extend_from_slice(&[8u32; 64]);
+    let t = mk([ni, ni, ni, 2.3, ni, ni, ni, 2.1, ni, ni]);
+    assert_eq!(argmax_row_hf_vocab(&t, 0, &[], &hist), 3);
+    // recent hard-skip legado retido.
+    let t = mk([ni, ni, ni, ni, ni, ni, ni, 50.0, 1.0, ni]);
+    assert_eq!(argmax_row_hf_vocab(&t, 0, &[7], &[]), 8);
+
+    set_repetition_penalty(1.15);
+    crate::bpe::reset_for_test(); // não vaza estado p/ outros testes
 }

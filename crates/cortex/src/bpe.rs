@@ -763,6 +763,17 @@ pub fn is_loaded() -> bool {
     BPE.lock().is_some()
 }
 
+/// Só-testes: limpa o vocab global (hermeticidade entre testes de sampler).
+#[cfg(test)]
+pub fn reset_for_test() {
+    *BPE.lock() = None;
+}
+
+/// Só-testes: serializa testes que instalam/leem o BPE global (o harness roda
+/// testes em threads; sem isto, install+clear intercalados flakam).
+#[cfg(test)]
+pub(crate) static BPE_TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
 pub fn eos_id() -> u32 {
     BPE.lock().as_ref().map(|t| t.eos()).unwrap_or(1)
 }
@@ -1144,6 +1155,35 @@ pub fn is_special_id(id: u32) -> bool {
         }
     }
     false
+}
+
+/// Máscara estendida de decode (IDEA #692 — port do `build_forbidden_ids` do
+/// rig, tools/chat_v6.py:133): peças `<...>` e `>>...<<`, com UNUSED, vazias
+/// e specials clássicos nunca geram — EXCETO eos/eot (parada deliberada).
+/// Só o path Falcon (`argmax_row_hf_vocab`) usa; `is_special_id` intacto p/
+/// coherence/weather. Sem BPE: fallback `id <= 2`. Id fora do mapa: mascarado
+/// (fail-closed — não se emite o que não se decodifica).
+pub fn is_forbidden_id(id: u32) -> bool {
+    let guard = BPE.lock();
+    let Some(tok) = guard.as_ref() else {
+        return id <= 2;
+    };
+    if id == tok.eos() || id == tok.eot() {
+        return false;
+    }
+    if id == tok.bos() {
+        return true;
+    }
+    let Some(s) = tok.decode_id(id) else {
+        return true;
+    };
+    if s.is_empty() {
+        return true;
+    }
+    (s.starts_with('<') && s.ends_with('>'))
+        || (s.starts_with(">>") && s.ends_with("<<"))
+        || s.contains("UNUSED")
+        || matches!(s, "<s>" | "</s>" | "<unk>" | "<pad>" | "</line>")
 }
 
 // ── ByteLevel BPE (GPT-2/Falcon3) ───────────────────────────────────────────
@@ -1566,6 +1606,7 @@ mod tests {
     #[test]
     fn rev_map_built_for_bytelevel_vocab_over_33k() {
         // Task 1: o gate antigo `vocab_n <= 33_000` deixava o Falcon3 131k sem `rev`.
+        let _g = BPE_TEST_LOCK.lock(); // série com outros installers globais
         let data = synthetic_bpb1(40_000, &[(39_999, "Zzz"), (0, "A")]);
         init_from_bpb1(&data).expect("BPB1 parse");
         {
@@ -1575,5 +1616,28 @@ mod tests {
             assert_eq!(v.rev.get("A"), Some(&0u32));
         }
         *BPE.lock() = None; // não vaza estado p/ outros testes
+    }
+
+    /// IDEA #692: `is_forbidden_id` espelha as classes do `build_forbidden_ids`
+    /// do rig (chat_v6.py:133) — eos/eot geráveis, resto das classes mascarado.
+    #[test]
+    fn forbidden_ids_mirror_rig_builder() {
+        let _g = BPE_TEST_LOCK.lock(); // série com outros installers globais
+        let data = synthetic_bpb1(10, &[
+            (0, "<bos>"), (1, "e"), (2, "x"), (3, "hello"),
+            (4, "<foo>"), (5, ">>UNUSED7<<"), (6, ""),
+            (7, "</line>"), (8, "<unk>"), (9, "world"),
+        ]);
+        init_from_bpb1(&data).expect("BPB1 parse");
+        for id in [0u32, 4, 5, 6, 7, 8] {
+            assert!(is_forbidden_id(id), "id={} deveria mascarar", id);
+        }
+        for id in [1u32, 2, 3, 9] {
+            assert!(!is_forbidden_id(id), "id={} deveria gerar", id);
+        }
+        // sem BPE: fallback id<=2 (igual a is_special_id).
+        *BPE.lock() = None; // não vaza estado p/ outros testes
+        assert!(is_forbidden_id(2));
+        assert!(!is_forbidden_id(3));
     }
 }

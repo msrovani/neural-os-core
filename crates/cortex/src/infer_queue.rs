@@ -1750,7 +1750,7 @@ fn run_decode_one(st: &mut ActiveState) {
 
     let next: u32 = if st.use_bpe {
         // ora-1 bullet3: argmax puro (sem score_piece/weather/coherence).
-        crate::cortex::argmax_row_hf_vocab(last_logits, 0, &st.recent_u16)
+        crate::cortex::argmax_row_hf_vocab(last_logits, 0, &st.recent_u16, &st.tokens)
     } else {
         let prev_u16 = st.recent_u16.last().copied().map(|v| v as u16);
         crate::cortex::argmax_row_char_vocab(last_logits, 0, prev_u16)
