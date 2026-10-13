@@ -2009,3 +2009,7 @@ elabel_*.py |
 | 2026-10-13 | **#696** | **Piloto 1B-QAT (E24)** - treino com ferro alugado (~200 USD); gate: coerencia 1B antes de escalar para 3B. Fonte: SESSION_468. | ⏳ | - | - |
 | 2026-10-13 | **#697** | **Inferencia 7B/10B em ferro maior** - 9/11GB RAM; status HYPOTHESIS ate medir suite; 27B/30B sao fantasmas (nao baixar de novo). Fonte: SESSION_468. | ⏳ | - | - |
 | 2026-10-13 | **#698** | **Boot QEMU com .V7** - validar loader scan + v6_file_size versao 7 + saudacao; evidencia em BOOT.LOG antes de declarar pronto. Fonte: SESSION_468. | 🟡 | - | - |
+| 2026-10-13 | **#699** | **v7 loader completo para 2B4T boot** - parse_model_header v7 + load_model_v7 + ReLU² (act=1) em 4 FFN forwards + Q6_K embed dequant (emb=1). Fonte: SESSION_470 (load_model REJECT h=0 L=0). | 🟡 | - | - |
+| 2026-10-13 | **#700** | **I2_S AVX2 path** - quando HW com AVX2 disponível; I2_S scalar no soft-float não dá ganho (0.013 tok/s 3B). Fonte: SESSION_470. | ⏳ | - | - |
+| 2026-10-13 | **#701** | **Modelo 1B para medição QEMU representativa** - 3B em soft-float QEMU = 78s/tok; 1B (18L/h=2048) seria medível. Fonte: SESSION_470. | 🟡 | - | - |
+| 2026-10-13 | **#702** | **TL2 LUT kernel** - avaliar se I2_S scalar prova ganho em HW; TL2 triple-LUT (1.67 bpw) é próximo no ranking. Fonte: SESSION_468/470. | 🟡 | - | - |
