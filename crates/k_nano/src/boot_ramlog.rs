@@ -589,15 +589,12 @@ pub fn dump() {
 }
 
 /// Emite linhas USB/hub/MSC do ramlog (foto no Alienware sem COM1).
-/// Varre **todo** o buffer (não só as 1ªs 200 linhas — F3 false "probe nao chegou").
+/// Varre **todo** o buffer e emite a **cauda** (últimas 32): a cabeça era só
+/// PRE/init e cortava o probe/Address/diag — exatamente as linhas que decidem
+/// a causa do cc=4 (s468d).
 pub fn dump_usb_hint(mut emit: impl FnMut(&str)) {
-    let mut n = 0usize;
-    for_each_line(usize::MAX, |line| {
-        if n >= 32 {
-            return;
-        }
-        let l = line;
-        let lower_ok = l.contains("USB")
+    let is_hint = |l: &str| {
+        l.contains("USB")
             || l.contains("usb")
             || l.contains("hub")
             || l.contains("MSC")
@@ -606,15 +603,36 @@ pub fn dump_usb_hint(mut emit: impl FnMut(&str)) {
             || l.contains("XHCI")
             || l.contains("BOOT.LOG")
             || l.contains("CCS")
-            || l.contains("PORTSC");
-        if lower_ok {
-            emit(l);
-            n += 1;
+            || l.contains("PORTSC")
+    };
+    const TAIL: usize = 32;
+    // Passo 1: total de matches (sem emitir — refs do buffer mudam sob SMP).
+    let mut total = 0usize;
+    for_each_line(usize::MAX, |line| {
+        if is_hint(line) {
+            total += 1;
         }
     });
-    if n == 0 {
+    if total == 0 {
         emit("USB: ramlog sem linhas hub/MSC (slog pode ser serial-only)");
+        return;
     }
+    let skip = total.saturating_sub(TAIL);
+    if skip > 0 {
+        // ASCII p/ fonte FB 0x20-0x7E.
+        emit("USB ramlog (cauda): ");
+        emit(alloc::format!("{} de {} linhas anteriores cortadas", skip, total).as_str());
+    }
+    // Passo 2: emite matches de skip em diante.
+    let mut idx = 0usize;
+    for_each_line(usize::MAX, |line| {
+        if is_hint(line) {
+            if idx >= skip {
+                emit(line);
+            }
+            idx += 1;
+        }
+    });
 }
 
 fn for_each_line(max: usize, mut emit: impl FnMut(&str)) {
