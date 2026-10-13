@@ -169,7 +169,7 @@ fn mesh_would_dispatch() -> bool {
 fn mesh_would_dispatch() -> bool {
     false
 }
-use crate::nn::{silu, relu2, rms_norm};
+use crate::nn::{silu, relu2};
 use crate::tensor::{PackedTernaryTensor, Tensor};
 
 pub const BOS: u16 = 0;
@@ -288,6 +288,36 @@ fn rope_apply_heads(data: &mut [f32], seq_len: usize, num_heads: usize, head_dim
                 let si = sin[rope_off + d];
                 data[off + 2 * d] = x * c - y * si;
                 data[off + 2 * d + 1] = x * si + y * c;
+            }
+        }
+    }
+}
+
+/// RoPE estilo BitNet/HF (rotate_half por metades — modeling_bitnet.py
+/// apply_rotary_pos_emb): só p/ act_type==1 (2B4T). Falcon (act 0) usa
+/// interleave (`rope_apply_heads`). Mesmas tabelas cos/sin.
+fn rope_apply_heads_half(data: &mut [f32], seq_len: usize, num_heads: usize, head_dim: usize,
+                         cos: &[f32], sin: &[f32], start_pos: usize) {
+    if cos.is_empty() || sin.is_empty() || head_dim < 2 {
+        return;
+    }
+    let half = head_dim / 2;
+    for s in 0..seq_len {
+        let pos = start_pos + s;
+        let base = s * num_heads * head_dim;
+        let rope_off = pos * half;
+        if rope_off + half > cos.len() || rope_off + half > sin.len() {
+            return;
+        }
+        for h in 0..num_heads {
+            let off = base + h * head_dim;
+            for d in 0..half {
+                let x1 = data[off + d];
+                let x2 = data[off + half + d];
+                let c = cos[rope_off + d];
+                let si = sin[rope_off + d];
+                data[off + d] = x1 * c - x2 * si;
+                data[off + half + d] = x1 * si + x2 * c;
             }
         }
     }
@@ -1560,8 +1590,28 @@ impl TransformerModel {
         let Some(mut t) = Tensor::from_row_major(x.shape, x.data.clone()) else {
             return Tensor::zero((0, 0));
         };
-        // M2 (ADR-0084 §11.2): 2B4T usa eps 1e-5 (era 1e-6)
-        rms_norm(&mut t, weight, 1e-5);
+        if weight.is_empty() || t.shape.1 == 0 {
+            return t; // nn::rms_norm no-op em peso vazio — preservado
+        }
+        // M2 (ADR-0084 §11.2): eps 1e-5. Por LINHA (rig/HF: mean(-1)) — a média
+        // sobre o batch inteiro divergia do rig no prefill multi-token; em
+        // decode (1 linha) é idêntico.
+        let (rows, cols) = t.shape;
+        for r in 0..rows {
+            let base = r * cols;
+            if base + cols > t.data.len() {
+                break;
+            }
+            let mut ss = 0.0f32;
+            for c in 0..cols {
+                let v = t.data[base + c];
+                ss += v * v;
+            }
+            let rms = libm::sqrtf(ss / cols as f32 + 1e-5);
+            for c in 0..cols {
+                t.data[base + c] = t.data[base + c] / rms * weight[c % weight.len()];
+            }
+        }
         t
     }
 
@@ -2042,10 +2092,18 @@ impl TransformerModel {
             *x = Tensor::zero((0, 0));
             return;
         }
-        rope_apply_heads(&mut q.data, new_len, self.num_heads, qk_head_dim,
-            &self.rope_cos, &self.rope_sin, start_pos);
-        rope_apply_heads(&mut k.data, new_len, self.num_kv_heads, qk_head_dim,
-            &self.rope_cos, &self.rope_sin, start_pos);
+        // 2B4T (act 1) = rotate_half (HF); Falcon (act 0) = interleave.
+        if self.act_type == 1 {
+            rope_apply_heads_half(&mut q.data, new_len, self.num_heads, qk_head_dim,
+                &self.rope_cos, &self.rope_sin, start_pos);
+            rope_apply_heads_half(&mut k.data, new_len, self.num_kv_heads, qk_head_dim,
+                &self.rope_cos, &self.rope_sin, start_pos);
+        } else {
+            rope_apply_heads(&mut q.data, new_len, self.num_heads, qk_head_dim,
+                &self.rope_cos, &self.rope_sin, start_pos);
+            rope_apply_heads(&mut k.data, new_len, self.num_kv_heads, qk_head_dim,
+                &self.rope_cos, &self.rope_sin, start_pos);
+        }
         let t2 = k_nano::tsc::now_us();
         crate::layer_diag::note(crate::layer_diag::S_QKV, t2.saturating_sub(t1));
 
@@ -4139,6 +4197,430 @@ fn v6_roundtrip_load() {
     assert!(tern_eq(&m.embed, &model.embed));
     assert!(tern_eq(&m.unembed, &model.unembed));
     assert!(m.embed_scale == 1.5 && m.unembed_scale == 0.6);
+}
+
+/// Transcrição independente do forward 2B4T do rig (chat_v6.py forward_layer,
+/// act==1): rmsnorm(eps 1e-5) → qkv+escalas → RoPE halves → causal softmax →
+/// SubLN pré-o_proj → resíduo → FFN relu²(gate)·up → SubLN pré-down → resíduo.
+/// Trits decodificados inline (sem get_weight). KV espelha o armazenamento
+/// INT8 do kernel (kv_quantize por chunk — pré-existente, fora deste gate);
+/// o resto é matemática rig pura. 1 token por chamada, pos 0/1 (prefill).
+#[cfg(test)]
+fn ref_2b4t_layer_step(
+    x0: &[f32],
+    lw: &LayerWeights,
+    hidden: usize,
+    n_heads: usize,
+    n_kv: usize,
+    theta: f32,
+    pos: usize,
+    kv: &mut (Vec<f32>, Vec<f32>),
+) -> Vec<f32> {    let q_dim = lw.q.shape.1;
+    let k_dim = lw.k.shape.1;
+    let ffn = lw.gate.shape.1;
+    let hd = q_dim / n_heads.max(1);
+    let half = hd / 2;
+    let rnorm = |v: &[f32], w: &[f32]| -> Vec<f32> {
+        let mean: f32 = v.iter().map(|a| a * a).sum::<f32>() / v.len() as f32;
+        let r = 1.0 / unsafe { libm::sqrtf(mean + 1e-5) };
+        v.iter().enumerate().map(|(i, a)| a * r * w[i % w.len()]).collect()
+    };
+    let trit = |packed: &[u8], idx: usize| -> f32 {
+        let b = packed[idx >> 2];
+        let p = ((b >> ((idx & 3) << 1)) & 3) as i32;
+        ((p & 1) - (p >> 1)) as f32
+    };
+    // (1,rows) @ W(rows,cols) × scale.
+    let tmat = |inp: &[f32], packed: &[u8], rows: usize, cols: usize, sc: f32| -> Vec<f32> {
+        let mut o = alloc::vec![0.0f32; cols];
+        for j in 0..cols {
+            let mut s = 0.0f32;
+            for t in 0..rows {
+                s += inp[t] * trit(packed, t * cols + j);
+            }
+            o[j] = s * sc;
+        }
+        o
+    };
+    // RoPE halves na posição `pos` (rig act==1: chunk por metades).
+    let rot = |t: &mut [f32], nh: usize| {
+        for h in 0..nh {
+            for d in 0..half {
+                let inv = unsafe { libm::powf(theta, -2.0 * d as f32 / hd as f32) };
+                let ang = pos as f32 * inv;
+                let (c, s) = (unsafe { libm::cosf(ang) }, unsafe { libm::sinf(ang) });
+                let (x1, x2) = (t[h * hd + d], t[h * hd + half + d]);
+                t[h * hd + d] = x1 * c - x2 * s;
+                t[h * hd + half + d] = x1 * s + x2 * c;
+            }
+        }
+    };
+    let n = rnorm(x0, &lw.rms_attn);
+    let mut q = tmat(&n, &lw.q.packed_data, hidden, q_dim, lw.q_scale);
+    let mut k = tmat(&n, &lw.k.packed_data, hidden, k_dim, lw.k_scale);
+    let v = tmat(&n, &lw.v.packed_data, hidden, k_dim, lw.v_scale);
+    rot(&mut q, n_heads);
+    rot(&mut k, n_kv);
+    kv.0.extend_from_slice(&k);
+    kv.1.extend_from_slice(&v);
+    let t = kv.0.len() / k_dim; // total_seq
+    // Espelha o armazenamento KV do kernel: chunk único quantizado (prefill faz
+    // um append) e lido dequantizado. kv_quantize é pré-existente (fora deste
+    // gate); sem isto, o ruído INT8 (~1% em k/v, amplificado pela FFN) domina.
+    let (qk, sk) = kv_quantize(&kv.0);
+    let (qv8, sv) = kv_quantize(&kv.1);
+    let kd = |buf: &[i8], sc: &[f32], i: usize| -> f32 { buf[i] as f32 * sc[i / KV_BLOCK] };
+    let gqa = n_heads / n_kv.max(1);
+    let sc = 1.0 / unsafe { libm::sqrtf(hd as f32) };
+    let mut o = alloc::vec![0.0f32; q_dim];
+    for h in 0..n_heads {
+        let kh = h / gqa;
+        let mut sums = alloc::vec![0.0f32; t];
+        let mut mx = core::f32::NEG_INFINITY;
+        for j in 0..t {
+            // causal: query em `pos` vê chaves ≤ pos.
+            let mut s = core::f32::NEG_INFINITY;
+            if j <= pos {
+                s = 0.0;
+                for d in 0..hd {
+                    s += q[h * hd + d] * kd(&qk, &sk, j * k_dim + kh * hd + d);
+                }
+                s *= sc;
+            }
+            sums[j] = s;
+            if s > mx {
+                mx = s;
+            }
+        }
+        let mut psum = 0.0f32;
+        for s in sums.iter_mut() {
+            *s = unsafe { libm::expf(*s - mx) };
+            psum += *s;
+        }
+        for d in 0..hd {
+            let mut acc = 0.0f32;
+            for j in 0..t {
+                acc += sums[j] / psum * kd(&qv8, &sv, j * k_dim + kh * hd + d);
+            }
+            o[h * hd + d] = acc;
+        }
+    }
+    let on = rnorm(&o, &lw.rms_inner_attn);
+    let op = tmat(&on, &lw.o.packed_data, q_dim, hidden, lw.o_scale);
+    let h: Vec<f32> = x0.iter().zip(op.iter()).map(|(a, b)| a + b).collect();
+    let y = rnorm(&h, &lw.rms_ffn);
+    let g = tmat(&y, &lw.gate.packed_data, hidden, ffn, lw.gate_scale);
+    let u = tmat(&y, &lw.up.packed_data, hidden, ffn, lw.up_scale);
+    let mut fu = alloc::vec![0.0f32; ffn];
+    for i in 0..ffn {
+        let r = if g[i] > 0.0 { g[i] } else { 0.0 };
+        fu[i] = r * r * u[i];
+    }
+    let fun = rnorm(&fu, &lw.rms_ffn_norm);
+    let d = tmat(&fun, &lw.down.packed_data, lw.down.shape.0, hidden, lw.down_scale);
+    h.iter().zip(d.iter()).map(|(a, b)| a + b).collect()
+}
+
+/// 2B4T sintético: apply_one_layer (act=1, SubLN reais, RoPE halves) vs
+/// transcrição do rig em 2 passos (pos 0→1, causal + KV). Gate: cosine +
+/// maxdiff; mais check de sensibilidade (interleave diverge).
+#[cfg(test)]
+#[test]
+fn bitnet2b4t_layer_parity_synth() {
+    let _g = crate::bitnet_w2a8::MATMUL_TEST_LOCK.lock(); // consome matmul_hybrid
+    let hidden = 32usize;
+    let n_heads = 2usize;
+    let n_kv = 1usize;
+    let q_dim = 32usize;
+    let hd = 16usize;
+    let k_dim = 16usize;
+    let inter = 64usize;
+    let ffn = 64usize;
+    let theta = 500000.0f32;
+    let lcg: core::cell::RefCell<u64> = core::cell::RefCell::new(7);
+    let rnd = || -> u32 {
+        let mut s = lcg.borrow_mut();
+        *s = (s.wrapping_mul(1103515245).wrapping_add(12345)) & 0x7FFFFFFF;
+        *s as u32
+    };
+    let tern = |rows: usize, cols: usize| -> PackedTernaryTensor {
+        let mut vals = Vec::with_capacity(rows * cols);
+        for _ in 0..rows * cols {
+            let r = rnd() % 3;
+            vals.push(match r { 0 => 1i8, 1 => -1i8, _ => 0i8 });
+        }
+        PackedTernaryTensor { shape: (rows, cols), packed_data: PackedTernaryTensor::pack_weights(&vals) }
+    };
+    let rmsv = |n: usize| -> Vec<f32> {
+        (0..n).map(|_| 0.5 + (rnd() % 100) as f32 / 100.0).collect()
+    };
+    let layer = LayerWeights {
+        rms_attn: rmsv(hidden),
+        q: tern(hidden, q_dim), q_scale: 0.5,
+        k: tern(hidden, k_dim), k_scale: 0.75,
+        v: tern(hidden, k_dim), v_scale: 1.25,
+        o: tern(q_dim, hidden), o_scale: 0.9,
+        rms_ffn: rmsv(hidden),
+        rms_inner_attn: rmsv(hidden),
+        rms_ffn_norm: rmsv(inter),
+        gate: tern(hidden, ffn), gate_scale: 1.1,
+        up: tern(hidden, ffn), up_scale: 0.8,
+        down: tern(inter, q_dim), down_scale: 1.05,
+        kv_dim: q_dim, num_kv_heads: n_kv,
+        intermediate_size: inter, ffn_group_size: ffn,
+    };
+    let (rc, rs) = rope_precompute(64, hd, theta);
+    let model = TransformerModel {
+        embed: tern(hidden, 64), embed_scale: 1.5,
+        layers: alloc::vec![layer],
+        rms_final: rmsv(hidden),
+        unembed: tern(hidden, 64), unembed_scale: 0.6,
+        medusa_heads: alloc::vec![],
+        vocab_size: 64, hidden, num_layers: 1, max_seq: 64,
+        num_heads: n_heads, num_kv_heads: n_kv, head_dim: hd, kv_dim: q_dim,
+        intermediate_size: inter, ffn_group_size: ffn,
+        tie_embeddings: false,
+        act_type: 1, embed_type: 0, embed_q6k: None, unembed_q6k: None,
+        rope_theta: theta, rope_cos: rc, rope_sin: rs,
+    };
+    let mut xdata = alloc::vec![0.0f32; 32];
+    for (i, v) in xdata.iter_mut().enumerate() {
+        *v = 0.3 + ((i * 37) % 11) as f32 * 0.25 - 0.5;
+    }
+    let mut x1data = alloc::vec![0.0f32; 32];
+    for (i, v) in x1data.iter_mut().enumerate() {
+        *v = -0.2 + ((i * 53 + 3) % 13) as f32 * 0.2;
+    }
+    let mut cache = KvCache::new(1, k_dim, q_dim);
+    // Prefill 2 tokens (start_pos=0): qb local == global, máscara interna do
+    // kernel coincide com a causal do rig. (Decode start_pos>0 usa outra
+    // convenção de máscara em bloco — fora deste gate, ver nota abaixo.)
+    let mut xall = alloc::vec![0.0f32; 2 * hidden];
+    xall[..hidden].copy_from_slice(&xdata);
+    xall[hidden..].copy_from_slice(&x1data);
+    // Máscara causal como forward_with_kv (NEG_INFINITY acima da diagonal).
+    let mut maskd = alloc::vec![0.0f32; 4];
+    maskd[1] = core::f32::NEG_INFINITY;
+    let mask = Tensor::from_row_major((2, 2), maskd).unwrap();
+    let mut x = Tensor::from_row_major((2, hidden), xall).unwrap();
+    model.apply_one_layer(0, &model.layers[0], &mut x, &mut cache, 0, 2, 2, &mask);
+    assert!(x.is_valid(), "apply prefill recusou");
+    // Referência rig em 2 passos (pos 0 com KV vazio, pos 1 com KV=[k0]).
+    let mut kv: (Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new());
+    let r0 = ref_2b4t_layer_step(&xdata, &model.layers[0], hidden, n_heads, n_kv, theta, 0, &mut kv);
+    let r1 = ref_2b4t_layer_step(&x1data, &model.layers[0], hidden, n_heads, n_kv, theta, 1, &mut kv);
+    assert_eq!(x.data.len(), 2 * r0.len());
+    // Gate por linha (localiza: pos0 sem mistura causal, pos1 com KV+softmax).
+    for (row, want) in [&r0, &r1].iter().enumerate() {
+        let base = row * want.len();
+        let (mut dot, mut aa, mut bb, mut maxdiff) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        for (i, p) in want.iter().enumerate() {
+            let (g, q) = (x.data[base + i], *p);
+            dot += g * q;
+            aa += g * g;
+            bb += q * q;
+            let d = (g - q).abs();
+            if d > maxdiff {
+                maxdiff = d;
+            }
+        }
+        let cos = dot / (aa.sqrt() * bb.sqrt()).max(1e-9);
+        assert!(cos > 0.999, "2b4t synth row{} cosine: {:.6} maxdiff={:.6}", row, cos, maxdiff);
+        assert!(maxdiff < 0.5, "2b4t synth row{} maxdiff: {:.6}", row, maxdiff);
+    }
+    // Sensibilidade: halves ≠ interleave nestes dados (gate significativo —
+    // com interleave o kernel reprovaria acima).
+    let mut ia = alloc::vec![0.1f32; 32];
+    let mut ib = ia.clone();
+    rope_apply_heads(&mut ia, 1, 2, hd, &model.rope_cos, &model.rope_sin, 1);
+    rope_apply_heads_half(&mut ib, 1, 2, hd, &model.rope_cos, &model.rope_sin, 1);
+    let mut dd = 0.0f32;
+    for i in 0..32 {
+        dd = dd.max((ia[i] - ib[i]).abs());
+    }
+    assert!(dd > 1e-3, "rope conventions indistinguíveis?");
+}
+
+/// 2B4T em pesos REAIS (target1/BITNET2B4T.V7, 760MB — lê só fatias):
+/// header da arquitetura + tamanho exato via parse_model_header + theta +
+/// paridade da camada 0 (pesos reais, x sintético) vs transcrição do rig.
+/// Pula (ok) sem o arquivo — nunca include_bytes de 760MB.
+#[cfg(test)]
+#[test]
+fn bitnet2b4t_layer_parity_real_weights() {
+    use std::io::{Read, Seek, SeekFrom};
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target1/BITNET2B4T.V7");
+    let mut f = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(_) => {
+            eprintln!("SKIP bitnet2b4t real: arquivo ausente");
+            return;
+        }
+    };
+    let _g = crate::bitnet_w2a8::MATMUL_TEST_LOCK.lock(); // consome matmul_hybrid
+    let flen = f.metadata().map(|m| m.len() as usize).unwrap_or(0);
+    let rd_u16 = |d: &[u8], o: usize| -> usize { u16::from_le_bytes([d[o], d[o + 1]]) as usize };
+    let rd_u32 = |d: &[u8], o: usize| -> u32 {
+        u32::from_le_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]])
+    };
+    let rd_f32 = |d: &[u8], o: usize| -> f32 {
+        f32::from_le_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]])
+    };
+    // Header mínimo (64B): valida a arquitetura 2B4T do artefato.
+    let mut head = [0u8; 64];
+    f.read_exact(&mut head).expect("header");
+    assert_eq!(u32::from_le_bytes([head[0], head[1], head[2], head[3]]), 0xBE11BE11);
+    assert_eq!(rd_u16(&head, 4), 7, "version");
+    let hidden = rd_u16(&head, 18);
+    let nlayers = rd_u16(&head, 20);
+    let nheads = rd_u16(&head, 22);
+    let vocab = rd_u32(&head, 24) as usize;
+    let maxseq = rd_u16(&head, 28);
+    let inter = rd_u16(&head, 30);
+    let nkv = rd_u16(&head, 32);
+    let qdim = rd_u16(&head, 34);
+    let medusa = rd_u32(&head, 36);
+    assert!((hidden, nlayers, nheads, vocab, inter, nkv, qdim) == (2560, 30, 20, 128256, 6912, 5, 2560));
+    assert_eq!(maxseq, 4096);
+    assert_eq!(medusa, 0);
+    assert_eq!(&head[40..44], b"TIED", "2B4T tied");
+    let tok_len = rd_u32(&head, 45) as usize;
+    assert_eq!(head[44], 1, "tok BPB1");
+    // act/embed/feat após o tok.
+    let mut aef = [0u8; 3];
+    f.seek(SeekFrom::Start(49 + tok_len as u64)).expect("seek aef");
+    f.read_exact(&mut aef).expect("aef");
+    assert!((aef[0], aef[1], aef[2]) == (1, 1, 0x07), "act=relu2 emb=Q6K feat=0x07");
+    // Provenance v7: mede o tamanho p/ achar o corpo.
+    let mut pl = [0u8; 2];
+    f.read_exact(&mut pl).expect("rl");
+    let rl = u16::from_le_bytes(pl) as u64;
+    f.seek(SeekFrom::Current(rl as i64 + 40)).expect("skip repo/rev");
+    f.read_exact(&mut pl).expect("cl");
+    let cl = u16::from_le_bytes(pl) as u64;
+    f.seek(SeekFrom::Current(cl as i64 + 40 + 4)).expect("skip conv/git/codes");
+    let body_off = f.stream_position().expect("pos") as usize;
+    // Entre header e camada 0 está o EMBED (Q6_K aqui) — pular pelo tamanho.
+    let emb_len = if aef[1] == 1 {
+        (hidden * vocab + 255) / 256 * 210 + 4
+    } else {
+        (hidden * vocab + 3) / 4 + 4
+    };
+    let l0_off = body_off + emb_len;
+    // Tamanho exato: parse_model_header sobre o header completo (tok+prov).
+    let mut hbuf = alloc::vec![0u8; body_off];
+    f.seek(SeekFrom::Start(0)).expect("rewind");
+    f.read_exact(&mut hbuf).expect("hbuf");
+    let mh = crate::model::parse_model_header(&hbuf).expect("parse_model_header v7");
+    assert_eq!(mh.file_size, flen, "bytes consumidos == arquivo");
+    // Theta: tied + medusa 0 ⇒ últimos 4B do arquivo.
+    let mut tb = [0u8; 4];
+    f.seek(SeekFrom::Start(flen as u64 - 4)).expect("seek theta");
+    f.read_exact(&mut tb).expect("theta");
+    assert!((rd_f32(&tb, 0) - 500000.0).abs() < 1.0, "rope_theta=500000");
+    // Camada 0: 4 RMS + 7×(packed+scale).
+    let k_dim = nkv * (qdim / nheads);
+    let ffn = inter * qdim / hidden;
+    assert!((k_dim, ffn) == (640, 6912));
+    let packed_len = |r: usize, c: usize| -> usize { (r * c + 3) / 4 };
+    let l0_len = (hidden * 3 + inter) * 4
+        + packed_len(hidden, qdim) + 4
+        + packed_len(hidden, k_dim) + 4
+        + packed_len(hidden, k_dim) + 4
+        + packed_len(qdim, hidden) + 4
+        + packed_len(hidden, ffn) + 4
+        + packed_len(hidden, ffn) + 4
+        + packed_len(inter, qdim) + 4;
+    let mut l0 = alloc::vec![0u8; l0_len];
+    f.seek(SeekFrom::Start(l0_off as u64)).expect("seek l0");
+    f.read_exact(&mut l0).expect("l0");
+    drop(f);
+    let mut o = 0usize;
+    let take_f32v = |d: &[u8], o: &mut usize, n: usize| -> Vec<f32> {
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n {
+            v.push(rd_f32(d, *o));
+            *o += 4;
+        }
+        v
+    };
+    let take_tern = |d: &[u8], o: &mut usize, r: usize, c: usize| -> (PackedTernaryTensor, f32) {
+        let n = packed_len(r, c);
+        let t = PackedTernaryTensor { shape: (r, c), packed_data: d[*o..*o + n].to_vec() };
+        *o += n;
+        let s = rd_f32(d, *o);
+        *o += 4;
+        (t, s)
+    };
+    let rms_attn = take_f32v(&l0, &mut o, hidden);
+    let rms_ffn = take_f32v(&l0, &mut o, hidden);
+    let sub_attn = take_f32v(&l0, &mut o, hidden);
+    let sub_ffn = take_f32v(&l0, &mut o, inter);
+    assert!(sub_attn.iter().all(|&v| v.is_finite() && v != 0.0), "subln attn sã");
+    assert!(sub_ffn.iter().all(|&v| v.is_finite() && v != 0.0), "subln ffn sã");
+    let (q, qs) = take_tern(&l0, &mut o, hidden, qdim);
+    let (k, ks) = take_tern(&l0, &mut o, hidden, k_dim);
+    let (v, vs) = take_tern(&l0, &mut o, hidden, k_dim);
+    let (pr, ps) = take_tern(&l0, &mut o, qdim, hidden);
+    let (g, gs) = take_tern(&l0, &mut o, hidden, ffn);
+    let (u, us) = take_tern(&l0, &mut o, hidden, ffn);
+    let (dn, ds) = take_tern(&l0, &mut o, inter, qdim);
+    assert_eq!(o, l0_len, "camada 0 consumida exata");
+    let layer = LayerWeights {
+        rms_attn, q, q_scale: qs, k, k_scale: ks, v, v_scale: vs,
+        o: pr, o_scale: ps, rms_ffn,
+        rms_inner_attn: sub_attn, rms_ffn_norm: sub_ffn,
+        gate: g, gate_scale: gs, up: u, up_scale: us,
+        down: dn, down_scale: ds,
+        kv_dim: qdim, num_kv_heads: nkv,
+        intermediate_size: inter, ffn_group_size: ffn,
+    };
+    let (rc, rs) = rope_precompute(2048, qdim / nheads, 500000.0);
+    let model = TransformerModel {
+        embed: PackedTernaryTensor { shape: (hidden, vocab), packed_data: Vec::new() },
+        embed_scale: 1.0,
+        layers: alloc::vec![layer],
+        rms_final: alloc::vec![1.0f32; hidden],
+        unembed: PackedTernaryTensor { shape: (hidden, vocab), packed_data: Vec::new() },
+        unembed_scale: 1.0,
+        medusa_heads: alloc::vec![],
+        vocab_size: vocab as u32, hidden, num_layers: 1, max_seq: maxseq,
+        num_heads: nheads, num_kv_heads: nkv, head_dim: qdim / nheads, kv_dim: qdim,
+        intermediate_size: inter, ffn_group_size: ffn,
+        tie_embeddings: true,
+        act_type: 1, embed_type: 1, embed_q6k: None, unembed_q6k: None,
+        rope_theta: 500000.0, rope_cos: rc, rope_sin: rs,
+    };
+    // x sintético determinístico, prefill 2 tokens.
+    let mut xd = alloc::vec![0.0f32; 2 * hidden];
+    for (i, v) in xd.iter_mut().enumerate() {
+        *v = ((i * 37) % 11) as f32 * 0.25 - 1.25 + 0.1;
+    }
+    let mut cache = KvCache::new(1, k_dim, qdim);
+    let mut maskd = alloc::vec![0.0f32; 4];
+    maskd[1] = core::f32::NEG_INFINITY;
+    let mask = Tensor::from_row_major((2, 2), maskd).unwrap();
+    let mut x = Tensor::from_row_major((2, hidden), xd.clone()).unwrap();
+    model.apply_one_layer(0, &model.layers[0], &mut x, &mut cache, 0, 2, 2, &mask);
+    assert!(x.is_valid(), "apply L0 real recusou");
+    let mut kv: (Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new());
+    let r0 = ref_2b4t_layer_step(&xd[..hidden], &model.layers[0], hidden, nheads, nkv, 500000.0, 0, &mut kv);
+    let r1 = ref_2b4t_layer_step(&xd[hidden..], &model.layers[0], hidden, nheads, nkv, 500000.0, 1, &mut kv);
+    let (mut dot, mut aa, mut bb, mut maxdiff) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    for (i, p) in r0.iter().chain(r1.iter()).enumerate() {
+        let (g, q) = (x.data[i], *p);
+        dot += g * q;
+        aa += g * g;
+        bb += q * q;
+        let d = (g - q).abs();
+        if d > maxdiff {
+            maxdiff = d;
+        }
+    }
+    let cos = dot / (aa.sqrt() * bb.sqrt()).max(1e-9);
+    assert!(cos > 0.999, "2b4t real cosine: {:.6} maxdiff={:.6}", cos, maxdiff);
+    assert!(maxdiff < 5.0, "2b4t real maxdiff: {:.6}", maxdiff);
 }
 
 /// HW Expert v6 (ADR-0085 §3.2): o arquivo convertido tools/target/hw_expert_v6.bitnet

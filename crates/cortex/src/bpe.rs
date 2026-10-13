@@ -337,6 +337,25 @@ impl BpeVocab {
         out
     }
 
+    /// Template BitNet? (suite auto-detect: `id2[bos] == "<|begin_of_text|>"`,
+    /// tools/test_v6_suite.py:131 — Llama-3-style 2B4T, bos 128000).
+    pub fn is_bitnet_template(&self) -> bool {
+        self.decode_id(self.bos) == Some("<|begin_of_text|>")
+    }
+
+    /// BitNet-2B-4T Instruct: bos + `User: {prompt}<|eot_id|>Assistant: `,
+    /// tokenizado com o BPE real (suite: sem system — mede o modelo, não o
+    /// prompt). NÃO usa tags Falcon.
+    pub fn encode_bitnet_chat(&self, prompt: &str) -> Vec<u32> {
+        let mut framed = String::with_capacity(prompt.len() + 32);
+        framed.push_str("User: ");
+        framed.push_str(prompt);
+        framed.push_str("<|eot_id|>Assistant: ");
+        let mut out = vec![self.bos];
+        out.extend(self.encode_bytelevel(&framed));
+        out
+    }
+
     /// Moldura chat + cue de saudacao (IDs BPB1 reais). Logits escolhem o resto.
     pub fn encode_greeting_cue(&self, prompt: &str) -> Vec<u32> {
         if self.is_sp32() {
@@ -730,6 +749,10 @@ pub fn encode(text: &str) -> Vec<u32> {
                 // em `encode_chat_frame` (cue Llama-3, 6 tokens) e o prompt era
                 // descartado — mesma saída p/ todo input.
                 tok.encode_falcon_chat(text)
+            } else if tok.is_bitnet_template() {
+                // BitNet-2B-4T: frame `User: ...<|eot_id|>Assistant: ` (suite
+                // auto-detect por bos == `<|begin_of_text|>`).
+                tok.encode_bitnet_chat(text)
             } else if prompt_is_greeting(text) {
                 tok.encode_greeting_cue(text)
             } else if false { // ponytail: demo_flags bin-specific
@@ -1570,7 +1593,7 @@ mod tests {
     }
 
     /// Monta um BPB1 sintético (só o header + heap; sem MRG1).
-    fn synthetic_bpb1(vocab_n: u32, pieces: &[(u32, &str)]) -> Vec<u8> {
+    fn synthetic_bpb1(vocab_n: u32, pieces: &[(u32, &str)], bos: u32, eos: u32, eot: u32) -> Vec<u8> {
         let mut offs = Vec::new();
         offs.resize(vocab_n as usize + 1, 0u32);
         let mut heap: Vec<u8> = Vec::new();
@@ -1592,9 +1615,9 @@ mod tests {
         let mut d = Vec::new();
         d.extend_from_slice(b"BPB1");
         d.extend_from_slice(&1u16.to_le_bytes());
-        d.extend_from_slice(&0u32.to_le_bytes()); // bos
-        d.extend_from_slice(&1u32.to_le_bytes()); // eos
-        d.extend_from_slice(&2u32.to_le_bytes()); // eot
+        d.extend_from_slice(&bos.to_le_bytes());
+        d.extend_from_slice(&eos.to_le_bytes());
+        d.extend_from_slice(&eot.to_le_bytes());
         d.extend_from_slice(&vocab_n.to_le_bytes());
         for o in &offs {
             d.extend_from_slice(&o.to_le_bytes());
@@ -1607,7 +1630,7 @@ mod tests {
     fn rev_map_built_for_bytelevel_vocab_over_33k() {
         // Task 1: o gate antigo `vocab_n <= 33_000` deixava o Falcon3 131k sem `rev`.
         let _g = BPE_TEST_LOCK.lock(); // série com outros installers globais
-        let data = synthetic_bpb1(40_000, &[(39_999, "Zzz"), (0, "A")]);
+        let data = synthetic_bpb1(40_000, &[(39_999, "Zzz"), (0, "A")], 0, 1, 2);
         init_from_bpb1(&data).expect("BPB1 parse");
         {
             let g = BPE.lock();
@@ -1627,7 +1650,7 @@ mod tests {
             (0, "<bos>"), (1, "e"), (2, "x"), (3, "hello"),
             (4, "<foo>"), (5, ">>UNUSED7<<"), (6, ""),
             (7, "</line>"), (8, "<unk>"), (9, "world"),
-        ]);
+        ], 0, 1, 2);
         init_from_bpb1(&data).expect("BPB1 parse");
         for id in [0u32, 4, 5, 6, 7, 8] {
             assert!(is_forbidden_id(id), "id={} deveria mascarar", id);
@@ -1639,5 +1662,30 @@ mod tests {
         *BPE.lock() = None; // não vaza estado p/ outros testes
         assert!(is_forbidden_id(2));
         assert!(!is_forbidden_id(3));
+    }
+
+    /// Template BitNet (suite auto-detect por bos): dispatch p/ frame
+    /// `User: ...<|eot_id|>Assistant: ` com bos na frente e prompt dentro
+    /// (sem merges no sintético: peças viram unk, estrutura é o assert).
+    #[test]
+    fn bitnet_template_dispatch_synth() {
+        let _g = BPE_TEST_LOCK.lock(); // série com outros installers globais
+        let data = synthetic_bpb1(128010, &[
+            (128000, "<|begin_of_text|>"),
+            (128001, "<|end_of_text|>"),
+            (128009, "<|eot_id|>"),
+            (100, "hi"),
+        ], 128000, 128001, 128009);
+        init_from_bpb1(&data).expect("BPB1 parse");
+        {
+            let g = BPE.lock();
+            let v = g.as_ref().expect("vocab carregado");
+            assert!(v.is_bitnet_template(), "bos 128000 = <|begin_of_text|>");
+            assert!(!v.is_falcon_bytelevel(), "bos>=1000 não é Falcon");
+        }
+        let framed = encode("hi");
+        assert_eq!(framed[0], 128000, "bos na frente");
+        assert!(framed.len() > 6, "prompt tokenizado, não cue fixo (len={})", framed.len());
+        *BPE.lock() = None; // não vaza estado p/ outros testes
     }
 }
