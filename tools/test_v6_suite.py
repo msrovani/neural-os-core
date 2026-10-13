@@ -108,21 +108,36 @@ def main():
                     help="desliga mascara de especiais (puro p/ paridade)")
     ap.add_argument("--w2a8", action="store_true",
                     help="matmul int8 em lineares (experimental; default fp32)")
+    ap.add_argument("--frame", default="auto", choices=["auto", "falcon", "bitnet"],
+                    help="chat template do prompt (auto: bos <|begin_of_text|>->bitnet)")
     args = ap.parse_args()
     chat_v6.W2A8 = args.w2a8
     print(f"[suite] w2a8={args.w2a8}")
 
     m = V6(ROOT / args.model)
-    tp = Path(args.tokenizer) if args.tokenizer else ensure_tokenizer(ROOT / args.model)
-    bpe = BPE(tp) if tp and tp.is_file() else None
+    bpe = None
+    if getattr(m, "tok_type", 0) == 1 and getattr(m, "tok_blob", b""):
+        bpe = BPE.from_bpb1(m.tok_blob)
+        print(f"[suite] tok embutido BPB1: vocab={len(bpe.vocab)} "
+              f"bos={bpe.bos} eos={bpe.eos} merges={len(bpe.ranks)}")
+    if bpe is None:
+        tp = Path(args.tokenizer) if args.tokenizer else ensure_tokenizer(ROOT / args.model)
+        bpe = BPE(tp) if tp and tp.is_file() else None
     if bpe is None:
         sys.exit("suite exige tokenizer (texto); sem vocab nao ha como julgar coerencia")
     eos = bpe.eos
     fbd = None if args.no_mask else build_forbidden_ids(bpe, eos)
     print(f"[suite] policy rep={args.repetition_penalty} mask={'off' if fbd is None else f'on({len(fbd)})'}")
+    _is_bitnet = bpe.id2.get(bpe.bos, "") == "<|begin_of_text|>"
+    _frame = args.frame if args.frame != "auto" else ("bitnet" if _is_bitnet else "falcon")
+    print(f"[suite] frame={_frame} (bos={bpe.id2.get(bpe.bos, '?')!r})")
 
     def frame(prompt):
-        ids = [bpe.bos] + bpe.encode(f"<|user|>\n{prompt}\n<|assistant|>\n")
+        if _frame == "bitnet":
+            # HF bitnet-b1.58-2B-4T (sem system — mede o modelo, nao o prompt).
+            ids = [bpe.bos] + bpe.encode(f"User: {prompt}<|eot_id|>Assistant: ")
+        else:
+            ids = [bpe.bos] + bpe.encode(f"<|user|>\n{prompt}\n<|assistant|>\n")
         return [i for i in ids if i < m.vocab] or [0]
 
     results = {}

@@ -196,9 +196,9 @@ class V6:
                                "git": git, "scale_conv": sc, "unpack_conv": uc}
             print(f"[prov] repo={repo} rev={rev} conv={conv} "
                   f"scale_conv={sc} unpack_conv={uc}")
-        assert self.act == 0, f"act {self.act} (so SILU)"
+        assert self.act in (0, 1), f"act {self.act} (so SILU=0/RELU2=1)"
         assert self.embed_type == 1, f"embed {self.embed_type} (so Q6_K)"
-        assert self.feat & ~0x0C == 0, f"feat 0x{self.feat:02x} (bits 2,3: theta, unembed_q6k)"
+        assert self.feat & ~0x0F == 0, f"feat 0x{self.feat:02x} (bits 0-3: inner, ffn, theta, unembed_q6k)"
         assert self.medusa == 0, "medusa>0 nao suportado"
 
         self.head_dim = self.q_dim // self.heads
@@ -233,10 +233,10 @@ class V6:
         self.blocks = []
         for _ in range(self.layers):
             rq, rf = rms(self.hidden), rms(self.hidden)
-            if self.feat & 1:
-                rms(self.hidden)  # rms_inner (Falcon3 nao tem; consome p/ alinhar)
-            if self.feat & 2:
-                rms(self.inter)
+            # SubLN (BitNet: attn_sub_norm hidden + ffn_sub_norm inter).
+            # None quando ausente (Falcon3) — o forward ignora.
+            ri = rms(self.hidden) if self.feat & 1 else None
+            rn = rms(self.inter) if self.feat & 2 else None
             q = tern(self.hidden, self.q_dim)
             k = tern(self.hidden, self.k_dim)
             v = tern(self.hidden, self.k_dim)
@@ -244,7 +244,7 @@ class V6:
             g = tern(self.hidden, self.ffn)
             u = tern(self.hidden, self.ffn)
             d = tern(self.inter, self.q_dim)
-            self.blocks.append((rq, rf, q, k, v, pr, g, u, d))
+            self.blocks.append((rq, rf, ri, rn, q, k, v, pr, g, u, d))
 
         self.rms_final = rms(self.hidden)
         if self.tie:
@@ -280,7 +280,7 @@ class V6:
         return x / torch.sqrt(x.pow(2).mean(-1, keepdim=True) + RMS_EPS) * w
 
     def forward_layer(self, h, blk, kvc, start):
-        rq, rf, q, k, v, pr, g, u, d = blk
+        rq, rf, ri, rn, q, k, v, pr, g, u, d = blk
         H, HD, HQ = self.hidden, self.head_dim, self.heads
         KV = self.kv_heads
         x = self.rmsnorm(h, rq)
@@ -296,12 +296,25 @@ class V6:
             nrot = min(S, ROPE_TABLE_CAP - start)
             c, s = cos[start:start + nrot], sin[start:start + nrot]
             # (S,H,HD): aplica nas posicoes cobertas pela tabela
-            def rot(t):
-                t1, t2 = t[:nrot], t[nrot:]
-                a, b = t1[..., 0::2], t1[..., 1::2]
-                r = torch.stack([a * c[:, None, :] - b * s[:, None, :],
-                                 a * s[:, None, :] + b * c[:, None, :]], -1).flatten(-2)
-                return torch.cat([r, t2], dim=0) if t2.shape[0] else r
+            if self.act == 1:
+                # BitNet/HF: rotate_half por metades + cos/sin cat((f,f))
+                # (modeling_bitnet.py apply_rotary_pos_emb; loop-for-loop).
+                cf = torch.cat([c, c], dim=-1)
+                sf = torch.cat([s, s], dim=-1)
+
+                def rot(t):
+                    t1, t2 = t[:nrot], t[nrot:]
+                    x1, x2 = t1.chunk(2, dim=-1)
+                    rh = torch.cat([-x2, x1], dim=-1)
+                    r = t1 * cf[:, None, :] + rh * sf[:, None, :]
+                    return torch.cat([r, t2], dim=0) if t2.shape[0] else r
+            else:
+                def rot(t):
+                    t1, t2 = t[:nrot], t[nrot:]
+                    a, b = t1[..., 0::2], t1[..., 1::2]
+                    r = torch.stack([a * c[:, None, :] - b * s[:, None, :],
+                                     a * s[:, None, :] + b * c[:, None, :]], -1).flatten(-2)
+                    return torch.cat([r, t2], dim=0) if t2.shape[0] else r
             qv, kv = rot(qv.squeeze(0)).unsqueeze(0), rot(kv.squeeze(0)).unsqueeze(0)
         if kvc is not None:
             kk, vv0 = kvc
@@ -322,11 +335,19 @@ class V6:
         att = att.masked_fill((qi < kj).unsqueeze(0).unsqueeze(0), float("-inf"))
         att = torch.softmax(att, -1)
         o = (att @ vh).transpose(1, 2).reshape(-1, S, HQ * HD)
+        if ri is not None:
+            o = self.rmsnorm(o, ri)  # SubLN: antes do o_proj (HF L214-216)
         h = h + _mm(o, pr[0], pr[1])
         y = self.rmsnorm(h, rf)
         gate = _mm(y, g[0], g[1])
         up = _mm(y, u[0], u[1])
-        h = h + _mm(torch.nn.functional.silu(gate) * up, d[0], d[1])
+        if self.act == 1:
+            fu = torch.relu(gate) ** 2 * up  # ReLU^2 (ReLUSquaredActivation)
+        else:
+            fu = torch.nn.functional.silu(gate) * up
+        if rn is not None:
+            fu = self.rmsnorm(fu, rn)  # SubLN: antes do down (HF MLP L76)
+        h = h + _mm(fu, d[0], d[1])
         return h
 
     @torch.no_grad()

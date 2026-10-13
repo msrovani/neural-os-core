@@ -5,10 +5,15 @@ Arquitetura LIDA de config.json — NAO assume shapes Falcon3 (nao e Falcon):
   hidden=2560 L=30 heads=20 kv=5 vocab=128256 inter=6912 act=relu2
   norm=SubLN (attn_sub_norm + ffn_sub_norm) tie=true sem bias.
 
-Nativo 1.58bit: packed u8 HF -> desembrulha + transpoe via
-convert_falcon3_to_v6.get_proj_tensor (unpack_conv=1 HF-strided,
-scale_conv=1 reciprocal-native; paridade exata vs referencia HF provada
-inline antes da conversao). Embed denso BF16 -> Q6_K (tied: sem unembed).
+Nativo 1.58bit: packed u8 HF -> desembrulha + transpoe via unpack_hf_oi
+(reuso convert_falcon3_to_v6, unpack_conv=1 HF-strided, paridade exata vs
+referencia HF provada inline). ESCALA DIRETA do buffer (scale_conv=0):
+sonda de magnitude vs o forward de referencia (AutoBitLinear offline:
+ActQuant8(x) @ signs * buf) provou rms(rig)/rms(ref)=1.0000 com buf as-is,
+enquanto o reciproco (convencao Falcon-nativa) erra por buf^2 (0.21-0.67).
+Os exports diferem: BitNet-2B4T grava weight_scale=mean|w|-like e o forward
+de referencia MULTIPLICA. Direcao derivada do forward, nunca do nome.
+Embed denso BF16 -> Q6_K (tied: sem unembed).
 
 Reusa bitnet_writer.py (v7 = v6 + provenance + tokenizer BPB1 embutido).
 Nao duplica o writer; nao toca em convert_falcon3_to_v6.py nem em crates/.
@@ -29,20 +34,42 @@ try:
         write_header_v7, write_embed, write_rms, write_ternary, write_q6k,
         compute_feat, MODEL_LLM, ACT_RELU2, ACT_SILU, EMBED_Q6K,
     )
-    from tools.convert_falcon3_to_v6 import get_proj_tensor, load_state_dict
+    from tools.convert_falcon3_to_v6 import unpack_hf_oi, load_state_dict
     from tools.export_bpe_bin import export as bpe_export
 except ImportError:
     from bitnet_writer import (
         write_header_v7, write_embed, write_rms, write_ternary, write_q6k,
         compute_feat, MODEL_LLM, ACT_RELU2, ACT_SILU, EMBED_Q6K,
     )
-    from convert_falcon3_to_v6 import get_proj_tensor, load_state_dict
+    from convert_falcon3_to_v6 import unpack_hf_oi, load_state_dict
     from export_bpe_bin import export as bpe_export
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SRC = ROOT / "target1" / "bitnet2b4t"
 DEFAULT_OUT = ROOT / "target1" / "BITNET2B4T.V7"
 PROV_REPO = "microsoft/bitnet-b1.58-2B-4T"
+
+
+def get_native_direct(state: dict, key: str, rows: int, cols: int):
+    """Tensor nativo 1.58bit -> (int8 (rows,cols), scale direta do buffer).
+
+    Unpack HF-strided + transpose (mesma orientacao do .V7: (in,out));
+    escala = weight_scale as-is (forward de referencia MULTIPLICA — provado
+    por sonda de magnitude; SEM reciproco). Falha alto se ausente.
+    """
+    arr = state.get(key)
+    if arr is None or not isinstance(arr, np.ndarray) or arr.dtype != np.uint8:
+        raise SystemExit(f"{key}: esperado packed u8 nativo, veio "
+                         f"{None if arr is None else getattr(arr, 'dtype', type(arr))}")
+    if arr.ndim != 2 or arr.shape[0] * 4 != cols or arr.shape[1] != rows:
+        raise SystemExit(f"{key}: shape packed {arr.shape} != ({cols // 4},{rows})")
+    q = unpack_hf_oi(arr).astype(np.int8).T.copy()
+    assert q.shape == (rows, cols), (key, q.shape, rows, cols)
+    skey = key.replace(".weight", ".weight_scale")
+    s = state.get(skey)
+    if s is None:
+        raise SystemExit(f"{skey}: weight_scale ausente (sem palpite)")
+    return q, float(np.asarray(s).flat[0])
 
 
 def sha256_file(p: Path) -> str:
@@ -99,9 +126,9 @@ def convert(source: Path, output: Path, repo: str = PROV_REPO) -> None:
     except Exception:
         _git = ""
     prov = {"repo": repo, "revision": "main",
-            "conv": "convert_bitnet2b4t_to_v6.py native+Q6K-embed(tied)",
+            "conv": "convert_bitnet2b4t_to_v6.py native-direct-scale+Q6K-embed(tied)",
             "git": _git or "unknown",
-            "scale_conv": 1, "unpack_conv": 1}
+            "scale_conv": 0, "unpack_conv": 1}
     tok_bpb1 = b""
     _tok_json = source / "tokenizer.json"
     if _tok_json.is_file():
@@ -180,7 +207,7 @@ def convert(source: Path, output: Path, repo: str = PROV_REPO) -> None:
                 (f"{p}.mlp.up_proj.weight", hidden, ffn_group),
                 (f"{p}.mlp.down_proj.weight", intermediate_size, q_dim),
             ]:
-                q, scale = get_proj_tensor(state, key, True, rows, cols)
+                q, scale = get_native_direct(state, key, rows, cols)
                 write_ternary(f, q.ravel(), scale)
 
             if li % 5 == 0 or li + 1 == num_layers:
