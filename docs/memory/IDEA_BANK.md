@@ -2014,3 +2014,4 @@ elabel_*.py |
 | 2026-10-13 | **#701** | **Modelo 1B para medição QEMU representativa** - 3B em soft-float QEMU = 78s/tok; 1B (18L/h=2048) seria medível. Fonte: SESSION_470. | 🟡 | - | - |
 | 2026-10-13 | **#702** | **TL2 LUT kernel** - avaliar se I2_S scalar prova ganho em HW; TL2 triple-LUT (1.67 bpw) é próximo no ranking. Fonte: SESSION_468/470. | 🟡 | - | - |
 | 2026-10-13 | **#703** | **Falcon3-1B 1.58b baseline** - download OK, .V7 693MB, suite 2/6 (Q1/Q6 coerente, host ~2.7 tok/s). QEMU WHPX indisponível neste host; TCG 2c carrega 3B do loader. Para medir 1B QEMU: desabilitar loader models ou build --mini. Fonte: SESSION_472. | ✅ | - | - |
+| 2026-10-13 | **#704** | **I2_S AVX2 path implementado + gated** - kernel AVX2 + repack_col_major_i8 + dispatch matmul_hybrid + parity test bit-exact vs scalar. QEMU WHPX: gate passa, mas tok/s não medido (benchmark pulado). Requer HW real p/ speedup. Fonte: SESSION_473. | ✅ | - | - |

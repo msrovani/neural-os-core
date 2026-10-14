@@ -747,6 +747,8 @@
 | 2B4T boot (QEMU WHPX 4G/4c) | FALHOU - Runtime OK mas load_model REJECT h=0 L=0 (v7 header vs v6 loader); requer v7 loader completo |
 | Falcon3-1B 1.58b (host suite) | COERENTE - Q1/Q6 pass, ~2.7 tok/s CPU fp32; Q2-Q5 vermelhos por calibração 3B; .V7 693MB gate green |
 | Falcon3-1B 1.58b (QEMU) | NÃO MEDIDO - WHPX falhou neste host → TCG 2c; loader QEMU carrega 3B fixo @0x100000000; TCG prefill 239s/L0 inutilizável |
+| I2_S AVX2 (kernel) | IMPLEMENTADO - sign-select blend/vpsrav + hadd + vmulps + tail k%32; gate allow_avx2 (WHPX -cpu Haswell passa); parity test bit-exact vs scalar; dispatch matmul_hybrid |
+| I2_S AVX2 (QEMU WHPX) | GATE OK - boot OK, LLM loaded, AVX2 enabled logado; tok/s NÃO medido (benchmark pulado no QEMU); requer HW real p/ speedup |
 
 ## Lab vivo (s410)
 
