@@ -1442,7 +1442,7 @@ pub fn f32_to_ternary_packed_adaptive(data: &[f32], rows: usize, cols: usize) ->
 }
 
 /// Dequantiza o primeiro tensor encontrado pelo nome que contém `name_hint`
-fn dequantize_tensor_by_name(file: &GgufFile, name_hint: &str) -> Option<(Vec<f32>, usize, usize)> {
+pub fn dequantize_tensor_by_name(file: &GgufFile, name_hint: &str) -> Option<(Vec<f32>, usize, usize)> {
     for t in &file.tensors {
         if t.name.contains(name_hint) {
             let rows = t.dims[0] as usize;

@@ -259,11 +259,18 @@ pub fn load_model_v6(data: &[u8]) -> Option<ModelView> {
     }
     let version = u16::from_le_bytes([data[4], data[5]]);
     match version {
-        6 | 7 => match data[14] {
+        6 => match data[14] {
             0 => crate::cortex::load_model_v6(data).map(ModelView::Llm),
             1 => crate::cortex::load_hwexpert_v6(data).map(ModelView::HwExpert),
             _ => {
                 k_nano::slog_cortex!("MODEL", "warn", "v6 model_type={} desconhecido", data[14]);
+                None
+            }
+        },
+        7 => match data[14] {
+            0 => crate::cortex::load_model_v7(data).map(ModelView::Llm),
+            _ => {
+                k_nano::slog_cortex!("MODEL", "warn", "v7 model_type={} não suportado", data[14]);
                 None
             }
         },

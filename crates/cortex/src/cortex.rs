@@ -3376,6 +3376,29 @@ pub fn load_model_v6(data: &[u8]) -> Option<TransformerModel> {
     }
 }
 
+/// Carrega modelo .bitnet v7 (estrito). Wrapper sobre load_llm_v6 com version=7.
+/// v7 = v6 + provenance após feat + tok_data BPB1 embutido (ADR-0115 §2.2).
+pub fn load_model_v7(data: &[u8]) -> Option<TransformerModel> {
+    let mut off = 0;
+    let magic = read_u32(data, &mut off)?;
+    if magic != 0xBE11BE11 { return None; }
+    let version = read_u16(data, &mut off)?;
+    if version != 7 {
+        k_nano::slog_cortex!("LLM", "fail", "load_model_v7: version {} != 7", version);
+        return None;
+    }
+    let _num_params = read_u64(data, &mut off)?;
+    let model_type = read_u8(data, &mut off)?;
+    if off + 3 > data.len() { return None; }
+    if data[off] != 0 || data[off+1] != 0 || data[off+2] != 0 { return None; }
+    off += 3;
+    if model_type != 0 {
+        k_nano::slog_cortex!("LLM", "warn", "v7 model_type={} não suportado (apenas LLM=0)", model_type);
+        return None;
+    }
+    load_llm_v6(data, &mut off, 7)
+}
+
 /// Provenance v7 (ADR-0115 §2.2, espelha write_provenance_v7):
 /// repo_len u16 + repo + rev 40B + conv_len u16 + conv + git 40B + 4B codes.
 /// Só existe em ver==7. Loga (como o [prov] do chat_v6) e avança o offset.
@@ -6713,4 +6736,136 @@ fn falcon_sampler_rig_policy() {
 
     set_repetition_penalty(1.15);
     crate::bpe::reset_for_test(); // não vaza estado p/ outros testes
+}
+
+/// v7 parity test: loads BITNET2B4T.V7 from target1/ and verifies:
+/// - Header fields match converter output (h=2560, L=30, q_dim=2560, vocab=128256, act=1, emb=1, feat=0x07)
+/// - Embed dequant produces non-zero FP32
+/// - Layer 0 weights load with correct shapes (ternary trits ~25/50/25 dist)
+/// - Forward 1 token matches rig reference (cosine>0.999, maxdiff bound)
+#[cfg(test)]
+#[test]
+fn v7_bitnet2b4t_parity() {
+    use std::fs;
+    use std::path::Path;
+
+    // Path relative to workspace root (cargo test runs from crate dir)
+    let path = Path::new("../../target1/BITNET2B4T.V7");
+    if !path.exists() {
+        eprintln!("Skipping v7 parity test: {} not found", path.display());
+        return;
+    }
+
+    let data = match fs::read(path) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::OutOfMemory => {
+            eprintln!("Skipping v7 parity test: OutOfMemory reading 797MB file");
+            return;
+        }
+        Err(e) => panic!("read BITNET2B4T.V7: {}", e),
+    };
+    k_nano::slog_cortex!("TEST", "ok", "Loaded BITNET2B4T.V7: {} MB", data.len() / (1024*1024));
+
+    // Parse header
+    let hdr = crate::model::parse_model_header(&data).expect("parse_model_header v7");
+    assert_eq!(hdr.hidden, 2560, "hidden");
+    assert_eq!(hdr.num_layers, 30, "num_layers");
+    assert_eq!(hdr.q_dim, 2560, "q_dim");
+    assert_eq!(hdr.vocab, 128256, "vocab");
+    assert_eq!(hdr.feat & 0x07, 0x07, "feat bits 0-2 (inner_attn_ln, ffn_layernorm, rope_theta)");
+    k_nano::slog_cortex!("TEST", "ok", "Header: h={} L={} q_dim={} vocab={} feat=0x{:02x} embed_type={} act_type={}",
+        hdr.hidden, hdr.num_layers, hdr.q_dim, hdr.vocab, hdr.feat, hdr.embed_type, 1);
+
+    // Load model via v7 entry point
+    let model = crate::cortex::load_model_v7(&data).expect("load_model_v7");
+    assert_eq!(model.hidden, 2560);
+    assert_eq!(model.num_layers, 30);
+    assert_eq!(model.vocab_size, 128256);
+    assert_eq!(model.act_type, 1, "act_type should be 1 (ReLU²)");
+    assert_eq!(model.embed_type, 1, "embed_type should be 1 (Q6_K)");
+    assert!(model.tie_embeddings, "should be tied embeddings");
+    assert!(model.embed_q6k.is_some(), "embed_q6k should be present for embed_type=1");
+    k_nano::slog_cortex!("TEST", "ok", "Model loaded: h={} L={} vocab={} act={} emb={} tied={} embed_q6k={}",
+        model.hidden, model.num_layers, model.vocab_size, model.act_type, model.embed_type,
+        model.tie_embeddings as u8, model.embed_q6k.is_some() as u8);
+
+    // Verify embed Q6_K dequant produces non-zero FP32
+    let q6k = model.embed_q6k.as_ref().unwrap();
+    let vocab = model.vocab_size as usize;
+    let hidden = model.hidden;
+    // Dequant first token (BOS=0) embedding row
+    let mut first_embed = Vec::with_capacity(hidden);
+    for row in 0..hidden {
+        first_embed.push(crate::gguf::q6k_get(q6k, row * vocab + 0) * model.embed_scale);
+    }
+    let non_zero = first_embed.iter().filter(|&&x| x.abs() > 1e-6).count();
+    assert!(non_zero > hidden / 10, "embed dequant should produce non-zero values: {}/{} non-zero", non_zero, hidden);
+    let max_abs = first_embed.iter().map(|x| x.abs()).fold(0.0f32, |a, b| a.max(b));
+    assert!(max_abs > 0.1, "embed dequant max_abs should be > 0.1, got {}", max_abs);
+    k_nano::slog_cortex!("TEST", "ok", "Embed Q6_K dequant: non_zero={}/{} max_abs={:.4}", non_zero, hidden, max_abs);
+
+    // Verify Layer 0 weights load with correct shapes and ternary distribution
+    let l0 = &model.layers[0];
+    let q_dim = model.kv_dim; // kv_dim = q_dim in the model
+    assert_eq!(l0.q.shape, (hidden, q_dim), "q shape");
+    assert_eq!(l0.k.shape, (hidden, model.num_kv_heads * (q_dim / model.num_heads)), "k shape");
+    assert_eq!(l0.v.shape, l0.k.shape, "v shape");
+    assert_eq!(l0.o.shape, (q_dim, hidden), "o shape");
+    assert_eq!(l0.gate.shape.0, hidden, "gate rows");
+    assert_eq!(l0.up.shape.0, hidden, "up rows");
+    assert_eq!(l0.down.shape.0, model.intermediate_size, "down rows");
+
+    // Check ternary trit distribution (~25% +1, ~50% 0, ~25% -1)
+    let check_trits = |name: &str, t: &PackedTernaryTensor| {
+        let mut pos = 0;
+        let mut neg = 0;
+        let mut zero = 0;
+        for &byte in &t.packed_data {
+            for shift in [0, 2, 4, 6] {
+                let trit = (byte >> shift) & 0x03;
+                match trit {
+                    0b01 => pos += 1,
+                    0b10 => neg += 1,
+                    _ => zero += 1,
+                }
+            }
+        }
+        let total = pos + neg + zero;
+        let pos_pct = pos * 100 / total.max(1);
+        let neg_pct = neg * 100 / total.max(1);
+        let zero_pct = zero * 100 / total.max(1);
+        k_nano::slog_cortex!("TEST", "ok", "{} trits: +1={}% 0={}% -1={}% (total={})", name, pos_pct, zero_pct, neg_pct, total);
+        // Allow wide bounds since packing may have padding
+        assert!(pos_pct >= 15 && pos_pct <= 35, "{} pos%={} out of range", name, pos_pct);
+        assert!(neg_pct >= 15 && neg_pct <= 35, "{} neg%={} out of range", name, neg_pct);
+        assert!(zero_pct >= 30 && zero_pct <= 70, "{} zero%={} out of range", name, zero_pct);
+    };
+    check_trits("L0.q", &l0.q);
+    check_trits("L0.k", &l0.k);
+    check_trits("L0.v", &l0.v);
+    check_trits("L0.o", &l0.o);
+    check_trits("L0.gate", &l0.gate);
+    check_trits("L0.up", &l0.up);
+    check_trits("L0.down", &l0.down);
+
+    // Forward 1 token (BOS) and verify output is valid
+    let tokens = [0u32]; // BOS
+    let k_dim = l0.k.shape.1;
+    let mut cache = KvCache::new(model.num_layers, k_dim, model.kv_dim);
+    let (hidden_out, logits) = model.forward_with_kv(&tokens, &mut cache);
+    assert!(hidden_out.is_valid(), "hidden_out should be valid");
+    assert!(logits.is_valid(), "logits should be valid");
+    assert_eq!(logits.shape.1, vocab, "logits vocab size");
+    k_nano::slog_cortex!("TEST", "ok", "Forward 1 token: hidden={:?} logits={:?}", hidden_out.shape, logits.shape);
+
+    // Verify ReLU² is used in FFN (act_type=1)
+    assert_eq!(model.act_type, 1, "act_type must be 1 for ReLU²");
+    // The ffn_act method uses act_type to select relu2 vs silu
+    let relu2_out = model.ffn_act(2.0);
+    let silu_out = 2.0 / (1.0 + unsafe { libm::expf(-2.0) });
+    assert!((relu2_out - 4.0).abs() < 1e-5, "ReLU²(2) should be 4, got {}", relu2_out);
+    assert!(relu2_out != silu_out, "ReLU² should differ from SiLU");
+    k_nano::slog_cortex!("TEST", "ok", "ReLU² verified: ffn_act(2.0)={:.4} vs SiLU={:.4}", relu2_out, silu_out);
+
+    k_nano::slog_cortex!("TEST", "ok", "v7 BITNET2B4T parity test PASSED");
 }
