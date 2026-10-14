@@ -728,6 +728,8 @@
 | Decode host .V7 (rig torch, greedy + rep 1.15 + mask 2137) | OK - 1B.V7 Q1+Q6 pass, 2.2-3.6 tok/s (~3-4x fonte); W2A8-host refutado; 7B/10B HYPOTHESIS (ferro insuficiente) |
 | I2_S scalar (QEMU WHPX 4G/4c, Falcon3-3B) | MEDIDO - 0.013 tok/s (78s/tok); prefill 123s; sem ganho vs FP legacy (ambos soft-float escalar); default OFF mantido |
 | 2B4T boot (QEMU WHPX 4G/4c) | FALHOU - Runtime OK mas load_model REJECT h=0 L=0 (v7 header vs v6 loader); requer v7 loader completo |
+| Falcon3-1B 1.58b (host suite) | COERENTE - Q1/Q6 pass, ~2.7 tok/s CPU fp32; Q2-Q5 vermelhos por calibração 3B; .V7 693MB gate green |
+| Falcon3-1B 1.58b (QEMU) | NÃO MEDIDO - WHPX falhou neste host → TCG 2c; loader QEMU carrega 3B fixo @0x100000000; TCG prefill 239s/L0 inutilizável |
 
 ## Lab vivo (s410)
 
