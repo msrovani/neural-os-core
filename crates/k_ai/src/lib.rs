@@ -20,6 +20,7 @@ pub mod chunker;
 pub mod economy;
 pub use economy::{CompressionTier, BudgetManager};
 pub mod expert_lifecycle;
+pub mod traits; // Item 12: traits for ExpertLifecycleManager/BudgetManager
 pub mod cognitive;
 pub mod context_window;
 pub mod conversation;

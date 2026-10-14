@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 use alloc::vec;
 use crate::nn::BitLinear;
 use crate::tensor::{Tensor, PackedTernaryTensor};
+use crate::gguf::{load_gguf, dequantize_tensor_by_name, f32_to_ternary_packed};
 
 pub struct Int8Router {
     pub weight: Vec<i8>,
@@ -225,6 +226,11 @@ impl DynamicMoE {
 
     pub fn flush_births(&mut self) {
         for expert in self.pending_births.drain(..) {
+            if self.base.experts.len() >= self.dyn_config.max_experts {
+                // At capacity — drop remaining births (honest: log and stop)
+                k_nano::slog_cortex!("MOE", "warn", "flush_births: at max_experts ({}), dropping remaining births", self.dyn_config.max_experts);
+                break;
+            }
             self.base.experts.push(expert);
             self.base.config.num_experts += 1;
             self.expert_hits.push(0);
@@ -375,6 +381,70 @@ impl DynamicMoE {
         k_nano::slog_cortex!("MOE", "ok",
             "birth expert #{} (cloned from #{}, hint: {})",
             new_id, best_idx, intent_hint);
+        Some(new_id)
+    }
+
+    /// Load an expert from a GGUF file by tensor name hint.
+    /// Returns the expert ID if successful, None if failed.
+    /// 
+    /// The GGUF file should contain a tensor matching `tensor_name_hint`.
+    /// The tensor is dequantized to f32, converted to ternary via adaptive threshold,
+    /// and wrapped in a BitLinear. The router weight column is initialized to zero
+    /// (will be trained on first use).
+    pub fn load_expert_from_gguf(
+        &mut self,
+        gguf_data: &[u8],
+        tensor_name_hint: &str,
+        expert_name: &str,
+    ) -> Option<usize> {
+        let n = self.base.experts.len();
+        if n >= self.dyn_config.max_experts {
+            k_nano::slog_cortex!("MOE", "warn", "load_expert_from_gguf: at max experts ({})", self.dyn_config.max_experts);
+            return None;
+        }
+
+        // Parse GGUF file
+        let file = match load_gguf(gguf_data) {
+            Ok(f) => f,
+            Err(e) => {
+                k_nano::slog_cortex!("MOE", "warn", "load_expert_from_gguf: parse failed: {}", e);
+                return None;
+            }
+        };
+
+        // Extract tensor by name hint
+        let (vals, cols, rows) = match dequantize_tensor_by_name(&file, tensor_name_hint) {
+            Some(v) => v,
+            None => {
+                k_nano::slog_cortex!("MOE", "warn", "load_expert_from_gguf: tensor '{}' not found", tensor_name_hint);
+                return None;
+            }
+        };
+
+        // Convert to ternary packed tensor
+        let packed = f32_to_ternary_packed(&vals, rows, cols);
+        let expert = BitLinear::new(packed, None);
+
+        // Add expert
+        let new_id = self.base.experts.len();
+        self.base.experts.push(expert);
+        self.base.config.num_experts += 1;
+        self.expert_hits.push(0);
+        self.expert_confidence.push(0.0);
+        self.expert_entropy.push(0.0);
+
+        // Initialize router column to zero (will be trained)
+        let d = self.base.router.in_features;
+        let num_exp = self.base.router.num_experts;
+        if num_exp < self.base.router.weight.len() / d {
+            for j in 0..d {
+                self.base.router.weight[j * num_exp + new_id] = 0;
+            }
+        }
+
+        k_nano::slog_cortex!("MOE", "ok",
+            "loaded expert #{} from GGUF tensor '{}' ({}x{})",
+            new_id, tensor_name_hint, rows, cols);
         Some(new_id)
     }
 
@@ -600,5 +670,151 @@ impl DynamicMoE {
         if dmoe.base.experts.len() != n + 1 { return false; }
 
         true
+    }
+}
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use crate::nn::BitLinear;
+    use crate::tensor::{PackedTernaryTensor, Tensor};
+    use crate::moe::{MoELayer, MoEConfig, Int8Router};
+
+    fn make_test_dmoe(hidden: usize, n: usize, top_k: usize) -> DynamicMoE {
+        let make_linear = || BitLinear::new(
+            PackedTernaryTensor { shape: (hidden, hidden), packed_data: vec![0u8; (hidden * hidden + 3) / 4] },
+            None,
+        );
+        let shared = make_linear();
+        let router = Int8Router::new(hidden, n);
+        let mut experts = Vec::with_capacity(n);
+        for _ in 0..n { experts.push(make_linear()); }
+        let config = MoEConfig::new(n, top_k, hidden);
+        let layer = MoELayer::new(config, shared, router, experts);
+        DynamicMoE::new(layer)
+    }
+
+    /// Invariant: expert count never exceeds max_experts config.
+    #[test]
+    fn expert_count_never_exceeds_max() {
+        let mut dmoe = make_test_dmoe(8, 4, 2);
+        let max = dmoe.dyn_config.max_experts;
+        for _ in 0..max + 5 {
+            let extra = BitLinear::new(
+                PackedTernaryTensor { shape: (8, 8), packed_data: vec![0u8; 16] },
+                None,
+            );
+            dmoe.queue_birth(extra);
+            dmoe.flush_births();
+            assert!(dmoe.base.experts.len() <= max, "expert count {} > max {}", dmoe.base.experts.len(), max);
+        }
+    }
+
+    /// Invariant: merge reduces expert count by exactly 1.
+    #[test]
+    fn merge_reduces_count_by_one() {
+        let mut dmoe = make_test_dmoe(8, 4, 2);
+        let initial = dmoe.base.experts.len();
+        dmoe.queue_merge(0, 1);
+        dmoe.flush_merges();
+        assert_eq!(dmoe.base.experts.len(), initial - 1);
+    }
+
+    /// Invariant: split increases expert count by exactly 1.
+    #[test]
+    fn split_increases_count_by_one() {
+        let mut dmoe = make_test_dmoe(8, 4, 2);
+        let initial = dmoe.base.experts.len();
+        dmoe.queue_split(0);
+        dmoe.flush_splits();
+        assert_eq!(dmoe.base.experts.len(), initial + 1);
+    }
+
+    /// Invariant: birth increases expert count by exactly 1.
+    #[test]
+    fn birth_increases_count_by_one() {
+        let mut dmoe = make_test_dmoe(8, 4, 2);
+        let initial = dmoe.base.experts.len();
+        let extra = BitLinear::new(
+            PackedTernaryTensor { shape: (8, 8), packed_data: vec![0u8; 16] },
+            None,
+        );
+        dmoe.queue_birth(extra);
+        dmoe.flush_births();
+        assert_eq!(dmoe.base.experts.len(), initial + 1);
+    }
+
+    /// Invariant: flush order (merges → splits → births) preserves indices correctly.
+    #[test]
+    fn flush_order_preserves_indices() {
+        let mut dmoe = make_test_dmoe(8, 4, 2);
+        // Queue: merge 0+1, split 2, birth new
+        dmoe.queue_merge(0, 1);
+        dmoe.queue_split(2);
+        let extra = BitLinear::new(
+            PackedTernaryTensor { shape: (8, 8), packed_data: vec![0u8; 16] },
+            None,
+        );
+        dmoe.queue_birth(extra);
+        let before = dmoe.base.experts.len();
+        dmoe.flush_all();
+        // merge: -1, split: +1, birth: +1 → net +1
+        assert_eq!(dmoe.base.experts.len(), before + 1);
+    }
+
+    /// Invariant: expert_hits, expert_confidence, expert_entropy arrays stay in sync with experts vec.
+    #[test]
+    fn metadata_arrays_stay_in_sync() {
+        let mut dmoe = make_test_dmoe(8, 4, 2);
+        assert_eq!(dmoe.expert_hits.len(), dmoe.base.experts.len());
+        assert_eq!(dmoe.expert_confidence.len(), dmoe.base.experts.len());
+        assert_eq!(dmoe.expert_entropy.len(), dmoe.base.experts.len());
+
+        let extra = BitLinear::new(
+            PackedTernaryTensor { shape: (8, 8), packed_data: vec![0u8; 16] },
+            None,
+        );
+        dmoe.queue_birth(extra);
+        dmoe.flush_births();
+        assert_eq!(dmoe.expert_hits.len(), dmoe.base.experts.len());
+        assert_eq!(dmoe.expert_confidence.len(), dmoe.base.experts.len());
+        assert_eq!(dmoe.expert_entropy.len(), dmoe.base.experts.len());
+
+        dmoe.queue_merge(0, 1);
+        dmoe.flush_merges();
+        assert_eq!(dmoe.expert_hits.len(), dmoe.base.experts.len());
+        assert_eq!(dmoe.expert_confidence.len(), dmoe.base.experts.len());
+        assert_eq!(dmoe.expert_entropy.len(), dmoe.base.experts.len());
+
+        dmoe.queue_split(0);
+        dmoe.flush_splits();
+        assert_eq!(dmoe.expert_hits.len(), dmoe.base.experts.len());
+        assert_eq!(dmoe.expert_confidence.len(), dmoe.base.experts.len());
+        assert_eq!(dmoe.expert_entropy.len(), dmoe.base.experts.len());
+    }
+
+    /// Invariant: entropy values are always non-negative.
+    #[test]
+    fn entropy_non_negative() {
+        let mut dmoe = make_test_dmoe(8, 4, 2);
+        for &e in &dmoe.expert_entropy {
+            assert!(e >= 0.0, "entropy {} < 0", e);
+        }
+        dmoe.queue_split(0);
+        dmoe.flush_splits();
+        for &e in &dmoe.expert_entropy {
+            assert!(e >= 0.0, "entropy {} < 0", e);
+        }
+    }
+
+    /// Invariant: confidence values are in [0, 1] range.
+    #[test]
+    fn confidence_in_range() {
+        let mut dmoe = make_test_dmoe(8, 4, 2);
+        for &c in &dmoe.expert_confidence {
+            assert!((0.0..=1.0).contains(&c), "confidence {} out of range", c);
+        }
+        dmoe.record_hit(0, 0.8);
+        assert!((0.0..=1.0).contains(&dmoe.expert_confidence[0]));
     }
 }

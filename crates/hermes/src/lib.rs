@@ -76,6 +76,8 @@ pub use soul::*;
 // cf_challenge, voice_skill, proactive, net_fallback, graph_engine
 pub mod skill_opt;
 pub mod bei; // ADR-0060 — BeiState/tick (emagreçer s359: saiu do bin)
+pub mod ap_jobs; // P5/Item 10: AP worker jobs (mesh/FL/CRDT offload from bei_tick)
+pub mod affect_channel; // Item 14: typed EventBus channel for AFFECT_SNAPSHOT
 pub mod skill_sync; // reativado s359 — wire bei_tick (HERMES_AUDIT mentia "0 callers")
 pub mod skill_marketplace; // reativado s359 — mesh MKTP + poll_p2p
 pub mod mesh_knowledge;

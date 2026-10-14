@@ -61,18 +61,9 @@ impl AffectSnapshot {
 
 /// Sincroniza o affect do ExecutiveSupervisor para o AFFECT_SNAPSHOT.
 /// Chamado pelo BeiInit::tick a cada ciclo.
+/// Atualiza tanto o legacy global quanto o novo canal EventBus tipado (Item 14).
 pub fn sync_affect_snapshot(affect: &crate::affect::AffectVector, phase_deg: u32) {
-    *AFFECT_SNAPSHOT.lock() = AffectSnapshot {
-        valence: affect.valence,
-        arousal: affect.arousal,
-        dominance: affect.dominance,
-        uncertainty: affect.uncertainty,
-        urgency: affect.urgency,
-        fatigue: affect.fatigue,
-        curiosity: affect.curiosity,
-        coherence: affect.coherence,
-        phase_deg,
-    };
+    crate::affect_channel::sync_affect_snapshot_both(affect, phase_deg);
 }
 
 lazy_static! {

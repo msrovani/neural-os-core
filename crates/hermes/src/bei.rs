@@ -1,14 +1,104 @@
 //! BEI (BitNet Ecosystem Intelligence) Initialization
 //! ADR-0060: Wire all 8 waves into the boot process.
 //! This module creates and connects all BEI components.
+//! P0.2: BeiState alocado em frame fixo via HHDM (fora da região de heap)
+//! para eliminar REMAP race (map_page_direct) que corrompia Arc pointers (s452).
+//!
+//! CONTRATO DE TICK (bei_tick):
+//! - Chamado a CADA tick do scheduler (BSP, ~18Hz PIT / 60Hz target) via
+//!   `agent_core::set_bei_tick_hook` → `maybe_log_sched_metrics`.
+//! - Ordem de locks (deadlock-free): CellNetwork → PlasticityController
+//!   (coleta grow/prune) → CellNetwork (spawn/mark_dead) → MemoryStore
+//!   → AffectRegulator → ExecutiveSupervisor → DynamicMoE →
+//!   ExpertLifecycleManager → BudgetManager.
+//! - Gates de heap (BeiHeapPolicy): low_mem=128MB (pula blocos não-essenciais),
+//!   critical=48MB (só AFFECT_SNAPSHOT). Re-check bounded (SESSION_411) em
+//!   Supervisor, PromoteSkill, MoE lifecycle.
+//! - Fail-closed observável: Arc corruption detector (CORRUPT_TICKS),
+//!   REMAP detector (BOOT_PA), watchpoint DR0 em affect_regulator (s452).
+//! - Mesh/FL/CRDT roda APÓS cognição local, gated por TOFU settled.
+//! - Métricas reais via `record_result(domain, success, confidence, latency)`
+//!   alimentam ExecutiveSupervisor (H9 gap: wire real pendente).
 
 use alloc::string::String;
 use alloc::sync::Arc;
+use core::ptr;
+use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use spin::Mutex;
+use x86_64::structures::paging::FrameAllocator;
 use k_nano::sync::mpmc::MpmcQueue;
 use k_ai::{economy::BudgetManager, expert_lifecycle::ExpertLifecycleManager};
 use cortex::{cellular::{CellNetwork, CellType}, evolution::PlasticityController, moe::DynamicMoE};
 use crate::{memory::{MemoryStore, MemoryLevel}, affect::{AffectRegulator, AffectVector, AffectEvent}, executive::{ExecutiveSupervisor, SupervisorVerdict}};
+
+
+/// Política de heap do BEI — centraliza thresholds (P4: unifica 4 gates espalhados).
+/// low_mem = 128MB (pula blocos não-essenciais), critical = 48MB (só AFFECT roda).
+/// Valores vêm de s429-lab: janela bump ~2030MB, wasmi/cranelift allocam GRANDE.
+#[derive(Copy, Clone)]
+pub struct BeiHeapPolicy {
+    pub low_mem_mb: usize,
+    pub critical_mb: usize,
+}
+
+impl Default for BeiHeapPolicy {
+    fn default() -> Self {
+        Self { low_mem_mb: 128, critical_mb: 48 }
+    }
+}
+
+impl BeiHeapPolicy {
+    /// true se headroom < low_mem_mb — pula blocos não-essenciais (CellNet, Plasticity, Supervisor, MoE lifecycle).
+    pub fn is_low(&self) -> bool {
+        let obs = k_nano::allocator::heap_observe();
+        obs.headroom_mb < self.low_mem_mb
+    }
+    /// true se headroom < critical_mb — só AFFECT_SNAPSHOT roda; resto espera.
+    pub fn is_critical(&self) -> bool {
+        let obs = k_nano::allocator::heap_observe();
+        obs.headroom_mb < self.critical_mb
+    }
+    /// Re-check bounded (padrão lost-wakeup SESSION_411): headroom pode cair entre gate externo e lock.
+    pub fn recheck_critical(&self) -> bool {
+        k_nano::allocator::heap_headroom_critical()
+    }
+}
+
+/// Helper de log throttled — substitui 7+ statics ad-hoc (LAST_LOG, LAST_BUDGET, LAST_FL_LOG, etc.).
+/// Uso: `ThrottledLog::new("BEI", "warn", 64).log(|| "msg")` — loga se passou `min_ticks` desde último.
+pub struct ThrottledLog {
+    subsystem: &'static str,
+    severity: &'static str,
+    min_ticks: u64,
+    last_tick: AtomicU64,
+}
+
+impl ThrottledLog {
+    pub const fn new(subsystem: &'static str, severity: &'static str, min_ticks: u64) -> Self {
+        Self { subsystem, severity, min_ticks, last_tick: AtomicU64::new(0) }
+    }
+    /// Loga se passou `min_ticks` desde último log. `msg_fn` é lazy (só executa se for logar).
+    pub fn log<F: FnOnce() -> alloc::string::String>(&self, msg_fn: F) {
+        let now = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+        let last = self.last_tick.load(Ordering::Relaxed);
+        if last == 0 || now.wrapping_sub(last) >= self.min_ticks {
+            self.last_tick.store(now, Ordering::Release);
+            k_nano::slog_bin!(self.subsystem, self.severity, "{}", msg_fn());
+        }
+    }
+    /// Loga one-shot (só primeira vez).
+    pub fn log_once<F: FnOnce() -> alloc::string::String>(&self, msg_fn: F) {
+        let last = self.last_tick.load(Ordering::Relaxed);
+        if last == 0 {
+            self.last_tick.store(1, Ordering::Release);
+            k_nano::slog_bin!(self.subsystem, self.severity, "{}", msg_fn());
+        }
+    }
+    /// Loga a cada `min_ticks` (rate-limited) — para logs periódicos como FL/health.
+    pub fn log_periodic<F: FnOnce() -> alloc::string::String>(&self, msg_fn: F) {
+        self.log(msg_fn);
+    }
+}
 
 
 /// Global BEI state container
@@ -166,26 +256,18 @@ impl BeiState {
         _expert_lifecycle: &Arc<Mutex<ExpertLifecycleManager>>,
         _budget_manager: &Arc<Mutex<BudgetManager>>,
     ) {
-        // ExecutiveSupervisor already contains EgoLayer, PonderNet, EntropyMonitor, AffectRegulator
-        // The affect_regulator is shared - supervisor has its own but we sync them
-        
-        // Connect MemoryStore to ExecutiveSupervisor (for domain confidence tracking)
-        // This is done via the supervisor's record_result which updates ego layer
-        
-        // Connect PlasticityController to CellNetwork (growth/pruning signals)
-        // This will be done in the BEI tick function
-        
-        // Connect DynamicMoE to ExpertLifecycleManager (birth/merge/split)
-        // This will be done in the BEI tick function
-        
-        // Connect BudgetManager to DynamicMoE (compression tier decisions)
-        // This will be done in the BEI tick function
-        
-        // Wire real: plasticity/dmoe/budget rodam no tick() — não há graph edges aqui.
+        // A fiação real ocorre no bei_tick() com ordem de locks consistente:
+        // 1. CellNetwork (net.lock)
+        // 2. PlasticityController (pc.lock) → decisões grow/prune → net.lock p/ spawn/mark_dead
+        // 3. MemoryStore (mem.lock)
+        // 4. AffectRegulator (affect.lock)
+        // 5. ExecutiveSupervisor (supervisor.lock)
+        // 6. DynamicMoE + ExpertLifecycleManager + BudgetManager (dmoe→lifecycle→budget)
+        // Não há graph edges no init — a cognição é tick-driven (ADR-0060).
         k_nano::slog_bin!(
             "BEI",
-            "warn",
-            "connect_components = PARTIAL/noop (cross-wire deferred to bei_tick)"
+            "ok",
+            "connect_components: wiring tick-driven (net→pc→mem→affect→supervisor→dmoe→lifecycle→budget)"
         );
     }
     
@@ -276,8 +358,8 @@ impl BeiState {
         // s429-lab rodada 8: 48→128MB — wasmi/cranelift allocam GRANDE no PromoteSkill
         // (bypassam o grow; janela ~2030MB com headroom 48-127MB ainda falha).
         // Mesmo piso dos gates submit/claim do InferQueue (s429-lab).
-        let obs = k_nano::allocator::heap_observe();
-        let low_mem = obs.headroom_mb < 128;
+        let heap_policy = BeiHeapPolicy::default();
+        let low_mem = heap_policy.is_low();
         // M20: sob headroom crítico só o snapshot (AFFECT) roda; o resto espera.
 
         // 1. Advance CellNetwork scheduler (skip sob heap critico — MPMC #PF)
@@ -348,7 +430,7 @@ impl BeiState {
             // o prefill concorrente come o headroom ENTRE o snapshot do início do
             // tick e aqui; iterar BTreeMap do supervisor com nós demand-paged sob
             // teto = #PF (evidência: LazyLeafRange cr2=0x702a00a8, T+28k).
-            if k_nano::allocator::heap_headroom_low() {
+            if heap_policy.is_low() {
                 k_nano::slog_bin!("BEI", "warn", "supervisor tick pulado: heap caiu no meio do tick (headroom low)");
             } else {
             let mut supervisor = self.executive_supervisor.lock();
@@ -358,8 +440,7 @@ impl BeiState {
             match verdict {
                 SupervisorVerdict::Proceed => {}
                 SupervisorVerdict::ProceedWithBudget(budget) => {
-                    let obs = k_nano::allocator::heap_observe();
-                    if obs.headroom_mb < 48 {
+                    if heap_policy.is_critical() {
                         // Rate-limit: slog sob headroom=0 também aloca.
                         static LAST_LOG: core::sync::atomic::AtomicU64 =
                             core::sync::atomic::AtomicU64::new(0);
@@ -367,6 +448,7 @@ impl BeiState {
                         let prev = LAST_LOG.load(core::sync::atomic::Ordering::Relaxed);
                         if now.saturating_sub(prev) >= 64 {
                             LAST_LOG.store(now, core::sync::atomic::Ordering::Relaxed);
+                            let obs = k_nano::allocator::heap_observe();
                             k_nano::slog_bin!(
                                 "BEI",
                                 "warn",
@@ -408,7 +490,7 @@ impl BeiState {
                     // s429-lab rodada 8: re-check bounded (padrão SESSION_411) —
                     // o heap cai ENTRE o gate externo e o wasmi (cmpxchg em obj NULL
                     // = #PF cr2=0x10; evidência rodada 8 T+25k pós teto 2030MB).
-                    if k_nano::allocator::heap_headroom_low() {
+                    if heap_policy.is_low() {
                         k_nano::slog_bin!("BEI", "warn", "PromoteSkill pulado: heap crítico (wasmi alloc)");
                     } else {
                         // s440: NÃO carimbar dummy — publica o pedido de geração
@@ -449,7 +531,7 @@ impl BeiState {
         // #PF no AP (evidência: flush_merges cr2=0x8, T+27.8s pós teto 2030MB).
         // Lifecycle MoE é trabalho não-essencial: pula o ciclo inteiro.
         if current_tick % 100 == 0
-            && !k_nano::allocator::heap_headroom_critical()
+            && !heap_policy.is_critical()
             && !self.dynamic_moe.lock().base.experts.is_empty()
         {
             let mut dmoe = self.dynamic_moe.lock();
@@ -458,7 +540,7 @@ impl BeiState {
             
             // Re-check bounded (padrão lost-wakeup SESSION_411): o headroom pode
             // ter caído entre o gate externo e o lock.
-            if k_nano::allocator::heap_headroom_critical() {
+            if heap_policy.recheck_critical() {
                 k_nano::slog_bin!("BEI", "warn", "lifecycle MoE pulado: heap crítico");
             } else {
             // Check for expert births (high entropy regions)
@@ -533,33 +615,59 @@ impl BeiState {
     }
 }
 
-use core::sync::atomic::{AtomicPtr, Ordering};
-
 /// Global BEI state (initialized during boot).
 /// After init_bei(), the Box is leaked and the AtomicPtr points to the leaked
 /// allocation, guaranteeing 'static lifetime for subsequent read-only access.
 static BEI_STATE: AtomicPtr<BeiState> = AtomicPtr::new(core::ptr::null_mut());
 
 /// Initialize BEI (call after heap init in main.rs). Fail-closed: OOM → skip, no panic.
+/// P0.2: aloca BeiState em frame fixo via HHDM (fora da região de heap) para
+/// evitar REMAP race do map_page_direct que corrompia Arc pointers (s452).
 pub fn init_bei() {
-    match BeiState::try_new() {
-        Some(state) => {
-            let ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(state));
-            BEI_STATE.store(ptr, Ordering::Release);
-            k_nano::slog_bin!(
-                "BEI",
-                "ok",
-                "BEI 8 waves up (connect PARTIAL — wire no tick)"
-            );
-        }
-        None => {
-            k_nano::slog_bin!(
-                "BEI",
-                "fail",
-                "init SKIP (MPMC/CellNetwork alloc fail) — boot DEGRADED sem BEI"
-            );
-        }
+    // 1) Tenta construir o BeiState (pode falhar OOM nos Arc::new internos)
+    let Some(state) = BeiState::try_new() else {
+        k_nano::slog_bin!(
+            "BEI",
+            "fail",
+            "init SKIP (MPMC/CellNetwork alloc fail) — boot DEGRADED sem BEI"
+        );
+        return;
+    };
+
+    // 2) Aloca 1 frame físico (4KB) via PMM — BeiState cabe em <1KB
+    let frame = k_nano::memory::GLOBAL_ALLOCATOR
+        .lock()
+        .as_mut()
+        .and_then(|a| a.allocate_frame());
+    let Some(frame) = frame else {
+        k_nano::slog_bin!(
+            "BEI",
+            "fail",
+            "init SKIP (PMM frame alloc fail) — boot DEGRADED sem BEI"
+        );
+        return;
+    };
+
+    // 3) VA fixa no HHDM (phys_mem_offset + frame_phys) — fora da região de heap
+    //    heap = 0x_4000_0000_0000.. ; HHDM = phys_mem_offset + phys
+    //    map_page_direct só toca heap_start + offset → HHDM imune a REMAP.
+    let pm_off = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    let bei_va = pm_off + frame.start_address().as_u64();
+
+    // 4) Constrói in-place no frame (ptr::write — sem Box, sem heap para o struct)
+    unsafe {
+        ptr::write(bei_va as *mut BeiState, state);
     }
+
+    // 5) Publica o ponteiro
+    BEI_STATE.store(bei_va as *mut BeiState, Ordering::Release);
+
+    k_nano::slog_bin!(
+        "BEI",
+        "ok",
+        "BEI 8 waves up (connect PARTIAL — wire no tick) @HHDM 0x{:x}",
+        bei_va
+    );
 }
 
 /// Get BEI state (call from agents/ticks)
@@ -585,142 +693,8 @@ pub fn bei_tick(_tick: u64) {
     if let Some(state) = bei_state() {
         state.tick();
     }
-    // SESSION_234: transporte P2P movido para k_nano (ADR-0081) — roda aqui
-    // (hook do scheduler, sempre chamado) em vez de depender do NetAgent agent
-    // (rate-limited). k_nano envia heartbeats, drena o RX 42069 e publica
-    // não-heartbeats no EVENT_BUS ("P2P_PACKET").
-    k_nano::net::mesh::p2p_tick(_tick);
-    // F1 (ADR-0081 Fase B): advertise de capabilities no heartbeat — refresh
-    // a cada ~110 ticks (cadência do heartbeat) p/ capturar modelos carregados
-    // tardiamente no boot. Cada heartbeat TX lê `local_caps()`.
-    static LAST_CAPS_REFRESH: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-    let caps_now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-    let caps_last = LAST_CAPS_REFRESH.load(core::sync::atomic::Ordering::Relaxed);
-    if caps_last == 0 || caps_now.wrapping_sub(caps_last) >= 110 {
-        LAST_CAPS_REFRESH.store(caps_now, core::sync::atomic::Ordering::Relaxed);
-        let mut caps = k_nano::net::mesh::CAP_COMPUTE;
-        if cortex::cortex::model_is_loaded() {
-            caps |= k_nano::net::mesh::CAP_LLM;
-        }
-        if cortex::cortex::hwexpert_is_loaded() {
-            caps |= k_nano::net::mesh::CAP_HWEXPERT;
-        }
-        if cortex::cortex::rustcoder_is_loaded() {
-            caps |= k_nano::net::mesh::CAP_RUSTCODER;
-        }
-        if k_ai::sgdb::ready() {
-            caps |= k_nano::net::mesh::CAP_SGDB_READY;
-        }
-        k_nano::net::mesh::set_local_caps(caps);
-    }
-    // Com peer TOFU settled, ativa sync de skills + marketplace (idempotente).
-    // Settle evita Master push/ROLE antes do Worker vincular nossa pk (drops
-    // "peer desconhecido"). Na 1ª transição settled→true, limpa synced p/
-    // re-empurrar skills que teriam sido marcadas cedo demais.
-    if k_nano::net::mesh::tofu_settled() {
-        static WAS_SETTLED: core::sync::atomic::AtomicBool =
-            core::sync::atomic::AtomicBool::new(false);
-        if !WAS_SETTLED.swap(true, core::sync::atomic::Ordering::AcqRel) {
-            // GOAL3: skill nova só no Master, antes do re-push (Worker não a tem).
-            crate::skill_sync::register_mesh_g3_probe_on_master();
-            crate::skill_sync::clear_synced_for_resync();
-            k_nano::slog_bin!("P2P", "ok", "TOFU settled — SkillSync/MKTP liberados");
-        }
-        crate::skill_sync::activate_global();
-        crate::skill_marketplace::activate_global();
-    }
-    // Consumo dos pacotes P2P não-heartbeat (EventBus) — lazy subscribe + dreno.
-    crate::skill_sync::poll_p2p();
-    crate::skill_marketplace::poll_p2p();
-    // RX de requests mesh (Master responde só se settled + Master — ver gates).
-    cortex::compute::poll_mesh_requests();
-    cortex::mesh_distrib::poll_expert_requests();
-    cortex::speculative::dsd_tick(_tick);
+    // P5/Item 10: offload mesh/FL/CRDT to AP workers via IPI.
+    // BSP submits job; AP workers execute in idle loop (k_nano::smp::ap_work).
+    crate::ap_jobs::submit_mesh_fl_crdt_tick();
 
-    // TX de dados (skills/CRDT/FL/MKTP/self-test) só após TOFU settle.
-    // Heartbeat/ROLE já gated em k_nano::mesh (FORCE_HB + assign_roles).
-    if !k_nano::net::mesh::tofu_settled() {
-        return;
-    }
-
-    // Sync de skills (Master push / diff) + marketplace broadcast periódico.
-    let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-    crate::skill_sync::sync_skills(now);
-    crate::skill_marketplace::marketplace_tick(k_nano::net::mesh::node_id());
-    // Memória coletiva L4: difunde os pares do SelfLearningAgent (k_ai) como
-    // MemoryDocs (throttled ~500 ticks interno). RX "MEM\0" de qualquer layer
-    // já é aplicado via put_doc no mesh_knowledge::poll_p2p.
-    crate::mesh_knowledge::broadcast_learner_memory();
-    // Self-test matmul 64×64 (~17KB → FRAG): qualquer não-Master após TOFU.
-    // AIOS: sob pressão de RAM (<1.5G) NÃO dispara FRAG — DEGRADED honesto.
-    // Antes: só role==Worker → ROLE\0 Memory/Compute matava o path antes do FRAG.
-    static MESH_SELFTEST_TRIES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-    let role = k_nano::net::mesh::local_role();
-    let non_master = matches!(
-        role,
-        k_nano::net::mesh::NodeRole::Worker
-            | k_nano::net::mesh::NodeRole::Memory
-            | k_nano::net::mesh::NodeRole::Compute
-    );
-    if MESH_SELFTEST_TRIES.load(core::sync::atomic::Ordering::Relaxed) < 5
-        && non_master
-        && k_nano::net::mesh::MESH_ENGINE.lock().as_ref().map_or(false, |e| e.node_count() >= 1)
-    {
-        if k_nano::memory::refuse_heavy_frag() {
-            // Uma vez: registra a decisão (Observe→Act→Remember via slog).
-            if MESH_SELFTEST_TRIES.fetch_add(1, core::sync::atomic::Ordering::Relaxed) == 0 {
-                let ram = k_nano::memory::TOTAL_RAM_MB
-                    .load(core::sync::atomic::Ordering::Relaxed);
-                k_nano::slog_bin!(
-                    "MESH", "warn",
-                    "self-test FRAG skip DEGRADED RAM={}MB (AIOS: nó frugal — mesh UI ok, matmul local)"
-                    , ram
-                );
-            }
-        } else {
-            MESH_SELFTEST_TRIES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            cortex::compute::mesh_matmul_self_test();
-        }
-    }
-    // ADR-0081 Fase C (C4/C5): CRDT version sync + FL federado via P2P real.
-    // k_ai consome o EventBus P2P_PACKET (assinatura já verificada no ingress
-    // do k_nano — Fase A fail-closed). No-op quando role == Undecided.
-    k_ai::sgdb::crdt_sync::crdt_sync_global(_tick);
-    k_ai::fl_trainer::mesh_tick_global(_tick);
-    // Diagnóstico FL/CRDT (throttle ~500 ticks do TIMER — SESSION_235).
-    static LAST_FL_LOG: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-    let fl_now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-    let fl_last = LAST_FL_LOG.load(core::sync::atomic::Ordering::Relaxed);
-    if fl_last == 0 || fl_now.wrapping_sub(fl_last) >= 500 {
-        LAST_FL_LOG.store(fl_now, core::sync::atomic::Ordering::Relaxed);
-        let (r, gr, nw) = k_ai::fl_trainer::fl_stats_global();
-        let (cv, peers) = k_ai::sgdb::crdt_sync::crdt_stats_global();
-        k_nano::slog_bin!(
-            "FL", "ok",
-            "fl round={} global={} grads={} | crdt v={} peers={}",
-            r, gr, nw, cv, peers
-        );
-    }
-    // Phase 4: MESH_HEALTH — periódico + flush se peer subiu/caiu (grafo dinâmico).
-    k_nano::net::mesh::flush_mesh_health_if_dirty();
-    static LAST_MESH_HEALTH: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-    let mh_now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-    let mh_last = LAST_MESH_HEALTH.load(core::sync::atomic::Ordering::Relaxed);
-    if mh_last == 0 || mh_now.wrapping_sub(mh_last) >= 110 {
-        LAST_MESH_HEALTH.store(mh_now, core::sync::atomic::Ordering::Relaxed);
-        k_nano::net::mesh::publish_mesh_health();
-    }
-    // SESSION_237 (ADR-0081 C2): Worker com peer anuncia os experts locais ao
-    // Master 1x (static flag — o EventBus do Master segura o pacote até ele
-    // processar, mesmo que a eleição ainda esteja em andamento).
-    static DISTRIB_BROADCAST_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-    if !DISTRIB_BROADCAST_DONE.load(core::sync::atomic::Ordering::Relaxed)
-        && k_nano::net::mesh::local_role() == k_nano::net::mesh::NodeRole::Worker
-        && k_nano::net::mesh::MESH_ENGINE.lock().as_ref().map_or(false, |e| e.node_count() >= 1)
-    {
-        // Honesty: só sticky após TX; falha permite retry no próximo tick.
-        if cortex::mesh_distrib::broadcast_local_experts() {
-            DISTRIB_BROADCAST_DONE.store(true, core::sync::atomic::Ordering::Relaxed);
-        }
-    }
 }

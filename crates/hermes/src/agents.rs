@@ -31,6 +31,10 @@ static PENDING_LEARNER_INPUT: spin::Mutex<Option<String>> = spin::Mutex::new(Non
 /// FORJA real `evolve::promote_model_text_to_wasm` (proveniência model-born).
 static PENDING_WASM_SKILL: spin::Mutex<Option<(String, String)>> = spin::Mutex::new(None);
 
+/// Tick da última submissão LLM (CortexAgent → InferQueue). Usado p/ medir
+/// latência no HermesAgent ao receber LLM_RESPONSE (P1: record_result real).
+static LAST_LLM_SUBMIT_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 // ---------------------------------------------------------------------------
 // MonitorAgent — Oneshot: publica SYSTEM_READY e conclui
 // ---------------------------------------------------------------------------
@@ -537,6 +541,9 @@ impl Agent for CortexAgent {
                     // Honesty: só conta budget quando o job entrou na fila.
                     k_ai::economy::record_tokens(estimated_tokens);
                     k_ai::economy::record_inference();
+                    // P1: registra tick de submissão p/ medir latência no response
+                    let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                    LAST_LLM_SUBMIT_TICK.store(now, core::sync::atomic::Ordering::Release);
                     k_nano::slog_cortex!(
                         "LLM",
                         "ok",
@@ -1089,6 +1096,13 @@ impl Agent for HermesAgent {
                 let text = core::str::from_utf8(&event.payload).unwrap_or("");
                 k_nano::slog_cortex!("LLM", "info", "Resposta: \"{}\"", text);
                 let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                // P1: record_result real — latência (ticks) + confiança heurística
+                let submit_tick = LAST_LLM_SUBMIT_TICK.load(core::sync::atomic::Ordering::Acquire);
+                let latency_ticks = if submit_tick > 0 { now.saturating_sub(submit_tick) } else { 0 };
+                let confidence = (text.len() as f32 / 200.0).min(1.0); // heurística simples
+                if let Some(bei) = crate::bei::bei_state() {
+                    bei.record_result("llm_inference", true, confidence, latency_ticks as f32);
+                }
                 // FORJA WASM: resposta marcada como op-IR de skill → promote
                 // model-born (wasmi). NUNCA o dummy `promote_ephemeral_to_wasm`.
                 if let Some((name, desc)) = PENDING_WASM_SKILL.lock().take() {
@@ -1226,6 +1240,21 @@ impl Agent for HermesAgent {
                     payload: r.ack.into_bytes(),
                     token: CapabilityToken::Legacy(1),
                 });
+            }
+
+            // Frase de energia (HITL arm+confirm em k_ai::shutdown): desligar/
+            // reiniciar/hibernar — resposta local SEM LLM. O drain do bin
+            // (power_drain_tick) executa o begin_orderly_* no tick seguinte.
+            // Gatilho por TECLADO: funciona mesmo sem mouse (metal: HID cc4).
+            if let Some(resp) = k_ai::shutdown::handle_power_phrase(text) {
+                responded = resp.clone();
+                let _ = EVENT_BUS.publish(Event {
+                    id: 0,
+                    topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
+                    payload: resp.into_bytes(),
+                    token: CapabilityToken::Legacy(1),
+                });
+                return agent_core::AgentTickResult::Pending;
             }
 
             // Sprint 78: IntentCache — evita re-classificação
@@ -3164,6 +3193,40 @@ impl AutoLearnAgent {
 
         k_nano::slog_hermes!("TRINITY", "Learn", "{}: {} bytes carregados. R3 replay com rotas congeladas...", topic, knowledge.len());
 
+        // P3: tenta carregar expert especializado de GGUF na FAT32
+        // e registrar no DynamicMoE (BEI)
+        let expert_gguf_name = match topic {
+            "security" => "SECURITY_EXPERT.GGUF",
+            "disk_diag" => "DISK_DIAG_EXPERT.GGUF",
+            "speech_synth" => "SPEECH_SYNTH_EXPERT.GGUF",
+            _ => return,
+        };
+        if let Some(bei) = crate::bei::bei_state() {
+            if let Some(mut dmoe) = bei.dynamic_moe.try_lock() {
+                // Tenta ler o arquivo GGUF da FAT32
+                if let Some(gguf_data) = self.load_gguf_from_fat(expert_gguf_name) {
+                    let tensor_hint = match topic {
+                        "security" => "security_expert",
+                        "disk_diag" => "disk_diag_expert",
+                        "speech_synth" => "speech_synth_expert",
+                        _ => "",
+                    };
+                    if !tensor_hint.is_empty() {
+                        if let Some(expert_id) = dmoe.load_expert_from_gguf(&gguf_data, tensor_hint, topic) {
+                            // Registra no ExpertLifecycleManager
+                            if let Some(mut lifecycle) = bei.expert_lifecycle.try_lock() {
+                                let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                                lifecycle.register(topic.into(), 2, tick); // 2 bits = ternário
+                            }
+                            k_nano::slog_hermes!("TRINITY", "ok", "{}: expert GGUF carregado e registrado no DynamicMoE (id={})", topic, expert_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        k_nano::slog_hermes!("TRINITY", "Learn", "{}: {} bytes carregados. R3 replay com rotas congeladas...", topic, knowledge.len());
+
         // R3: atualiza router com logits congelados (sem re-rotear / sem dummy train_step)
         let mut traces = [cortex::r3::RouteTrace {
             embedding_addr: 0,
@@ -3241,6 +3304,26 @@ impl AutoLearnAgent {
             return data;
         }
         Vec::new()
+    }
+
+    /// Carrega arquivo GGUF da FAT32 para expert especializado
+    fn load_gguf_from_fat(&self, fname: &str) -> Option<Vec<u8>> {
+        unsafe {
+            let ata = k_nano::ATA_DRIVER.lock();
+            if let Some(ref ata) = *ata {
+                let parts = k_nano::fat32::read_mbr(ata);
+                for p in &parts {
+                    if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
+                    if let Some(fs) = k_nano::fat32::Fat32Reader::new(ata, p) {
+                        if let Some(data) = fs.read_file(fname) {
+                            k_nano::slog_hermes!("TRINITY", "Learn", "{} carregado via FAT32: {} bytes", fname, data.len());
+                            return Some(data);
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     fn download_knowledge(&self, topic: &str) -> Option<Vec<u8>> {

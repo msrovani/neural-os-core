@@ -1100,8 +1100,30 @@ pub fn is_dummy_ops(ops: &[Op]) -> bool {
 
 pub fn op_ir_schema_hint() -> &'static str {
     concat!(
-        "Gere ops i32 (op-IR): LocalGet|I32Const|I32Add|I32Sub|I32Mul|",
-        "I32LtS|I32GtS|I32Eq|I32Eqz|Block|Loop|Br|BrIf|End."
+        "Gere ops i32 (op-IR) válidos para wasm_build::model_text_to_ops.\n",
+        "Dois formatos aceitos:\n",
+        "1. Expressão aritmética (ex: a*b+7, (a+b)*2, p2*p3+1)\n",
+        "   Variáveis: a,b,p0..p31 (params), variáveis locais via atribuição.\n",
+        "   Ops suportados na expressão:\n",
+        "     Aritmética: + (I32Add), - (I32Sub), * (I32Mul)\n",
+        "     Comparação: == (I32Eq), != (I32Eq+I32Eqz), < (I32LtS), > (I32GtS),\n",
+        "                 <= (I32GtS+I32Eqz), >= (I32LtS+I32Eqz)\n",
+        "     Lógica: || (LogicalOr via If), && (LogicalAnd via If)\n",
+        "     Ternário: cond ? a : b (I32Select)\n",
+        "     Parênteses, números, identificadores (params a,b,p0..p31, variáveis locais)\n",
+        "     if/while expressions: if cond { a } else { b }, while cond { body }\n",
+        "2. Python DSL subset (stmts separados por ; ou newline):\n",
+        "   Stmts: print(...), return <expr>, if <cond>: <true> [else: <false>],\n",
+        "   atribuições (x = <expr>), while <cond>: <body>.\n",
+        "   Expressões dentro do DSL usam a mesma gramática de expressão.\n",
+        "Exemplos válidos:\n",
+        "  a*b+7\n",
+        "  (a+b)*2\n",
+        "  return a*b+7\n",
+        "  if a>b: return a else: return b\n",
+        "  x = a+b; return x*2\n",
+        "  while x>0: x = x-1; return x\n",
+        "Responda SOMENTE com a expressão ou DSL — sem markdown, sem explicação."
     )
 }
 
