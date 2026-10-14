@@ -1,5 +1,23 @@
 ﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [1.9.99-s468] - 2026-10-13 - BEI hardening + DynamicMoE GGUF + AP offload + traits + property tests + typed AFFECT channel
+
+- **P0.1/P0.2**: Watchpoint DR0 armed on `affect_regulator` (s452); `BeiState` pinned to fixed HHDM frame via PMM — eliminates REMAP race in `map_page_direct`.
+- **P1**: `record_result` real metrics — `CortexAgent` stores `LAST_LLM_SUBMIT_TICK` on submit; `HermesAgent` computes latency (ticks) + heuristic confidence on `LLM_RESPONSE`, calls `bei_state().record_result()`.
+- **P2**: `connect_components` documented honestly — lock order `net→pc→mem→affect→supervisor→dmoe→lifecycle→budget`; "PARTIAL/noop" warning removed.
+- **P3**: `DynamicMoE` loads GGUF experts — `load_expert_from_gguf()` parses GGUF, dequantizes tensor by name, converts to ternary via `f32_to_ternary_packed`, registers `BitLinear` in `MoELayer` + `ExpertLifecycleManager` (bits=2). `AutoLearnAgent` loads expert GGUF from FAT32 on `learn_topic()`.
+- **P4**: `BeiHeapPolicy` centralizes thresholds (low=128MB, critical=48MB); `ThrottledLog` trait replaces 7+ ad-hoc statics (`LAST_LOG`, `LAST_BUDGET`, etc.).
+- **P5/Item 10**: `bei_tick` split — mesh/FL/CRDT offloaded to AP workers via `k_nano::smp::ap_work::enqueue`; new `ap_jobs.rs` with `mesh_fl_crdt_tick_job`.
+- **Item 6**: `op_ir_schema_hint()` expanded with real ops + examples; `model_skill_prompt` uses it.
+- **Item 11**: `affect_regulator` sync verified — `Arc<Mutex>` shared, BEI decay+snapshot under lock, Hermes/Display `incorporate_affect`, compositor reads snapshot.
+- **Item 8/9**: `BeiHeapPolicy` + `ThrottledLog` unified in P4.
+- **Item 12**: Traits for testability — `k_ai::traits` (`ExpertLifecycle`, `BudgetManager`), `cortex::traits` (`PlasticityController`).
+- **Item 13**: `DynamicMoE` property tests (8) — expert count ≤ max, merge/split/birth counts, metadata sync, entropy ≥ 0, confidence ∈ [0,1]; `flush_births` guards `max_experts`.
+- **Item 14**: `AFFECT_SNAPSHOT` typed EventBus channel — `affect_channel.rs` with serialize/deserialize, typed publish/subscribe, backward-compat `sync_affect_snapshot_both`.
+- **Item 15**: `bei_tick` contract documented in `bei.rs` header — lock order, heap gates, fail-closed, mesh integration, metrics.
+- **Build**: `cargo check --release` 0 errors; `cargo test -p cortex property_tests` 8/8 passed.
+- **Image**: `target\usb_hw.img` (8319 MB, kernel sha `a2fe1c24c0ab1680`) ready for metal flash.
+
 ## [1.9.99-s467] - 2026-10-11 - Pós-tarefa s466b: lab 4 nós PASS + imagem HW + auditoria USB 9/9
 
 - **Lab mesh 4×(2G/4c) OVERALL PASS** (`logs\mesh4lab_verdict.txt`, 40min): `peers=3`
