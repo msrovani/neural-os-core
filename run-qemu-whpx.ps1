@@ -185,11 +185,14 @@ try {
     }
 
     $accel = "tcg"
-    $cpu = "max"
+    # Use Haswell as base, explicitly disable RTM and ARAT which host may not support
+    # RTM (Restricted Transactional Memory) = CPUID leaf 7 EBX bit 11
+    # ARAT (Always Running APIC Timer) = CPUID leaf 6 EAX bit 2
+    $cpu = "Haswell,-rtm,-arat"
     if (-not $Tcg) {
         $accel = "whpx"
         # host + APX/MPX em QEMU 11 -> OVMF #GP no PlatformPei; Haswell estavel + AVX2
-        $cpu = "Haswell"
+        # Haswell ja e o default; -rtm,-arat desabilita features que host pode nao suportar
     }
 
     $smpTry = @($Smp)

@@ -13,8 +13,16 @@ static DROPPED_INJECT: AtomicU64 = AtomicU64::new(0);
 /// Simple DNS cache entry with TTL.
 #[derive(Clone, Copy)]
 struct DnsCacheEntry {
-    ip: [u8; 4],
+    ipv4: Option<[u8; 4]>,
+    ipv6: Option<[u8; 16]>,
     expires_at: u64, // TSC timestamp
+}
+
+/// DNS reply type supporting both IPv4 and IPv6.
+#[derive(Clone, Copy)]
+enum DnsReply {
+    Ipv4([u8; 4]),
+    Ipv6([u8; 16]),
 }
 
 /// Maximum DNS cache entries (bounded to prevent unbounded growth).
@@ -445,19 +453,31 @@ impl NetStack {
         self.set_static_ip(None);
     }
 
-    /// Look up hostname in DNS cache. Returns cached IP if valid (not expired).
+    /// Look up hostname in DNS cache. Returns cached IPv4 if valid (not expired).
     fn dns_cache_get(&self, hostname: &str) -> Option<[u8; 4]> {
         let now = k_nano::tsc::now_us() as u64;
         self.dns_cache.get(hostname).and_then(|entry| {
             if entry.expires_at > now {
-                Some(entry.ip)
+                entry.ipv4
             } else {
                 None
             }
         })
     }
 
-    /// Store IP in DNS cache with TTL.
+    /// Look up hostname in DNS cache. Returns cached IPv6 if valid (not expired).
+    fn dns_cache_get_aaaa(&self, hostname: &str) -> Option<[u8; 16]> {
+        let now = k_nano::tsc::now_us() as u64;
+        self.dns_cache.get(hostname).and_then(|entry| {
+            if entry.expires_at > now {
+                entry.ipv6
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Store IPv4 in DNS cache with TTL.
     fn dns_cache_put(&mut self, hostname: String, ip: [u8; 4]) {
         let now = k_nano::tsc::now_us() as u64;
         // Evict expired entries if cache is full.
@@ -472,7 +492,39 @@ impl NetStack {
             }
         }
         let expires_at = k_nano::tsc::now_us() as u64 + DNS_CACHE_TTL_TICKS;
-        self.dns_cache.insert(hostname, DnsCacheEntry { ip, expires_at });
+        self.dns_cache.entry(hostname).and_modify(|entry| {
+            entry.ipv4 = Some(ip);
+            entry.expires_at = expires_at;
+        }).or_insert(DnsCacheEntry {
+            ipv4: Some(ip),
+            ipv6: None,
+            expires_at,
+        });
+    }
+
+    /// Store IPv6 in DNS cache with TTL.
+    fn dns_cache_put_aaaa(&mut self, hostname: String, ip: [u8; 16]) {
+        let now = k_nano::tsc::now_us() as u64;
+        // Evict expired entries if cache is full.
+        if self.dns_cache.len() >= DNS_CACHE_MAX_ENTRIES {
+            let now = k_nano::tsc::now_us() as u64;
+            self.dns_cache.retain(|_, entry| entry.expires_at > now);
+            // If still full, remove oldest (first entry in BTreeMap).
+            if self.dns_cache.len() >= DNS_CACHE_MAX_ENTRIES {
+                if let Some(first_key) = self.dns_cache.keys().next().cloned() {
+                    self.dns_cache.remove(&first_key);
+                }
+            }
+        }
+        let expires_at = k_nano::tsc::now_us() as u64 + DNS_CACHE_TTL_TICKS;
+        self.dns_cache.entry(hostname).and_modify(|entry| {
+            entry.ipv6 = Some(ip);
+            entry.expires_at = expires_at;
+        }).or_insert(DnsCacheEntry {
+            ipv4: None,
+            ipv6: Some(ip),
+            expires_at,
+        });
     }
 
     pub fn poll(&mut self, now_ms: i64) {
@@ -951,8 +1003,8 @@ impl NetStack {
             // Exponential backoff: 500us * 2^attempt, capped at 64ms
             let delay_us = base_delay_us.saturating_mul(1u64 << attempt).min(64000);
             let deadline_us = tsc::now_us().saturating_add(delay_us);
-            let mut got_reply = false;
-            let mut reply_ip: Option<[u8; 4]> = None;
+            let mut reply_ipv4: Option<[u8; 4]> = None;
+            let mut reply_ipv6: Option<[u8; 16]> = None;
 
             while tsc::now_us() < deadline_us {
                 let pkt = unsafe { nic_recv() };
@@ -961,20 +1013,47 @@ impl NetStack {
                     continue;
                 };
                 NET_RX_COUNT.fetch_add(1, Ordering::Relaxed);
-                if let Some(ip) = Self::parse_dns_udp_reply(&pkt, txid, src_port) {
+                if let Some(reply) = Self::parse_dns_udp_reply(&pkt, txid, src_port) {
                     let _ = self.prime_neighbor_for_http();
-                    k_nano::slog_hermes!(
-                        "DNS",
-                        "info",
-                        "OK raw {}.{}.{}.{} (dtx={} drx={} attempt={})",
-                        ip[0], ip[1], ip[2], ip[3],
-                        net_tx_count().saturating_sub(tx0),
-                        net_rx_count().saturating_sub(rx0),
-                        attempt + 1
-                    );
-                    // Store in DNS cache for future lookups.
-                    self.dns_cache_put(hostname.to_string(), ip);
-                    return Some(ip);
+                    match reply {
+                        DnsReply::Ipv4(ip) => {
+                            k_nano::slog_hermes!(
+                                "DNS",
+                                "info",
+                                "OK raw {}.{}.{}.{} (dtx={} drx={} attempt={})",
+                                ip[0], ip[1], ip[2], ip[3],
+                                net_tx_count().saturating_sub(tx0),
+                                net_rx_count().saturating_sub(rx0),
+                                attempt + 1
+                            );
+                            // Store in DNS cache for future lookups.
+                            self.dns_cache_put(hostname.to_string(), ip);
+                            reply_ipv4 = Some(ip);
+                        }
+                        DnsReply::Ipv6(ip) => {
+                            k_nano::slog_hermes!(
+                                "DNS",
+                                "info",
+                                "OK AAAA {:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x} (dtx={} drx={} attempt={})",
+                                ip[0], ip[1], ip[2], ip[3], ip[4], ip[5], ip[6], ip[7],
+                                ip[8], ip[9], ip[10], ip[11], ip[12], ip[13], ip[14], ip[15],
+                                net_tx_count().saturating_sub(tx0),
+                                net_rx_count().saturating_sub(rx0),
+                                attempt + 1
+                            );
+                            // Store in DNS cache for future lookups.
+                            self.dns_cache_put_aaaa(hostname.to_string(), ip);
+                            reply_ipv6 = Some(ip);
+                        }
+                    }
+                    // Prefer IPv4, but return IPv6 if no IPv4
+                    if reply_ipv4.is_some() {
+                        return reply_ipv4;
+                    } else if reply_ipv6.is_some() {
+                        // For backward compatibility, we can't return IPv6 from this function
+                        // but we've cached it for future use via dns_cache_get_aaaa
+                        k_nano::slog_hermes!("DNS", "info", "IPv6 address cached for {}", hostname);
+                    }
                 }
             }
 
@@ -1133,7 +1212,7 @@ impl NetStack {
         Some(pkt[udp + 8..udp + ulen].to_vec())
     }
 
-    fn parse_dns_udp_reply(pkt: &[u8], txid: u16, local_port: u16) -> Option<[u8; 4]> {
+    fn parse_dns_udp_reply(pkt: &[u8], txid: u16, local_port: u16) -> Option<DnsReply> {
         if pkt.len() < 14 + 20 + 8 + 12 {
             return None;
         }
@@ -1172,6 +1251,8 @@ impl NetStack {
         }
         let mut pos = Self::skip_dns_name(data, 12);
         pos += 4;
+        let mut ipv4_addr: Option<[u8; 4]> = None;
+        let mut ipv6_addr: Option<[u8; 16]> = None;
         for _ in 0..ancount {
             if pos + 10 > data.len() {
                 break;
@@ -1184,12 +1265,23 @@ impl NetStack {
             let rclass = u16::from_be_bytes([data[pos + 2], data[pos + 3]]);
             let rdlen = u16::from_be_bytes([data[pos + 8], data[pos + 9]]) as usize;
             pos += 10;
-            if rtype == 1 && rclass == 1 && rdlen == 4 && pos + 4 <= data.len() {
-                return Some([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+            if rtype == 1 && rclass == 1 && rdlen == 4 && pos + 4 <= data.len() && ipv4_addr.is_none() {
+                ipv4_addr = Some([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+            } else if rtype == 28 && rclass == 1 && rdlen == 16 && pos + 16 <= data.len() && ipv6_addr.is_none() {
+                let mut addr = [0u8; 16];
+                addr.copy_from_slice(&data[pos..pos + 16]);
+                ipv6_addr = Some(addr);
             }
             pos = pos.saturating_add(rdlen);
         }
-        None
+        // Prefer IPv4, fall back to IPv6
+        if let Some(ip) = ipv4_addr {
+            Some(DnsReply::Ipv4(ip))
+        } else if let Some(ip) = ipv6_addr {
+            Some(DnsReply::Ipv6(ip))
+        } else {
+            None
+        }
     }
 
     pub fn prime_neighbor_for_http(&mut self) -> bool {
@@ -1415,4 +1507,19 @@ impl NetStack {
         let udp = self.sockets.get_mut::<udp_socket::Socket>(self.udp_handle);
         udp.can_recv()
     }
+}
+
+/// DNSSEC validation stub — placeholder for future implementation.
+/// Returns true if validation passes (or is skipped), false if validation fails.
+/// Currently returns true (validation skipped) with a warning log.
+pub fn dnssec_validate(_hostname: &str, _dns_reply: &DnsReply) -> bool {
+    k_nano::slog_hermes!("DNSSEC", "warn", "DNSSEC validation not implemented, skipping validation");
+    true
+}
+
+/// DNS over TCP fallback for truncated responses (TC bit set).
+/// Attempts to resolve via TCP when UDP response is truncated.
+pub fn dns_resolve_tcp(_hostname: &str, _dns_server: [u8; 4]) -> Option<DnsReply> {
+    k_nano::slog_hermes!("DNS", "warn", "TCP DNS fallback not fully implemented, returning None");
+    None
 }

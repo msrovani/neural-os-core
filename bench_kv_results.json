@@ -1,0 +1,761 @@
+[
+  {
+    "kv_mode": "fp16",
+    "context_tokens": 500,
+    "questions": [
+      {
+        "question": "What is the base LLM model used?",
+        "expected": "Falcon3-1B",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 39.858335971832275
+      },
+      {
+        "question": "How many native agents does the system have?",
+        "expected": "41",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 36.83227229118347
+      },
+      {
+        "question": "What is the VOCAB size for the Trinity MoE router?",
+        "expected": "256",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 41.10736680030823
+      },
+      {
+        "question": "What is the heap address?",
+        "expected": "0x4000_0000_0000",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 38.65870547294617
+      },
+      {
+        "question": "How many workspace crates are there?",
+        "expected": "12",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 34.41873526573181
+      },
+      {
+        "question": "What is the framebuffer address formula?",
+        "expected": "0xB8000 + physical_memory_offset",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 42.047492265701294
+      },
+      {
+        "question": "What quantization does BitNet use?",
+        "expected": "1.58-bit ternary",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 47.31784987449646
+      },
+      {
+        "question": "How many experts in Trinity MoE?",
+        "expected": "7",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 35.78670358657837
+      },
+      {
+        "question": "What is the TTS system?",
+        "expected": "Piper with VITS",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 37.63721704483032
+      },
+      {
+        "question": "What is the STT vocabulary size?",
+        "expected": "28",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 39.937506914138794
+      },
+      {
+        "question": "How many unique devices in HW Expert?",
+        "expected": "44K",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 36.486812353134155
+      },
+      {
+        "question": "What are the 5 SleepCycle phases?",
+        "expected": "REPLAY, DREAM, CONSOLIDATE, PRUNE, REFLECT",
+        "answer": "0.0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 38.899680614471436
+      },
+      {
+        "question": "What acceleration does WHPX provide?",
+        "expected": "AVX2 native execution",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 51.620206117630005
+      },
+      {
+        "question": "What is the bootloader version?",
+        "expected": "0.11.15",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 67.41809272766113
+      },
+      {
+        "question": "What file system does the boot log use?",
+        "expected": "FAT32",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 62.9769766330719
+      },
+      {
+        "question": "How many Rust files in the project?",
+        "expected": "714",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 38.13941550254822
+      },
+      {
+        "question": "What is the K3CHJ workspace?",
+        "expected": "k_nano, k_hal, k_ai, cortex, hermes, jarbas",
+        "answer": "0.0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 34.4479455947876
+      },
+      {
+        "question": "What does ADR-0088 establish?",
+        "expected": "AIOS-first premissa",
+        "answer": "0.0.0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 35.309062242507935
+      },
+      {
+        "question": "What does ADR-0113 establish?",
+        "expected": "systemic optimization mission",
+        "answer": "0.0.0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 38.23741674423218
+      },
+      {
+        "question": "What does ADR-0081 define?",
+        "expected": "mesh P2P with 16-slot reassembly",
+        "answer": "0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 38.508500814437866
+      },
+      {
+        "question": "What allocator is used for runtime?",
+        "expected": "talc",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 38.30424356460571
+      },
+      {
+        "question": "What network stack is used?",
+        "expected": "smoltcp",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 39.75588274002075
+      },
+      {
+        "question": "What display format is used?",
+        "expected": "BGRA32 double-buffered",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 38.39790749549866
+      },
+      {
+        "question": "What is the Orb UI?",
+        "expected": "hexagonal grid with 5 glow layers",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 41.85935068130493
+      },
+      {
+        "question": "What is the target FPS?",
+        "expected": "60",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 42.06875252723694
+      },
+      {
+        "question": "How many lines of code?",
+        "expected": "~214K",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 43.679850816726685
+      },
+      {
+        "question": "What is the boot log size?",
+        "expected": "256KB",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 37.34778594970703
+      },
+      {
+        "question": "What database provides semantic memory?",
+        "expected": "NSGDB",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 41.536866664886475
+      },
+      {
+        "question": "What is the Tickv database?",
+        "expected": "persistent key-value storage with GC",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 36.88788652420044
+      },
+      {
+        "question": "What is the capability MVP?",
+        "expected": "AS+CR3+SPSC+Cap+int0x90",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 37.360353231430054
+      }
+    ],
+    "memory_bytes": 36864000,
+    "total_time": 1233.0040798187256,
+    "memory_mb": 35.15625,
+    "avg_time_per_q": 41.10013599395752,
+    "exact_match_rate": 0.0,
+    "avg_f1": 0.0,
+    "perplexity": 46464.02116487774
+  },
+  {
+    "kv_mode": "int8",
+    "context_tokens": 500,
+    "questions": [
+      {
+        "question": "What is the base LLM model used?",
+        "expected": "Falcon3-1B",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 37.49565243721008
+      },
+      {
+        "question": "How many native agents does the system have?",
+        "expected": "41",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 38.4852876663208
+      },
+      {
+        "question": "What is the VOCAB size for the Trinity MoE router?",
+        "expected": "256",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 35.682798624038696
+      },
+      {
+        "question": "What is the heap address?",
+        "expected": "0x4000_0000_0000",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 37.82777667045593
+      },
+      {
+        "question": "How many workspace crates are there?",
+        "expected": "12",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 36.8536434173584
+      },
+      {
+        "question": "What is the framebuffer address formula?",
+        "expected": "0xB8000 + physical_memory_offset",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 36.6604483127594
+      },
+      {
+        "question": "What quantization does BitNet use?",
+        "expected": "1.58-bit ternary",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 35.38864469528198
+      },
+      {
+        "question": "How many experts in Trinity MoE?",
+        "expected": "7",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 35.50001049041748
+      },
+      {
+        "question": "What is the TTS system?",
+        "expected": "Piper with VITS",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 37.205058097839355
+      },
+      {
+        "question": "What is the STT vocabulary size?",
+        "expected": "28",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.90527272224426
+      },
+      {
+        "question": "How many unique devices in HW Expert?",
+        "expected": "44K",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 35.956587076187134
+      },
+      {
+        "question": "What are the 5 SleepCycle phases?",
+        "expected": "REPLAY, DREAM, CONSOLIDATE, PRUNE, REFLECT",
+        "answer": "0.0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.990437030792236
+      },
+      {
+        "question": "What acceleration does WHPX provide?",
+        "expected": "AVX2 native execution",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.843377113342285
+      },
+      {
+        "question": "What is the bootloader version?",
+        "expected": "0.11.15",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.836695194244385
+      },
+      {
+        "question": "What file system does the boot log use?",
+        "expected": "FAT32",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 29.84563899040222
+      },
+      {
+        "question": "How many Rust files in the project?",
+        "expected": "714",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 35.45871901512146
+      },
+      {
+        "question": "What is the K3CHJ workspace?",
+        "expected": "k_nano, k_hal, k_ai, cortex, hermes, jarbas",
+        "answer": "0.0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 34.668766498565674
+      },
+      {
+        "question": "What does ADR-0088 establish?",
+        "expected": "AIOS-first premissa",
+        "answer": "0.0.0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 32.2052960395813
+      },
+      {
+        "question": "What does ADR-0113 establish?",
+        "expected": "systemic optimization mission",
+        "answer": "0.0.0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 30.84130334854126
+      },
+      {
+        "question": "What does ADR-0081 define?",
+        "expected": "mesh P2P with 16-slot reassembly",
+        "answer": "0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 35.59248185157776
+      },
+      {
+        "question": "What allocator is used for runtime?",
+        "expected": "talc",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 30.484663009643555
+      },
+      {
+        "question": "What network stack is used?",
+        "expected": "smoltcp",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 34.08510899543762
+      },
+      {
+        "question": "What display format is used?",
+        "expected": "BGRA32 double-buffered",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 35.114070892333984
+      },
+      {
+        "question": "What is the Orb UI?",
+        "expected": "hexagonal grid with 5 glow layers",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.88251852989197
+      },
+      {
+        "question": "What is the target FPS?",
+        "expected": "60",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 34.80090689659119
+      },
+      {
+        "question": "How many lines of code?",
+        "expected": "~214K",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 34.001174211502075
+      },
+      {
+        "question": "What is the boot log size?",
+        "expected": "256KB",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.34844636917114
+      },
+      {
+        "question": "What database provides semantic memory?",
+        "expected": "NSGDB",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 34.96020746231079
+      },
+      {
+        "question": "What is the Tickv database?",
+        "expected": "persistent key-value storage with GC",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.642409563064575
+      },
+      {
+        "question": "What is the capability MVP?",
+        "expected": "AS+CR3+SPSC+Cap+int0x90",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 34.889925718307495
+      }
+    ],
+    "memory_bytes": 18432288,
+    "total_time": 1040.6211845874786,
+    "memory_mb": 17.578399658203125,
+    "avg_time_per_q": 34.68737281958262,
+    "exact_match_rate": 0.0,
+    "avg_f1": 0.0,
+    "perplexity": 46464.02116487774
+  },
+  {
+    "kv_mode": "ternary",
+    "context_tokens": 500,
+    "questions": [
+      {
+        "question": "What is the base LLM model used?",
+        "expected": "Falcon3-1B",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 32.472639083862305
+      },
+      {
+        "question": "How many native agents does the system have?",
+        "expected": "41",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 35.514516830444336
+      },
+      {
+        "question": "What is the VOCAB size for the Trinity MoE router?",
+        "expected": "256",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 34.49205660820007
+      },
+      {
+        "question": "What is the heap address?",
+        "expected": "0x4000_0000_0000",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.546865463256836
+      },
+      {
+        "question": "How many workspace crates are there?",
+        "expected": "12",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 30.875454664230347
+      },
+      {
+        "question": "What is the framebuffer address formula?",
+        "expected": "0xB8000 + physical_memory_offset",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 32.49843454360962
+      },
+      {
+        "question": "What quantization does BitNet use?",
+        "expected": "1.58-bit ternary",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.72327947616577
+      },
+      {
+        "question": "How many experts in Trinity MoE?",
+        "expected": "7",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 32.97313714027405
+      },
+      {
+        "question": "What is the TTS system?",
+        "expected": "Piper with VITS",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 34.22456765174866
+      },
+      {
+        "question": "What is the STT vocabulary size?",
+        "expected": "28",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 35.84084939956665
+      },
+      {
+        "question": "How many unique devices in HW Expert?",
+        "expected": "44K",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.65794825553894
+      },
+      {
+        "question": "What are the 5 SleepCycle phases?",
+        "expected": "REPLAY, DREAM, CONSOLIDATE, PRUNE, REFLECT",
+        "answer": "0.0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 32.36641526222229
+      },
+      {
+        "question": "What acceleration does WHPX provide?",
+        "expected": "AVX2 native execution",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 34.66431903839111
+      },
+      {
+        "question": "What is the bootloader version?",
+        "expected": "0.11.15",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.429686069488525
+      },
+      {
+        "question": "What file system does the boot log use?",
+        "expected": "FAT32",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 28.82956862449646
+      },
+      {
+        "question": "How many Rust files in the project?",
+        "expected": "714",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 30.502867460250854
+      },
+      {
+        "question": "What is the K3CHJ workspace?",
+        "expected": "k_nano, k_hal, k_ai, cortex, hermes, jarbas",
+        "answer": "0.0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 35.94643473625183
+      },
+      {
+        "question": "What does ADR-0088 establish?",
+        "expected": "AIOS-first premissa",
+        "answer": "0.0.0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 34.27096486091614
+      },
+      {
+        "question": "What does ADR-0113 establish?",
+        "expected": "systemic optimization mission",
+        "answer": "0.0.0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 31.653934240341187
+      },
+      {
+        "question": "What does ADR-0081 define?",
+        "expected": "mesh P2P with 16-slot reassembly",
+        "answer": "0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.54088377952576
+      },
+      {
+        "question": "What allocator is used for runtime?",
+        "expected": "talc",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 37.14346385002136
+      },
+      {
+        "question": "What network stack is used?",
+        "expected": "smoltcp",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 34.83253216743469
+      },
+      {
+        "question": "What display format is used?",
+        "expected": "BGRA32 double-buffered",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.351890325546265
+      },
+      {
+        "question": "What is the Orb UI?",
+        "expected": "hexagonal grid with 5 glow layers",
+        "answer": "0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 32.606642961502075
+      },
+      {
+        "question": "What is the target FPS?",
+        "expected": "60",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 29.273845911026
+      },
+      {
+        "question": "How many lines of code?",
+        "expected": "~214K",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.777655839920044
+      },
+      {
+        "question": "What is the boot log size?",
+        "expected": "256KB",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 33.46126842498779
+      },
+      {
+        "question": "What database provides semantic memory?",
+        "expected": "NSGDB",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 35.12430119514465
+      },
+      {
+        "question": "What is the Tickv database?",
+        "expected": "persistent key-value storage with GC",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 34.676239013671875
+      },
+      {
+        "question": "What is the capability MVP?",
+        "expected": "AS+CR3+SPSC+Cap+int0x90",
+        "answer": "0.\nThe 0.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.net.",
+        "exact_match": false,
+        "f1": 0.0,
+        "time": 37.73364520072937
+      }
+    ],
+    "memory_bytes": 18432288,
+    "total_time": 1007.1777670383453,
+    "memory_mb": 17.578399658203125,
+    "avg_time_per_q": 33.57259223461151,
+    "exact_match_rate": 0.0,
+    "avg_f1": 0.0,
+    "perplexity": 46464.02116487774
+  }
+]

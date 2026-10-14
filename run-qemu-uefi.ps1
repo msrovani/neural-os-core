@@ -152,8 +152,12 @@ Write-Host "Serial: COM2=tcp client -> 127.0.0.1:$SerialBridgePort" -ForegroundC
 
 function Build-QemuArgs {
     param([int]$SmpN)
+    # Use Haswell as base, explicitly disable RTM and ARAT which host may not support
+    # RTM (Restricted Transactional Memory) = CPUID leaf 7 EBX bit 11
+    # ARAT (Always Running APIC Timer) = CPUID leaf 6 EAX bit 2
+    $cpu = "Haswell,-rtm,-arat"
     $a = @(
-        "-m", "${RamGB}G", "-smp", "$SmpN", "-accel", "tcg",
+        "-m", "${RamGB}G", "-smp", "$SmpN", "-accel", "tcg", "-cpu", $cpu,
         "-drive", "format=raw,file=$uefi,if=ide,index=0"
     )
     if ($disk) {

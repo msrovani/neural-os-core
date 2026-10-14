@@ -1973,8 +1973,6 @@ pub(crate) fn kernel_boot(
     // CortexAgent existe cedo (tick carrega pesos depois). Bind de HW no T+0
     // e tabela+DeviceRecipe — Cortex ainda sem pesos (honesto, SESSION_272).
     let cortex_agent = agents::CortexAgent::new();
-    // Enable I2S AVX2 path for measurement (WHPX -cpu host)
-    cortex_crate::bitnet_w2a8::set_i2s_avx2(true);
     // Banner APÓS heap+TPM+BEI+Cortex (bughunt H1 — não antes do trabalho).
     publish_boot_phase(BootPhase::SystemBringup, "SIMD+heap+TPM+BEI+Cortex agent ready");
 

@@ -120,8 +120,13 @@ $memStr = "${Mem}G"
 # serial so com "X64 Exception Type". Bisect de 5 variantes provou que e o -cpu,
 # nao o pflash VARS ausente (Haswell+code-only boota, tick 6514).
 # Mesma politica de run-qemu-whpx.ps1:190 - Haswell estavel + AVX2.
-$cpu = "max"
-if ($accelChosen -eq "whpx") { $cpu = "Haswell" }
+# Use Haswell as base, explicitly disable RTM and ARAT which host may not support
+# RTM (Restricted Transactional Memory) = CPUID leaf 7 EBX bit 11
+# ARAT (Always Running APIC Timer) = CPUID leaf 6 EAX bit 2
+$cpu = "Haswell,-rtm,-arat"
+if ($accelChosen -eq "whpx") {
+    # Haswell already the base; -rtm,-arat disables features host may not support
+}
 Write-Host "[INFO] Mem=$memStr Cores=$Cores Accel=$accelChosen cpu=$cpu Models=$useModels Instance=$Instance imgDir=$imgDir" -ForegroundColor Cyan
 
 $baseArgs = @(

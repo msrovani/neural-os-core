@@ -47,6 +47,7 @@ $diskArg = if ($disk) { @("-drive", "format=raw,file=$disk,if=ide,index=1") } el
 
 $qemuArgs = @(
     "-m", "${RamGB}G", "-smp", "$Cores", "-accel", $Accel,
+    "-cpu", "Haswell,-rtm,-arat",
     "-drive", "format=raw,file=$bios,if=ide,index=0"
 ) + $diskArg
 
