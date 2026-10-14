@@ -749,6 +749,10 @@
 | Falcon3-1B 1.58b (QEMU) | NÃO MEDIDO - WHPX falhou neste host → TCG 2c; loader QEMU carrega 3B fixo @0x100000000; TCG prefill 239s/L0 inutilizável |
 | I2_S AVX2 (kernel) | IMPLEMENTADO - sign-select blend/vpsrav + hadd + vmulps + tail k%32; gate allow_avx2 (WHPX -cpu Haswell passa); parity test bit-exact vs scalar; dispatch matmul_hybrid |
 | I2_S AVX2 (QEMU WHPX) | GATE OK - boot OK, LLM loaded, AVX2 enabled logado; tok/s NÃO medido (benchmark pulado no QEMU); requer HW real p/ speedup |
+| Rep-penalty kernel | CONFIRMADO - argmax_row_hf_vocab + infer_queue run_fine + Medusa usam sampler com rep 1.15 + forbidden-id; sample_token_coherence fixado |
+| E30 per-row scales | IMPLEMENTADO - write_q6k per_row + convert --per-row-scales; aguarda teste coerência |
+| E09 KV ternary recall | IMPLEMENTADO - quantize_kv_ternary + bench_kv_ternary (needle-in-haystack 36 Qs); aguarda benchmark 3 modos |
+| E06 draft-verify | PROTÓTIPO - --draft-verify + JSON schema state machine; aguarda teste acceptance/validity |
 
 ## Lab vivo (s410)
 
