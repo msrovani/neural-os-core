@@ -184,7 +184,7 @@ def get_proj_tensor(state: dict, key: str, native: bool, rows: int, cols: int):
     return q, scale
 
 
-def convert(source: Path, output: Path, native: bool, repo: str = "") -> None:
+def convert(source: Path, output: Path, native: bool, repo: str = "", per_row_scales: bool = False) -> None:
     state, cfg = load_state_dict(source)
 
     hidden = int(cfg.get("hidden_size", FALCON_HIDDEN))
@@ -382,9 +382,9 @@ def convert(source: Path, output: Path, native: bool, repo: str = "") -> None:
                     lm = lm.T
                 elif lm.shape != (hidden, vocab_size):
                     lm = lm.reshape(hidden, vocab_size)
-                write_q6k(f, np.ascontiguousarray(lm), hidden, vocab_size)
+                write_q6k(f, np.ascontiguousarray(lm), hidden, vocab_size, per_row=per_row_scales)
                 f.write(struct.pack("<f", 1.0))
-                print(f"  [T] unembed {(hidden, vocab_size)} -> Q6_K {((hidden * vocab_size + 255) // 256) * 210} bytes")
+                print(f"  [T] unembed {(hidden, vocab_size)} -> Q6_K {((hidden * vocab_size + 255) // 256) * 210} bytes (per_row={per_row_scales})")
             else:
                 lm = lm.astype(np.float32)
                 if lm.shape == (vocab_size, hidden):
@@ -433,6 +433,7 @@ def main():
     ap.add_argument("--native", action="store_true", help="entrada ja ternaria (1.58bit): so transpor/unpack, sem re-ternarizar")
     ap.add_argument("--hf-repo", type=str, default=None, help="atalho: baixa via download_falcon3.py e converte")
     ap.add_argument("--repo", type=str, default="", help="repo fonte p/ provenance v7 (ex.: tiiuae/Falcon3-1B-Instruct-1.58bit)")
+    ap.add_argument("--per-row-scales", action="store_true", help="Q6_K unembed com escalas por linha (E30)")
     args = ap.parse_args()
     src = args.source
     if args.hf_repo:
@@ -442,7 +443,7 @@ def main():
         variant = "1.58bit" if args.native else "base"
         subprocess.run([sys.executable, str(dl), "--variant", variant], check=True)
         src = DEFAULT_SRC
-    convert(src, args.output, args.native, repo=args.repo)
+    convert(src, args.output, args.native, repo=args.repo, per_row_scales=args.per_row_scales)
 
 
 if __name__ == "__main__":

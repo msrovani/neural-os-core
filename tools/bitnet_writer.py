@@ -195,18 +195,20 @@ def write_ternary(f, q_int8: np.ndarray, scale: float):
     f.write(struct.pack('<f', scale))
 
 
-def write_q6k(f, vals: np.ndarray, rows: int, cols: int):
+def write_q6k(f, vals: np.ndarray, rows: int, cols: int, per_row: bool = False):
     """Write Q6_K-encoded tensor (210B per 256-weight super-block).
 
     Args:
         vals: (rows, cols) f32 row-major.
+        per_row: If True, encode each row independently with its own Q6_K blocks
+                 (per-row scales). If False (default), encode entire matrix as flat.
     """
-    f.write(_encode_q6k(vals))
+    f.write(_encode_q6k(vals, per_row=per_row))
 
 
 # ── Q6_K encoder ────────────────────────────────────────────────────────
 
-def _encode_q6k(vals: np.ndarray) -> bytes:
+def _encode_q6k(vals: np.ndarray, per_row: bool = False) -> bytes:
     """Encode f32 ndarray → Q6_K super-blocks (GGUF layout, 210B/256 pesos).
 
     Vetorizado (numpy) — 328M elementos do embed 2B em segundos (era loops
@@ -214,7 +216,73 @@ def _encode_q6k(vals: np.ndarray) -> bytes:
       half = e//128, rem = e%128, lane = rem//32, l = rem%32, is = l//16
       q6 (6-bit) vem de ql/qh por lane; scale = scales[half*8 + is + lane*2]
       value = d * scale * (q6 - 32)
+
+    Args:
+        vals: f32 array, either flat or (rows, cols) if per_row=True.
+        per_row: If True, vals must be 2D (rows, cols) and each row is encoded
+                 independently with its own Q6_K blocks and scales.
     """
+    if per_row:
+        assert vals.ndim == 2, "per_row requires 2D array (rows, cols)"
+        rows, cols = vals.shape
+        total_per_row = cols
+        num_blocks_per_row = (total_per_row + 255) // 256
+        out = bytearray()
+        for r in range(rows):
+            row_data = vals[r].astype(np.float32)
+            # Pad row to multiple of 256
+            padded = np.zeros(num_blocks_per_row * 256, dtype=np.float32)
+            padded[:total_per_row] = row_data
+            blocks = padded.reshape(num_blocks_per_row, 256)  # (B_row, 256)
+
+            # d per block (within this row)
+            block_max = np.max(np.abs(blocks), axis=1)  # (B_row,)
+            d = np.where(block_max > 0, block_max / (31.0 * 127.0), 1e-9)  # (B_row,)
+
+            # sub-blocks of 16: (B_row, 16, 16)
+            subs = blocks.reshape(num_blocks_per_row, 16, 16)
+            sb_max = np.max(np.abs(subs), axis=2)  # (B_row, 16)
+            scale = np.clip(np.round(127.0 * sb_max / block_max[:, None]), 1, 127)
+            scale = np.where((block_max > 0)[:, None], scale, 1).astype(np.int8)  # (B_row,16)
+
+            eff = d[:, None] * scale.astype(np.float32)  # (B_row,16)
+            q6 = np.clip(np.round(subs / eff[:, :, None]) + 32, 0, 63).astype(np.int32)
+            q6 = q6.reshape(num_blocks_per_row, 256)  # (B_row, 256)
+
+            # Packing: posições ql/qh por elemento
+            e = np.arange(256)
+            half = e // 128
+            rem = e % 128
+            lane = rem // 32
+            l = rem % 32
+            ql_pos = np.where(lane % 2 == 0, half * 64 + l, half * 64 + l + 32)
+            qh_pos = half * 32 + l
+
+            low = (q6 & 0xF).astype(np.uint8)
+            high = ((q6 >> 4) & 3).astype(np.uint8)
+
+            ql = np.zeros((num_blocks_per_row, 128), dtype=np.uint8)
+            qh = np.zeros((num_blocks_per_row, 64), dtype=np.uint8)
+            rows_b = np.broadcast_to(np.arange(num_blocks_per_row)[:, None], (num_blocks_per_row, 256))
+
+            m_low = (lane < 2)[None, :]
+            np.bitwise_or.at(ql, (rows_b, np.broadcast_to(ql_pos, (num_blocks_per_row, 256))),
+                             np.where(m_low, low, 0))
+            np.bitwise_or.at(ql, (rows_b, np.broadcast_to(ql_pos, (num_blocks_per_row, 256))),
+                             np.where(~m_low, low << 4, 0))
+            np.bitwise_or.at(qh, (rows_b, np.broadcast_to(qh_pos, (num_blocks_per_row, 256))),
+                             high << (lane * 2)[None, :])
+
+            d_f16 = d.astype(np.float16).view(np.uint16)
+
+            for b in range(num_blocks_per_row):
+                out += ql[b].tobytes()
+                out += qh[b].tobytes()
+                out += scale[b].tobytes()
+                out += d_f16[b].tobytes()
+        return bytes(out)
+
+    # Original flat encoding (per-tensor scales)
     total = vals.size
     flat = vals.astype(np.float32).ravel()
     num_blocks = (total + 255) // 256

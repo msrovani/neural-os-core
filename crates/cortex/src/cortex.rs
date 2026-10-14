@@ -4829,6 +4829,7 @@ pub fn sample_token_coherence(logits: &Tensor, row: usize, recent: &[u32]) -> u3
         let id = j as u32;
         if recent.iter().any(|&p| p as usize == j) { continue; }
         if crate::bpe::is_special_id(id) { continue; }
+        if crate::bpe::is_forbidden_id(id) { continue; }
         let v = logits.data[start + j];
         if v.is_nan() { continue; }
         if n < 64 { cand[n] = (id, v); n += 1; }

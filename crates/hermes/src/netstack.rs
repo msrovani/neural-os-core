@@ -1,10 +1,26 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::string::ToString;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 /// H5 (onda 4): contador de RX injetado e DESCARTADO. smoltcp lê direto dos
 /// rings do NIC via `nic_recv` — não há fila RX intermediária onde injetar;
 /// o pacote cai. Contar é honesto; fingir entrega era silencioso.
 static DROPPED_INJECT: AtomicU64 = AtomicU64::new(0);
+
+/// Simple DNS cache entry with TTL.
+#[derive(Clone, Copy)]
+struct DnsCacheEntry {
+    ip: [u8; 4],
+    expires_at: u64, // TSC timestamp
+}
+
+/// Maximum DNS cache entries (bounded to prevent unbounded growth).
+const DNS_CACHE_MAX_ENTRIES: usize = 64;
+/// Default TTL for cached DNS entries (in TSC ticks, ~5 minutes at 1GHz).
+const DNS_CACHE_TTL_TICKS: u64 = 5 * 60 * 1_000_000_000; // 5 minutes at 1GHz TSC
 
 /// Contagem de drops de `inject_rx_packet` (diagnóstico HW).
 pub fn dropped_inject_count() -> u64 {
@@ -22,8 +38,8 @@ pub fn inject_rx_packet(pkt: &[u8]) {
         );
     }
 }
-use core::sync::atomic::{AtomicU64, Ordering};
 use k_nano::slip;
+use k_nano::tsc;
 
 fn ip_checksum(data: &[u8]) -> u16 {
     let mut sum = 0u32;
@@ -343,6 +359,8 @@ pub struct NetStack {
     pub tx_count: u64,
     pub rx_count: u64,
     udp_handle: SocketHandle,
+    /// DNS cache with TTL-based expiration.
+    dns_cache: BTreeMap<alloc::string::String, DnsCacheEntry>,
 }
 
 fn ip_to_u32(ip: [u8; 4]) -> u32 {
@@ -389,7 +407,7 @@ impl NetStack {
         }
         k_nano::slog_hermes!("P2P", "info", "UDP broadcast socket ativo na porta 42069");
 
-        NetStack { iface, sockets, phy, dhcp_handle, dhcp_done: false, has_static_ip: false, tx_count: 0, rx_count: 0, udp_handle }
+        NetStack { iface, sockets, phy, dhcp_handle, dhcp_done: false, has_static_ip: false, tx_count: 0, rx_count: 0, udp_handle, dns_cache: BTreeMap::new() }
     }
 
     pub fn set_static_ip(&mut self, custom_ip: Option<[u8; 4]>) {
@@ -425,6 +443,36 @@ impl NetStack {
     /// Compat shim for old callers without custom IP.
     pub fn set_static_ip_legacy(&mut self) {
         self.set_static_ip(None);
+    }
+
+    /// Look up hostname in DNS cache. Returns cached IP if valid (not expired).
+    fn dns_cache_get(&self, hostname: &str) -> Option<[u8; 4]> {
+        let now = k_nano::tsc::now_us() as u64;
+        self.dns_cache.get(hostname).and_then(|entry| {
+            if entry.expires_at > now {
+                Some(entry.ip)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Store IP in DNS cache with TTL.
+    fn dns_cache_put(&mut self, hostname: String, ip: [u8; 4]) {
+        let now = k_nano::tsc::now_us() as u64;
+        // Evict expired entries if cache is full.
+        if self.dns_cache.len() >= DNS_CACHE_MAX_ENTRIES {
+            let now = k_nano::tsc::now_us() as u64;
+            self.dns_cache.retain(|_, entry| entry.expires_at > now);
+            // If still full, remove oldest (first entry in BTreeMap).
+            if self.dns_cache.len() >= DNS_CACHE_MAX_ENTRIES {
+                if let Some(first_key) = self.dns_cache.keys().next().cloned() {
+                    self.dns_cache.remove(&first_key);
+                }
+            }
+        }
+        let expires_at = k_nano::tsc::now_us() as u64 + DNS_CACHE_TTL_TICKS;
+        self.dns_cache.insert(hostname, DnsCacheEntry { ip, expires_at });
     }
 
     pub fn poll(&mut self, now_ms: i64) {
@@ -775,6 +823,12 @@ impl NetStack {
             return None;
         }
 
+        // Check DNS cache first.
+        if let Some(cached_ip) = self.dns_cache_get(hostname) {
+            k_nano::slog_hermes!("DNS", "info", "cache HIT for {} -> {}.{}.{}.{}", hostname, cached_ip[0], cached_ip[1], cached_ip[2], cached_ip[3]);
+            return Some(cached_ip);
+        }
+
         let dmac = match Self::arp_resolve_raw(sip, dns_server, smac) {
             Some(m) => m,
             None => {
@@ -784,22 +838,51 @@ impl NetStack {
             }
         };
 
-        let txid: u16 = 0x1234;
-        let qname = Self::encode_dns_name(hostname);
-        let mut dns = Vec::with_capacity(12 + qname.len() + 4);
-        dns.extend_from_slice(&txid.to_be_bytes());
-        dns.extend_from_slice(&[0x01, 0x00]);
-        dns.extend_from_slice(&[0x00, 0x01]);
-        dns.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
-        dns.extend_from_slice(&qname);
-        dns.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+        // L16: TXID e source port randomizados por consulta para evitar
+        // colisão com respostas stale/injetadas de queries anteriores.
+        let txid: u16 = {
+            use rand_core::RngCore;
+            let mut rng = crate::tls::client::KernelRng;
+            (rng.next_u32() & 0xFFFF) as u16
+        };
+        let src_port: u16 = {
+            use rand_core::RngCore;
+            let mut rng = crate::tls::client::KernelRng;
+            // Ephemeral port range: 49152-65535
+            49152 + ((rng.next_u32() & 0x3FFF) as u16)
+        };
 
-        let src_port: u16 = 54321;
+        let qname = Self::encode_dns_name(hostname);
+        let mut dns = Vec::with_capacity(12 + qname.len() + 4 + 11); // +11 for EDNS0 OPT
+        dns.extend_from_slice(&txid.to_be_bytes());
+        dns.extend_from_slice(&[0x01, 0x00]); // Standard query
+        dns.extend_from_slice(&[0x00, 0x01]); // 1 question
+        dns.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // 0 answer, 0 authority, 0 additional
+        dns.extend_from_slice(&qname);
+        // Query for both A (1) and AAAA (28) records
+        dns.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]); // QTYPE=A, QCLASS=IN
+        dns.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // 0 answer, 0 authority, 0 additional
+        dns.extend_from_slice(&qname);
+        dns.extend_from_slice(&[0x00, 0x1C, 0x00, 0x01]); // QTYPE=AAAA (28), QCLASS=IN
+
+        // EDNS0 OPT record (pseudo-RR in additional section) for UDP payload size 1232
+        // NAME=0 (root), TYPE=41 (OPT), CLASS=1232 (UDP payload size), TTL=0, RDLEN=0
+        dns.extend_from_slice(&[0x00]); // NAME=0
+        dns.extend_from_slice(&[0x00, 0x29]); // TYPE=41 (OPT)
+        dns.extend_from_slice(&[0x04, 0xD0]); // CLASS=1232 (UDP payload size 1232)
+        dns.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // TTL=0
+        dns.extend_from_slice(&[0x00, 0x00]); // RDLEN=0
+
+        let src_port: u16 = {
+            use rand_core::RngCore;
+            let mut rng = crate::tls::client::KernelRng;
+            49152 + ((rng.next_u32() & 0x3FFF) as u16)
+        };
         let udp_len = (8 + dns.len()) as u16;
         let mut udp = Vec::with_capacity(udp_len as usize);
         udp.extend_from_slice(&src_port.to_be_bytes());
         udp.extend_from_slice(&53u16.to_be_bytes());
-        udp.extend_from_slice(&udp_len.to_be_bytes());
+        udp.extend_from_slice(&(dns.len() as u16 + 8).to_be_bytes());
         udp.extend_from_slice(&[0x00, 0x00]);
         udp.extend_from_slice(&dns);
 
@@ -821,13 +904,62 @@ impl NetStack {
         frame.extend_from_slice(&ip);
         frame.extend_from_slice(&udp);
 
+        // Exponential backoff: 500us, 1ms, 2ms, 4ms, 8ms, 16ms, 32ms, 64ms
+        let mut base_delay_us: u64 = 500;
         for attempt in 0..8u32 {
+            // Regenerate frame with new TXID and source port for each retry
+            if attempt > 0 {
+                let new_txid: u16 = {
+                    use rand_core::RngCore;
+                    let mut rng = crate::tls::client::KernelRng;
+                    (rng.next_u32() & 0xFFFF) as u16
+                };
+                let new_src_port: u16 = {
+                    use rand_core::RngCore;
+                    let mut rng = crate::tls::client::KernelRng;
+                    49152 + ((rng.next_u32() & 0x3FFF) as u16)
+                };
+                // Rebuild DNS with new TXID
+                dns[0..2].copy_from_slice(&{
+                    let new_txid: u16 = {
+                        use rand_core::RngCore;
+                        let mut rng = crate::tls::client::KernelRng;
+                        (rng.next_u32() & 0xFFFF) as u16
+                    };
+                    new_txid.to_be_bytes()
+                });
+                // Rebuild UDP with new source port
+                udp[0..2].copy_from_slice(&{
+                    let new_src_port: u16 = {
+                        use rand_core::RngCore;
+                        let mut rng = crate::tls::client::KernelRng;
+                        49152 + ((rng.next_u32() & 0x3FFF) as u16)
+                    };
+                    new_src_port.to_be_bytes()
+                });
+                // Rebuild IP checksum (total_len unchanged)
+                let new_cs = ip_checksum(&ip);
+                ip[10..12].copy_from_slice(&new_cs.to_be_bytes());
+                // Rebuild frame
+                frame.truncate(14 + 20);
+                frame.extend_from_slice(&udp);
+            }
+
             unsafe { nic_send(frame.clone()) };
             NET_TX_COUNT.fetch_add(1, Ordering::Relaxed);
-            for _ in 0..600u32 {
-                wall_pause_us(500);
+
+            // Exponential backoff: 500us * 2^attempt, capped at 64ms
+            let delay_us = base_delay_us.saturating_mul(1u64 << attempt).min(64000);
+            let deadline_us = tsc::now_us().saturating_add(delay_us);
+            let mut got_reply = false;
+            let mut reply_ip: Option<[u8; 4]> = None;
+
+            while tsc::now_us() < deadline_us {
                 let pkt = unsafe { nic_recv() };
-                let Some(pkt) = pkt else { continue };
+                let Some(pkt) = pkt else {
+                    wall_pause_us(100);
+                    continue;
+                };
                 NET_RX_COUNT.fetch_add(1, Ordering::Relaxed);
                 if let Some(ip) = Self::parse_dns_udp_reply(&pkt, txid, src_port) {
                     let _ = self.prime_neighbor_for_http();
@@ -840,10 +972,23 @@ impl NetStack {
                         net_rx_count().saturating_sub(rx0),
                         attempt + 1
                     );
+                    // Store in DNS cache for future lookups.
+                    self.dns_cache_put(hostname.to_string(), ip);
                     return Some(ip);
                 }
             }
+
+            // Timeout for this attempt - will retry with new TXID/port
+            k_nano::slog_hermes!(
+                "DNS",
+                "warn",
+                "attempt {} timeout (txid={:#x} port={}) dtx={} drx={}",
+                attempt + 1, txid, src_port,
+                net_tx_count().saturating_sub(tx0),
+                net_rx_count().saturating_sub(rx0)
+            );
         }
+
         k_nano::slog_hermes!(
             "DNS",
             "info",

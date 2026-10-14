@@ -15,6 +15,9 @@ Tokenizer: precisa do vocab 131k do Falcon3, que NAO esta em disco.
   O script procura `--tokenizer`, depois `target/tokenizer*.json`, senao
   baixa de `tiiuae/<Modelo>-Instruct` no HF e guarda em target/.
   Sem tokenizer: roda em modo numerico (top-5 ids por passo).
+
+E06 Prototype: grammar-constrained draft-verify (--draft-verify)
+  python tools/chat_v6.py --model target1/FALCON3_1B.V6 --draft-verify --ask '{"name": "test", "value": 42}'
 """
 from __future__ import annotations
 import argparse
@@ -23,8 +26,10 @@ import os
 import re
 import struct
 import sys
+import time
 import urllib.request
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 ROOT = Path(__file__).resolve().parents[1]
 try:
@@ -115,6 +120,90 @@ def decode_q6k_fast(data: bytes, rows: int, cols: int) -> np.ndarray:
 # int8 matmul e EXATA (acumulador int32 folgado p/ K<=23040: 127*23040 < 2^31);
 # a unica aproximacao e o arredondamento das ativacoes (~1%).
 W2A8 = False
+
+# ── KV Quantization modes (E09: ternary KV for memory savings) ──────────
+# KV_QUANT = "fp16" | "int8" | "ternary"
+#   fp16:   half precision (2 bytes/element) — baseline
+#   int8:   absmax per-tensor (1 byte/element) — current INT8 approach
+#   ternary: absmean per-tensor, 2-bit trits (-1/0/+1, 4 trits/byte) — E09 proposal
+KV_QUANT = "fp16"
+
+
+def quantize_kv_ternary(kv: torch.Tensor) -> tuple[torch.Tensor, float]:
+    """Quantize KV tensor to ternary (2-bit trits: -1/0/+1) via absmean.
+    Returns (packed_bytes, scale) where packed_bytes has 4 trits/byte.
+    Scale = mean(|kv|) for dequantization: kv_dequant = trits * scale.
+    """
+    scale = kv.abs().mean().item()
+    if scale == 0:
+        scale = 1.0
+    # Normalize and quantize to trits: -1, 0, +1
+    # Threshold at 0.5 * scale for ternary decision
+    thresh = 0.5 * scale
+    trits = torch.where(kv > thresh, 1, torch.where(kv < -thresh, -1, 0)).to(torch.int8)
+    # Pack 4 trits per byte: 2 bits each (00=0, 01=+1, 10=-1, 11=0)
+    n = trits.numel()
+    nbytes = (n + 3) // 4
+    packed = torch.zeros(nbytes, dtype=torch.uint8)
+    trits_flat = trits.flatten()
+    # Proper packing: each byte holds 4 trits (2 bits each)
+    for i in range(nbytes):
+        byte_val = 0
+        for j in range(4):
+            idx = i * 4 + j
+            if idx < n:
+                t = trits_flat[idx].item()
+                # Map: 0->00, 1->01, -1->10
+                if t == 1:
+                    code = 1  # 01
+                elif t == -1:
+                    code = 2  # 10
+                else:
+                    code = 0  # 00
+                byte_val |= (code << (2 * j))
+        packed[i] = byte_val
+    return packed, scale
+
+
+def dequantize_kv_ternary(packed: torch.Tensor, scale: float, shape: tuple) -> torch.Tensor:
+    """Dequantize ternary KV back to fp32."""
+    n = 1
+    for s in shape:
+        n *= s
+    nbytes = (n + 3) // 4
+    trits = torch.empty(n, dtype=torch.int8)
+    for i in range(nbytes):
+        byte_val = packed[i].item()
+        for j in range(4):
+            idx = i * 4 + j
+            if idx < n:
+                code = (byte_val >> (2 * j)) & 3
+                # Map: 00->0, 01->+1, 10->-1, 11->0
+                if code == 1:
+                    trits[idx] = 1
+                elif code == 2:
+                    trits[idx] = -1
+                else:
+                    trits[idx] = 0
+    return (trits.to(torch.float32) * scale).reshape(shape)
+
+
+def quantize_kv_int8(kv: torch.Tensor) -> tuple[torch.Tensor, float]:
+    """Quantize KV tensor to INT8 via absmax per-tensor.
+    Returns (int8_tensor, scale) where scale = max(|kv|) / 127.
+    """
+    max_val = kv.abs().max().item()
+    if max_val == 0:
+        scale = 1.0
+    else:
+        scale = max_val / 127.0
+    q = (kv / scale).round().clamp(-128, 127).to(torch.int8)
+    return q, scale
+
+
+def dequantize_kv_int8(q: torch.Tensor, scale: float) -> torch.Tensor:
+    """Dequantize INT8 KV back to fp32."""
+    return q.to(torch.float32) * scale
 
 
 def _mm(x, w, s):
@@ -318,9 +407,28 @@ class V6:
             qv, kv = rot(qv.squeeze(0)).unsqueeze(0), rot(kv.squeeze(0)).unsqueeze(0)
         if kvc is not None:
             kk, vv0 = kvc
+            # Dequantize cached KV if needed
+            if KV_QUANT == "ternary":
+                kk = dequantize_kv_ternary(kk[0], kk[1], kk[2])
+                vv0 = dequantize_kv_ternary(vv0[0], vv0[1], vv0[2])
+            elif KV_QUANT == "int8":
+                kk = dequantize_kv_int8(kk[0], kk[1])
+                vv0 = dequantize_kv_int8(vv0[0], vv0[1])
             kv = torch.cat([kk, kv], dim=1)
             vv = torch.cat([vv0, vv], dim=1)
-            kvc[0], kvc[1] = kv, vv
+            # Quantize and store back to cache
+            if KV_QUANT == "ternary":
+                k_packed, k_scale = quantize_kv_ternary(kv)
+                v_packed, v_scale = quantize_kv_ternary(vv)
+                kvc[0] = (k_packed, k_scale, kv.shape)
+                kvc[1] = (v_packed, v_scale, vv.shape)
+            elif KV_QUANT == "int8":
+                k_q, k_scale = quantize_kv_int8(kv)
+                v_q, v_scale = quantize_kv_int8(vv)
+                kvc[0] = (k_q, k_scale)
+                kvc[1] = (v_q, v_scale)
+            else:
+                kvc[0], kvc[1] = kv, vv
         rep = HQ // KV
         kv_e = kv.repeat_interleave(rep, dim=2)
         vv_e = vv.repeat_interleave(rep, dim=2)
@@ -353,9 +461,18 @@ class V6:
     @torch.no_grad()
     def prefill_collect(self, ids):
         """Prefill devolvendo [h_embed, h_l0, ..., h_lN] (p/ paridade vs referencia)."""
-        kvc = [[torch.empty(1, 0, self.kv_heads, self.head_dim),
-                torch.empty(1, 0, self.kv_heads, self.head_dim)]
-               for _ in range(self.layers)]
+        if KV_QUANT == "ternary":
+            kvc = [[(torch.empty(0, dtype=torch.uint8), 1.0, (1, 0, self.kv_heads, self.head_dim)),
+                    (torch.empty(0, dtype=torch.uint8), 1.0, (1, 0, self.kv_heads, self.head_dim))]
+                   for _ in range(self.layers)]
+        elif KV_QUANT == "int8":
+            kvc = [[(torch.empty(1, 0, self.kv_heads, self.head_dim, dtype=torch.int8), 1.0),
+                    (torch.empty(1, 0, self.kv_heads, self.head_dim, dtype=torch.int8), 1.0)]
+                   for _ in range(self.layers)]
+        else:
+            kvc = [[torch.empty(1, 0, self.kv_heads, self.head_dim),
+                    torch.empty(1, 0, self.kv_heads, self.head_dim)]
+                   for _ in range(self.layers)]
         h = self.embed[:, list(ids)].T.unsqueeze(0) * self.embed_scale
         states = [h.clone()]
         for li, blk in enumerate(self.blocks):
@@ -371,9 +488,18 @@ class V6:
         if seed is not None:
             torch.manual_seed(seed)
         ids = list(ids)
-        kvc = [[torch.empty(1, 0, self.kv_heads, self.head_dim),
-                torch.empty(1, 0, self.kv_heads, self.head_dim)]
-               for _ in range(self.layers)]
+        if KV_QUANT == "ternary":
+            kvc = [[(torch.empty(0, dtype=torch.uint8), 1.0, (1, 0, self.kv_heads, self.head_dim)),
+                    (torch.empty(0, dtype=torch.uint8), 1.0, (1, 0, self.kv_heads, self.head_dim))]
+                   for _ in range(self.layers)]
+        elif KV_QUANT == "int8":
+            kvc = [[(torch.empty(1, 0, self.kv_heads, self.head_dim, dtype=torch.int8), 1.0),
+                    (torch.empty(1, 0, self.kv_heads, self.head_dim, dtype=torch.int8), 1.0)]
+                   for _ in range(self.layers)]
+        else:
+            kvc = [[torch.empty(1, 0, self.kv_heads, self.head_dim),
+                    torch.empty(1, 0, self.kv_heads, self.head_dim)]
+                   for _ in range(self.layers)]
         h = self.embed[:, ids].T.unsqueeze(0) * self.embed_scale
         for li, blk in enumerate(self.blocks):
             h = self.forward_layer(h, blk, kvc[li], 0)
@@ -431,6 +557,474 @@ class V6:
                 h = self.forward_layer(h, blk, kvc[li], len(ids) + len(out) - 1)
         dt = time.time() - t0
         return out, (len(out) / dt if dt > 0 else 0.0)
+
+    # ── E06: grammar-constrained draft-verify ──────────────────────────
+    @torch.no_grad()
+    def generate_draft_verify(
+        self,
+        ids: List[int],
+        max_tokens: int,
+        eos: int,
+        schema: Dict[str, Any],
+        bpe: Optional["BPE"],
+        acceptance_threshold: float = 0.5,
+        max_draft_tokens: int = 8,
+        stream=None,
+        temp: float = 0.0,
+        top_p: float = 1.0,
+        seed: Optional[int] = None,
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        penalty_last_n: int = 64,
+        forbidden_ids: Optional[Set[int]] = None,
+    ) -> Tuple[List[int], float, Dict[str, Any]]:
+        """
+        Grammar-constrained draft-verify generation (E06 prototype).
+
+        Draft phase: generate tokens constrained by JSON schema using a simple
+        state machine that only allows valid JSON tokens at each position.
+
+        Verify phase: run full model forward on draft tokens, accept/reject
+        based on probability threshold (acceptance_threshold).
+
+        Returns: (accepted_tokens, tok/s, stats_dict)
+        """
+        if seed is not None:
+            torch.manual_seed(seed)
+
+        # Build JSON syntax-constrained token mask for each position
+        schema_machine = JSONSyntaxStateMachine(bpe, self.vocab)
+
+        ids = list(ids)
+        kvc = [[torch.empty(1, 0, self.kv_heads, self.head_dim),
+                torch.empty(1, 0, self.kv_heads, self.head_dim)]
+               for _ in range(self.layers)]
+        h = self.embed[:, ids].T.unsqueeze(0) * self.embed_scale
+        for li, blk in enumerate(self.blocks):
+            h = self.forward_layer(h, blk, kvc[li], 0)
+
+        accepted = []
+        total_drafted = 0
+        total_accepted = 0
+        total_rejected = 0
+        verify_calls = 0
+
+        t0 = time.time()
+
+        for step in range(max_tokens):
+            # Get allowed tokens from schema state machine
+            allowed_tokens = schema_machine.get_allowed_tokens(accepted)
+            if not allowed_tokens:
+                # Schema complete or no valid continuation
+                break
+
+            # Draft phase: generate constrained tokens greedily
+            draft_tokens = []
+            draft_h = h
+            draft_kvc = [[kk.clone(), vv.clone()] for kk, vv in kvc]
+
+            for _ in range(max_draft_tokens):
+                last = draft_h[:, -1:, :]
+                U = self.unembed.float() if self.unembed is not None else self.embed
+                s = self.unembed_scale
+                logits = (self.rmsnorm(last, self.rms_final) @ U) * s
+
+                # Apply penalties
+                if repetition_penalty != 1.0 or frequency_penalty != 0.0:
+                    from collections import Counter as _Counter
+                    _tail = (ids + accepted + draft_tokens)[-penalty_last_n:] if penalty_last_n > 0 else (ids + accepted + draft_tokens)
+                    _seen = _Counter(t for t in _tail if 0 <= t < logits.shape[-1])
+                    if _seen:
+                        _adj = logits[0, 0]
+                        for _t, _c in _seen.items():
+                            _v = float(_adj[_t])
+                            if repetition_penalty != 1.0 and _v != 0.0:
+                                _v = _v / repetition_penalty if _v > 0 else _v * repetition_penalty
+                            if frequency_penalty != 0.0:
+                                _v -= _c * frequency_penalty
+                            _adj[_t] = _v
+
+                if forbidden_ids:
+                    logits[0, 0][list(forbidden_ids)] = float("-inf")
+
+                # Mask to only schema-allowed tokens
+                mask = torch.full_like(logits[0, 0], float("-inf"))
+                mask[list(allowed_tokens)] = 0
+                logits = logits + mask.unsqueeze(0).unsqueeze(0)
+
+                if temp > 0:
+                    probs = torch.softmax(logits[0, 0] / temp, dim=-1)
+                    if top_p < 1.0:
+                        order = torch.argsort(probs, descending=True)
+                        ps = probs[order]
+                        keep = torch.cumsum(ps, dim=0) <= top_p
+                        keep[0] = True
+                        mask2 = torch.zeros_like(probs, dtype=torch.bool)
+                        mask2[order[keep]] = True
+                        probs = torch.where(mask2, probs, torch.zeros_like(probs))
+                        probs = probs / probs.sum()
+                    nxt = int(torch.multinomial(probs, 1).item())
+                else:
+                    nxt = int(logits.argmax(-1).item())
+
+                draft_tokens.append(nxt)
+                total_drafted += 1
+
+                if nxt == eos:
+                    break
+
+                # Update draft state
+                draft_h = self.embed[:, [nxt]].T.unsqueeze(0) * self.embed_scale
+                for li, blk in enumerate(self.blocks):
+                    draft_h = self.forward_layer(draft_h, blk, draft_kvc[li], len(ids) + len(accepted) + len(draft_tokens) - 1)
+
+                # Update schema state
+                schema_machine.advance(nxt)
+                allowed_tokens = schema_machine.get_allowed_tokens(accepted + draft_tokens)
+                if not allowed_tokens or nxt == eos:
+                    break
+
+            if not draft_tokens:
+                break
+
+            # Verify phase: run full forward on draft tokens, check probabilities
+            verify_h = h
+            verify_kvc = [[kk.clone(), vv.clone()] for kk, vv in kvc]
+            verify_accepted = []
+
+            for draft_tok in draft_tokens:
+                verify_calls += 1
+                last = verify_h[:, -1:, :]
+                U = self.unembed.float() if self.unembed is not None else self.embed
+                s = self.unembed_scale
+                logits = (self.rmsnorm(last, self.rms_final) @ U) * s
+
+                # Apply same penalties
+                if repetition_penalty != 1.0 or frequency_penalty != 0.0:
+                    from collections import Counter as _Counter
+                    _tail = (ids + accepted + verify_accepted)[-penalty_last_n:] if penalty_last_n > 0 else (ids + accepted + verify_accepted)
+                    _seen = _Counter(t for t in _tail if 0 <= t < logits.shape[-1])
+                    if _seen:
+                        _adj = logits[0, 0]
+                        for _t, _c in _seen.items():
+                            _v = float(_adj[_t])
+                            if repetition_penalty != 1.0 and _v != 0.0:
+                                _v = _v / repetition_penalty if _v > 0 else _v * repetition_penalty
+                            if frequency_penalty != 0.0:
+                                _v -= _c * frequency_penalty
+                            _adj[_t] = _v
+
+                if forbidden_ids:
+                    logits[0, 0][list(forbidden_ids)] = float("-inf")
+
+                probs = torch.softmax(logits[0, 0], dim=-1)
+                tok_prob = probs[draft_tok].item()
+
+                if tok_prob >= acceptance_threshold:
+                    # Accept
+                    verify_accepted.append(draft_tok)
+                    total_accepted += 1
+                    # Update verify state
+                    verify_h = self.embed[:, [draft_tok]].T.unsqueeze(0) * self.embed_scale
+                    for li, blk in enumerate(self.blocks):
+                        verify_h = self.forward_layer(verify_h, blk, verify_kvc[li], len(ids) + len(accepted) + len(verify_accepted) - 1)
+                else:
+                    # Reject: stop at this token, don't include it
+                    total_rejected += 1
+                    break
+
+            # Commit accepted tokens
+            accepted.extend(verify_accepted)
+            if stream:
+                for t in verify_accepted:
+                    stream(t)
+
+            # Update main state with accepted tokens
+            for tok in verify_accepted:
+                h = self.embed[:, [tok]].T.unsqueeze(0) * self.embed_scale
+                for li, blk in enumerate(self.blocks):
+                    h = self.forward_layer(h, blk, kvc[li], len(ids) + len(accepted) - 1)
+
+            # Check if schema is complete or EOS
+            if schema_machine.is_complete() or (verify_accepted and verify_accepted[-1] == eos):
+                break
+
+            # If we rejected early, we need to sample a new token from the model
+            # (fallback to unconstrained for the rejected position)
+            if total_rejected > 0 and len(verify_accepted) < len(draft_tokens):
+                # Sample one token unconstrained to continue
+                last = h[:, -1:, :]
+                U = self.unembed.float() if self.unembed is not None else self.embed
+                s = self.unembed_scale
+                logits = (self.rmsnorm(last, self.rms_final) @ U) * s
+                if forbidden_ids:
+                    logits[0, 0][list(forbidden_ids)] = float("-inf")
+                if temp > 0:
+                    probs = torch.softmax(logits[0, 0] / temp, dim=-1)
+                    nxt = int(torch.multinomial(probs, 1).item())
+                else:
+                    nxt = int(logits.argmax(-1).item())
+                accepted.append(nxt)
+                if stream:
+                    stream(nxt)
+                h = self.embed[:, [nxt]].T.unsqueeze(0) * self.embed_scale
+                for li, blk in enumerate(self.blocks):
+                    h = self.forward_layer(h, blk, kvc[li], len(ids) + len(accepted) - 1)
+                schema_machine.advance(nxt)
+                if nxt == eos:
+                    break
+
+        dt = time.time() - t0
+        tok_s = len(accepted) / dt if dt > 0 else 0.0
+
+        stats = {
+            "total_drafted": total_drafted,
+            "total_accepted": total_accepted,
+            "total_rejected": total_rejected,
+            "acceptance_rate": total_accepted / total_drafted if total_drafted > 0 else 0.0,
+            "verify_calls": verify_calls,
+            "steps": step + 1,
+        }
+        return accepted, tok_s, stats
+
+
+# ── E06: JSON Syntax State Machine ───────────────────────────────────
+
+class JSONSyntaxStateMachine:
+    """State machine for JSON syntax-constrained token generation.
+
+    Constrains tokens to valid JSON syntax (structural chars, strings, numbers,
+    literals) without enforcing specific schema values. Schema validation
+    happens post-generation.
+    """
+
+    def __init__(self, bpe: Optional["BPE"], vocab_size: int):
+        self.bpe = bpe
+        self.vocab_size = vocab_size
+        self.state = "start"  # start, in_object, in_array, in_string, in_number, after_value, done
+        self.depth = 0  # nesting depth
+        self.in_string = False
+        self.completed = False
+
+        # Precompute token sets for JSON syntax tokens
+        self._init_token_sets()
+
+    def _init_token_sets(self):
+        """Precompute token IDs for JSON syntax tokens."""
+        self.tokens = {
+            "structural": set(),      # { } [ ] : ,
+            "string_start": set(),    # "
+            "string_content": set(),  # string content chars
+            "number": set(),          # digits, -, .
+            "literal": set(),         # true, false, null
+            "whitespace": set(),      # space, newline, tab
+        }
+
+        if self.bpe is None:
+            return
+
+        # Structural tokens
+        structural_chars = {
+            "{": "structural", "}": "structural",
+            "[": "structural", "]": "structural",
+            ":": "structural", ",": "structural",
+        }
+        for ch, cat in structural_chars.items():
+            if ch in self.bpe.vocab:
+                self.tokens[cat].add(self.bpe.vocab[ch])
+
+        # String delimiter
+        if '"' in self.bpe.vocab:
+            self.tokens["string_start"].add(self.bpe.vocab['"'])
+
+        # Number tokens
+        for d in "0123456789":
+            if d in self.bpe.vocab:
+                self.tokens["number"].add(self.bpe.vocab[d])
+        if "-" in self.bpe.vocab:
+            self.tokens["number"].add(self.bpe.vocab["-"])
+        if "." in self.bpe.vocab:
+            self.tokens["number"].add(self.bpe.vocab["."])
+
+        # Literals
+        for lit in ("true", "false", "null"):
+            if lit in self.bpe.vocab:
+                self.tokens["literal"].add(self.bpe.vocab[lit])
+
+        # Whitespace
+        for ws in (" ", "\n", "\t", "\r"):
+            if ws in self.bpe.vocab:
+                self.tokens["whitespace"].add(self.bpe.vocab[ws])
+
+        # Also add multi-char tokens that the tokenizer might produce
+        for tok, tid in self.bpe.vocab.items():
+            if tok in ("true", "false", "null"):
+                self.tokens["literal"].add(tid)
+            elif tok.startswith('"') and tok.endswith('"') and len(tok) > 2:
+                # Quoted string token - can be used as complete string value
+                self.tokens["string_content"].add(tid)
+            elif all(c in '0123456789.-' for c in tok) and any(c in '0123456789' for c in tok):
+                # Number-like token
+                self.tokens["number"].add(tid)
+            elif tok in ("{", "}", "[", "]", ":", ","):
+                self.tokens["structural"].add(tid)
+
+    def get_allowed_tokens(self, generated: List[int]) -> Set[int]:
+        """Get set of token IDs allowed at current position based on JSON syntax."""
+        if self.completed:
+            return set()
+
+        allowed = set()
+
+        # Always allow whitespace
+        allowed.update(self.tokens["whitespace"])
+
+        if self.state == "start":
+            # Must start with { or [
+            allowed.update(self.tokens["structural"] & {self.bpe.vocab.get("{"), self.bpe.vocab.get("[")})
+
+        elif self.state == "in_object":
+            if self.depth == 0:
+                # At root level, only } allowed to close
+                allowed.update(self.tokens["structural"] & {self.bpe.vocab.get("}")})
+            elif self.in_string:
+                # Inside a string value
+                allowed.update(self.tokens["string_content"])
+                allowed.update(self.tokens["string_start"])  # Can close string
+            else:
+                # Expecting key (string) or } or ,
+                allowed.update(self.tokens["string_start"])
+                allowed.update(self.tokens["structural"] & {self.bpe.vocab.get("}"), self.bpe.vocab.get(",")})
+
+        elif self.state == "in_array":
+            if self.in_string:
+                allowed.update(self.tokens["string_content"])
+                allowed.update(self.tokens["string_start"])
+            else:
+                # Array values: string, number, literal, object, array, or ]
+                allowed.update(self.tokens["string_start"])
+                allowed.update(self.tokens["number"])
+                allowed.update(self.tokens["literal"])
+                allowed.update(self.tokens["structural"] & {self.bpe.vocab.get("["), self.bpe.vocab.get("{")})
+                allowed.update(self.tokens["structural"] & {self.bpe.vocab.get("]"), self.bpe.vocab.get(",")})
+
+        elif self.state == "after_colon":
+            # After key:value colon, expecting value
+            if self.in_string:
+                allowed.update(self.tokens["string_content"])
+                allowed.update(self.tokens["string_start"])
+            else:
+                allowed.update(self.tokens["string_start"])
+                allowed.update(self.tokens["number"])
+                allowed.update(self.tokens["literal"])
+                allowed.update(self.tokens["structural"] & {self.bpe.vocab.get("["), self.bpe.vocab.get("{")})
+
+        elif self.state == "after_value":
+            # After a value, expect , or } or ]
+            allowed.update(self.tokens["structural"] & {self.bpe.vocab.get(","), self.bpe.vocab.get("}"), self.bpe.vocab.get("]")})
+
+        # Filter to vocab range
+        return {t for t in allowed if 0 <= t < self.vocab_size}
+
+    def advance(self, token_id: int):
+        """Advance state machine with a generated token."""
+        if self.completed or self.bpe is None:
+            return
+
+        tok_str = self.bpe.id2.get(token_id, "")
+
+        # Skip whitespace
+        if tok_str in (" ", "\n", "\t", "\r"):
+            return
+
+        if self.state == "start":
+            if tok_str == "{":
+                self.state = "in_object"
+                self.depth = 1
+            elif tok_str == "[":
+                self.state = "in_array"
+                self.depth = 1
+
+        elif self.state == "in_object":
+            if self.in_string:
+                if tok_str == '"':
+                    self.in_string = False
+                    self.state = "after_colon"  # After key string, expect colon
+            else:
+                if tok_str == '"':
+                    self.in_string = True
+                elif tok_str == ":":
+                    self.state = "after_colon"
+                elif tok_str == "}":
+                    self.depth -= 1
+                    if self.depth == 0:
+                        self.completed = True
+                        self.state = "done"
+                    else:
+                        self.state = "after_value"
+                elif tok_str == ",":
+                    # Next key
+                    pass
+                elif tok_str == "{":
+                    self.depth += 1
+                elif tok_str == "[":
+                    self.state = "in_array"
+                    self.depth += 1
+
+        elif self.state == "in_array":
+            if self.in_string:
+                if tok_str == '"':
+                    self.in_string = False
+                    self.state = "after_value"
+            else:
+                if tok_str == '"':
+                    self.in_string = True
+                elif tok_str == "]":
+                    self.depth -= 1
+                    if self.depth == 0:
+                        self.completed = True
+                        self.state = "done"
+                    else:
+                        self.state = "after_value"
+                elif tok_str == ",":
+                    pass
+                elif tok_str == "{":
+                    self.state = "in_object"
+                    self.depth += 1
+                elif tok_str == "[":
+                    self.depth += 1
+
+        elif self.state == "after_colon":
+            if tok_str == '"':
+                self.in_string = True
+                self.state = "in_object"  # Back to object, but in string value
+            elif tok_str in ("{", "["):
+                if tok_str == "{":
+                    self.state = "in_object"
+                else:
+                    self.state = "in_array"
+                self.depth += 1
+            elif tok_str in ("true", "false", "null") or (tok_str and (tok_str[0].isdigit() or tok_str[0] == "-")):
+                # Literal or number - single token value
+                self.state = "after_value"
+            # Multi-token numbers/strings handled by staying in after_colon until structural
+
+        elif self.state == "after_value":
+            if tok_str == ",":
+                if self.depth > 0:
+                    # Check if we're in object or array by looking at context
+                    # Simplified: assume object if we just had a key:value
+                    pass
+            elif tok_str in ("}", "]"):
+                self.depth -= 1
+                if self.depth == 0:
+                    self.completed = True
+                    self.state = "done"
+                else:
+                    self.state = "after_value"
+
+    def is_complete(self) -> bool:
+        return self.completed
 
 
 # ── tokenizer (tokenizer.json HF) ─────────────────────────────────────
@@ -614,6 +1208,173 @@ def ensure_tokenizer(model_path: Path) -> Path | None:
         return None
 
 
+# ── E06: draft-verify test runner ────────────────────────────────────
+
+DEFAULT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "value": {"type": "number"}
+    },
+    "required": ["name", "value"]
+}
+
+
+def json_repair(text: str) -> str:
+    """Simple JSON repair: try to extract valid JSON from text."""
+    text = text.strip()
+    # Try to find JSON object
+    start = text.find('{')
+    end = text.rfind('}')
+    if start >= 0 and end > start:
+        candidate = text[start:end+1]
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass
+    # Try to find JSON array
+    start = text.find('[')
+    end = text.rfind(']')
+    if start >= 0 and end > start:
+        candidate = text[start:end+1]
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass
+    return "{}"
+
+
+def validate_json_schema(data: Any, schema: Dict[str, Any]) -> bool:
+    """Simple schema validation for our test schema."""
+    if not isinstance(data, dict):
+        return False
+    if "name" not in data or "value" not in data:
+        return False
+    if not isinstance(data["name"], str):
+        return False
+    if not isinstance(data["value"], (int, float)):
+        return False
+    return True
+
+
+def run_draft_verify(m: V6, bpe: BPE, args):
+    """Run E06 draft-verify prototype test."""
+    print("\n=== E06 Draft-Verify Prototype ===")
+
+    # Load schema
+    if args.schema:
+        schema = json.loads(Path(args.schema).read_text())
+        print(f"[schema] loaded from {args.schema}")
+    else:
+        schema = DEFAULT_SCHEMA
+        print(f"[schema] using default: {json.dumps(schema)}")
+
+    # Test prompt that should produce JSON matching schema
+    prompt = 'Retorne apenas JSON valido: {"name": "test", "value": 42}'
+    ids = [bpe.bos] + bpe.encode(f"<|user|>\n{prompt}\n<|assistant|>\n")
+    ids = [i for i in ids if i < m.vocab] or [0]
+    eos = bpe.eos
+    fbd = build_forbidden_ids(bpe, eos)
+
+    print(f"[prompt] {prompt}")
+    print(f"[config] max_tokens={args.max_tokens}, threshold={args.acceptance_threshold}, max_draft={args.max_draft_tokens}")
+
+    # 1. Draft-verify constrained generation
+    print("\n--- Draft-Verify (Constrained) ---")
+    pieces = []
+    def on_tok(t):
+        pieces.append(t)
+        sys.stdout.write(bpe.decode([t]))
+        sys.stdout.flush()
+
+    t0 = time.time()
+    out_dv, tps_dv, stats = m.generate_draft_verify(
+        ids, args.max_tokens, eos, schema, bpe,
+        acceptance_threshold=args.acceptance_threshold,
+        max_draft_tokens=args.max_draft_tokens,
+        stream=on_tok,
+        temp=args.temp, top_p=args.top_p, seed=args.seed,
+        repetition_penalty=args.repetition_penalty,
+        frequency_penalty=args.frequency_penalty,
+        penalty_last_n=args.penalty_last_n,
+        forbidden_ids=fbd,
+    )
+    dt_dv = time.time() - t0
+    text_dv = bpe.decode(out_dv)
+    print()
+    print(f"[dv] {len(out_dv)} toks in {dt_dv:.2f}s ({tps_dv:.2f} tok/s)")
+    print(f"[dv] output: {text_dv!r}")
+    print(f"[dv] stats: drafted={stats['total_drafted']}, accepted={stats['total_accepted']}, "
+          f"rejected={stats['total_rejected']}, acceptance_rate={stats['acceptance_rate']:.2%}, "
+          f"verify_calls={stats['verify_calls']}")
+
+    # Validate output
+    try:
+        parsed_dv = json.loads(text_dv)
+        valid_dv = validate_json_schema(parsed_dv, schema)
+        print(f"[dv] JSON valid: {valid_dv}, schema valid: {valid_dv}")
+    except json.JSONDecodeError as e:
+        valid_dv = False
+        print(f"[dv] JSON invalid: {e}")
+
+    # 2. Unconstrained greedy generation (baseline)
+    print("\n--- Unconstrained Greedy (Baseline) ---")
+    pieces = []
+    def on_tok2(t):
+        pieces.append(t)
+        sys.stdout.write(bpe.decode([t]))
+        sys.stdout.flush()
+
+    t0 = time.time()
+    out_uc, tps_uc = m.generate(
+        ids, args.max_tokens, eos, stream=on_tok2,
+        temp=args.temp, top_p=args.top_p, seed=args.seed,
+        repetition_penalty=args.repetition_penalty,
+        frequency_penalty=args.frequency_penalty,
+        penalty_last_n=args.penalty_last_n,
+        forbidden_ids=fbd,
+    )
+    dt_uc = time.time() - t0
+    text_uc = bpe.decode(out_uc)
+    print()
+    print(f"[uc] {len(out_uc)} toks in {dt_uc:.2f}s ({tps_uc:.2f} tok/s)")
+    print(f"[uc] output: {text_uc!r}")
+
+    # Validate unconstrained output
+    try:
+        parsed_uc = json.loads(text_uc)
+        valid_uc = validate_json_schema(parsed_uc, schema)
+        print(f"[uc] JSON valid: {valid_uc}, schema valid: {valid_uc}")
+    except json.JSONDecodeError:
+        valid_uc = False
+        print(f"[uc] JSON invalid")
+
+    # 3. Unconstrained + JSON repair
+    if args.compare_unconstrained:
+        print("\n--- Unconstrained + JSON Repair ---")
+        repaired = json_repair(text_uc)
+        try:
+            parsed_rep = json.loads(repaired)
+            valid_rep = validate_json_schema(parsed_rep, schema)
+            print(f"[repair] repaired: {repaired!r}")
+            print(f"[repair] JSON valid: {valid_rep}, schema valid: {valid_rep}")
+        except json.JSONDecodeError:
+            valid_rep = False
+            print(f"[repair] repair failed")
+
+    # Summary
+    print("\n=== SUMMARY ===")
+    speedup = tps_dv / tps_uc if tps_uc > 0 else 0
+    print(f"Draft-Verify:  {tps_dv:.2f} tok/s, JSON_valid={valid_dv}, schema_valid={valid_dv}, acceptance={stats['acceptance_rate']:.2%}")
+    print(f"Unconstrained: {tps_uc:.2f} tok/s, JSON_valid={valid_uc}, schema_valid={valid_uc}")
+    if args.compare_unconstrained:
+        print(f"Repaired:      JSON_valid={valid_rep}, schema_valid={valid_rep}")
+    print(f"Speedup (dv/uc): {speedup:.2f}x")
+    print(f"Acceptance rate: {stats['acceptance_rate']:.2%} ({stats['total_accepted']}/{stats['total_drafted']})")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Chat no host com modelo .v6")
     ap.add_argument("--model", type=str, default=None)
@@ -626,7 +1387,19 @@ def main():
     ap.add_argument("--repetition-penalty", type=float, default=1.0, help="1.0=off; ex. 1.15 anti-loop")
     ap.add_argument("--frequency-penalty", type=float, default=0.0)
     ap.add_argument("--penalty-last-n", type=int, default=64)
+    ap.add_argument("--kv-quant", type=str, default="fp16", choices=["fp16", "int8", "ternary"],
+                    help="KV cache quantization: fp16 (baseline), int8 (absmax), ternary (absmean 2-bit)")
+    # E06: draft-verify prototype
+    ap.add_argument("--draft-verify", action="store_true", help="E06: grammar-constrained draft-verify mode")
+    ap.add_argument("--schema", type=str, default=None, help="JSON schema file for draft-verify")
+    ap.add_argument("--acceptance-threshold", type=float, default=0.5, help="Draft token acceptance probability threshold")
+    ap.add_argument("--max-draft-tokens", type=int, default=8, help="Max tokens to draft per step")
+    ap.add_argument("--compare-unconstrained", action="store_true", help="Compare with unconstrained greedy + JSON repair")
     args = ap.parse_args()
+
+    global KV_QUANT
+    KV_QUANT = args.kv_quant
+    print(f"[kv] quantization mode: {KV_QUANT}")
 
     torch.set_num_threads(max(1, os.cpu_count() or 4))
 
@@ -694,6 +1467,13 @@ def main():
         if not bpe:
             from collections import Counter
             print("[gen] top ids:", Counter(out).most_common(5))
+
+    # E06: draft-verify test mode
+    if args.draft_verify:
+        if bpe is None:
+            sys.exit("draft-verify requires tokenizer (--tokenizer or embedded BPB1)")
+        run_draft_verify(m, bpe, args)
+        return
 
     if args.ask:
         run(args.ask)
