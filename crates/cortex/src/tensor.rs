@@ -412,10 +412,11 @@ impl PackedTernaryTensor {
         }
         // I2_S gated rollout (default OFF): mesmo contrato, inner loop inteiro.
         // Falha aqui cai no FP legado (flag experimental nunca quebra o boot).
+        // Dispatch escolhe AVX2 se `I2S_AVX2_ENABLED` + `allow_avx2()`, senão escalar.
         if crate::bitnet_w2a8::i2s_enabled() {
             let (k, n) = self.shape;
             let (m, _) = input.shape;
-            if let Some(r) = crate::bitnet_w2a8::i2s_ternary_gemv(self, input) {
+            if let Some(r) = crate::bitnet_w2a8::i2s_ternary_gemv_dispatch(self, input) {
                 if r.is_valid() {
                     crate::matmul_diag::note_call(k, n, m, 8, true);
                     return Some(r);

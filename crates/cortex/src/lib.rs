@@ -24,6 +24,7 @@ pub struct HardwareRegisterMap {
 
 pub mod cellular;
 pub mod evolution;
+pub mod traits; // Item 12: trait for PlasticityController
 pub mod arena;
 pub mod global_arena;
 pub mod r3;

@@ -75,6 +75,11 @@ pub fn w2a8_ternary_matmul_scalar(w: &PackedTernaryTensor, x: &Tensor) -> Option
 pub static I2S_ENABLED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
+/// AVX2 path para I2_S (default OFF — requer `set_i2s_avx2(true)` + `allow_avx2()`).
+/// WHPX `-cpu host` expõe AVX2 nativo; TCG falha no gate.
+pub static I2S_AVX2_ENABLED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 pub fn i2s_enabled() -> bool {
     I2S_ENABLED.load(core::sync::atomic::Ordering::Relaxed)
 }
@@ -82,6 +87,15 @@ pub fn i2s_enabled() -> bool {
 pub fn set_i2s_enabled(v: bool) {
     I2S_ENABLED.store(v, core::sync::atomic::Ordering::Relaxed);
     k_nano::slog_cortex!("I2S", "ok", "i2s set enabled={}", v as u8);
+}
+
+pub fn i2s_avx2_enabled() -> bool {
+    I2S_AVX2_ENABLED.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn set_i2s_avx2(v: bool) {
+    I2S_AVX2_ENABLED.store(v, core::sync::atomic::Ordering::Relaxed);
+    k_nano::slog_cortex!("I2S", "ok", "i2s_avx2 set enabled={}", v as u8);
 }
 
 /// Só-testes: serializa o teste que alterna I2S_ENABLED contra testes que
@@ -139,6 +153,159 @@ pub fn i2s_ternary_gemv(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
         }
     }
     Some(out)
+}
+
+/// Repack pesos 2-bit row-major → col-major i8 (n*k contíguo).
+/// Mesmo layout do W2A8 `repack_col_major` — reutilizável p/ I2_S AVX2.
+fn repack_col_major_i8(w: &PackedTernaryTensor) -> Vec<i8> {
+    let (k, n) = w.shape;
+    let mut out = vec![0i8; n * k];
+    for j in 0..n {
+        for t in 0..k {
+            let idx = t * n + j;
+            let byte = w.packed_data[idx >> 2];
+            let pair = (byte >> ((idx & 3) << 1)) & 3;
+            let v = ((pair & 1) as i8) - ((pair >> 1) as i8);
+            out[j * k + t] = v;
+        }
+    }
+    out
+}
+
+/// I2_S AVX2 kernel: GEMV ternário com ativações INT8 (absmax per row) +
+/// pesos 2-bit repacked col-major i8 {-1,0,1}.
+/// - Processa 32 elementos k por iteração (256-bit = 32 i8)
+/// - Sign-select: mask_pos = (w==1), mask_neg = (w==-1)
+///   pos = and(xq, mask_pos), neg = and(-xq, mask_neg), sum = add(pos, neg)
+/// - Horizontal sum: vpmovsxbw → vpmaddwd(ones) → hadd → extract
+/// - Single vmulps por linha para escala final
+/// - Fallback escalar para cauda k%32
+/// Requer: `I2S_AVX2_ENABLED` + `allow_avx2()` (WHPX `-cpu host` passa; TCG falha).
+#[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
+#[target_feature(enable = "avx2,ssse3")]
+unsafe fn i2s_ternary_gemv_avx2(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
+    use core::arch::x86_64::*;
+    let (k, n) = w.shape;
+    let (m, k2) = x.shape;
+    if k != k2 || k == 0 || n == 0 || m == 0 || !x.is_valid() {
+        return None;
+    }
+    let mut out = Tensor::new((m, n));
+    if !out.is_valid() {
+        return None;
+    }
+
+    // Repack weights to column-major i8 (n*k contiguous)
+    let w8 = repack_col_major_i8(w);
+
+    for i in 0..m {
+        let base = i * k;
+        let row = &x.data[base..base + k];
+        let mut max_abs = 0.0f32;
+        for &v in row {
+            let a = v.abs();
+            if a > max_abs {
+                max_abs = a;
+            }
+        }
+        let si = if max_abs > 1e-9 { max_abs / 127.0 } else { 1.0 };
+        let inv_si = 1.0 / si;
+
+        // Quantize activations to i8 [-127, 127] (once per row)
+        let mut xq_i8 = alloc::vec::Vec::new();
+        if xq_i8.try_reserve_exact(k).is_err() {
+            return None;
+        }
+        xq_i8.resize(k, 0i8);
+        for t in 0..k {
+            let q = unsafe { libm::roundf(row[t] * inv_si) } as i32;
+            xq_i8[t] = q.clamp(-127, 127) as i8;
+        }
+
+        // For each output column j
+        for j in 0..n {
+            let wj = &w8[j * k..(j + 1) * k];
+            let mut acc = 0i32;
+            let mut t = 0usize;
+
+            // Main loop: process 32 elements per iteration
+            while t + 32 <= k {
+                // Load 32 activations (i8)
+                let a32 = _mm256_loadu_si256(xq_i8.as_ptr().add(t) as *const __m256i);
+                // Load 32 weights (i8) for this column
+                let w32 = _mm256_loadu_si256(wj.as_ptr().add(t) as *const __m256i);
+
+                // Sign-select: w == 1 → +xq, w == -1 → -xq, w == 0 → 0
+                let ones = _mm256_set1_epi8(1);
+                let minus_ones = _mm256_set1_epi8(-1i8);
+                let zero = _mm256_setzero_si256();
+
+                // mask_pos = (w == 1), mask_neg = (w == -1)
+                let mask_pos = _mm256_cmpeq_epi8(w32, ones);
+                let mask_neg = _mm256_cmpeq_epi8(w32, minus_ones);
+
+                // pos_part = xq & mask_pos (xq where w==1, else 0)
+                let pos_part = _mm256_and_si256(a32, mask_pos);
+                // neg_part = (-xq) & mask_neg (-xq where w==-1, else 0)
+                let neg_xq = _mm256_sub_epi8(zero, a32);
+                let neg_part = _mm256_and_si256(neg_xq, mask_neg);
+
+                // sum_part = pos_part + neg_part (xq for w=1, -xq for w=-1, 0 for w=0)
+                let sum_part = _mm256_add_epi8(pos_part, neg_part);
+
+                // Horizontal sum of 32 i8 → int32
+                // vpmovsxbw: 16 i8 → 16 i16 (128-bit), need two for 256-bit
+                let sum_lo = _mm256_castsi256_si128(sum_part);
+                let sum_hi = _mm256_extracti128_si256(sum_part, 1);
+                let sum16_lo = _mm_cvtepi8_epi16(sum_lo);
+                let sum16_hi = _mm_cvtepi8_epi16(sum_hi);
+                // vpmaddwd with 1s: pairs of i16 → i32
+                let ones16 = _mm_set1_epi16(1);
+                let sum32_lo = _mm_madd_epi16(sum16_lo, ones16);
+                let sum32_hi = _mm_madd_epi16(sum16_hi, ones16);
+                // hadd pairs: [a,b,c,d] → [a+b, c+d, ...]
+                let sum32_lo_h = _mm_hadd_epi32(sum32_lo, sum32_hi);
+                // Extract 4 int32 from lo_h
+                let mut buf = [0i32; 4];
+                _mm_storeu_si128(buf.as_mut_ptr() as *mut __m128i, sum32_lo_h);
+                acc += buf[0] + buf[1] + buf[2] + buf[3];
+
+                t += 32;
+            }
+
+            // Scalar tail for k%32
+            while t < k {
+                let w_val = wj[t];
+                if w_val == 1 {
+                    acc += xq_i8[t] as i32;
+                } else if w_val == -1 {
+                    acc -= xq_i8[t] as i32;
+                }
+                t += 1;
+            }
+            out.data[i * n + j] = acc as f32 * si;
+        }
+    }
+    Some(out)
+}
+
+/// Dispatch I2_S: escolhe AVX2 se habilitado e disponível, senão escalar.
+pub fn i2s_ternary_gemv_dispatch(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
+    static PATH_LOGGED: core::sync::atomic::AtomicBool =
+        core::sync::atomic::AtomicBool::new(false);
+    #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
+    {
+        if i2s_avx2_enabled() && k_nano::platform_probe::allow_avx2() {
+            if !PATH_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                k_nano::slog_cortex!("I2S", "ok", "path=avx2 (host)");
+            }
+            return unsafe { i2s_ternary_gemv_avx2(w, x) };
+        }
+    }
+    if !PATH_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        k_nano::slog_cortex!("I2S", "ok", "path=scalar (soft-float / no AVX2)");
+    }
+    i2s_ternary_gemv(w, x)
 }
 
 /// W2A8: out[m,n] = quantized(x) @ w_ternary.
@@ -547,5 +714,79 @@ mod tests {
             set_i2s_enabled(false);
             assert!(!i2s_enabled(), "flag restaurada OFF");
         }
+    }
+
+    /// I2_S AVX2 parity: AVX2 path vs scalar I2_S bit-exact on synthetic +
+    /// real weight slices (cosine > 0.999, maxdiff bound).
+    /// Only runs on host with AVX2 (not target_os="none").
+    #[cfg(all(target_arch = "x86_64", not(target_os = "none")))]
+    #[test]
+    fn i2s_avx2_parity_vs_scalar() {
+        let _g = MATMUL_TEST_LOCK.lock();
+        // Enable AVX2 path for this test
+        set_i2s_enabled(true);
+        set_i2s_avx2(true);
+        // Test cases: various k, n, m with tails (k%32, n%4, etc.)
+        for (k, n, m, seed) in [
+            (256usize, 17usize, 3usize, 11u32),
+            (64, 9, 2, 4242),
+            (32, 4, 4, 7),
+            (128, 33, 2, 99),  // k%32=0, n%4=1
+            (100, 16, 1, 123), // k%32=4, n%4=0
+            (200, 50, 3, 456), // k%32=8, n%4=2
+        ] {
+            let w = tern(k, n, seed);
+            let mut xdata = Vec::with_capacity(m * k);
+            for i in 0..m {
+                for t in 0..k {
+                    xdata.push(((i * 31 + t * 7 + seed as usize) % 11) as f32 * 0.25 - 1.25);
+                }
+            }
+            let x = Tensor::from_row_major((m, k), xdata).unwrap();
+
+            // Scalar I2_S (reference)
+            let scalar = i2s_ternary_gemv(&w, &x).expect("scalar None");
+            // AVX2 I2_S via dispatch
+            let avx2 = i2s_ternary_gemv_dispatch(&w, &x).expect("avx2 None");
+
+            assert_eq!(avx2.shape, scalar.shape, "shape mismatch k={} n={} m={}", k, n, m);
+
+            // Bit-exact comparison (same quantization, same accumulation order)
+            for i in 0..m * n {
+                assert_eq!(
+                    avx2.data[i].to_bits(),
+                    scalar.data[i].to_bits(),
+                    "i2s AVX2 vs scalar bit-exact k={} n={} m={} idx={} avx2={} scalar={}",
+                    k, n, m, i, avx2.data[i], scalar.data[i]
+                );
+            }
+
+            // Also verify vs quantized reference (cosine > 0.999, maxdiff bound)
+            let qref = w2a8_reference_quantized(&w, &x).expect("qref None");
+            let (mut dot, mut aa, mut bb, mut maxdiff) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+            for i in 0..m * n {
+                let (g, p) = (avx2.data[i], qref.data[i]);
+                dot += g * p;
+                aa += g * g;
+                bb += p * p;
+                let d = (g - p).abs();
+                if d > maxdiff {
+                    maxdiff = d;
+                }
+            }
+            let cos = dot / (aa.sqrt() * bb.sqrt()).max(1e-9);
+            if aa < 1e-12 && bb < 1e-12 {
+                assert!(maxdiff < 1e-6, "i2s avx2 zero-case k={}: {}", k, maxdiff);
+            } else {
+                assert!(cos > 0.999, "i2s avx2 cosine k={} n={} m={}: {:.6}", k, n, m, cos);
+            }
+            let bound = k as f32 * 1.5 / 254.0 + 1e-6;
+            assert!(maxdiff <= bound, "i2s avx2 maxdiff k={}: {} > bound {}", k, maxdiff, bound);
+        }
+        // Restore flags
+        set_i2s_avx2(false);
+        set_i2s_enabled(false);
+        assert!(!i2s_avx2_enabled(), "avx2 flag restored OFF");
+        assert!(!i2s_enabled(), "flag restored OFF");
     }
 }
