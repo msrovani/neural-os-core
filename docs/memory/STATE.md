@@ -750,9 +750,10 @@
 | I2_S AVX2 (kernel) | IMPLEMENTADO - sign-select blend/vpsrav + hadd + vmulps + tail k%32; gate allow_avx2 (WHPX -cpu Haswell passa); parity test bit-exact vs scalar; dispatch matmul_hybrid |
 | I2_S AVX2 (QEMU WHPX) | GATE OK - boot OK, LLM loaded, AVX2 enabled logado; tok/s NÃO medido (benchmark pulado no QEMU); requer HW real p/ speedup |
 | Rep-penalty kernel | CONFIRMADO - argmax_row_hf_vocab + infer_queue run_fine + Medusa usam sampler com rep 1.15 + forbidden-id; sample_token_coherence fixado |
-| E30 per-row scales | IMPLEMENTADO - write_q6k per_row + convert --per-row-scales; aguarda teste coerência |
-| E09 KV ternary recall | IMPLEMENTADO - quantize_kv_ternary + bench_kv_ternary (needle-in-haystack 36 Qs); aguarda benchmark 3 modos |
-| E06 draft-verify | PROTÓTIPO - --draft-verify + JSON schema state machine; aguarda teste acceptance/validity |
+| E30 per-row scales | IMPLEMENTADO + TESTADO - write_q6k per_row + convert --per-row-scales; suite idêntica (2/6), zero impacto coerência; não adotar |
+| E09 KV ternary recall | IMPLEMENTADO + TESTADO - quantize_kv_ternary + bench_kv_ternary; inconclusivo (modelo falha tarefa, 0% EM); medição memória errada; requer modelo fine-tuned QA |
+| E06 draft-verify | PROTÓTIPO + TESTADO - --draft-verify + JSON schema state machine; quebrado (mismatches tokenizer); unconstrained greedy 100% JSON validity; requer rewrite |
+| 2B4T boot (QEMU) | v7 HEADER MISMATCH - boot OK mas load_model REJECT h=0 L=0 (v7 header vs v6 loader); solução: converter .V7 p/ v6 header OU estender load_model_v6 p/ v7 |
 
 ## Lab vivo (s410)
 
