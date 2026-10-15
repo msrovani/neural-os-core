@@ -135,6 +135,93 @@ pub fn parse_model_header(data: &[u8]) -> Option<ModelHeader> {
         kv_heads, q_dim, num_medusa, tie, feat, embed_type, file_size: size })
 }
 
+/// Resultado de `probe_llm_file_size`.
+/// O boot lê o loader em fatias: 64 B não cobrem o tokenizer embutido do v7.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LlmSizeProbe {
+    /// Magic ausente, versão fora de 6/7, ou model_type diferente de LLM.
+    NotLlm,
+    /// Prefixo curto demais. `bytes` é o mínimo para a próxima decisão.
+    Need(usize),
+    /// Tamanho total do arquivo, o mesmo de `parse_model_header`.
+    Ready(usize),
+}
+
+/// Descobre o tamanho de um LLM v6/v7 sem exigir o arquivo inteiro no buffer.
+/// `Need` pede mais prefixo (tok_len ou provenance). `NotLlm` não é erro de
+/// header: expert/router e lixo caem aqui para o caller escolher outro parser.
+pub fn probe_llm_file_size(buf: &[u8]) -> LlmSizeProbe {
+    if buf.len() < 4 {
+        return LlmSizeProbe::Need(52);
+    }
+    let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    if magic != 0xBE11BE11 {
+        return LlmSizeProbe::NotLlm;
+    }
+    if buf.len() < 16 {
+        return LlmSizeProbe::Need(52);
+    }
+    let version = u16::from_le_bytes([buf[4], buf[5]]);
+    if version != 6 && version != 7 {
+        return LlmSizeProbe::NotLlm;
+    }
+    if buf.len() < 49 {
+        return LlmSizeProbe::Need(52);
+    }
+    if buf[14] != 0 {
+        return LlmSizeProbe::NotLlm;
+    }
+    let tok_len = u32::from_le_bytes([buf[45], buf[46], buf[47], buf[48]]) as usize;
+    let tok_cap = if version == 7 { 8 * 1024 * 1024 } else { 65536 };
+    if tok_len > tok_cap {
+        return LlmSizeProbe::NotLlm;
+    }
+    let mut need = match 49usize.checked_add(tok_len).and_then(|n| n.checked_add(3)) {
+        Some(n) => n,
+        None => return LlmSizeProbe::NotLlm,
+    };
+    if version == 7 {
+        if buf.len() < need.saturating_add(2) {
+            return LlmSizeProbe::Need(need.saturating_add(2));
+        }
+        let rl = u16::from_le_bytes([buf[need], buf[need + 1]]) as usize;
+        if rl > 4096 {
+            return LlmSizeProbe::NotLlm;
+        }
+        let p = match need
+            .checked_add(2)
+            .and_then(|n| n.checked_add(rl))
+            .and_then(|n| n.checked_add(40))
+        {
+            Some(n) => n,
+            None => return LlmSizeProbe::NotLlm,
+        };
+        if buf.len() < p.saturating_add(2) {
+            return LlmSizeProbe::Need(p.saturating_add(2));
+        }
+        let cl = u16::from_le_bytes([buf[p], buf[p + 1]]) as usize;
+        if cl > 4096 {
+            return LlmSizeProbe::NotLlm;
+        }
+        need = match p
+            .checked_add(2)
+            .and_then(|n| n.checked_add(cl))
+            .and_then(|n| n.checked_add(40))
+            .and_then(|n| n.checked_add(4))
+        {
+            Some(n) => n,
+            None => return LlmSizeProbe::NotLlm,
+        };
+    }
+    if buf.len() < need {
+        return LlmSizeProbe::Need(need);
+    }
+    match parse_model_header(buf) {
+        Some(h) => LlmSizeProbe::Ready(h.file_size),
+        None => LlmSizeProbe::NotLlm,
+    }
+}
+
 // ── Static: header do modelo carregado ─────────────────────────────────
 
 static HEADER_LOADED: AtomicBool = AtomicBool::new(false);
@@ -410,6 +497,20 @@ mod tests {
         assert_eq!(h7.file_size - h6.file_size, 2 + 1 + 40 + 2 + 0 + 40 + 4);
         // v7 sem provenance mas truncado no corpo: load None (fail-closed).
         assert!(load_model_v6(&v7).is_none());
+        // 64 B não cobrem o tok embutido: o probe pede o resto, não mente h=0.
+        let mut with_tok = synth_header(7, true);
+        with_tok[45] = 100;
+        with_tok[46] = 0;
+        with_tok[47] = 0;
+        with_tok[48] = 0;
+        assert_eq!(
+            probe_llm_file_size(&with_tok[..64.min(with_tok.len())]),
+            LlmSizeProbe::Need(49 + 100 + 3 + 2)
+        );
+        assert!(matches!(probe_llm_file_size(&v7[..64]), LlmSizeProbe::Need(_)));
+        assert_eq!(probe_llm_file_size(&v7), LlmSizeProbe::Ready(h7.file_size));
+        assert_eq!(probe_llm_file_size(&v6), LlmSizeProbe::Ready(h6.file_size));
+        assert_eq!(probe_llm_file_size(&[0, 1, 2, 3]), LlmSizeProbe::NotLlm);
         // v6 com tok_len acima do cap histórico: None (comportamento intacto).
         let mut bigtok = synth_header(6, false);
         bigtok[45] = 0x70; bigtok[46] = 0x11; bigtok[47] = 0x01; bigtok[48] = 0x00; // 70000

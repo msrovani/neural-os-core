@@ -801,227 +801,174 @@ class JSONSyntaxStateMachine:
     def __init__(self, bpe: Optional["BPE"], vocab_size: int):
         self.bpe = bpe
         self.vocab_size = vocab_size
-        self.state = "start"  # start, in_object, in_array, in_string, in_number, after_value, done
-        self.depth = 0  # nesting depth
-        self.in_string = False
+        self.state = "value"  # value, key, colon, after_value, in_string, in_number, done
+        self._stack: List[str] = []
+        self._string_role = "value"
+        self._struct_id: Dict[str, int] = {}
         self.completed = False
 
         # Precompute token sets for JSON syntax tokens
         self._init_token_sets()
 
-    def _init_token_sets(self):
-        """Precompute token IDs for JSON syntax tokens."""
-        self.tokens = {
-            "structural": set(),      # { } [ ] : ,
-            "string_start": set(),    # "
-            "string_content": set(),  # string content chars
-            "number": set(),          # digits, -, .
-            "literal": set(),         # true, false, null
-            "whitespace": set(),      # space, newline, tab
-        }
+    def _raw(self, tok: str) -> str:
+        """GPT-2 byte-level: o vocab guarda o char mapeado, nao o byte ASCII."""
+        if not tok or self.bpe is None:
+            return tok
+        u2b = getattr(self.bpe, "u2b", None)
+        if not u2b:
+            return tok
+        try:
+            return bytes(u2b[c] for c in tok).decode("utf-8")
+        except (KeyError, UnicodeDecodeError):
+            return tok
 
+    def _is_special(self, tok: str) -> bool:
+        return tok.startswith("<|") or tok.startswith("</")
+
+    def _number_body(self, raw: str) -> str:
+        return raw[1:] if raw.startswith(" ") else raw
+
+    def _is_number_piece(self, raw: str) -> bool:
+        body = self._number_body(raw)
+        if not body or not all(c in "0123456789.eE+-" for c in body):
+            return False
+        return any(c.isdigit() for c in body)
+
+    def _init_token_sets(self):
+        """Classifica pelo texto decodificado, nao pela chave crua do vocab."""
+        self.tokens = {
+            "structural": set(),
+            "string_start": set(),
+            "string_content": set(),
+            "number": set(),
+            "literal": set(),
+            "whitespace": set(),
+        }
+        self._struct_id = {}
         if self.bpe is None:
             return
 
-        # Structural tokens
-        structural_chars = {
-            "{": "structural", "}": "structural",
-            "[": "structural", "]": "structural",
-            ":": "structural", ",": "structural",
-        }
-        for ch, cat in structural_chars.items():
-            if ch in self.bpe.vocab:
-                self.tokens[cat].add(self.bpe.vocab[ch])
-
-        # String delimiter
-        if '"' in self.bpe.vocab:
-            self.tokens["string_start"].add(self.bpe.vocab['"'])
-
-        # Number tokens
-        for d in "0123456789":
-            if d in self.bpe.vocab:
-                self.tokens["number"].add(self.bpe.vocab[d])
-        if "-" in self.bpe.vocab:
-            self.tokens["number"].add(self.bpe.vocab["-"])
-        if "." in self.bpe.vocab:
-            self.tokens["number"].add(self.bpe.vocab["."])
-
-        # Literals
-        for lit in ("true", "false", "null"):
-            if lit in self.bpe.vocab:
-                self.tokens["literal"].add(self.bpe.vocab[lit])
-
-        # Whitespace
-        for ws in (" ", "\n", "\t", "\r"):
-            if ws in self.bpe.vocab:
-                self.tokens["whitespace"].add(self.bpe.vocab[ws])
-
-        # Also add multi-char tokens that the tokenizer might produce
         for tok, tid in self.bpe.vocab.items():
-            if tok in ("true", "false", "null"):
-                self.tokens["literal"].add(tid)
-            elif tok.startswith('"') and tok.endswith('"') and len(tok) > 2:
-                # Quoted string token - can be used as complete string value
-                self.tokens["string_content"].add(tid)
-            elif all(c in '0123456789.-' for c in tok) and any(c in '0123456789' for c in tok):
-                # Number-like token
-                self.tokens["number"].add(tid)
-            elif tok in ("{", "}", "[", "]", ":", ","):
+            if not isinstance(tid, int) or self._is_special(tok):
+                continue
+            raw = self._raw(tok)
+            if raw in ("{", "}", "[", "]", ":", ","):
                 self.tokens["structural"].add(tid)
+                self._struct_id.setdefault(raw, tid)
+            elif raw == '"':
+                self.tokens["string_start"].add(tid)
+            elif raw and all(c in " \n\t\r" for c in raw):
+                self.tokens["whitespace"].add(tid)
+            elif raw.lstrip(" ") in ("true", "false", "null"):
+                self.tokens["literal"].add(tid)
+            elif self._is_number_piece(raw):
+                self.tokens["number"].add(tid)
+            if raw != '"':
+                self.tokens["string_content"].add(tid)
+
+    def _add(self, allowed: Set[int], tid: Optional[int]):
+        if tid is not None:
+            allowed.add(tid)
 
     def get_allowed_tokens(self, generated: List[int]) -> Set[int]:
-        """Get set of token IDs allowed at current position based on JSON syntax."""
-        if self.completed:
+        """Tokens legais neste estado. `generated` fica na assinatura do caller."""
+        del generated
+        if self.completed or self.bpe is None:
             return set()
 
-        allowed = set()
-
-        # Always allow whitespace
-        allowed.update(self.tokens["whitespace"])
-
-        if self.state == "start":
-            # Must start with { or [
-            allowed.update(self.tokens["structural"] & {self.bpe.vocab.get("{"), self.bpe.vocab.get("[")})
-
-        elif self.state == "in_object":
-            if self.depth == 0:
-                # At root level, only } allowed to close
-                allowed.update(self.tokens["structural"] & {self.bpe.vocab.get("}")})
-            elif self.in_string:
-                # Inside a string value
-                allowed.update(self.tokens["string_content"])
-                allowed.update(self.tokens["string_start"])  # Can close string
-            else:
-                # Expecting key (string) or } or ,
-                allowed.update(self.tokens["string_start"])
-                allowed.update(self.tokens["structural"] & {self.bpe.vocab.get("}"), self.bpe.vocab.get(",")})
-
-        elif self.state == "in_array":
-            if self.in_string:
-                allowed.update(self.tokens["string_content"])
-                allowed.update(self.tokens["string_start"])
-            else:
-                # Array values: string, number, literal, object, array, or ]
-                allowed.update(self.tokens["string_start"])
-                allowed.update(self.tokens["number"])
-                allowed.update(self.tokens["literal"])
-                allowed.update(self.tokens["structural"] & {self.bpe.vocab.get("["), self.bpe.vocab.get("{")})
-                allowed.update(self.tokens["structural"] & {self.bpe.vocab.get("]"), self.bpe.vocab.get(",")})
-
-        elif self.state == "after_colon":
-            # After key:value colon, expecting value
-            if self.in_string:
-                allowed.update(self.tokens["string_content"])
-                allowed.update(self.tokens["string_start"])
-            else:
-                allowed.update(self.tokens["string_start"])
-                allowed.update(self.tokens["number"])
-                allowed.update(self.tokens["literal"])
-                allowed.update(self.tokens["structural"] & {self.bpe.vocab.get("["), self.bpe.vocab.get("{")})
-
-        elif self.state == "after_value":
-            # After a value, expect , or } or ]
-            allowed.update(self.tokens["structural"] & {self.bpe.vocab.get(","), self.bpe.vocab.get("}"), self.bpe.vocab.get("]")})
-
-        # Filter to vocab range
+        allowed: Set[int] = set(self.tokens["whitespace"])
+        st = self.state
+        if st == "value":
+            allowed.update(self.tokens["string_start"])
+            allowed.update(self.tokens["number"])
+            allowed.update(self.tokens["literal"])
+            self._add(allowed, self._struct_id.get("{"))
+            self._add(allowed, self._struct_id.get("["))
+        elif st == "key":
+            allowed.update(self.tokens["string_start"])
+            if self._stack and self._stack[-1] == "object":
+                self._add(allowed, self._struct_id.get("}"))
+        elif st == "colon":
+            self._add(allowed, self._struct_id.get(":"))
+        elif st == "after_value":
+            self._add(allowed, self._struct_id.get(","))
+            if self._stack:
+                close = "}" if self._stack[-1] == "object" else "]"
+                self._add(allowed, self._struct_id.get(close))
+        elif st == "in_string":
+            allowed.update(self.tokens["string_content"])
+            allowed.update(self.tokens["string_start"])
+        elif st == "in_number":
+            allowed.update(self.tokens["number"])
+            self._add(allowed, self._struct_id.get(","))
+            if self._stack:
+                close = "}" if self._stack[-1] == "object" else "]"
+                self._add(allowed, self._struct_id.get(close))
         return {t for t in allowed if 0 <= t < self.vocab_size}
 
+    def _close(self):
+        if self._stack:
+            self._stack.pop()
+        if not self._stack:
+            self.completed = True
+            self.state = "done"
+        else:
+            self.state = "after_value"
+
     def advance(self, token_id: int):
-        """Advance state machine with a generated token."""
+        """Avanca um token. Numero pode ocupar varios tokens (1, depois 2)."""
         if self.completed or self.bpe is None:
             return
-
-        tok_str = self.bpe.id2.get(token_id, "")
-
-        # Skip whitespace
-        if tok_str in (" ", "\n", "\t", "\r"):
+        tok = self.bpe.id2.get(token_id, "")
+        raw = self._raw(tok)
+        if raw and all(c in " \n\t\r" for c in raw):
+            if self.state == "in_number":
+                self.state = "after_value"
             return
 
-        if self.state == "start":
-            if tok_str == "{":
-                self.state = "in_object"
-                self.depth = 1
-            elif tok_str == "[":
-                self.state = "in_array"
-                self.depth = 1
+        if self.state == "in_string":
+            if raw == '"':
+                self.state = "colon" if self._string_role == "key" else "after_value"
+            return
 
-        elif self.state == "in_object":
-            if self.in_string:
-                if tok_str == '"':
-                    self.in_string = False
-                    self.state = "after_colon"  # After key string, expect colon
-            else:
-                if tok_str == '"':
-                    self.in_string = True
-                elif tok_str == ":":
-                    self.state = "after_colon"
-                elif tok_str == "}":
-                    self.depth -= 1
-                    if self.depth == 0:
-                        self.completed = True
-                        self.state = "done"
-                    else:
-                        self.state = "after_value"
-                elif tok_str == ",":
-                    # Next key
-                    pass
-                elif tok_str == "{":
-                    self.depth += 1
-                elif tok_str == "[":
-                    self.state = "in_array"
-                    self.depth += 1
+        if self.state == "in_number":
+            if self._is_number_piece(raw):
+                return
+            self.state = "after_value"
 
-        elif self.state == "in_array":
-            if self.in_string:
-                if tok_str == '"':
-                    self.in_string = False
-                    self.state = "after_value"
-            else:
-                if tok_str == '"':
-                    self.in_string = True
-                elif tok_str == "]":
-                    self.depth -= 1
-                    if self.depth == 0:
-                        self.completed = True
-                        self.state = "done"
-                    else:
-                        self.state = "after_value"
-                elif tok_str == ",":
-                    pass
-                elif tok_str == "{":
-                    self.state = "in_object"
-                    self.depth += 1
-                elif tok_str == "[":
-                    self.depth += 1
-
-        elif self.state == "after_colon":
-            if tok_str == '"':
-                self.in_string = True
-                self.state = "in_object"  # Back to object, but in string value
-            elif tok_str in ("{", "["):
-                if tok_str == "{":
-                    self.state = "in_object"
-                else:
-                    self.state = "in_array"
-                self.depth += 1
-            elif tok_str in ("true", "false", "null") or (tok_str and (tok_str[0].isdigit() or tok_str[0] == "-")):
-                # Literal or number - single token value
+        if self.state == "value":
+            if raw == "{":
+                self._stack.append("object")
+                self.state = "key"
+            elif raw == "[":
+                self._stack.append("array")
+                self.state = "value"
+            elif raw == '"':
+                self._string_role = "value"
+                self.state = "in_string"
+            elif raw.lstrip(" ") in ("true", "false", "null"):
                 self.state = "after_value"
-            # Multi-token numbers/strings handled by staying in after_colon until structural
+            elif self._is_number_piece(raw):
+                self.state = "in_number"
+            return
 
-        elif self.state == "after_value":
-            if tok_str == ",":
-                if self.depth > 0:
-                    # Check if we're in object or array by looking at context
-                    # Simplified: assume object if we just had a key:value
-                    pass
-            elif tok_str in ("}", "]"):
-                self.depth -= 1
-                if self.depth == 0:
-                    self.completed = True
-                    self.state = "done"
-                else:
-                    self.state = "after_value"
+        if self.state == "key":
+            if raw == '"':
+                self._string_role = "key"
+                self.state = "in_string"
+            elif raw == "}":
+                self._close()
+            return
+
+        if self.state == "colon" and raw == ":":
+            self.state = "value"
+            return
+
+        if self.state == "after_value":
+            if raw == ",":
+                self.state = "key" if self._stack and self._stack[-1] == "object" else "value"
+            elif raw in ("}", "]"):
+                self._close()
 
     def is_complete(self) -> bool:
         return self.completed
@@ -1271,8 +1218,11 @@ def run_draft_verify(m: V6, bpe: BPE, args):
         schema = DEFAULT_SCHEMA
         print(f"[schema] using default: {json.dumps(schema)}")
 
-    # Test prompt that should produce JSON matching schema
-    prompt = 'Retorne apenas JSON valido: {"name": "test", "value": 42}'
+    # Test prompt. --ask deixa de ser ignorado (SESSION_475).
+    if getattr(args, "ask", None):
+        prompt = args.ask
+    else:
+        prompt = 'Retorne apenas JSON valido: {"name": "test", "value": 42}'
     ids = [bpe.bos] + bpe.encode(f"<|user|>\n{prompt}\n<|assistant|>\n")
     ids = [i for i in ids if i < m.vocab] or [0]
     eos = bpe.eos
@@ -1375,6 +1325,58 @@ def run_draft_verify(m: V6, bpe: BPE, args):
     print(f"Acceptance rate: {stats['acceptance_rate']:.2%} ({stats['total_accepted']}/{stats['total_drafted']})")
 
 
+def json_sm_selftest():
+    """Prova a maquina JSON sem modelo. Falha se o vocab byte-level ficar vazio."""
+    b = BPE.__new__(BPE)
+    b.b2u = bytes_to_unicode()
+    b.u2b = {c: by for by, c in b.b2u.items()}
+    pieces = {
+        "{": 1, "}": 2, "[": 3, "]": 4, ":": 5, ",": 6, '"': 7,
+        " ": 8, "\n": 9, "\t": 10,
+        "1": 11, "2": 12, "42": 13,
+        "name": 14, "ab": 15, "true": 16, "value": 17,
+    }
+    vocab = {}
+    id2 = {}
+    for text, tid in pieces.items():
+        key = "".join(b.b2u[by] for by in text.encode("utf-8"))
+        vocab[key] = tid
+        id2[tid] = key
+    vocab["<|endoftext|>"] = 99
+    id2[99] = "<|endoftext|>"
+    b.vocab = vocab
+    b.id2 = id2
+
+    def tid_of(text: str) -> int:
+        key = "".join(b.b2u[by] for by in text.encode("utf-8"))
+        return vocab[key]
+
+    sm = JSONSyntaxStateMachine(b, 200)
+    assert 8 in sm.tokens["whitespace"] and 9 in sm.tokens["whitespace"]
+    assert 10 in sm.tokens["whitespace"]
+    assert 13 in sm.tokens["number"]
+    assert 14 in sm.tokens["string_content"]
+    assert 99 not in sm.tokens["string_content"]
+    assert tid_of("{") in sm.get_allowed_tokens([])
+
+    seq = ["{", '"', "name", '"', ":", " ", '"', "ab", '"', ",", '"', "value", '"', ":", "1", "2", "}"]
+    for i, text in enumerate(seq):
+        tid = tid_of(text)
+        allowed = sm.get_allowed_tokens([])
+        if tid not in allowed:
+            raise SystemExit(f"json-sm token {text!r} fora do estado {sm.state} passo {i}")
+        sm.advance(tid)
+    if not sm.is_complete():
+        raise SystemExit(f"json-sm nao fechou, estado={sm.state} stack={sm._stack}")
+
+    empty = JSONSyntaxStateMachine(b, 200)
+    empty.advance(tid_of("{"))
+    empty.advance(tid_of("}"))
+    if not empty.is_complete():
+        raise SystemExit("json-sm objeto vazio nao fecha")
+    print("[json-sm] selftest ok")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Chat no host com modelo .v6")
     ap.add_argument("--model", type=str, default=None)
@@ -1395,7 +1397,12 @@ def main():
     ap.add_argument("--acceptance-threshold", type=float, default=0.5, help="Draft token acceptance probability threshold")
     ap.add_argument("--max-draft-tokens", type=int, default=8, help="Max tokens to draft per step")
     ap.add_argument("--compare-unconstrained", action="store_true", help="Compare with unconstrained greedy + JSON repair")
+    ap.add_argument("--json-sm-selftest", action="store_true",
+                    help="E06: prova a maquina de estados JSON e sai (sem modelo)")
     args = ap.parse_args()
+    if args.json_sm_selftest:
+        json_sm_selftest()
+        return
 
     global KV_QUANT
     KV_QUANT = args.kv_quant
@@ -1436,7 +1443,10 @@ def main():
 
     def frame(prompt):
         if bpe:
-            ids = [bpe.bos] + bpe.encode(f"<|user|>\n{prompt}\n<|assistant|>\n")
+            # Falcon3 chat template: "User: <prompt>\nAssistant:\n"
+            # Use bos token (10 = <|startoftext|>) + "User: <prompt>\nAssistant:\n"
+            prompt_text = f"User: {prompt}\nAssistant:\n"
+            ids = [bpe.bos] + bpe.encode(prompt_text)
         else:
             ids = [10] + [ord(c) % m.vocab for c in prompt[:64]]
         return [i for i in ids if i < m.vocab] or [0]

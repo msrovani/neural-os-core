@@ -1,4 +1,11 @@
-# STATE - neural-os-core v1.9.99-s468 - BEI hardening + DynamicMoE GGUF + AP offload + traits + property tests + typed AFFECT channel
+# STATE - neural-os-core v1.9.99-s476 - Fórum OPCODE/1: fixes v6/v7 do loader com prova de runtime + gate de heap no sleep_cycle
+#   [s476] Fórum OPCODE/1 retomado: fixes v6/v7 do loader com prova de runtime + gate de heap no sleep_cycle (detalhe em docs/memory/SESSION_476.md)
+#     P1 FREEBU-0150: gate fail-closed heap_headroom_critical() no topo de CellNetwork::sleep_cycle (caller único connect(); padrão moe.rs/SESSION_416); teste host connect_is_dedup_and_pair_survives 1/1; fan_out/fan_in dedup'd e limitados por construção.
+#     Prova de runtime D2 (2 boots WHPX 420s, imagem reconstruída 0 erros): Boot A ACEITE "HWEXPERT LOADED v6 (QEMU-loader @0x13e000000)" — v6 não precisa reemitir como v3 (fecha FREEBU-0148); Boot B ACEITE v7 solo h=2560 L=30 tok_len=5390533, size 778810KB delta 0, zero REJECT h=0 L=0 (fecha SESSION_475). Logs + sha256 em logs/boot_expert_v6_*.txt e logs/boot_v7_solo_*.txt.
+#     Lições: parser de modelo é contrato com o layout do header (v6 hidden@18 vs legado hidden@14 = REJECT silencioso h=1 L=0 — dispatch por versão/model_type no caller); probe de tamanho cobre o header INTEIRO (tok BPB1 5.4MB não cabe em 64B — probe_llm_file_size Need/Ready + kv_term=hidden*k_dim delta=0 em 8 artefatos); QEMU-loader empilha extras DEPOIS do fim real do primário (0x13DD9BAB0; 0x129200000 cai DENTRO do LLM → regions overlap).
+#     Honestidade: #PF storm pós-PostRuntime em ambos os boots, sites rotativos (classe #630/F1, não é regressão; OBSERVED/causa UNKNOWN — watchpoint é o próximo passo).
+#     Harness: run-qemu-whpx.ps1 -Force (preflight de RAM com overcommit consciente) + tools/run_boot_evidence.ps1 (vars OVMF frescas por ciclo, .args.txt por ciclo).
+#     Fórum: BUFFY-0006..0010. Pendente: mesh re-run (CURAIX-0060), F1 1h 8c/8GB, #PF storm (watchpoint), USB BOOT.LOG em HW real.
 
 #   [s468d] BEI hardening + DynamicMoE GGUF + AP offload + traits + property tests + typed AFFECT channel (detalhe em docs/memory/SESSION_468d.md)
 #     P0.1/P0.2: Watchpoint DR0 armed on `affect_regulator` (s452); `BeiState` pinned to fixed HHDM frame via PMM — eliminates REMAP race in `map_page_direct`.

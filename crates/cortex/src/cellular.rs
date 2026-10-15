@@ -277,6 +277,16 @@ impl CellNetwork {
     /// Chamado durante ciclos ociosos do scheduler.
     pub fn sleep_cycle(&mut self) {
         if self.cells.is_empty() { return; }
+        // FREEBU-0150 P1 fail-closed (bare-metal only — padrão moe.rs flush_merges,
+        // SESSION_416): connect() → fan_out/fan_in.push → Vec grow sob heap crítico
+        // devolve null → deref → #PF storm → park core (evidência T+6018: crash chain
+        // RawVecInner::grow_exact ← CellNetwork::sleep_cycle). Pular o ciclo é honesto:
+        // o próximo sleep_cycle com headroom reconecta (fan_out é dedup'd e limitado
+        // por construção a cells.len() índices — não há perda estrutural).
+        #[cfg(target_os = "none")]
+        if k_nano::allocator::heap_headroom_critical() {
+            return;
+        }
 
         // Fase 1+2: REPLAY+DREAM — simula conexões entre células vizinhas
         let count = self.cells.len();
@@ -299,5 +309,31 @@ impl CellNetwork {
                 k_nano::slog_cortex!("CELL", "ok", "SleepCycle prune: {} removed ({} remain)", pruned, self.cells.len());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cellular_tests {
+    use super::*;
+
+    /// FREEBU-0150 P1: a invariante que torna o gate de heap honesto — connect
+    /// repetido NAO cresce fan_out/fan_in (dedup) e o par sobrevive (sem perda
+    /// estrutural ao pular o ciclo sob heap critico).
+    #[test]
+    fn connect_is_dedup_and_pair_survives() {
+        let mut net = CellNetwork::new(4, 8).unwrap();
+        let a = net.spawn_cell(CellType::Reasoning, 0).unwrap();
+        let b = net.spawn_cell(CellType::Memory, 1).unwrap();
+        for _ in 0..100 {
+            net.connect(a, b);
+        }
+        let ai = net.index_of(a).unwrap();
+        let bi = net.index_of(b).unwrap();
+        assert_eq!(net.cells[ai].fan_out, alloc::vec![bi], "fan_out dedup");
+        assert_eq!(net.cells[bi].fan_in, alloc::vec![ai], "fan_in dedup");
+        // sleep_cycle em host (gate cfg(none) inerte) roda e nao duplica nem perde.
+        net.sleep_cycle();
+        assert_eq!(net.cells[ai].fan_out.len(), 1);
+        assert_eq!(net.cells[bi].fan_in.len(), 1);
     }
 }

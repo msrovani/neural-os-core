@@ -33,7 +33,8 @@ param(
     [string]$TapName = "",     # TAP adapter name for -Bridge (auto-detect if empty)
     [int]$SerialBridgePort = 4444,
     [int]$RamGB = 6,
-    [int]$Smp = 4
+    [int]$Smp = 4,
+    [switch]$Force            # overcommit do preflight de RAM (mesmo padrao de run-mesh4-lab.ps1)
 )
 
 $ErrorActionPreference = "Stop"
@@ -373,7 +374,7 @@ try {
         return $a
     }
 
-    Assert-QemuMemFree -NeededGB ($RamGB + 1.0) -Label ("run-qemu-whpx " + $RamGB + "G")
+    Assert-QemuMemFree -NeededGB ($RamGB + 1.0) -Label ("run-qemu-whpx " + $RamGB + "G") -Force:$Force
 
     $ok = $false
     foreach ($smpN in $smpTry) {

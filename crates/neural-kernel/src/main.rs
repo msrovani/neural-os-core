@@ -270,6 +270,30 @@ pub static AUDIT_TRAIL: spin::Mutex<crate::audit::AuditTrail> = spin::Mutex::new
 /// Inicializado após ramdisk loader terminar.
 pub static QEMU_LOADER_SCAN_START: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
+/// Tamanho do LLM no QEMU-loader a partir do header.
+/// v6 sem tokenizer cabe em 64 B. v7 com BPB1 embutido pede o prefixo de volta
+/// (`LlmSizeProbe::Need`); sem isso o boot caía no `load_model` legado, lia
+/// `hidden` no offset errado e logava `h=0 L=0` (SESSION_475).
+unsafe fn qemu_loader_llm_len(ptr: *const u8, region_cap: usize, fallback: usize) -> usize {
+    if region_cap < 16 {
+        return fallback.min(region_cap);
+    }
+    let mut hdr_len = 64usize.min(region_cap);
+    for _ in 0..4 {
+        let hdr = core::slice::from_raw_parts(ptr, hdr_len);
+        match cortex_crate::model::probe_llm_file_size(hdr) {
+            cortex_crate::model::LlmSizeProbe::Ready(sz) => {
+                return sz.min(region_cap);
+            }
+            cortex_crate::model::LlmSizeProbe::Need(n) if n > hdr_len && n <= region_cap => {
+                hdr_len = n;
+            }
+            _ => break,
+        }
+    }
+    fallback.min(region_cap)
+}
+
 
 
 
@@ -3928,21 +3952,28 @@ pub(crate) fn kernel_boot(
                 // do header (o const v4 604MB truncava o 2B v6 de 792MB → OOM #PF).
                 const BITNET_2B_V4_BYTES: usize = 604_856_373;
                 let mut model_len = fat_sz.unwrap_or(BITNET_2B_V4_BYTES);
-                // Header v6 no loader é a fonte de verdade (ADR-0101): FAT pode
+                // Header v6/v7 no loader é a fonte de verdade (ADR-0101): FAT pode
                 // ter FALCON3.BIN=7B mal-nomeado enquanto o loader traz o 3B.
+                // v7 pede mais que 64 B quando o BPB1 vem embutido.
                 {
-                    let hdr = unsafe { core::slice::from_raw_parts(probe_ptr, 64) };
-                    if let Some(v6sz) = cortex_crate::model::v6_file_size(hdr) {
-                        if fat_sz.map_or(false, |f| f != v6sz) {
+                    let region_cap = handoff
+                        .region_end_containing(load_addr)
+                        .map(|r_end| (r_end - load_addr) as usize)
+                        .unwrap_or(model_len);
+                    let sized = unsafe {
+                        qemu_loader_llm_len(probe_ptr, region_cap, model_len)
+                    };
+                    if sized != model_len {
+                        if fat_sz.map_or(false, |f| f != sized) {
                             k_nano::slog_bin!(
                                 "Asset",
                                 "warn",
-                                "FAT size {}KB != header v6 {}KB — usando header (loader)",
+                                "FAT size {}KB != header {}KB — usando header (loader)",
                                 fat_sz.unwrap_or(0) / 1024,
-                                v6sz / 1024
+                                sized / 1024
                             );
                         }
-                        model_len = v6sz;
+                        model_len = sized;
                     }
                 }
                 if let Some(r_end) = handoff.region_end_containing(load_addr) {
@@ -4020,17 +4051,16 @@ pub(crate) fn kernel_boot(
                     let magic2 = unsafe { core::ptr::read_volatile(probe2) };
                     if magic2 == 0xBE11BE11 {
                         const BITNET_2B_V4_BYTES: usize = 604_856_373;
-                        let mut model_len2 = fat_sz
+                        let fallback2 = fat_sz
                             .filter(|&sz| sz >= 50 * 1024 * 1024)
                             .unwrap_or(BITNET_2B_V4_BYTES);
-                        // Bounds check: truncar ao fim da região de memória
-                        if let Some(r_end) = handoff.region_end_containing(load_addr2) {
-                            let region2 = (r_end - load_addr2) as usize;
-                            if region2 < model_len2 {
-                                k_nano::slog_bin!("Asset", "warn", "region2 {}MB < model2 {}MB — truncando", region2 / (1024*1024), model_len2 / (1024*1024));
-                                model_len2 = region2;
-                            }
-                        }
+                        let region2 = handoff
+                            .region_end_containing(load_addr2)
+                            .map(|r_end| (r_end - load_addr2) as usize)
+                            .unwrap_or(fallback2);
+                        let model_len2 = unsafe {
+                            qemu_loader_llm_len(probe2 as *const u8, region2, fallback2)
+                        };
                         let model_data2 = unsafe { core::slice::from_raw_parts(probe2 as *const u8, model_len2) };
                         let llm_v6 = cortex_crate::model::load_model_v6(model_data2).and_then(|v| match v {
                             cortex_crate::model::ModelView::Llm(m) => Some(m),
@@ -4412,6 +4442,41 @@ pub(crate) fn kernel_boot(
                         "{} magic 0xBE11BE11 found @{:#x} — tentando parse {} KB",
                         label, addr, size / 1024);
                     let data = unsafe { core::slice::from_raw_parts(ptr, size) };
+                    // LLM v6/v7 no meio do scan de expert (BITNET2B4T empilhado
+                    // depois do Falcon3). O parser legado lê hidden no offset
+                    // do v3 e loga "header invalido h=0 L=0" (SESSION_475).
+                    let head = &data[..core::cmp::min(64, data.len())];
+                    if !matches!(
+                        cortex_crate::model::probe_llm_file_size(head),
+                        cortex_crate::model::LlmSizeProbe::NotLlm
+                    ) {
+                        k_nano::slog_bin!(
+                            "Asset",
+                            "warn",
+                            "{} @{:#x} e LLM v6/v7, nao expert — skip (nao chamar load_model legado)",
+                            label,
+                            addr
+                        );
+                        addr = addr.saturating_add(0x100000);
+                        continue;
+                    }
+                    // FREEBU-0148: o artefato e v6 (model_type 1). O parser
+                    // legado recusa e loga parse FAILED. Consenso CURAIX-0058:
+                    // nao reemitir como v3; usar load_hwexpert_v6.
+                    if is_hw {
+                        if let Some(v6) = cortex_crate::cortex::load_hwexpert_v6(data) {
+                            cortex_crate::cortex::set_hwexpert_v4_model(v6);
+                            k_nano::slog_bin!(
+                                "Asset",
+                                "ok",
+                                "{} LOADED v6 (QEMU-loader @{:#x}) window={}KB",
+                                label,
+                                addr,
+                                size / 1024
+                            );
+                            return true;
+                        }
+                    }
                     if let Some(model) = crate::cortex::load_model(data) {
                         let nl = model.num_layers;
                         let hd = model.hidden;

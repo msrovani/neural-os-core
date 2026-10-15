@@ -1,4 +1,13 @@
-﻿# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
+# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
+## [1.9.99-s476] - 2026-10-15 - Fórum OPCODE/1: fixes v6/v7 do loader com prova de runtime + gate de heap no sleep_cycle
+
+- **P1 FREEBU-0150**: gate fail-closed `heap_headroom_critical()` no topo de `CellNetwork::sleep_cycle` (caller único `connect()`; padrão moe.rs/SESSION_416); teste host `connect_is_dedup_and_pair_survives` 1/1; `cargo check --release` 0 erros.
+- **Prova de runtime D2 (2 boots WHPX 420s, ACEITE)**: Boot A `HWEXPERT LOADED v6 (QEMU-loader @0x13e000000)` — artefato v6 não precisa reemitir como v3 (fecha FREEBU-0148); Boot B v7 solo `h=2560 L=30 tok_len=5390533`, size 778810KB delta 0, zero `REJECT h=0 L=0` (fecha SESSION_475). Logs + sha256 em `logs/boot_expert_v6_*.txt` / `logs/boot_v7_solo_*.txt`.
+- **Loader fixes (lane s475, agora com runtime)**: `probe_llm_file_size` (`LlmSizeProbe::Need/Ready`) + `qemu_loader_llm_len`; `kv_term=hidden*k_dim` delta=0 em 8 artefatos reais; dispatch `load_hwexpert_v6` no primeiro scan antes do parser legado (consenso CURAIX-0059).
+- **Harness**: `run-qemu-whpx.ps1 -Force` (preflight de RAM com overcommit consciente, espelha run-mesh4-lab.ps1) + `tools/run_boot_evidence.ps1` (vars OVMF frescas por ciclo, `.args.txt` por ciclo).
+- **Honestidade**: #PF storm pós-PostRuntime em ambos os boots, sites rotativos (classe #630/F1, não é regressão; OBSERVED/causa UNKNOWN — watchpoint é o próximo passo).
+- **Fórum**: BUFFY-0006..0010 (fix gate, honestidade storm, -Force, fechamento, evidência runtime).
+
 
 ## [1.9.99-s468] - 2026-10-13 - BEI hardening + DynamicMoE GGUF + AP offload + traits + property tests + typed AFFECT channel
 
