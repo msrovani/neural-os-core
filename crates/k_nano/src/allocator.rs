@@ -1803,6 +1803,14 @@ pub fn try_fault_in_heap(cr2: u64, err: u64) -> bool {
     let talc_end = TALC_SPAN_END.load(Ordering::Acquire) as u64;
     let in_talc = cr2 >= start && cr2 < talc_end;
 
+    // Range 0: SLAB (HEAP_START .. LARGE_HEAP_START) — primeiras páginas do heap,
+    // cobertas por identidade HHDM (cr2 - pmoff). Não entra no TALC (começa em
+    // LARGE_HEAP_START) nem no bump (HEAP_BUFFER está no kernel virt, endereço
+    // muito alto). Sem este range, faults no SLAB caem em no_rng → #PF storm.
+    let heap_start = HEAP_START as u64;
+    let slab_end = LARGE_HEAP_START as u64;
+    let in_slab = cr2 >= heap_start && cr2 < slab_end;
+
     let bump_start = unsafe { HEAP_BUFFER.as_mut_ptr() as u64 };
     let kvirt_end = KERNEL_VIRT_END.load(Ordering::Relaxed);
     let limit_end = bump_start + HEAP_LIMIT.load(Ordering::Relaxed) as u64;
@@ -1831,9 +1839,35 @@ pub fn try_fault_in_heap(cr2: u64, err: u64) -> bool {
         cr2 >= 0xffffffff80000000
     };
 
-    if !in_talc && !in_bump && !in_kernel_virt {
+    if !in_talc && !in_bump && !in_kernel_virt && !in_slab {
         PF_DIAG_NO_RANGE.fetch_add(1, Ordering::Relaxed);
         return false;
+    }
+
+    if in_slab {
+        // SLAB: mapeia via identidade HHDM (cr2 - pmoff). A página física
+        // já existe (é parte do heap inicial .bss.heap); só falta a entrada
+        // da page table. Se pmoff for 0, não há como mapear — recusa.
+        if pmoff == 0 {
+            PF_DIAG_PMOFF_ZERO.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        let p = hhdm_phys & !0xFFF;
+        if p == 0 {
+            PF_DIAG_P0.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        unsafe {
+            map_page_direct(base, virt, p);
+            x86_64::instructions::tlb::flush(virt);
+            let ok = heap_pte_present(base, virt);
+            if ok {
+                PF_DIAG_OK.fetch_add(1, Ordering::Relaxed);
+            } else {
+                PF_DIAG_MAP_FAIL.fetch_add(1, Ordering::Relaxed);
+            }
+            return ok;
+        }
     }
 
     if in_talc || in_bump {
@@ -1844,7 +1878,14 @@ pub fn try_fault_in_heap(cr2: u64, err: u64) -> bool {
         if in_talc && cr2 >= talc_end {
             TALC_PF_OUTSIDE_SPAN.store(cr2, Ordering::Relaxed);
         }
-        // Heap ranges: allocate a fresh frame (old behavior)
+        // Heap ranges: refuse honestamente se o heap está crítico — alocar
+        // sob pressão causa #PF dentro do handler de #PF → storm (SESSION_476
+        // gateou sleep_cycle, mas try_fault_in_heap é chamado diretamente do
+        // handler de page fault e precisava do mesmo guard).
+        if heap_headroom_critical() {
+            PF_DIAG_ALLOC_FAIL.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
         if let Some(f) = crate::memory::alloc_physical_frame() {
             let p = f.start_address().as_u64();
             unsafe {

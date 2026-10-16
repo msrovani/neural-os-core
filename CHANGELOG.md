@@ -1,4 +1,13 @@
 # Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
+## [1.9.99-s478] - 2026-10-16 - #PF storm de pressão do heap: try_fault_in_heap sem gate + range do SLAB descoberto
+
+- **Problema**: gate `heap_headroom_critical()` do s476 estava só no `sleep_cycle`; `try_fault_in_heap` é chamado diretamente do handler de page fault sem guard. `#PF storm` reapareceu com `cr2=0x000040000007fff8` (range do SLAB, não coberto por nenhum range do `try_fault_in_heap` → `no_rng` → `#PF` não curado → storm → park core).
+- **Causa-raiz (3 problemas)**: (1) gate incompleto — `heap_headroom_critical()` não estava em `try_fault_in_heap`; (2) range do SLAB (`HEAP_START` a `LARGE_HEAP_START`) não coberto — faults no SLAB caíam em `no_rng`; (3) handler de page fault chamava `try_fault_in_heap` sem verificar `heap_headroom_critical()`.
+- **Fix (2 arquivos)**: `allocator.rs` — gate `heap_headroom_critical()` antes de `alloc_physical_frame()` em `try_fault_in_heap` + range `in_slab` (`HEAP_START`..`LARGE_HEAP_START`) mapeado via identidade HHDM; `interrupts_ext.rs` — `!heap_headroom_critical() &&` antes de chamar `try_fault_in_heap` no handler de page fault.
+- **Prova de runtime D2 (QEMU TCG, smp=4, 4GB)**: `logs/boot_whpx_20261016_010907.txt`. `pf=0` (zero page faults), `heap=1024/3840M`, `tick=43723+`, `aps=3`, `[SILENCE] log parado ha 810s` — sistema estável 13+ min sem `#PF`. Antes do fix: `#PF storm` em segundos após o Runtime.
+- **Gates**: `cargo check --release` 0 erros.
+- **Forum**: não houve post neste arco (fix interno de regressão). Classificacao: fix = runtime-VERIFIED (QEMU TCG).
+
 ## [1.9.99-s477] - 2026-10-15 - USB BOOT.LOG: fix EP0 A+B+C runtime-VERIFIED (correlacao + enqueue/cycle + P24a honesto)
 
 - **Problema**: caminho MSC/BOT existia no kernel mas nunca era exercitado em dev (launcher nao anexava device MSC ao xHCI); validacao USB em HW real rotulada `AWAITING_HW`. Experimento do forum (BUFFY-0014, device `usb-storage`): bloqueador = `EP0 slot=1 timeout (sem Status)`.

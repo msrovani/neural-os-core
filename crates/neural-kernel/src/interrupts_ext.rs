@@ -200,7 +200,10 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     if crate::demand_page::try_handle_fault(cr2.as_u64()) {
         return;
     }    // Heap Tier-1 + kernel demand-page — cura 4KiB e retry.
-    if crate::allocator::try_fault_in_heap(cr2.as_u64(), code.bits()) {
+    // Se o heap está crítico, NÃO tente alocar: alocar sob pressão causa
+    // #PF dentro do handler de #PF → storm (SESSION_476 gateou sleep_cycle;
+    // este guard cobre o caminho direto do handler de page fault).
+    if !crate::allocator::heap_headroom_critical() && crate::allocator::try_fault_in_heap(cr2.as_u64(), code.bits()) {
         return;
     }
     // Debug: show why try_fault_in_heap failed + diagnostic counters
