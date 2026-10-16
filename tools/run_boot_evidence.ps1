@@ -5,7 +5,8 @@ param(
   [string]$Loader2 = "",
   [int]$Seconds = 420,
   [string]$Accel = "whpx",
-  [string]$Cpu = "Haswell"
+  [string]$Cpu = "Haswell",
+  [switch]$UsbMsc
 )
 $ErrorActionPreference = "Stop"
 $qemu = "C:\Program Files\qemu\qemu-system-x86_64.exe"
@@ -23,6 +24,13 @@ $qargs = @(
 )
 if ($Loader1 -ne "") { $qargs += @("-device","loader,file=$Loader1,addr=0x100000000") }
 if ($Loader2 -ne "") { $qargs += @("-device","loader,file=$Loader2,addr=0x13E000000") }
+if ($UsbMsc) {
+  $qargs += @(
+    "-drive","if=none,id=datadisk,format=raw,file=target/disk_qemu.raw",
+    "-device","qemu-xhci,id=xhci",
+    "-device","usb-storage,drive=datadisk,bus=xhci.0"
+  )
+}
 Set-Content -Path "logs\${Name}_${ts}.args.txt" -Value ($qargs -join " ")
 $p = Start-Process -FilePath $qemu -ArgumentList $qargs -PassThru -WindowStyle Hidden
 Start-Sleep -Seconds 5

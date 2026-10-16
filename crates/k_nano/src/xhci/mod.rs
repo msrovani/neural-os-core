@@ -312,9 +312,13 @@ pub struct XhciState {
     /// Byte offset from Cap base to Doorbell Array (DBOFF).
     pub(crate) db_off: u64,
     pub(crate) tr_va: u64,
-    /// PA do anel EP0 (tr_va - pmoff). Necessário p/ correlacionar o Transfer
-    /// Event do Status Stage (auditoria USB §2) — o evento carrega PA, não VA.
-    pub(crate) tr_pa: u64,
+    /// Cursor de enqueue do anel EP0 (índice de TRB de 16 B) + cycle bit
+    /// corrente. O anel é reutilizado entre transferências — sem cursor os
+    /// writers reescreviam TRBs já consumidos (Bug B s467). PA do anel é
+    /// DERIVADO (tr_va - pmoff) em ep0_reserve — sem campo tr_pa (Bug A).
+    /// ponytail: sem Link TRB não cicla (teto 256 TRBs; boot <20 transfers).
+    pub(crate) ep0_enqueue: u16,
+    pub(crate) ep0_cycle: bool,
     pub(crate) report_va: u64,
     pub(crate) last_report: [u8; 8],
     pub(crate) cmd_ring_pa: u64,
@@ -1018,7 +1022,8 @@ pub unsafe fn init_xhci_select(index: usize) -> bool {
         slot: 1,
         db_off,
         tr_va: tr.0 + pmoff,
-        tr_pa: tr.0,
+        ep0_enqueue: 0,
+        ep0_cycle: true,
         report_va: report.0 + pmoff,
         last_report: [0; 8],
         cmd_ring_pa: cmd.0,

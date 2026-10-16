@@ -1,4 +1,13 @@
 # Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
+## [1.9.99-s477] - 2026-10-15 - USB BOOT.LOG: fix EP0 A+B+C runtime-VERIFIED (correlacao + enqueue/cycle + P24a honesto)
+
+- **Problema**: caminho MSC/BOT existia no kernel mas nunca era exercitado em dev (launcher nao anexava device MSC ao xHCI); validacao USB em HW real rotulada `AWAITING_HW`. Experimento do forum (BUFFY-0014, device `usb-storage`): bloqueador = `EP0 slot=1 timeout (sem Status)`.
+- **Causa-raiz (BUFFY-0015, via @oracle)**: 2 bugs no ciclo de vida do anel EP0. A) regressao s465 `e2d79925` - `st.tr_pa` stale apos troca de anel (`ep0_ring()` devolvia tr_va=novo/tr_pa=velho; o Transfer Event do slot=1/ep=1 era roteado a `route_isoc_event` e descartado; prova em runtime: `sev desconhecida 'isoc' total=2`). B) anel EP0 reutilizado sem tracking de enqueue/cycle (TD#2 escrito em regiao ja consumida -> o controlador nunca faz fetch, nunca gera evento).
+- **Fix (4 arquivos, +104/-44)**: A) `ep0_ring()` apagada; `ep0_reserve(n_trbs)` deriva `tr_pa = tr_va - pmoff` (fonte unica) e o campo `tr_pa` foi apagado de `XhciState`. B) cursor `ep0_enqueue`/`ep0_cycle` no state (re-zerado na troca de anel); os 3 writers EP0 postam no offset do cursor com o cycle corrente; `status_pa = tr_pa + (idx + n_trb_td - 1)*16` (era +16/+32 fixo). C) P24a honesto (falha de transporte nao reivindica porta; exige `proto == want`). Opcional: `"isoc" => Sev::Warn`.
+- **Prova de runtime D2 (WHPX de 1a, 420s, usb-storage no xHCI)**: log `logs/boot_usb_msc_fix_20261015_115605.txt` (120.505 B, sha256 `A8EBC983...A85CE`). ZERO `EP0 slot=N timeout` (antes: 7+) e ZERO `sev desconhecida 'isoc'`; MSC enumerado (`MSC desc cfg=1` + `bringup OK slot=1` + `MSC installed`); **BOOT.LOG no disco USB** (`msc=true` + `bootlog: OK 20008 bytes em BOOT.LOG (LBA 2048)`); P24a honesto (`nenhum HID boot`). **Prova no artefato**: readback externo do `disk_qemu.raw` (dirent `BOOT.LOG size=262137 cluster=4693477` + conteudo com as linhas deste boot).
+- **Gates**: `cargo check --release` 0 erros; `k-nano` serializado 385 pass / 1 fail pre-existente (`allocator_routing_tests`, provado com stash - licao SESSION_418); escopo dos fixes verde: xhci 14/14, slog 6/6, usb 2/2.
+- **Forum**: BUFFY-0011..0016 (arco fechado). Classificacao: fix = runtime-VERIFIED; metal = UNKNOWN.
+
 ## [1.9.99-s476] - 2026-10-15 - Fórum OPCODE/1: fixes v6/v7 do loader com prova de runtime + gate de heap no sleep_cycle
 
 - **P1 FREEBU-0150**: gate fail-closed `heap_headroom_critical()` no topo de `CellNetwork::sleep_cycle` (caller único `connect()`; padrão moe.rs/SESSION_416); teste host `connect_is_dedup_and_pair_survives` 1/1; `cargo check --release` 0 erros.

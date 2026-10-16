@@ -93,6 +93,10 @@ impl Sev {
             //   state = k_ai self_state write (SELF.STATE atualizado)
             //   revoke= k_hal cap_gate revoke (ação executada com sucesso)
             | "reg" | "query" | "select" | "state" | "revoke" => Sev::Ok,
+            //   isoc = route_isoc_event (s467): "Transfer Event sem dono —
+            //     descartado" / FIFO cheio são diagnóstico de roteamento
+            //     (SESSION_299: responde pergunta → visível), one-shot logged.
+            | "isoc" => Sev::Warn,
             //   smoke = storage_bus MBR read smoke test — diagnóstico de
             //     bring-up (passo de validação, não evento de produção) → TRACE.
             | "smoke" => Sev::Trace,

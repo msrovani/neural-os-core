@@ -50,15 +50,42 @@ unsafe fn input_context_entry(base: *mut u8, dci: u32) -> *mut u32 {
     base.add(input_context_offset(dci, hc_context_size())) as *mut u32
 }
 
-/// (VA, PA) do anel EP0 compartilhado. PA necessário p/ correlacionar o Transfer
-/// Event do Status Stage (auditoria USB §2) — o evento carrega PA, não VA.
-fn ep0_ring() -> Option<(u64, u64)> {
-    let g = XHCI_STATE.lock();
-    let st = g.as_ref()?;
-    if st.tr_va == 0 || st.tr_pa == 0 {
+/// Reserva `n_trbs` TRBs no anel EP0 e devolve (tr_va, tr_pa, idx_base, cycle).
+///
+/// FIX A (s465/BUFFY-0015): o PA é DERIVADO do invariante `tr_va = pa + pmoff`
+/// (válido nos únicos 2 sites de escrita: init em mod.rs e address_device_loc).
+/// O antigo campo `st.tr_pa` era 2ª fonte de verdade e dessincronizava quando
+/// address_device_loc trocava o anel — o Transfer Event chegava (prova: "sev
+/// desconhecida 'isoc'") e era descartado por correlacionar contra o PA velho.
+///
+/// FIX B (s467): o anel EP0 é reutilizado entre transferências — sem cursor de
+/// enqueue, os writers reescreviam offsets 0/16/32 já consumidos com o mesmo
+/// cycle bit e o controlador (dequeue avançado) nunca fetchava o TD seguinte.
+/// O cursor avança a cada TD; o cycle bit postado é o corrente.
+///
+/// ponytail: sem Link TRB o anel EP0 não cicla (teto 256 TRBs de 16 B; o boot
+/// faz <20 transferências ≈ <60 TRBs) — overflow = recusa honesta; upgrade =
+/// Link TRB no slot 255 + flip de cycle.
+unsafe fn ep0_reserve(n_trbs: u16) -> Option<(u64, u64, u16, bool)> {
+    let mut g = XHCI_STATE.lock();
+    let st = g.as_mut()?;
+    if st.tr_va == 0 || st.tr_va <= st.pmoff {
         return None;
     }
-    Some((st.tr_va, st.tr_pa))
+    if st.ep0_enqueue as u32 + n_trbs as u32 > 256 {
+        crate::slog_nano!(
+            "USB",
+            "warn",
+            "EP0 ring sem espaco enqueue={} need={} (teto 256 TRBs, sem Link TRB)",
+            st.ep0_enqueue,
+            n_trbs
+        );
+        return None;
+    }
+    let idx = st.ep0_enqueue;
+    let cycle = st.ep0_cycle;
+    st.ep0_enqueue = idx + n_trbs;
+    Some((st.tr_va, st.tr_va - st.pmoff, idx, cycle))
 }
 
 /// Descarta Transfer Events EP0 obsoletos deste slot (de transferência anterior
@@ -776,8 +803,21 @@ unsafe fn bringup_hid_boot(kind: HidBootKind) -> bool {
                 continue;
             }
         }
-        let proto = ep0_peek_hid_boot_protocol(slot, max_packet).unwrap_or(0);
-        if proto != 0 && proto != want_proto {
+        let Some(proto) = ep0_peek_hid_boot_protocol(slot, max_packet) else {
+            // FIX C (s467/Bug C): sem config descriptor legível não há como
+            // exigir proto == want — reivindicar a porta era falso-positivo
+            // (5× EP0 timeout viravam "HID boot keyboard OK" com usb-storage
+            // na porta). Skip honesto; o device segue para o probe certo.
+            crate::slog_nano!(
+                "USB",
+                "hid",
+                "{} skip port={} (sem HID boot: config desc ausente ou EP0 falhou)",
+                tag,
+                port
+            );
+            continue;
+        };
+        if proto != want_proto {
             crate::slog_nano!(
                 "USB",
                 "hid",
@@ -789,7 +829,6 @@ unsafe fn bringup_hid_boot(kind: HidBootKind) -> bool {
             );
             continue;
         }
-        // proto==0: best-effort (descriptor curto) — tenta mesmo assim
 
         let _ = ep0_set_configuration(slot, max_packet, 1);
         // QEMU usb-tablet (HID_TABLET): SET_PROTOCOL → STALL (só kbd/mouse).
@@ -900,20 +939,20 @@ unsafe fn ep0_class_no_data(
         0,
     ];
     core::ptr::copy_nonoverlapping(pkt.as_ptr(), setup_pa.1, 8);
-    let (tr_va, tr_pa) = match ep0_ring() {
-        Some(p) => p,
-        None => return false,
+    // TD = Setup + Status (2 TRBs) no offset corrente do cursor (FIX B).
+    let Some((tr_va, tr_pa, idx, cycle)) = ep0_reserve(2) else {
+        return false;
     };
-    let trb0 = tr_va as *mut u32;
+    let trb0 = (tr_va as *mut u32).add(idx as usize * 4);
     trb0.add(0).write_volatile(u32::from_le_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]));
     trb0.add(1).write_volatile(u32::from_le_bytes([pkt[4], pkt[5], pkt[6], pkt[7]]));
     trb0.add(2).write_volatile(8);
-    trb0.add(3).write_volatile((2u32 << 10) | (1 << 6) | 1);
-    let trb1 = (tr_va as *mut u32).add(4);
+    trb0.add(3).write_volatile((2u32 << 10) | (1 << 6) | (cycle as u32));
+    let trb1 = trb0.add(4);
     trb1.add(0).write_volatile(0);
     trb1.add(1).write_volatile(0);
     trb1.add(2).write_volatile(0);
-    trb1.add(3).write_volatile((4u32 << 10) | (1 << 16) | (1 << 5) | 1);
+    trb1.add(3).write_volatile((4u32 << 10) | (1 << 16) | (1 << 5) | (cycle as u32));
     drain_stale_ep0_events(slot);
     core::arch::asm!("sfence", options(nostack, preserves_flags));
     {
@@ -921,8 +960,8 @@ unsafe fn ep0_class_no_data(
         let st = match g.as_ref() { Some(s) => s, None => return false };
         w32(st.base, st.db_off + (slot as u64) * 4, 1);
     }
-    // Status Stage = trb1 (+16 B). Correlaciona o evento (§2).
-    let _ = wait_transfer_event(slot, tr_pa + 16, 100_000);
+    // Status Stage = 2º TRB do TD (idx+1). Correlaciona o evento (§2).
+    let _ = wait_transfer_event(slot, tr_pa + (idx as u64 + 1) * 16, 100_000);
     true // best-effort — alguns devices ignoram SET_PROTOCOL
 }
 
@@ -992,30 +1031,30 @@ unsafe fn ep0_control_in(
         (len >> 8) as u8,
     ];
 
-    let (tr_va, tr_pa) = match ep0_ring() {
-        Some(p) => p,
-        None => return false,
+    // TD = Setup + Data IN + Status OUT (3 TRBs) no offset corrente (FIX B).
+    let Some((tr_va, tr_pa, idx, cycle)) = ep0_reserve(3) else {
+        return false;
     };
-    let trb0 = tr_va as *mut u32;
+    let trb0 = (tr_va as *mut u32).add(idx as usize * 4);
     // Setup Stage, TRT=IN data (3), IDT=1
     trb0.add(0).write_volatile(u32::from_le_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]));
     trb0.add(1).write_volatile(u32::from_le_bytes([pkt[4], pkt[5], pkt[6], pkt[7]]));
     trb0.add(2).write_volatile(8);
-    trb0.add(3).write_volatile((2u32 << 10) | (3u32 << 16) | (1 << 6) | 1);
+    trb0.add(3).write_volatile((2u32 << 10) | (3u32 << 16) | (1 << 6) | (cycle as u32));
 
     // Data Stage IN (type 3), DIR=IN
-    let trb1 = (tr_va as *mut u32).add(4);
+    let trb1 = trb0.add(4);
     trb1.add(0).write_volatile(data_pa.0 as u32);
     trb1.add(1).write_volatile((data_pa.0 >> 32) as u32);
     trb1.add(2).write_volatile(len as u32);
-    trb1.add(3).write_volatile((3u32 << 10) | (1 << 16) | 1);
+    trb1.add(3).write_volatile((3u32 << 10) | (1 << 16) | (cycle as u32));
 
     // Status Stage OUT (type 4), DIR=OUT (0), IOC
-    let trb2 = (tr_va as *mut u32).add(8);
+    let trb2 = trb0.add(8);
     trb2.add(0).write_volatile(0);
     trb2.add(1).write_volatile(0);
     trb2.add(2).write_volatile(0);
-    trb2.add(3).write_volatile((4u32 << 10) | (1 << 5) | 1);
+    trb2.add(3).write_volatile((4u32 << 10) | (1 << 5) | (cycle as u32));
 
     drain_stale_ep0_events(slot);
     core::arch::asm!("sfence", options(nostack, preserves_flags));
@@ -1024,8 +1063,8 @@ unsafe fn ep0_control_in(
         let st = match g.as_ref() { Some(s) => s, None => return false };
         w32(st.base, st.db_off + (slot as u64) * 4, 1);
     }
-    // Status Stage = trb2 (+32 B). Correlaciona o evento (§2).
-    let ok = wait_transfer_event(slot, tr_pa + 32, 200_000);
+    // Status Stage = 3º TRB do TD (idx+2). Correlaciona o evento (§2).
+    let ok = wait_transfer_event(slot, tr_pa + (idx as u64 + 2) * 16, 200_000);
     if ok {
         core::ptr::copy_nonoverlapping(data_pa.1, data.as_mut_ptr(), data.len());
     }
@@ -1811,6 +1850,10 @@ pub unsafe fn address_device_loc(slot: u8, loc: DevLoc, ep0_mps: u16) -> bool {
         let mut g = XHCI_STATE.lock();
         if let Some(st) = g.as_mut() {
             st.tr_va = ep0_tr.0 + st.pmoff;
+            // Anel novo foi zerado — cursor/cycle reiniciam (FIX B s467:
+            // sem isto o TD#1 pós-troca postaria após o cursor do anel velho).
+            st.ep0_enqueue = 0;
+            st.ep0_cycle = true;
             st.slot = slot;
         }
     }
@@ -2051,24 +2094,24 @@ unsafe fn ep0_set_configuration(slot: u8, ep0_mps: u16, config: u8) -> bool {
     let pkt: [u8; 8] = [0x00, 0x09, config, 0, 0, 0, 0, 0];
     core::ptr::copy_nonoverlapping(pkt.as_ptr(), setup_pa.1, 8);
 
-    let (tr_va, tr_pa) = match ep0_ring() {
-        Some(p) => p,
-        None => return false,
+    // TD = Setup + Status IN (2 TRBs) no offset corrente do cursor (FIX B).
+    let Some((tr_va, tr_pa, idx, cycle)) = ep0_reserve(2) else {
+        return false;
     };
 
     // Setup Stage TRB (type 2), IDT=1, TRT=No Data (0)
-    let trb0 = tr_va as *mut u32;
+    let trb0 = (tr_va as *mut u32).add(idx as usize * 4);
     trb0.add(0).write_volatile(u32::from_le_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]));
     trb0.add(1).write_volatile(u32::from_le_bytes([pkt[4], pkt[5], pkt[6], pkt[7]]));
     trb0.add(2).write_volatile(8); // Transfer Length
-    trb0.add(3).write_volatile((2u32 << 10) | (1 << 6) | 1); // Setup, IDT, C=1
+    trb0.add(3).write_volatile((2u32 << 10) | (1 << 6) | (cycle as u32)); // Setup, IDT, C
 
     // Status Stage TRB (type 4), DIR=IN (1)
-    let trb1 = (tr_va as *mut u32).add(4);
+    let trb1 = trb0.add(4);
     trb1.add(0).write_volatile(0);
     trb1.add(1).write_volatile(0);
     trb1.add(2).write_volatile(0);
-    trb1.add(3).write_volatile((4u32 << 10) | (1 << 16) | (1 << 5) | 1); // Status, DIR, IOC, C
+    trb1.add(3).write_volatile((4u32 << 10) | (1 << 16) | (1 << 5) | (cycle as u32)); // Status, DIR, IOC, C
 
     let _ = (ep0_mps, setup_pa);
     drain_stale_ep0_events(slot);
@@ -2079,8 +2122,8 @@ unsafe fn ep0_set_configuration(slot: u8, ep0_mps: u16, config: u8) -> bool {
         w32(st.base, st.db_off + (slot as u64) * 4, 1); // EP0 DCI=1
     }
 
-    // Status Stage = trb1 (+16 B). Correlaciona o evento (§2).
-    wait_transfer_event(slot, tr_pa + 16, 200_000)
+    // Status Stage = 2º TRB do TD (idx+1). Correlaciona o evento (§2).
+    wait_transfer_event(slot, tr_pa + (idx as u64 + 1) * 16, 200_000)
 }
 
 // ── UAC bring-up (ADR-0045) — isócrono ─────────────────────────────────────
