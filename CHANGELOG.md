@@ -1,4 +1,14 @@
 # Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
+## [1.9.99-s479] - 2026-10-17 - #PF storm tick=1 = recursao mutua infinita affect + matriz 8 modelos + HW emulado maximo
+
+- **Correcao do s478**: o "range do SLAB" era diagnostico errado (aritmetica hex). `0x4000_0000_0000` = **64 TiB**, nao 4 TiB — `cr2` estava dentro da janela de 512 KiB e o `in_slab` disparava. Regra: conferir hex→TiB antes de declarar um range.
+- **Causa-raiz real (VERIFIED por disassembly)**: recursao mutua infinita de 2 funcoes, introduzida em `92d25242` (s468d) — `globals.rs:66` → `affect_channel.rs:120` → volta. A stack de 8 MiB do scheduler do BSP (`main.rs:5518`) transborda → `#PF` no limite do heap VA → `park core` em `tick=1`. O gate de heap do s476 nao podia ajudar: o caminho **nao aloca** antes de recursar.
+- **Fix (4 arquivos, +34/−52)**: `globals.rs:65` faz o trabalho real (publica no canal tipado + escreve `AFFECT_SNAPSHOT`, que o compositor lia congelado em NEUTRAL); `affect_channel.rs:107` vira shim de 1 linha; `allocator.rs` mantem a mascara RSVD e **reverte** `start=HEAP_START` → `LARGE_HEAP_START`; `smp/mod.rs:518` `AP_STACK` trace→info.
+- **Prova de runtime**: mesh 4×1G/4c sem modelo → `tick` = **3201/3073/2944/2784** (antes `1` em todos), `mesh TX MCH ok=true`, zero `#PF storm`. Os 8 `#PF` restantes são os demos Ring3 P6 intencionais (`ring3.rs:182`) — contador por regex é falso-positivo.
+- **Matriz de 8 modelos** (nó único × 7G, 240 s cada): saudável+carregado = `falcon3-3b` (1012764 KB, v6 h=3072 L=22), `bitnet-2a-4b` (778810 KB, v7 tok_len=5390533), `piper-pt-br` (61342 KB + 46070 amostras de TTS); **travado** = `bge-m3` (`PANIC talc.rs:836 new_heap must contain old_heap`, 6/9 phases).
+- **Achado transversal aberto**: 5 de 8 logs imprimem o mesmo tamanho fictício `model 590680KB` (577 MB) — nenhum arquivo do repo tem esse tamanho. O probe lê header v6 em blobs v3/v4 e fabrica um LLM fantasma; contido em 4, fatal no `bge-m3`.
+- **HW emulado máximo** (`tools/run-qemu-fullhw.ps1`): 10 devices enumerando — vídeo (fb 1280×800 bpp=4 + virtio-gpu), NVMe, virtio-blk, AHCI/SATA, e1000, xHCI (1b36:000d, 8 portas, os_owned), usb-storage/MSC, HDA, ATA/IDE. **Duas NICs quebram o net bootstrap** (6/9 PHASE, 0 ticks, preso no smoke de DNS) → `-VirtioNet` virou opt-in.
+- **4 scripts novos**: `run-mesh-model.ps1`, `run-mesh-models-batch.ps1`, `run-mesh-empty.ps1`, `run-qemu-fullhw.ps1` (ASCII-only, dump de argv por ciclo, métricas null-safe).
 ## [1.9.99-s478] - 2026-10-16 - #PF storm de pressão do heap: try_fault_in_heap sem gate + range do SLAB descoberto
 
 - **Problema**: gate `heap_headroom_critical()` do s476 estava só no `sleep_cycle`; `try_fault_in_heap` é chamado diretamente do handler de page fault sem guard. `#PF storm` reapareceu com `cr2=0x000040000007fff8` (range do SLAB, não coberto por nenhum range do `try_fault_in_heap` → `no_rng` → `#PF` não curado → storm → park core).

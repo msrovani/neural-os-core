@@ -63,7 +63,23 @@ impl AffectSnapshot {
 /// Chamado pelo BeiInit::tick a cada ciclo.
 /// Atualiza tanto o legacy global quanto o novo canal EventBus tipado (Item 14).
 pub fn sync_affect_snapshot(affect: &crate::affect::AffectVector, phase_deg: u32) {
-    crate::affect_channel::sync_affect_snapshot_both(affect, phase_deg);
+    let snap = AffectSnapshot {
+        valence: affect.valence,
+        arousal: affect.arousal,
+        dominance: affect.dominance,
+        uncertainty: affect.uncertainty,
+        urgency: affect.urgency,
+        fatigue: affect.fatigue,
+        curiosity: affect.curiosity,
+        coherence: affect.coherence,
+        phase_deg,
+    };
+    // Canal tipado primeiro (usa &snap), depois o global (move). S479: o global
+    // era escrito aqui antes do refactor 92d25242/s468d; o refactor trocou a
+    // escrita por uma delegação que formou ciclo com affect_channel e deixou o
+    // compositor lendo um NEUTRAL congelado para sempre.
+    crate::affect_channel::publish_affect_snapshot(&snap);
+    *AFFECT_SNAPSHOT.lock() = snap;
 }
 
 lazy_static! {

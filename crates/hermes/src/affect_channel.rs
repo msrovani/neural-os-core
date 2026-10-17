@@ -105,19 +105,11 @@ impl AffectSnapshotReceiver {
 /// Sync affect snapshot to both the legacy global and the new EventBus channel.
 /// This maintains backward compatibility during transition.
 pub fn sync_affect_snapshot_both(affect: &crate::affect::AffectVector, phase_deg: u32) {
-    let snap = crate::globals::AffectSnapshot {
-        valence: affect.valence,
-        arousal: affect.arousal,
-        dominance: affect.dominance,
-        uncertainty: affect.uncertainty,
-        urgency: affect.urgency,
-        fatigue: affect.fatigue,
-        curiosity: affect.curiosity,
-        coherence: affect.coherence,
-        phase_deg,
-    };
-    // Legacy global (for existing consumers)
+    // Shim fino. S479: esta função publicava o EventBus e chamava
+    // `crate::globals::sync_affect_snapshot` DE VOLTA — e globals delegava para
+    // cá. Ciclo mútuo infinito (introduzido em 92d25242/s468d) que estourava a
+    // stack de 8 MiB do scheduler do BSP em ~200k níveis, cravava o #PF no
+    // limite do heap e esmagava 512 KiB do heap VA em silêncio.
+    // O trabalho real (global AFFECT_SNAPSHOT + canal tipado) vive em globals.
     crate::globals::sync_affect_snapshot(affect, phase_deg);
-    // New typed EventBus channel
-    publish_affect_snapshot(&snap);
 }

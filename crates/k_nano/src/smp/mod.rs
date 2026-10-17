@@ -517,7 +517,7 @@ pub unsafe fn wake_aps_sequential(
         };
         crate::slog_nano!(
             "SMP",
-            "trace",
+            "info",
             "AP_STACK dest={:#x} top={:#x} size={:#x}",
             dest,
             ap_stack,
