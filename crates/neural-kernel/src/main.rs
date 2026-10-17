@@ -274,24 +274,28 @@ pub static QEMU_LOADER_SCAN_START: core::sync::atomic::AtomicU64 = core::sync::a
 /// v6 sem tokenizer cabe em 64 B. v7 com BPB1 embutido pede o prefixo de volta
 /// (`LlmSizeProbe::Need`); sem isso o boot caía no `load_model` legado, lia
 /// `hidden` no offset errado e logava `h=0 L=0` (SESSION_475).
-unsafe fn qemu_loader_llm_len(ptr: *const u8, region_cap: usize, fallback: usize) -> usize {
+unsafe fn qemu_loader_llm_len(ptr: *const u8, region_cap: usize) -> Option<usize> {
     if region_cap < 16 {
-        return fallback.min(region_cap);
+        return None;
     }
     let mut hdr_len = 64usize.min(region_cap);
     for _ in 0..4 {
         let hdr = core::slice::from_raw_parts(ptr, hdr_len);
         match cortex_crate::model::probe_llm_file_size(hdr) {
             cortex_crate::model::LlmSizeProbe::Ready(sz) => {
-                return sz.min(region_cap);
+                return Some(sz.min(region_cap));
             }
             cortex_crate::model::LlmSizeProbe::Need(n) if n > hdr_len && n <= region_cap => {
                 hdr_len = n;
             }
-            _ => break,
+            // S479: NotLlm (version∉{6,7} ou model_type≠0) e probe esgotado
+            // devolvem None — NÃO caem num fallback de 604.856.373 B, que era
+            // o "590680KB" que nenhum artefato tem e fazia BGE/ROUTER/STT
+            // serem carregados como LLM generativo com shapes fabricados.
+            _ => return None,
         }
     }
-    fallback.min(region_cap)
+    None
 }
 
 
@@ -3947,33 +3951,38 @@ pub(crate) fn kernel_boot(
             k_nano::slog_bin!("Asset", "ok", "Probe 4GB: raw=[0x{:02x},0x{:02x},0x{:02x},0x{:02x}]", raw0, raw1, raw2, raw3);
             let qemu_magic = u32::from_le_bytes([raw0, raw1, raw2, raw3]);
             if qemu_magic == 0xBE11BE11 {
-                // Fallback so se FAT nao tiver blob (loader-only).
-                // v6 é autodescritivo: calcular o tamanho real do arquivo a partir
-                // do header (o const v4 604MB truncava o 2B v6 de 792MB → OOM #PF).
-                const BITNET_2B_V4_BYTES: usize = 604_856_373;
-                let mut model_len = fat_sz.unwrap_or(BITNET_2B_V4_BYTES);
-                // Header v6/v7 no loader é a fonte de verdade (ADR-0101): FAT pode
-                // ter FALCON3.BIN=7B mal-nomeado enquanto o loader traz o 3B.
-                // v7 pede mais que 64 B quando o BPB1 vem embutido.
+                // S479: o comprimento do blob no loader SÓ vem do probe. `fat_sz`
+                // descreve o arquivo no disco e pode ser OUTRO modelo — usá-lo
+                // como comprimento da região do loader fabricava um LLM
+                // fantasma a partir de um BGE/ROUTER/STT. A constante v4
+                // 604.856.373 B (o "590680KB" sem artefato correspondente) foi
+                // removida: nenhum artefato do repo tem esse tamanho.
+                let mut model_len = 0usize;
                 {
                     let region_cap = handoff
                         .region_end_containing(load_addr)
                         .map(|r_end| (r_end - load_addr) as usize)
-                        .unwrap_or(model_len);
-                    let sized = unsafe {
-                        qemu_loader_llm_len(probe_ptr, region_cap, model_len)
-                    };
-                    if sized != model_len {
-                        if fat_sz.map_or(false, |f| f != sized) {
+                        .unwrap_or(usize::MAX);
+                    match unsafe { qemu_loader_llm_len(probe_ptr, region_cap) } {
+                        Some(sized) => {
+                            if fat_sz.map_or(false, |f| f != sized) {
+                                k_nano::slog_bin!(
+                                    "Asset",
+                                    "warn",
+                                    "FAT size {}KB != header {}KB (loader manda)",
+                                    fat_sz.unwrap_or(0) / 1024,
+                                    sized / 1024
+                                );
+                            }
+                            model_len = sized;
+                        }
+                        None => {
                             k_nano::slog_bin!(
                                 "Asset",
                                 "warn",
-                                "FAT size {}KB != header {}KB — usando header (loader)",
-                                fat_sz.unwrap_or(0) / 1024,
-                                sized / 1024
+                                "blob @0x100000000 tem magic BitNet mas nao e LLM (v6/v7 + model_type=0) — loader ignorado"
                             );
                         }
-                        model_len = sized;
                     }
                 }
                 if let Some(r_end) = handoff.region_end_containing(load_addr) {
@@ -4050,17 +4059,23 @@ pub(crate) fn kernel_boot(
                     let probe2 = (load_addr2 + pm_offset) as *const u32;
                     let magic2 = unsafe { core::ptr::read_volatile(probe2) };
                     if magic2 == 0xBE11BE11 {
-                        const BITNET_2B_V4_BYTES: usize = 604_856_373;
-                        let fallback2 = fat_sz
-                            .filter(|&sz| sz >= 50 * 1024 * 1024)
-                            .unwrap_or(BITNET_2B_V4_BYTES);
+                        // S479: mesma regra do scan de 0x100000000 — o comprimento do blob no
+                        // loader vem SÓ do probe. `fat_sz` descreve o disco e
+                        // pode ser outro modelo; a constante v4 604.856.373 B
+                        // ("590680KB") foi removida nos dois pontos.
                         let region2 = handoff
                             .region_end_containing(load_addr2)
                             .map(|r_end| (r_end - load_addr2) as usize)
-                            .unwrap_or(fallback2);
-                        let model_len2 = unsafe {
-                            qemu_loader_llm_len(probe2 as *const u8, region2, fallback2)
-                        };
+                            .unwrap_or(usize::MAX);
+                        match unsafe { qemu_loader_llm_len(probe2 as *const u8, region2) } {
+                            None => {
+                                k_nano::slog_bin!(
+                                    "Asset",
+                                    "warn",
+                                    "blob @0x120000000 tem magic BitNet mas nao e LLM — loader ignorado"
+                                );
+                            }
+                            Some(model_len2) => {
                         let model_data2 = unsafe { core::slice::from_raw_parts(probe2 as *const u8, model_len2) };
                         let llm_v6 = cortex_crate::model::load_model_v6(model_data2).and_then(|v| match v {
                             cortex_crate::model::ModelView::Llm(m) => Some(m),
@@ -4070,6 +4085,8 @@ pub(crate) fn kernel_boot(
                             crate::cortex::set_model(alloc::boxed::Box::new(big_model));
                             k_nano::slog_bin!("LLM", "ok", "LLM LOADED (QEMU-loader @0x120000000) size={}KB", model_len2 / 1024);
                             model_loaded = true;
+                        }
+                            }
                         }
                     }
                 }

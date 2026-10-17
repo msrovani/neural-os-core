@@ -1639,6 +1639,19 @@ pub fn try_alloc_check() -> bool {
 }
 
 pub fn resize_heap_to_mb(target_mb: usize) {
+    // S479: pos-claim o span do TALC ja cobre `budget` (~75% RAM) e e
+    // demand-paged. Estender aqui monta um `req` MENOR que o span atual e entra
+    // em panic no talc ("new_heap must contain old_heap") -- medido no bge-m3:
+    // current=512MB, target=1795MB -> req=1.75GB < old=budget(~5GB).
+    // Alem disso o start_virt usa CURRENT_HEAP_MB (teto do BUMP) como se fosse
+    // o do TALC, mapeando paginas dentro do span ja reivindicado.
+    // Fail-closed: recusa e deixa o caller decidir. Unico caller e
+    // cortex.rs:2630 (load_model legado); memory_agent.rs:214 ja tinha
+    // removido o dele pelo mesmo motivo ("mirava a pool errada").
+    if TALC_READY.load(Ordering::Acquire) {
+        crate::slog_nano!("HEAP", "warn", "resize pos-claim recusado (span ja e budget) target={}MB", target_mb);
+        return;
+    }
     let current = CURRENT_HEAP_MB.load(Ordering::SeqCst);
     if target_mb <= current {
         return;
