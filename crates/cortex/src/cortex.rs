@@ -5958,41 +5958,6 @@ pub fn register_model_slot(slot: crate::model_hub::ModelSlot, model: Box<dyn Mod
     }
 }
 
-/// Aceita múltiplos blobs: cada um vai para slot heurístico por tamanho (ou `hint`).
-pub fn load_models_multi(blobs: &[(&[u8], Option<&str>)]) -> usize {
-    let mut n = 0usize;
-    for (data, hint) in blobs {
-        let Some(m) = load_model(data) else {
-            continue;
-        };
-        let slot = hint
-            .and_then(crate::model_hub::ModelSlot::from_name)
-            .unwrap_or_else(|| crate::model_hub::slot_from_bitnet_bytes(*data));
-        // Primeiro modelo “grande” ou Active vazio → CURRENT; demais → slots.
-        let boxed = alloc::boxed::Box::new(m);
-        if !model_is_loaded()
-            && matches!(
-                slot,
-                crate::model_hub::ModelSlot::Active
-                    | crate::model_hub::ModelSlot::GeneratorPro
-                    | crate::model_hub::ModelSlot::Vision
-            )
-        {
-            let also_pro = slot == crate::model_hub::ModelSlot::GeneratorPro
-                || crate::model_hub::slot_from_bitnet_bytes(*data)
-                    == crate::model_hub::ModelSlot::GeneratorPro;
-            set_model(boxed);
-            if also_pro {
-                crate::model_hub::mark_pro_alias(true);
-            }
-        } else {
-            register_model_slot(slot, boxed);
-        }
-        n += 1;
-    }
-    n
-}
-
 /// True se CURRENT_MODEL está setado (LLM LOADED).
 pub fn model_is_loaded() -> bool {
     if MODEL_LOADED.load(core::sync::atomic::Ordering::Acquire) {

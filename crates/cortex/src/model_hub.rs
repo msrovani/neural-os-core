@@ -543,39 +543,6 @@ pub fn hub_status() -> String {
     s
 }
 
-pub fn slot_from_bitnet_bytes(data: &[u8]) -> ModelSlot {
-    // Tenta parse do header v6 (autônomo — zero hardcoded)
-    if let Some(h) = crate::model::parse_model_header(data) {
-        let params = h.estimated_params();
-        k_nano::slog_cortex!("MODEL", "ok",
-            "slot_from_header: params={} MB={} hidden={}",
-            params, h.file_size_mb(), h.hidden);
-        return match params {
-            0..=99_999_999 => ModelSlot::Reranker,
-            100_000_000..=599_999_999 => ModelSlot::Learner,
-            600_000_000..=3_999_999_999 => ModelSlot::Active,
-            4_000_000_000..=12_000_000_000 => ModelSlot::GeneratorPro,
-            _ => ModelSlot::GeneratorPro,
-        };
-    }
-    // Fallback: tamanho bruto (legado) — ADR-0101 lab 3B ~989MB = Active.
-    let len = data.len();
-    const MB: usize = 1024 * 1024;
-    if len < 20 * MB {
-        ModelSlot::Reranker
-    } else if len < 200 * MB {
-        ModelSlot::Learner
-    } else if len < 450 * MB {
-        ModelSlot::Vision
-    } else if len < 1200 * MB {
-        // Falcon3-3B v6 (~989MB) e Agent médios → Active (lab), não Agent stub.
-        ModelSlot::Active
-    } else {
-        // Falcon3-7B/10B / LLaMA-8B → GeneratorPro
-        ModelSlot::GeneratorPro
-    }
-}
-
 /// FAT 8.3 candidatos por slot (ordem de preferência).
 pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
     match slot {
