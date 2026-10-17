@@ -277,6 +277,56 @@ pub fn ensure_slot_loaded(slot: ModelSlot) -> bool {
     try_load_on_demand(slot)
 }
 
+/// s484 Passo 3: primitivo de EVICT explicito — libera o modelo do slot e
+/// limpa mask + footprint (o estado volta a "nunca medido", honesto).
+///
+/// Direcao do plano @oracle: Active <-> (Pro|Agent), 1 evict por vez. O
+/// contrario (recarregar o Active em runtime) nao tem caminho hoje — o Active
+/// so carrega no boot — entao a direcao unica implementada e: sob pressao,
+/// carregar Pro|Agent custa o Active (maior residente). Evict e DEGRADACAO:
+/// sempre `warn`, nunca `ok` (mesma regra do fallback s480).
+pub fn evict_slot(slot: ModelSlot) -> bool {
+    match slot {
+        // Active vive no CURRENT_MODEL (honesty s388) — clear_model ja faz
+        // None + MODEL_LOADED=false + EMBED_DIM=0 + header + mark_active(false).
+        ModelSlot::Active => {
+            if !slot_loaded(ModelSlot::Active) {
+                return false;
+            }
+            crate::cortex::clear_model();
+            note_footprint(ModelSlot::Active, 0);
+            // O alias Pro (mark_pro_alias) apontava para o Active — sem blob
+            // Pro ele vira mentira no hub_status ("alias" de um morto).
+            if !hub_has_blob(ModelSlot::GeneratorPro) {
+                mark(ModelSlot::GeneratorPro, false);
+            }
+            k_nano::slog_bin!("MODEL", "warn", "hub EVICT slot=active (CURRENT_MODEL liberado)");
+            true
+        }
+        // Experts legados (RustCoder/HwExpert) vivem em statics dedicados com
+        // consumers proprios (MoE routing) — sem evict (YAGNI, fora do plano).
+        ModelSlot::RustCoder | ModelSlot::HwExpert => false,
+        other => {
+            if !hub_has_blob(other) {
+                return false;
+            }
+            let freed_mb = measured_slot_mb(other);
+            let taken = HUB.lock().slots[idx(other)].take();
+            drop(taken); // libera os tensores do heap AGORA
+            mark(other, false);
+            note_footprint(other, 0);
+            k_nano::slog_bin!(
+                "MODEL",
+                "warn",
+                "hub EVICT slot={} freed~{}MB",
+                other.name(),
+                freed_mb.unwrap_or(0)
+            );
+            true
+        }
+    }
+}
+
 pub fn generate_from_slot(slot: ModelSlot, prompt: &str) -> Option<String> {
     // s483 Passo 2b: primeiro consumidor dispara o load.
     let _ = ensure_slot_loaded(slot);
@@ -573,5 +623,44 @@ pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
             "MICRO.BIN",
             "LLAMA8B.BIN",
         ],
+    }
+}
+
+#[cfg(test)]
+mod evict_tests {
+    use super::*;
+    use alloc::string::String;
+
+    struct DummyModel;
+    impl crate::cortex::Model for DummyModel {
+        fn generate(&self, _prompt: &str) -> String {
+            String::new()
+        }
+        fn embed_dim(&self) -> usize {
+            1
+        }
+        fn vocab_size(&self) -> u32 {
+            1
+        }
+        fn max_seq(&self) -> usize {
+            1
+        }
+    }
+
+    #[test]
+    fn evict_slot_libera_blob_e_limpa_estado() {
+        // Slot Agent: nenhum outro teste toca o HUB[7] (grep em cortex/src).
+        let slot = ModelSlot::Agent;
+        register_model(slot, alloc::boxed::Box::new(DummyModel));
+        assert!(slot_real(slot), "dummy deve estar real antes do evict");
+
+        assert!(evict_slot(slot), "evict de slot com blob = true");
+        assert!(!slot_real(slot), "pos-evict o slot nao e mais real");
+        assert_eq!(measured_slot_mb(slot), None, "footprint volta a None");
+        // Evict de slot vazio = false (nada a liberar, nao finge sucesso).
+        assert!(!evict_slot(slot));
+        // Experts legados: sem evict por design.
+        assert!(!evict_slot(ModelSlot::RustCoder));
+        assert!(!evict_slot(ModelSlot::HwExpert));
     }
 }

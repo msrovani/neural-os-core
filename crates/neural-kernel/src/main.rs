@@ -5019,6 +5019,29 @@ fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
         );
         return;
     }
+    // s484 Passo 3: evict EXPLICITO Active <-> (Pro|Agent) sob pressao de heap.
+    // heap_headroom_low() = headroom COMBINADO (bump + TALC free medido, s435)
+    // < 128MB — o read do blob (ate 752MB) nao cabe e o padrao e OOM->#PF->park
+    // (s415-420). O Active e o maior residente (~1GB): liberar ele e o unico
+    // evict que abre espaco de verdade. Apos o evict, o branch "Active vazio e
+    // slot pro/fast vira primary" (abaixo) faz o swap ficar coerente: Pro entra
+    // como primary. Direcao unica — recarregar o Active em runtime nao tem
+    // caminho hoje (boot-only); degradacao com warn, nunca sucesso silencioso.
+    if matches!(
+        slot,
+        crate::model_hub::ModelSlot::GeneratorPro | crate::model_hub::ModelSlot::Agent
+    ) && k_nano::allocator::heap_headroom_low()
+        && crate::cortex::model_is_loaded()
+    {
+        k_nano::slog_bin!(
+            "MODEL",
+            "warn",
+            "hub evict Active p/ slot={} sz={}KB (headroom_low)",
+            slot.name(),
+            sz / 1024
+        );
+        crate::model_hub::evict_slot(crate::model_hub::ModelSlot::Active);
+    }
     if let Some(data) = fs.read_file(name) {
         // s483 Passo 0: validação entre read e load (plano s481 Passo 2/4).
         // v6/v7: header autodescritivo — tamanho declarado TEM que bater com o
