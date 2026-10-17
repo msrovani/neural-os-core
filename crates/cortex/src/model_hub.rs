@@ -239,7 +239,47 @@ pub fn mark_pro_alias(filled: bool) {
 }
 
 /// Gera a partir do slot — Active/RustCoder leem os Mutex legados (não o array HUB).
+/// s483 Passo 2b — load-on-first-use.
+///
+/// O loader vive no bin (precisa de ATA/FAT32); a crate so tem a seam. Mesmo
+/// padrao da bridge TLS (SESSION_241): tipo aqui, `register_*` aqui, o boot
+/// registra com cast explicito, o consumidor chama a API daqui.
+pub type SlotLoader = fn(ModelSlot) -> bool;
+
+/// 0 = nenhum loader registrado. Guardamos o ponteiro como `usize` para nao
+/// precisar de `Option<fn>` (nao Copy) dentro de um static.
+static SLOT_LOADER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Chamado pelo boot com `try_hub_slot_fat` (ou equivalente).
+pub fn register_slot_loader(f: SlotLoader) {
+    SLOT_LOADER.store(f as usize, Ordering::Release);
+}
+
+/// Dispara o loader registrado uma vez, sob demanda.
+fn try_load_on_demand(slot: ModelSlot) -> bool {
+    let p = SLOT_LOADER.load(Ordering::Acquire);
+    if p == 0 {
+        return false;
+    }
+    // SAFETY: p veio de `register_slot_loader`, que so grava ponteiros do
+    // mesmo tipo. 0 e verificado acima.
+    let f: SlotLoader = unsafe { core::mem::transmute(p) };
+    f(slot)
+}
+
+/// Garante o slot carregado, chamando o loader uma unica vez sob demanda.
+/// Nao pega NENHUM lock: o loader usa `HUB` e `TicketLock` nao e reentrante
+/// (s438) — carregar dentro do lock seria deadlock.
+pub fn ensure_slot_loaded(slot: ModelSlot) -> bool {
+    if slot_real(slot) {
+        return true;
+    }
+    try_load_on_demand(slot)
+}
+
 pub fn generate_from_slot(slot: ModelSlot, prompt: &str) -> Option<String> {
+    // s483 Passo 2b: primeiro consumidor dispara o load.
+    let _ = ensure_slot_loaded(slot);
     match slot {
         ModelSlot::Active => {
             let guard = crate::cortex::CURRENT_MODEL.lock();
@@ -337,7 +377,7 @@ fn fit_ok(slot: ModelSlot) -> bool {
 /// Os 5 slots do HUB só são reais com blob em `HUB`. Active/RustCoder/HwExpert
 /// vivem nos Mutex legados (`register_model`), então `slot_loaded` é a
 /// verdade para eles.
-fn slot_real(slot: ModelSlot) -> bool {
+pub fn slot_real(slot: ModelSlot) -> bool {
     match slot {
         ModelSlot::Vision
         | ModelSlot::GeneratorPro

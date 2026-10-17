@@ -200,6 +200,12 @@ pub fn slot_footprint_mb(slot_name: &str) -> Option<u64> {
         "tinystories" | "tiny" | "smoke" => Some(4),
         "rust_coder" | "rustcoder" => Some(260),
         "hw_identify" | "hwexpert" => Some(1),
+        // s483 Passo 2a: vision/reranker/agent nao tinham braco nenhum e caiam em
+        // `_ => None` -> slot_too_tight(None)==false -> "sempre cabe". Hints dos
+        // artefatos reais (ADR-0078 §2.2 / tabela do README historico).
+        "vision" | "siglip" | "vit" | "encoder" => Some(33),
+        "reranker" | "rerank" | "bge_reranker" => Some(165),
+        "agent" | "qwen3b" => Some(752),
         "learner" | "qwen05" | "qwen0.5b" => {
             dyn_mb.or(Some(Falcon3Kind::Tiny1B.file_mb_hint()))
         }
@@ -578,21 +584,37 @@ mod ram_policy_tests {
     }
 
     /// s482 Passo 1 — o footprint precisa ser por slot, não herdado do header global.
-    /// Antes: `slot_footprint_mb("vision")` caía em `_ => None` (e `slot_too_tight(None)`
-    /// == false, ou seja "sempre cabe"), e active/pro respondiam pelo MESMO header global.
+    /// s483 Passo 2a — E TODO slot precisa ter hint: vision/reranker/agent caíam em
+    /// `_ => None` e `slot_too_tight(None) == false` significava "sempre cabe".
+    /// (A versão s482 deste teste fixava `== None` como precondição, o que
+    ///  **fixou a mentira como expectativa** — o s483 corrigiu a expectativa.)
     #[test]
     fn slot_footprint_e_por_slot_nao_header_global() {
         use crate::model_hub::{ModelSlot, note_footprint};
 
-        // visões/reranker/agent não tinham braço nenhum no match: eram `None`.
-        assert_eq!(slot_footprint_mb("vision"), None);
-        assert_eq!(slot_footprint_mb("reranker"), None);
-        assert_eq!(slot_footprint_mb("agent"), None);
+        // Nenhum slot do hub pode responder None: sem hint, slot_too_tight = false
+        // e o roteamento acha que TUDO cabe, independentemente da RAM.
+        for s in [
+            "active",
+            "vision",
+            "generator_pro",
+            "reranker",
+            "rust_coder",
+            "hw_identify",
+            "learner",
+            "agent",
+        ] {
+            assert!(
+                slot_footprint_mb(s).is_some(),
+                "slot '{}' sem hint => slot_too_tight=false => 'sempre cabe'",
+                s
+            );
+        }
 
         note_footprint(ModelSlot::Vision, 33 * 1024 * 1024);
         note_footprint(ModelSlot::GeneratorPro, 1900 * 1024 * 1024);
 
-        // Medido prevalece: cada slot responde pelo SEU blob.
+        // Medido prevalece sobre o hint estático: cada slot responde pelo SEU blob.
         assert_eq!(slot_footprint_mb("vision"), Some(33));
         assert_eq!(slot_footprint_mb("generator_pro"), Some(1900));
         // E o par deixa de ser indistinguível (era o mesmo dyn_mb para os dois).
@@ -600,7 +622,6 @@ mod ram_policy_tests {
             slot_footprint_mb("vision"),
             slot_footprint_mb("generator_pro")
         );
-        // Round-trip MB: bytes -> MB não deve inventar resto.
         assert_eq!(crate::model_hub::measured_slot_mb(ModelSlot::Vision), Some(33));
     }
 }

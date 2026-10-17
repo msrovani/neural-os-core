@@ -1,4 +1,14 @@
 # Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
+## [1.9.99-s483] - 2026-10-17 - Passo 2 do hub: Rerunker alcançável + load-on-first-use (seam, não loop eager)
+
+- **2a — Reranker alcançável**: `pio_cap` do Reranker de 32MB → `slot_footprint_mb()` (artefato de 165MB contra cap de 32MB = skip sempre, com log `info` parecendo tentativa). Acrescido gate `heap_headroom_critical()` antes do `read_file` — corrigir o cap torna a leitura de 165MB *possível*, e sem gate é o padrão OOM → #PF → park.
+- **Footprint tem duas metades**: medido (pós-load, s482) e **hint estático** (pré-load, este passo). Com só a primeira, `slot_footprint_mb("reranker")` dava `None` no momento de dimensionar o load → cap 0 → nunca carrega. Braços novos: `vision`→33MB, `reranker`→165MB, `agent`→752MB.
+- **2b — load-on-first-use**: seam `SlotLoader`/`register_slot_loader` em `cortex::model_hub` (mesmo padrão da bridge TLS), `ensure_slot_loaded` chamado por `generate_from_slot` **antes** de qualquer lock (`TicketLock` não é reentrante). Removidas as 5 chamadas eager do boot; o primeiro consumidor dispara o load.
+- **Correção minha**: "sem consumidor" era meio errado — `generate_from_slot` existe e é chamado (`cortex.rs:5845`, path do Trinity). O que não existe é consumidor de Vision/Reranker/Learner/Agent; para eles o hook nunca dispara (custo zero).
+- **Teste reescrito**: a versão s482 fixava `slot_footprint_mb("vision") == None` como *precondição* — fixava a mentira como expectativa. Agora afirma que **nenhum** slot do hub pode responder `None`.
+- **Prova**: build 0 erros; host test 6/6; runtime falcon3 `T+8359`, `[PANIC]` 0, `tick=32` — não regrediu. O crash `0xc0000096` da suíte completa é **pré-existente** (provado por `git stash`).
+- **2a/2b: runtime UNKNOWN.** Sob QEMU `qemu_dev_skip_models` pula o bloco do hub inteiro, então o seam nunca é registrado (`SLOT_LOADER=0` → comportamento antigo, fail-safe). Aceite exige HW real ou liberação do gate de sandbox — decisão do Maintainer.
+- **Lição**: teste que fixa a mentira como precondição atrasa o fix (passava 6/6 enquanto a mentira valia); "sem consumidor" precisa de grep de caller, não de inferência.
 ## [1.9.99-s482] - 2026-10-17 - Passo 1 do hub: footprint medido por slot (+ harness de #PF que parou de mentir)
 
 - **Passo 1** (plano do @oracle, desenhado no s481): `SLOT_FOOTPRINT:[AtomicU64;8]` em `model_hub.rs` com bytes **medidos** por slot, escritos no topo de `register_bytes` (e nos **dois** slots no redirect HwExpert→Active). `slot_footprint_mb()` passa a consultar o medido antes do header global.

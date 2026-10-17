@@ -4880,7 +4880,16 @@ pub(crate) fn kernel_boot(
             false
         }
 
-        fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
+        /// s483 Passo 2b: adapter do seam de load-on-first-use.
+/// `try_hub_slot_fat` retorna `()` (tem varios `return;` no corpo — mudar a
+/// assinatura seria um diff grande sem ganho), entao o retorno booleano e
+/// derivado do estado real do slot depois da tentativa.
+fn hub_load_on_demand(slot: crate::model_hub::ModelSlot) -> bool {
+    try_hub_slot_fat(slot);
+    crate::model_hub::slot_real(slot)
+}
+
+fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
             if crate::model_hub::slot_loaded(slot)
                 && matches!(
                     slot,
@@ -4926,7 +4935,17 @@ pub(crate) fn kernel_boot(
             } else {
                 match slot {
                     crate::model_hub::ModelSlot::Vision => PIO_FAST.min(pio_hw),
-                    crate::model_hub::ModelSlot::Reranker => 32 * 1024 * 1024,
+                    // s483 Passo 2a: era 32MB contra artefato de 165MB ->
+                    // `if sz > pio_cap { continue }` = Reranker INALCANCAVEL por
+                    // construcao (skip sempre, com log `info` parecendo tentativa).
+                    // O cap agora e o footprint MEDIDO do slot (Passo 1), com piso
+                    // no plano RAM. 0 => sem cap (artefato decide).
+                    crate::model_hub::ModelSlot::Reranker => cortex_crate::model_fit::slot_footprint_mb(
+                        slot.name(),
+                    )
+                    .unwrap_or(0) as usize
+                    * 1024
+                    * 1024,
                     _ => pio_hw,
                 }
             };
@@ -4973,7 +4992,22 @@ pub(crate) fn kernel_boot(
                                     );
                                     continue;
                                 }
-                                if let Some(data) = fs.read_file(name) {
+                                // s483 Passo 2a: o cap do Reranker deixou de ser inalcançavel, então esta
+    // leitura de 165MB passa a ser POSSIVEL no boot. Sem gate ela e o padrao
+    // OOM -> #PF -> park (s415-420). Fail-closed: recusa e loga, nao aloca.
+    if slot == crate::model_hub::ModelSlot::Reranker
+        && k_nano::allocator::heap_headroom_critical()
+    {
+        k_nano::slog_bin!(
+            "MODEL",
+            "warn",
+            "reranker refuse PIO headroom_critical ({}KB) slot={}",
+            sz / 1024,
+            slot.name()
+        );
+        return;
+    }
+    if let Some(data) = fs.read_file(name) {
                                     if let Some(m) = crate::cortex::load_model(&data) {
                                         // Se Active vazio e slot é pro/fast, vira primary
                                         if !crate::cortex::model_is_loaded()
@@ -5029,12 +5063,16 @@ pub(crate) fn kernel_boot(
                 k_nano::slog_bin!("HUB", "info", "slot {} via NeuralFS", s.name());
             }
         }
-        try_hub_slot_fat(crate::model_hub::ModelSlot::Reranker);
-        try_hub_slot_fat(crate::model_hub::ModelSlot::Vision);
-        try_hub_slot_fat(crate::model_hub::ModelSlot::GeneratorPro);
-        try_hub_slot_fat(crate::model_hub::ModelSlot::Learner);
-        try_hub_slot_fat(crate::model_hub::ModelSlot::Agent);
-        k_nano::slog_bin!("HUB", "info", "Agent slot load attempted");
+        // s483 Passo 2b: load-on-first-use. Nao tentamos mais os 5 slots no boot.
+        // Registramos o loader como seam e o primeiro CONSUMIDOR dispara o load
+        // (cortex.rs -> generate_from_slot -> ensure_slot_loaded).
+        // O boot deixa de fazer 5 leituras PIO por boot sem ninguem ler o resultado.
+        crate::model_hub::register_slot_loader(hub_load_on_demand);
+        k_nano::slog_bin!(
+            "HUB",
+            "info",
+            "loader registrado (load-on-first-use; 0 leituras PIO no boot)"
+        );
         // Se Active é grande (≥200MB heurística via embed), marca pro-alias
         let dim = crate::cortex::CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
         if dim >= 2048 {
