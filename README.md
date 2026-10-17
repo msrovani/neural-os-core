@@ -263,8 +263,10 @@ Outside the hub (ADR-0078 §2.3, already unique names, not renamed): `BGE.BIN` (
 `PIPER.BIN` / `PIPER_EN.BIN` (VITS TTS), `STT.BIN` (CTC), `ROUTER.BITNET` (MoE router — 6-char
 extension does not fit 8.3, stored as `ROUTER.BIT`).
 
-**Honest scope** (ADR-0078 §1.1): only `Active` and `Pro` are exercised at runtime today — the
-rest are declared slots with no wired loader. Only the generator has niche resolution
+**Honest scope.** ADR-0078 §1.1 claims *"only Active + Fast + Pro + TinyStores are actually
+used"*. Measured against the code: `Fast` is not a `ModelSlot` variant (it survives only as a
+shape alias in `model_fit.rs`) and `TinyStories` appears in no `.rs`. So only `Active` and
+`GeneratorPro` are real, exercised slots. Only the generator has niche resolution
 (`select_generator_slot`); the other subsystems degrade on their own (e.g. BGE absent →
 `emb=pseudo`, Reranker/Learner/Vision → no consumer).
 
