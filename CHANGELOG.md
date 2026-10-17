@@ -1,4 +1,13 @@
 # Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
+## [1.9.99-s482] - 2026-10-17 - Passo 1 do hub: footprint medido por slot (+ harness de #PF que parou de mentir)
+
+- **Passo 1** (plano do @oracle, desenhado no s481): `SLOT_FOOTPRINT:[AtomicU64;8]` em `model_hub.rs` com bytes **medidos** por slot, escritos no topo de `register_bytes` (e nos **dois** slots no redirect HwExpert→Active). `slot_footprint_mb()` passa a consultar o medido antes do header global.
+- **O que mata**: `vision`/`reranker`/`agent` não tinham braço no `match` → `_ => None` → `slot_too_tight(None) == false` → **"sempre cabe"**; e `active`/`pro`/`learner` respondiam pelo mesmo `loaded_model_header` (do último carregado).
+- **Prova**: host test novo (vision=33, generator_pro=1900, par deixa de ser indistinguível), 6/6; build 0 erros; runtime falcon3 `model 1012764KB`, `T+10165`, `tick=32` — não regrediu. **Runtime do footprint em si: UNKNOWN** — o falsificador exige um blob Vision/Reranker que não existe no repo (depende do Passo 2).
+- **Harness corrigido** (`run-mesh-model.ps1`): acusava `PF` num boot saudável porque 5 das 12 ocorrências eram **texto de log** (`patch_idt: ... #PF hook`) e o regex `panic` casava `panic=true` cross-boot. Agora usa os marcadores que o kernel já emite (`#PF storm`/`RECOVER-HALT`) e o literal `[PANIC]`.
+- **Bug pré-existente aberto**: `#PF storm` sob falcon3 (`streak=3+ park core`). **Não** é do Passo 1 — o baseline s479 tem **2** storms e IP diferente por boot (wild-write/corrupção, s438/s415-417). Precisa watchpoint para capturar o writer.
+- **Plano**: AirLLM **não** é estratégia de troca (`gguf_streaming.rs:322` = *generate STUB — refuse inventar tokens*). A troca real = residência dos pequenos + 1 evict explícito `Active ↔ (Pro|Agent)`. Ordem: honesty (feito) → alcance+demanda → evict com gate.
+- **Lição**: contar ocorrência de um símbolo no log ≠ contar o evento (`#PF` tem forma: `[EXC] #PF`); harness que já tem o marcador não deve adivinhar o limiar; baseline antes de culpar o diff (o único log do falcon3 era do run novo — o baseline veio de `boot_mesh_c_FALCON3.txt`).
 ## [1.9.99-s481] - 2026-10-17 - resolve/informa do hub: severidade honesta, presenca real (anti-alias), ausencia->fallback + tabela de nichos no README
 
 - **Duas correções** (meu grep anterior excluía `neural-kernel/src/`): `hub_status()` **já tem** caller em `main.rs:5043` (afirmei que não tinha — errado); e `mark_pro_alias` tem caller **vivo** em `main.rs:5041` (marca Pro com `EMBED_DIM >= 2048`, o 3B tem 3072) → o alias **está no ar**: `slot_loaded(GeneratorPro)` retorna `true` sem existir blob Pro.

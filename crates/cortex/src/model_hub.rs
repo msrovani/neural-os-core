@@ -2,7 +2,7 @@
 
 use alloc::boxed::Box;
 use alloc::string::String;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use spin::Mutex;
 
 use crate::cortex::Model;
@@ -66,6 +66,38 @@ static HUB: Mutex<HubInner> = Mutex::new(HubInner {
 });
 static SLOT_MASK: AtomicU8 = AtomicU8::new(0);
 
+/// s482 Passo 1: footprint **medido** do blob por slot, em bytes. 0 = sem blob.
+///
+/// Antes disto, `slot_footprint_mb` lia UM header global (`loaded_model_header`, do
+/// último carregado), então 3 slots respondiam pelo tamanho de outro e 3 mais caíam
+/// em `_ => None` → `slot_too_tight(None) == false` → "sempre cabe". Medir por slot
+/// mata as duas classes de mentira com um array.
+static SLOT_FOOTPRINT: [AtomicU64; 8] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+/// Grava o tamanho real do blob carregado neste slot (chamado em `register_bytes`).
+pub fn note_footprint(slot: ModelSlot, bytes: u64) {
+    SLOT_FOOTPRINT[idx(slot)].store(bytes, Ordering::Release);
+}
+
+/// Footprint medido do slot em MB. `None` = nenhum blob medido (nunca inferido).
+pub fn measured_slot_mb(slot: ModelSlot) -> Option<u64> {
+    let b = SLOT_FOOTPRINT[idx(slot)].load(Ordering::Acquire);
+    if b == 0 {
+        None
+    } else {
+        Some(b / (1024 * 1024))
+    }
+}
+
 fn idx(slot: ModelSlot) -> usize {
     slot as usize
 }
@@ -110,8 +142,12 @@ pub fn register_model(slot: ModelSlot, model: Box<dyn Model>) {
 /// Ponto único de carga por bytes (ADR-0085 §7): load_model_v6 → ModelView
 /// → armazenamento por kind. Active/RustCoder/HwExpert usam os Mutex legados.
 pub fn register_bytes(slot: ModelSlot, data: &[u8]) -> bool {
-    // Honesty s387: Observe header ANTES do load — ADR-0101/AIOS (SKU sync k_hal).
+    // Honesty s387: Observe header ANTES do load - ADR-0101/AIOS (SKU sync k_hal).
     crate::model::note_header_from_bytes(data);
+    // s482 Passo 1: footprint REAL do blob neste slot (medido, nao inferred).
+    // `slot_footprint_mb` lia UM header global (do ultimo carregado), entao 3 slots
+    // respondiam pelo tamanho de outro. Ver nota_footprint / slot_footprint_mb.
+    note_footprint(slot, data.len() as u64);
     // 1. Tenta v6 .bitnet
     let view = match crate::model::load_model_v6(data) {
         Some(v) => Some(v),
@@ -166,6 +202,9 @@ pub fn register_bytes(slot: ModelSlot, data: &[u8]) -> bool {
                     );
                     crate::cortex::set_model(boxed);
                     mark(ModelSlot::Active, true);
+                    // O blob foi para Active, não para hw_identify: mede nos dois
+                    // senão o footprint de Active fica stale (s482).
+                    note_footprint(ModelSlot::Active, data.len() as u64);
                 }
                 other => {
                     let i = idx(other);

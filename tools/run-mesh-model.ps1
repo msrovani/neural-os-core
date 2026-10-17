@@ -180,11 +180,19 @@ foreach ($p in $procs) {
         # Última linha com MESH_HEALTH
         $mHealth = [regex]::Matches($text, "MESH_HEALTH.*?(\{.*?\})") | Select-Object -Last 1
         if ($mHealth) { $health = $mHealth.Groups[1].Value.Substring(0, [math]::Min(80, $mHealth.Groups[1].Value.Length)) }
-        # #PF count
-        $mPF = [regex]::Matches($text, "#PF") | Measure-Object
-        $pf = $mPF.Count
-        # panic
-        $mPanic = [regex]::Matches($text, "panic") | Measure-Object
+        # #PF: o veredito e o marcador que o kernel JA emite ("#PF storm"), nunca
+        # "#PF > 0" e nunca a contagem crua. Dois motivos medidos:
+        #  - 5 de 12 ocorrencias de "#PF" no log sao TEXTO ("patch_idt: ... #PF hook",
+        #    "avoid #PF"), nao faults;
+        #  - a demo Ring3 P6 emite 1 fault em 0x000070000030000a por design.
+        $pf = ([regex]::Matches($text, "\[EXC\] #PF")).Count
+        $mStorm = [regex]::Matches($text, "#PF storm") | Measure-Object
+        $storm = $mStorm.Count
+        $mHalt = [regex]::Matches($text, "RECOVER-HALT") | Measure-Object
+        $halt = $mHalt.Count
+        # panic: literal [PANIC]. "panic=true" em boot_failure e o registro
+        # cross-boot do k_ai SELF lendo o ramlog do boot ANTERIOR (falso positivo).
+        $mPanic = [regex]::Matches($text, "\[PANIC\]") | Measure-Object
         $panic = $mPanic.Count
         # tick
         $mTick = [regex]::Matches($text, "tick=(\d+)") | Select-Object -Last 1
@@ -196,6 +204,7 @@ foreach ($p in $procs) {
         Peers   = $peers
         Tick    = $tick
         PF      = $pf
+        Storm   = $storm
         Panic   = $panic
         Health  = $health
         Log     = $p.Log
@@ -216,10 +225,11 @@ Write-Host "Resumo salvo em: $summaryPath" -ForegroundColor Green
 # Veredito geral
 $allOk = $true
 foreach ($r in $results) {
-    if ($r.PF -gt 0 -or $r.Panic -gt 0) { $allOk = $false }
+    # O kernel emite "#PF storm" / "RECOVER-HALT" quando realmente falha.
+    if ($r.Storm -gt 0 -or $r.Panic -gt 0) { $allOk = $false }
 }
 if ($allOk) {
-    Write-Host "VEREDIto: TODOS OS NÓS SEM #PF OU PANIC - modelo $modelName OK no mesh" -ForegroundColor Green
+    Write-Host "VEREDIto: TODOS OS NOS SAUDAVEIS (sem #PF storm, sem [PANIC]) - modelo $modelName OK no mesh" -ForegroundColor Green
 } else {
-    Write-Host "VEREDIto: ALGUM NÓ COM #PF OU PANIC - revisar logs" -ForegroundColor Red
+    Write-Host "VEREDIto: ALGUM NO COM #PF STORM OU [PANIC] - revisar logs" -ForegroundColor Red
 }

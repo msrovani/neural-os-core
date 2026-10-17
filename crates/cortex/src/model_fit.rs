@@ -169,6 +169,14 @@ pub fn score_fit(
 /// (parse_model_header → file_size_mb), fallback para constantes conhecidas.
 /// smoke/hwexpert mantêm fallback pequeno (4/1 MB) quando sem header.
 pub fn slot_footprint_mb(slot_name: &str) -> Option<u64> {
+    // s482 Passo 1: footprint MEDIDO por slot tem precedencia sobre tudo.
+    // O header global abaixo responde pelo ULTIMO carregado, entao 3 slots diziam
+    // o tamanho de outro. Medido > header global > hint estatico.
+    if let Some(slot) = crate::model_hub::ModelSlot::from_name(slot_name) {
+        if let Some(mb) = crate::model_hub::measured_slot_mb(slot) {
+            return Some(mb);
+        }
+    }
     // header dinâmico se algum LLM foi carregado
     let dyn_mb = crate::model::loaded_model_header().map(|h| h.file_size_mb());
     match slot_name.to_ascii_lowercase().as_str() {
@@ -567,5 +575,32 @@ mod ram_policy_tests {
         assert_eq!(falcon3_kind_of_name("FALCON10.v6"), Some(Falcon3Kind::Large10B));
         assert_eq!(hub_slot_for_kind(Falcon3Kind::Daily3B), crate::model_hub::ModelSlot::Active);
         assert_eq!(falcon3_boot_names()[0], "FALCON3.V6");
+    }
+
+    /// s482 Passo 1 — o footprint precisa ser por slot, não herdado do header global.
+    /// Antes: `slot_footprint_mb("vision")` caía em `_ => None` (e `slot_too_tight(None)`
+    /// == false, ou seja "sempre cabe"), e active/pro respondiam pelo MESMO header global.
+    #[test]
+    fn slot_footprint_e_por_slot_nao_header_global() {
+        use crate::model_hub::{ModelSlot, note_footprint};
+
+        // visões/reranker/agent não tinham braço nenhum no match: eram `None`.
+        assert_eq!(slot_footprint_mb("vision"), None);
+        assert_eq!(slot_footprint_mb("reranker"), None);
+        assert_eq!(slot_footprint_mb("agent"), None);
+
+        note_footprint(ModelSlot::Vision, 33 * 1024 * 1024);
+        note_footprint(ModelSlot::GeneratorPro, 1900 * 1024 * 1024);
+
+        // Medido prevalece: cada slot responde pelo SEU blob.
+        assert_eq!(slot_footprint_mb("vision"), Some(33));
+        assert_eq!(slot_footprint_mb("generator_pro"), Some(1900));
+        // E o par deixa de ser indistinguível (era o mesmo dyn_mb para os dois).
+        assert_ne!(
+            slot_footprint_mb("vision"),
+            slot_footprint_mb("generator_pro")
+        );
+        // Round-trip MB: bytes -> MB não deve inventar resto.
+        assert_eq!(crate::model_hub::measured_slot_mb(ModelSlot::Vision), Some(33));
     }
 }
