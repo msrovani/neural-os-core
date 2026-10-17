@@ -241,27 +241,32 @@ and Rust-subset paths exist but are gated behind the isolation ring.
 
 ### Model hub — slot → model → task
 
-Eight niches (`cortex::model_hub::ModelSlot`), each bound to one task. A niche is filled by
-a file named after it; when it is absent the system routes to a loaded generic and says so
-(`FIT warn niche=... reason=absent`) instead of handing back an empty slot. Names must fit
-**8.3 uppercase** — the kernel skips LFN entries (`fat32.rs`, `0x0F`).
+Eight niches (`cortex::model_hub::ModelSlot`), each bound to one task. The model each niche
+carries is defined in [ADR-0078](docs/architecture/0078-multi-slot-multimodal-learner.md)
+§2.2/§2.3 (the same table shipped in this README until `760cfae3`, which moved it into the ADR).
+A niche is filled by a file named after it; when it is absent the system routes to a loaded
+generic and says so (`FIT warn niche=... reason=absent`) instead of handing back an empty slot.
+Names must fit **8.3 uppercase** — the kernel skips LFN entries (`fat32.rs`, `0x0F`).
 
-| Slot | Task | Canonical name | Fallback names | Driver |
+| Slot | Model (ADR-0078) | RAM | Task | Canonical name |
 |---|---|---|---|---|
-| `Active` | main LLM, day-to-day | `FALCON3.V7` | `FALCON3.V6`, `FALCON3B.BIN` | `load_model_v6` → `CURRENT_MODEL` |
-| `GeneratorPro` | complex generation (7B/10B) | `PRO.V7` | `PRO.v6`, `FALCON7B.v6` | hub + `select_generator_slot` |
-| `Agent` | agentic / orchestration | `AGENT.V7` | `AGENT.BIN`, `QWEN3B.BIN` | hub |
-| `RustCoder` | code generation | `RUSTCDR.V7` | `RUSTCDR3.BIN` | legacy Mutex |
-| `HwExpert` | hardware identification | `HWEXPRT.V7` | `HWEXPRT4.BIN` | legacy Mutex |
-| `Vision` | vision encoder | `VISION.V7` | `VISION.v6`, `SIGLIP.BIN` | hub (`k_ai::vision::vit`) |
-| `Reranker` | re-rank / memory | `RERANKER.V7` | `RERANKER.BIN` | hub (`k_ai::memory_systems`) |
-| `Learner` | 1B / auto-learning | `LEARNER.V7` | `FALCON1B.v6` | hub |
+| `Active` | BitNet 2B — now Falcon3-3B | 590MB | general conversation, default | `FALCON3.V7` |
+| `GeneratorPro` | Llama 3.1 8B | 1.9GB | deep diagnosis, auto-healing | `PRO.V7` |
+| `Agent` | Qwen 2.5 3B | 752MB | agentic tasks | `AGENT.V7` |
+| `RustCoder` | DeepSeek Coder 1.3B | 321MB | code generation for patches | `RUSTCDR.V7` |
+| `HwExpert` | SDIO HW ID | 1MB | hardware identification | `HWEXPRT.V7` |
+| `Vision` | SigLIP ViT-B/16 | 33MB | visual encoder | `VISION.V7` |
+| `Reranker` | BGE Reranker v2 M3 | 165MB | RAG cross-encoder | `RERANKER.V7` |
+| `Learner` | Qwen 2.5 0.5B | 124MB | continuous on-device learning | `LEARNER.V7` |
 
-Outside the hub (already unique names, not renamed): `BGE.BIN` (embeddings), `PIPER.BIN` /
-`PIPER_EN.BIN` (TTS), `STT.BIN` (CTC), `ROUTER.BITNET` (MoE router — 6-char extension does not
-fit 8.3, stored as `ROUTER.BIT`). Only the generator has niche resolution today
+Outside the hub (ADR-0078 §2.3, already unique names, not renamed): `BGE.BIN` (BAAI embedding),
+`PIPER.BIN` / `PIPER_EN.BIN` (VITS TTS), `STT.BIN` (CTC), `ROUTER.BITNET` (MoE router — 6-char
+extension does not fit 8.3, stored as `ROUTER.BIT`).
+
+**Honest scope** (ADR-0078 §1.1): only `Active` and `Pro` are exercised at runtime today — the
+rest are declared slots with no wired loader. Only the generator has niche resolution
 (`select_generator_slot`); the other subsystems degrade on their own (e.g. BGE absent →
-`emb=pseudo`).
+`emb=pseudo`, Reranker/Learner/Vision → no consumer).
 
 ### Audio & voice
 

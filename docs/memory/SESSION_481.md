@@ -74,6 +74,16 @@ caber em 8.3 uppercase** (`.V7` = 2 chars de extensão, cabe). `ROUTER.BITNET` (
   Active tem embed_dim alto; `slot_real` separa os casos.
 - **Tick baixo em boot de LLM ≠ regressão** — o falcon3 segura o tick budget na inferência; `tick=1`
   com `T+` subindo é o comportamento conhecido (mesmo do s479).
+- **Tabela que existia e foi deletada: procurar no histórico antes de reconstruir** — a tabela
+  slot→modelo→tarefa **estava no README** e foi removida no **próprio commit da ADR** (`760cfae3`,
+  ADR-0078, 2026-07-28), que moveu a informação para `docs/architecture/0078-*.md` §2.2/§2.3 e
+  deixou o README sem ela. Eu declarei "não existe" e **infiri/chutei** as atribuições de modelo em
+  vez de recuperá-las. Recuperado do histórico: Active=BitNet 2B (hoje Falcon3-3B), Vision=SigLIP
+  ViT-B/16, Pro=Llama 3.1 8B, Agent=Qwen 2.5 3B, Coder=DeepSeek Coder 1.3B, Reranker=BGE Reranker
+  v2 M3, HwExpert=SDIO HW ID, Learner=Qwen 2.5 0.5B; subsistemas §2.3: BGE, STT, Piper, OCR.
+  README corrigido com a atribuição real + escopo honesto (ADR-0078 §1.1: só Active + Fast + Pro
+  são usados de fato). Corolário: "não achei no arquivo atual" ≠ "não existe" — `git log --follow`
+  no doc antes de reconstruir conhecimento institucionalizado.
 
 ## 6. Pendentes
 
