@@ -382,6 +382,26 @@ def _inject_device_legos(files: list) -> None:
         print(f"[LEGO] ERROR inject skipped: {e}")
 
 
+def warn_83_collisions(files):
+    """Guard 8.3 (s483 Passo 0): o writer trunca base>8/ext>3 e o kernel
+    (fat32::encode_83) trunca IGUAL — nomes longos casam. Mas DOIS nomes que
+    colapsam para o mesmo dirent de 11 bytes fazem o 2º sumir do root.
+    Avisa truncamento e colisão antes do write."""
+    seen83 = {}
+    for name, src in files:
+        if src is None:
+            continue
+        base, _, ext = name.rpartition(".")
+        if not base:
+            base, ext = name, ""
+        key = base[:8].upper().ljust(8) + ext[:3].upper().ljust(3)
+        if key in seen83:
+            print(f"  [!] COLISAO 8.3: {name} == {seen83[key]} (dirent {key!r}) — o 2º some do root")
+        seen83[key] = name
+        if len(base) > 8 or len(ext) > 3:
+            print(f"  [~] 8.3 truncado: {name} -> dirent {key.rstrip()}")
+
+
 def populate(path):
     llm = pack_llm_set()
     print(f"[PACK_LLM] {sorted(llm) or 'none'} (env PACK_LLM; default=falcon3)")
@@ -606,6 +626,8 @@ def populate(path):
         files.append(("HINT.BIN", hint_bin))
     else:
         print("  [--] HINT.BIN ausente (rode python tools/train_hint_mlp.py) — hints ready")
+
+    warn_83_collisions(files)
 
     with open(path, "r+b") as f:
         f.seek(2048 * 512)  # skip MBR + partition start

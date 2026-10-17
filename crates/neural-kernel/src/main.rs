@@ -4862,6 +4862,18 @@ pub(crate) fn kernel_boot(
                         };
                         let Some(ino) = vol.resolve_path(dev, &path) else { continue };
                         let Ok(data) = vol.read_file(dev, ino) else { continue };
+                        // s483 Passo 0: mesma validação do path FAT (gap read→load).
+                        if let Err(reason) = cortex_crate::model::validate_bitnet_blob(&data) {
+                            k_nano::slog_bin!(
+                                "MODEL",
+                                "warn",
+                                "NeuralFS REJECT path={} slot={} reason={}",
+                                path,
+                                slot.name(),
+                                reason
+                            );
+                            continue;
+                        }
                         if let Some(m) = crate::cortex::load_model(&data) {
                             crate::cortex::register_model_slot(slot, alloc::boxed::Box::new(m));
                             k_nano::slog_bin!(
@@ -5008,6 +5020,21 @@ fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
         return;
     }
     if let Some(data) = fs.read_file(name) {
+        // s483 Passo 0: validação entre read e load (plano s481 Passo 2/4).
+        // v6/v7: header autodescritivo — tamanho declarado TEM que bater com o
+        // blob (s480: fantasma de tamanho = recusa, nunca registra).
+        if let Err(reason) = cortex_crate::model::validate_bitnet_blob(&data) {
+            k_nano::slog_bin!(
+                "MODEL",
+                "warn",
+                "hub REJECT file={} slot={} reason={} ({}KB)",
+                name,
+                slot.name(),
+                reason,
+                data.len() / 1024
+            );
+            continue;
+        }
                                     if let Some(m) = crate::cortex::load_model(&data) {
                                         // Se Active vazio e slot é pro/fast, vira primary
                                         if !crate::cortex::model_is_loaded()

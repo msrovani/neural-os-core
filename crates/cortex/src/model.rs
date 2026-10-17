@@ -222,6 +222,39 @@ pub fn probe_llm_file_size(buf: &[u8]) -> LlmSizeProbe {
     }
 }
 
+/// s483 Passo 0 (plano s481 Passo 2/4): validação entre read e load.
+/// v6/v7 LLM: o header é autodescritivo — o tamanho declarado TEM que bater
+/// com o blob lido (s480: fantasma de tamanho = recusa, nunca registra).
+/// v1..=5 legacy: sem tamanho declarado no header — só magic (o warn de
+/// migração já vem do load_model_v6). v6/v7 com model_type != 0 (expert/
+/// router) não é LLM: recusa — o HwExpert tem path dedicado
+/// (load_hwexpert_v6) e parsear como LLM é fantasma.
+pub fn validate_bitnet_blob(data: &[u8]) -> Result<(), &'static str> {
+    if data.len() < 16 {
+        return Err("too_short");
+    }
+    let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    if magic != 0xBE11BE11 {
+        return Err("bad_magic");
+    }
+    let version = u16::from_le_bytes([data[4], data[5]]);
+    match version {
+        1..=5 => Ok(()),
+        6 | 7 => {
+            if data[14] != 0 {
+                return Err("not_llm");
+            }
+            match probe_llm_file_size(data) {
+                LlmSizeProbe::Ready(n) if n == data.len() => Ok(()),
+                LlmSizeProbe::Ready(_) => Err("size_mismatch"),
+                LlmSizeProbe::Need(_) => Err("truncated_header"),
+                LlmSizeProbe::NotLlm => Err("bad_header"),
+            }
+        }
+        _ => Err("unsupported_version"),
+    }
+}
+
 // ── Static: header do modelo carregado ─────────────────────────────────
 
 static HEADER_LOADED: AtomicBool = AtomicBool::new(false);
@@ -515,5 +548,37 @@ mod tests {
         let mut bigtok = synth_header(6, false);
         bigtok[45] = 0x70; bigtok[46] = 0x11; bigtok[47] = 0x01; bigtok[48] = 0x00; // 70000
         assert!(parse_model_header(&bigtok).is_none());
+    }
+
+    #[test]
+    fn validate_bitnet_blob_gates() {
+        // v6 válido: tamanho declarado == blob → Ok.
+        let v6 = synth_header(6, false);
+        let h6 = parse_model_header(&v6).expect("v6 header");
+        let mut blob = v6.clone();
+        blob.resize(h6.file_size, 0);
+        assert_eq!(validate_bitnet_blob(&blob), Ok(()));
+        // Truncado: declarado != lido → recusa (fantasma de tamanho, s480).
+        blob.truncate(h6.file_size - 1);
+        assert_eq!(validate_bitnet_blob(&blob), Err("size_mismatch"));
+        // Magic errado → recusa.
+        let mut junk = alloc::vec![0u8; 32];
+        junk[0] = 0x11; junk[1] = 0xBE;
+        assert_eq!(validate_bitnet_blob(&junk), Err("bad_magic"));
+        // Curto (<16) → recusa.
+        assert_eq!(validate_bitnet_blob(&[0xBE, 0x11, 0xBE, 0x11]), Err("too_short"));
+        // v5 legacy: sem tamanho declarado — só magic → Ok (warn vem do loader).
+        let mut v5 = alloc::vec![0u8; 32];
+        v5[..4].copy_from_slice(&0xBE11BE11u32.to_le_bytes());
+        v5[4] = 5; v5[5] = 0;
+        assert_eq!(validate_bitnet_blob(&v5), Ok(()));
+        // v8 → versão não suportada.
+        let mut v8 = synth_header(6, false);
+        v8[4] = 8; v8[5] = 0;
+        assert_eq!(validate_bitnet_blob(&v8), Err("unsupported_version"));
+        // model_type != 0 (expert/router) → não é LLM (path dedicado).
+        let mut expert = synth_header(6, false);
+        expert[14] = 1;
+        assert_eq!(validate_bitnet_blob(&expert), Err("not_llm"));
     }
 }
