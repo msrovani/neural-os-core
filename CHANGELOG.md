@@ -1,4 +1,14 @@
 # Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
+## [1.9.99-s481] - 2026-10-17 - resolve/informa do hub: severidade honesta, presenca real (anti-alias), ausencia->fallback + tabela de nichos no README
+
+- **Duas correções** (meu grep anterior excluía `neural-kernel/src/`): `hub_status()` **já tem** caller em `main.rs:5043` (afirmei que não tinha — errado); e `mark_pro_alias` tem caller **vivo** em `main.rs:5041` (marca Pro com `EMBED_DIM >= 2048`, o 3B tem 3072) → o alias **está no ar**: `slot_loaded(GeneratorPro)` retorna `true` sem existir blob Pro.
+- **Fix** (`crates/cortex/src/model_hub.rs`, +39/−14):
+  - **`slot_real(slot)`** — presença real anti-alias: os 5 slots do HUB só contam blob em `HUB`; Active/RustCoder/HwExpert vivem nos Mutex legados, onde `slot_loaded` é a verdade.
+  - **`maybe_fit` considera ausência** — antes só caía em fallback por RAM (`too_tight`); um nicho ausente com RAM folgada devolvia slot vazio. Ausência e RAM caem agora no mesmo `pick_fit_fallback` (decisão não duplicada).
+  - **Severidade honesta** — o log de fallback sai de `ok` para `warn`, como `niche={} -> fallback={} reason={}` (`absent`|`too_tight`).
+- **Prova** (falcon3-3b, nó único × 7G): não regrediu — `model 1012764KB` (tamanho correto, o `590680KB` fantasma não aparece), `LLM LOADED`, `T+3658` (maior que os 1106 do s479). `tick=1` é o comportamento conhecido do 3B (inferência segura o tick budget), não regressão.
+- **Tabela slot→modelo→tarefa escrita no README** (não existia): os 8 nichos (`FALCON3.V7`, `PRO.V7`, `AGENT.V7`, `RUSTCDR.V7`, `HWEXPRT.V7`, `VISION.V7`, `RERANKER.V7`, `LEARNER.V7`) + fora do hub (`BGE.BIN`, `PIPER.BIN`, `STT.BIN`, `ROUTER.BIT`). Nomes 8.3 uppercase — o kernel pula LFN.
+- **Lição**: grep que exclui um diretório produz conclusões falsas; fallback por RAM não é fallback por ausência; presença precisa distinguir blob real de alias; tick baixo em boot de LLM ≠ regressão.
 ## [1.9.99-s480] - 2026-10-17 - bge-m3 deixa de entrar em panic: resize_heap_to_mb fail-closed + NotLlm propaga (mata o 590680KB)
 
 - **Passo 0 — `resize_heap_to_mb` fail-closed pós-claim** (`allocator.rs:1641`): o span do TALC, pós-claim, é `budget` (~75% RAM), mas a função usava `CURRENT_HEAP_MB` (teto do **BUMP**) como se fosse o do TALC → `extend` recebia um `req` **menor** que o `old` → assert `new_heap must contain old_heap`. Medido no bge-m3: `current=512MB`, `target=1795MB` → `req`=1,75 GB contra `old`=~5 GB. Agora recusa quando `TALC_READY`.

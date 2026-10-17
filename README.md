@@ -239,6 +239,30 @@ and Rust-subset paths exist but are gated behind the isolation ring.
 - **SleepCycle** — scheduled REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT cycle over
   episodic memories (no effectiveness benchmark yet)
 
+### Model hub — slot → model → task
+
+Eight niches (`cortex::model_hub::ModelSlot`), each bound to one task. A niche is filled by
+a file named after it; when it is absent the system routes to a loaded generic and says so
+(`FIT warn niche=... reason=absent`) instead of handing back an empty slot. Names must fit
+**8.3 uppercase** — the kernel skips LFN entries (`fat32.rs`, `0x0F`).
+
+| Slot | Task | Canonical name | Fallback names | Driver |
+|---|---|---|---|---|
+| `Active` | main LLM, day-to-day | `FALCON3.V7` | `FALCON3.V6`, `FALCON3B.BIN` | `load_model_v6` → `CURRENT_MODEL` |
+| `GeneratorPro` | complex generation (7B/10B) | `PRO.V7` | `PRO.v6`, `FALCON7B.v6` | hub + `select_generator_slot` |
+| `Agent` | agentic / orchestration | `AGENT.V7` | `AGENT.BIN`, `QWEN3B.BIN` | hub |
+| `RustCoder` | code generation | `RUSTCDR.V7` | `RUSTCDR3.BIN` | legacy Mutex |
+| `HwExpert` | hardware identification | `HWEXPRT.V7` | `HWEXPRT4.BIN` | legacy Mutex |
+| `Vision` | vision encoder | `VISION.V7` | `VISION.v6`, `SIGLIP.BIN` | hub (`k_ai::vision::vit`) |
+| `Reranker` | re-rank / memory | `RERANKER.V7` | `RERANKER.BIN` | hub (`k_ai::memory_systems`) |
+| `Learner` | 1B / auto-learning | `LEARNER.V7` | `FALCON1B.v6` | hub |
+
+Outside the hub (already unique names, not renamed): `BGE.BIN` (embeddings), `PIPER.BIN` /
+`PIPER_EN.BIN` (TTS), `STT.BIN` (CTC), `ROUTER.BITNET` (MoE router — 6-char extension does not
+fit 8.3, stored as `ROUTER.BIT`). Only the generator has niche resolution today
+(`select_generator_slot`); the other subsystems degrade on their own (e.g. BGE absent →
+`emb=pseudo`).
+
 ### Audio & voice
 
 Intel HDA capture + playback (CORB/RIRB, SD0/SD1), Piper VITS TTS (PT-BR + EN),

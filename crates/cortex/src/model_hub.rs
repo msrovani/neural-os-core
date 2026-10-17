@@ -288,7 +288,28 @@ fn fit_ok(slot: ModelSlot) -> bool {
     !crate::model_fit::slot_too_tight(slot.name())
 }
 
-fn pick_fit_fallback(preferred: ModelSlot) -> ModelSlot {
+/// Presença REAL de um modelo no slot — s480.
+///
+/// `slot_loaded` sozinho MENTE para GeneratorPro: `mark_pro_alias(true)`
+/// (chamado em `main.rs:5041` quando o Active tem embed_dim >= 2048, o que o
+/// 3B tem: 3072) marca Pro como carregado sem existir blob Pro. `hub_status`
+/// já desambiguava isso com a tag "alias"; aqui a decisão é programática.
+///
+/// Os 5 slots do HUB só são reais com blob em `HUB`. Active/RustCoder/HwExpert
+/// vivem nos Mutex legados (`register_model`), então `slot_loaded` é a
+/// verdade para eles.
+fn slot_real(slot: ModelSlot) -> bool {
+    match slot {
+        ModelSlot::Vision
+        | ModelSlot::GeneratorPro
+        | ModelSlot::Reranker
+        | ModelSlot::Agent
+        | ModelSlot::Learner => hub_has_blob(slot),
+        ModelSlot::Active | ModelSlot::RustCoder | ModelSlot::HwExpert => slot_loaded(slot),
+    }
+}
+
+fn pick_fit_fallback(preferred: ModelSlot, reason: &str) -> ModelSlot {
     // Honesty s388: Vision ≠ gerador — só Pro/Agent/Reranker/Active.
     let order = [
         ModelSlot::GeneratorPro,
@@ -297,19 +318,17 @@ fn pick_fit_fallback(preferred: ModelSlot) -> ModelSlot {
         ModelSlot::Active,
     ];
     for s in order {
-        let loaded = if s == ModelSlot::Active {
-            slot_loaded(s)
-        } else {
-            hub_has_blob(s) || slot_loaded(s)
-        };
-        if loaded && fit_ok(s) {
+        if slot_real(s) && fit_ok(s) {
             if s != preferred {
+                // s480: fallback é DEGRADAÇÃO, não sucesso — sai como warn.
+                // A lição do próprio repo: "sucesso com sev fail = dmesg mentiroso".
                 k_nano::slog_bin!(
                     "FIT",
-                    "ok",
-                    "escalate slot={} → {} reason=too_tight",
+                    "warn",
+                    "niche={} -> fallback={} reason={} (usando generico)",
                     preferred.name(),
-                    s.name()
+                    s.name(),
+                    reason
                 );
             }
             return s;
@@ -318,17 +337,23 @@ fn pick_fit_fallback(preferred: ModelSlot) -> ModelSlot {
     k_nano::slog_bin!(
         "FIT",
         "warn",
-        "escalate slot={} reason=too_tight (no Good+ fallback)",
-        preferred.name()
+        "niche={} sem fallback carregado reason={} -> Active (pode estar vazio)",
+        preferred.name(),
+        reason
     );
     ModelSlot::Active
 }
 
 fn maybe_fit(slot: ModelSlot) -> ModelSlot {
-    if fit_ok(slot) {
+    // s480: AUSÊNCIA também é motivo de fallback, não só aperto de RAM.
+    // Antes, um nicho ausente com RAM folgada passava por `fit_ok` e era
+    // devolvido — o consumidor recebia um slot vazio. Agora ausência e
+    // too_tight caem no mesmo `pick_fit_fallback` (decisão não duplicada).
+    let present = slot_real(slot);
+    if present && fit_ok(slot) {
         slot
     } else {
-        pick_fit_fallback(slot)
+        pick_fit_fallback(slot, if present { "too_tight" } else { "absent" })
     }
 }
 
