@@ -1,4 +1,18 @@
 # Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
+## [1.9.99-s487] - 2026-10-18 — LOO do hub destravado: seam registrado no sandbox + Pro preferido
+
+- **Ovo-galinha rompido**: `select_generator_slot` exigia `hub_has_blob(GeneratorPro)` para escolher Pro — mas o LOO existe justamente para carregar o blob ausente. Agora decide por **intenção** (`is_complex_conversation`) e devolve `GeneratorPro` mesmo sem blob; o fallback honesto (`pro miss → CURRENT_MODEL`, warn) já existia em `dispatch_expert`.
+- **Gate separado**: `qemu_dev_skip_models` envolvia todo o bloco do hub, inclusive o `register_slot_loader` → `SLOT_LOADER=0` em sandbox e seam **nunca exercitável**. Agora o sandbox pula apenas o *eager* NeuralFS; o loader registra sempre.
+- **Early-return `qemu_loader_2b` removido**: recusava Pro/Vision mesmo quando o seam disparava. A proteção que ele dava (PIO gigante) continua no `pio_cap` (8MB em `qemu_hv`, 400MB em metal) — guard duplicado com o cap, e a duplicação era o bloqueio.
+- **Adapter** `hub_load_on_demand`: NeuralFS (disco instalado) antes de FAT (pendrive/live).
+- **Prova**: `cargo check --release` 0 erros; `cargo test -p cortex --lib model_hub` 2/2 (novo `select_complex_prefers_pro_even_absent`). **Runtime = UNKNOWN**: o cap de 8MB sob QEMU recusa qualquer slot do hub — o observável é o log de skip, não um load. Aceite exige metal ou liberar o cap.
+
+## [1.9.99-s484..s486] - 2026-10-17 — Passo 0/3/5-6 do hub (registro consolidado)
+
+- **s484 — validador + guard 8.3**: premissa "nomes 8.3 mortos" derrubada (truncamento simétrico writer↔kernel; nomes longos casam como dirent) — o risco real é colisão. `validate_bitnet_blob` entre read e load nos dois paths (FAT + NeuralFS) + `warn_83_collisions` no `mkfat32.py`. Host tests 11/11.
+- **s485 — evict explícito**: `evict_slot(slot)` reaproveita `clear_model()` (Active) / `take+drop` (HUB), zera footprint e limpa o alias Pro quando Pro não tem blob; gate em `heap_headroom_low()` junto ao cap do Reranker. Evict é degradação (warn); evict de vazio = `false`.
+- **s486 — poda verificada**: `slot_from_bitnet_bytes` e `load_models_multi` apagados (~66 LOC mortas, cadeia transitiva); `ModelSlot::from_name` fica (vivo em `model_fit`); MICROPY.WASM é módulo boot-wired (refutado como peso morto); `fat_names_for` é no-op (premissa morreu com os renames cancelados).
+
 ## [1.9.99-s483] - 2026-10-17 - Passo 2 do hub: Rerunker alcançável + load-on-first-use (seam, não loop eager)
 
 - **2a — Reranker alcançável**: `pio_cap` do Reranker de 32MB → `slot_footprint_mb()` (artefato de 165MB contra cap de 32MB = skip sempre, com log `info` parecendo tentativa). Acrescido gate `heap_headroom_critical()` antes do `read_file` — corrigir o cap torna a leitura de 165MB *possível*, e sem gate é o padrão OOM → #PF → park.

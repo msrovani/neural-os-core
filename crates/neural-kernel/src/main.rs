@@ -4892,11 +4892,13 @@ pub(crate) fn kernel_boot(
             false
         }
 
-        /// s483 Passo 2b: adapter do seam de load-on-first-use.
-/// `try_hub_slot_fat` retorna `()` (tem varios `return;` no corpo — mudar a
-/// assinatura seria um diff grande sem ganho), entao o retorno booleano e
-/// derivado do estado real do slot depois da tentativa.
+        /// s483 Passo 2b + s487 P1: adapter do seam de load-on-first-use.
+/// Ordem: NeuralFS (disco instalado) → FAT (pendrive/live). `try_hub_slot_fat`
+/// retorna `()` (varios `return;` no corpo); o bool sai de `slot_real`.
 fn hub_load_on_demand(slot: crate::model_hub::ModelSlot) -> bool {
+    if try_hub_slot_neuralfs(slot) {
+        return true;
+    }
     try_hub_slot_fat(slot);
     crate::model_hub::slot_real(slot)
 }
@@ -4961,23 +4963,9 @@ fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
                     _ => pio_hw,
                 }
             };
-            // Active ja veio do loader — nao duplicar GeneratorFast/Pro via FAT
-            if qemu_loader_2b
-                && crate::cortex::model_is_loaded()
-                && matches!(
-                    slot,
-                    crate::model_hub::ModelSlot::Vision
-                        | crate::model_hub::ModelSlot::GeneratorPro
-                )
-            {
-                k_nano::slog_bin!(
-                    "MODEL",
-                    "info",
-                    "hub skip {} — Active ja carregado via QEMU-loader",
-                    slot.name()
-                );
-                return;
-            }
+            // s487: LOO pode pedir Pro/Vision sob demanda mesmo com Active do
+            // QEMU-loader — o pio_cap abaixo ainda protege contra PIO gigante.
+            // (O early-return antigo matava o LOO do Pro por construcao.)
             unsafe {
                 let ata_guard = crate::ATA_DRIVER.lock();
                 if let Some(ref ata) = *ata_guard {
@@ -5094,29 +5082,18 @@ fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
                 }
             }
         }
-        // I5: NeuralFS do disco instalado primeiro (Residente), depois FAT32 (pendrive/live).
-        // Sandbox QEMU/WHPX = DEV/TEST — pula hub FAT (RERANKER/AGENT 100–700MB).
-        // Aceite de modelos = HW real ou QEMU-loader explícito.
-        let qemu_dev_skip_models = k_nano::platform_probe::hypervisor().is_sandbox();
-        if qemu_dev_skip_models {
-            k_nano::slog_bin!("HUB", "skip", "sandbox (profile=qemu) — modelos hub nao carregados (aceite=HW)");
-            // Pula para apos do bloco de model loading (cai no proximo `}`)
-        } else {
-        for s in [
-            crate::model_hub::ModelSlot::Reranker,
-            crate::model_hub::ModelSlot::Vision,
-            crate::model_hub::ModelSlot::GeneratorPro,
-            crate::model_hub::ModelSlot::Learner,
-            crate::model_hub::ModelSlot::Agent,
-        ] {
-            if !crate::model_hub::slot_loaded(s) && try_hub_slot_neuralfs(s) {
-                k_nano::slog_bin!("HUB", "info", "slot {} via NeuralFS", s.name());
-            }
+        // s487 P0: gate SEPARADO — sandbox nao engole o seam LOO.
+        // Eager NeuralFS/PIO de nichos grandes fica fora do boot (custo/hang);
+        // o loader SEMPRE registra: first-use dispara NeuralFS→FAT com pio_cap.
+        if k_nano::platform_probe::hypervisor().is_sandbox() {
+            k_nano::slog_bin!(
+                "HUB",
+                "ok",
+                "sandbox: LOO seam only (sem eager NeuralFS) — first-use + pio_cap"
+            );
         }
-        // s483 Passo 2b: load-on-first-use. Nao tentamos mais os 5 slots no boot.
-        // Registramos o loader como seam e o primeiro CONSUMIDOR dispara o load
-        // (cortex.rs -> generate_from_slot -> ensure_slot_loaded).
-        // O boot deixa de fazer 5 leituras PIO por boot sem ninguem ler o resultado.
+        // s483 Passo 2b + s487: load-on-first-use (NeuralFS→FAT no adapter).
+        // Consumidor: cortex.rs -> generate_from_slot -> ensure_slot_loaded.
         crate::model_hub::register_slot_loader(hub_load_on_demand);
         k_nano::slog_bin!(
             "HUB",
@@ -5129,7 +5106,6 @@ fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
             crate::model_hub::mark_pro_alias(true);
         }
         k_nano::slog_bin!("MODEL", "ok", "{}", crate::model_hub::hub_status());
-        }
     }
 
     // BPE vocab HF (BPB1) via QEMU-loader + FAT — ANTES do LLM-TEST

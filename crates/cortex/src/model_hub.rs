@@ -487,21 +487,36 @@ fn maybe_fit(slot: ModelSlot) -> ModelSlot {
 }
 
 pub fn select_generator_slot(prompt: &str) -> ModelSlot {
-    // Complexo: blob Pro separado → Pro; senão Active (2B/3B no CURRENT).
+    // Complexo: preferir Pro. s487 ovo-galinha — NÃO exigir hub_has_blob a priori:
+    // generate_from_slot → ensure_slot_loaded dispara LOO; se o load falhar,
+    // dispatch_expert (cortex) cai no Active com warn. Antes, Pro ausente com
+    // RAM folgada nunca era escolhido → LOO do Pro morto por construção.
     if is_complex_conversation(prompt) {
-        if hub_has_blob(ModelSlot::GeneratorPro) {
+        if slot_real(ModelSlot::GeneratorPro) {
             return maybe_fit(ModelSlot::GeneratorPro);
         }
-        if slot_loaded(ModelSlot::Active) {
-            return maybe_fit(ModelSlot::Active);
-        }
+        k_nano::slog_bin!(
+            "FIT",
+            "ok",
+            "niche=generator_pro absent -> try LOO (complex prompt)"
+        );
+        return ModelSlot::GeneratorPro;
     }
     if slot_loaded(ModelSlot::Active) {
         return maybe_fit(ModelSlot::Active);
     }
     // Vision encoder não é gerador de texto — não entra no select_generator
-    if hub_has_blob(ModelSlot::GeneratorPro) {
+    if slot_real(ModelSlot::GeneratorPro) {
         return maybe_fit(ModelSlot::GeneratorPro);
+    }
+    // Active vazio: tentar Pro via LOO (mesmo padrão do complexo).
+    if fit_ok(ModelSlot::GeneratorPro) {
+        k_nano::slog_bin!(
+            "FIT",
+            "ok",
+            "niche=generator_pro absent -> try LOO (Active empty)"
+        );
+        return ModelSlot::GeneratorPro;
     }
     if hub_has_blob(ModelSlot::Reranker) {
         return maybe_fit(ModelSlot::Reranker);
@@ -612,6 +627,24 @@ mod evict_tests {
         fn max_seq(&self) -> usize {
             1
         }
+    }
+
+    #[test]
+    fn select_complex_prefers_pro_even_absent() {
+        // s487 ovo-galinha: Pro ausente ainda e escolhido p/ disparar LOO.
+        let _ = evict_slot(ModelSlot::GeneratorPro);
+        assert!(
+            !slot_real(ModelSlot::GeneratorPro),
+            "precondicao: Pro sem blob"
+        );
+        let slot = select_generator_slot(
+            "explique detalhadamente a arquitetura do neural-os e compare com linux",
+        );
+        assert_eq!(
+            slot,
+            ModelSlot::GeneratorPro,
+            "complexo + Pro ausente deve devolver Pro (LOO), nao Active"
+        );
     }
 
     #[test]
