@@ -152,7 +152,7 @@ pub fn parallel_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     k_nano::smp::ap_work::reset_barrier(aps.min(n_workers.saturating_sub(1)) as u32);
 
     for jid in 0..aps.min(n_workers.saturating_sub(1)) {
-        let _ = k_nano::smp::ap_work::enqueue(matmul_worker, jid);
+        let _ = k_nano::smp::ap_work::enqueue_barrier(matmul_worker, jid);
     }
 
     unsafe {
@@ -387,7 +387,7 @@ pub fn parallel_ternary_matmul(
     k_nano::smp::ap_work::clear_queue();
     k_nano::smp::ap_work::reset_barrier(aps.min(n_workers.saturating_sub(1)) as u32);
     for jid in 0..aps.min(n_workers.saturating_sub(1)) {
-        let _ = k_nano::smp::ap_work::enqueue(ternary_worker, jid);
+        let _ = k_nano::smp::ap_work::enqueue_barrier(ternary_worker, jid);
     }
     let (t_ipi, t_bsp);
     unsafe {

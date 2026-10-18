@@ -1,4 +1,10 @@
 # Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
+## [1.9.99-s490] - 2026-10-18 — #PF storm (F1, classe #630): epoch real na barreira
+
+- **Causa**: `job_done()` creditava a barreira global sem epoch — arrival atrasado liberava o dispatch seguinte cedo, `TernaryJobCtx` dropado com worker vivo, talc reciclando o bloco (`c_ptr=0` → store em cr2 pequeno) em `ternary_worker`. Writer capturado por hardware watchpoint (TCG): IP fixo `0xffffffff8092b7b4`; 4/7 boots reproduziam.
+- **Fix**: `JobSlot` com `epoch+counts`; `reset_barrier` bumpa epoch; `job_done(epoch,counts)` não credita stale/não-participante; `enqueue_barrier` só para workers de matmul. Harness: `tools/watch_pf_writer.ps1`, `tools/pf_ctx_watch.py`, falsificador `tools/epoch_falsifier_boots.sh`.
+- **Prova**: `cargo check --release` 0 erros; `ap_work` 5/5; 4 boots TCG **0 storms** (baseline 4/7) com matmul exercitado (workers=8, T+13251). Origem exata do `c_ptr=0` = UNKNOWN; metal = UNKNOWN. SESSION_490.
+
 ## [1.9.99-s489] - 2026-10-18 — LOO Load Usable (HW-first) + auditoria de blobs
 
 - **Materialize**: `validate_for_slot(slot, data)` (HwExpert type=1; LLM type=0+size; Vision/Reranker magic+ver) → LOO só `register_bytes` (NeuralFS+FAT). AlwaysTiny HwExpert com Active residente; `mark_slot(HwExpert)` em `set_hwexpert_v4_model`.

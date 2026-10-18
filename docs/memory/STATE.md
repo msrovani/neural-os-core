@@ -1,4 +1,21 @@
-# STATE - neural-os-core v1.9.99-s489 - LOO Load Usable (HW-first materialize)
+# STATE - neural-os-core v1.9.99-s490 - #PF storm fechado (epoch na barreira)
+#   [s490] #PF storm (F1, classe #630) - writer capturado e cadeia corrigida. CAUSA: job_done() creditava
+#     barreira global sem epoch -> arrival atrasado liberava o dispatch seguinte cedo -> BSP dropava
+#     TernaryJobCtx com worker vivo -> talc reciclava o bloco -> store c_ptr=0 em ternary_worker (cr2
+#     pequeno, err=write, IP fixo 0xffffffff8092b7b4; 4/7 boots reproduziam; fingerprint de 16B do PF_DBG
+#     provou que o ELF usado p/ simbolizar nao era o que bootou = fim do "IP migrante").
+#     FIX: JobSlot{epoch,counts}; reset_barrier bumpa epoch antes de zerar DONE; job_done(epoch,counts) nao
+#     credita stale/nao-participante; enqueue_barrier so p/ workers de matmul (hermes segue count=false).
+#     Harness: tools/watch_pf_writer.ps1 + tools/pf_ctx_watch.py (gdb Python re-arm por publish, 3 ultimos
+#     ctx); falsificador: tools/epoch_falsifier_boots.sh.
+#     PROVA: cargo check --release 0; ap_work 5/5 (stale_job_done_nao_credita_barreira_nova); 4 boots TCG
+#     0 storms (baseline 4/7), matmul exercitado workers=8 T+13251.
+#     HONESTIDADE: origem exata do c_ptr=0 = UNKNOWN (write zero nao capturado; cadeia barreira = com
+#     falsificador); metal = UNKNOWN (watchpoint so existe em TCG).
+#     LICOES: simbolizar IP exige o ELF que BOOTOU; protecao documentada com 0 callers nao protege;
+#     watchpoint precisa re-arm por publish.
+#     PENDENTES: F1 1h 8c/8GB (agora destravado); contador STALE_DONE p/ prova direta; aceite metal.
+#     Detalhe: SESSION_490.md.
 #   [s489] Path metal: validate_for_slot→register_bytes; AlwaysTiny+mark_slot HwExpert; PCI inject
 #     + family names; pio metal=pio_hw.max(footprint), QEMU=8MB miss honesto. Host VERIFIED
 #     (validate_for_slot + check release). Metal mid-niche VERIFIED = UNKNOWN ate usb_hw.img.
@@ -7,7 +24,7 @@
 #   [s488] Hub MoE + revisao de fluxo ADR-0088. FEITO: resolve_route→dispatch; ExpertKind::Agent;
 #     mid-slots LOO; AlwaysTiny; moe_compose pipelines; REMOVIDO skip saudacao MoE; AirLLM so apos
 #     classify e so se rota geradora. PROVA host: resolve/pipeline/slot tests OK. LOO runtime UNKNOWN.
-#     Detalhe: SESSION_488.md.
+#     Detalhe: SESSION_INDEX (linha 488) + commit s488+s489 (67507ee5).
 #   [s487] Passo "ovo-galinha" do load-on-first-use (fecha o arco s483 2b -> s485 evict -> s487). O seam EXISTIA desde o s483, mas TRES gates o anulavam e o registro do s483 chamou o resultado de "fail-safe": (1) qemu_dev_skip_models (hypervisor().is_sandbox()) envolvia TODO o bloco do hub, inclusive register_slot_loader -> SLOT_LOADER=0 em sandbox -> try_load_on_demand sempre false -> caminho antigo e seam NUNCA exercitavel em dev; (2) select_generator_slot exigia hub_has_blob(GeneratorPro) -> Pro sem blob nunca era escolhido, mas LOO existe para carregar o blob que falta (ovo-galinha: precisa do blob p/ escolher o slot, precisa do slot p/ carregar o blob); (3) early-return em try_hub_slot_fat (qemu_loader_2b && model_is_loaded() && slot in {Vision,Pro} -> return "Active ja carregado via QEMU-loader") recusava o load mesmo se o seam disparasse. Classe unica: gate que protege trabalho tambem mata o caminho que deveria exercita-lo.
 #     FEITO: (1) P0 gate SEPARADO no bin - sandbox pula so o EAGER NeuralFS; register_slot_loader roda SEMPRE (log "HUB ok sandbox: LOO seam only (sem eager NeuralFS) - first-use + pio_cap"). (2) select_generator_slot: slot_real no lugar de hub_has_blob; prompt complexo com Pro ausente devolve GeneratorPro DE PROPOSITO (dispara LOO); fallback ja existia e e honesto - dispatch_expert -> generate_from_slot None -> "pro miss -> CURRENT_MODEL (Active)" com warn (cortex.rs:5848-5853). (3) P1 adapter hub_load_on_demand: NeuralFS (disco instalado) ANTES de FAT (pendrive/live), bool derivado de slot_real. (4) REMOVIDO o early-return qemu_loader_2b: o que ele protegia (PIO gigante) continua protegido pelo pio_cap (PIO_QEMU 8MB sob qemu_hv, PIO_FAST 400MB em metal) - era guard duplicado com o cap, e a duplicacao era o bloqueio. qemu_loader_2b segue usado no calculo do cap (main.rs:4918/4945).
 #     PROVA host: cargo check --release exit=0; cargo test -p cortex --lib model_hub 2/2. PROVA runtime WHPX (NoDisk + Falcon3 loader 989MB @0x100000000, 6G/2c): logs/boot_hub_nodisk_s487_20261018_130517.txt — HUB ok "LOO seam only" + "loader registrado"; ModelHub active=1 generator_pro=alias; LLM LOADED 1012764KB. Confundidor: FAT disk 512MB estola em K33 tickv (hub fica depois) — aceite do seam = NoDisk.

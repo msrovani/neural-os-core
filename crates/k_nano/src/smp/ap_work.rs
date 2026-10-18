@@ -24,6 +24,20 @@ const MAX_JOBS: usize = 64;
 struct JobSlot {
     f: Option<ApJobFn>,
     job_id: usize,
+    /// Epoch da leva em que o job foi enfileirado (s490).
+    epoch: u32,
+    /// `true` = participa da barreira do dispatch (worker de matmul).
+    /// Job de outro agente (ex.: hermes) roda, mas NUNCA credita DONE.
+    counts: bool,
+}
+
+/// Job entregue ao AP por `try_dequeue`.
+#[derive(Clone, Copy)]
+pub struct QueuedJob {
+    pub f: ApJobFn,
+    pub job_id: usize,
+    pub epoch: u32,
+    pub counts: bool,
 }
 
 // SAFETY: SLOTS is only written by BSP (enqueue) and read by APs (try_dequeue).
@@ -31,19 +45,29 @@ struct JobSlot {
 static SLOTS: SyncCell<[JobSlot; MAX_JOBS]> = SyncCell(UnsafeCell::new([JobSlot {
     f: None,
     job_id: 0,
+    epoch: 0,
+    counts: false,
 }; MAX_JOBS]));
 static HEAD: AtomicUsize = AtomicUsize::new(0);
 static TAIL: AtomicUsize = AtomicUsize::new(0);
 static PENDING: AtomicU32 = AtomicU32::new(0);
 static DONE: AtomicU32 = AtomicU32::new(0);
-/// Epoch da leva atual — APs só executam se epoch == ACTIVE_EPOCH.
+/// Epoch da leva atual (s490). Jobs rodam sempre, mas so CREDITAM a barreira
+/// (`DONE`) se `slot.epoch == ACTIVE_EPOCH` e `slot.counts`. Era o elo que
+/// faltava: um `job_done()` de job atrasado liberava a barreira do dispatch
+/// seguinte cedo -> ctx dropado com worker ainda vivo -> #PF storm.
 static ACTIVE_EPOCH: AtomicU32 = AtomicU32::new(0);
 /// Instrumentação: 1 log na transição não-gateado → gateado (evita spam).
 static UI_GATED_LOGGED: AtomicBool = AtomicBool::new(false);
 
-pub fn reset_barrier(pending: u32) {
+/// Abre uma leva nova: bumpa a epoch ANTES de zerar contadores, para que um
+/// arrival atrasado da leva anterior ja' seja reconhecido como stale.
+/// Retorna a epoch corrente (jobs enfileirados depois carregam esta).
+pub fn reset_barrier(pending: u32) -> u32 {
+    let e = ACTIVE_EPOCH.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
     DONE.store(0, Ordering::Release);
     PENDING.store(pending, Ordering::Release);
+    e
 }
 
 /// Espera a barreira até `timeout_us` (relógio monotônico TSC). Retorna `true`
@@ -107,12 +131,29 @@ pub fn barrier_done() -> u32 {
     DONE.load(Ordering::Acquire)
 }
 
-pub fn job_done() {
+/// Arrival de um worker. So conta se o job pertence a leva ATIVA e participa
+/// da barreira; stale/não-participante retorna `false` sem tocar `DONE`.
+pub fn job_done(epoch: u32, counts: bool) -> bool {
+    if !counts || epoch != ACTIVE_EPOCH.load(Ordering::Acquire) {
+        return false;
+    }
     DONE.fetch_add(1, Ordering::Release);
+    true
 }
 
 /// Enfileira job (BSP). Retorna false se cheio.
+/// Job comum NÃO participa da barreira de matmul (counts=false).
 pub fn enqueue(f: ApJobFn, job_id: usize) -> bool {
+    enqueue_impl(f, job_id, false)
+}
+
+/// Enfileira worker de barreira (matmul): o `job_done` dele conta para o
+/// dispatch corrente, e só para ele.
+pub fn enqueue_barrier(f: ApJobFn, job_id: usize) -> bool {
+    enqueue_impl(f, job_id, true)
+}
+
+fn enqueue_impl(f: ApJobFn, job_id: usize, counts: bool) -> bool {
     let t = TAIL.load(Ordering::Relaxed);
     let h = HEAD.load(Ordering::Acquire);
     if t.wrapping_sub(h) >= MAX_JOBS {
@@ -122,6 +163,8 @@ pub fn enqueue(f: ApJobFn, job_id: usize) -> bool {
         (*SLOTS.0.get())[t % MAX_JOBS] = JobSlot {
             f: Some(f),
             job_id,
+            epoch: ACTIVE_EPOCH.load(Ordering::Acquire),
+            counts,
         };
     }
     TAIL.store(t + 1, Ordering::Release);
@@ -133,7 +176,7 @@ pub fn enqueue(f: ApJobFn, job_id: usize) -> bool {
 }
 
 /// AP: tenta pegar um job.
-pub fn try_dequeue() -> Option<(ApJobFn, usize)> {
+pub fn try_dequeue() -> Option<QueuedJob> {
     let h = HEAD.load(Ordering::Relaxed);
     let t = TAIL.load(Ordering::Acquire);
     if h >= t {
@@ -148,12 +191,19 @@ pub fn try_dequeue() -> Option<(ApJobFn, usize)> {
     unsafe {
         let slot = &(*SLOTS.0.get())[h % MAX_JOBS];
         match slot.f {
-            Some(f) => Some((f, slot.job_id)),
+            Some(f) => Some(QueuedJob {
+                f,
+                job_id: slot.job_id,
+                epoch: slot.epoch,
+                counts: slot.counts,
+            }),
             // Slot vazio após o claim (clear_queue/race): conta como done para
             // nunca deixar `DONE < PENDING` (barreira ilimitada = wedge). O
             // oracle do hang de prefill provou que o `?` daqui perdia o job.
+            // s490: o credito passa pela epoch — slot de leva antiga não
+            // libera a barreira nova.
             None => {
-                job_done();
+                let _ = job_done(slot.epoch, slot.counts);
                 None
             }
         }
@@ -231,9 +281,10 @@ pub fn ap_idle_loop(worker_id: usize) -> ! {
         // [SILENCE] usa a idade p/ distinguir "loop vivo que não loga" de
         // "core sem progresso". Custo: 1 load + 1 store Relaxed/iteração.
         crate::silence_watchdog::note_core_progress();
-        if let Some((f, jid)) = try_dequeue() {
-            unsafe { f(jid, worker_id) };
-            job_done();
+        if let Some(job) = try_dequeue() {
+            unsafe { (job.f)(job.job_id, worker_id) };
+            // s490: arrival só credita a barreira se o job é da leva ativa.
+            let _ = job_done(job.epoch, job.counts);
             continue;
         }
         if let Some(task) = super::work_stealing::try_steal_global(worker_id) {
@@ -328,24 +379,66 @@ mod tests {
     #[test]
     fn try_dequeue_empty_slot_marks_done() {
         // Bug do prefill: CAS no HEAD + `slot.f?` retornava None sem job_done()
-        // → DONE < PENDING para sempre (barreira ilimitada). Deve contar o job.
+        // → DONE < PENDING para sempre (barreira ilimitada). Deve contar o job
+        // — desde que o slot seja da leva ATIVA (s490).
         let _g = TEST_LOCK.lock();
         reset();
+        let e = reset_barrier(1);
         unsafe {
             (*SLOTS.0.get())[0] = JobSlot {
                 f: None,
                 job_id: 7,
+                epoch: e,
+                counts: true,
             };
         }
         TAIL.store(1, Ordering::Release);
-        PENDING.store(1, Ordering::Release);
         let got = try_dequeue();
         assert!(got.is_none(), "slot vazio → None");
         assert_eq!(
             DONE.load(Ordering::Acquire),
             1,
-            "job perdido não pode deixar DONE<PENDING"
+            "job perdido da leva ativa não pode deixar DONE<PENDING"
         );
+        reset();
+    }
+
+    #[test]
+    fn stale_job_done_nao_credita_barreira_nova() {
+        // s490 (causa do #PF storm): arrival atrasado da leva anterior não pode
+        // liberar a barreira do dispatch novo — era o credit-from-stale que
+        // dropava o TernaryJobCtx com worker ainda escrevendo nele.
+        let _g = TEST_LOCK.lock();
+        reset();
+        let old = reset_barrier(1);
+        assert!(job_done(old, true), "arrival da própria leva conta");
+        assert_eq!(barrier_done(), 1);
+        let new = reset_barrier(1);
+        assert_eq!(barrier_done(), 0, "reset zera DONE");
+        assert!(
+            !job_done(old, true),
+            "arrival da leva antiga deve ser ignorado"
+        );
+        assert_eq!(
+            barrier_done(),
+            0,
+            "barreira nova não pode ser liberada por stale"
+        );
+        assert!(job_done(new, true));
+        assert_eq!(barrier_done(), 1);
+        reset();
+    }
+
+    #[test]
+    fn job_nao_participante_nao_credita() {
+        // Job de outro agente (ex.: hermes mesh tick) roda, mas não é worker do
+        // dispatch — antes ele somava em DONE e liberava a barreira cedo.
+        let _g = TEST_LOCK.lock();
+        reset();
+        let e = reset_barrier(2);
+        assert!(!job_done(e, false), "counts=false não conta");
+        assert!(!job_done(e.wrapping_add(1), true), "epoch errada não conta");
+        assert_eq!(barrier_done(), 0);
         reset();
     }
 

@@ -10,6 +10,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 490 | F1/Storm | s490 | #PF storm: writer + epoch na barreira | Fingerprint de 16B do [PF_DBG] provou ELF divergente (fim do "IP migrante"); byte-pattern unico → store de ternary_worker em 0xffffffff8092b7b4 com c_ptr=0; watchpoint TCG capturou o talc reciclando o bloco do ctx apos o dispatch. Fix: JobSlot epoch+counts, reset_barrier bumpa epoch, job_done(stale/nao-participante) nao credita, enqueue_barrier. Prova: check 0 + ap_work 5/5 + falsificador 0/4 storms TCG (baseline 4/7). Origem do c_ptr=0 = UNKNOWN; metal = UNKNOWN. Detalhe: SESSION_490.md. |
 | 489 | Hub/LOO | s489 | LOO Load Usable HW-first | validate_for_slot→register_bytes (fim dual load_model no demand); AlwaysTiny+mark_slot HwExpert; PCI inject+family; metal pio_hw/footprint vs QEMU 8MB miss. Host VERIFIED; metal mid UNKNOWN ate usb_hw.img. |
 | 488 | Hub/Trinity | s488 | Hub + Trinity MoE usável (warehouse + pipelines) | Contrato unico ExpertKind/name→ModelSlot; mid-slots via generate_from_slot+LOO; ExpertKind::Agent; AlwaysTiny HwExpert no boot; moe_compose VisionQA/RAG/Heal/Agentic + telemetria; DiskDiag/Security skill-backed. Host 6/6. Runtime LOO nichos = UNKNOWN (s487). |
 | 487 | Hub/LOO | s487 | LOO destravado: gate vs registro | Seam sandbox + Pro ovo-galinha + NeuralFS→FAT; SEAM VERIFIED WHPX NoDisk; load nichos UNKNOWN (8MB cap). |

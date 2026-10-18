@@ -1,4 +1,4 @@
-# SESSION_488 — #PF storm: captura do writer com watchpoint (fim do "IP migrante")
+# SESSION_490 — #PF storm: captura do writer com watchpoint (fim do "IP migrante")
 
 **Data:** 2026-10-18
 **Contexto:** bug aberto desde o s479, herdado como "F1 / #PF storm, IP migrante, precisa
@@ -148,7 +148,7 @@ Classificação: **fix IMPLEMENTED + runtime-VERIFIED em TCG (QEMU)** para o sto
 # captura (watchpoint)
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch_pf_writer.ps1 -WaitSec 600 -RamGB 5 -Smp 8
 # falsificador do fix: 4 boots TCG de 320 s, procurando "PF storm" no serial
-tools\_epoch_boots_tmp.sh 320 4   # (script de sessao; comando QEMU documentado acima)
+tools\epoch_falsifier_boots.sh 320 4   # 4 boots TCG; cmdline QEMU completa no proprio script
 ```
 
 Endereços absolutos no script valem para o ELF atual — regenerar após rebuild
