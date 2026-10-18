@@ -252,23 +252,23 @@ Names must fit **8.3 uppercase** — the kernel skips LFN entries (`fat32.rs`, `
 |---|---|---|---|---|
 | `Active` | BitNet 2B — now Falcon3-3B | 590MB | general conversation, default | `FALCON3.V7` |
 | `GeneratorPro` | Llama 3.1 8B | 1.9GB | deep diagnosis, auto-healing | `PRO.V7` |
-| `Agent` | Qwen 2.5 3B | 752MB | agentic tasks | `AGENT.V7` |
+| `Agent` | Qwen 2.5 3B | — | agentic tasks | *(ausente: `AGENT.v6` quarantined size_mismatch — reexport GGUF)* |
 | `RustCoder` | DeepSeek Coder 1.3B | 321MB | code generation for patches | `RUSTCDR.V7` |
 | `HwExpert` | SDIO HW ID | 1MB | hardware identification | `HWEXPRT.V7` |
 | `Vision` | SigLIP ViT-B/16 | 33MB | visual encoder | `VISION.V7` |
 | `Reranker` | BGE Reranker v2 M3 | 165MB | RAG cross-encoder | `RERANKER.V7` |
-| `Learner` | Qwen 2.5 0.5B | 124MB | continuous on-device learning | `LEARNER.V7` |
+| `Learner` | Falcon3-1B (fallback) | ~690MB | continuous on-device learning | `FALCON3_1B.V6` *(Qwen LEARNER quarantined)* |
 
 Outside the hub (ADR-0078 §2.3, already unique names, not renamed): `BGE.BIN` (BAAI embedding),
 `PIPER.BIN` / `PIPER_EN.BIN` (VITS TTS), `STT.BIN` (CTC), `ROUTER.BITNET` (MoE router — 6-char
 extension does not fit 8.3, stored as `ROUTER.BIT`).
 
-**Honest scope.** ADR-0078 §1.1 claims *"only Active + Fast + Pro + TinyStores are actually
-used"*. Measured against the code: `Fast` is not a `ModelSlot` variant (it survives only as a
-shape alias in `model_fit.rs`) and `TinyStories` appears in no `.rs`. So only `Active` and
-`GeneratorPro` are real, exercised slots. Only the generator has niche resolution
-(`select_generator_slot`); the other subsystems degrade on their own (e.g. BGE absent →
-`emb=pseudo`, Reranker/Learner/Vision → no consumer).
+**Hub + Trinity MoE.** Hub = warehouse tipado; Trinity = router (`ExpertKind` incl. `Agent`).
+Mapa único `slot_for_expert_kind` / `slot_for_expert_name` → `generate_from_slot` + LOO.
+Residência: AlwaysTiny (`HwExpert` no boot); mid/heavy via LOO (`validate_for_slot`→`register_bytes`). QEMU=lab 8MB; mid niches = metal.
+Pipelines (`moe_compose`): VisionQA, RAG, Heal, Agentic — composição multi-função sem
+novo slot. DiskDiag/Security = skill-backed (Active + warn); PIPER/BGE/STT/ROUTER fora do hub.
+Telemetria: `route=kind→slot`, `pipe=steps`, `fallback=reason` (`n/a` ≠ 0).
 
 ### Audio & voice
 

@@ -198,7 +198,9 @@ pub fn slot_footprint_mb(slot_name: &str) -> Option<u64> {
             dyn_mb.or(Some(Falcon3Kind::Tiny1B.file_mb_hint()))
         }
         "tinystories" | "tiny" | "smoke" => Some(4),
-        "rust_coder" | "rustcoder" => Some(260),
+        // Artefato medido target1/RUSTCDR3.BIN = 321.26MB (v5); hint 260 subestimava
+        // e podia fazer pio_cap metal < sz → skip honesto falso (s489 audit).
+        "rust_coder" | "rustcoder" => Some(322),
         "hw_identify" | "hwexpert" => Some(1),
         // s483 Passo 2a: vision/reranker/agent nao tinham braco nenhum e caiam em
         // `_ => None` -> slot_too_tight(None)==false -> "sempre cabe". Hints dos

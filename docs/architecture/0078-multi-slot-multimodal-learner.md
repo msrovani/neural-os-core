@@ -1,8 +1,8 @@
 # ADR-0078: Multi-Slot Multimodal com Aprendizado Contínuo — conversão GGUF→ternário, 6 slots reais, visão
 
 **Data:** 2026-07-27
-**Status:** Proposed
-**Lifecycle (INDEX):** `por_fazer`
+**Status:** Accepted (parcial — hub wired; multimodal residual)
+**Lifecycle (INDEX):** `fazendo` (SESSION_481–487: niches + LOO + validate + evict)
 **Extraído de:** Sessão de design 2026-07-27 (análise de viabilidade GGUF→ternário, aprendizado contínuo, multimodal)
 **Substitui:** ADR-0033 (micro-learning — absorvido e expandido), ADR-0028 (GGUF research — implementado)
 **Gates:** Fase 1 ✅ → Fase 2 → Fase 3 → Fase 4 (sequencial por dependência)
@@ -48,47 +48,68 @@ fn f32_to_ternary_packed_adaptive(data: &[f32]) -> PackedTernaryTensor {
 
 Ganho estimado: **0.5-1.0 PPL** recuperado sem custo de runtime.
 
-### 2.2 Seis slots com modelos reais
+### 2.2 Oito slots ModelHub (canônico SESSION_481 / README)
 
-| Slot | Modelo | RAM | Função |
+| Slot | Modelo (lab atual) | Footprint hint | Função |
 |---|---|---|---|
-| **Active** | BitNet 2B (existente) | 590MB | Conversa geral, default |
-| **Fast** | Llama 3.2 1B convertido | 310MB | Consultas triviais, fallback rápido |
-| **Pro** | Llama 3.1 8B convertido | 2.0GB | Diagnóstico profundo, auto-healing |
-| **RustCoder** | DeepSeek Coder 1.3B convertido | 350MB | Geração de código para patches |
-| **Reranker** | BGE Reranker v2 M3 | 140MB | Re-rank cross-encoder para RAG (ex-TinyStories) |
-| **HwExpert** | SDIO HW ID model (existente) | 1MB | Identificação de hardware |
-| **Learner** | Qwen2.5 0.5B convertido | 125MB | ⭐ Aprendizado contínuo on-device |
+| **Active** | Falcon3-3B Instruct 1.58bit | ~989MB | LLM dia-a-dia / CURRENT_MODEL |
+| **GeneratorPro** | Falcon3-7B/10B (guardado s458) | ~1.9GB+ | Tarefa complexa (LOO s487) |
+| **Agent** | Qwen/AGENT.v6 | ~752MB | Orquestração |
+| **RustCoder** | DeepSeek Coder (RUSTCDR*) | ~260–321MB | Geração de código |
+| **HwExpert** | SDIO HW ID v6 | ~1–259KB | Identificação de hardware |
+| **Vision** | SigLIP / VISION.BIN v5 | ~33MB | Encoder de visão (HUB) |
+| **Reranker** | BGE Reranker / RERANKER.BIN | ~165MB | Re-rank / memória |
+| **Learner** | Falcon3-1B / LEARNER.v6 | ~118–690MB | Auto-aprendizado |
 
-### 2.3 Subsistemas (fora dos slots)
+> Slot **Fast**/TinyStories da tabela original foi absorvido: Active cobre o default;
+> Reranker herdou o índice ex-TinyStories. Alias Pro (`mark_pro_alias`) quando
+> Active tem `embed_dim ≥ 2048` — presença real = `slot_real`, não `slot_loaded`.
 
-| Subsistema | Modelo | RAM | Função |
-|---|---|---|---|
-| **Vision** | SigLIP ViT-B | 350MB | Codifica imagens → embedding 768d |
-| **BGE** | BAAI Embedding | 5MB | RAG semântico (memória de longo prazo) |
-| **STT** | CTC LSTM tiny (55K params) | 1MB | Voz → texto |
-| **Piper** | VITS TTS (15.6M params) | 60MB | Texto → voz |
-| **OCR** | Layout parser mínimo | 2MB | PDF → texto estruturado |
+### 2.3 Subsistemas (fora dos slots geradores)
 
-### 2.4 Arquitetura de seleção
+| Subsistema | Modelo | Função |
+|---|---|---|
+| **BGE** | BAAI Embedding (`BGE.BIN`) | RAG semântico (fora do hub gerador) |
+| **STT** | CTC LSTM tiny | Voz → texto |
+| **Piper** | VITS TTS | Texto → voz |
+| **OCR** | Layout parser mínimo | PDF → texto (residual) |
+
+### 2.4 Fluxo revisado Cortex → Trinity → Hub (s488) — ADR-0088 AIOS-first
+
+Premissa: **IA desde o boot**; toda geração é caminho cognitivo (classify → resolve →
+act → telemetria). **Proibido** atalho “saudação → CURRENT_MODEL skip MoE” ou
+AirLLM antes de classificar. AirLLM = degradação **adaptativa** só após
+`resolve_route` dizer gerador.
 
 ```
-Usuário → Trinity MoE (intent routing)
-                │
-        ┌───────┼───────────────┐
-        │       │               │
-  "generator"  "rust_coder"  "hw_identify"
-        │       │               │
-  ModelHub::    RustCoder      HwExpert
-  select       slot fixo       slot fixo
-  (size heuristic)
-        │
-  ┌─────┴──────┐
-  │            │
-  is_complex  → Pro (8B)
-  prompt  ?   → Active (2B)
-  trivial?    → Fast (1B)
+Boot → Trinity init + ModelHub loaders (AlwaysTiny + LOO seam)
+Usuário / EventBus
+  └─ Hermes classify (pending_route) ──┐
+Cortex generate_via_model              │
+  ├─ take pending OR classify_intent ◄─┘  (sempre decide)
+  ├─ resolve_route(name) → RouteTarget
+  │     ├─ HwControl          → skill HAL (HITL caps)
+  │     ├─ Pipeline(id)       → moe_compose (auto-composição)
+  │     ├─ Slot{slot,wrap}    → generate_from_slot + LOO
+  │     ├─ GeneratorSelect    → select_generator_slot → Active|Pro
+  │     │                      (+ AirLLM se stream e rota geradora)
+  │     ├─ SkillBackedActive  → Active + warn (DiskDiag/Security)
+  │     ├─ OutsidePiper       → texto → TTS
+  │     └─ FallbackActive     → CURRENT_MODEL (honesto)
+  └─ note_route / pipe telemetria (n/a ≠ 0) → SGDB/HUD
 ```
+
+**Contratos:** `slot_for_expert_kind` / `slot_for_expert_name` / `resolve_route`.
+Pipelines = keyword sintético (`vision_qa`/`rag`/`heal`/`agentic_pipe`) — auto-composição
+de funções pequenas; não incham `ModelSlot`.
+
+**Residência:** AlwaysTiny = HwExpert (boot); LooMid/Heavy = LOO + evict.
+`ExpertKind::Agent` first-class. Fallback ausente = warn + Active, nunca silêncio.
+
+**Materialize (s489 HW-first):** LOO = `validate_for_slot` → `register_bytes` (nunca
+`load_model` LLM-only no demand path). QEMU = smoke (`PIO_QEMU` 8MB; mid = miss
+honesto). Aceite VERIFIED de RustCoder/Agent/Vision = **metal** (`pio_hw`/footprint
++ `usb_hw.img` com nichos empacotados).
 
 ### 2.5 Ciclo de aprendizado contínuo
 

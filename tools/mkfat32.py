@@ -189,20 +189,142 @@ def find_bitnet_3b():
     return find_large("BITNET3B.BIN") or find_large("bitnet_3B.bitnet")
 
 def _v6_layers_hidden(path):
-    """Lê (num_layers, hidden) do header v6 BE11 — None se inválido.
+    """Lê (num_layers, hidden) do header v6/v7 BE11 — None se inválido.
     Offsets canônicos = cortex::model::parse_model_header (hidden@18, layers@20)."""
     try:
         with open(path, "rb") as f:
             hdr = f.read(40)
         if len(hdr) < 24 or int.from_bytes(hdr[0:4], "little") != 0xBE11BE11:
             return None
-        if hdr[4] != 6 or hdr[5] != 0:  # version != 6
+        ver = int.from_bytes(hdr[4:6], "little")
+        if ver not in (6, 7):
             return None
         hidden = int.from_bytes(hdr[18:20], "little")
         layers = int.from_bytes(hdr[20:22], "little")
         return layers, hidden
     except OSError:
         return None
+
+
+def _expected_v6_llm_size(data: bytes):
+    """Espelha cortex::model::parse_model_header (só LLM mtype=0). None se inválido."""
+    if len(data) < 52:
+        return None
+    if int.from_bytes(data[0:4], "little") != 0xBE11BE11:
+        return None
+    ver = int.from_bytes(data[4:6], "little")
+    if ver not in (6, 7) or data[14] != 0:
+        return None
+    hidden = int.from_bytes(data[18:20], "little")
+    layers = int.from_bytes(data[20:22], "little")
+    heads = int.from_bytes(data[22:24], "little")
+    vocab = int.from_bytes(data[24:28], "little")
+    inter = int.from_bytes(data[30:32], "little")
+    kv = int.from_bytes(data[32:34], "little")
+    qdim = int.from_bytes(data[34:36], "little")
+    medusa = int.from_bytes(data[36:40], "little")
+    tie = data[40:44] == b"TIED"
+    tok_len = int.from_bytes(data[45:49], "little")
+    tok_cap = 8 * 1024 * 1024 if ver == 7 else 65536
+    if tok_len > tok_cap:
+        return None
+    hdr_end = 49 + tok_len + 3
+    if hdr_end > len(data):
+        return None
+    emb = data[hdr_end - 2]
+    feat = data[hdr_end - 1]
+    if ver == 7:
+        if hdr_end + 2 > len(data):
+            return None
+        rl = int.from_bytes(data[hdr_end:hdr_end + 2], "little")
+        if rl > 4096:
+            return None
+        p = hdr_end + 2 + rl + 40
+        if p + 2 > len(data):
+            return None
+        cl = int.from_bytes(data[p:p + 2], "little")
+        if cl > 4096:
+            return None
+        p = p + 2 + cl + 40 + 4
+        if p > len(data):
+            return None
+        hdr_end = p
+    hd = qdim // max(heads, 1)
+    k_dim = kv * hd
+    ffn_group = inter * qdim // max(hidden, 1)
+    size = hdr_end
+    if emb == 0:
+        size += (hidden * vocab + 3) // 4 + 4
+    elif emb == 1:
+        size += ((hidden * vocab + 255) // 256) * 210 + 4
+    else:
+        size += hidden * vocab * 2 + 4
+    per_layer_norms = hidden * 4 * 2
+    if feat & 1:
+        per_layer_norms += hidden * 4
+    if feat & 2:
+        per_layer_norms += inter * 4
+    q_term = (hidden * qdim + 3) // 4
+    kv_term = (hidden * k_dim + 3) // 4
+    o_term = (qdim * hidden + 3) // 4
+    ff_term = (hidden * ffn_group + 3) // 4
+    down_term = (inter * qdim + 3) // 4
+    per_layer_tern = q_term + kv_term * 2 + o_term + ff_term * 2 + down_term + 7 * 4
+    size += layers * (per_layer_norms + per_layer_tern)
+    size += hidden * 4
+    if not tie:
+        if feat & 0x08:
+            size += ((hidden * vocab + 255) // 256) * 210 + 4
+        else:
+            size += (hidden * vocab + 3) // 4 + 4
+    size += medusa * ((hidden * vocab + 3) // 4 + 4)
+    if feat & 4:
+        size += 4
+    return size
+
+
+def bitnet_llm_size_ok(path) -> bool:
+    """True se v6/v7 LLM com file_size do header == len(arquivo) (gate s489).
+    v1..=5 e non-LLM: True (outro path). Arquivo ausente/curto: False."""
+    try:
+        sz = os.path.getsize(path)
+        with open(path, "rb") as f:
+            head = f.read(min(sz, 16 * 1024 * 1024))
+        if len(head) < 16 or int.from_bytes(head[0:4], "little") != 0xBE11BE11:
+            return False
+        ver = int.from_bytes(head[4:6], "little")
+        if ver <= 5:
+            return True
+        if ver not in (6, 7):
+            return False
+        if head[14] != 0:
+            return True  # HwExpert/router — size probe LLM não aplica
+        # Pode precisar de mais bytes p/ tok v7
+        need = _expected_v6_llm_size(head)
+        if need is None and sz > len(head):
+            with open(path, "rb") as f:
+                head = f.read(sz)  # só se ainda None (raro; tok enorme)
+            need = _expected_v6_llm_size(head)
+        if need is None:
+            return False
+        ok = need == sz
+        if not ok:
+            print(
+                f"[PACK] REJECT size_mismatch {os.path.basename(path)} "
+                f"file={sz} exp={need} delta={sz - need}"
+            )
+        return ok
+    except OSError:
+        return False
+
+
+def find_valid_llm(*names):
+    """find_file + gate size (não empacota AGENT/LEARNER fantasma)."""
+    for name in names:
+        p = find_file(name)
+        if p and bitnet_llm_size_ok(p):
+            return p
+    return None
 
 def find_falcon3():
     """Lab canônico = Falcon3-3B Instruct 1.58 (22L / hidden 3072). Evita 7B
@@ -253,7 +375,14 @@ def _find_falcon3_by_layers(want_layers, want_hidden, names, label):
 def find_falcon3_1b():
     return _find_falcon3_by_layers(
         18, 2048,
-        ("FALCON1B.v6", "FALCON1B.BIN", "F1B.v6", "falcon3_1b.v6"),
+        (
+            "FALCON3_1B.V6",
+            "FALCON3_1B.V7",
+            "FALCON1B.v6",
+            "FALCON1B.BIN",
+            "F1B.v6",
+            "falcon3_1b.v6",
+        ),
         "falcon3-1b 1.58",
     )
 
@@ -444,11 +573,12 @@ def populate(path):
         ("LLAMA8B.BIN", find_file("LLAMA8B.BIN") or find_file("LLAMA8B.BITNET")),
         ("RUSTCDR3.BIN", find_file("RUSTCDR3.v6") or find_file("RUSTCDR3.BIN") or find_file("RUSTCDR3.BITNET")),
         ("RERANKER.BIN", find_file("RERANKER.v6") or find_file("RERANKER.BIN") or find_file("RERANKER.BITNET")),
-        # LEARNER.v6 real tem precedência; Falcon3-1B é só fallback quando não há
-        # arquivo LEARNER (ordem inversa sombreava o modelo real com 544MB errados).
-        ("LEARNER.BIN", find_file("LEARNER.v6") or find_file("LEARNER.BIN") or find_file("LEARNER.BITNET")
-         or (find_falcon3_1b() if "falcon3-1b" in llm else None)),
-        ("AGENT.BIN", find_file("AGENT.v6") or find_file("AGENT.BIN") or find_file("AGENT.BITNET")),
+        # LEARNER: só blob size-ok (s489); AGENT/LEARNER legados size_mismatch
+        # foram quarantinados (*.size_mismatch). Fallback = Falcon3-1B real.
+        ("LEARNER.BIN", find_valid_llm("LEARNER.v6", "LEARNER.BIN", "LEARNER.BITNET")
+         or find_falcon3_1b()),
+        # AGENT: sem fallback de outro SKU (miss → Active via LOO). Gate size.
+        ("AGENT.BIN", find_valid_llm("AGENT.v6", "AGENT.BIN", "AGENT.BITNET")),
         # GOAL3: MicroPython WASM (tools/build_micropython_wasm.py → models/MICROPY.WASM)
         ("MICROPY.WASM", find_file("MICROPY.WASM") or find_file("micropython.wasm")),
         # BOOT.LOG: único dirent, pré-alocado com header (append p/ CONFIG.TXT).

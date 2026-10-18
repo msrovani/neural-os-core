@@ -1,4 +1,15 @@
 # Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
+## [1.9.99-s489] - 2026-10-18 — LOO Load Usable (HW-first) + auditoria de blobs
+
+- **Materialize**: `validate_for_slot(slot, data)` (HwExpert type=1; LLM type=0+size; Vision/Reranker magic+ver) → LOO só `register_bytes` (NeuralFS+FAT). AlwaysTiny HwExpert com Active residente; `mark_slot(HwExpert)` em `set_hwexpert_v4_model`.
+- **Usável**: PCI inject + family/agent names no `generate_from_slot(HwExpert)`; metal `pio_cap = pio_hw.max(footprint)` (RustCoder hint 322MB); QEMU 8MB + miss honesto.
+- **Auditoria**: `tools/audit_model_blobs.py`. Quarentena `AGENT.v6`/`LEARNER.v6` (`*.size_mismatch`) e `FALCON3` L=28 mal-nomeado (`*.misname_L28`). `mkfat32` `find_valid_llm` + Learner→Falcon3-1B; `find_falcon3_1b` cobre `FALCON3_1B.V6/V7`.
+- **Prova host**: `validate_for_slot` + `model_fit` OK; `cargo check --release` 0. Metal mid = UNKNOWN até `usb_hw.img`. SESSION_489.
+
+## [1.9.99-s488] - 2026-10-18 — Hub + Trinity MoE usável (ADR-0088, sem bypass)
+
+- Contrato único `ExpertKind`↔`ModelSlot`; `resolve_route`→dispatch; `ExpertKind::Agent`; mid-slots via `generate_from_slot`+LOO; AlwaysTiny; `moe_compose` (VisionQA/RAG/Heal/Agentic). Removido skip saudação MoE; AirLLM só após classify e só se rota geradora. Host OK; LOO runtime nichos = SESSION_487/489. SESSION_488.
+
 ## [1.9.99-s487] - 2026-10-18 — LOO do hub destravado: seam registrado no sandbox + Pro preferido
 
 - **Ovo-galinha rompido**: `select_generator_slot` exigia `hub_has_blob(GeneratorPro)` para escolher Pro — mas o LOO existe justamente para carregar o blob ausente. Agora decide por **intenção** (`is_complex_conversation`) e devolve `GeneratorPro` mesmo sem blob; o fallback honesto (`pro miss → CURRENT_MODEL`, warn) já existia em `dispatch_expert`.

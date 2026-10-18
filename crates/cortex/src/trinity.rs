@@ -37,16 +37,115 @@ pub fn publish_cortex_posture(trained: bool) {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[repr(u8)]
 pub enum ExpertKind {
-    HwIdentify,
+    HwIdentify = 0,
     /// Controles de plataforma (volume, mute, brilho) — skill/HW, sem LLM.
+    HwControl = 1,
+    RustCoder = 2,
+    DiskDiag = 3,
+    Security = 4,
+    Generator = 5,
+    SpeechSynth = 6,
+    /// Planejamento / orquestração agentic (ModelHub::Agent).
+    Agent = 7,
+    Unknown = 8,
+}
+
+/// Contrato único ExpertKind → ModelSlot (hub warehouse).
+/// `None` = sem blob no hub (skill/HAL/TTS externo ou skill-backed).
+/// Generator → Pro só p/ mmap de pesos expert; chat usa `RouteTarget::GeneratorSelect`.
+pub fn slot_for_expert_kind(kind: ExpertKind) -> Option<crate::model_hub::ModelSlot> {
+    use crate::model_hub::ModelSlot;
+    match kind {
+        ExpertKind::HwIdentify => Some(ModelSlot::HwExpert),
+        ExpertKind::RustCoder => Some(ModelSlot::RustCoder),
+        ExpertKind::Generator => Some(ModelSlot::GeneratorPro),
+        ExpertKind::Agent => Some(ModelSlot::Agent),
+        ExpertKind::HwControl
+        | ExpertKind::DiskDiag
+        | ExpertKind::Security
+        | ExpertKind::SpeechSynth
+        | ExpertKind::Unknown => None,
+    }
+}
+
+/// Contrato único expert_name → ModelSlot.
+/// `generator` / `generator_fast` / `tinystories` → `None` (caller usa `select_generator_slot`).
+pub fn slot_for_expert_name(name: &str) -> Option<crate::model_hub::ModelSlot> {
+    use crate::model_hub::ModelSlot;
+    match name {
+        "hw_identify" => Some(ModelSlot::HwExpert),
+        "rust_coder" | "rustcoder" => Some(ModelSlot::RustCoder),
+        "agent" | "orchestrator" | "agentic" => Some(ModelSlot::Agent),
+        "generator_pro" | "pro" => Some(ModelSlot::GeneratorPro),
+        "generator" | "generator_fast" | "tinystories" => None,
+        "hw_control" | "disk_diag" | "security" | "speech_synth" | "unknown" => None,
+        // Pipelines não são slots.
+        "vision_qa" | "visionqa" | "vlm" | "rag" | "retrieve" | "rerank_gen" | "heal"
+        | "self_heal" | "heal_code" | "agentic_pipe" | "agent_pipe" => None,
+        other => ModelSlot::from_name(other),
+    }
+}
+
+/// Alvo resolvido do fluxo Cortex→Trinity→Hub (uma decisão, um execute).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteTarget {
+    /// Skill HAL (volume/mute/brilho) — sem modelo.
     HwControl,
-    RustCoder,
-    DiskDiag,
-    Security,
-    Generator,
-    SpeechSynth,
-    Unknown,
+    /// Pipeline multi-slot (`moe_compose`).
+    Pipeline(crate::moe_compose::PipelineId),
+    /// DiskDiag/Security — Active + skill (sem nicho).
+    SkillBackedActive,
+    /// SpeechSynth — PIPER fora do hub; devolve texto p/ TTS.
+    OutsidePiper,
+    /// Slot tipado + LOO (`generate_from_slot`).
+    Slot {
+        slot: crate::model_hub::ModelSlot,
+        wrap: SlotPromptWrap,
+    },
+    /// `select_generator_slot(prompt)` → Active|Pro (+ LOO).
+    GeneratorSelect,
+    /// Último recurso: CURRENT_MODEL / Active.
+    FallbackActive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotPromptWrap {
+    None,
+    RustCoderSystem,
+    HwIdentifyPrefix,
+}
+
+/// Resolve expert_name (Trinity / Hermes pending) → alvo único. Fonte da verdade do dispatch.
+pub fn resolve_route(expert_name: &str) -> RouteTarget {
+    if expert_name == "hw_control" {
+        return RouteTarget::HwControl;
+    }
+    if let Some(pid) = crate::moe_compose::pipeline_from_name(expert_name) {
+        return RouteTarget::Pipeline(pid);
+    }
+    if expert_name == "disk_diag" || expert_name == "security" {
+        return RouteTarget::SkillBackedActive;
+    }
+    if expert_name == "speech_synth" {
+        return RouteTarget::OutsidePiper;
+    }
+    if matches!(
+        expert_name,
+        "generator" | "generator_fast" | "tinystories"
+    ) {
+        return RouteTarget::GeneratorSelect;
+    }
+    if let Some(slot) = slot_for_expert_name(expert_name) {
+        let wrap = match expert_name {
+            "rust_coder" | "rustcoder" => SlotPromptWrap::RustCoderSystem,
+            "hw_identify" => SlotPromptWrap::HwIdentifyPrefix,
+            _ => SlotPromptWrap::None,
+        };
+        return RouteTarget::Slot { slot, wrap };
+    }
+    RouteTarget::FallbackActive
 }
 
 /// Extrai o pedido do usuário de prompts envelopados (skills L0 / cognitive context).
@@ -92,6 +191,32 @@ static FALLBACK_GENERATOR: Expert = Expert {
     kind: ExpertKind::Generator,
     name: "generator",
     description: "trinity empty fallback",
+    weight: None,
+};
+
+/// Experts sintéticos de pipeline (não entram no router neural; só keyword).
+static PIPE_VISION_QA: Expert = Expert {
+    kind: ExpertKind::Unknown,
+    name: "vision_qa",
+    description: "pipeline Vision encode → Active/Pro",
+    weight: None,
+};
+static PIPE_RAG: Expert = Expert {
+    kind: ExpertKind::Unknown,
+    name: "rag",
+    description: "pipeline BGE → Reranker → Active",
+    weight: None,
+};
+static PIPE_HEAL: Expert = Expert {
+    kind: ExpertKind::Unknown,
+    name: "heal",
+    description: "pipeline HwIdentify → RustCoder → Pro?",
+    weight: None,
+};
+static PIPE_AGENTIC: Expert = Expert {
+    kind: ExpertKind::Unknown,
+    name: "agentic_pipe",
+    description: "pipeline Agent plan → exec → verify",
     weight: None,
 };
 
@@ -558,6 +683,56 @@ impl TrinityRouter {
             }
         }
 
+        // 2b) Pipelines multi-função (antes dos experts de slot único).
+        let is_vision = has_word("imagem")
+            || has_word("screenshot")
+            || has_word("foto")
+            || has_word("picture")
+            || has_word("image")
+            || has_word("vision")
+            || has_word("tela")
+            || lower.contains("o que tem na");
+        if is_vision {
+            k_nano::slog_cortex!("TRINITY", "ok", "keyword: pipeline vision_qa");
+            return &PIPE_VISION_QA;
+        }
+        let is_rag = has_word("rag")
+            || has_word("rerank")
+            || ((has_word("busque") || has_word("search") || has_word("procure"))
+                && (has_word("documento")
+                    || has_word("document")
+                    || has_word("memoria")
+                    || has_word("memória")
+                    || has_word("contexto")
+                    || has_word("knowledge")));
+        if is_rag {
+            k_nano::slog_cortex!("TRINITY", "ok", "keyword: pipeline rag");
+            return &PIPE_RAG;
+        }
+        let is_heal = has_word("heal")
+            || has_word("cura")
+            || has_word("autocura")
+            || has_word("selfheal")
+            || has_word("self-heal")
+            || ((has_word("corrija") || has_word("fix") || has_word("patch"))
+                && (has_word("bug")
+                    || has_word("crash")
+                    || has_word("driver")
+                    || has_word("kernel")
+                    || has_word("falha")));
+        if is_heal {
+            k_nano::slog_cortex!("TRINITY", "ok", "keyword: pipeline heal");
+            return &PIPE_HEAL;
+        }
+        let is_agentic_pipe = (has_word("plano") && has_word("execute"))
+            || lower.contains("plan and execute")
+            || lower.contains("planeje e execute")
+            || lower.contains("multi-agent");
+        if is_agentic_pipe {
+            k_nano::slog_cortex!("TRINITY", "ok", "keyword: pipeline agentic_pipe");
+            return &PIPE_AGENTIC;
+        }
+
         for expert in &self.experts {
             match expert.kind {
                 ExpertKind::HwControl => {}
@@ -642,6 +817,23 @@ impl TrinityRouter {
                         return expert;
                     }
                 }
+                ExpertKind::Agent => {
+                    if has_word("agente")
+                        || has_word("agent")
+                        || has_word("orquestre")
+                        || has_word("orquestrar")
+                        || has_word("orchestrat")
+                        || has_word("planeje")
+                        || has_word("planejar")
+                        || has_word("plano de acao")
+                        || has_word("plano de ação")
+                        || has_word("multi-step")
+                        || has_word("multistep")
+                        || has_word("workflow")
+                    {
+                        return expert;
+                    }
+                }
                 ExpertKind::Unknown => {}
             }
         }
@@ -699,12 +891,7 @@ impl TrinityRouter {
                 return Some(w);
             }
         }
-        let slot = match kind {
-            ExpertKind::HwIdentify => Some(crate::model_hub::ModelSlot::HwExpert),
-            ExpertKind::RustCoder => Some(crate::model_hub::ModelSlot::RustCoder),
-            ExpertKind::Generator => Some(crate::model_hub::ModelSlot::GeneratorPro),
-            _ => None,
-        };
+        let slot = slot_for_expert_kind(kind);
         // Efeito Matrix: descritor loader registrado + slot loaded → vista RO.
         if let Some(idx) = mmap_index(kind) {
             if let Some(v) = mmap_view(idx) {
@@ -1025,11 +1212,16 @@ pub fn clear_mmap_for_tests() {
 
 /// Bytes de pesos residentes por ExpertKind (telemetria HUD — lock-free).
 /// Atualizado por set_expert_weight(); lido por expert_resident_bytes_kind().
-static mut EXPERT_BYTES: [(ExpertKind, usize); 8] = [
-    (ExpertKind::Generator, 0), (ExpertKind::HwControl, 0),
-    (ExpertKind::HwIdentify, 0), (ExpertKind::RustCoder, 0),
-    (ExpertKind::DiskDiag, 0), (ExpertKind::Security, 0),
-    (ExpertKind::SpeechSynth, 0), (ExpertKind::Unknown, 0),
+static mut EXPERT_BYTES: [(ExpertKind, usize); 9] = [
+    (ExpertKind::Generator, 0),
+    (ExpertKind::HwControl, 0),
+    (ExpertKind::HwIdentify, 0),
+    (ExpertKind::RustCoder, 0),
+    (ExpertKind::DiskDiag, 0),
+    (ExpertKind::Security, 0),
+    (ExpertKind::SpeechSynth, 0),
+    (ExpertKind::Agent, 0),
+    (ExpertKind::Unknown, 0),
 ];
 
 /// Bytes de pesos residentes para um expert (free function — acessível sem instância).
@@ -1063,6 +1255,7 @@ pub fn expert_kind_name(kind: ExpertKind) -> &'static str {
         ExpertKind::Security => "security",
         ExpertKind::SpeechSynth => "speech_synth",
         ExpertKind::Generator => "generator",
+        ExpertKind::Agent => "agent",
         ExpertKind::Unknown => "unknown",
     }
 }
@@ -1221,6 +1414,10 @@ pub fn init_trinity() -> TrinityRouter {
         kind: ExpertKind::SpeechSynth, name: "speech_synth",
         description: "Sintese de fala — TTS, voz, audio", weight: None,
     });
+    router.register_expert(Expert {
+        kind: ExpertKind::Agent, name: "agent",
+        description: "Planejamento agentic / orquestracao (ModelHub Agent)", weight: None,
+    });
     router
 }
 
@@ -1313,6 +1510,106 @@ mod tests {
         assert!(e.weight.is_none());
         clear_mmap_for_tests();
         assert!(r.get_or_mmap_expert(ExpertKind::HwIdentify).is_none());
+    }
+
+    #[test]
+    fn resolve_route_covers_flow() {
+        use super::{resolve_route, RouteTarget, SlotPromptWrap};
+        use crate::model_hub::ModelSlot;
+        use crate::moe_compose::PipelineId;
+
+        assert!(matches!(resolve_route("hw_control"), RouteTarget::HwControl));
+        assert!(matches!(
+            resolve_route("heal"),
+            RouteTarget::Pipeline(PipelineId::Heal)
+        ));
+        assert!(matches!(
+            resolve_route("vision_qa"),
+            RouteTarget::Pipeline(PipelineId::VisionQa)
+        ));
+        assert!(matches!(
+            resolve_route("disk_diag"),
+            RouteTarget::SkillBackedActive
+        ));
+        assert!(matches!(
+            resolve_route("speech_synth"),
+            RouteTarget::OutsidePiper
+        ));
+        assert!(matches!(
+            resolve_route("generator"),
+            RouteTarget::GeneratorSelect
+        ));
+        match resolve_route("rust_coder") {
+            RouteTarget::Slot {
+                slot,
+                wrap: SlotPromptWrap::RustCoderSystem,
+            } => assert_eq!(slot, ModelSlot::RustCoder),
+            other => panic!("expected Slot RustCoder, got {:?}", other),
+        }
+        match resolve_route("generator_pro") {
+            RouteTarget::Slot {
+                slot,
+                wrap: SlotPromptWrap::None,
+            } => assert_eq!(slot, ModelSlot::GeneratorPro),
+            other => panic!("expected Slot Pro, got {:?}", other),
+        }
+        assert!(matches!(
+            resolve_route("unknown_xyz"),
+            RouteTarget::FallbackActive
+        ));
+    }
+
+    #[test]
+    fn pipeline_keywords_route() {
+        let r = init_trinity();
+        assert_eq!(r.classify_intent("o que tem na imagem da tela").name, "vision_qa");
+        assert_eq!(r.classify_intent("busque no documento com rag").name, "rag");
+        assert_eq!(r.classify_intent("corrija o bug do driver com patch").name, "heal");
+        assert_eq!(
+            r.classify_intent("planeje e execute o multi-agent").name,
+            "agentic_pipe"
+        );
+    }
+
+    #[test]
+    fn slot_for_expert_kind_contract() {
+        use crate::model_hub::ModelSlot;
+        use super::{slot_for_expert_kind, slot_for_expert_name, ExpertKind};
+        assert_eq!(
+            slot_for_expert_kind(ExpertKind::HwIdentify),
+            Some(ModelSlot::HwExpert)
+        );
+        assert_eq!(
+            slot_for_expert_kind(ExpertKind::RustCoder),
+            Some(ModelSlot::RustCoder)
+        );
+        assert_eq!(
+            slot_for_expert_kind(ExpertKind::Agent),
+            Some(ModelSlot::Agent)
+        );
+        assert_eq!(
+            slot_for_expert_kind(ExpertKind::Generator),
+            Some(ModelSlot::GeneratorPro)
+        );
+        assert!(slot_for_expert_kind(ExpertKind::DiskDiag).is_none());
+        assert!(slot_for_expert_kind(ExpertKind::Security).is_none());
+        assert!(slot_for_expert_kind(ExpertKind::HwControl).is_none());
+        assert!(slot_for_expert_name("generator").is_none());
+        assert_eq!(
+            slot_for_expert_name("agentic"),
+            Some(ModelSlot::Agent)
+        );
+        assert_eq!(
+            slot_for_expert_name("rust_coder"),
+            Some(ModelSlot::RustCoder)
+        );
+    }
+
+    #[test]
+    fn agent_keyword_routes() {
+        let r = init_trinity();
+        assert_eq!(r.classify_intent("orquestre o workflow multi-step").name, "agent");
+        assert_eq!(r.classify_intent("planeje a acao do agente").name, "agent");
     }
 
     #[test]

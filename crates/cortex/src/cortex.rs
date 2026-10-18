@@ -889,6 +889,7 @@ pub fn hwexpert_v4_is_loaded() -> bool {
 }
 
 pub fn set_hwexpert_v4_model(model: HwExpertV4Model) {
+    crate::model_hub::mark_slot(crate::model_hub::ModelSlot::HwExpert, true);
     *HWEXPERT_V4_MODEL.lock() = Some(model);
     k_nano::slog_cortex!("HWEXPERT", "ok", "HW Expert v4 model loaded (multi-head).");
 }
@@ -5775,144 +5776,171 @@ fn fallback_generate(prompt: &str) -> String {
     }
 }
 
+/// Fluxo canônico: Trinity name → `resolve_route` → execute (hub / pipe / skill).
 fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
-    if expert_name == "hw_control" {
-        let utterance = crate::trinity::extract_user_utterance(prompt);
-        return dispatch_hw_control(utterance);
-    }
-    if expert_name == "rust_coder" {
-        let guard = RUSTCODER_MODEL.lock();
-        if let Some(m) = guard.as_ref() {
-            k_nano::slog_cortex!("TRINITY", "ok", "MoE routing: RustCoder expert");
-            return m.generate(&alloc::format!(
-                "{{\"role\":\"system\",\"content\":\"Gere apenas codigo Rust valido.\"}}\n{}\n",
-                prompt
-            ));
+    use crate::trinity::{resolve_route, RouteTarget, SlotPromptWrap};
+
+    let target = resolve_route(expert_name);
+    k_nano::slog_cortex!(
+        "TRINITY",
+        "ok",
+        "MoE resolve name={} → {:?}",
+        expert_name,
+        target
+    );
+
+    match target {
+        RouteTarget::HwControl => {
+            let utterance = crate::trinity::extract_user_utterance(prompt);
+            dispatch_hw_control(utterance)
         }
-        k_nano::slog_cortex!(
-            "TRINITY",
-            "warn",
-            "MoE routing: RustCoder expert unloaded, fallback CURRENT_MODEL"
-        );
-        return fallback_generate(prompt);
-    }
-    if expert_name == "hw_identify" {
-        let guard = HWEXPERT_MODEL.lock();
-        if let Some(m) = guard.as_ref() {
-            k_nano::slog_cortex!("TRINITY", "ok", "MoE routing: HWIdentify expert");
-            return m.generate(&alloc::format!("identifique hardware {}", prompt));
+        RouteTarget::Pipeline(pid) => crate::moe_compose::compose_pipeline(pid, prompt),
+        RouteTarget::SkillBackedActive => {
+            crate::moe_compose::note_route(expert_name, "active", "skill_backed");
+            fallback_generate(prompt)
         }
-        k_nano::slog_cortex!(
-            "TRINITY",
-            "warn",
-            "MoE routing: HWIdentify expert unloaded, fallback CURRENT_MODEL"
-        );
-        return fallback_generate(prompt);
-    }
-    if expert_name == "agent" || expert_name == "orchestrator" || expert_name == "agentic" {
-        k_nano::slog_cortex!("TRINITY", "ok", "MoE routing: Agent expert");
-        if let Some(out) =
-            crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::Agent, prompt)
-        {
-            return out;
+        RouteTarget::OutsidePiper => {
+            crate::moe_compose::note_route(expert_name, "piper", "outside_hub");
+            fallback_generate(prompt)
         }
-        k_nano::slog_cortex!(
-            "TRINITY",
-            "warn",
-            "MoE routing: Agent expert unloaded, fallback CURRENT_MODEL"
-        );
-        return fallback_generate(prompt);
-    }
-    if expert_name == "generator"
-        || expert_name == "generator_pro"
-        || expert_name == "generator_fast"
-        || expert_name == "tinystories"
-    {
-        let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
-            id: 0,
-            topic: alloc::string::String::from("TRINITY_UNMATCHED"),
-            payload: prompt.as_bytes().to_vec(),
-            token: event_bus::CapabilityToken::Legacy(1),
-        });
-        let slot = match expert_name {
-            "generator_pro" => crate::model_hub::ModelSlot::GeneratorPro,
-            // Honesty s388: Vision ≠ gerador de texto — alias de Active.
-            "generator_fast" | "tinystories" => crate::model_hub::select_generator_slot(prompt),
-            _ => crate::model_hub::select_generator_slot(prompt),
-        };
-        k_nano::slog_cortex!("TRINITY", "ok", "MoE generator slot={}", slot.name());
-        if slot != crate::model_hub::ModelSlot::Active {
-            if let Some(out) = crate::model_hub::generate_from_slot(slot, prompt) {
+        RouteTarget::Slot { slot, wrap } => {
+            let prompt_for_slot = match wrap {
+                SlotPromptWrap::RustCoderSystem => alloc::format!(
+                    "{{\"role\":\"system\",\"content\":\"Gere apenas codigo Rust valido.\"}}\n{}\n",
+                    prompt
+                ),
+                SlotPromptWrap::HwIdentifyPrefix => {
+                    alloc::format!("identifique hardware {}", prompt)
+                }
+                SlotPromptWrap::None => alloc::string::String::from(prompt),
+            };
+            crate::moe_compose::note_route(expert_name, slot.name(), "direct");
+            if let Some(out) = crate::model_hub::generate_from_slot(slot, &prompt_for_slot) {
                 return out;
             }
-            // Pro miss → Active (não Vision encoder)
-            if slot == crate::model_hub::ModelSlot::GeneratorPro {
-                k_nano::slog_cortex!("TRINITY", "warn", "pro miss → CURRENT_MODEL (Active)");
-            }
+            k_nano::slog_cortex!(
+                "TRINITY",
+                "warn",
+                "MoE slot={} miss → CURRENT_MODEL",
+                slot.name()
+            );
+            crate::moe_compose::note_route(expert_name, "active", "niche_miss");
+            fallback_generate(prompt)
         }
+        RouteTarget::GeneratorSelect => {
+            let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+                id: 0,
+                topic: alloc::string::String::from("TRINITY_UNMATCHED"),
+                payload: prompt.as_bytes().to_vec(),
+                token: event_bus::CapabilityToken::Legacy(1),
+            });
+            let slot = crate::model_hub::select_generator_slot(prompt);
+            k_nano::slog_cortex!("TRINITY", "ok", "MoE generator slot={}", slot.name());
+            crate::moe_compose::note_route(expert_name, slot.name(), "generator_select");
+            if slot != crate::model_hub::ModelSlot::Active {
+                if let Some(out) = crate::model_hub::generate_from_slot(slot, prompt) {
+                    return out;
+                }
+                if slot == crate::model_hub::ModelSlot::GeneratorPro {
+                    k_nano::slog_cortex!("TRINITY", "warn", "pro miss → CURRENT_MODEL (Active)");
+                    crate::moe_compose::note_route(expert_name, "active", "pro_miss");
+                }
+            }
+            fallback_generate(prompt)
+        }
+        RouteTarget::FallbackActive => fallback_generate(prompt),
     }
-    fallback_generate(prompt)
 }
 
 /// Gera resposta usando rota já decidida pelo caller (Hermes R3) — sem re-classificar.
 pub fn generate_via_model_with_route(prompt: &str, expert_name: &str) -> String {
     let _busy = infer_guard();
+    // ADR-0088: rota já decidida (Hermes) ainda passa por resolve/execute;
+    // AirLLM só se o alvo for gerador (mesmo contrato de generate_via_model).
     {
-        let stream_guard = CURRENT_STREAMING_MODEL.lock();
-        if let Some(ref sm) = *stream_guard {
-            let result = sm.generate(prompt);
-            drop(stream_guard);
-            return result;
+        use crate::trinity::{resolve_route, RouteTarget};
+        let target = resolve_route(expert_name);
+        let stream_ok = matches!(
+            target,
+            RouteTarget::GeneratorSelect
+                | RouteTarget::FallbackActive
+                | RouteTarget::SkillBackedActive
+                | RouteTarget::OutsidePiper
+        );
+        if stream_ok {
+            let stream_guard = CURRENT_STREAMING_MODEL.lock();
+            if let Some(ref sm) = *stream_guard {
+                crate::moe_compose::note_route(expert_name, "airllm", "generator_select");
+                let result = sm.generate(prompt);
+                drop(stream_guard);
+                return result;
+            }
         }
     }
     dispatch_expert(prompt, expert_name)
 }
 
 /// Generate text via Trinity MoE director (fonte única — hermes + bin).
+///
+/// ADR-0088: **toda** geração passa por classificação → `resolve_route` → hub/pipe/skill.
+/// Saudação NÃO bypassa o MoE (Trinity keyword já mapeia oi/olá → `generator` →
+/// `GeneratorSelect` → Active). AirLLM streaming só atende rotas geradoras; outras
+/// rotas (RustCoder, heal, …) usam o path tipado do hub — auto-adaptar, não atalho.
 pub fn generate_via_model(prompt: &str) -> String {
     let _busy = infer_guard();
-    // AirLLM path: se há modelo streaming ativo, usa layer-by-layer
-    {
-        let stream_guard = CURRENT_STREAMING_MODEL.lock();
-        if let Some(ref sm) = *stream_guard {
-            let result = sm.generate(prompt);
-            drop(stream_guard);
-            return result;
-        }
-    }
 
     // Sempre classifica o utterance do usuário (não o envelope de skills).
     let utterance = crate::trinity::extract_user_utterance(prompt);
 
-    // Chat / saudação → BitNet principal (nunca expert 128h).
-    if crate::bpe::prompt_is_greeting(utterance) || crate::bpe::prompt_is_greeting(prompt) {
-        k_nano::slog_cortex!("TRINITY", "ok", "saudacao → CURRENT_MODEL (skip MoE expert)");
-        let _ = crate::global_arena::take_pending_route();
-        let guard = CURRENT_MODEL.lock();
-        return match guard.as_ref() {
-            Some(m) => m.generate(prompt),
-            None => String::from(NO_MODEL_MSG),
-        };
+    // 1) Rota pendente do Hermes (já classificada no utterance) — single classify.
+    let expert_name = if let Some((name, _trace)) = crate::global_arena::take_pending_route() {
+        k_nano::slog_cortex!("TRINITY", "ok", "usando rota pendente R3: {}", name);
+        name
+    } else {
+        // 2) Classifica utterance na arena (neural ou keyword — sempre decide).
+        crate::global_arena::with_arena(|arena| {
+            let trinity = crate::trinity::TRINITY.lock();
+            let (expert, trace) = trinity.classify_intent_with_trace(utterance, arena);
+            let name = expert.name;
+            drop(trinity);
+            crate::global_arena::push_route_trace(trace);
+            name
+        })
+        .unwrap_or_else(|| {
+            let trinity = crate::trinity::TRINITY.lock();
+            trinity.classify_intent(utterance).name
+        })
+    };
+
+    // AirLLM: degradacao honesta do gerador (layer-by-layer), nao bypass de Trinity.
+    // Só aplica se a rota resolvida e geradora; especialistas/pipes usam hub tipado.
+    {
+        use crate::trinity::{resolve_route, RouteTarget};
+        let target = resolve_route(expert_name);
+        let stream_ok = matches!(
+            target,
+            RouteTarget::GeneratorSelect
+                | RouteTarget::FallbackActive
+                | RouteTarget::SkillBackedActive
+                | RouteTarget::OutsidePiper
+        );
+        if stream_ok {
+            let stream_guard = CURRENT_STREAMING_MODEL.lock();
+            if let Some(ref sm) = *stream_guard {
+                k_nano::slog_cortex!(
+                    "TRINITY",
+                    "ok",
+                    "AirLLM stream apos MoE resolve name={} (adaptive, nao bypass)",
+                    expert_name
+                );
+                crate::moe_compose::note_route(expert_name, "airllm", "generator_select");
+                let result = sm.generate(prompt);
+                drop(stream_guard);
+                return result;
+            }
+        }
     }
 
-    // 1) Rota pendente do Hermes (já classificada no utterance)
-    if let Some((name, _trace)) = crate::global_arena::take_pending_route() {
-        k_nano::slog_cortex!("TRINITY", "ok", "usando rota pendente R3: {}", name);
-        return dispatch_expert(prompt, name);
-    }
-    // 2) Classifica utterance na arena
-    let expert_name = crate::global_arena::with_arena(|arena| {
-        let trinity = crate::trinity::TRINITY.lock();
-        let (expert, trace) = trinity.classify_intent_with_trace(utterance, arena);
-        let name = expert.name;
-        drop(trinity);
-        crate::global_arena::push_route_trace(trace);
-        name
-    })
-    .unwrap_or_else(|| {
-        let trinity = crate::trinity::TRINITY.lock();
-        trinity.classify_intent(utterance).name
-    });
     dispatch_expert(prompt, expert_name)
 }
 

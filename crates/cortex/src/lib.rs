@@ -48,6 +48,7 @@ pub mod tensor;
 pub mod matmul_diag;
 pub mod layer_diag;
 pub mod trinity;
+pub mod moe_compose;
 pub mod tv_dsl;
 pub mod ngram_spec;
 pub mod projection;

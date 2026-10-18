@@ -4757,10 +4757,11 @@ pub(crate) fn kernel_boot(
         // e o gate Trinity segue ABSENT mesmo após LOADED (slot não alimenta
         // o router) — ou seja, em A o load só adiciona risco. Small expert
         // é fallback p/ configs sem modelo (B), onde o path é saudável.
-        if !hw_ok
-            && !crate::cortex::hwexpert_v4_is_loaded()
-            && cortex_crate::model::loaded_model_header().is_none()
-        {
+        // s489: AlwaysTiny HwExpert mesmo com Active/Falcon3 já residente
+        // (header presente). Gate antigo `loaded_model_header().is_none()`
+        // matava o expert no path metal/WHPX com LLM. AlwaysTiny pós-loader
+        // também chama hub_load_on_demand; este early path evita miss se FAT ok.
+        if !hw_ok && !crate::cortex::hwexpert_v4_is_loaded() {
             fn try_hwexpert_small_fat() -> bool {
                 const PIO_CAP: usize = 8 * 1024 * 1024;
                 unsafe fn try_dev(
@@ -4862,8 +4863,10 @@ pub(crate) fn kernel_boot(
                         };
                         let Some(ino) = vol.resolve_path(dev, &path) else { continue };
                         let Ok(data) = vol.read_file(dev, ino) else { continue };
-                        // s483 Passo 0: mesma validação do path FAT (gap read→load).
-                        if let Err(reason) = cortex_crate::model::validate_bitnet_blob(&data) {
+                        // s489: validate_for_slot + register_bytes (kind-aware; metal path).
+                        if let Err(reason) =
+                            cortex_crate::model::validate_for_slot(slot, &data)
+                        {
                             k_nano::slog_bin!(
                                 "MODEL",
                                 "warn",
@@ -4874,12 +4877,11 @@ pub(crate) fn kernel_boot(
                             );
                             continue;
                         }
-                        if let Some(m) = crate::cortex::load_model(&data) {
-                            crate::cortex::register_model_slot(slot, alloc::boxed::Box::new(m));
+                        if crate::model_hub::register_bytes(slot, &data) {
                             k_nano::slog_bin!(
                                 "MODEL",
-                                "info",
-                                "NeuralFS LOADED file={} slot={} size={}KB",
+                                "ok",
+                                "NeuralFS LOADED via register_bytes file={} slot={} size={}KB",
                                 path,
                                 slot.name(),
                                 data.len() / 1024
@@ -4942,24 +4944,34 @@ fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
                 k_nano::slog_bin!("MODEL", "info", "hub generator_pro via AirLLM/GGUF plan={}",
                     llm_plan.as_str());
             }
+            // s489 HW-first: QEMU = PIO_QEMU 8MB (smoke; mid niches = miss
+            // honesto). Metal = pio_hw / footprint — RustCoder 321MB é path
+            // produto, não lab.
             let qemu_hv = qemu_loader_2b || k_nano::platform_probe::hypervisor().is_sandbox();
             let pio_hw = (llm_plan.max_resident_mb as usize).saturating_mul(1024 * 1024);
+            let footprint_b = cortex_crate::model_fit::slot_footprint_mb(slot.name())
+                .unwrap_or(0) as usize
+                * 1024
+                * 1024;
             let pio_cap = if qemu_hv {
                 PIO_QEMU
             } else {
                 match slot {
-                    crate::model_hub::ModelSlot::Vision => PIO_FAST.min(pio_hw),
-                    // s483 Passo 2a: era 32MB contra artefato de 165MB ->
-                    // `if sz > pio_cap { continue }` = Reranker INALCANCAVEL por
-                    // construcao (skip sempre, com log `info` parecendo tentativa).
-                    // O cap agora e o footprint MEDIDO do slot (Passo 1), com piso
-                    // no plano RAM. 0 => sem cap (artefato decide).
-                    crate::model_hub::ModelSlot::Reranker => cortex_crate::model_fit::slot_footprint_mb(
-                        slot.name(),
-                    )
-                    .unwrap_or(0) as usize
-                    * 1024
-                    * 1024,
+                    crate::model_hub::ModelSlot::Vision => {
+                        let need = if footprint_b > 0 {
+                            footprint_b
+                        } else {
+                            33 * 1024 * 1024
+                        };
+                        PIO_FAST.min(pio_hw.max(need))
+                    }
+                    crate::model_hub::ModelSlot::RustCoder
+                    | crate::model_hub::ModelSlot::Agent
+                    | crate::model_hub::ModelSlot::Learner
+                    | crate::model_hub::ModelSlot::Reranker => {
+                        // Metal: maior entre plano RAM e footprint do nicho.
+                        pio_hw.max(footprint_b)
+                    }
                     _ => pio_hw,
                 }
             };
@@ -4981,12 +4993,14 @@ fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
                                     continue;
                                 }
                                 if sz > pio_cap {
+                                    let why = if qemu_hv { "lab_PIO_QEMU" } else { "pio_hw" };
                                     k_nano::slog_bin!(
                                         "MODEL",
-                                        "info",
-                                        "{} PRESENT {}KB — skip PIO (cap={}MB); slot={}",
+                                        "warn",
+                                        "{} PRESENT {}KB — skip PIO ({} cap={}MB); slot={} (metal: fat LOO; qemu: niche_miss)",
                                         name,
                                         sz / 1024,
+                                        why,
                                         pio_cap / (1024 * 1024),
                                         slot.name()
                                     );
@@ -5031,10 +5045,8 @@ fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
         crate::model_hub::evict_slot(crate::model_hub::ModelSlot::Active);
     }
     if let Some(data) = fs.read_file(name) {
-        // s483 Passo 0: validação entre read e load (plano s481 Passo 2/4).
-        // v6/v7: header autodescritivo — tamanho declarado TEM que bater com o
-        // blob (s480: fantasma de tamanho = recusa, nunca registra).
-        if let Err(reason) = cortex_crate::model::validate_bitnet_blob(&data) {
+        // s489: validate_for_slot + register_bytes (único path kind-aware).
+        if let Err(reason) = cortex_crate::model::validate_for_slot(slot, &data) {
             k_nano::slog_bin!(
                 "MODEL",
                 "warn",
@@ -5046,29 +5058,17 @@ fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
             );
             continue;
         }
-                                    if let Some(m) = crate::cortex::load_model(&data) {
-                                        // Se Active vazio e slot é pro/fast, vira primary
+                                    if crate::model_hub::register_bytes(slot, &data) {
+                                        // Active vazio + Pro carregado via LOO: Pro vira primary.
                                         if !crate::cortex::model_is_loaded()
-                                            && matches!(
-                                                slot,
-                                                crate::model_hub::ModelSlot::GeneratorPro
-                                                    | crate::model_hub::ModelSlot::Vision
-                                            )
+                                            && slot == crate::model_hub::ModelSlot::GeneratorPro
                                         {
-                                            crate::cortex::set_model(alloc::boxed::Box::new(m));
-                                            if slot == crate::model_hub::ModelSlot::GeneratorPro {
-                                                crate::model_hub::mark_pro_alias(true);
-                                            }
-                                        } else {
-                                            crate::cortex::register_model_slot(
-                                                slot,
-                                                alloc::boxed::Box::new(m),
-                                            );
+                                            crate::model_hub::mark_pro_alias(true);
                                         }
                                         k_nano::slog_bin!(
                                             "MODEL",
-                                            "info",
-                                            "hub LOADED file={} slot={} size={}KB",
+                                            "ok",
+                                            "hub LOADED via register_bytes file={} slot={} size={}KB",
                                             name,
                                             slot.name(),
                                             data.len() / 1024
@@ -5100,6 +5100,34 @@ fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
             "info",
             "loader registrado (load-on-first-use; 0 leituras PIO no boot)"
         );
+        // P1 residency: AlwaysTiny (HwExpert) residente no boot; mid/heavy só LOO.
+        // Em sandbox o pio_cap ainda protege; miss = warn honesto, sem inventar.
+        for &tiny in crate::model_hub::always_tiny_slots() {
+            if crate::model_hub::slot_real(tiny) {
+                k_nano::slog_bin!(
+                    "HUB",
+                    "ok",
+                    "residency AlwaysTiny slot={} already real",
+                    tiny.name()
+                );
+                continue;
+            }
+            if hub_load_on_demand(tiny) {
+                k_nano::slog_bin!(
+                    "HUB",
+                    "ok",
+                    "residency AlwaysTiny slot={} resident (boot)",
+                    tiny.name()
+                );
+            } else {
+                k_nano::slog_bin!(
+                    "HUB",
+                    "warn",
+                    "residency AlwaysTiny slot={} miss (LOO ainda disponivel)",
+                    tiny.name()
+                );
+            }
+        }
         // Se Active é grande (≥200MB heurística via embed), marca pro-alias
         let dim = crate::cortex::CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
         if dim >= 2048 {

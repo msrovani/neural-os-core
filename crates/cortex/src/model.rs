@@ -255,6 +255,53 @@ pub fn validate_bitnet_blob(data: &[u8]) -> Result<(), &'static str> {
     }
 }
 
+/// Validação por slot do ModelHub (LOO / metal). HwExpert e Vision/Reranker
+/// não passam pelo gate LLM-only de `validate_bitnet_blob`.
+pub fn validate_for_slot(
+    slot: crate::model_hub::ModelSlot,
+    data: &[u8],
+) -> Result<(), &'static str> {
+    use crate::model_hub::ModelSlot;
+    if data.len() < 16 {
+        return Err("too_short");
+    }
+    let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    if magic != 0xBE11BE11 {
+        return Err("bad_magic");
+    }
+    let version = u16::from_le_bytes([data[4], data[5]]);
+    match slot {
+        ModelSlot::HwExpert => match version {
+            1..=5 => Ok(()), // legado; loader decide
+            6 | 7 => {
+                // model_type: 0=LLM, 1=HwExpert, 2=router — só 1 é coerente aqui.
+                if data[14] == 1 {
+                    Ok(())
+                } else if data[14] == 0 {
+                    Err("llm_in_hwexpert_slot")
+                } else {
+                    Err("not_hwexpert")
+                }
+            }
+            _ => Err("unsupported_version"),
+        },
+        ModelSlot::Vision | ModelSlot::Reranker => match version {
+            1..=5 => Ok(()),
+            6 | 7 => {
+                // Encoder/rerank podem ser type 0 (LLM shell) ou legado; não exigir probe
+                // de tamanho LLM (artefatos v5/v6 variam). Magic+versão bastam.
+                Ok(())
+            }
+            _ => Err("unsupported_version"),
+        },
+        ModelSlot::Active
+        | ModelSlot::GeneratorPro
+        | ModelSlot::Agent
+        | ModelSlot::RustCoder
+        | ModelSlot::Learner => validate_bitnet_blob(data),
+    }
+}
+
 // ── Static: header do modelo carregado ─────────────────────────────────
 
 static HEADER_LOADED: AtomicBool = AtomicBool::new(false);
@@ -580,5 +627,35 @@ mod tests {
         let mut expert = synth_header(6, false);
         expert[14] = 1;
         assert_eq!(validate_bitnet_blob(&expert), Err("not_llm"));
+    }
+
+    #[test]
+    fn validate_for_slot_hwexpert_vs_llm() {
+        use crate::model_hub::ModelSlot;
+        let mut expert = synth_header(6, false);
+        expert[14] = 1;
+        assert_eq!(
+            validate_for_slot(ModelSlot::HwExpert, &expert),
+            Ok(())
+        );
+        assert_eq!(
+            validate_for_slot(ModelSlot::Active, &expert),
+            Err("not_llm")
+        );
+        let v6 = synth_header(6, false);
+        let h6 = parse_model_header(&v6).expect("v6");
+        let mut llm = v6.clone();
+        llm.resize(h6.file_size, 0);
+        assert_eq!(validate_for_slot(ModelSlot::Active, &llm), Ok(()));
+        assert_eq!(
+            validate_for_slot(ModelSlot::HwExpert, &llm),
+            Err("llm_in_hwexpert_slot")
+        );
+        let mut v5 = alloc::vec![0u8; 32];
+        v5[..4].copy_from_slice(&0xBE11BE11u32.to_le_bytes());
+        v5[4] = 5;
+        v5[5] = 0;
+        assert_eq!(validate_for_slot(ModelSlot::Vision, &v5), Ok(()));
+        assert_eq!(validate_for_slot(ModelSlot::Reranker, &v5), Ok(()));
     }
 }

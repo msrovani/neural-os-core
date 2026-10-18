@@ -40,18 +40,31 @@ assert de que prompt complexo devolve `GeneratorPro` (não `Active`).
 
 ## 3. Prova
 
-- `cargo check --release` → **exit 0** (0 erros; 120 warnings pré-existentes de dead-code).
+- `cargo check --release` → **exit 0** (0 erros; warnings pré-existentes).
 - `cargo test -p cortex --lib model_hub` → **2/2**
   (`select_complex_prefers_pro_even_absent`, `evict_slot_libera_blob_e_limpa_estado`).
 - Sem mudança de assinatura pública; `qemu_loader_2b` continua usado no cálculo de
-  `pio_cap` (main.rs:4918/4945) — a remoção foi só do early-return.
+  `pio_cap` — a remoção foi só do early-return.
+- **Runtime WHPX VERIFIED (seam)** — log
+  `logs/boot_hub_nodisk_s487_20261018_130517.txt` (NoDisk + Falcon3-3B loader
+  `models/FALCON3.BIN` @ `0x100000000`, `-m 6G -smp 2` Haswell):
+  - `HUB ok sandbox: LOO seam only (sem eager NeuralFS) — first-use + pio_cap`
+  - `HUB ok loader registrado (load-on-first-use; 0 leituras PIO no boot)`
+  - `MODEL ok ModelHub: active=1 vision=0 generator_pro=alias reranker=0 …`
+  - `Asset ok LLM LOADED … size=1012764KB` + `LOADED — model active in ModelHub`
+- Confundidor: boot **com** `disk_qemu.raw` FAT 512MB (VISION+RERANKER) estola em
+  `K33[26] tickv` após `MBR type=0x0c` (pré-existente; hub fica depois do tickv).
+  Aceite do seam usou NoDisk; niches no FAT = metal ou tickv sem hang.
 
-## 4. Honestidade: runtime do LOO continua UNKNOWN
+## 4. Honestidade: o que é VERIFIED vs UNKNOWN
 
-O P0 torna o seam **registrado** em sandbox (antes disso era impossível), mas o `pio_cap`
-de 8MB sob `qemu_hv` recusa qualquer slot do hub (todos os artefatos são maiores). O
-observável em QEMU será o log de skip com `sz`/cap, **não** um load. Aceite real continua
-exigindo metal (ou liberar o cap em dev, decisão do mantenedor).
+| Claim | Status |
+|---|---|
+| Seam registrado em sandbox | **VERIFIED** (log acima) |
+| Active via QEMU-loader | **VERIFIED** (1012764KB) |
+| Select complexo → Pro ausente | **VERIFIED** host test |
+| Load real de Pro/Vision/Reranker via LOO | **UNKNOWN** — `pio_cap` 8MB sob `qemu_hv` rejeita blobs >8MB; aceite = metal ou cap liberado |
+| Validate REJECT / evict sob pressão | **UNKNOWN** (exige LOO que passa do cap) |
 
 ## 5. Lições
 

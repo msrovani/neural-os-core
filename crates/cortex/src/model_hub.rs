@@ -20,6 +20,17 @@ pub enum ModelSlot {
     Agent = 7,
 }
 
+/// Política de residência (hub MoE usável): tiny no boot; mid/heavy via LOO.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResidencyTier {
+    /// Carrega no boot se blob no FAT (HwExpert ~1MB).
+    AlwaysTiny,
+    /// Load-on-first-use; evict sob pressão.
+    LooMid,
+    /// LOO + evict; Pro só sob rota/select.
+    LooHeavy,
+}
+
 impl ModelSlot {
     pub fn name(self) -> &'static str {
         match self {
@@ -31,6 +42,17 @@ impl ModelSlot {
             Self::HwExpert => "hw_identify",
             Self::Learner => "learner",
             Self::Agent => "agent",
+        }
+    }
+
+    pub fn residency_tier(self) -> ResidencyTier {
+        match self {
+            Self::HwExpert => ResidencyTier::AlwaysTiny,
+            // Learner: LOO mid por default; boot eager só se treino contínuo (bin).
+            Self::Learner | Self::RustCoder | Self::Agent | Self::Reranker | Self::Vision => {
+                ResidencyTier::LooMid
+            }
+            Self::Active | Self::GeneratorPro => ResidencyTier::LooHeavy,
         }
     }
 
@@ -53,6 +75,11 @@ impl ModelSlot {
             _ => None,
         }
     }
+}
+
+/// Slots AlwaysTiny — o boot deve residentar estes após `register_slot_loader`.
+pub fn always_tiny_slots() -> &'static [ModelSlot] {
+    &[ModelSlot::HwExpert]
 }
 
 const N_SLOTS: usize = 8;
@@ -339,10 +366,158 @@ pub fn generate_from_slot(slot: ModelSlot, prompt: &str) -> Option<String> {
             let guard = crate::cortex::RUSTCODER_MODEL.lock();
             guard.as_ref().map(|m| m.generate(prompt))
         }
+        ModelSlot::HwExpert => {
+            // Mutex legado (LLM) OU v4 multi-head (predict) — nunca HUB array.
+            {
+                let guard = crate::cortex::HWEXPERT_MODEL.lock();
+                if let Some(m) = guard.as_ref() {
+                    return Some(m.generate(prompt));
+                }
+            }
+            try_hwexpert_v4_text(prompt)
+        }
         other => {
             let hub = HUB.lock();
             hub.slots[idx(other)].as_ref().map(|m| m.generate(prompt))
         }
+    }
+}
+
+/// HwExpert v4: extrai vid:did do prompt (ou injeta 1º PCI real) e formata saída usável.
+fn try_hwexpert_v4_text(prompt: &str) -> Option<String> {
+    if !crate::cortex::hwexpert_v4_is_loaded() {
+        return None;
+    }
+    let (vid, did, injected) = match parse_pci_ids(prompt) {
+        Some((v, d)) => (v, d, false),
+        None => {
+            let (v, d) = first_pci_vid_did()?;
+            k_nano::slog_cortex!(
+                "HWEXPERT",
+                "ok",
+                "hw_identify inject vid={:04x} did={:04x} (inventario PCI)",
+                v,
+                d
+            );
+            (v, d, true)
+        }
+    };
+    let pred = crate::cortex::hwexpert_v4_predict(vid, did)?;
+    let family = hw_family_name(pred.family_id);
+    let agent = hw_agent_name(pred.agent_id);
+    let inj = if injected { " inject=1" } else { "" };
+    Some(alloc::format!(
+        "hw_identify vid={:04x} did={:04x} family={} ({}) fw={} agent={} ({}) caps={:#x} next={}{}",
+        vid,
+        did,
+        pred.family_id,
+        family,
+        pred.fw_id,
+        pred.agent_id,
+        agent,
+        pred.caps_bits,
+        pred.next_action,
+        inj
+    ))
+}
+
+fn hw_family_name(id: u8) -> &'static str {
+    match id {
+        0 => "Unknown",
+        1 => "IntelE1000",
+        2 => "VirtioNet",
+        3 => "RealtekEth",
+        4 => "IntelIwlWifi",
+        5 => "RealtekWifi",
+        6 => "AtherosWifi",
+        7 => "BroadcomWifi",
+        8 => "NvidiaGpu",
+        9 => "IntelI915",
+        10 => "AmdGpu",
+        11 => "QemuVga",
+        12 => "VirtioGpu",
+        13 => "UsbHostXhci",
+        14 => "IntelHda",
+        15 => "StorageAta",
+        16 => "PciBridge",
+        _ => "Other",
+    }
+}
+
+fn hw_agent_name(id: u8) -> &'static str {
+    match id {
+        0 => "HwBridgeAgent",
+        1 => "NetAgent",
+        2 => "WifiAgent",
+        3 => "DisplayAgent",
+        4 => "GpuBackend",
+        5 => "UsbDriverAgent",
+        6 => "HdaAudioAgent",
+        7 => "DiskAgent",
+        8 => "PlatformAgent",
+        _ => "PlatformAgent",
+    }
+}
+
+/// Primeiro dispositivo PCI válido do inventário (HW real / QEMU).
+fn first_pci_vid_did() -> Option<(u16, u16)> {
+    let mut found: Option<(u16, u16)> = None;
+    unsafe {
+        k_nano::pci::scan_pci_cb(|_bus, _slot, _func, vid, did| {
+            if found.is_none() && vid != 0xffff && vid != 0 {
+                found = Some((vid, did));
+                true // stop
+            } else {
+                false
+            }
+        });
+    }
+    found
+}
+
+fn parse_pci_ids(prompt: &str) -> Option<(u16, u16)> {
+    // Aceita "8086:2723", "0x8086:0x2723", "vid=8086 did=2723".
+    let bytes = prompt.as_bytes();
+    let mut i = 0;
+    while i + 9 <= bytes.len() {
+        if let Some((vid, next)) = parse_hex_u16_at(bytes, i) {
+            let mut j = next;
+            while j < bytes.len() && (bytes[j] == b':' || bytes[j] == b' ' || bytes[j] == b'=') {
+                j += 1;
+            }
+            if let Some((did, _)) = parse_hex_u16_at(bytes, j) {
+                return Some((vid, did));
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn parse_hex_u16_at(bytes: &[u8], mut i: usize) -> Option<(u16, usize)> {
+    if i + 2 <= bytes.len() && bytes[i] == b'0' && (bytes[i + 1] == b'x' || bytes[i + 1] == b'X') {
+        i += 2;
+    }
+    let start = i;
+    let mut val: u16 = 0;
+    let mut n = 0usize;
+    while i < bytes.len() && n < 4 {
+        let c = bytes[i];
+        let d = match c {
+            b'0'..=b'9' => c - b'0',
+            b'a'..=b'f' => c - b'a' + 10,
+            b'A'..=b'F' => c - b'A' + 10,
+            _ => break,
+        };
+        val = (val << 4) | (d as u16);
+        n += 1;
+        i += 1;
+    }
+    if n == 4 {
+        Some((val, i))
+    } else {
+        let _ = start;
+        None
     }
 }
 
@@ -578,7 +753,15 @@ pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
             "LLAMA8B.BIN",
         ],
         ModelSlot::RustCoder => &["RUSTCDR3.v6", "RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"],
-        ModelSlot::HwExpert => &["HWEXPRT.v6", "HWEXPRT.BIN", "HWEXPERT.BIN", "HWEXPRT4.BIN", "HWEXPRT4.bin"],
+        ModelSlot::HwExpert => &[
+            "HWEXPRT.v6",
+            "HWEXPRT4.BIN",
+            "HWEXPRT4.bin",
+            "HW_EXPERT.BITNET",
+            "HWEXPRT.BIN",
+            "HWEXPERT.BIN",
+            "HW_EXPERT.BIN",
+        ],
         ModelSlot::Learner => &[
             "FALCON1B.v6",
             "FALCON1B.BIN",
@@ -627,6 +810,31 @@ mod evict_tests {
         fn max_seq(&self) -> usize {
             1
         }
+    }
+
+    #[test]
+    fn residency_tiers_match_plan() {
+        assert_eq!(
+            ModelSlot::HwExpert.residency_tier(),
+            ResidencyTier::AlwaysTiny
+        );
+        assert_eq!(
+            ModelSlot::RustCoder.residency_tier(),
+            ResidencyTier::LooMid
+        );
+        assert_eq!(
+            ModelSlot::Agent.residency_tier(),
+            ResidencyTier::LooMid
+        );
+        assert_eq!(
+            ModelSlot::Active.residency_tier(),
+            ResidencyTier::LooHeavy
+        );
+        assert_eq!(
+            ModelSlot::GeneratorPro.residency_tier(),
+            ResidencyTier::LooHeavy
+        );
+        assert_eq!(always_tiny_slots(), &[ModelSlot::HwExpert]);
     }
 
     #[test]

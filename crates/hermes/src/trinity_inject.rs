@@ -105,6 +105,7 @@ pub fn expert_device_class(kind: ExpertKind) -> Option<DeviceClass> {
         ExpertKind::RustCoder
         | ExpertKind::Security
         | ExpertKind::Generator
+        | ExpertKind::Agent
         | ExpertKind::Unknown => None,
     }
 }
@@ -192,6 +193,7 @@ pub fn skill_name_to_expert_kind(skill_name: &str) -> Option<ExpertKind> {
         "security" => Some(ExpertKind::Security),
         "generator" => Some(ExpertKind::Generator),
         "speech_synth" | "piper_tts" => Some(ExpertKind::SpeechSynth),
+        "agent" | "orchestrator" | "agentic" => Some(ExpertKind::Agent),
         _ => None,
     }
 }

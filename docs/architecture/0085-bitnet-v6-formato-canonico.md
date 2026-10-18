@@ -1,8 +1,8 @@
 # ADR-0085: `.bitnet v6` — Formato Canônico + Registro de Modelos K³CHJ
 
 **Data:** 2026-08-04
-**Status:** Proposed
-**Lifecycle:** `por_fazer`
+**Status:** Accepted (F0–F4 formato + registro; hub LOO s487)
+**Lifecycle:** `completa` (residual: LOO load real de nichos em metal — SESSION_487)
 **Fonte:** Requisito do dono (padronizar codificação/escrita/leitura/inferência/propagação K³CHJ) +
 auditoria tripla ADR × Python × Rust (ver ADR-0084 §11 e comparação 3-vias) + design do oracle
 **Ideias:** relaciona #479–490 (ADR-0084); nova #491 a registrar no IDEA_BANK
@@ -264,8 +264,9 @@ qualquer trabalho de kernel (ADR-0084 F1/F2).
 ## 9. Fora de escopo
 
 STT/Piper/BGE/ViT/wakeword/register-predictor: containers próprios, magic preservado, loaders locais
-(D7). k_nano/k_hal: transporte. `slot_from_bitnet_bytes` (model_hub.rs:267): heurística por tamanho
-inalterada. Nomes FAT 8.3 inalterados.
+(D7). k_nano/k_hal: transporte. `slot_from_bitnet_bytes` **removido** (SESSION_486 — morto
+transitivo com `load_models_multi`; LOO s483/s487 substitui). Nomes FAT 8.3: truncamento
+simétrico kernel↔writer (SESSION_484) — sem rename em massa; guard de colisão em `mkfat32.py`.
 
 ---
 
@@ -297,14 +298,17 @@ inalterada. Nomes FAT 8.3 inalterados.
 
 ## 12. Checklist de Aceite
 
-- [ ] F0: `tools/bitnet_writer.py` + `save_model_v6` + `v6_writer_parity` (byte-exact) + golden
-- [ ] F1: 8 conversores + validators emitindo v6; 2B re-convertido carrega e gera
-- [ ] F2: `load_model_v6` estrito + fallback legado com WARN + `migrate_bitnet_v6.py`
-- [ ] F3: act_type/embed_type/theta/ffn_norm intermediate aplicados; parity 2B4T logit-level PASS
-- [ ] F4: `cortex::model` + ModelHub `register_bytes` + call sites consolidados no main.rs
-- [ ] `cargo check --release` 0 erros a cada fase
-- [ ] Boot QEMU v6 (`-NoDisk` TCG + WHPX) 8 fases + geração viva
-- [ ] INDEX.md, IDEA_BANK e TECNOLOGIAS.md atualizados
+- [x] F0: `tools/bitnet_writer.py` + `save_model_v6` + paridade (SESSION_247+)
+- [x] F1–F3: conversores/loaders v6 + tags (SESSION_249/255/288)
+- [x] F4: `cortex::model` + ModelHub `register_bytes` + LOO seam (s249/s388/s483/s487/s489)
+- [x] Boot QEMU v6 NoDisk WHPX: Active loader + hub seam registrado (SESSION_487)
+- [x] Hub+Trinity MoE usável: `slot_for_expert_kind`/`name`, `ExpertKind::Agent`,
+      mid-slots via `generate_from_slot`+LOO, AlwaysTiny residency, `moe_compose`
+      pipelines (VisionQA/RAG/Heal/Agentic); DiskDiag/Security skill-backed (SESSION_488)
+- [x] s489 materialize HW-first: `validate_for_slot` + demand=`register_bytes`;
+      metal `pio_hw`/footprint; QEMU mid = miss honesto (SESSION_489)
+- [ ] Residual hub: aceite metal mid-niche VERIFIED (`usb_hw.img` / notebook)
+- [x] INDEX.md / IDEA #491
 
 ---
 
