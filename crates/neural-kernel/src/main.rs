@@ -282,10 +282,14 @@ unsafe fn qemu_loader_llm_len(ptr: *const u8, region_cap: usize) -> Option<usize
     for _ in 0..4 {
         let hdr = core::slice::from_raw_parts(ptr, hdr_len);
         match cortex_crate::model::probe_llm_file_size(hdr) {
-            cortex_crate::model::LlmSizeProbe::Ready(sz) => {
-                return Some(sz.min(region_cap));
-            }
-            cortex_crate::model::LlmSizeProbe::Need(n) if n > hdr_len && n <= region_cap => {
+            // s493: NAO min(region_cap) no Ready — e820 high muitas vezes
+            // reporta so 1GiB enquanto o QEMU-loader ja depositou o blob
+            // inteiro (FALCON3.V7 1210MB). Caller valida end-page.
+            cortex_crate::model::LlmSizeProbe::Ready(sz) => return Some(sz),
+            // Prefixo v7 (tok embutido) ate 16MB — cabe mesmo com e820_hi=1G.
+            cortex_crate::model::LlmSizeProbe::Need(n)
+                if n > hdr_len && n <= 16 * 1024 * 1024 && n <= region_cap.max(16 * 1024 * 1024) =>
+            {
                 hdr_len = n;
             }
             // S479: NotLlm (version∉{6,7} ou model_type≠0) e probe esgotado
@@ -3985,15 +3989,42 @@ pub(crate) fn kernel_boot(
                         }
                     }
                 }
+                // s493: NUNCA truncar o blob e parsear (FALCON3.V7 1210MB com
+                // region e820=1GB → unembed truncado → REJECT h=0). Se a pagina
+                // final do header size estiver presente, confia no probe (QEMU
+                // loader escreveu la); senao skip honesto (suba -m).
+                let mut region_mb = 0usize;
                 if let Some(r_end) = handoff.region_end_containing(load_addr) {
                     let region = (r_end - load_addr) as usize;
+                    region_mb = region / (1024 * 1024);
                     if region < model_len {
-                        k_nano::slog_bin!("Asset", "warn", "region {}MB < model {}MB — truncando", region / (1024*1024), model_len / (1024*1024));
-                        model_len = region;
+                        let end_va = (load_addr + pm_offset)
+                            .saturating_add(model_len as u64)
+                            .saturating_sub(1);
+                        if crate::memory::is_page_present(end_va) {
+                            k_nano::slog_bin!(
+                                "Asset",
+                                "warn",
+                                "e820 region {}MB < header {}MB — end page present; using header size",
+                                region_mb,
+                                model_len / (1024 * 1024)
+                            );
+                        } else {
+                            k_nano::slog_bin!(
+                                "Asset",
+                                "warn",
+                                "e820 region {}MB < header {}MB e end #PF — skip (suba -m / Mem)",
+                                region_mb,
+                                model_len / (1024 * 1024)
+                            );
+                            model_len = 0;
+                        }
                     }
-                }                    k_nano::slog_bin!("Asset", "ok", "LLM magic 0xBE11BE11 @0x100000000 — model {}KB fat={:?}",
+                }
+                k_nano::slog_bin!("Asset", "ok", "LLM magic 0xBE11BE11 @0x100000000 — model {}KB fat={:?} e820_hi={}MB",
                     model_len / 1024,
-                    fat_sz.map(|s| s / 1024)
+                    fat_sz.map(|s| s / 1024),
+                    region_mb
                 );
                 if model_len > 1024 {
                     let model_data = unsafe { core::slice::from_raw_parts(probe_ptr, model_len) };
@@ -4007,11 +4038,12 @@ pub(crate) fn kernel_boot(
                         "LLM parse in-place from loader {}KB (no full-blob leak) then load_model_v6…",
                         model_len / 1024
                     );
+                    // So load_model_v6/v7 — load_model legado le hidden@14 e inventa h=0.
                     let llm_v6 = cortex_crate::model::load_model_v6(model_data).and_then(|v| match v {
                         cortex_crate::model::ModelView::Llm(m) => Some(m),
                         _ => None,
                     });
-                    if let Some(big_model) = llm_v6.or_else(|| crate::cortex::load_model(model_data)) {
+                    if let Some(big_model) = llm_v6 {
                         crate::cortex::set_model(alloc::boxed::Box::new(big_model));
                         let tag = fat_name.unwrap_or("llama8b.bin");
                         // AIOS na veia (premissa 4): loga a decisão de fit com a RAM
@@ -4837,6 +4869,16 @@ pub(crate) fn kernel_boot(
     {
         // I5 ADR-0086: carrega modelo da NeuralFS do disco instalado (Residente).
         // O ModelProvisioner persiste em /models/; boot lê daqui sem re-baixar.
+        fn ata_has_neuralfs_part() -> bool {
+            let mut ata_guard = crate::ATA_DRIVER.lock();
+            let Some(ata) = ata_guard.as_mut() else {
+                return false;
+            };
+            crate::fat32::read_mbr(ata)
+                .iter()
+                .any(|p| p.type_code == k_nano::neural_fs::volume::MBR_TYPE_NEURALFS)
+        }
+
         fn try_hub_slot_neuralfs(slot: crate::model_hub::ModelSlot) -> bool {
             let mut ata_guard = crate::ATA_DRIVER.lock();
             let Some(ata) = ata_guard.as_mut() else { return false };
@@ -4852,8 +4894,12 @@ pub(crate) fn kernel_boot(
                 ) else {
                     continue;
                 };
-                // ModelProvisioner grava em /models/<FAT_NAME> (create_file na raiz não cria dirs).
-                // ponytail: procura na raiz e em /boot (kernel.elf fica em /boot).
+                // s493: paths canónicos NeuralFS.md §14 primeiro; FAT names legado depois.
+                let mut candidates: alloc::vec::Vec<alloc::string::String> =
+                    alloc::vec::Vec::new();
+                for p in crate::model_hub::neural_paths_for(slot) {
+                    candidates.push(alloc::string::String::from(*p));
+                }
                 for root in ["models", "boot", ""] {
                     for name in crate::model_hub::fat_names_for(slot) {
                         let path = if root.is_empty() {
@@ -4861,33 +4907,87 @@ pub(crate) fn kernel_boot(
                         } else {
                             alloc::format!("{}/{}", root, name)
                         };
-                        let Some(ino) = vol.resolve_path(dev, &path) else { continue };
-                        let Ok(data) = vol.read_file(dev, ino) else { continue };
-                        // s489: validate_for_slot + register_bytes (kind-aware; metal path).
-                        if let Err(reason) =
-                            cortex_crate::model::validate_for_slot(slot, &data)
-                        {
-                            k_nano::slog_bin!(
-                                "MODEL",
-                                "warn",
-                                "NeuralFS REJECT path={} slot={} reason={}",
-                                path,
-                                slot.name(),
-                                reason
-                            );
-                            continue;
-                        }
-                        if crate::model_hub::register_bytes(slot, &data) {
-                            k_nano::slog_bin!(
-                                "MODEL",
-                                "ok",
-                                "NeuralFS LOADED via register_bytes file={} slot={} size={}KB",
-                                path,
-                                slot.name(),
-                                data.len() / 1024
-                            );
-                            return true;
-                        }
+                        candidates.push(path);
+                    }
+                }
+                for path in &candidates {
+                    let Some(ino) = vol.resolve_path(dev, path) else { continue };
+                    let Some((_, fsize, _, _)) = vol.lookup_inode(dev, ino) else {
+                        continue;
+                    };
+                    if fsize == 0 || fsize > 2u64 * 1024 * 1024 * 1024 {
+                        continue;
+                    }
+                    let need = fsize as usize;
+                    // WHPX/TCG: ATA PIO multi-centenas de MB congela/abort (s493
+                    // active.v7 1210MB). Lab = QEMU-loader; metal USB = PIO ok.
+                    if need > 64 * 1024 * 1024
+                        && k_nano::platform_probe::hypervisor().is_sandbox()
+                    {
+                        k_nano::slog_bin!(
+                            "MODEL",
+                            "warn",
+                            "NeuralFS skip path={} slot={} sz={}MB under HV (use QEMU-loader; metal=USB/AHCI)",
+                            path,
+                            slot.name(),
+                            need / (1024 * 1024)
+                        );
+                        continue;
+                    }
+                    // Blobs >64MB exigem headroom (Active ~1.2GB metal).
+                    if need > 64 * 1024 * 1024
+                        && k_nano::allocator::heap_headroom_critical()
+                    {
+                        k_nano::slog_bin!(
+                            "MODEL",
+                            "warn",
+                            "NeuralFS skip path={} slot={} sz={}MB headroom_critical",
+                            path,
+                            slot.name(),
+                            need / (1024 * 1024)
+                        );
+                        continue;
+                    }
+                    k_nano::slog_bin!(
+                        "MODEL",
+                        "ok",
+                        "NeuralFS reading path={} slot={} sz={}MB (ATA PIO)",
+                        path,
+                        slot.name(),
+                        need / (1024 * 1024)
+                    );
+                    // read_range (F8) com CRC por página; fallback read_file.
+                    let data = match vol.read_range(dev, ino, 0, need) {
+                        Ok(d) if !d.is_empty() => d,
+                        _ => match vol.read_file(dev, ino) {
+                            Ok(d) => d,
+                            Err(_) => continue,
+                        },
+                    };
+                    if let Err(reason) =
+                        cortex_crate::model::validate_for_slot(slot, &data)
+                    {
+                        k_nano::slog_bin!(
+                            "MODEL",
+                            "warn",
+                            "NeuralFS REJECT path={} slot={} reason={}",
+                            path,
+                            slot.name(),
+                            reason
+                        );
+                        continue;
+                    }
+                    if crate::model_hub::register_bytes(slot, &data) {
+                        k_nano::storage_posture::note_nrfs_mounted(true);
+                        k_nano::slog_bin!(
+                            "MODEL",
+                            "ok",
+                            "NeuralFS LOADED via register_bytes file={} slot={} size={}KB",
+                            path,
+                            slot.name(),
+                            data.len() / 1024
+                        );
+                        return true;
                     }
                 }
             }
@@ -4901,6 +5001,14 @@ fn hub_load_on_demand(slot: crate::model_hub::ModelSlot) -> bool {
     if try_hub_slot_neuralfs(slot) {
         return true;
     }
+    // s493: FAT = DEGRADED — warn + posture (nunca silêncio).
+    k_nano::slog_bin!(
+        "STORAGE",
+        "warn",
+        "hub LOO slot={} NeuralFS miss -> FAT fallback (DEGRADED NeuralFS.md §14)",
+        slot.name()
+    );
+    k_nano::storage_posture::observe_fat_fallback_once();
     try_hub_slot_fat(slot);
     crate::model_hub::slot_real(slot)
 }
@@ -4947,7 +5055,13 @@ fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
             // s489 HW-first: QEMU = PIO_QEMU 8MB (smoke; mid niches = miss
             // honesto). Metal = pio_hw / footprint — RustCoder 321MB é path
             // produto, não lab.
-            let qemu_hv = qemu_loader_2b || k_nano::platform_probe::hypervisor().is_sandbox();
+            // s493: volume NeuralFS (0x7F) = lab "perto de metal" — mesmo
+            // pio_cap do HW, nao o teto 8MB de NoDisk/smoke.
+            let nrfs_metal = k_nano::storage_posture::nrfs_mounted()
+                || ata_has_neuralfs_part();
+            let qemu_hv = (qemu_loader_2b
+                || k_nano::platform_probe::hypervisor().is_sandbox())
+                && !nrfs_metal;
             let pio_hw = (llm_plan.max_resident_mb as usize).saturating_mul(1024 * 1024);
             let footprint_b = cortex_crate::model_fit::slot_footprint_mb(slot.name())
                 .unwrap_or(0) as usize
@@ -5083,25 +5197,33 @@ fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
             }
         }
         // s487 P0: gate SEPARADO — sandbox nao engole o seam LOO.
-        // Eager NeuralFS/PIO de nichos grandes fica fora do boot (custo/hang);
-        // o loader SEMPRE registra: first-use dispara NeuralFS→FAT com pio_cap.
-        if k_nano::platform_probe::hypervisor().is_sandbox() {
+        // s493: NRFS no ATA (0x7F) → caminho metal-like (eager Active + pio_hw).
+        // Posture flag OU probe MBR — hub pode correr antes do agent se ordem variar.
+        if ata_has_neuralfs_part() && !k_nano::storage_posture::nrfs_mounted() {
+            k_nano::storage_posture::note_nrfs_mounted(true);
+        }
+        let nrfs_metal = k_nano::storage_posture::nrfs_mounted() || ata_has_neuralfs_part();
+        if k_nano::platform_probe::hypervisor().is_sandbox() && !nrfs_metal {
             k_nano::slog_bin!(
                 "HUB",
                 "ok",
                 "sandbox: LOO seam only (sem eager NeuralFS) — first-use + pio_cap"
             );
+        } else if nrfs_metal {
+            k_nano::slog_bin!(
+                "HUB",
+                "ok",
+                "nrfs metal-lab: AlwaysTiny via NRFS; Active=loader|metal PIO (NeuralFS.md §14)"
+            );
         }
         // s483 Passo 2b + s487: load-on-first-use (NeuralFS→FAT no adapter).
-        // Consumidor: cortex.rs -> generate_from_slot -> ensure_slot_loaded.
         crate::model_hub::register_slot_loader(hub_load_on_demand);
         k_nano::slog_bin!(
             "HUB",
             "info",
             "loader registrado (load-on-first-use; 0 leituras PIO no boot)"
         );
-        // P1 residency: AlwaysTiny (HwExpert) residente no boot; mid/heavy só LOO.
-        // Em sandbox o pio_cap ainda protege; miss = warn honesto, sem inventar.
+        // P1 residency: AlwaysTiny (HwExpert) residente no boot.
         for &tiny in crate::model_hub::always_tiny_slots() {
             if crate::model_hub::slot_real(tiny) {
                 k_nano::slog_bin!(
@@ -5125,6 +5247,42 @@ fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
                     "warn",
                     "residency AlwaysTiny slot={} miss (LOO ainda disponivel)",
                     tiny.name()
+                );
+            }
+        }
+        // s493 metal-lab Active:
+        // - QEMU: QEMU-loader @0x100000000 (ATA PIO 1GB+ sob WHPX aborta — prova).
+        // - Metal USB/AHCI: hub_load_on_demand NeuralFS (pio_hw).
+        if nrfs_metal && !crate::model_hub::slot_real(crate::model_hub::ModelSlot::Active) {
+            if crate::cortex::model_is_loaded() {
+                k_nano::slog_bin!(
+                    "HUB",
+                    "ok",
+                    "nrfs metal-lab: Active already resident (QEMU-loader/CURRENT_MODEL)"
+                );
+            } else if k_nano::platform_probe::hypervisor().is_sandbox() {
+                k_nano::slog_bin!(
+                    "HUB",
+                    "warn",
+                    "nrfs metal-lab: Active skip NRFS PIO under HV — attach FALCON3.V7 loader"
+                );
+            } else if k_nano::allocator::heap_headroom_critical() {
+                k_nano::slog_bin!(
+                    "HUB",
+                    "warn",
+                    "nrfs metal-lab: Active skip headroom_critical (LOO depois)"
+                );
+            } else if hub_load_on_demand(crate::model_hub::ModelSlot::Active) {
+                k_nano::slog_bin!(
+                    "HUB",
+                    "ok",
+                    "nrfs metal-lab: Active resident (boot via NeuralFS)"
+                );
+            } else {
+                k_nano::slog_bin!(
+                    "HUB",
+                    "warn",
+                    "nrfs metal-lab: Active miss (path/validate/pio)"
                 );
             }
         }

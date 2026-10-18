@@ -159,11 +159,28 @@ Copy-Item "C:\Program Files\qemu\share\edk2-i386-vars.fd" target\ovmf_vars.fd
 
 ### Gerar imagem de disco
 ```powershell
-# Cria target\disk_qemu.raw (3072 MB default). PACK_LLM=850 (default) → depois 13 → 2b → 3b|all
-# $env:PACK_LLM="850"; python tools\build_image.py
-# $env:PACK_LLM="850,13"; python tools\build_image.py
+# Aliases .V7 canônicos em target1/ (Active/Pro/Learner) — uma vez após download/convert:
+python tools\materialize_hub_v7.py
+# Cria target\disk_qemu.raw (3072 MB default). PACK_LLM: falcon3 (lab 3B.V7) | all (1B+3B+7B+10B)
+# $env:PACK_LLM="falcon3"; python tools\build_image.py
+# $env:PACK_LLM="all"; python tools\build_image.py --hw --unified --size 8192
 python tools\build_image.py
 # Artefato canonico: target\disk_qemu.raw (scripts tambem aceitam tools\ e copiam)
+
+# s493 NeuralFS canónico (data volume) — FAT data = DEGRADED:
+# $env:PACK_LLM="falcon3"; python tools\build_image.py --fs neuralfs
+# -> target\disk_qemu.neural.raw (MBR 0x7F @ LBA 2048; ecosystem/models/)
+# Lab full-HW + video (recomendado):
+#   powershell -File tools\run-qemu-nrfs-fullhw.ps1 -BuildDisk -Window -Force
+# USB metal: python tools\build_image.py --hw --unified --fs neuralfs
+```
+
+### BOOT.LOG DEV (ESP) — extrair na IDE
+Canal DEV/TEST = ESP FAT (`BOOT.LOG` pré-alocado), **não** o volume NeuralFS.
+```powershell
+python tools\extract_esp_bootlog.py target\uefi.img -o logs\BOOT.LOG
+python tools\extract_esp_bootlog.py target\usb_hw.img -o logs\BOOT.LOG
+# Aceite: slog STORAGE posture data_fs=neuralfs|fat32|none no serial / BOOT.LOG
 ```
 
 ### Executar QEMU
@@ -258,8 +275,11 @@ cargo nk
 cargo build --release -p boot
 
 # target\usb_hw.img (+ alias target\disk_hw_unified.raw)
+# Canónico s493: data=NeuralFS (BOOT.LOG só na ESP)
+python tools\build_image.py --hw --unified --fs neuralfs
+# Legado DEGRADED (Explorer monta FAT):
 python tools\build_image.py --hw --unified
-# ou: python tools\build_usb_unified.py --size 1536
+# ou: python tools\build_usb_unified.py --fs neuralfs --size 1536
 ```
 
 **Windows (Rufus, um stick, modo DD):**

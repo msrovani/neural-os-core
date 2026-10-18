@@ -81,6 +81,7 @@ pub mod crypto;
 pub mod dbc;
 
 pub mod neural_fs;
+pub mod storage_posture;
 pub mod pci;
 pub mod pci_aer;
 pub mod vmd; // Intel VMD binder (s422) — NVMe atrás do domínio RST (notebooks Alder Lake+)

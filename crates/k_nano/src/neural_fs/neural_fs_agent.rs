@@ -111,18 +111,26 @@ impl NeuralFsAgent {
             state: Mutex::new(None),
         };
         // Live USB sem MSC: NÃO bootstrap ATA (HD interno PIO = hang em VFS+FS).
+        // s493: se ATA_DRIVER já é disco NeuralFS (0x7F) — é o data volume do lab, não
+        // HD errado — permitir mount mesmo com skip_disk_persist_except_usb.
         let skip_internal = crate::boot_logger::internal_disk_skipped();
+        let ata_is_nrfs = Self::ata_driver_has_neuralfs();
         // QEMU/TCG: ata0 = uefi.img (boot) — NeuralFS format/mount PIO trava minutos.
-        let skip_ata_bootstrap = skip_internal
+        let skip_ata_bootstrap = (skip_internal && !ata_is_nrfs)
             || (crate::storage_bw::skip_measure()
-                && crate::virtio_blk::VIRTIO_BLK_DEV.lock().is_some());
+                && crate::virtio_blk::VIRTIO_BLK_DEV.lock().is_some()
+                && !ata_is_nrfs);
         if !skip_ata_bootstrap && agent.try_bootstrap_ata() {
+            crate::storage_posture::note_nrfs_mounted(true);
             agent.ensure_ecosystem_tree();
+            crate::storage_posture::slog_posture_once();
             Self::try_exfat_write_smoke();
             return agent;
         }
         if agent.try_bootstrap_usb() {
+            crate::storage_posture::note_nrfs_mounted(true);
             agent.ensure_ecosystem_tree();
+            crate::storage_posture::slog_posture_once();
             Self::try_exfat_write_smoke();
             return agent;
         }
@@ -133,10 +141,40 @@ impl NeuralFsAgent {
                 "ATA bootstrap skip (live USB / TCG+virtio) — RAM 4MB"
             );
         }
+        // Observe: se há FAT data sem NRFS → DEGRADED.
+        Self::observe_fat_degraded();
         agent.bootstrap_ram();
+        crate::storage_posture::note_nrfs_mounted(false);
         agent.ensure_ecosystem_tree();
+        crate::storage_posture::slog_posture_once();
         Self::try_exfat_write_smoke();
         agent
+    }
+
+    /// s493: se MBR tem 0x0B/0x0C e não 0x7F → data_fs=fat32 (DEGRADED).
+    fn observe_fat_degraded() {
+        let mut guard = crate::ATA_DRIVER.lock();
+        let Some(ata) = guard.as_mut() else {
+            return;
+        };
+        let parts = crate::fat32::read_mbr_dev(ata);
+        let mut has_fat = false;
+        let mut has_nrfs = false;
+        for p in &parts {
+            if p.type_code == MBR_TYPE_NEURALFS {
+                has_nrfs = true;
+            }
+            if matches!(p.type_code, 0x0B | 0x0C | 0x1C) {
+                has_fat = true;
+            }
+        }
+        if has_nrfs {
+            crate::storage_posture::note_data_fs(crate::storage_posture::DataFs::NeuralFs);
+        } else if has_fat {
+            crate::storage_posture::note_data_fs(crate::storage_posture::DataFs::Fat32);
+        } else if !parts.is_empty() {
+            crate::storage_posture::note_data_fs(crate::storage_posture::DataFs::None);
+        }
     }
 
     /// IDEA #417 — write opt-in: `EXFAT_WRITE=1` no CONFIG.TXT do volume exFAT.
@@ -316,13 +354,26 @@ impl NeuralFsAgent {
         .unwrap_or(false)
     }
 
+    /// True se `ATA_DRIVER` atual tem partição MBR 0x7F (data NeuralFS).
+    fn ata_driver_has_neuralfs() -> bool {
+        let mut guard = crate::ATA_DRIVER.lock();
+        let Some(ata) = guard.as_mut() else {
+            return false;
+        };
+        let parts = crate::fat32::read_mbr_dev(ata);
+        parts.iter().any(|p| p.type_code == MBR_TYPE_NEURALFS)
+    }
+
     fn try_bootstrap_ata(&self) -> bool {
         let mut guard = crate::ATA_DRIVER.lock();
         let Some(ata) = guard.as_mut() else {
             return false;
         };
-        // ATA: format cauda livre permitido (disco de dados QEMU/HW do OS).
-        Self::try_mount_or_format(ata, "ATA", true, |start, vol| NeuralFsState {
+        // Disco já é 0x7F: só mount (sem format cauda/GPT — evita wipe do seed lab).
+        let allow_format = !crate::fat32::read_mbr_dev(ata)
+            .iter()
+            .any(|p| p.type_code == MBR_TYPE_NEURALFS);
+        Self::try_mount_or_format(ata, "ATA", allow_format, |start, vol| NeuralFsState {
             backend: Backend::Ata { start_lba: start },
             volume: vol,
         })

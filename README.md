@@ -248,20 +248,23 @@ A niche is filled by a file named after it; when it is absent the system routes 
 generic and says so (`FIT warn niche=... reason=absent`) instead of handing back an empty slot.
 Names must fit **8.3 uppercase** — the kernel skips LFN entries (`fat32.rs`, `0x0F`).
 
-| Slot | Model (ADR-0078) | RAM | Task | Canonical name |
-|---|---|---|---|---|
-| `Active` | BitNet 2B — now Falcon3-3B | 590MB | general conversation, default | `FALCON3.V7` |
-| `GeneratorPro` | Llama 3.1 8B | 1.9GB | deep diagnosis, auto-healing | `PRO.V7` |
-| `Agent` | Qwen 2.5 3B | — | agentic tasks | *(ausente: `AGENT.v6` quarantined size_mismatch — reexport GGUF)* |
-| `RustCoder` | DeepSeek Coder 1.3B | 321MB | code generation for patches | `RUSTCDR.V7` |
-| `HwExpert` | SDIO HW ID | 1MB | hardware identification | `HWEXPRT.V7` |
-| `Vision` | SigLIP ViT-B/16 | 33MB | visual encoder | `VISION.V7` |
-| `Reranker` | BGE Reranker v2 M3 | 165MB | RAG cross-encoder | `RERANKER.V7` |
-| `Learner` | Falcon3-1B (fallback) | ~690MB | continuous on-device learning | `FALCON3_1B.V6` *(Qwen LEARNER quarantined)* |
+Equiparação **TII UAE → gaveta** (ADR-0078 §2.2): geradores 1.58bit e visão TII;
+H1/SSM fora até loader híbrido; Laya/Jev = intent (não slot).
 
-Outside the hub (ADR-0078 §2.3, already unique names, not renamed): `BGE.BIN` (BAAI embedding),
-`PIPER.BIN` / `PIPER_EN.BIN` (VITS TTS), `STT.BIN` (CTC), `ROUTER.BITNET` (MoE router — 6-char
-extension does not fit 8.3, stored as `ROUTER.BIT`).
+| Slot | Fonte (TII ou outro) | Função | Artefato (`target1/`, `materialize_hub_v7.py`) |
+|---|---|---|---|
+| `Active` | **TII** Falcon3-3B Instruct 1.58bit | chat default | `FALCON3.V7` ← `FALCON3_BASE.V7` (L=22) |
+| `GeneratorPro` | **TII** Falcon3-7B/10B 1.58bit | diagnóstico / heal | `PRO.V7` / `FALCON10.V7` |
+| `Learner` | **TII** Falcon3-1B (alt. Falcon-E-1B) | fine-tune on-device | `LEARNER.V7` ← `FALCON3_1B.V7` |
+| `Vision` | **TII** SigLino *(hoje SigLIP v5)* | encoder visual | `VISION.BIN` (sem .V7 até conversor) |
+| `Agent` | *(não-TII / vazio)* | agentic | miss → Active |
+| `RustCoder` | *(não-TII)* DeepSeek Coder | código / patches | `RUSTCDR3.BIN` (v5) |
+| `HwExpert` | *(não-TII)* SDIO treino próprio | HWID | `hw_expert_v6.bitnet` |
+| `Reranker` | *(não-TII)* BGE | RAG cross-encoder | `RERANKER.BIN` (v5) |
+
+Outside the hub (ADR-0078 §2.3): `BGE.BIN`, `PIPER.BIN` / `PIPER_EN.BIN`, `STT.BIN`
+*(futuro Falcon ASR)*, `ROUTER.BITNET` (8.3 → `ROUTER.BIT`). **Não** empacotar
+Falcon-H1/Mamba como Active.
 
 **Hub + Trinity MoE.** Hub = warehouse tipado; Trinity = router (`ExpertKind` incl. `Agent`).
 Mapa único `slot_for_expert_kind` / `slot_for_expert_name` → `generate_from_slot` + LOO.

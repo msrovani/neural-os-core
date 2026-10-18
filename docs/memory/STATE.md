@@ -1,4 +1,17 @@
-# STATE - neural-os-core v1.9.99-s490 - #PF storm fechado (epoch na barreira)
+# STATE - neural-os-core v1.9.99-s493 - NeuralFS substrato AIOS (FAT data=DEGRADED)
+#   [s493] NeuralFS.md §14 + storage_posture; write_file_stream; hub neural_paths_for+read_range;
+#     mkneuralfs seed (MBR 0x7F magic VERIFIED 64MB smoke); build_image/unified --fs neuralfs;
+#     extract_esp_bootlog; boot_logger ESP-first; SysInstaller ecosystem/models+logs; FAT LOO warn.
+#     Host: posture 2/2, stream 1/1, check k-nano/cortex/neural-kernel 0. Runtime QEMU Active NRFS
+#     + metal usb_hw = UNKNOWN. Detalhe: SESSION_493.md.
+#   [s492] materialize_hub_v7.py: FALCON3.V7/PRO.V7/FALCON10.V7/LEARNER.V7 hardlinks;
+#     mkfat32 V7-first 1 dirent/SKU; fat_names_for .V7; audit REJECT=0. Nichos v5 intactos.
+#     Detalhe: SESSION_492.md.
+#   [s491] Equiparação TII canônica nas 8 gavetas: Active=Falcon3-3B 1.58bit; Pro=7B/10B;
+#     Learner=1B (Falcon-E-1B alt); Vision=SigLino (legado VISION.BIN); H1/Mamba FORA ate loader
+#     SSM; Agent vazio/não-TII; RustCoder/HwExpert/Reranker=não-TII; Laya/Jev=intent. Docs ADR-0078
+#     + README + from_name aliases + fat_names SIGLINO + mkfat32. Prova: host from_name. Runtime N/A.
+#     Detalhe: SESSION_491.md.
 #   [s490] #PF storm (F1, classe #630) - writer capturado e cadeia corrigida. CAUSA: job_done() creditava
 #     barreira global sem epoch -> arrival atrasado liberava o dispatch seguinte cedo -> BSP dropava
 #     TernaryJobCtx com worker vivo -> talc reciclava o bloco -> store c_ptr=0 em ternary_worker (cr2

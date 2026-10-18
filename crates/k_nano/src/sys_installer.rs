@@ -227,26 +227,37 @@ impl SysInstaller {
         self.status = InstallStatus::Copying { progress: 50 };
         crate::slog_nano!("SYS-INST", "info", "NeuralFS formatted");
 
-        // 5. Monta NeuralFS e copia kernel.elf para raiz como /boot/kernel.elf
-        //    Primeiro cria dir /boot/ (parent_ino=1), depois cria o arquivo
-        //    S18: este path é vestigial — o Limine carrega kernel.elf da ESP
-        //    (copiada crua acima); /boot/kernel.elf na NeuralFS serve como
-        //    referência/cópia de segurança, não é o boot path.
+        // 5. Monta NeuralFS: /boot/kernel.elf (cópia) + ecosystem/models (s493 §14 =
+        //    mesmo contrato do seed mkneuralfs / ModelHub neural_paths_for).
         let mut vol = NeuralVolume::mount(target, neural_start)
             .ok_or("NeuralFS mount failed")?;
 
-        // Cria diretório /boot/ sob root (ino 1)
-        let boot_ino = vol.create_file(target, 1, "boot").map_err(|_| "create /boot dir failed")?;
-
-        // Cria kernel.elf dentro de /boot/
-        let kf_ino = vol.create_file(target, boot_ino, "kernel.elf")
+        let boot_ino = vol
+            .create_dir(target, 1, "boot")
+            .map_err(|_| "create /boot dir failed")?;
+        let kf_ino = vol
+            .create_file(target, boot_ino, "kernel.elf")
             .map_err(|_| "create /boot/kernel.elf failed")?;
-
         vol.write_file(target, kf_ino, kernel_elf)
             .map_err(|_| "kernel.elf write failed")?;
-
         self.bytes_copied += kernel_elf.len() as u64;
         crate::slog_nano!("SYS-INST", "info", "kernel.elf written: {} bytes", kernel_elf.len());
+
+        // Namespace PackageHub / hub LOO (NeuralFS.md §14) — dirs vazios; ModelPlanner
+        // preenche active.v7 etc. no provisionamento (ADR-0079/0086).
+        let eco = vol
+            .create_dir(target, 1, "ecosystem")
+            .map_err(|_| "create ecosystem")?;
+        let _models = vol
+            .create_dir(target, eco, "models")
+            .map_err(|_| "create ecosystem/models")?;
+        let _ = vol.create_dir(target, eco, "firmware");
+        let _ = vol.create_dir(target, 1, "logs");
+        crate::slog_nano!(
+            "SYS-INST",
+            "ok",
+            "NeuralFS ecosystem/models+logs ready (seed contract s493)"
+        );
 
         self.status = InstallStatus::Copying { progress: 100 };
         self.total_bytes = self.bytes_copied;

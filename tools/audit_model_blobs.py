@@ -35,6 +35,8 @@ def slot_guess(name: str) -> str:
         return "GeneratorPro"
     if "FALCON10" in n or "FALCON3_10" in n:
         return "GeneratorPro"
+    if "LEARNER" in n or "FALCON1B" in n or "FALCON3_1B" in n or "F1B" in n:
+        return "Learner"
     if "FALCON" in n or "BITNET2" in n or n.startswith("BITNET"):
         return "Active"
     if "ROUTER" in n:

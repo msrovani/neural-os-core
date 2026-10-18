@@ -3,8 +3,11 @@
 Uso: python tools/mkfat32.py [--size 3072] [--label NEURAL-OS] [--output target/disk_qemu.raw]
 
 PACK_LLM=850|13|2b|3b|falcon3|1b|7b|10b|all  — Falcon3 1.58bit opções (default: falcon3=3B lab)
-  falcon3 / 3b-lab → FALCON3.V6 (22L/3072); 1b → FALCON1B; 7b/pro → PRO.V6; 10b → FALCON10.v6
+  Preferência: .V7 (tok embutido) → .V6. materialize_hub_v7.py cria aliases canônicos.
+  falcon3 → FALCON3.V7 (22L/3072); 1b → LEARNER.V7/FALCON1B.V7; 7b → PRO.V7; 10b → FALCON10.V7
   legado: 850→BITNET850; 13→BITNET13; 2b→BITNET2B; 3b→BITNET3B; all→todos Falcon3+legado
+Equiparação TII→ModelHub (ADR-0078 §2.2): Active=Falcon3-3B; Pro=7B/10B; Learner=1B;
+  Vision=SigLino (legado VISION.BIN); H1/Mamba NÃO empacotar; Agent/RustCoder/HwExpert/Reranker=não-TII.
 FIT_GATE=1 — filtra PACK_LLM via tools/llmfit_pack_filter.py (nunca sobe degrau).
 FAT32: partição pode ser 3GB+; limite ~4GB-1 é por *arquivo*. Modelos grandes (>PIO):
   preferir AirLLM (/model GGUF ATA) em vez de PIO full-RAM.
@@ -327,9 +330,11 @@ def find_valid_llm(*names):
     return None
 
 def find_falcon3():
-    """Lab canônico = Falcon3-3B Instruct 1.58 (22L / hidden 3072). Evita 7B
-    mal-nomeado como FALCON3.BIN/V6 (SESSION_348+ / ADR-0101)."""
+    """Lab canônico = Falcon3-3B Instruct 1.58 (22L / hidden 3072). Prefer .V7
+    (ADR-0078 §2.2 / materialize_hub_v7). Evita 7B mal-nomeado (SESSION_348)."""
     preferred = (
+        find_large("FALCON3.V7"),
+        find_large("FALCON3_BASE.V7"),
         find_large("FALCON3_BASE.V6"),
         find_large("FALCON3_3B.V6"),
         find_large("FALCON3.V6"),
@@ -350,12 +355,16 @@ def find_falcon3():
             print(f"[PACK_LLM] falcon3 lab 3B 1.58: {p} (L={layers} h={hidden})")
             return p
         print(f"[PACK_LLM] skip {p} (L={layers} h={hidden} — nao e 3B lab)")
-    # Fallback: BASE explícito mesmo sem parse
-    return find_large("FALCON3_BASE.V6") or find_large("FALCON3.V6")
+    return (
+        find_large("FALCON3.V7")
+        or find_large("FALCON3_BASE.V7")
+        or find_large("FALCON3_BASE.V6")
+        or find_large("FALCON3.V6")
+    )
 
 
 def _find_falcon3_by_layers(want_layers, want_hidden, names, label):
-    """Procura v6 Falcon3 1.58bit pelo (layers, hidden) HF."""
+    """Procura Falcon3 1.58bit pelo (layers, hidden) HF — .V7 preferido na lista."""
     for name in names:
         p = find_large(name)
         if not p:
@@ -376,8 +385,10 @@ def find_falcon3_1b():
     return _find_falcon3_by_layers(
         18, 2048,
         (
-            "FALCON3_1B.V6",
+            "LEARNER.V7",
+            "FALCON1B.V7",
             "FALCON3_1B.V7",
+            "FALCON3_1B.V6",
             "FALCON1B.v6",
             "FALCON1B.BIN",
             "F1B.v6",
@@ -390,7 +401,17 @@ def find_falcon3_1b():
 def find_falcon3_7b():
     return _find_falcon3_by_layers(
         28, 3072,
-        ("PRO.v6", "PRO.V6", "FALCON7B.v6", "FALCON7B.BIN", "falcon3_7b.v6"),
+        (
+            "PRO.V7",
+            "FALCON7B.V7",
+            "FALCON3_7B.V7",
+            "PRO.V6",
+            "PRO.v6",
+            "FALCON7B.v6",
+            "FALCON7B.BIN",
+            "FALCON3_7B.V6",
+            "falcon3_7b.v6",
+        ),
         "falcon3-7b 1.58",
     )
 
@@ -398,9 +419,43 @@ def find_falcon3_7b():
 def find_falcon3_10b():
     return _find_falcon3_by_layers(
         40, 3072,
-        ("FALCON10.v6", "FALCON10.BIN", "F10B.v6", "falcon3_10b.v6"),
+        (
+            "FALCON10.V7",
+            "FALCON3_10B.V7",
+            "FALCON10.v6",
+            "FALCON10.BIN",
+            "FALCON3_10B.V6",
+            "F10B.v6",
+            "falcon3_10b.v6",
+        ),
         "falcon3-10b 1.58",
     )
+
+def _is_v7_path(path):
+    return bool(path) and str(path).upper().endswith(".V7")
+
+
+def _pack_one(fat_v7, fat_v6, src):
+    """Uma entrada FAT: nome .V7 se fonte .V7, senão .V6. Evita duplicar GB."""
+    if not src:
+        return []
+    if _is_v7_path(src):
+        return [(fat_v7, src)]
+    return [(fat_v6, src)]
+
+
+def _pack_llm_entries(llm: set[str]):
+    """Dirents Falcon3 conforme PACK_LLM — um por SKU, preferindo .V7."""
+    out = []
+    if "falcon3" in llm:
+        out.extend(_pack_one("FALCON3.V7", "FALCON3.V6", find_falcon3()))
+    if "falcon3-7b" in llm:
+        out.extend(_pack_one("PRO.V7", "PRO.V6", find_falcon3_7b()))
+    if "falcon3-10b" in llm:
+        out.extend(_pack_one("FALCON10.V7", "FALCON10.v6", find_falcon3_10b()))
+    # falcon3-1b → LEARNER.V7 abaixo (nicho hub); não duplicar FALCON1B.V7 no FAT
+    return out
+
 
 def align_up(v, a): return (v + a - 1) // a * a
 
@@ -558,25 +613,22 @@ def populate(path):
          if "2b" in llm else None),
         ("BITNET.BIN", None),  # alias legado; não empacota stub
         ("BITNET3B.BIN", find_bitnet_3b() if "3b" in llm else None),
-        # Falcon3 Instruct 1.58bit — opções 1B / 3B / 7B / 10B
-        ("FALCON3.V6", find_falcon3() if "falcon3" in llm else None),
-        ("FALCON3.BIN", find_falcon3() if "falcon3" in llm else None),
-        ("FALCON1B.v6", find_falcon3_1b() if "falcon3-1b" in llm else None),
-        ("FALCON1B.BIN", find_falcon3_1b() if "falcon3-1b" in llm else None),
-        ("PRO.V6", find_falcon3_7b() if "falcon3-7b" in llm else None),
-        ("FALCON7B.v6", find_falcon3_7b() if "falcon3-7b" in llm else None),
-        ("FALCON10.v6", find_falcon3_10b() if "falcon3-10b" in llm else None),
-        ("FALCON10.BIN", find_falcon3_10b() if "falcon3-10b" in llm else None),
+        # Falcon3 Instruct 1.58bit — UM dirent por SKU (V7 se fonte V7; senão V6).
+        # Não duplicar V7+V6+BIN (antes triplicava ~GB no FAT).
+        *_pack_llm_entries(llm),
         ("MICRO.BITNET", None if ("850" in llm or "13" in llm) else find_file("MICRO.BITNET")),
-        # ADR-0078/0079: todos os slots ModelHub (fat_names_for em cortex::model_hub)
+        # ADR-0078/0079: nichos (v5 legado — sem .V7 até conversor dedicado)
         ("VISION.BIN", find_file("VISION.v6") or find_file("VISION.BIN")),
         ("LLAMA8B.BIN", find_file("LLAMA8B.BIN") or find_file("LLAMA8B.BITNET")),
         ("RUSTCDR3.BIN", find_file("RUSTCDR3.v6") or find_file("RUSTCDR3.BIN") or find_file("RUSTCDR3.BITNET")),
         ("RERANKER.BIN", find_file("RERANKER.v6") or find_file("RERANKER.BIN") or find_file("RERANKER.BITNET")),
-        # LEARNER: só blob size-ok (s489); AGENT/LEARNER legados size_mismatch
-        # foram quarantinados (*.size_mismatch). Fallback = Falcon3-1B real.
-        ("LEARNER.BIN", find_valid_llm("LEARNER.v6", "LEARNER.BIN", "LEARNER.BITNET")
-         or find_falcon3_1b()),
+        # Learner nicho: sempre tenta Falcon3-1B V7 (independente de PACK_LLM=1b)
+        *_pack_one(
+            "LEARNER.V7",
+            "LEARNER.BIN",
+            find_falcon3_1b()
+            or find_valid_llm("LEARNER.V7", "LEARNER.v6", "LEARNER.BIN", "LEARNER.BITNET"),
+        ),
         # AGENT: sem fallback de outro SKU (miss → Active via LOO). Gate size.
         ("AGENT.BIN", find_valid_llm("AGENT.v6", "AGENT.BIN", "AGENT.BITNET")),
         # GOAL3: MicroPython WASM (tools/build_micropython_wasm.py → models/MICROPY.WASM)

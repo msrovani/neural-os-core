@@ -803,6 +803,44 @@ impl NeuralVolume {
         ino: u64,
         data: &[u8],
     ) -> Result<(), &'static str> {
+        let mut offset = 0usize;
+        self.write_file_stream(dev, ino, data.len(), |buf| {
+            let n = buf.len().min(data.len() - offset);
+            buf[..n].copy_from_slice(&data[offset..offset + n]);
+            offset += n;
+            Ok(n)
+        })
+    }
+
+    /// s493 F1: grava arquivo puxando páginas via `pull` (anti-OOM no packer /
+    /// installer). `total_len` = tamanho lógico; CRC32C acumulado incremental.
+    pub fn write_file_stream<F>(
+        &mut self,
+        dev: &mut dyn BlockDevice,
+        ino: u64,
+        total_len: usize,
+        pull: F,
+    ) -> Result<(), &'static str>
+    where
+        F: FnMut(&mut [u8]) -> Result<usize, &'static str>,
+    {
+        // Default: F4b page checksums (integridade forte).
+        self.write_file_stream_ex(dev, ino, total_len, true, pull)
+    }
+
+    /// Host seed lab (multi-GB): `page_checksums=false` — só CRC do arquivo no inode (F4).
+    /// F4b (1 item b-tree por página) explode metadados em modelos ≥100MB.
+    pub fn write_file_stream_ex<F>(
+        &mut self,
+        dev: &mut dyn BlockDevice,
+        ino: u64,
+        total_len: usize,
+        page_checksums: bool,
+        mut pull: F,
+    ) -> Result<(), &'static str>
+    where
+        F: FnMut(&mut [u8]) -> Result<usize, &'static str>,
+    {
         let (mode, _, old_block, old_count) =
             self.lookup_inode(dev, ino).ok_or("no inode")?;
         if mode & Inode::S_IFREG == 0 {
@@ -810,36 +848,48 @@ impl NeuralVolume {
         }
         self.begin_tx();
 
-        // F4/redoxfs: checksum dos dados — CRC32C cobre exatamente data.len()
-        // (bytes lógicos), calculado numa passada sobre o buffer em memória.
-        // O read_file recomputa sobre o mesmo span e recusa dados corrompidos.
-        let data_crc = super::checksum::crc32c(data);
-
-        // F2: ordem CoW correta — (1) aloca+escreve dados NOVOS primeiro,
-        // (2) cow da folha, (3) commit, (4) SÓ ENTÃO reclaim antigos.
-        // Reclaim antes do commit destruía a versão boa se ENOSPC/erro/power-loss
-        // no meio (oracle F2 + BAFS b81b43f + LiberFS "freeing adiado por 1 commit").
-        let blocks_needed = (data.len() + 4095) / 4096;
-        // F4b: checksum POR BLOCO (ItemType::Checksum) — CRC32C de cada página
-        // de 4096B COMO GRAVADA (padding zero incluso, determinístico). O
-        // read_range verifica página a página sem reler o arquivo inteiro.
-        let mut page_crcs: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(blocks_needed);
-        let (first_block, block_count) = self.alloc_contiguous(blocks_needed).ok_or("no space")?;
+        let blocks_needed = if total_len == 0 {
+            0
+        } else {
+            (total_len + 4095) / 4096
+        };
+        let mut page_crcs: alloc::vec::Vec<u32> = if page_checksums {
+            alloc::vec::Vec::with_capacity(blocks_needed)
+        } else {
+            alloc::vec::Vec::new()
+        };
+        let mut data_crc = super::checksum::Crc32c::new();
+        let (first_block, block_count) = if blocks_needed == 0 {
+            (0u64, 0u32)
+        } else {
+            self.alloc_contiguous(blocks_needed).ok_or("no space")?
+        };
+        let mut filled = 0usize;
         for bi in 0..blocks_needed {
             let b = first_block + bi as u64;
             let mut page = [0u8; 4096];
-            let start = bi * 4096;
-            let end = (start + 4096).min(data.len());
-            page[..end - start].copy_from_slice(&data[start..end]);
-            page_crcs.push(super::checksum::crc32c(&page));
+            let want = (total_len - filled).min(4096);
+            let mut got = 0usize;
+            while got < want {
+                let n = pull(&mut page[got..want])?;
+                if n == 0 {
+                    return Err("short pull");
+                }
+                got += n;
+            }
+            filled += want;
+            data_crc.update(&page[..want]);
+            if page_checksums {
+                page_crcs.push(super::checksum::crc32c(&page));
+            }
             if !self.write_block_raw(dev, b, &page) {
-                // F2: no erro, devolve os blocos recém-alocados (sem leak)
                 for j in 0..blocks_needed {
                     self.reclaim_block(first_block + j as u64);
                 }
                 return Err("data write");
             }
         }
+        let data_crc = data_crc.finish();
 
         let inode_key = Inode::make_key(ino);
         let extent_key = Key {
@@ -852,7 +902,7 @@ impl NeuralVolume {
         leaf.delete_key(&extent_key);
         let new_val = LeafValue::from_inode_crc(
             mode,
-            data.len() as u64,
+            total_len as u64,
             first_block,
             block_count,
             data_crc,

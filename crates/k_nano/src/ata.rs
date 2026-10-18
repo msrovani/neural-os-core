@@ -43,7 +43,8 @@ impl AtaDriver {
         }
         let mut best: Option<AtaDriver> = None;
         let mut best_type: u8 = 0;
-        // Candidatos com FS de dados; preferir exFAT (QEMU disk_qemu) e maior tamanho.
+        // s493: preferir NeuralFS (0x7F) sobre FAT/exFAT (DEGRADED) / GPT ESP.
+        let mut nrfs_best: Option<(AtaDriver, u64)> = None;
         let mut data_best: Option<(AtaDriver, u64, bool)> = None; // drv, sectors, is_exfat
         for &base in &[0x1F0u16, 0x170u16] {
             for &slave in &[false, true] {
@@ -66,6 +67,36 @@ impl AtaDriver {
                         write_io(base + 6, if slave { 0xB0 } else { 0xA0 });
                         for _ in 0..1000 { core::hint::spin_loop(); }
                         if drv.has_mbr() {
+                            let mut mbr = [0u8; 512];
+                            let mut has_nrfs = false;
+                            if drv.read_sectors(0, &mut mbr, 1) {
+                                for i in 0..4 {
+                                    let off = 0x1BE + i * 16;
+                                    if mbr[off + 4] == crate::neural_fs::volume::MBR_TYPE_NEURALFS {
+                                        has_nrfs = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if has_nrfs {
+                                crate::slog_nano!(
+                                    "Disk",
+                                    "ok",
+                                    "ISA {}: {} NeuralFS 0x7F sectors={} bps={}",
+                                    base,
+                                    if slave { "slave" } else { "master" },
+                                    total,
+                                    lba_size
+                                );
+                                let better = match &nrfs_best {
+                                    None => true,
+                                    Some((_, sec)) => total > *sec,
+                                };
+                                if better {
+                                    nrfs_best = Some((drv.clone(), total));
+                                }
+                                continue;
+                            }
                             let has_ex = crate::fat32::disk_has_exfat(&drv);
                             let has_fat = crate::fat32::disk_has_fat32(&drv);
                             if has_ex || has_fat {
@@ -87,7 +118,6 @@ impl AtaDriver {
                                 }
                                 continue;
                             }
-                            let mut mbr = [0u8; 512];
                             if drv.read_sectors(0, &mut mbr, 1) {
                                 for i in 0..4 {
                                     let off = 0x1BE + i * 16;
@@ -106,6 +136,17 @@ impl AtaDriver {
                     }
                 }
             }
+        }
+        if let Some((drv, sec)) = nrfs_best {
+            crate::slog_nano!(
+                "Disk",
+                "ok",
+                "escolhido NeuralFS data disk slave={} sectors={} bps={} (s493)",
+                drv.slave,
+                sec,
+                drv.lba_size
+            );
+            return Some(drv);
         }
         if let Some((drv, sec, ex)) = data_best {
             crate::slog_nano!(

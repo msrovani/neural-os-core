@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
-"""Gera imagem USB unificada (boot UEFI + dados FAT32/exFAT) para Rufus DD / um pendrive.
+"""Gera imagem USB unificada (boot UEFI + dados FAT32/exFAT/NeuralFS) para Rufus DD.
 
-Layout (GPT + MBR com dados+ESP — empirico no notebook real, SESSÃO_258/260):
-  Part GPT 0 — ESP (conteudo de target/uefi.img / bootloader 0.11) — FAT
-  Part GPT 1 — dados (FAT32 default — monta no Explorer; --exfat opcional)
-  MBR slot0 — dados 0x0C/0x07 (Windows monta E:; FAT32/exFAT)
-  MBR slot1 — ESP 0xEF SEM flag ativa (firmware UEFI acha \\EFI\\BOOT\\BOOTX64.EFI
-    pelo tipo no MBR; 0x80 era o que fazia o Windows tratar como disco de sistema
-    e nao montar; 0xEE-only/sem-ESP fizeram firmware real nao listar)
+Layout (GPT + MBR com dados+ESP — empirico notebook real, SESSION_258/260 + s493):
+  Part GPT 0 — ESP (uefi.img / Limine) — FAT32 + BOOT.LOG DEV
+  Part GPT 1 — dados: NeuralFS canónico (--fs neuralfs) | FAT32 legado DEGRADED | exFAT
+  MBR slot0 — dados 0x7F (NRFS) / 0x0C (FAT32) / 0x07 (exFAT)
+  MBR slot1 — ESP 0xEF
 
 Uso:
-  python tools/build_usb_unified.py
+  python tools/build_usb_unified.py --fs neuralfs
   python tools/build_usb_unified.py --size 1536 --output target/usb_hw.img
-  python tools/build_image.py --hw --unified
-  python tools/build_usb_unified.py --fat32   # dados FAT32 (BOOT.LOG / modelos)
+  python tools/build_image.py --hw --unified --fs neuralfs
+  python tools/build_usb_unified.py --fat32   # legado DEGRADED
 
-Requer: target/uefi.img (cargo build --release -p boot) e modelos/firmware
-        como em mkexfat.py / build_image.py --hw.
-        Device LEGO (ADR-0056): pack_device_legos.py + inject LEGO*.MD no volume.
+Requer: target/uefi.img (cargo build --release -p boot) e modelos como em
+        mkneuralfs.py / mkfat32.py. Device LEGO: pack_device_legos.py.
 """
 from __future__ import annotations
 
@@ -294,49 +291,78 @@ def patch_fat_bpb(f, part_lba: int, part_sectors: int) -> None:
         f.write(bpb)
 
 
-def build_data_volume(size_mb: int, tmp_path: str, *, use_fat32: bool) -> int:
-    """Gera disk via mkexfat (default) ou mkfat32; retorna LBA inicio particao (2048)."""
+def build_data_volume(size_mb: int, tmp_path: str, *, fs: str) -> int:
+    """Gera disk via mkneuralfs / mkfat32 / mkexfat; retorna LBA inicio particao (2048)."""
     env = os.environ.copy()
     env.pop("SKIP_2B", None)
     env["BOOT_MODE"] = "hw"
     env.setdefault("PYTHONIOENCODING", "utf-8")
 
-    # ADR-0056: pack LEGOs antes do volume de dados
-    print("=== Device LEGO pack (ecosystem/devices -> target/lego) ===")
-    r_lego = subprocess.run(
-        [sys.executable, os.path.join(ROOT, "tools", "pack_device_legos.py")],
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    if r_lego.stdout:
-        sys.stdout.write(r_lego.stdout)
-        if not r_lego.stdout.endswith("\n"):
-            sys.stdout.write("\n")
-    if r_lego.returncode != 0:
-        print(f"[ERRO] pack_device_legos.py exit={r_lego.returncode}: {(r_lego.stderr or '')[:400]}")
-        sys.exit(r_lego.returncode)
+    if fs != "neuralfs":
+        # ADR-0056: pack LEGOs antes do volume FAT (NRFS seed via mkneuralfs)
+        print("=== Device LEGO pack (ecosystem/devices -> target/lego) ===")
+        r_lego = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "tools", "pack_device_legos.py")],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if r_lego.stdout:
+            sys.stdout.write(r_lego.stdout)
+            if not r_lego.stdout.endswith("\n"):
+                sys.stdout.write("\n")
+        if r_lego.returncode != 0:
+            print(f"[ERRO] pack_device_legos.py exit={r_lego.returncode}: {(r_lego.stderr or '')[:400]}")
+            sys.exit(r_lego.returncode)
 
-    maker = "mkfat32.py" if use_fat32 else "mkexfat.py"
-    fs_name = "FAT32" if use_fat32 else "exFAT"
-    cmd = [
-        sys.executable,
-        os.path.join(ROOT, "tools", maker),
-        "--size",
-        str(size_mb),
-        "--output",
-        tmp_path,
-        "--label",
-        "NEURAL-OS",
-    ]
-    print(f"=== Dados {fs_name} {size_mb}MB (BOOT_MODE=hw) + Device LEGO ===")
+    if fs == "neuralfs":
+        maker = "mkneuralfs.py"
+        fs_name = "NeuralFS"
+        cmd = [
+            sys.executable,
+            os.path.join(ROOT, "tools", maker),
+            "--size",
+            str(size_mb),
+            "--output",
+            tmp_path,
+        ]
+    elif fs == "exfat":
+        maker = "mkexfat.py"
+        fs_name = "exFAT"
+        cmd = [
+            sys.executable,
+            os.path.join(ROOT, "tools", maker),
+            "--size",
+            str(size_mb),
+            "--output",
+            tmp_path,
+            "--label",
+            "NEURAL-OS",
+        ]
+    else:
+        maker = "mkfat32.py"
+        fs_name = "FAT32"
+        print("[STORAGE] warn data_fs=fat32 DEGRADED (NeuralFS.md §14)")
+        cmd = [
+            sys.executable,
+            os.path.join(ROOT, "tools", maker),
+            "--size",
+            str(size_mb),
+            "--output",
+            tmp_path,
+            "--label",
+            "NEURAL-OS",
+        ]
+    print(f"=== Dados {fs_name} {size_mb}MB (BOOT_MODE=hw) ===")
     r = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=3600)
     if r.stdout:
         sys.stdout.write(r.stdout)
         if not r.stdout.endswith("\n"):
             sys.stdout.write("\n")
+    if r.stderr:
+        sys.stderr.write(r.stderr)
     if r.returncode != 0:
         print(f"[ERRO] {maker} exit={r.returncode}: {(r.stderr or '')[:500]}")
         sys.exit(r.returncode)
@@ -420,14 +446,20 @@ def main() -> None:
     p.add_argument("--data-raw", default=None, help="Reusar disk_hw.raw em vez de regenerar")
     p.add_argument("--build-boot", action="store_true", help="Se falta uefi.img, roda cargo build -p boot")
     p.add_argument(
+        "--fs",
+        choices=("fat32", "exfat", "neuralfs"),
+        default=None,
+        help="FS dados: neuralfs (canónico s493), fat32 (DEGRADED), exfat. Default fat32.",
+    )
+    p.add_argument(
         "--exfat",
         action="store_true",
-        help="Particao de dados exFAT (Windows pode marcar RAW; default e FAT32)",
+        help="Particao de dados exFAT (equivale a --fs exfat)",
     )
     p.add_argument(
         "--fat32",
         action="store_true",
-        help="Particao FAT32 (default; redundante, so documenta)",
+        help="Particao FAT32 legado DEGRADED (equivale a --fs fat32)",
     )
     p.add_argument(
         "--fixed-disk",
@@ -436,7 +468,12 @@ def main() -> None:
         "default = MBR removable dados+ESP (pendrive)",
     )
     args = p.parse_args()
-    use_fat32 = not args.exfat  # default FAT32 — Explorer monta; --exfat opt-in
+    if args.fs:
+        fs = args.fs
+    elif args.exfat:
+        fs = "exfat"
+    else:
+        fs = "fat32"  # legado default até lab seed NRFS VERIFIED em metal
 
     target_dir = os.path.join(ROOT, "target")
     os.makedirs(target_dir, exist_ok=True)
@@ -457,8 +494,15 @@ def main() -> None:
     if esp_src_lba != 2048:
         print(f"[AVISO] ESP fonte em LBA {esp_src_lba}; unificado usa LBA {esp_start}")
     esp_end = esp_start + esp_sectors - 1
-    data_mbr_type = 0x0C if use_fat32 else 0x07
-    fs_name = "FAT32" if use_fat32 else "exFAT"
+    if fs == "neuralfs":
+        data_mbr_type = 0x7F
+        fs_name = "NeuralFS"
+    elif fs == "exfat":
+        data_mbr_type = 0x07
+        fs_name = "exFAT"
+    else:
+        data_mbr_type = 0x0C
+        fs_name = "FAT32"
 
     with tempfile.TemporaryDirectory(prefix="nk_usb_") as tmp:
         if args.data_raw:
@@ -468,11 +512,16 @@ def main() -> None:
             part_lba_in_raw = 2048
         else:
             data_raw = os.path.join(tmp, "disk_hw.raw")
-            part_lba_in_raw = build_data_volume(args.size, data_raw, use_fat32=use_fat32)
+            part_lba_in_raw = build_data_volume(args.size, data_raw, fs=fs)
 
         data_file_sectors = os.path.getsize(data_raw) // SECTOR
         data_payload_sectors = data_file_sectors - part_lba_in_raw
-        min_payload = 65525 if use_fat32 else 4096 * 8  # exFAT: ~clusters min * SPC
+        if fs == "fat32":
+            min_payload = 65525
+        elif fs == "exfat":
+            min_payload = 4096 * 8
+        else:
+            min_payload = 1024  # NeuralFS: superbloco+free list cabem em poucos MB
         if data_payload_sectors < min_payload:
             raise SystemExit(f"[ERRO] particao de dados muito pequena para {fs_name}")
 
@@ -483,7 +532,7 @@ def main() -> None:
         total_bytes = total_sectors * SECTOR
 
         print(f"=== Layout unificado -> {out} ===")
-        print(f"  ESP : LBA {esp_start}..{esp_end} ({esp_sectors * SECTOR // 1024} KB) FAT")
+        print(f"  ESP : LBA {esp_start}..{esp_end} ({esp_sectors * SECTOR // 1024} KB) FAT + BOOT.LOG")
         print(
             f"  DATA: LBA {data_start}..{data_end} "
             f"({data_sectors * SECTOR // (1024*1024)} MB) type=0x{data_mbr_type:02X} {fs_name}"
@@ -500,13 +549,9 @@ def main() -> None:
 
         with open(out, "r+b") as f:
             if args.fixed_disk:
-                # HD externo USB (fixed): firmware UEFI le GPT via MBR 0xEE protetor.
-                # Pendrive/removable usa write_removable_mbr (ESP visivel no MBR slot1).
                 write_protective_mbr(f, total_sectors=total_sectors)
                 print("[INFO] MBR fixed-disk: protetor 0xEE + GPT (ESP em EFI System)")
             else:
-                # Pendrive = removable: Windows ignora GPT se MBR for so 0xEE.
-                # Dados na slot0 → Explorer ganha letra; GPT permanece para UEFI.
                 write_removable_mbr(
                     f,
                     esp_start=esp_start,
@@ -515,7 +560,7 @@ def main() -> None:
                     data_sectors=data_sectors,
                     data_mbr_type=data_mbr_type,
                 )
-                print("[INFO] MBR removable: dados 0x0C + ESP 0xEF (pendrive)")
+                print(f"[INFO] MBR removable: dados 0x{data_mbr_type:02X} + ESP 0xEF")
             write_gpt(
                 f,
                 total_sectors=total_sectors,
@@ -539,10 +584,13 @@ def main() -> None:
                     remaining -= len(chunk)
                 if remaining != 0:
                     raise SystemExit("[ERRO] copia incompleta da particao de dados")
-            if use_fat32:
+            if fs == "fat32":
                 patch_fat_bpb(f, data_start, data_sectors)
-            else:
+            elif fs == "exfat":
                 patch_exfat_vbr(f, data_start, data_sectors)
+            # neuralfs: sem BPB FAT — payload já tem MBR 0x7F + SB no raw; relocação
+            # LBA muda start — regrava tipo MBR (já feito) e magic fica relativo ao
+            # início da partição (start_lba = data_start no mount kernel).
 
     final = os.path.getsize(out)
     alias = os.path.join(target_dir, "disk_hw_unified.raw")
@@ -551,7 +599,6 @@ def main() -> None:
         print(f"[OK] alias {alias}")
 
     print(f"\n[OK] {out}: {final // (1024 * 1024)} MB (ESP FAT + dados {fs_name})")
-    # AIOS Verify: recusar imagem que o firmware nao consegue carregar.
     v = subprocess.run(
         [sys.executable, os.path.join(ROOT, "tools", "verify_usb_esp.py"), out],
         cwd=ROOT,
@@ -563,8 +610,12 @@ def main() -> None:
         print("F12: procure UEFI: <marca do HD> (nao 'Removable Drive').")
     else:
         print("Rufus: modo Imagem DD -> grave no pendrive (Secure Boot OFF).")
-    print("Windows: deve aparecer volume NEURAL-OS (FAT32/exFAT) com BOOT.LOG.")
-    print("QEMU dois discos: continue com uefi.img + disk_qemu.raw (nao use este como unico).")
+    if fs == "neuralfs":
+        print("BOOT.LOG DEV: ESP apenas — python tools/extract_esp_bootlog.py", out)
+        print("Dados NeuralFS: Windows NAO monta (esperado); kernel mount 0x7F.")
+    else:
+        print("Windows: volume NEURAL-OS (FAT32/exFAT). Preferir --fs neuralfs (s493).")
+    print("QEMU dois discos: uefi.img + disk_qemu.neural.raw (ou FAT legado).")
 
 
 if __name__ == "__main__":

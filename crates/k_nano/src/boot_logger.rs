@@ -401,12 +401,25 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> Overwrit
     if parts.is_empty() {
         return OverwriteResult::NoFatParts;
     }
-    // Prefere volume de dados (0x0C/0x0B) sobre ESP (0xEF) — BOOT.LOG vive no NEURAL-OS.
-    parts.sort_by_key(|p| match p.type_code {
-        0x0C | 0x0B | 0x1C => 0u8,
-        0x73 => 1u8,
-        0xEF => 2u8,
-        _ => 3u8,
+    // s493 / NeuralFS.md §14: com data=NeuralFS (ou posture preferindo ESP),
+    // BOOT.LOG DEV é canónico na ESP (0xEF). Legado FAT data: dados primeiro.
+    let prefer_esp = crate::storage_posture::bootlog_prefer_esp();
+    parts.sort_by_key(|p| {
+        if prefer_esp {
+            match p.type_code {
+                0xEF => 0u8,
+                0x0C | 0x0B | 0x1C => 1u8,
+                0x73 => 2u8,
+                _ => 3u8,
+            }
+        } else {
+            match p.type_code {
+                0x0C | 0x0B | 0x1C => 0u8,
+                0x73 => 1u8,
+                0xEF => 2u8,
+                _ => 3u8,
+            }
+        }
     });
     let mut saw_fat = false;
     let mut saw_missing = false;
@@ -555,6 +568,16 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> Overwrit
                     if verify_written_chain(
                         dev, fat_lba, data_lba, spc, bps, start_fc, &data[..write_len],
                     ) {
+                        // s493: telemetria do backend real (ESP vs FAT data).
+                        if part.type_code == 0xEF {
+                            crate::storage_posture::note_bootlog_backend(
+                                crate::storage_posture::BootLogBackend::Esp,
+                            );
+                        } else {
+                            crate::storage_posture::note_bootlog_backend(
+                                crate::storage_posture::BootLogBackend::FatData,
+                            );
+                        }
                         return OverwriteResult::Ok;
                     }
                     saw_io = true;

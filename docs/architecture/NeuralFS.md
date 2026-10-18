@@ -345,9 +345,40 @@ Mount canônico: `/mnt/neural` (NeuralFsAgent). Namespace de pacotes:
 
 **Bootstrap:** `NeuralFsAgent` cria `ecosystem/{skills,agents,workflows,plugins,mcp,models,firmware,devices}` após mount (RAM/ATA/USB). Nomes de dir entry ≤22 bytes; paths lógicos longos são codificados no VFS. Detalhe LEGO: `docs/specs/device-lego/NEURALFS_LAYOUT.md`.
 
-**Disco de dados ≠ namespace:** `disk_*.raw` (exFAT flat via `mkexfat.py`) carrega modelos/firmware no root. PackageHub **não** lê exFAT — só NeuralFS `/mnt/neural`. Seed de agentes = embutido (`include`/`agency_seed`) + persist opcional no NeuralFS.
+**Disco de dados ≠ namespace (legado):** `disk_*.raw` FAT32/exFAT flat (`mkfat32.py`) ainda existe como **DEGRADED** — ver §14.
 
 **Persistência:** se `/mnt/neural` não montar, PackageHub opera em **RAM** e loga honestamente (`persisted=false`). Não inventar write em disco.
+
+---
+
+## 14. AIOS full-auto — storage posture (s493 / ADR-0088+0113)
+
+Premissa: NeuralFS é o **substrato nativo de payload**; FAT data não é destino.
+
+| Partição | FS | Papel |
+|---|---|---|
+| ESP | FAT32 (sempre) | Limine + `kernel.elf` + **`BOOT.LOG` DEV/TEST** |
+| Data | **NeuralFS** (canônico) | `/ecosystem/{models,firmware,…}`, NSGDB, `/logs/` produto |
+| Data FAT32/exFAT | **DEGRADED** | Legado lab; slog `data_fs=fat32`; aposentar |
+
+**Dois produtores, um on-disk:** host seed `tools/mkneuralfs.py` (lab) ≡ SysInstaller/ModelPlanner (produto). Paths canônicos hub:
+
+| ModelSlot | Path NeuralFS |
+|---|---|
+| Active | `ecosystem/models/active.v7` (aliases: `falcon3.v7`, FAT name legado) |
+| GeneratorPro | `ecosystem/models/pro.v7` |
+| Learner | `ecosystem/models/learner.v7` |
+| Vision | `ecosystem/models/vision.bin` |
+| RustCoder | `ecosystem/models/rustcdr.bin` |
+| HwExpert | `ecosystem/models/hwexpert.bitnet` |
+| Reranker | `ecosystem/models/reranker.bin` |
+| Agent | `ecosystem/models/agent.v7` |
+
+**BOOT.LOG:** canal DEV = ESP apenas (prioridade `0xEF` no `boot_logger`). Produto = `/logs/` no NRFS. IDE: serial ou `tools/extract_esp_bootlog.py`.
+
+**Ciclo:** Observe (`storage_posture`) → Plan → Act (mount NRFS cedo / LOO) → Verify → Remember. Fallback FAT = warn + telemetria (`n/a≠0`), nunca silêncio.
+
+**Taxonomia:** seed host VERIFIED ≠ installer VERIFIED ≠ metal VERIFIED (ADR-0113).
 
 **Segurança no FS:** path traversal (`..`) rejeitado no hub; pacotes unsigned exigem ApprovalGate Escalate antes de Create/Update/Delete (detalhe ADR-0051).
 **VFS bridge:** Hermes usa callbacks do bin (`neural-kernel::fs`) após `init_fs_agents` — não o VFS vazio de `k_nano`.

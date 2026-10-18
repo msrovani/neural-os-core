@@ -276,6 +276,7 @@ fn kind_from_u8(v: u8) -> ExpertKind {
         4 => ExpertKind::Security,
         5 => ExpertKind::Generator,
         6 => ExpertKind::SpeechSynth,
+        7 => ExpertKind::Agent,
         _ => ExpertKind::Unknown,
     }
 }

@@ -58,19 +58,23 @@ impl ModelSlot {
 
     pub fn from_name(s: &str) -> Option<Self> {
         match s {
+            // ADR-0078 §2.2 — TII Falcon3-3B / Falcon-E-3B → Active
             "active" | "current" | "generator" | "falcon3" | "falcon3b" | "falcon3-3b" | "3b"
-            | "tiiuae" | "daily" | "lab" => Some(Self::Active),
-            "vision" | "siglip" | "vit" | "encoder" => {
+            | "tiiuae" | "daily" | "lab" | "falcon_e" | "falcon-e" | "falcone" => Some(Self::Active),
+            // TII SigLino / OCR-Perception → Vision (legado: siglip)
+            "vision" | "siglip" | "siglino" | "vit" | "encoder" | "falcon_ocr" | "perception" => {
                 Some(Self::Vision)
             }
+            // TII Falcon3-7B / 10B → GeneratorPro
             "generator_pro" | "pro" | "falcon7b" | "falcon3-7b" | "7b" | "falcon3-10b" | "10b"
             | "falcon10b" | "large" => Some(Self::GeneratorPro),
             "reranker" | "rerank" | "cross_encoder" | "bge_reranker" => Some(Self::Reranker),
             "rust_coder" | "rustcoder" => Some(Self::RustCoder),
             "hw_identify" | "hwexpert" => Some(Self::HwExpert),
-            "learner" | "qwen05" | "qwen0.5b" | "falcon3-1b" | "falcon1b" | "1b" | "tiny" => {
-                Some(Self::Learner)
-            }
+            // TII Falcon3-1B / Falcon-E-1B → Learner
+            "learner" | "qwen05" | "qwen0.5b" | "falcon3-1b" | "falcon1b" | "1b" | "tiny"
+            | "falcon_e_1b" | "falcon-e-1b" => Some(Self::Learner),
+            // Agent: sem análogo TII bitnet (H1 fora até loader)
             "agent" | "qwen3b" | "agentic" | "orchestrator" => Some(Self::Agent),
             _ => None,
         }
@@ -733,27 +737,96 @@ pub fn hub_status() -> String {
     s
 }
 
-/// FAT 8.3 candidatos por slot (ordem de preferência).
+/// Paths canónicos NeuralFS (NeuralFS.md §14) — preferidos ao FAT flat.
+pub fn neural_paths_for(slot: ModelSlot) -> &'static [&'static str] {
+    match slot {
+        ModelSlot::Active => &[
+            "ecosystem/models/active.v7",
+            "ecosystem/models/falcon3.v7",
+            "models/active.v7",
+            "models/FALCON3.V7",
+        ],
+        ModelSlot::GeneratorPro => &[
+            "ecosystem/models/pro.v7",
+            "ecosystem/models/falcon7b.v7",
+            "models/pro.v7",
+            "models/PRO.V7",
+        ],
+        ModelSlot::Learner => &[
+            "ecosystem/models/learner.v7",
+            "ecosystem/models/falcon1b.v7",
+            "models/learner.v7",
+            "models/LEARNER.V7",
+        ],
+        ModelSlot::Vision => &[
+            "ecosystem/models/vision.bin",
+            "models/vision.bin",
+            "models/VISION.BIN",
+        ],
+        ModelSlot::RustCoder => &[
+            "ecosystem/models/rustcdr.bin",
+            "models/rustcdr.bin",
+            "models/RUSTCDR3.BIN",
+        ],
+        ModelSlot::HwExpert => &[
+            "ecosystem/models/hwexpert.bitnet",
+            "models/hwexpert.bitnet",
+            "models/HW_EXPERT.BITNET",
+        ],
+        ModelSlot::Reranker => &[
+            "ecosystem/models/reranker.bin",
+            "models/reranker.bin",
+            "models/RERANKER.BIN",
+        ],
+        ModelSlot::Agent => &[
+            "ecosystem/models/agent.v7",
+            "models/agent.v7",
+            "models/AGENT.BIN",
+        ],
+    }
+}
+
+/// FAT 8.3 candidatos por slot (ordem de preferência) — legado DEGRADED.
 pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
     match slot {
-        // target1 canônico (.v6 primeiro); fallback .BIN legado
-        ModelSlot::Reranker => &["RERANKER.v6", "RERANKER.BIN", "RERANK.BITNET", "RERANK.BIN"],
-        ModelSlot::Vision => &["VISION.v6", "VISION.BIN", "SIGLIP.BIN", "VIT.BIN"],
+        // target1 canônico (.V7 primeiro); fallback .V6/.BIN legado
+        ModelSlot::Reranker => &["RERANKER.V7", "RERANKER.v6", "RERANKER.BIN", "RERANK.BITNET", "RERANK.BIN"],
+        // ADR-0078 §2.2: alvo TII SigLino; legado SIGLIP/VIT (ainda v5)
+        ModelSlot::Vision => &[
+            "VISION.V7",
+            "VISION.v6",
+            "VISION.BIN",
+            "SIGLINO.BIN",
+            "SIGLIP.BIN",
+            "VIT.BIN",
+        ],
         ModelSlot::GeneratorPro => &[
+            "PRO.V7",
+            "FALCON7B.V7",
+            "FALCON10.V7",
+            "PRO.V6",
             "PRO.v6",
             "PRO.BIN",
             "FALCON7B.v6",
             "FALCON7B.BIN",
-            "PRO.GGUF",
-            "FALCN7B.GGUF",
             "FALCON10.v6",
             "FALCON10.BIN",
+            "PRO.GGUF",
+            "FALCN7B.GGUF",
             "FALCN10.GGUF",
             "BITNET3B.BIN",
             "LLAMA8B.BIN",
         ],
-        ModelSlot::RustCoder => &["RUSTCDR3.v6", "RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"],
+        ModelSlot::RustCoder => &[
+            "RUSTCDR.V7",
+            "RUSTCDR3.v6",
+            "RUSTCDR3.BIN",
+            "RUSTCDR2.BIN",
+            "RUSTCDR.BITNET",
+            "RUSTCDR.BIN",
+        ],
         ModelSlot::HwExpert => &[
+            "HWEXPRT.V7",
             "HWEXPRT.v6",
             "HWEXPRT4.BIN",
             "HWEXPRT4.bin",
@@ -763,6 +836,9 @@ pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
             "HW_EXPERT.BIN",
         ],
         ModelSlot::Learner => &[
+            "LEARNER.V7",
+            "FALCON1B.V7",
+            "FALCON3_1B.V7",
             "FALCON1B.v6",
             "FALCON1B.BIN",
             "F1B.v6",
@@ -772,8 +848,18 @@ pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
             "QWEEN05.BIN",
             "QWEN05B.BIN",
         ],
-        ModelSlot::Agent => &["FALCON3B.BIN", "FALCN3B.GGUF", "AGENT.v6", "AGENT.BIN", "QWEN3B.BIN", "QWEN.BIN"],
+        ModelSlot::Agent => &[
+            "AGENT.V7",
+            "AGENT.v6",
+            "AGENT.BIN",
+            "FALCON3B.BIN",
+            "FALCN3B.GGUF",
+            "QWEN3B.BIN",
+            "QWEN.BIN",
+        ],
         ModelSlot::Active => &[
+            "FALCON3.V7",
+            "FALCON3_BASE.V7",
             "FALCON3.V6",
             "FALCON3B.v6",
             "FALCON3B.BIN",
@@ -810,6 +896,20 @@ mod evict_tests {
         fn max_seq(&self) -> usize {
             1
         }
+    }
+
+    #[test]
+    fn tii_aliases_map_to_adr0078_slots() {
+        // SESSION_491 / ADR-0078 §2.2
+        assert_eq!(ModelSlot::from_name("falcon3-3b"), Some(ModelSlot::Active));
+        assert_eq!(ModelSlot::from_name("falcon-e"), Some(ModelSlot::Active));
+        assert_eq!(ModelSlot::from_name("falcon3-7b"), Some(ModelSlot::GeneratorPro));
+        assert_eq!(ModelSlot::from_name("falcon3-10b"), Some(ModelSlot::GeneratorPro));
+        assert_eq!(ModelSlot::from_name("falcon3-1b"), Some(ModelSlot::Learner));
+        assert_eq!(ModelSlot::from_name("falcon-e-1b"), Some(ModelSlot::Learner));
+        assert_eq!(ModelSlot::from_name("siglino"), Some(ModelSlot::Vision));
+        assert_eq!(ModelSlot::from_name("falcon_ocr"), Some(ModelSlot::Vision));
+        assert!(fat_names_for(ModelSlot::Vision).contains(&"SIGLINO.BIN"));
     }
 
     #[test]

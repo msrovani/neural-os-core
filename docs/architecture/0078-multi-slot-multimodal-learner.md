@@ -48,31 +48,47 @@ fn f32_to_ternary_packed_adaptive(data: &[f32]) -> PackedTernaryTensor {
 
 Ganho estimado: **0.5-1.0 PPL** recuperado sem custo de runtime.
 
-### 2.2 Oito slots ModelHub (canônico SESSION_481 / README)
+### 2.2 Oito slots ModelHub — equiparação TII UAE (canônico s489+)
 
-| Slot | Modelo (lab atual) | Footprint hint | Função |
-|---|---|---|---|
-| **Active** | Falcon3-3B Instruct 1.58bit | ~989MB | LLM dia-a-dia / CURRENT_MODEL |
-| **GeneratorPro** | Falcon3-7B/10B (guardado s458) | ~1.9GB+ | Tarefa complexa (LOO s487) |
-| **Agent** | Qwen/AGENT.v6 | ~752MB | Orquestração |
-| **RustCoder** | DeepSeek Coder (RUSTCDR*) | ~260–321MB | Geração de código |
-| **HwExpert** | SDIO HW ID v6 | ~1–259KB | Identificação de hardware |
-| **Vision** | SigLIP / VISION.BIN v5 | ~33MB | Encoder de visão (HUB) |
-| **Reranker** | BGE Reranker / RERANKER.BIN | ~165MB | Re-rank / memória |
-| **Learner** | Falcon3-1B / LEARNER.v6 | ~118–690MB | Auto-aprendizado |
+Fonte de descoberta: [huggingface.co/tiiuae/collections](https://huggingface.co/tiiuae/collections).
+Política: **geradores ternários / visão TII** ocupam Active·Pro·Learner·Vision;
+nichos **não-TII** (HwExpert, RustCoder, Reranker, Agent) ficam de outros vendors
+ou vazios até artefato coerente. H1/SSM/Mamba **não** entram nestas gavetas até
+loader híbrido (ver SESSION_489 discussão — custo ≠ conversão BitNet).
 
-> Slot **Fast**/TinyStories da tabela original foi absorvido: Active cobre o default;
-> Reranker herdou o índice ex-TinyStories. Alias Pro (`mark_pro_alias`) quando
-> Active tem `embed_dim ≥ 2048` — presença real = `slot_real`, não `slot_loaded`.
+| Slot | Função no AIOS | Fonte TII (HF) preferida | Artefato FAT / lab | Footprint |
+|---|---|---|---|---|
+| **Active** | Chat default, CURRENT_MODEL | **Falcon3-3B** Instruct **1.58bit** (`tiiuae/Falcon3-3B-Instruct-1.58bit`); alt. Falcon-E-3B | `FALCON3.V7` ← `FALCON3_BASE.V7` (L=22 h=3072); **não** L=28 misname | ~1.21GB |
+| **GeneratorPro** | Diagnóstico profundo, heal | **Falcon3-7B / 10B** Instruct 1.58bit | `PRO.V7` / `FALCON10.V7` (`materialize_hub_v7.py`) | ~2.2–2.9GB |
+| **Learner** | Fine-tune / replay on-device | **Falcon3-1B** 1.58bit; alt. **Falcon-E-1B** | `LEARNER.V7` ← `FALCON3_1B.V7` | ~693MB |
+| **Vision** | Encoder visual → pipelines VisionQA | **SigLino** (SigLIP2+DINOv3); consumidores **Falcon-OCR / Falcon-Perception** | Hoje: `VISION.BIN` v5 legado; upgrade = SigLino convertido | ~33MB (legado) |
+| **Agent** | Orquestração agentic | *(sem análogo TII bitnet)* — H1-3B só após loader H1 | Ausente (`AGENT.v6` size_mismatch) → LOO miss → Active | — |
+| **RustCoder** | Patches / código | *(não-TII)* DeepSeek Coder BitNet | `RUSTCDR3.BIN` v5 | ~321MB |
+| **HwExpert** | HWID → família/fw | *(não-TII)* treino SDIO próprio | `hw_expert_v6.bitnet` / `HWEXPRT*` | ~0.25MB AlwaysTiny |
+| **Reranker** | Cross-encoder RAG | *(não-TII)* BGE Reranker | `RERANKER.BIN` v5 | ~165MB |
+
+**Fora destas gavetas (explícito):**
+
+| Item TII / externo | Destino Neural |
+|---|---|
+| Falcon-H1 / H1-Tiny / H1R / FalconMamba | **Fora** até motor SSM — não empacotar como Active |
+| Falcon-Arabic / Emirati | Active **só se** 1.58bit conversível; senão skill/persona |
+| Falcon ASR | Path **STT** (fora hub), não Active |
+| Benchmarks / datasets TII (3LM, NativeQA, E2LM…) | Host/eval — não ModelSlot |
+| Laya / Jev / AgentJev | **Intent/router** (`decide_intent`, ROUTER) — não slot gerador |
+| BGE embed, Piper, STT CTC, ROUTER.BITNET | Subsistemas §2.3 |
+
+> Alias Pro (`mark_pro_alias`) quando Active tem `embed_dim ≥ 2048` — presença real =
+> `slot_real`. Slot Fast/TinyStories absorvido por Active.
 
 ### 2.3 Subsistemas (fora dos slots geradores)
 
 | Subsistema | Modelo | Função |
 |---|---|---|
 | **BGE** | BAAI Embedding (`BGE.BIN`) | RAG semântico (fora do hub gerador) |
-| **STT** | CTC LSTM tiny | Voz → texto |
+| **STT** | CTC LSTM tiny *(futuro: Falcon ASR)* | Voz → texto |
 | **Piper** | VITS TTS | Texto → voz |
-| **OCR** | Layout parser mínimo | PDF → texto (residual) |
+| **OCR** | Layout mínimo *(futuro: Falcon-OCR via Vision)* | PDF/imagem → texto |
 
 ### 2.4 Fluxo revisado Cortex → Trinity → Hub (s488) — ADR-0088 AIOS-first
 
@@ -118,7 +134,7 @@ DIA:
   Usuário conversa → Active/Pro responde
   AutoLearnAgent detecta padrão
     → coleta exemplos
-    → fine-tune Learner (Qwen2.5 0.5B)
+    → fine-tune Learner (Falcon3-1B / Falcon-E-1B — §2.2)
     → registra novo expert no Trinity MoE
 
 NOITE (SleepCycle):

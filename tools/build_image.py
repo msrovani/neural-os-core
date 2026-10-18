@@ -64,6 +64,13 @@ def parse_args():
         help="Usar mkexfat.py em vez de mkfat32.py (experimental, sem BOOT.LOG)",
     )
     p.add_argument(
+        "--fs",
+        choices=("fat32", "exfat", "neuralfs"),
+        default=None,
+        help="FS do volume de dados: fat32 (legado DEGRADED), exfat, neuralfs (canónico s493). "
+        "Default: fat32; --exfat implica exfat.",
+    )
+    p.add_argument(
         "--mini",
         action="store_true",
         help="Imagem instalavel FIXA (ADR-0086 s3.6A): so kernel+HwExpert+firmware+UPDATE.CFG, "
@@ -120,7 +127,12 @@ def main():
         cmd.append("--build-boot")
         if args.fixed_disk:
             cmd.append("--fixed-disk")
-        print(f"=== USB unificado (BOOT_MODE=hw) -> {out} ===")
+        fs = args.fs
+        if fs is None and args.exfat:
+            fs = "exfat"
+        if fs:
+            cmd.extend(["--fs", fs])
+        print(f"=== USB unificado (BOOT_MODE=hw fs={fs or 'fat32'}) -> {out} ===")
         r = subprocess.run(cmd, cwd=ROOT)
         sys.exit(r.returncode)
 
@@ -174,8 +186,24 @@ def main():
         print(f"[ERRO] pack_device_legos.py exit={r_lego.returncode}: {(r_lego.stderr or '')[:400]}")
         sys.exit(r_lego.returncode)
 
-    maker = "mkexfat.py" if args.exfat else "mkfat32.py"
-    fs_name = "exFAT" if args.exfat else "FAT32"
+    fs = args.fs
+    if fs is None:
+        fs = "exfat" if args.exfat else "fat32"
+    if fs == "neuralfs":
+        maker = "mkneuralfs.py"
+        fs_name = "NeuralFS"
+        if out.endswith(".raw") and "neural" not in os.path.basename(out).lower():
+            # Evitar sobrescrever disk_qemu.raw FAT por engano
+            base, ext = os.path.splitext(out)
+            out = base + ".neural" + ext
+            print(f"[neuralfs] output -> {out}")
+    elif fs == "exfat":
+        maker = "mkexfat.py"
+        fs_name = "exFAT"
+    else:
+        maker = "mkfat32.py"
+        fs_name = "FAT32"
+        print("[STORAGE] warn data_fs=fat32 DEGRADED (NeuralFS.md §14) — use --fs neuralfs")
     cmd = [
         sys.executable,
         os.path.join(ROOT, "tools", maker),
@@ -185,8 +213,11 @@ def main():
         out,
     ]
     print(f"=== Criando imagem {args.size}MB {fs_name} (BOOT_MODE={boot_mode}) -> {out} ===")
-    print("    BITNET-2B incluso se arquivo existir em repo/target/")
-    print("    Device LEGO: LEGOVNET/ATHK/GP08/XHCI.MD + LEGOIDX.TXT")
+    if fs != "neuralfs":
+        print("    BITNET-2B incluso se arquivo existir em repo/target/")
+        print("    Device LEGO: LEGOVNET/ATHK/GP08/XHCI.MD + LEGOIDX.TXT")
+    else:
+        print("    BOOT.LOG=ESP (nao neste volume); modelos em ecosystem/models/")
     # ponytail: 1800s — mkfat32 copia ~4.2GB de modelos (LLAMA8B 2GB, AGENT 788MB…);
     # 600s estourava em disco lento, matando o subprocess no meio da cópia.
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=1800, env=env)
