@@ -33,10 +33,13 @@ hermes-crate = { path = "../hermes", package = "hermes" }
 jarbas-crate = { path = "../jarbas", package = "jarbas" }
 
 [features]
-default = ["ring3", "cap-demos", "smp-runqueue", "fat-boot-log"]
+default = ["ring3", "cap-demos", "smp-runqueue", "fat-boot-log", "ap-pollable"]
 ring3 = ["k-nano/ring3"]
 # ADR-0089: per-CPU agent run-queues + roles dinâmicos (MAX_CORES=256).
 smp-runqueue = ["k-nano/smp-runqueue", "jarbas-crate/smp-runqueue"]
+# ADR-0057 WS-F: APs como workers de matmul (wake_fn + ap_pollable). Metal
+# s494: smp_online=16 mas slog feature_off — default ON p/ escada SMP W2A8.
+ap-pollable = ["k-nano/ap-pollable"]
 # Demos P4–P9 ADR-0041 (clone_current) — off com `--no-default-features --features ring3` p/ HW enxuto.
 cap-demos = []
 # Sprint 107 QEMU HIT clima (STT-sim seed + lexicon constrained). Off = HW real.
@@ -53,7 +56,7 @@ boot-trace = ["k-nano/boot-trace"]
 # em arrays Rust embutidos, sem runtime parsing.
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "ring3", "cap-demos", "fat-boot-log", "weather-e2e", "boot-trace", "smp-runqueue"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "ring3", "cap-demos", "fat-boot-log", "weather-e2e", "boot-trace", "smp-runqueue", "ap-pollable"))'] }
 
 [package.metadata.bootimage]
 run-args = ["-m", "2G", "-serial", "stdio", "-nic", "user,model=rtl8139", "-smp", "2", "-accel", "whpx"]

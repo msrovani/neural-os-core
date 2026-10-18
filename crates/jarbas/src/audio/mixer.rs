@@ -116,7 +116,8 @@ impl Agent for AudioMixerAgent {
             // Telemetria de stall (VOICE_STATE preso em SPEAKING): ring tem dados
             // mas nada sai. Causas possíveis: hda_free=0 (SD1 LPIB congelado,
             // HW não consome) ou throttled pelo clock (teto Δt×rate). Log 1×/s.
-            if ring_avail > 0 && now.saturating_sub(LAST_STALL_LOG.load(Ordering::Relaxed)) > 1_000_000 {
+            // s494: 10s (era 1s) — metal HDA-not-ready engolia o BOOT.LOG.
+            if ring_avail > 0 && now.saturating_sub(LAST_STALL_LOG.load(Ordering::Relaxed)) > 10_000_000 {
                 LAST_STALL_LOG.store(now, Ordering::Relaxed);
                 match k_nano::audio::hda::playback_stall_diag() {
                     Some(d) => k_nano::slog_jarbas!(

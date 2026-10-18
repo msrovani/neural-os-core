@@ -1,4 +1,13 @@
-# STATE - neural-os-core v1.9.99-s493 - NeuralFS substrato AIOS (FAT data=DEGRADED)
+# STATE - neural-os-core v1.9.99-s495 - Escada W2A8 AIOS (metal Ampere)
+#   [s495] P0 BAR size/roles + ga107 recipe/hint; ap-pollable default + wake antes enable;
+#     big_ladder 64x64; compute_rung + Tickv hw/compute/rung; P1 BAR Mapped wire intacto
+#     (lane OFF se não cabe); P2 NKP_W2A8_SM86 CpuStub no nkp-lab (pack≠Ready).
+#     Host: hw_capability 2/2; check neural-kernel 0. Metal falsificadores = UNKNOWN.
+#     Detalhe: SESSION_495.md.
+#   [s494] BOOT_LOG/RAMLOG/logwriter/mk_esp=1MiB; flush=ramlog dump; WRAP+keep-newest;
+#     zero-fill chain; verify-miss accept MSC; extract D:/NEURAL; NSGDB na ESP;
+#     DSD/BOT/MIXER rate-limit; pci read_bar_size + detect VRAM; nvidia DID fw hint.
+#     Host tests abaixo. Metal re-image UNKNOWN. Detalhe: SESSION_494.md.
 #   [s493] NeuralFS.md §14 + storage_posture; write_file_stream; hub neural_paths_for+read_range;
 #     mkneuralfs seed (MBR 0x7F magic VERIFIED 64MB smoke); build_image/unified --fs neuralfs;
 #     extract_esp_bootlog; boot_logger ESP-first; SysInstaller ecosystem/models+logs; FAT LOO warn.

@@ -86,6 +86,10 @@ impl SpeculativeDecoder {
         }
         let role = k_nano::net::mesh::local_role();
         self.active = role != k_nano::net::mesh::NodeRole::Undecided;
+        // s494: idle Undecided + draft=0 enchia o BOOT.LOG (metal 256KB→corte).
+        if !self.active && self.draft_len == 0 && self.verified == 0 && self.rejected == 0 {
+            return;
+        }
         k_nano::slog_cortex!(
             "DSD", "ok",
             "draft={} verified={} rejected={} (mesh: {} role={:?})",

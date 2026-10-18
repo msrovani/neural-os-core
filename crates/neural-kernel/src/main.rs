@@ -3465,15 +3465,26 @@ pub(crate) fn kernel_boot(
     k_hal::npu::init_npu();
     // ADR-0057 WS-G (#412): valida o primitivo de structured-decode sem modelo.
     let _ = cortex_crate::decode::self_test();
-    // ADR-0057 WS-F: instala o seam de wake (reschedule-IPI do APIC vivo). APs
-    // como workers vivos (ap_pollable) exigem IDT/IPI por-core = residual HW.
+    // ADR-0057 WS-F: instala o seam de wake (reschedule-IPI do APIC vivo) ANTES
+    // de try_enable — s494: enable cedo via feature via com wake=0 → no_wake.
     k_nano::smp::install_wake_fn(crate::apic::send_ipi_reschedule);
+    k_nano::smp::try_enable_ap_workers_from_feature();
     k_nano::slog_bin!(
         "SMP",
-        "info",
-        "AP workers pollable={} (WS-F on-demand wake = residual HW/IDT)",
+        "ok",
+        "AP workers pollable={} wake_installed=1 (WS-F)",
         k_nano::smp::ap_pollable()
     );
+    // Escada W2A8 AIOS: rung + counters (Mapped ≠ gpu GO).
+    cortex_crate::compute::slog_compute_rung();
+    // Remember leve: /hw/compute/rung via Tickv (mesmo contrato SGDB HW).
+    {
+        let rung = cortex_crate::compute::compute_rung_label();
+        k_nano::slog_bin!("SGDB", "ok", "/hw/compute/rung={}", rung);
+        if k_nano::storage::tickv::is_ready() {
+            let _ = k_nano::storage::tickv::put_blob("hw/compute/rung", rung.as_bytes());
+        }
+    }
 
     publish_boot_phase(BootPhase::DriverInit, "NIC/ATA/AHCI/xHCI/GPU probes concluidos");
 

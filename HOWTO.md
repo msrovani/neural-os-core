@@ -176,11 +176,12 @@ python tools\build_image.py
 ```
 
 ### BOOT.LOG DEV (ESP) — extrair na IDE
-Canal DEV/TEST = ESP FAT (`BOOT.LOG` pré-alocado), **não** o volume NeuralFS.
+Canal DEV/TEST = ESP FAT (`BOOT.LOG` 1 MiB + opcional `NEURAL\BOOT.LOG`), **não** o volume NeuralFS.
 ```powershell
 python tools\extract_esp_bootlog.py target\uefi.img -o logs\BOOT.LOG
 python tools\extract_esp_bootlog.py target\usb_hw.img -o logs\BOOT.LOG
-# Aceite: slog STORAGE posture data_fs=neuralfs|fat32|none no serial / BOOT.LOG
+python tools\extract_esp_bootlog.py D: -o logs\BOOT.LOG   # stick montado (raiz vs NEURAL, maior vence)
+# Aceite: STORAGE posture data_fs=neuralfs; fim sem corte mid-line; [TRUNCATED] se CAP
 ```
 
 ### Executar QEMU

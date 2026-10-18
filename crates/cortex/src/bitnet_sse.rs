@@ -289,6 +289,49 @@ pub fn sse2_sret_boot_canary() -> bool {
             crate::matmul_diag::status_line()
         );
     }
+    // s494: shapes big (n,k≥64) exercitam SMP/W2A8 rungs — canário 4×4 não prova escada.
+    let _ = big_ladder_boot_probe();
+    ok
+}
+
+/// Probe matmul 64×64: dispara rung SMP/W2A8 se gates abertos; telemetria só.
+fn big_ladder_boot_probe() -> bool {
+    const M: usize = 1;
+    const K: usize = 64;
+    const N: usize = 64;
+    let mut weights = alloc::vec![0i8; K * N];
+    for (i, w) in weights.iter_mut().enumerate() {
+        *w = match i % 3 {
+            0 => 1,
+            1 => -1,
+            _ => 0,
+        };
+    }
+    let w = PackedTernaryTensor {
+        shape: (K, N),
+        packed_data: PackedTernaryTensor::pack_weights(&weights),
+    };
+    let mut xdata = alloc::vec![0.0f32; M * K];
+    for (i, v) in xdata.iter_mut().enumerate() {
+        *v = (i as f32) * 0.01;
+    }
+    let Some(x) = Tensor::from_row_major((M, K), xdata) else {
+        k_nano::slog_cortex!("MatmulDiag", "warn", "big ladder: x alloc fail");
+        return false;
+    };
+    // Abrir gaps só neste probe (não altera política Cheap do boot greeting).
+    let prev = crate::cortex::GENERATION_GAPS_RESOLVED.swap(true, core::sync::atomic::Ordering::Release);
+    let y = ternary_matmul(&w, &x);
+    crate::cortex::GENERATION_GAPS_RESOLVED.store(prev, core::sync::atomic::Ordering::Release);
+    let ok = y.as_ref().map(|t| t.is_valid() && t.shape == (M, N)).unwrap_or(false);
+    crate::compute::slog_compute_rung();
+    k_nano::slog_cortex!(
+        "MatmulDiag",
+        if ok { "ok" } else { "warn" },
+        "big ladder probe 64x64 ok={} | {}",
+        ok as u8,
+        crate::matmul_diag::status_line()
+    );
     ok
 }
 

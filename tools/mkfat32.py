@@ -783,15 +783,15 @@ def populate(path):
     # (ex: note 1 no cabo/ICS: UPDATE_URL=http://192.168.137.1:8080/UPDATE.MANIFEST).
     update_url = os.environ.get("UPDATE_URL", "http://10.0.2.2:8080/UPDATE.MANIFEST").strip()
     files.append(("UPDATE.CFG", f"UPDATE_URL={update_url}\n".encode()))
-    # BOOT.LOG pre-alocado (256 KiB): canal DEV/TEST (Live stick / QEMU).
+    # BOOT.LOG pre-alocado (1 MiB, s494): canal DEV/TEST (Live stick / QEMU).
     # Produto Installed usa /logs/boot_<tick>.log com timestamp (SESSION_270).
-    boot_log = (
+    _boot_hdr = (
         b"[S] neural-os-core BOOT.LOG (DEV/TEST only)\n"
         b"# Placeholder - se so isto apos reboot: kernel sem USB-MSC;\n"
         b"# logwriter-efi grava no boot seguinte (seal NEURLOG! + warm-reset).\n"
-        + b"\x00" * (256 * 1024 - 180)
     )
-    files.append(("BOOT.LOG", boot_log[: 256 * 1024]))
+    boot_log = _boot_hdr + b"\x00" * (1024 * 1024 - len(_boot_hdr))
+    files.append(("BOOT.LOG", boot_log[: 1024 * 1024]))
     # NSGDB.BIN pre-alocado (8 MiB, zeros): volume TickvLite/SGDB persistente
     # via FileFlash (k_nano::storage::flash) quando nao ha NVMe. Zeros puros =
     # scan_volume para no EOF limpo; primeiro put real escreve header TKLV.

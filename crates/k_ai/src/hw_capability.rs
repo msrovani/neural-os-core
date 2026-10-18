@@ -49,6 +49,22 @@ pub enum HwNextAction {
     ObserveOnly = 8,
 }
 
+/// Hint de firmware NVIDIA por DID (s494 / W2A8 AIOS).
+/// Ampere/Ada ≠ Pascal gp108 — metal 10de:25ac apontava gp108 e loopava HEALTH_ISSUE.
+pub fn nvidia_firmware_hint(did: u16) -> &'static str {
+    match did {
+        // Maxwell / Pascal lab (GP10x)
+        0x1300..=0x1CFF => "nvidia/gp108",
+        // Turing (TU10x)
+        0x1E00..=0x1FFF => "nvidia/tu106",
+        // Ampere GA10x (incl. GA107 laptop 25ac)
+        0x2000..=0x25FF => "nvidia/ga107",
+        // Ada / Blackwell — GSP path genérico
+        0x2600..=0x2BFF => "nvidia/ad102",
+        _ => "nvidia/ga107",
+    }
+}
+
 /// Card estruturado — o que Hermes/Cortex precisam para USAR o HW.
 #[derive(Debug, Clone)]
 pub struct HwCapabilityCard {
@@ -234,7 +250,7 @@ fn prediction_to_card(
         2 => Some("rtlwifi"),
         3 => Some("ath9k"),
         4 => Some("brcmfmac"),
-        5 => Some("nvidia/gp108"),
+        5 => Some(nvidia_firmware_hint(did)),
         6 => Some("i915"),
         7 => Some("amdgpu"),
         _ => None,
@@ -394,8 +410,14 @@ fn heuristic_card(
         }
         0x0D => wifi_heuristic(vid),
         0x03 => match vid {
-            0x10DE => (HwFamily::NvidiaGpu, "GpuBackend", Some("nvidia/gp108"),
-                       DISPLAY | COMPUTE | NEEDS_FW, HwNextAction::LoadFirmware, (0, 0, 0, 0, 0u16)),
+            0x10DE => (
+                HwFamily::NvidiaGpu,
+                "GpuBackend",
+                Some(nvidia_firmware_hint(did)),
+                DISPLAY | COMPUTE | NEEDS_FW,
+                HwNextAction::LoadFirmware,
+                (0, 0, 0, 0, 0u16),
+            ),
             0x8086 => (HwFamily::IntelI915, "DisplayAgent", Some("i915"),
                        DISPLAY | COMPUTE | NEEDS_FW, HwNextAction::LoadFirmware, (0, 0, 0, 0, 0u16)),
             0x1002 => (HwFamily::AmdGpu, "GpuBackend", Some("amdgpu"),
@@ -451,4 +473,23 @@ pub fn v4_label_names() -> &'static [&'static str] {
     &[
         "family", "fw_id", "agent_id", "caps_bits", "next_action",
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nvidia_hint_ampere_ga107_not_gp108() {
+        assert_eq!(nvidia_firmware_hint(0x25ac), "nvidia/ga107");
+        assert_eq!(nvidia_firmware_hint(0x1c82), "nvidia/gp108");
+        assert_eq!(nvidia_firmware_hint(0x1f08), "nvidia/tu106");
+    }
+
+    #[test]
+    fn build_card_25ac_hint_ga107() {
+        let c = build_card(0x10DE, 0x25AC, 0x03, 0x00, "NVIDIA");
+        assert_eq!(c.firmware, Some("nvidia/ga107"));
+        assert_ne!(c.firmware, Some("nvidia/gp108"));
+    }
 }

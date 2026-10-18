@@ -44,6 +44,10 @@ def build_manifest(pack: set[str], path: str) -> None:
         p = find_blob("FALCON3.V7", "FALCON3_BASE.V7", "FALCON3_BASE.V6")
         if p:
             mapping.append(("ecosystem/models/active.v7", p))
+    # AlwaysTiny (hub LOO metal): empacota se existir, mesmo sem PACK_LLM=all.
+    p = find_blob("hw_expert_v6.bitnet", "HW_EXPERT.BITNET", "HWEXPERT.BIN")
+    if p and not any(m[0].endswith("hwexpert.bitnet") for m in mapping):
+        mapping.append(("ecosystem/models/hwexpert.bitnet", p))
     if "falcon3-1b" in pack or "all" in pack or "1b" in pack:
         p = find_blob("LEARNER.V7", "FALCON1B.V7", "FALCON3_1B.V7")
         if p:

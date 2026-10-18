@@ -28,11 +28,13 @@ use uefi::CStr16;
 
 /// Espelha `k_nano::boot_ramlog::BOOT_RAMLOG_PHYS`.
 const RAMLOG_PHYS: usize = 0x1000_0000;
-const RAMLOG_CAP: usize = 256 * 1024;
+/// Espelha `k_nano::boot_ramlog::BOOT_RAMLOG_CAP` (s494: 1 MiB).
+const RAMLOG_CAP: usize = 1024 * 1024;
 const HDR_SIZE: usize = 24;
 const MAGIC_NEED: u64 = u64::from_le_bytes(*b"NEURLOG!");
 const MAGIC_DONE: u64 = u64::from_le_bytes(*b"NEURDONE");
-const BOOT_LOG_CAP: usize = 256 * 1024;
+/// Espelha `k_nano::boot_logger::BOOT_LOG_CAP`.
+const BOOT_LOG_CAP: usize = 1024 * 1024;
 /// Espelha `k_nano::boot_ramlog::FLAG_POWEROFF_AFTER_CAPTURE`.
 const FLAG_POWEROFF_AFTER_CAPTURE: u32 = 0x504F_4646; // "POFF"
 
@@ -208,9 +210,9 @@ fn write_bootlog(payload: &[u8]) -> Result<usize, &'static str> {
         }
     }
 
-    // Nenhum volume de dados com BOOT.LOG — fallback `\NEURAL\BOOT.LOG` na ESP.
+    // Nenhum volume de dados com BOOT.LOG — ESP: raiz (pré-alocado) + NEURAL\.
     let n = write_bootlog_on_esp(payload)?;
-    info!("logwriter: target=esp path=NEURAL\\BOOT.LOG");
+    info!("logwriter: target=esp path=BOOT.LOG(+NEURAL)");
     Ok(n)
 }
 
@@ -222,6 +224,11 @@ fn write_bootlog_on_esp(payload: &[u8]) -> Result<usize, &'static str> {
         boot::open_protocol_exclusive::<SimpleFileSystem>(device).map_err(|_| "SFS on ESP")?;
     let mut root = sfs.open_volume().map_err(|_| "open volume")?;
 
+    // s494: raiz primeiro (mesmo ficheiro que o kernel / extract_esp_bootlog).
+    let mut root_buf = [0u16; 32];
+    let root_log = c16("BOOT.LOG", &mut root_buf).ok_or("cstr")?;
+    let root_ok = try_write_regular(&mut root, root_log, payload, FileMode::ReadWrite);
+
     let mut dir_buf = [0u16; 32];
     let neural = c16("NEURAL", &mut dir_buf).ok_or("cstr")?;
     let _ = root.open(
@@ -232,10 +239,11 @@ fn write_bootlog_on_esp(payload: &[u8]) -> Result<usize, &'static str> {
 
     let mut path_buf = [0u16; 64];
     let path = c16("NEURAL\\BOOT.LOG", &mut path_buf).ok_or("cstr")?;
-    if try_write_regular(&mut root, path, payload, FileMode::CreateReadWrite) {
+    let neural_ok = try_write_regular(&mut root, path, payload, FileMode::CreateReadWrite);
+    if root_ok || neural_ok {
         Ok(payload.len())
     } else {
-        Err("create NEURAL\\BOOT.LOG")
+        Err("write ESP BOOT.LOG")
     }
 }
 
@@ -322,9 +330,16 @@ fn build_payload(body: &[u8], ckpt: u8) -> Vec<u8> {
         body.len()
     );
     out.extend_from_slice(hdr.as_bytes());
+    let hdr_end = out.len();
     out.extend_from_slice(body);
     if out.len() > BOOT_LOG_CAP {
-        out.truncate(BOOT_LOG_CAP);
+        // Keep-newest (igual boot_logger::build_session_bytes).
+        let marker = b"\n[TRUNCATED keep-newest]\n";
+        let budget = BOOT_LOG_CAP.saturating_sub(hdr_end + marker.len());
+        let start = body.len().saturating_sub(budget);
+        out.truncate(hdr_end);
+        out.extend_from_slice(marker);
+        out.extend_from_slice(&body[start..]);
     }
     out
 }

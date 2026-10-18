@@ -182,10 +182,13 @@ pub unsafe fn detect_all() -> Vec<GpuInfo> {
         // sem BAR grande = DRAM compartilhada, honesto). Itera os 6 dwords e
         // PULA o HIGH de BARs 64-bit — a NVIDIA põe a VRAM em **BAR1** (índice
         // ÍMPAR): um par fixo (0,1)(2,3)(4,5) nunca a mede → `vram: n/a` (bug s439).
+        // s494: size inválido (0) nunca vira VRAM; NVIDIA BAR0 = MMIO sempre
+        // (não promover aperture se size probe explodir — metal 25ac).
         let (bar0, bar2, vram_bytes) = unsafe {
-            let mut mmio = 0u64;
-            let mut vram_base = 0u64;
-            let mut vram_sz = 0u64;
+            const MB64: u64 = 64 * 1024 * 1024;
+            const GB64: u64 = 64 * 1024 * 1024 * 1024;
+            let mut bars: [(u8, u64, u64); 6] = [(0, 0, 0); 6];
+            let mut n_bars: usize = 0;
             let mut i: u8 = 0;
             while i < 6 {
                 let raw = k_nano::pci::read_config_dword(
@@ -198,24 +201,41 @@ pub unsafe fn detect_all() -> Vec<GpuInfo> {
                     let is_64 = (raw & 0x6) == 0x4;
                     let base = k_nano::pci::read_bar_value(dev.bus, dev.device, dev.function, i);
                     let size = k_nano::pci::read_bar_size(dev.bus, dev.device, dev.function, i);
-                    if i == 0 {
-                        mmio = base; // MMIO default = BAR0 (AMD dGPU sobrescreve abaixo)
-                    }
-                    if base != 0 && size >= 64 * 1024 * 1024 && size > vram_sz {
-                        vram_base = base;
-                        vram_sz = size;
+                    if base != 0 && size != 0 && n_bars < 6 {
+                        bars[n_bars] = (i, base, size);
+                        n_bars += 1;
                     }
                     i += if is_64 { 2 } else { 1 };
                 } else {
                     i += 1; // I/O BAR — não é memória
                 }
             }
+            let bar0_base = bars.iter().take(n_bars).find(|b| b.0 == 0).map(|b| b.1).unwrap_or(0);
+            // Candidatos VRAM: size ∈ [64MB, 64GB], base ≠ 0.
+            let mut vram_base = 0u64;
+            let mut vram_sz = 0u64;
+            let mut vram_idx = 0xFFu8;
+            for &(idx, base, size) in bars.iter().take(n_bars) {
+                if size >= MB64 && size <= GB64 && size > vram_sz {
+                    // NVIDIA: BAR0 é MMIO (16MB típico) — nunca escolher como VRAM.
+                    if vendor == GpuVendor::Nvidia && idx == 0 {
+                        continue;
+                    }
+                    vram_base = base;
+                    vram_sz = size;
+                    vram_idx = idx;
+                }
+            }
             // MMIO = BAR0, exceto quando BAR0 É a aperture (AMD: VRAM→BAR0) → BAR5.
-            let mmio = if mmio == 0 || (vram_base != 0 && mmio == vram_base) {
+            let mmio = if vendor == GpuVendor::Nvidia {
+                // Ampere/Pascal: PMC vive em BAR0 — não cair para BAR5.
+                bar0_base
+            } else if bar0_base == 0 || (vram_base != 0 && bar0_base == vram_base && vram_idx == 0) {
                 k_nano::pci::read_bar_value(dev.bus, dev.device, dev.function, 5)
             } else {
-                mmio
+                bar0_base
             };
+            let _ = vram_idx;
             (mmio, vram_base, vram_sz)
         };
 

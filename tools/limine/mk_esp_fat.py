@@ -442,17 +442,22 @@ def build_esp(esp_dir: str, out_path: str, size_mb: int = 128) -> None:
     for le in lfn_entries("boot", n83):
         root += le
     root += dir_entry_83(n83, 0x10, boot_cl, 0)
-    # s424: BOOT.LOG pré-alocado (256KB) na RAIZ da ESP — fallback canônico do
-    # kernel quando o flush na partição de dados falha (USB-MSC lento / volume
-    # de dados ausente). O logwriter-efi grava NEURAL\BOOT.LOG (subdir); o
-    # kernel grava o BOOT.LOG raiz via BlockDevice (mesmo mecanismo do volume
-    # de dados, zero código novo de FS).
-    bootlog = bytes(256 * 1024)
+    # s424/s494: BOOT.LOG pré-alocado (1 MiB) na RAIZ da ESP — canal DEV.
+    # logwriter-efi grava NEURAL\BOOT.LOG + raiz; kernel sobrescreve raiz.
+    bootlog = bytes(1024 * 1024)
     cl = alloc_chain(bootlog)
     n83 = short83("BOOT.LOG", used83)
     for le in lfn_entries("BOOT.LOG", n83):
         root += le
     root += dir_entry_83(n83, 0x20, cl, len(bootlog))
+    # s494: NSGDB.BIN na ESP — data=NeuralFS não tem FAT; FileFlash precisa
+    # de um volume FAT montável (ESP 0xEF) para Tickv persistir entre boots.
+    nsgdb = bytes(8 * 1024 * 1024)
+    cl = alloc_chain(nsgdb)
+    n83 = short83("NSGDB.BIN", used83)
+    for le in lfn_entries("NSGDB.BIN", n83):
+        root += le
+    root += dir_entry_83(n83, 0x20, cl, len(nsgdb))
     for long_name, data in buckets[""]:
         cl = alloc_chain(data)
         n83 = short83(long_name, used83)

@@ -308,15 +308,23 @@ impl UsbMassStorage {
         let ok =
             csw_sig == CSW_SIGNATURE && csw_tag == tag && csw_status == 0 && csw_residue == 0;
         if !ok {
-            crate::slog_nano!(
-                "USB",
-                "warn",
-                "BOT fail slot={} op={:#x} stage=csw-content status={} residue={}",
-                self.slot,
-                op,
-                csw_status,
-                csw_residue
-            );
+            // s494: rate-limit — metal SanDisk gerava 74× op=0x35 (READ CAPACITY)
+            // e engolia o BOOT.LOG. Primeiras 3 + 1/64 depois.
+            static BOT_FAIL_LOG: core::sync::atomic::AtomicU32 =
+                core::sync::atomic::AtomicU32::new(0);
+            let n = BOT_FAIL_LOG.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            if n < 3 || n % 64 == 0 {
+                crate::slog_nano!(
+                    "USB",
+                    "warn",
+                    "BOT fail slot={} op={:#x} stage=csw-content status={} residue={} (n={})",
+                    self.slot,
+                    op,
+                    csw_status,
+                    csw_residue,
+                    n + 1
+                );
+            }
         }
         ok
     }

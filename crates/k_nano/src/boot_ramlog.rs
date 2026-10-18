@@ -10,7 +10,8 @@ use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 /// 256 MiB — acima da zona que firmware costuma limpar no reset.
 pub const BOOT_RAMLOG_PHYS: u64 = 0x1000_0000;
-pub const BOOT_RAMLOG_CAP: usize = 256 * 1024;
+/// s494: 1 MiB — metal T+1420 estourava 256 KiB a meio da linha (DSD/BOT spam).
+pub const BOOT_RAMLOG_CAP: usize = 1024 * 1024;
 const HDR_SIZE: usize = 24;
 
 pub const MAGIC_NEED_FLUSH: u64 = u64::from_le_bytes(*b"NEURLOG!");
@@ -218,8 +219,19 @@ pub fn append(msg: &str) {
             core::ptr::write_volatile(&mut (*hdr_mut()).recover_count, kept);
         }
         let mut len = h.len as usize;
+        // Ring: se cheio, guarda a metade recente + marcador (não silenciar).
         if len >= data_cap() {
-            return;
+            let keep_from = data_cap() / 2;
+            let keep_len = len.saturating_sub(keep_from);
+            let wrap = b"[WRAP]\n";
+            let dst_off = wrap.len();
+            let copy_n = keep_len.min(data_cap().saturating_sub(dst_off));
+            if copy_n > 0 {
+                core::ptr::copy(data_ptr().add(keep_from), data_ptr().add(dst_off), copy_n);
+            }
+            core::ptr::copy_nonoverlapping(wrap.as_ptr(), data_ptr(), wrap.len());
+            len = dst_off + copy_n;
+            core::ptr::write_volatile(&mut h.len, len as u32);
         }
         let tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
         let mut line = [0u8; 320];
@@ -654,9 +666,9 @@ fn for_each_line(max: usize, mut emit: impl FnMut(&str)) {
     }
 }
 
-/// Snapshot do conteúdo como String (leitura pública p/ SGDB ingest — IDEA #539c).
-/// None se PHYS_MEM_OFFSET ainda 0, buffer vazio ou payload não-UTF8.
-pub fn snapshot() -> Option<alloc::string::String> {
+/// Snapshot do payload (bytes) — fonte única p/ flush DEV do BOOT.LOG (s494).
+/// None se PHYS_MEM_OFFSET ainda 0 ou buffer vazio.
+pub fn snapshot_bytes() -> Option<alloc::vec::Vec<u8>> {
     if crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed) == 0 {
         return None;
     }
@@ -667,8 +679,14 @@ pub fn snapshot() -> Option<alloc::string::String> {
             return None;
         }
         let slice = core::slice::from_raw_parts(data_ptr(), len);
-        core::str::from_utf8(slice).ok().map(alloc::string::String::from)
+        Some(slice.to_vec())
     }
+}
+
+/// Snapshot do conteúdo como String (leitura pública p/ SGDB ingest — IDEA #539c).
+/// None se PHYS_MEM_OFFSET ainda 0, buffer vazio ou payload não-UTF8.
+pub fn snapshot() -> Option<alloc::string::String> {
+    snapshot_bytes().and_then(|v| alloc::string::String::from_utf8(v).ok())
 }
 
 #[cfg(test)]
@@ -683,7 +701,7 @@ mod tests {
         assert_eq!(MAGIC_NEED_FLUSH, u64::from_le_bytes(*b"NEURLOG!"));
         assert_eq!(MAGIC_FLUSHED, u64::from_le_bytes(*b"NEURDONE"));
         assert_eq!(BOOT_RAMLOG_PHYS, 0x1000_0000);
-        assert_eq!(BOOT_RAMLOG_CAP, 256 * 1024);
+        assert_eq!(BOOT_RAMLOG_CAP, 1024 * 1024);
         // Layout do header compartilhado com logwriter-efi (HDR_SIZE=24 +
         // flags@16 + recover_count@20). Mudar aqui sem mudar o EFI quebra a
         // captura em silêncio.

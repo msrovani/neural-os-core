@@ -66,6 +66,19 @@ pub static GOLDEN_RECIPES: &[RecipeBindEntry] = &[
         // Subset short-name (main.rs GP108 preload)
         fat_names: &["ACR_BL.BIN", "ACRLOAD.BIN", "GPCCS_IN.BIN"],
     },
+    // Ampere GA107 laptop (metal 10de:25ac) — GSP, nunca gp108/Pascal.
+    RecipeBindEntry {
+        vendor_id: 0x10DE,
+        device_id: 0x25AC,
+        class: DeviceClass::Gpu,
+        match_mode: RecipeMatch::VidDid,
+        package_id: "gpu.nvidia.ga107",
+        trusted: true,
+        rebel: true,
+        requires_fw: true,
+        // GSP blobs (linux-firmware nvidia/ga107|ga102) — short names TBD no FAT
+        fat_names: &["GSP.BIN", "GSPBOOT.BIN", "GSPLOAD.BIN"],
+    },
     RecipeBindEntry {
         vendor_id: 0,
         device_id: 0,

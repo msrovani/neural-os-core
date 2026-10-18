@@ -397,14 +397,27 @@ pub struct SelfHeal {
 }
 
 /// Invariantes de hardware: I3 (firmware) e I4 (skill) — só VIDs conhecidos (N2 gated).
+/// Hint NVIDIA: use [`crate::hw_capability::nvidia_firmware_hint`] (DID-aware);
+/// a string aqui é só fallback de inventário (Pascal lab).
 pub const FW_KNOWN_VIDS: &[(u16, u16, &str, &str)] = &[
-    (0x10DE, 0x03, "nvidia/gp108", "FECS+GPCCS"),
+    (0x10DE, 0x03, "nvidia/*", "GSP/ACR por DID"),
     (0x8086, 0x03, "i915/skl+kbl", "GuC+HuC+DMC"),
     (0x10EC, 0x02, "rtl_nic", "rtl8168*"),
     (0x10EC, 0x0D, "rtl_nic", "rtl8168*"),
     (0x8086, 0x02, "intel/iwlwifi", "AX200/AX210"),
     (0x8086, 0x0D, "intel/iwlwifi", "AX200/AX210"),
 ];
+
+/// Resolve o path de firmware honesto p/ (vid, did, class).
+pub fn firmware_hint_for(vid: u16, did: u16, class: u8) -> Option<&'static str> {
+    if vid == 0x10DE && class == 0x03 {
+        return Some(crate::hw_capability::nvidia_firmware_hint(did));
+    }
+    FW_KNOWN_VIDS
+        .iter()
+        .find(|(v, c, _, _)| *v == vid && *c == class as u16)
+        .map(|(_, _, path, _)| *path)
+}
 
 /// Relatório do scan VID-gated (ADR-0042 N2).
 #[derive(Clone, Debug, Default)]
@@ -504,23 +517,35 @@ impl SelfHeal {
                     return true;
                 }
                 LoadStatus::Failed | LoadStatus::Absent => {
+                    let hint = crate::hw_capability::nvidia_firmware_hint(did);
                     self.pending_fixes.push((
                         dev.clone(),
                         alloc::format!(
-                            "firmware ausente para VID={:04X} DID={:04X} status={}",
+                            "firmware ausente para VID={:04X} DID={:04X} status={} hint={}",
                             vid,
                             did,
-                            get(AssetKind::FwGpu).as_str()
+                            get(AssetKind::FwGpu).as_str(),
+                            hint
                         ),
                     ));
-                    let msg = alloc::format!("HEALTH_ISSUE:I3:{}:firmware_ausente", dev);
+                    let msg = alloc::format!(
+                        "HEALTH_ISSUE:I3:{}:firmware_ausente:hint:{}",
+                        dev,
+                        hint
+                    );
                     let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
                         id: 0,
                         topic: alloc::string::String::from("HEALTH_ISSUE"),
                         payload: msg.into_bytes(),
                         token: event_bus::CapabilityToken::Legacy(1),
                     });
-                    k_nano::slog_kai!("SelfHeal", "warn", "I3: {} precisa de firmware", dev);
+                    k_nano::slog_kai!(
+                        "SelfHeal",
+                        "warn",
+                        "I3: {} precisa de firmware hint={}",
+                        dev,
+                        hint
+                    );
                     return false;
                 }
             }

@@ -139,15 +139,25 @@ pub unsafe fn map_bars_uc(gpu: &GpuInfo) {
             pages);
     }
     if gpu.bar2 > 0 && gpu.vram_size > 0 {
-        let aligned = gpu.vram_size.next_power_of_two().min(256 * 1024 * 1024);
-        let pages = k_nano::apic::map_region_uc_2mb(gpu.bar2, aligned, pmoff);
-        if pages == 0 {
-            k_nano::slog_hal!("GPU", "BAR", "AVISO: BAR2(VRAM) @ {:#x} falhou ao mapear!", gpu.bar2);
+        // s494: não mapear VRAM se bar2 == bar0 (roles invertidas / size lixo).
+        if gpu.bar2 == gpu.bar0 {
+            k_nano::slog_hal!(
+                "GPU",
+                "warn",
+                "BAR2(VRAM) skip — coincide com MMIO bar0={:#x} (roles inválidas)",
+                gpu.bar0
+            );
         } else {
-            k_nano::slog_hal!("GPU", "bar", "BAR2(VRAM) mapeado UC: {:#x} ({} MB, {} x 2MB)",
-                gpu.bar2,
-                gpu.vram_size / (1024 * 1024),
-                pages);
+            let aligned = gpu.vram_size.next_power_of_two().min(256 * 1024 * 1024);
+            let pages = k_nano::apic::map_region_uc_2mb(gpu.bar2, aligned, pmoff);
+            if pages == 0 {
+                k_nano::slog_hal!("GPU", "BAR", "AVISO: BAR2(VRAM) @ {:#x} falhou ao mapear!", gpu.bar2);
+            } else {
+                k_nano::slog_hal!("GPU", "bar", "BAR2(VRAM) mapeado UC: {:#x} ({} MB, {} x 2MB)",
+                    gpu.bar2,
+                    gpu.vram_size / (1024 * 1024),
+                    pages);
+            }
         }
     }
 }
@@ -266,7 +276,7 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
     if let Some(job_ring) = GpuJobRing::new(gpu, pmoff) {
         // Runtime hygiene (s410d): um ring por vendor — re-init (rescan/
         // respawn de agente) substitui o ring existente em vez de empilhar
-        // (JOB_RINGS só fazia push; boots múltiplos = rings órfãos). Dual
+        // (JOB_RINGS só fazia push; boots múltiplos = rings órfãos). Dual
         // GPU mesmo-vendor = residual raro (ring antigo é substituído).
         let mut rings = JOB_RINGS.lock();
         if let Some(slot) = rings.iter_mut().find(|r| r.gpu_vendor == job_ring.gpu_vendor) {

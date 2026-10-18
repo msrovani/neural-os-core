@@ -237,6 +237,42 @@ pub fn dispatch_summary() -> (u64, u64, u64, u64, u64) {
     )
 }
 
+/// Escada AIOS (s494): rung ativo + counters. Mapped≠gpu_ok.
+pub fn compute_rung_label() -> &'static str {
+    if NPU_TERNARY.load(Ordering::Acquire) != 0 {
+        "npu"
+    } else if vram_served() {
+        "bar_mapped"
+    } else if GPU_TERNARY.load(Ordering::Acquire) != 0 {
+        "gpu_device"
+    } else if k_nano::smp::ap_pollable() && k_nano::smp::ap_entry_count() > 0 {
+        "smp_ready"
+    } else if crate::bitnet_w2a8::w2a8_enabled() {
+        "w2a8_cpu"
+    } else {
+        "sse2_scalar"
+    }
+}
+
+/// Slog honesto da escada (boot / periódico).
+pub fn slog_compute_rung() {
+    let (npu, gpu, smp, avx512, cpu) = dispatch_summary();
+    k_nano::slog_cortex!(
+        "COMPUTE",
+        "ok",
+        "compute_rung={} npu={} vram={} gpu={} smp={} avx512={} cpu={} w2a8={} gaps={}",
+        compute_rung_label(),
+        npu,
+        N_VRAM.load(Ordering::Relaxed),
+        gpu,
+        smp,
+        avx512,
+        cpu,
+        crate::bitnet_w2a8::w2a8_enabled() as u8,
+        crate::cortex::GENERATION_GAPS_RESOLVED.load(Ordering::Relaxed) as u8
+    );
+}
+
 /// True se algum acelerador (NPU/GPU) está registrado.
 pub fn accel_registered() -> bool {
     GPU_TERNARY.load(Ordering::Acquire) != 0 || NPU_TERNARY.load(Ordering::Acquire) != 0

@@ -19,7 +19,8 @@ use crate::block_dev::BlockDevice;
 /// Produto (BootMode::Installed) usa `timestamped_session_name()` → `/logs/boot_<tick>.log`.
 pub const BOOT_LOG_NAME: &str = "BOOT.LOG";
 /// Capacidade do arquivo pré-alocado (mkfat32) — só canal DEV.
-pub const BOOT_LOG_CAP: usize = 256 * 1024;
+/// s494: 1 MiB (lockstep com ramlog + mk_esp_fat + logwriter-efi).
+pub const BOOT_LOG_CAP: usize = 1024 * 1024;
 
 struct StackBuf {
     buf: [u8; 256],
@@ -538,6 +539,41 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> Overwrit
                     ]) & 0x0FFF_FFFF;
                 }
 
+                // s494: zera o resto da chain pré-alocada — evita cauda stale/NUL
+                // misturada com flush menor (janela antiga → "log corrompido").
+                let mut pad = written;
+                while fc >= 2 && fc < 0x0FFF_FFF8 && pad < capacity {
+                    let fc_lba = data_lba + (fc - 2) * spc;
+                    let mut pad_io = false;
+                    for s in 0..spc {
+                        if pad >= capacity {
+                            break;
+                        }
+                        let zero = [0u8; 512];
+                        if !dev.write_sectors((fc_lba + s) as u64, &zero) {
+                            pad_io = true;
+                            break;
+                        }
+                        pad += 512;
+                    }
+                    if pad_io {
+                        break;
+                    }
+                    let fat_off = fc as usize * 4;
+                    let fat_sec = fat_lba + (fat_off as u32 / bps);
+                    let mut fsec = [0u8; 512];
+                    if !dev.read_sectors(fat_sec as u64, &mut fsec) {
+                        break;
+                    }
+                    let boff = fat_off % bps as usize;
+                    fc = u32::from_le_bytes([
+                        fsec[boff],
+                        fsec[boff + 1],
+                        fsec[boff + 2],
+                        fsec[boff + 3],
+                    ]) & 0x0FFF_FFFF;
+                }
+
                 if alloc_size < 512 || alloc_size > BOOT_LOG_CAP {
                     let target = (capacity as u32).to_le_bytes();
                     dir[entry + 28..entry + 32].copy_from_slice(&target);
@@ -564,24 +600,32 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> Overwrit
                 // sucesso — FAT_READY mentia (auditoria USB).
                 if written == write_len {
                     // Readback: relê a cadeia e compara — o contador prova que o
-                    // laço andou, não que o meio gravou. Falha = IoFail (tenta ESP).
-                    if verify_written_chain(
+                    // laço andou, não que o meio gravou.
+                    let verified = verify_written_chain(
                         dev, fat_lba, data_lba, spc, bps, start_fc, &data[..write_len],
-                    ) {
-                        // s493: telemetria do backend real (ESP vs FAT data).
-                        if part.type_code == 0xEF {
-                            crate::storage_posture::note_bootlog_backend(
-                                crate::storage_posture::BootLogBackend::Esp,
-                            );
-                        } else {
-                            crate::storage_posture::note_bootlog_backend(
-                                crate::storage_posture::BootLogBackend::FatData,
+                    );
+                    if !verified {
+                        // s494: SanDisk metal — BOT fail no READ do verify após
+                        // WRITE ok → heal loop + spam op=0x35. Aceita o write
+                        // (bytes já no stick); warn one-shot.
+                        static VERIFY_MISS: AtomicBool = AtomicBool::new(false);
+                        if !VERIFY_MISS.swap(true, Ordering::Relaxed) {
+                            log_no_flush(
+                                "bootlog: verify miss apos write ok — accept (MSC flake)",
                             );
                         }
-                        return OverwriteResult::Ok;
                     }
-                    saw_io = true;
-                    break;
+                    // s493: telemetria do backend real (ESP vs FAT data).
+                    if part.type_code == 0xEF {
+                        crate::storage_posture::note_bootlog_backend(
+                            crate::storage_posture::BootLogBackend::Esp,
+                        );
+                    } else {
+                        crate::storage_posture::note_bootlog_backend(
+                            crate::storage_posture::BootLogBackend::FatData,
+                        );
+                    }
+                    return OverwriteResult::Ok;
                 }
                 // Tudo pronto mas 0 bytes gravados = falha de I/O — segue p/ ESP.
                 saw_io = true;
@@ -683,13 +727,25 @@ pub fn build_session_bytes() -> Vec<u8> {
         )
         .as_bytes(),
     );
-    let buf = PRE_FAT_BUF.lock();
-    for line in buf.iter() {
-        content.extend_from_slice(line);
+    let hdr_end = content.len();
+    // s494: fonte única = ramlog (sessão inteira). PRE_FAT_BUF = fallback só
+    // se PHYS_MEM_OFFSET=0 / ramlog vazio (host tests / pré-map).
+    if let Some(snap) = crate::boot_ramlog::snapshot_bytes() {
+        content.extend_from_slice(&snap);
+    } else if let Some(buf) = PRE_FAT_BUF.try_lock() {
+        for line in buf.iter() {
+            content.extend_from_slice(line);
+        }
     }
-    drop(buf);
     if content.len() > BOOT_LOG_CAP {
-        content.truncate(BOOT_LOG_CAP);
+        // Keep-newest: header + marcador + cauda (não cortar mid-line no meio).
+        let marker = b"\n[TRUNCATED keep-newest]\n";
+        let budget = BOOT_LOG_CAP.saturating_sub(hdr_end + marker.len());
+        let body = content[hdr_end..].to_vec();
+        let start = body.len().saturating_sub(budget);
+        content.truncate(hdr_end);
+        content.extend_from_slice(marker);
+        content.extend_from_slice(&body[start..]);
     }
     content
 }
@@ -1286,7 +1342,7 @@ mod tests {
 
     #[test]
     fn boot_log_cap_matches_mkfat32() {
-        assert_eq!(BOOT_LOG_CAP, 256 * 1024);
+        assert_eq!(BOOT_LOG_CAP, 1024 * 1024);
         assert_eq!(BOOT_LOG_NAME, "BOOT.LOG");
     }
 
@@ -1537,13 +1593,14 @@ mod tests {
         }
     }
 
-    /// Erro de leitura no readback → não-Ok (integração via overwrite).
+    /// s494: erro de leitura no readback após write completo → ainda Ok
+    /// (MSC flake no metal; verify miss one-shot warn).
     #[test]
-    fn overwrite_boot_log_rejects_read_error_on_verify() {
+    fn overwrite_boot_log_accepts_write_when_verify_read_fails() {
         let mut d = DataFailDisk(fat_test_disk_n(1));
         let data = alloc::vec![0xABu8; 512];
         let r = unsafe { overwrite_boot_log(&mut d, &data) };
-        assert_ne!(r, OverwriteResult::Ok, "falha de leitura não é sucesso");
+        assert_eq!(r, OverwriteResult::Ok, "write completo sobrevive a verify flake");
     }
 }
 

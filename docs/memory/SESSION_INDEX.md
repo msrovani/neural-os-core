@@ -10,6 +10,8 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 495 | GPU/W2A8 | s495 | Escada W2A8 AIOS (Ampere metal) | P0 BAR/ga107/ap-pollable/wake+big_ladder/compute_rung; P1 Mapped wire+lane OFF; P2 NKP SM86 stub≠Ready; GSP=Layer S. Host VERIFIED; metal UNKNOWN. Detalhe: SESSION_495.md. |
+| 494 | Bootlog/Metal | s494 | CAP 1MiB + VRAM BAR + spam | Metal cortava BOOT.LOG mid-line (256KB); flush=ramlog; WRAP; verify-miss accept; NSGDB ESP; DSD/BOT/MIXER limit; BAR size mask_hi=0; nvidia DID≠gp108. Host tests; metal re-image UNKNOWN. Detalhe: SESSION_494.md. |
 | 493 | Storage/AIOS | s493 | NeuralFS substrato (não trocar mkfat32) | §14 AIOS: data=NRFS canónico, FAT=DEGRADED, BOOT.LOG=ESP; storage_posture; write_file_stream; neural_paths_for+LOO; mkneuralfs seed (magic VERIFIED); build_image/unified --fs neuralfs; extract_esp_bootlog; SysInstaller ecosystem/models. Host OK; QEMU Active/metal = UNKNOWN. Detalhe: SESSION_493.md. |
 | 492 | Hub/Pack | s492 | Materializar .V7 canônicos target1 | Hardlinks FALCON3/PRO/FALCON10/LEARNER.V7; mkfat32 1 dirent/SKU V7-first; fat_names_for .V7; audit Ok=25 REJECT=0. Nichos v5 sem fake-V7. Detalhe: SESSION_492.md. |
 | 491 | Hub/TII | s491 | Equiparação TII UAE → ModelHub | ADR-0078 §2.2 canônico: Active=Falcon3-3B, Pro=7B/10B, Learner=1B/E-1B, Vision=SigLino; H1/Mamba fora; Agent/RustCoder/HwExpert/Reranker=não-TII; Laya/Jev=intent. Aliases from_name + SIGLINO.BIN; README/mkfat32 alinhados. Detalhe: SESSION_491.md. |

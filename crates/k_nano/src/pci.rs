@@ -320,12 +320,25 @@ pub unsafe fn read_bar_size(bus: u8, device: u8, function: u8, bar_index: u8) ->
     if mask_lo == 0 && mask_hi == 0 {
         return 0; // BAR ausente
     }
-    // ~mask = size-1 com low 4 bits 1 (BARs são 16B-aligned, potência de 2)
-    let raw = (((!mask_hi) as u64) << 32) | ((!mask_lo & 0xFFFF_FFF0) as u64);
-    if raw == 0 {
+    // PCI: size = (~(mask & ~0xF)) + 1. BARs 64-bit que cabem em 32-bit
+    // devolvem mask_hi=0 após write-all-ones — tratar high=0 como size só no
+    // low (senão !0<<32 explode p/ ~2^64 → metal Ampere vram_size lixo
+    // 0xffffffff01000000, MMIO virava "VRAM", BAR5 corrompia bar0 — s494).
+    let mask_lo_clean = mask_lo & 0xFFFF_FFF0;
+    let size = if is_64 && mask_hi != 0 {
+        let raw = ((!mask_hi as u64) << 32) | (!mask_lo_clean as u64);
+        raw.wrapping_add(1)
+    } else {
+        if mask_lo_clean == 0 {
+            return 0;
+        }
+        (!(mask_lo_clean as u32) as u64).wrapping_add(1)
+    };
+    // Sanitize: potência de 2, ≥16B, ≤128GB (consumer/ReBAR). Fora = 0 honesto.
+    if size < 16 || size > (128u64 << 30) || size.count_ones() != 1 {
         return 0;
     }
-    raw + 16
+    size
 }
 
 pub unsafe fn write_config_dword(bus: u8, device: u8, function: u8, offset: u8, value: u32) {
