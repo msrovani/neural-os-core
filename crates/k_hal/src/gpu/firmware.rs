@@ -387,13 +387,23 @@ pub unsafe fn secure_boot_gpu(gpu: &GpuInfo, pmoff: u64) -> SecureBootResult {
             if crate::gpu::detect::is_nvidia_legacy_acr(gpu.arch) {
                 nvidia_acr_load(gpu, pmoff)
             } else if crate::gpu::detect::is_nvidia_gsp_family(gpu.arch) {
+                let report = crate::gpu::nvidia_gsp::bring_up_gsp(gpu, pmoff);
                 k_nano::slog_hal!(
                     "SECURE",
                     "BOOT",
-                    "NVIDIA GSP family={} — scaffold (GSP-RM residual)",
-                    crate::gpu::detect::nvidia_family_str(gpu.arch)
+                    "NVIDIA GSP family={} stage={} gsp_booted={}",
+                    crate::gpu::detect::nvidia_family_str(gpu.arch),
+                    report.stage.as_str(),
+                    report.gsp_booted()
                 );
-                SecureBootResult::NoFirmware
+                if report.gsp_booted() {
+                    SecureBootResult::Ok
+                } else if report.stage == crate::gpu::nvidia_gsp::GspStage::BlobsMissing {
+                    SecureBootResult::NoFirmware
+                } else {
+                    // BooterTimeout / BlobsOk sem alive = InitFail (tentou, não Ready).
+                    SecureBootResult::InitFail
+                }
             } else {
                 SecureBootResult::NoFirmware
             }

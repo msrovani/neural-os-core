@@ -5,6 +5,7 @@ pub mod pcie_bypass;
 pub mod compute_abi;
 pub mod falcon3_w2a8;
 pub mod aios_adapt;
+pub mod compute_posture; // AIOS multi-vendor Observe→Plan posture (ADR-0088/0112)
 pub mod kernel_image;
 pub mod blob_cubin;
 pub mod blob_hsaco;
@@ -20,6 +21,7 @@ pub mod intel_arc;
 pub mod intel_mad;
 pub mod intel_display;
 pub mod nvidia;
+pub mod nvidia_gsp;
 pub mod nvidia_pascal;
 pub mod nvidia_pascal_acr;
 pub mod nvidia_pascal_ce;

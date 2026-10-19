@@ -126,7 +126,10 @@ def compile_cubin(sm: str, out_cubin: Path, source_text: str, src_name: str) -> 
 
 
 def try_sign(canonical: bytes, seed_hex: str | None) -> bytes:
-    """Return 64-byte Ed25519 signature, or zeros if unsigned / unavailable."""
+    """Return 64-byte Ed25519 signature, or zeros if unsigned / unavailable.
+
+    Prefers tools/ota_sign.py (zero deps) then PyNaCl.
+    """
     if not seed_hex:
         return bytes(64)
     seed_hex = seed_hex.strip().lower().replace("0x", "")
@@ -138,6 +141,21 @@ def try_sign(canonical: bytes, seed_hex: str | None) -> bytes:
     except ValueError:
         print("[pack_nvidia] invalid seed hex")
         return bytes(64)
+    # Pure RFC8032 via ota_sign (same stack as OTA release key)
+    try:
+        sys_path_root = Path(__file__).resolve().parent
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("ota_sign", sys_path_root / "ota_sign.py")
+        if spec and spec.loader:
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            sig = mod.sign(seed, canonical)
+            pk = mod.public_key(seed).hex()
+            print(f"[pack_nvidia] signed via ota_sign (pk={pk[:16]}…)")
+            return bytes(sig)
+    except Exception as e:
+        print(f"[pack_nvidia] ota_sign failed ({e}); try PyNaCl")
     try:
         from nacl.signing import SigningKey  # type: ignore
     except ImportError:

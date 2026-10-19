@@ -2290,10 +2290,12 @@ pub(crate) fn kernel_boot(
     // via IOAPIC no QEMU — sendkey nunca chegava ao shell). Valida o fluxo
     // UPDATE.CFG → GET manifest → slot inativo → serve_update.py.
     // DEPOIS do probe do ATA: `with_fat_reader` exige ATA_DRIVER populado.
+    k_nano::slog_bin!("BOOT", "ok", "pos-ATA — OTA scan (bounded)");
     if crate::net::detect_qemu_ota_trigger() {
         let report = hermes_crate::self_update::check_for_update_qemu_slirp();
         k_nano::slog_bin!("OTA", "info", "boot trigger: {}", report);
     }
+    k_nano::slog_bin!("BOOT", "ok", "pos-OTA — HDA/USB");
 
     // Intel HDA — so se DeviceTree tem Snd (ou plano ainda nao instalado).
     if k_nano::boot_bind::should_probe_snd() {
@@ -2525,14 +2527,19 @@ pub(crate) fn kernel_boot(
     // Honesty smokes adiados (SESSION_265) — USB live sem MSC: lite only (evita hang K71).
     // QEMU/TCG: labor completo trava minutos (xHCI/HDA/GSP) — lite path igual HW live USB.
     crate::display::fb::boot_ckpt(71, "labor smokes");
+    // WHPX/QEMU: labor completo (wifi/xhci/http) trava minutos — mesma lite
+    // path do TCG / live USB (comentário SESSION_265).
+    let hv_sandbox = k_nano::platform_probe::probe_done()
+        && k_nano::platform_probe::hypervisor().is_sandbox();
     k_nano::slog_bin!(
         "BOOT",
         "ok",
-        "labor smokes enter tcg_lite={} hw_real={}",
+        "labor smokes enter tcg_lite={} hw_real={} sandbox={}",
         tcg_lite,
-        hw_real
+        hw_real,
+        hv_sandbox as u8
     );
-    if (hw_real && crate::USB_MSC.lock().is_none()) || tcg_lite {
+    if (hw_real && crate::USB_MSC.lock().is_none()) || tcg_lite || hv_sandbox {
         labor_smokes::run_deferred_usb_live(boot_tag);
     } else {
         labor_smokes::run_deferred(boot_tag);
@@ -3343,8 +3350,20 @@ pub(crate) fn kernel_boot(
 
             crate::boot_logger::log(&alloc::format!("BOOT: GPU plan — {:?}", plan));
 
+            // Dual: BAR/Streams/loader-VRAM só no compute_gpu (nunca iGPU display).
             if let Some(ci) = plan.compute_index() {
                 if let Some(g) = gpus.get(ci) {
+                    if plan.is_dual() {
+                        k_nano::slog_bin!(
+                            "GPU",
+                            "ok",
+                            "dual BAR target compute={} did={:04x} isa={} igpu={}",
+                            g.name,
+                            g.device_id,
+                            g.isa_tag.as_str(),
+                            g.is_integrated as u8
+                        );
+                    }
                     crate::display::fb::boot_ckpt(43, "gpu vram map");
                     if crate::gpu::vram::init_vram_tier(g) {
                         // IDEA #67 — MHI AllocTier::Vram → buddy BAR
@@ -3383,62 +3402,105 @@ pub(crate) fn kernel_boot(
                 }
             }
 
-            // Pré-carrega firmware NVIDIA GP108 (8.3 no FAT) via ATA/USB antes do ACR.
-            // Sem isso o jarbas só vê ATA; no boot USB puro o MSC é a fonte.
-            crate::display::fb::boot_ckpt(44, "GP108 firmware");
-            // Ponytail: GP108 preload — tenta ATA (read_sectors retorna false
-            // se sem disco, nao trava mais — commit e154edc mudou assinatura).
-            // USB-MSC é tentado como fallback.
-            let has_nvidia_fw = gpus.iter().any(|g| matches!(g.vendor, k_hal::gpu::detect::GpuVendor::Nvidia));
-            if has_nvidia_fw {
-                const GP108: &[(&str, &str)] = &[
-                    ("fecs_bl.bin", "FECS_BL.BIN"),
-                    ("fecs_data.bin", "FECS_DAT.BIN"),
-                    ("fecs_inst.bin", "FECS_INS.BIN"),
-                    ("fecs_sig.bin", "FECS_SIG.BIN"),
-                    ("gpccs_bl.bin", "GPCCS_BL.BIN"),
-                    ("gpccs_data.bin", "GPCCS_DA.BIN"),
-                    ("gpccs_inst.bin", "GPCCS_IN.BIN"),
-                    ("gpccs_sig.bin", "GPCCS_SI.BIN"),
-                    ("sw_ctx.bin", "SW_CTX.BIN"),
-                    ("sw_bundle_init.bin", "SW_BNDL.BIN"),
-                    ("sw_method_init.bin", "SW_MTHD.BIN"),
-                    ("sw_nonctx.bin", "SW_NONC.BIN"),
-                    ("bl.bin", "ACR_BL.BIN"),
-                    ("ucode_load.bin", "ACRLOAD.BIN"),
-                    ("ucode_unload.bin", "ACRUNLD.BIN"),
-                    ("unload_bl.bin", "ACR_UBL.BIN"),
-                ];
+            // FW preload por recipe DID (multi-vendor) — nunca hardcode GP108 em Ampere.
+            crate::display::fb::boot_ckpt(44, "GPU firmware recipe");
+            {
+                use k_hal::device_cap::DeviceClass;
+                use k_hal::device_recipe;
+                use k_hal::gpu::compute_abi::ComputeBackendKind;
+                let compute = k_hal::gpu::display_coex::compute_gpu(&plan, &gpus);
                 let mut n = 0u32;
-                for (logical, fat_name) in GP108 {
-                    let mut data = None;
-                    if let Some(ref ata) = *crate::ATA_DRIVER.lock() {
-                        let parts = unsafe { crate::fat32::read_mbr(ata) };
-                        for p in &parts {
-                            if matches!(p.type_code, 0x0B | 0x0C | 0x1C | 0x73) {
-                                if let Some(fs) = unsafe { crate::fat32::Fat32Reader::new(ata, p) } {
-                                    data = unsafe { fs.read_file(fat_name) };
-                                    if data.is_some() { break; }
+                let mut total = 0u32;
+                let mut pkg = "none";
+                if let Some(g) = compute {
+                    let vid = match g.vendor {
+                        k_hal::gpu::detect::GpuVendor::Nvidia => 0x10DEu16,
+                        k_hal::gpu::detect::GpuVendor::Amd => 0x1002,
+                        k_hal::gpu::detect::GpuVendor::Intel => 0x8086,
+                        _ => 0,
+                    };
+                    let entry = device_recipe::find_entry(vid, g.device_id, DeviceClass::Gpu);
+                    // Pascal ACR: tabela legada longa; GSP/AMD/Intel: fat_names da recipe.
+                    let legacy_acr = matches!(g.backend_kind, ComputeBackendKind::LegacyAcr);
+                    const GP108: &[(&str, &str)] = &[
+                        ("fecs_bl.bin", "FECS_BL.BIN"),
+                        ("fecs_data.bin", "FECS_DAT.BIN"),
+                        ("fecs_inst.bin", "FECS_INS.BIN"),
+                        ("fecs_sig.bin", "FECS_SIG.BIN"),
+                        ("gpccs_bl.bin", "GPCCS_BL.BIN"),
+                        ("gpccs_data.bin", "GPCCS_DA.BIN"),
+                        ("gpccs_inst.bin", "GPCCS_IN.BIN"),
+                        ("gpccs_sig.bin", "GPCCS_SI.BIN"),
+                        ("sw_ctx.bin", "SW_CTX.BIN"),
+                        ("sw_bundle_init.bin", "SW_BNDL.BIN"),
+                        ("sw_method_init.bin", "SW_MTHD.BIN"),
+                        ("sw_nonctx.bin", "SW_NONC.BIN"),
+                        ("bl.bin", "ACR_BL.BIN"),
+                        ("ucode_load.bin", "ACRLOAD.BIN"),
+                        ("ucode_unload.bin", "ACRUNLD.BIN"),
+                        ("unload_bl.bin", "ACR_UBL.BIN"),
+                    ];
+                    let load_one = |logical: &str, fat_name: &str| -> bool {
+                        let mut data = None;
+                        if let Some(ref ata) = *crate::ATA_DRIVER.lock() {
+                            let parts = unsafe { crate::fat32::read_mbr(ata) };
+                            for p in &parts {
+                                if matches!(p.type_code, 0x0B | 0x0C | 0x1C | 0x73) {
+                                    if let Some(fs) = unsafe { crate::fat32::Fat32Reader::new(ata, p) } {
+                                        data = unsafe { fs.read_file(fat_name) };
+                                        if data.is_some() {
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
-                    if data.is_none() {
-                        if let Some(ref mut msc) = *crate::USB_MSC.lock() {
-                            data = unsafe { read_file_from_dev(msc, fat_name) };
+                        if data.is_none() {
+                            if let Some(ref mut msc) = *crate::USB_MSC.lock() {
+                                data = unsafe { read_file_from_dev(msc, fat_name) };
+                            }
                         }
+                        if let Some(d) = data {
+                            crate::gpu::firmware::preload_blob(logical, d);
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if legacy_acr {
+                        pkg = entry.map(|e| e.package_id).unwrap_or("gpu.nvidia.gp108");
+                        total = GP108.len() as u32;
+                        for (logical, fat_name) in GP108 {
+                            if load_one(logical, fat_name) {
+                                n += 1;
+                            }
+                        }
+                    } else if let Some(e) = entry {
+                        pkg = e.package_id;
+                        total = e.fat_names.len() as u32;
+                        for fat_name in e.fat_names {
+                            if load_one(fat_name, fat_name) {
+                                n += 1;
+                            }
+                        }
+                    } else {
+                        pkg = "unmatched";
                     }
-                    if let Some(d) = data {
-                        crate::gpu::firmware::preload_blob(logical, d);
-                        n += 1;
-                    }
+                    k_nano::slog_bin!(
+                        "FW",
+                        "ok",
+                        "fw preload pkg={} backend={:?} {}/{} (recipe DID {:04x})",
+                        pkg,
+                        g.backend_kind,
+                        n,
+                        total,
+                        g.device_id
+                    );
+                } else {
+                    k_nano::slog_bin!("FW", "ok", "fw preload SKIP (no compute GPU)");
                 }
-                k_nano::slog_bin!("FW", "info", "GP108 preload: {}/{} blobs (ATA/USB)", n, GP108.len());
-            } else {
-                k_nano::slog_bin!("FW", "ok", "GP108 preload SKIP (no NVIDIA or no storage)");
             }
-
-            crate::display::fb::boot_ckpt(45, "GP108 done");
+            crate::display::fb::boot_ckpt(45, "GPU firmware done");
 
             // Plano coex dirige backend (display owner intocado em falha compute)
             crate::display::fb::boot_ckpt(46, "Backend init start");
@@ -3929,29 +3991,50 @@ pub(crate) fn kernel_boot(
         let load_addr: u64 = 0x100000000;
         // pm_offset já calculado via handoff no início de kernel_boot
         let mem_has_4gb = handoff.has_addr_in_any_region(load_addr);
-        let (fat_name, fat_sz): (Option<&'static str>, Option<usize>) = unsafe {
-            let ata_guard = crate::ATA_DRIVER.lock();
-            (*ata_guard).as_ref().map(|ata| {
-                let parts = crate::fat32::read_mbr(ata);
-                for p in &parts {
-                    if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
-                        continue;
-                    }
-                    if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
-                        // Ordem = degrau ladder; com PACK_LLM=um so, so esse existe.
-                        for name in &["falcon3.v6", "llama8b.bin"] {
-                            if let Some(sz) = fs.lookup_file_size(name) {
-                                if sz >= 1_000_000 {
-                                    return (Some(*name), Some(sz));
+        // Sandbox: NÃO fazer lookup_file_size ATA aqui — walk de root dir via PIO
+        // no ESP/IDE pós-PHASE 3 travava o boot (log congelava; CPU queimava).
+        // fat_sz só informa/compara; loader manda no tamanho (S479). HW real mantém walk.
+        k_nano::slog_bin!(
+            "BOOT",
+            "ok",
+            "LLM path enter mem_has_4gb={} sandbox={}",
+            mem_has_4gb,
+            k_nano::platform_probe::hypervisor().is_sandbox()
+        );
+        let (fat_name, fat_sz): (Option<&'static str>, Option<usize>) =
+            if k_nano::platform_probe::hypervisor().is_sandbox() {
+                k_nano::slog_bin!("BOOT", "ok", "sandbox skip ATA fat_sz walk (loader-first)");
+                (None, None)
+            } else {
+                unsafe {
+                    let ata_guard = crate::ATA_DRIVER.lock();
+                    (*ata_guard)
+                        .as_ref()
+                        .map(|ata| {
+                            let parts = crate::fat32::read_mbr(ata);
+                            for p in &parts {
+                                if p.type_code != 0x1C
+                                    && p.type_code != 0x0C
+                                    && p.type_code != 0x0B
+                                {
+                                    continue;
+                                }
+                                if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                                    // Ordem = degrau ladder; com PACK_LLM=um so, so esse existe.
+                                    for name in &["falcon3.v6", "llama8b.bin"] {
+                                        if let Some(sz) = fs.lookup_file_size(name) {
+                                            if sz >= 1_000_000 {
+                                                return (Some(*name), Some(sz));
+                                            }
+                                        }
+                                    }
                                 }
                             }
-                        }
-                    }
+                            (None, None)
+                        })
+                        .unwrap_or((None, None))
                 }
-                (None, None)
-            })
-            .unwrap_or((None, None))
-        };
+            };
         // QEMU/WHPX = DEV/TEST: NÃO pular o probe do QEMU-loader @0x100000000 —
         // scripts (`run-qemu-*-loop`, whpx MoE loader) depositam FALCON3.BIN aí.
         // Só o FAT PIO grande fica gated (bloco `if !model_loaded` abaixo).
@@ -5206,7 +5289,79 @@ fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
                     }
                 }
             }
+        // Metal pendrive: LOO via USB-MSC (ATA costuma ser o HD do dual-boot vazio).
+        if !crate::model_hub::slot_real(slot)
+            && !k_nano::platform_probe::hypervisor().is_sandbox()
+        {
+            unsafe {
+                let mut usb_guard = crate::USB_MSC.lock();
+                if let Some(ref mut msc) = *usb_guard {
+                    for name in crate::model_hub::fat_names_for(slot) {
+                        let Some(sz) =
+                            k_nano::fat32::lookup_file_on_dev(msc, name)
+                        else {
+                            continue;
+                        };
+                        if sz > pio_cap {
+                            k_nano::slog_bin!(
+                                "MODEL",
+                                "warn",
+                                "USB {} PRESENT {}KB — skip PIO (pio_cap={}MB) slot={}",
+                                name,
+                                sz / 1024,
+                                pio_cap / (1024 * 1024),
+                                slot.name()
+                            );
+                            continue;
+                        }
+                        if k_nano::allocator::heap_headroom_critical() {
+                            k_nano::slog_bin!(
+                                "MODEL",
+                                "warn",
+                                "USB LOO refuse headroom_critical slot={} {}KB",
+                                slot.name(),
+                                sz / 1024
+                            );
+                            return;
+                        }
+                        let Some(data) = read_file_from_dev(msc, name) else {
+                            continue;
+                        };
+                        if let Err(reason) =
+                            cortex_crate::model::validate_for_slot(slot, &data)
+                        {
+                            k_nano::slog_bin!(
+                                "MODEL",
+                                "warn",
+                                "USB REJECT file={} slot={} reason={}",
+                                name,
+                                slot.name(),
+                                reason
+                            );
+                            continue;
+                        }
+                        if crate::model_hub::register_bytes(slot, &data) {
+                            if !crate::cortex::model_is_loaded()
+                                && slot == crate::model_hub::ModelSlot::GeneratorPro
+                            {
+                                crate::model_hub::mark_pro_alias(true);
+                            }
+                            k_nano::slog_bin!(
+                                "MODEL",
+                                "ok",
+                                "hub LOADED USB-MSC file={} slot={} size={}KB",
+                                name,
+                                slot.name(),
+                                data.len() / 1024
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
         }
+}
+
         // s487 P0: gate SEPARADO — sandbox nao engole o seam LOO.
         // s493: NRFS no ATA (0x7F) → caminho metal-like (eager Active + pio_hw).
         // Posture flag OU probe MBR — hub pode correr antes do agent se ordem variar.

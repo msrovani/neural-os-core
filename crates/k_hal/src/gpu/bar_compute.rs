@@ -48,9 +48,20 @@ static UPLOADED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool
 static SEQ_MATS: spin::Mutex<alloc::vec::Vec<(u64, usize, usize)>> =
     spin::Mutex::new(alloc::vec::Vec::new());
 
+/// StreamsW2a8: janela de 1 layer na aperture quando o modelo inteiro não cabe.
+static STREAMING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static STREAM_LAYER: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(usize::MAX);
+static STREAM_WINDOW_BASE: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
 /// Nº de matrizes por layer na sequência canônica do TransformerModel.
 /// Deve casar com os call sites de `dispatch_vram_seq` em cortex.rs.
 pub const SEQ_SLOTS_PER_LAYER: usize = 7;
+
+pub fn streaming_enabled() -> bool {
+    STREAMING.load(core::sync::atomic::Ordering::Acquire)
+}
 
 /// Copia a matriz de pesos packed (k,n) para a VRAM no offset dado.
 /// Retorna bytes escritos. Fail-closed sem aperture.
@@ -126,9 +137,16 @@ pub fn vram_ternary_seq(seq: usize, w: &PackedTernaryTensor, x: &Tensor) -> Opti
     if !bar_compute_enabled() {
         return None;
     }
+    if streaming_enabled() {
+        let layer = seq / SEQ_SLOTS_PER_LAYER;
+        ensure_stream_layer(layer)?;
+    }
     let (vram_off, k, n) = {
         let g = SEQ_MATS.lock();
         let (off, k, n) = *g.get(seq)?;
+        if off == 0 {
+            return None;
+        }
         (off, k, n)
     };
     // Proteção de identidade: shape divergente = sequência dessincronizada.
@@ -149,10 +167,92 @@ pub fn vram_ternary_seq(seq: usize, w: &PackedTernaryTensor, x: &Tensor) -> Opti
 /// Marca o upload completo (uma vez por boot de modelo).
 pub fn mark_uploaded() {
     UPLOADED.store(true, core::sync::atomic::Ordering::Release);
+    cortex::compute::note_vram_weights_ready(true);
 }
 
 pub fn weights_uploaded() -> bool {
     UPLOADED.load(core::sync::atomic::Ordering::Acquire)
+}
+
+/// Garante layer `L` na janela StreamsW2a8 (1 layer por vez na aperture).
+fn ensure_stream_layer(layer: usize) -> Option<()> {
+    if STREAM_LAYER.load(core::sync::atomic::Ordering::Acquire) == layer {
+        return Some(());
+    }
+    let model = cortex::cortex::current_model_layers_snapshot()?;
+    let base = layer.checked_mul(SEQ_SLOTS_PER_LAYER)?;
+    let end = base.checked_add(SEQ_SLOTS_PER_LAYER)?;
+    if end > model.len() {
+        return None;
+    }
+    let slice: alloc::vec::Vec<&PackedTernaryTensor> = model[base..end].to_vec();
+    let need: u64 = slice.iter().map(|t| t.packed_data.len() as u64).sum();
+    let aperture = crate::gpu::vram::vram_status_aperture_bytes()?;
+    let plan = RingPlan::falcon3_default();
+    let win_base = {
+        let b = STREAM_WINDOW_BASE.load(core::sync::atomic::Ordering::Acquire);
+        if b == 0 {
+            let start = plan.ring_bytes().max(2 * 1024 * 1024);
+            STREAM_WINDOW_BASE.store(start, core::sync::atomic::Ordering::Release);
+            start
+        } else {
+            b
+        }
+    };
+    if win_base.saturating_add(need) > aperture {
+        k_nano::slog_hal!(
+            "BARCOMPUTE",
+            "warn",
+            "streams layer={} need={}MB não cabe na janela — CPU ladder",
+            layer,
+            need / (1024 * 1024)
+        );
+        return None;
+    }
+    // Upload in-place na janela fixa (reusa aperture; 1 layer resident).
+    let mut off = win_base;
+    let mut mats = alloc::vec::Vec::with_capacity(SEQ_SLOTS_PER_LAYER);
+    for w in &slice {
+        off = (off + 4095) & !4095;
+        let written = unsafe { upload_weights_at(w, off, aperture)? };
+        mats.push((off, w.shape.0, w.shape.1));
+        off += written as u64;
+    }
+    {
+        let mut seq = SEQ_MATS.lock();
+        if seq.len() < end {
+            seq.resize(end, (0, 0, 0));
+        }
+        for (i, m) in mats.iter().enumerate() {
+            seq[base + i] = *m;
+        }
+    }
+    *RESIDENT.lock() = Some(ResidentWeights {
+        mats: SEQ_MATS.lock().clone(),
+        total_bytes: need,
+    });
+    STREAM_LAYER.store(layer, core::sync::atomic::Ordering::Release);
+    note_weights_resident(need);
+    Some(())
+}
+
+fn enter_streams_mode(n_mats: usize, avail_mb: u64, need_mb: u64) {
+    STREAMING.store(true, core::sync::atomic::Ordering::Release);
+    STREAM_LAYER.store(usize::MAX, core::sync::atomic::Ordering::Release);
+    crate::gpu::vram_stream::set_stage(StreamStage::StreamsW2a8);
+    let mut seq = SEQ_MATS.lock();
+    seq.clear();
+    seq.resize(n_mats, (0, 0, 0));
+    drop(seq);
+    // Lane ativo: register já ocorreu no boot; pesos sob demanda por layer.
+    mark_uploaded();
+    k_nano::slog_hal!(
+        "BARCOMPUTE",
+        "ok",
+        "StreamsW2a8: need={}MB > avail={}MB — janela 1 layer (vendor-agnostic BAR)",
+        need_mb,
+        avail_mb
+    );
 }
 
 // ── s427: loader-VRAM (FAT → BAR sem heap) ────────────────────────────────
@@ -222,6 +322,8 @@ pub fn register_loader_resident(mats: alloc::vec::Vec<(u64, usize, usize)>, tota
     });
     mark_uploaded();
     note_weights_resident(total_bytes);
+    // Próximo load_llm_v6 stub packed (não double-copy bump).
+    cortex::cortex::set_vram_external_weights(true);
     k_nano::slog_hal!(
         "BARCOMPUTE", "ok",
         "loader-VRAM: pesos FAT→BAR sem heap ({} matrizes, {}MB) — lane ativo",
@@ -353,8 +455,18 @@ pub fn bar_compute_enabled() -> bool {
     matches!(stage(), StreamStage::Mapped | StreamStage::StreamsW2a8 | StreamStage::ComputeDevice)
 }
 
-/// Inicializa BAR compute para a GPU compute (após init_vram_tier + ring).
+/// Inicializa BAR compute para a GPU **compute** (após init_vram_tier + ring).
+/// Recusa iGPU UMA — dual-GPU: só dGPU (display_coex).
 pub fn init_bar_compute(gpu: &GpuInfo) -> bool {
+    if gpu.is_integrated {
+        k_nano::slog_hal!(
+            "BARCOMPUTE",
+            "warn",
+            "{}: iGPU/UMA — BAR Mapped/Streams OFF (use dGPU compute)",
+            gpu.name
+        );
+        return false;
+    }
     let plan = RingPlan::falcon3_default();
     unsafe { crate::gpu::vram_stream::init_stream_ring(gpu, &plan) }
 }
@@ -391,13 +503,27 @@ pub fn on_model_loaded() {
     let used = crate::gpu::vram_stream::BYTES_RESIDENT.load(core::sync::atomic::Ordering::Relaxed);
     let avail = aperture.saturating_sub(plan.ring_bytes()).saturating_sub(used);
     if need > avail {
-        k_nano::slog_hal!(
-            "BARCOMPUTE", "warn",
-            "lane VRAM off honesto: need={}MB > aperture disponível={}MB (sem ReBAR) — CPU ladder",
-            need / (1024 * 1024), avail / (1024 * 1024)
-        );
+        // StreamsW2a8: se 1 layer cabe, janela sob demanda; senão CPU ladder.
+        let n_layers = layers.len() / SEQ_SLOTS_PER_LAYER.max(1);
+        let per_layer = if n_layers > 0 { need / n_layers as u64 } else { need };
+        if per_layer > 0 && per_layer <= avail {
+            enter_streams_mode(
+                layers.len(),
+                avail / (1024 * 1024),
+                need / (1024 * 1024),
+            );
+        } else {
+            k_nano::slog_hal!(
+                "BARCOMPUTE", "warn",
+                "lane VRAM off honesto: need={}MB > avail={}MB e 1 layer={}MB — CPU ladder",
+                need / (1024 * 1024),
+                avail / (1024 * 1024),
+                per_layer / (1024 * 1024)
+            );
+        }
         return;
     }
+    STREAMING.store(false, core::sync::atomic::Ordering::Release);
     match upload_layer_weights(&layers, &plan) {
         Some(r) => {
             mark_uploaded();

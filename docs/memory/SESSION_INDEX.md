@@ -10,6 +10,9 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |---|---|---|---|---|
+| 498 | GPU/GSP | s498 | Ampere GSP escada D0–D5 + paralelos | nvidia_gsp bring_up; A1 BAR; A3 NKP sm_86 signed; S0 FAT GSP PASS; usb_hw GSP+NKP. Metal Alive/Compute UNKNOWN. Detalhe: SESSION_498.md. |
+| 497 | Metal/HW-GATE | s497 | Metal dual-boot: confirmado vs AWAITING | ESP log: smoke+MSC+NRFS+orb+smp16 VERIFIED; ath10k/GPU/i225/hub-TT AWAITING; USB_HUB PARTIAL se MSC; llm ABSENT (NRFS miss+.V6). Fix: falcon3_boot_names .V7; LOO USB; hw_gate PARTIAL. Detalhe: SESSION_497.md. |
+| 496 | GPU/AIOS | s496 | GPU compute multi-vendor | IsaTag from_u32; compute_posture; StreamsW2a8; loader stub; CapToken GSP/PSP/GuC + recipes; FW por DID; vram_served=uploaded. Host VERIFIED; metal UNKNOWN. Detalhe: SESSION_496.md. |
 | 495 | GPU/W2A8 | s495 | Escada W2A8 AIOS (Ampere metal) | P0 BAR/ga107/ap-pollable/wake+big_ladder/compute_rung; P1 Mapped wire+lane OFF; P2 NKP SM86 stub≠Ready; GSP=Layer S. Host VERIFIED; metal UNKNOWN. Detalhe: SESSION_495.md. |
 | 494 | Bootlog/Metal | s494 | CAP 1MiB + VRAM BAR + spam | Metal cortava BOOT.LOG mid-line (256KB); flush=ramlog; WRAP; verify-miss accept; NSGDB ESP; DSD/BOT/MIXER limit; BAR size mask_hi=0; nvidia DID≠gp108. Host tests; metal re-image UNKNOWN. Detalhe: SESSION_494.md. |
 | 493 | Storage/AIOS | s493 | NeuralFS substrato (não trocar mkfat32) | §14 AIOS: data=NRFS canónico, FAT=DEGRADED, BOOT.LOG=ESP; storage_posture; write_file_stream; neural_paths_for+LOO; mkneuralfs seed (magic VERIFIED); build_image/unified --fs neuralfs; extract_esp_bootlog; SysInstaller ecosystem/models. Host OK; QEMU Active/metal = UNKNOWN. Detalhe: SESSION_493.md. |

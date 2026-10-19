@@ -216,9 +216,19 @@ pub unsafe fn detect_all() -> Vec<GpuInfo> {
             let mut vram_sz = 0u64;
             let mut vram_idx = 0xFFu8;
             for &(idx, base, size) in bars.iter().take(n_bars) {
-                if size >= MB64 && size <= GB64 && size > vram_sz {
+                // s498/A1: rejeita size com bits altos lixo (ex. 0xffffffff01000000
+                // metal 25ac) — máscara acima de 64GB = inválido.
+                let size_hi_garbage = (size & !((GB64 << 1) - 1)) != 0;
+                if size_hi_garbage || size < MB64 || size > GB64 {
+                    continue;
+                }
+                if size > vram_sz {
                     // NVIDIA: BAR0 é MMIO (16MB típico) — nunca escolher como VRAM.
                     if vendor == GpuVendor::Nvidia && idx == 0 {
+                        continue;
+                    }
+                    // NVIDIA: aperture ≠ MMIO base
+                    if vendor == GpuVendor::Nvidia && base != 0 && base == bar0_base {
                         continue;
                     }
                     vram_base = base;
@@ -583,18 +593,15 @@ fn arch_from_pmc_boot0(boot0: u32) -> Option<(GpuArch, &'static str)> {
     Some((arch, name))
 }
 
-/// Melhor candidato a compute (ainda pode estar sem golden).
+/// Melhor candidato a compute — delega a `display_coex` (fonte única dual-GPU).
 pub fn best_compute_gpu(gpus: &[GpuInfo]) -> Option<&GpuInfo> {
-    gpus.iter()
-        .filter(|g| g.compute_candidate && !g.is_integrated)
-        .max_by_key(|g| g.vram_size)
-        .or_else(|| gpus.iter().filter(|g| g.compute_candidate).max_by_key(|g| g.vram_size))
+    let plan = crate::gpu::display_coex::plan_assignment(gpus);
+    crate::gpu::display_coex::compute_gpu(&plan, gpus)
 }
 
-/// GPU para display (prioriza iGPU).
+/// GPU para display — delega a `display_coex` (iGPU preferida).
 pub fn best_display_gpu(gpus: &[GpuInfo]) -> Option<&GpuInfo> {
-    gpus.iter()
-        .filter(|g| g.has_display_engine)
-        .max_by_key(|g| if g.is_integrated { 1 } else { 0 })
+    let plan = crate::gpu::display_coex::plan_assignment(gpus);
+    crate::gpu::display_coex::display_gpu(&plan, gpus)
 }
 

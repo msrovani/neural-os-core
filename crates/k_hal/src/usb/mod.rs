@@ -36,6 +36,8 @@ pub unsafe fn probe_and_install() -> bool {
         crate::unlock_dag::grant(crate::unlock_dag::CapToken::UsbHostSched);
         crate::unlock_dag::grant(crate::unlock_dag::CapToken::UsbPortReady);
         k_nano::slog_hal!("USB", "ok", "MSC installed via k_hal::usb");
+        // s497: re-emite HW-GATE p/ USB_HUB→PARTIAL (MSC root ≠ hub TT).
+        crate::hw_gate::emit_all_refresh();
     } else {
         k_nano::slog_hal!("USB", "warn", "MSC probe FAIL (hub/root)");
     }

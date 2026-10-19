@@ -2541,6 +2541,23 @@ fn read_ternary_tensor(data: &[u8], offset: &mut usize, rows: usize, cols: usize
 }
 
 fn read_ternary_tensor_with_scale(data: &[u8], offset: &mut usize, rows: usize, cols: usize) -> Option<(PackedTernaryTensor, f32)> {
+    // Loader-VRAM: pesos já na BAR — avança o ficheiro sem alocar packed no bump.
+    if vram_external_weights() {
+        let n_vals = rows.saturating_mul(cols);
+        let packed_len = n_vals.saturating_add(3) / 4;
+        if *offset + packed_len > data.len() {
+            return None;
+        }
+        *offset += packed_len;
+        let scale = read_f32(data, offset)?;
+        return Some((
+            PackedTernaryTensor {
+                shape: (rows, cols),
+                packed_data: alloc::vec::Vec::new(),
+            },
+            scale,
+        ));
+    }
     let packed = read_ternary_tensor(data, offset, rows, cols)?;
     let scale = read_f32(data, offset)?;
     Some((packed, scale))
@@ -5499,6 +5516,27 @@ pub static RUSTCODER_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::n
 /// ctx e max_gen deixam de ser o budget Cheap (ver `refresh_generation_gaps`).
 pub static GENERATION_GAPS_RESOLVED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
+
+/// ADR-0112 residual: pesos já na VRAM (loader-VRAM) — `load_llm_v6` stub
+/// `packed_data` (shape-correct, avança offset) para não copiar 2× no bump.
+static VRAM_EXTERNAL_WEIGHTS: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Ligado por `k_hal::bar_compute::register_loader_resident`.
+pub fn set_vram_external_weights(v: bool) {
+    VRAM_EXTERNAL_WEIGHTS.store(v, core::sync::atomic::Ordering::Release);
+    if v {
+        k_nano::slog_cortex!(
+            "LLM",
+            "ok",
+            "vram_external_weights=1 — load_llm stub packed (RAM win)"
+        );
+    }
+}
+
+pub fn vram_external_weights() -> bool {
+    VRAM_EXTERNAL_WEIGHTS.load(core::sync::atomic::Ordering::Acquire)
+}
 
 /// Atualiza o gate a partir da política de decode (ADR-0105 B3.1).
 pub fn refresh_generation_gaps(soft_stride: usize, max_gen: usize, ctx_cap: usize) {

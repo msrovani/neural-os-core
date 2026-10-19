@@ -413,9 +413,15 @@ pub fn detect_qemu_ota_trigger() -> bool {
         if ram_end <= 0x100000000 {
             return false;
         }
+        // Cap: scan MiB-a-MiB da high-RAM + map_page_uc sob WHPX/overcommit
+        // virava hang silencioso pós-"ATA probe" (FB congelava em PHASE 5).
+        // Aceite do loop OTA = flag em poucos slots canônicos, não varrer 1GB+.
+        const MAX_PAGES: u32 = 64;
         let mut addr: u64 = ram_end;
-        while addr > 0x100000000 {
+        let mut n = 0u32;
+        while addr > 0x100000000 && n < MAX_PAGES {
             addr -= 0x100000;
+            n += 1;
             k_nano::apic::map_page_uc(addr, pmoff);
             let p = (addr + pmoff) as *const u8;
             if core::ptr::read_volatile(p) == b'O' {

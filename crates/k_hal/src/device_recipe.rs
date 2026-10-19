@@ -76,8 +76,33 @@ pub static GOLDEN_RECIPES: &[RecipeBindEntry] = &[
         trusted: true,
         rebel: true,
         requires_fw: true,
-        // GSP blobs (linux-firmware nvidia/ga107|ga102) — short names TBD no FAT
+        // linux-firmware ga102/gsp → FAT short (mkfat32 nvidia_gsp_fat_name):
+        // gsp-*.bin→GSP.BIN, bootloader-*→GSPBOOT.BIN, booter_load-*→GSPLOAD.BIN
         fat_names: &["GSP.BIN", "GSPBOOT.BIN", "GSPLOAD.BIN"],
+    },
+    // AMD RDNA2 lab (DID típico 73FF etc. — match VidDid quando known; class fallback não).
+    RecipeBindEntry {
+        vendor_id: 0x1002,
+        device_id: 0x73FF,
+        class: DeviceClass::Gpu,
+        match_mode: RecipeMatch::VidDid,
+        package_id: "gpu.amd.gfx1030",
+        trusted: true,
+        rebel: true,
+        requires_fw: true,
+        fat_names: &["PSP_SOS.BIN", "PSP_TA.BIN", "MEC.BIN"],
+    },
+    // Intel Arc / DG2
+    RecipeBindEntry {
+        vendor_id: 0x8086,
+        device_id: 0x5690,
+        class: DeviceClass::Gpu,
+        match_mode: RecipeMatch::VidDid,
+        package_id: "gpu.intel.dg2",
+        trusted: true,
+        rebel: true,
+        requires_fw: true,
+        fat_names: &["GUC.BIN", "HUC.BIN", "DMC.BIN"],
     },
     RecipeBindEntry {
         vendor_id: 0,

@@ -82,15 +82,30 @@ impl NvidiaGpu {
         );
 
         let mut d2 = if backend == ComputeBackendKind::LegacyAcr {
-            unsafe { nvidia_pascal::bring_up_d2(gpu, mmio) }
-        } else if backend == ComputeBackendKind::Gsp {
+            // A2 lab Pascal: caminho LegacyAcr (GP108) — não misturar com GSP.
             k_nano::slog_hal!(
                 "GPU",
                 "nvidia",
-                "step=gsp status=PARTIAL reason=gsp_rm_scaffold family={}",
+                "step=legacy_acr lab=pascal family={} (A2 CapToken via ACR+canary)",
                 detect::nvidia_family_str(gpu.arch)
             );
-            None
+            unsafe { nvidia_pascal::bring_up_d2(gpu, mmio) }
+        } else if backend == ComputeBackendKind::Gsp {
+            // Bring-up GSP (D0–D4) — CapToken GpuGspBooted só se Alive+.
+            let gsp = unsafe {
+                let pm = k_nano::memory::PHYS_MEM_OFFSET
+                    .load(core::sync::atomic::Ordering::Relaxed);
+                crate::gpu::nvidia_gsp::bring_up_gsp(gpu, pm)
+            };
+            k_nano::slog_hal!(
+                "GPU",
+                "nvidia",
+                "step=gsp status={} stage={} family={} (PARTIAL≠GpuCompute)",
+                if gsp.gsp_booted() { "PARTIAL" } else { "AWAITING" },
+                gsp.stage.as_str(),
+                detect::nvidia_family_str(gpu.arch)
+            );
+            None // D2/D3 Pascal channel N/A; compute via try_vector_add_gsp
         } else {
             None
         };
@@ -296,7 +311,7 @@ pub unsafe fn try_vector_add_legacy(
     false
 }
 
-/// GspBackend (Turing+): zero offsets Pascal; RPC GSP-RM.
+/// GspBackend (Turing+): zero offsets Pascal; RPC GSP-RM (escada nvidia_gsp).
 pub unsafe fn try_vector_add_gsp(
     gpu: &GpuInfo,
     cubin: &[u8],
@@ -304,7 +319,6 @@ pub unsafe fn try_vector_add_gsp(
     b: &[f32],
     expect: &[f32],
 ) -> bool {
-    let _ = (a, b, expect);
     if detect::is_nvidia_legacy_acr(gpu.arch) {
         k_nano::slog_hal!(
             "NVIDIA",
@@ -314,15 +328,5 @@ pub unsafe fn try_vector_add_gsp(
         );
         return false;
     }
-    if cubin.is_empty() {
-        return false;
-    }
-    k_nano::slog_hal!(
-        "NVIDIA",
-        "C1b",
-        "GspBackend scaffold: family={} pack {}B; GSP-RM incompleto — quarantine",
-        detect::nvidia_family_str(gpu.arch),
-        cubin.len()
-    );
-    false
+    crate::gpu::nvidia_gsp::try_gsp_vector_add(gpu, cubin, a, b, expect)
 }

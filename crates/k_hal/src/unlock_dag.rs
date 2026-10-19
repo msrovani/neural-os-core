@@ -27,6 +27,12 @@ pub enum CapToken {
     UsbHubOk = 14,
     /// Blit 2D acelerado verificado via canário gradiente.
     GpuBlitReady = 15,
+    /// NVIDIA GSP-RM mínimo (Ampere+) — Layer S.
+    GpuGspBooted = 16,
+    /// AMD PSP SOS/TA vivo — Layer S.
+    GpuPspAlive = 17,
+    /// Intel GuC submission ready — Layer S.
+    GpuGucReady = 18,
 }
 
 impl CapToken {
@@ -48,6 +54,9 @@ impl CapToken {
             CapToken::WifiAssociated => "WifiAssociated",
             CapToken::UsbHubOk => "UsbHubOk",
             CapToken::GpuBlitReady => "GpuBlitReady",
+            CapToken::GpuGspBooted => "GpuGspBooted",
+            CapToken::GpuPspAlive => "GpuPspAlive",
+            CapToken::GpuGucReady => "GpuGucReady",
         }
     }
 

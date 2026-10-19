@@ -1027,6 +1027,19 @@ pub fn init(ata: Option<&crate::ata::AtaDriver>, _parts: &[crate::fat32::Partiti
         // Storage acabou de ficar usável (ATA/FAT) — limpa backoff da falha early
         // (init_after_usb sem backend) para o 1º flush pós-ATA poder gravar.
         clear_breaker_on_success();
+        // QEMU/WHPX: init_after_usb já flushou; 2º persist_now no ESP/ATA PIO
+        // sob overcommit = hang silencioso pós-"Kernel nao assinado".
+        if FAT_READY.load(Ordering::Relaxed)
+            && crate::platform_probe::probe_done()
+            && crate::platform_probe::hypervisor().is_sandbox()
+        {
+            crate::slog_nano!(
+                "LOG",
+                "ok",
+                "BOOT.LOG init skip re-persist (sandbox FAT_READY)"
+            );
+            return;
+        }
         if let Some(a) = ata {
             let _ = a;
             let ok = persist_now(None);

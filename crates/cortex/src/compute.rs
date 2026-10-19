@@ -1,8 +1,10 @@
 //! ADR-0057 WS-C: camada de dispatch de compute (ComputeBackend).
 //!
 //! Choke point único de roteamento do matmul da LLM. Ordem de fallback honesta:
-//! `NPU → GPU → CPU-SMP (P-cores) → AVX-512 → AVX2 → scalar`. Cada camada só entra se o
-//! seu gate passou; nada é "fingido".
+//! Mesh(p2p) → NPU → GPU device → SMP → AVX-512 → (caller) W2A8 CPU → SSE2/scalar.
+//! VRAM BAR Mapped/Streams (ADR-0112) entra via `dispatch_vram_seq` em
+//! `apply_one_layer` — não dentro de `dispatch_ternary` (shape não distingue q/k/v/o).
+//! Multi-vendor: NVIDIA/AMD/Intel; Mapped ≠ note_gpu_compute.
 //!
 //! GPU (`k_hal`) e NPU (`k_ai`) registram-se por fn-pointer porque dependem de
 //! `cortex` (evita ciclo de dependência: `k_nano ← cortex ← {k_hal,k_ai}`).
@@ -34,6 +36,8 @@ static NPU_TERNARY: AtomicUsize = AtomicUsize::new(0);
 /// GEMV no host lendo pela aperture. Antes do GPU device (não exige firmware).
 static VRAM_TERNARY: AtomicUsize = AtomicUsize::new(0);
 static VRAM_ENABLED: AtomicBool = AtomicBool::new(false);
+/// Pesos realmente uploaded (Mapped full ou Streams janela) — ≠ só register.
+static VRAM_WEIGHTS_READY: AtomicBool = AtomicBool::new(false);
 
 // Telemetria (ADR-0057 + ADR-0061): quantas ops cada anel tratou.
 static N_NPU: AtomicU64 = AtomicU64::new(0);
@@ -80,10 +84,15 @@ pub fn register_vram_ternary_seq(f: VramSeqFn) {
     k_nano::slog_nano!("COMPUTE", "ok", "VRAM ternary backend registrado (ADR-0112 BAR compute, seq)");
 }
 
-/// Lane VRAM pronto p/ servir ( registrado + pesos uploaded). Callers
-/// usam isso p/ gate de rota honesto (HUD/logs) antes de tentar o lane.
+/// Lane VRAM pronto p/ servir (registrado **e** pesos uploaded / streams).
+/// Register sozinho ≠ bar_mapped (honesty s496).
 pub fn vram_served() -> bool {
-    VRAM_ENABLED.load(Ordering::Acquire)
+    VRAM_ENABLED.load(Ordering::Acquire) && VRAM_WEIGHTS_READY.load(Ordering::Acquire)
+}
+
+/// Chamado por `k_hal::bar_compute` após upload / StreamsW2a8 enter.
+pub fn note_vram_weights_ready(v: bool) {
+    VRAM_WEIGHTS_READY.store(v, Ordering::Release);
 }
 
 /// Telemetria: ops tratadas pelo lane VRAM.
@@ -237,7 +246,7 @@ pub fn dispatch_summary() -> (u64, u64, u64, u64, u64) {
     )
 }
 
-/// Escada AIOS (s494): rung ativo + counters. Mapped≠gpu_ok.
+/// Escada AIOS multi-vendor: rung ativo + counters. Mapped≠gpu_ok.
 pub fn compute_rung_label() -> &'static str {
     if NPU_TERNARY.load(Ordering::Acquire) != 0 {
         "npu"

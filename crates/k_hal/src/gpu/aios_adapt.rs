@@ -156,6 +156,8 @@ pub fn adapt_boot(gpus: &[GpuInfo], ram_mb: u64) -> AiosGpuLlmPlan {
 
     // ── Remember ─────────────────────────────────────────────
     *LAST.lock() = Some(snap);
+    // Posture multi-vendor (BAR / Streams / DeviceAwait / CpuLadder).
+    let _ = crate::gpu::compute_posture::refresh(gpus);
     snap
 }
 
@@ -185,6 +187,9 @@ pub fn adapt_on_model_loaded() {
                     p.sku = sku;
                 }
             }
+            // Re-plan posture com header real (need_mb) via backend statics.
+            let empty: [GpuInfo; 0] = [];
+            let _ = crate::gpu::compute_posture::refresh(&empty);
         }
     }
 }

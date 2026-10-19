@@ -243,6 +243,40 @@ mod tests {
         assert_ne!(cg.isa_tag, IsaTag::Gen9);
     }
 
+    /// Lab metal âncora: Intel display + NVIDIA Ampere sm_86 (ex. 10de:25ac).
+    #[test]
+    fn dual_lab_intel_display_ampere_compute() {
+        let mut igpu = stub(GpuVendor::Intel, "UHD", true, IsaTag::Gen9, 0, 0);
+        igpu.device_id = 0xA7AB;
+        igpu.backend_kind = ComputeBackendKind::Gen9Ring;
+        let mut dgpu = stub(
+            GpuVendor::Nvidia,
+            "GA107",
+            false,
+            IsaTag::Sm86,
+            256 * 1024 * 1024,
+            0,
+        );
+        dgpu.device_id = 0x25AC;
+        dgpu.backend_kind = ComputeBackendKind::Gsp;
+        let gpus = [igpu, dgpu];
+        let plan = plan_assignment(&gpus);
+        assert!(plan.is_dual(), "lab dual esperado");
+        let dg = display_gpu(&plan, &gpus).unwrap();
+        let cg = compute_gpu(&plan, &gpus).unwrap();
+        assert_eq!(dg.vendor, GpuVendor::Intel);
+        assert!(dg.is_integrated);
+        assert_eq!(cg.vendor, GpuVendor::Nvidia);
+        assert_eq!(cg.isa_tag, IsaTag::Sm86);
+        assert_eq!(cg.device_id, 0x25AC);
+        assert!(!cg.is_integrated);
+        // BAR/Streams/pack → compute ISA, nunca Gen9
+        assert_ne!(cg.isa_tag, IsaTag::Gen9);
+        let st = assignment_status(&plan, &gpus);
+        assert!(st.contains("DUAL"));
+        assert!(st.contains("NVIDIA dGPU compute"));
+    }
+
     #[test]
     fn dual_prefers_nvidia_over_arc_when_both_dgpu() {
         let gpus = [

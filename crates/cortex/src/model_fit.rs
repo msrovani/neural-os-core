@@ -412,14 +412,17 @@ impl LlmBootPlan {
     }
 }
 
-/// Ordem FAT: **3B lab primeiro** (ADR-0101), depois GGUF AirLLM, 7B/10B opcionais, 1B comparativo.
+/// Ordem FAT: **3B lab primeiro** (ADR-0101), `.V7` canónico (s492) antes de `.V6`/BIN.
+/// Metal USB (`usb_hw.img`) empacota `FALCON3.V7`/`PRO.V7`/… — lista só-V6 = miss eterno.
 pub fn falcon3_boot_names() -> &'static [&'static str] {
     &[
-        "FALCON3.V6", "FALCON3B.v6", "FALCON3B.BIN", "FALCN3B.GGUF",
-        "PRO.v6", "PRO.BIN", "FALCON7B.v6", "FALCON7B.BIN",
+        "FALCON3.V7", "FALCON3_BASE.V7", "FALCON3.V6", "FALCON3B.v6", "FALCON3B.BIN",
+        "FALCN3B.GGUF",
+        "PRO.V7", "FALCON7B.V7", "PRO.v6", "PRO.BIN", "FALCON7B.v6", "FALCON7B.BIN",
         "PRO.GGUF", "FALCN7B.GGUF",
-        "FALCON10.v6", "FALCON10.BIN", "F10B.v6", "FALCN10.GGUF",
-        "FALCON1B.v6", "FALCON1B.BIN", "F1B.v6", "FALCN1B.GGUF",
+        "FALCON10.V7", "FALCON10.v6", "FALCON10.BIN", "F10B.v6", "FALCN10.GGUF",
+        "LEARNER.V7", "FALCON1B.V7", "FALCON3_1B.V7", "FALCON1B.v6", "FALCON1B.BIN",
+        "F1B.v6", "FALCN1B.GGUF",
         "BITNET2B.v6", "BITNET2B.BIN", "BITNET13.BIN", "BITNET850.BIN",
         "MICRO.BITNET", "LLAMA8B.BIN",
     ]
@@ -440,7 +443,11 @@ pub fn falcon3_kind_of_name(name: &str) -> Option<Falcon3Kind> {
     if u.contains("PRO") || u.contains("7B") || u.starts_with("FALCON7") || u.starts_with("FALCN7") {
         return Some(Falcon3Kind::Goal7B);
     }
-    if u.contains("1B") || u.starts_with("FALCN1") || u.starts_with("F1B") {
+    if u.contains("1B")
+        || u.starts_with("FALCN1")
+        || u.starts_with("F1B")
+        || u.starts_with("LEARNER")
+    {
         return Some(Falcon3Kind::Tiny1B);
     }
     if u.starts_with("FALCON3") || u.starts_with("FALCN3") || u.starts_with("F3B") {
@@ -582,7 +589,9 @@ mod ram_policy_tests {
         assert_eq!(falcon3_kind_of_name("FALCON3_1B.V6"), Some(Falcon3Kind::Tiny1B));
         assert_eq!(falcon3_kind_of_name("FALCON10.v6"), Some(Falcon3Kind::Large10B));
         assert_eq!(hub_slot_for_kind(Falcon3Kind::Daily3B), crate::model_hub::ModelSlot::Active);
-        assert_eq!(falcon3_boot_names()[0], "FALCON3.V6");
+        assert_eq!(falcon3_boot_names()[0], "FALCON3.V7");
+        assert_eq!(falcon3_kind_of_name("FALCON3.V7"), Some(Falcon3Kind::Daily3B));
+        assert_eq!(falcon3_kind_of_name("LEARNER.V7"), Some(Falcon3Kind::Tiny1B));
     }
 
     /// s482 Passo 1 — o footprint precisa ser por slot, não herdado do header global.

@@ -95,6 +95,17 @@ pub fn stage() -> StreamStage {
     }
 }
 
+/// Promove estágio (Mapped → StreamsW2a8). Nunca inventa Off→Mapped sem canário.
+pub fn set_stage(s: StreamStage) {
+    if s == StreamStage::Off {
+        return;
+    }
+    if !STREAM_READY.load(Ordering::Acquire) {
+        return;
+    }
+    STAGE.store(s as u8, Ordering::Release);
+}
+
 /// VA da CPU para um offset físico dentro da aperture (UC via init_vram_tier).
 /// Segurança: offset < aperture size é responsabilidade do caller (buddy).
 #[inline]

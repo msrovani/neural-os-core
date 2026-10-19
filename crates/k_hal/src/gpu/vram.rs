@@ -161,8 +161,20 @@ impl VramBuddy {
 
 pub static VRAM_BUDDY: spin::Mutex<Option<VramBuddy>> = spin::Mutex::new(None);
 
-/// Inicializa VRAM buddy allocator para a GPU detectada
+/// Inicializa VRAM buddy allocator para a GPU **compute** (dGPU).
+/// Dual-GPU: caller DEVE passar `display_coex::compute_gpu` — iGPU UMA
+/// recusada aqui (Off honesto; display BARs intocados).
 pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
+    // Dual: iGPU UMA ≠ aperture BAR — nunca Mapped/Streams na display GPU.
+    if gpu.is_integrated {
+        k_nano::slog_hal!(
+            "VRAM",
+            "warn",
+            "{}: iGPU/UMA — VRAM tier OFF (BAR compute só na dGPU; display_coex)",
+            gpu.name
+        );
+        return false;
+    }
     // SESSÃO_260 (AIOS, notebook dual-GPU): dGPU dorme em D3 no boot — BARs
     // visíveis mas a VRAM não responde; mapear/tocar gera hang de barramento
     // PCIe = freeze real. s423: ANTES de recusar, tenta o wake D3→D0 via
@@ -181,6 +193,17 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
         k_nano::slog_hal!("VRAM", "warn", "{}: sem BAR2 mapeavel (usando DRAM compartilhada)", gpu.name);
         return false;
     }
+    // A1/s498: roles invertidas (bar2==bar0) = hang se mapear como VRAM.
+    if gpu.bar2 == gpu.bar0 {
+        k_nano::slog_hal!(
+            "VRAM",
+            "warn",
+            "{}: BAR aperture==MMIO {:#x} — skip (roles inválidas; metal 25ac)",
+            gpu.name,
+            gpu.bar0
+        );
+        return false;
+    }
 
     // SESSÃO_260 (HW real GTX 1050): BAR size medido pode vir lixo (ex:
     // 2^64-1 como o VGA dummy do QEMU logou) → o loop do mapeamento 2MB
@@ -189,7 +212,12 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
     // alinhados a 16MB. O check antigo de pow2 (`count_ones()!=1`)
     // rejeitava aperturas válidas não-pow2 (6GB/3GB).
     let mb = 1024 * 1024;
-    if gpu.vram_size < 256 * mb || gpu.vram_size > 64 * 1024 * mb || gpu.vram_size % (16 * mb) != 0 {
+    let hi_garbage = (gpu.vram_size & !((128u64 * 1024 * mb) - 1)) != 0;
+    if hi_garbage
+        || gpu.vram_size < 256 * mb
+        || gpu.vram_size > 64 * 1024 * mb
+        || gpu.vram_size % (16 * mb) != 0
+    {
         k_nano::slog_hal!("VRAM", "warn", "{}: vram_size suspeito {:#x} — skip (fora de 256MB..64GB ou mal alinhado)", gpu.name, gpu.vram_size);
         return false;
     }
@@ -232,7 +260,16 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
     // MHI 1.5: hook para alloc_by_tier(Vram) + tier0 promote no mhi_tick.
     k_nano::mhi::register_vram_allocator(vram_alloc);
 
-    k_nano::slog_hal!("VRAM", "info", "{} buddy allocator ativo: {} MB", gpu.name, vram_size / (1024*1024));
+    k_nano::slog_hal!(
+        "VRAM",
+        "ok",
+        "aperture_owner={} vendor={:?} did={:04x} isa={} buddy={}MB (BAR compute=dGPU)",
+        gpu.name,
+        gpu.vendor,
+        gpu.device_id,
+        gpu.isa_tag.as_str(),
+        vram_size / (1024 * 1024)
+    );
     true
 }
 

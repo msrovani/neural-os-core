@@ -169,6 +169,28 @@ impl IsaTag {
             IsaTag::Sm86 => "sm_86",
         }
     }
+
+    /// Round-trip com `as u32` / Atomic — cobre **toda** a matriz (Sm86+).
+    /// `0` / desconhecido → `None` (CPU-only / não probeado).
+    pub fn from_u32(v: u32) -> Option<Self> {
+        match v {
+            x if x == IsaTag::None as u32 => None,
+            x if x == IsaTag::Sm61 as u32 => Some(IsaTag::Sm61),
+            x if x == IsaTag::Sm75 as u32 => Some(IsaTag::Sm75),
+            x if x == IsaTag::Sm89 as u32 => Some(IsaTag::Sm89),
+            x if x == IsaTag::Gfx90c as u32 => Some(IsaTag::Gfx90c),
+            x if x == IsaTag::Gfx1036 as u32 => Some(IsaTag::Gfx1036),
+            x if x == IsaTag::Gfx1103 as u32 => Some(IsaTag::Gfx1103),
+            x if x == IsaTag::Gfx1030 as u32 => Some(IsaTag::Gfx1030),
+            x if x == IsaTag::Gen9 as u32 => Some(IsaTag::Gen9),
+            x if x == IsaTag::Dg2 as u32 => Some(IsaTag::Dg2),
+            x if x == IsaTag::Sm52 as u32 => Some(IsaTag::Sm52),
+            x if x == IsaTag::Sm70 as u32 => Some(IsaTag::Sm70),
+            x if x == IsaTag::Sm80 as u32 => Some(IsaTag::Sm80),
+            x if x == IsaTag::Sm86 as u32 => Some(IsaTag::Sm86),
+            _ => None,
+        }
+    }
 }
 
 /// Identificador de golden canário.
@@ -287,4 +309,35 @@ pub fn vector_add_check(got: &[f32], expect: &[f32], eps: f32) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod isa_tag_tests {
+    use super::IsaTag;
+
+    #[test]
+    fn isa_tag_roundtrip_all_vendors() {
+        let tags = [
+            IsaTag::Sm52,
+            IsaTag::Sm61,
+            IsaTag::Sm70,
+            IsaTag::Sm75,
+            IsaTag::Sm80,
+            IsaTag::Sm86,
+            IsaTag::Sm89,
+            IsaTag::Gen9,
+            IsaTag::Dg2,
+            IsaTag::Gfx90c,
+            IsaTag::Gfx1030,
+            IsaTag::Gfx1036,
+            IsaTag::Gfx1103,
+        ];
+        for t in tags {
+            let back = IsaTag::from_u32(t as u32);
+            assert_eq!(back, Some(t), "roundtrip {:?}", t);
+        }
+        assert_eq!(IsaTag::from_u32(0), None);
+        assert_eq!(IsaTag::from_u32(13), Some(IsaTag::Sm86));
+        assert_eq!(IsaTag::from_u32(99), None);
+    }
 }

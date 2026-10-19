@@ -1,4 +1,15 @@
-# STATE - neural-os-core v1.9.99-s495 - Escada W2A8 AIOS (metal Ampere)
+# STATE - neural-os-core v1.9.99-s498 - Ampere GSP escada + paralelos
+#   [s498] Plano GSP: nvidia_gsp D0–D5; A1 BAR sanitize/map 2GB; A3 NKP sm_86
+#     CUBIN+sig (lab key pinada); S0 verify_gsp_fat PASS; usb_hw com GSP+NKP.
+#     Metal GpuGspBooted/GpuCompute = UNKNOWN. Detalhe: SESSION_498.md.
+#   [s497] Metal dual-boot (BOOT_esp_now): smoke/MSC/NRFS/orb/smp16 VERIFIED;
+#     ath10k/GPU bar0/i225/hub-TT AWAITING; USB_HUB→PARTIAL se MSC live; llm ABSENT
+#     (NRFS miss). Código: falcon3_boot_names .V7; LOO USB-MSC; hw_gate PARTIAL +
+#     need= cita evidência metal. Detalhe: SESSION_497.md.
+#   [s496] IsaTag::from_u32 matriz completa; compute_posture Observe→Plan→Remember;
+#     StreamsW2a8 1-layer; loader stub packed; CapToken GSP/PSP/GuC + recipes AMD/Intel;
+#     FW preload por DID; vram_served=uploaded. Host: isa 1/1 + posture 3/3 + check 0.
+#     Metal = UNKNOWN. Detalhe: SESSION_496.md.
 #   [s495] P0 BAR size/roles + ga107 recipe/hint; ap-pollable default + wake antes enable;
 #     big_ladder 64x64; compute_rung + Tickv hw/compute/rung; P1 BAR Mapped wire intacto
 #     (lane OFF se não cabe); P2 NKP_W2A8_SM86 CpuStub no nkp-lab (pack≠Ready).

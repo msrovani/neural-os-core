@@ -20,6 +20,26 @@ DEFAULT_SIZE_MB = 3072  # 3GB dados — cabe 850+1.3B+2B; arquivo FAT32 máx ~4G
 
 # Nomes 8.3 no FAT — espelham k_hal/src/gpu/firmware.rs::load_firmware_file + WiFi.
 # Sem ponto no nome longo → colisão/truncamento no encode_83 do kernel.
+def nvidia_gsp_fat_name(lname: str) -> str | None:
+    """Mapa linux-firmware gsp-* → short names da recipe gpu.nvidia.ga107.
+
+    k_hal::device_recipe fat_names = GSP.BIN / GSPBOOT.BIN / GSPLOAD.BIN.
+    Sem este alias o packer gera FW_NVIDIA_GA102_GSP_GSP_535_… e o boot
+    preload/fat_blobs_ok nunca acha o blob (anti-premissa s498).
+    """
+    if not lname.endswith(".bin"):
+        return None
+    if lname.startswith("gsp-"):
+        return "GSP.BIN"
+    if lname.startswith("bootloader-"):
+        return "GSPBOOT.BIN"
+    if lname.startswith("booter_load-"):
+        return "GSPLOAD.BIN"
+    if lname.startswith("booter_unload-"):
+        return "GSPUNLD.BIN"
+    return None
+
+
 FW_LNAME_TO_FAT = {
     # NVIDIA GP108 (ACR + GR + sw)
     "fecs_bl.bin": "FECS_BL.BIN",
@@ -647,7 +667,8 @@ def populate(path):
     # SKIP_2B removido: com imagem 512MB+ e pendrive 32GB, sempre inclui se existir
     # Firmware blobs — política FAT (GSP dezenas de MB; não embutir catálogo inteiro).
     # FW_FAT_CHIPS=gp108,skl,kbl,green_sardine  (default)
-    # Opt-in GSP: FW_FAT_CHIPS=...,tu102,ad102,ga102
+    # Opt-in GSP: FW_FAT_CHIPS=...,tu102,ad102,ga102,ga107
+    #   ga107/gr em firmware/; GSP short names via nvidia_gsp_fat_name (GSP.BIN…)
     # FW_FAT_CHIPS=all → legado (tudo em firmware/)
     fw_root = os.path.join(ROOT, "firmware")
     fat_chips = os.environ.get("FW_FAT_CHIPS", "gp108,skl,kbl,green_sardine").strip().lower()
@@ -659,6 +680,7 @@ def populate(path):
         "tu106": ("nvidia/tu106/",),
         "ad102": ("nvidia/ad102/",),
         "ga102": ("nvidia/ga102/",),
+        "ga107": ("nvidia/ga107/",),
         "green_sardine": ("amdgpu/green_sardine_",),
         "raphael": ("amdgpu/gc_10_3_6_", "amdgpu/psp_13_0_5_", "amdgpu/sdma_5_2_6"),
         "gc_11_5_0": ("amdgpu/gc_11_5_0_",),
@@ -681,9 +703,13 @@ def populate(path):
             ("rtl_nic/", "rtlwifi/", "intel/iwlwifi/", "realtek/", "ath10k/")
         ):
             return True
-        # GSP: opt-in explícito (dezenas de MB)
+        # GSP: opt-in por chip no path (não liberar tu102/ad102 só porque ga102 ∈ allow —
+        # first-wins nos short names GSP.BIN/GSPBOOT.BIN pegaria bootloader Ada por engano)
         if "/gsp/" in rel_posix:
-            return bool(chip_allow & {"tu102", "ad102", "ga102", "tu106"})
+            for chip in ("tu102", "ad102", "ga102", "tu106"):
+                if chip in chip_allow and f"nvidia/{chip}/" in rel_posix:
+                    return True
+            return False
         for chip in chip_allow:
             for prefix in chip_paths.get(chip, ()):
                 if rel_posix.startswith(prefix) or prefix.rstrip("_") in rel_posix:
@@ -712,7 +738,10 @@ def populate(path):
                 prefix = "" if rel == "." else rel.upper().replace("\\", "_").replace("/", "_")
                 fw_path = os.path.join(root, name)
                 lname = name.lower()
-                if lname in FW_LNAME_TO_FAT:
+                gsp_short = nvidia_gsp_fat_name(lname) if "/gsp/" in rel_posix else None
+                if gsp_short:
+                    fw_name = gsp_short
+                elif lname in FW_LNAME_TO_FAT:
                     fw_name = FW_LNAME_TO_FAT[lname]
                 elif ("nvidia" in prefix.lower() and "gp108" in prefix.lower()) or prefix.startswith(
                     "NVIDIA_GP108"

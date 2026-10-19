@@ -42,24 +42,11 @@ pub fn is_dual_gpu() -> bool {
 }
 
 /// IsaTag do alvo W2A8/canary (compute owner). None se CPU-only.
+/// Matriz completa via `IsaTag::from_u32` (Sm86=13 e todos os vendors).
 pub fn compute_isa_tag() -> Option<crate::gpu::compute_abi::IsaTag> {
-    use crate::gpu::compute_abi::IsaTag;
-    match COMPUTE_ISA.load(core::sync::atomic::Ordering::Acquire) {
-        0 => None,
-        1 => Some(IsaTag::Sm61),
-        2 => Some(IsaTag::Sm75),
-        3 => Some(IsaTag::Sm89),
-        4 => Some(IsaTag::Gfx90c),
-        5 => Some(IsaTag::Gfx1036),
-        6 => Some(IsaTag::Gfx1103),
-        7 => Some(IsaTag::Gfx1030),
-        8 => Some(IsaTag::Gen9),
-        9 => Some(IsaTag::Dg2),
-        10 => Some(IsaTag::Sm52),
-        11 => Some(IsaTag::Sm70),
-        12 => Some(IsaTag::Sm80),
-        _ => None,
-    }
+    crate::gpu::compute_abi::IsaTag::from_u32(
+        COMPUTE_ISA.load(core::sync::atomic::Ordering::Acquire),
+    )
 }
 
 /// Vendor do alvo de compute (Observe). None se CPU-only / não probeado.
@@ -148,15 +135,26 @@ pub unsafe fn map_bars_uc(gpu: &GpuInfo) {
                 gpu.bar0
             );
         } else {
-            let aligned = gpu.vram_size.next_power_of_two().min(256 * 1024 * 1024);
-            let pages = k_nano::apic::map_region_uc_2mb(gpu.bar2, aligned, pmoff);
+            // A1: Ampere BAR compute precisa >256MB (Falcon3-1B packed ~256MB+).
+            // Teto 2GB UC map no boot; buddy usa vram_size real em init_vram_tier.
+            let map_bytes = gpu
+                .vram_size
+                .next_power_of_two()
+                .min(2 * 1024 * 1024 * 1024)
+                .max(256 * 1024 * 1024);
+            let pages = k_nano::apic::map_region_uc_2mb(gpu.bar2, map_bytes, pmoff);
             if pages == 0 {
                 k_nano::slog_hal!("GPU", "BAR", "AVISO: BAR2(VRAM) @ {:#x} falhou ao mapear!", gpu.bar2);
             } else {
-                k_nano::slog_hal!("GPU", "bar", "BAR2(VRAM) mapeado UC: {:#x} ({} MB, {} x 2MB)",
+                k_nano::slog_hal!(
+                    "GPU",
+                    "bar",
+                    "BAR2(VRAM) mapeado UC: {:#x} (aperture={} MB map={} MB, {} x 2MB)",
                     gpu.bar2,
                     gpu.vram_size / (1024 * 1024),
-                    pages);
+                    map_bytes / (1024 * 1024),
+                    pages
+                );
             }
         }
     }

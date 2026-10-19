@@ -27,6 +27,8 @@ Lab targets:
   NVIDIA 2060  → nvidia/tu102/gsp (pin) [target/] + nvidia/tu106/gr [firmware/]
   NVIDIA 4070S → nvidia/ad102/gsp + ga102/gsp [target/ only]
                  (WHENCE: ad103/ad104 → ad102; ad102/gsp/*.bin → ga102)
+  NVIDIA GA107 → nvidia/ga107/gr (repo) + ga102/gsp (WHENCE Link ga107/gsp→ga102)
+                 metal 10de:25ac; FAT short names GSP.BIN/GSPBOOT/GSPLOAD (mkfat32)
   AMD 5600G    → amdgpu/green_sardine_*
   AMD 7700G    → amdgpu/gc_10_3_6_* + psp_13_0_5_* (+ sdma_5_2_6)
   AMD Strix+   → amdgpu/gc_11_5_0_* (MES)
@@ -119,13 +121,24 @@ def nvidia_specs(gsp_ver: str) -> list[tuple[str, str]]:
     specs.append(
         (f"nvidia/ga102/gsp/gsp-{gsp_ver}.bin", f"nvidia/ad102/gsp/gsp-{gsp_ver}.bin")
     )
-    # ga102 booter (same pin) — useful if DID maps Ampere path
+    # ga102 booter (same pin) — Ampere GA10x / metal 10de:25ac (ga107/gsp → ga102)
     for name in (
         f"bootloader-{gsp_ver}.bin",
         f"booter_load-{gsp_ver}.bin",
         f"booter_unload-{gsp_ver}.bin",
+        f"gsp-{gsp_ver}.bin",
     ):
         specs.append((f"nvidia/ga102/gsp/{name}", f"nvidia/ga102/gsp/{name}"))
+
+    # Ampere GA107 laptop GR (WHENCE File; ACR/sec2/nvdec = Link→ga102 — skip links)
+    for name in (
+        "fecs_bl.bin",
+        "fecs_sig.bin",
+        "gpccs_bl.bin",
+        "gpccs_sig.bin",
+        "NET_img.bin",
+    ):
+        specs.append((f"nvidia/ga107/gr/{name}", f"nvidia/ga107/gr/{name}"))
 
     return specs
 
@@ -233,6 +246,7 @@ FAT_CHIP_PATHS = {
     "tu106": ("nvidia/tu106/",),
     "ad102": ("nvidia/ad102/",),
     "ga102": ("nvidia/ga102/",),
+    "ga107": ("nvidia/ga107/",),
     "green_sardine": ("amdgpu/green_sardine_",),
     "raphael": ("amdgpu/gc_10_3_6_", "amdgpu/psp_13_0_5_", "amdgpu/sdma_5_2_6"),
     "gc_11_5_0": ("amdgpu/gc_11_5_0_",),
@@ -400,7 +414,7 @@ def write_policy(gsp_ver: str, roots: list[Path], git_commit: str = "") -> None:
     policy = (
         "# Gerado por download_firmware.py\n"
         "# GSP: SO em target/firmware/nvidia/*/gsp/ -- NAO versionar em firmware/\n"
-        "# FAT: NAO embutir GSP sem FW_FAT_CHIPS=tu102,ad102,ga102\n"
+        "# FAT: NAO embutir GSP sem FW_FAT_CHIPS=ga102,ga107 (Ampere 25ac) ou tu102/ad102\n"
         f"GSP_PIN={gsp_ver}\n"
         "GSP_LOCATION=target/firmware/nvidia/{tu102,ad102,ga102}/gsp/\n"
         "FAT_DEFAULT_CHIPS=gp108,skl,kbl,green_sardine\n"
