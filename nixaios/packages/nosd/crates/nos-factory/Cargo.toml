@@ -1,0 +1,12 @@
+[package]
+name = "nos-factory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nos-core = { path = "../nos-core" }
+nos-wasm = { path = "../nos-wasm" }
+thiserror = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }

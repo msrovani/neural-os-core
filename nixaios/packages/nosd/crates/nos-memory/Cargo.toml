@@ -1,0 +1,17 @@
+[package]
+name = "nos-memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Facade remember/recall/curate — doutrina neural-sgdb (ADR-0091)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

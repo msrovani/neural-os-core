@@ -39,6 +39,7 @@ pub mod burn_flex;
 pub mod cortex;
 pub mod delta;
 pub mod model;
+pub mod bitfuzzy; // model_type=3 (BitFuzzy recurrent MoE) — loader/parser
 pub mod model_hub;
 pub mod model_fit;
 pub mod install_adviser;

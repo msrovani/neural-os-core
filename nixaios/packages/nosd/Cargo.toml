@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/nos-core",
+  "crates/nos-ipc",
+  "crates/nos-bus",
+  "crates/nos-cortex",
+  "crates/nos-factory",
+  "crates/nos-bei",
+  "crates/nos-hermes",
+  "crates/nos-jarbas",
+  "crates/nos-voice",
+  "crates/nos-memory",
+  "crates/nos-mesh",
+  "crates/nos-wasm",
+  "crates/nosd",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0"
+authors = ["Neural OS / NixAIOS"]
+
+[workspace.dependencies]
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "signal", "fs", "time"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+bytes = "1.7"
+memmap2 = "0.9"
+libloading = "0.8"
+wasmi = { version = "0.40", default-features = true }
+wat = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+parking_lot = "0.12"
+uuid = { version = "1.10", features = ["v4"] }
+tempfile = "3.12"

@@ -2587,6 +2587,22 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     let magic = read_u32(data, &mut off)?;
     if magic != 0xBE11BE11 { return None; }
     let version = read_u16(data, &mut off)?;
+    // GUARD fail-closed (Etapa B): o header canonico v6+ tem `model_type` no
+    // offset 14 (magic u32 + version u16 + num_params u64). Este loader
+    // legado (v1..v4) NAO distingue um contentor model_type=3 (BitFuzzy
+    // recurrent MoE, crates/cortex/src/bitfuzzy.rs) de um LLM denso: leria
+    // hidden=3 / num_layers=0 do bfz e tentaria interpretalo como LLM denso
+    // com shapes erradas = CORRUPCAO SILENCIOSA. So model_type=0 (LLM)
+    // entra no caminho legado; qualquer outro e RECUSADO.
+    if version >= 6 {
+        let Some(&model_type) = data.get(14) else { return None; };
+        if model_type != 0 {
+            k_nano::slog_cortex!("LLM", "warn",
+                "load_model recusa model_type={} (offset 14) - so model_type=0 (LLM denso) entra no loader legado",
+                model_type);
+            return None;
+        }
+    }
     // v4: u32 num_params; v5+: u64 num_params
     let _num_params = if version >= 5 {
         read_u64(data, &mut off)? as u64

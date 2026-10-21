@@ -1,10 +1,33 @@
 ﻿# 📋 TODO — neural-os-core
 
-**Versão:** v1.9.99-s468 TEST
-**Data:** 2026-10-13
-**Fonte:** SESSION_468d / STATE.md + ADRs 0081/0088-0113
+**Versão:** v1.9.99-s499 TEST
+**Data:** 2026-10-19
+**Fonte:** SESSION_499 / STATE.md + ADR-0117
 **Retomada:** docs/memory/RESUME.md (runbook único — comandos do F1.5, decisões D1–D5, mapa de donos da working tree, armadilhas medidas, UNKNOWN)
 **Legenda:** ✅ feito | 🟡 em andamento | [~] parcial | 🔴 bloqueado | ⏳ agendado | ▶️ AWAITING_HW | [ ] pendente
+
+---
+
+## 🟡 s499 — BitFuzzy-MoE Recurrent Engine (ADR-0117): pipeline host-side de 6 fases + loader/forward kernel (host-side)
+
+| item | IDEA/ADR | criterio de aceite | status |
+|------|----------|--------------------|--------|
+| F1 — pruning angular (ShortGPT) do teacher denso | #706 / ADR-0117 | exercitado em modelo REAL (hoje só modelo SINTÉTICO de 2 camadas) | 🟡 |
+| F2 — recorrência de profundidade (1 bloco compartilhado, K passos) | #706 / ADR-0117 | gradiente do bloco vivo (bug do ACT halting — que descartava a saída do passo halting — já corrigido) | 🟡 |
+| F3 — MoE fuzzy (pertinência + T-norm + top-k + roteamento ternário) | #706 / ADR-0117 | `--selftest` verde + comportamento de roteamento medido | 🟡 |
+| F4 — fuzzy STE + Sugeno BitLinear | #706 / ADR-0117 | paridade de forward com o STE padrão (mesma aritmética) | 🟡 |
+| F5 — destilação (KL+CE+esparsidade) + latent thought | #706 / ADR-0117 | corrida REAL em CUDA (VRAM estimada 23,84 GB) | 🔴 sem GPU neste host (torch 2.13 CPU-only) |
+| F6 — low-rank A×B nos experts + congelamento ternário | #706 / ADR-0117 | roda sobre student treinada; footprint medido (<500 MB só fecha aqui) | 🔴 depende de F5 |
+| Exportador bare-metal `tools/export_no_std.py` (v6 `model_type=3` + header C) | #706 / ADR-0117 | roundtrip + paridade de logits | ✅ **feito (host-side)** — `--selftest` 7/7 (paridade byte-a-byte do header vs writer v6, roundtrip, logits max\|delta\| 2,384e-07, header C monotônico, roteamento int16); header C compila limpo em `gcc -fsyntax-only -Wall -Wextra -std=c99` |
+| Loader Rust / suporte `cortex` para a arquitetura nova (`model_type=3`) | #706 / ADR-0117 | loader que parseia header v6 (52 B) + bloco de config (20 B) + corpo sequencial e bate com a referência Python no mesmo container (mesmos logits) | ✅ **feito (host-side)** — `crates/cortex/src/bitfuzzy.rs` (loader/parser por UM `plan()` **+ forward** recorrente: K passos sobre UM bloco compartilhado + MoE fuzzy + Sugeno + halting ACT); `model.rs` = `ModelKind::BitFuzzy`/`ModelView::BitFuzzy`/`as_bitfuzzy()`/braço `3 =>`; guard fail-closed no `load_model` legado (recusa `version>=6` com `data[14]!=0`); `model_hub` **descreve mas não registra**. **Aceite = paridade VERIFIED host-side**: max_abs 2,533197e-07 / max_rel 8,959963e-05 (tolerância 1e-04 **não aliviada**; o max_rel estrito é dominado por 1 logit de referência quase-zero `\|ref\|=1,256407e-03` — a métrica significativa sobre `\|ref\|>1e-2` é 6,333679e-06); mutações materiais provam que o gate não é vazio (expert gate 1,279962e-02; embed 1,953993e-01); `cargo check --release -p cortex` 0 erros; `cargo build --release` 0 erros no membro bare-metal. ⚠️ **NÃO usável pelo boot** (hub recusa) e **nunca rodou em bare metal** |
+| Integração hub/boot — como o boot consome um modelo **recorrente** (e não um `TransformerModel`) | #706 / ADR-0117 | decisão de design (slot, agente, política de inferência) + bfz registável sem mentir sobre o tipo | [ ] pendente |
+| Student **treinado** + medição de qualidade (suite/perplexidade/KL) | #706 / ADR-0117 | corrida real em GPU (F5/F6) e números medidos sobre o student treinado (hoje o golden tem pesos aleatórios) | 🔴 depende de F5 (sem GPU neste host) |
+| Validação do forward bfz em QEMU/metal | #706 / ADR-0117 | boot que carrega um bfz e logits medidos no guest (hoje a prova é **só host-side**) | [ ] pendente |
+| Caminho de VRAM externa para o contentor de escala 3B (pesos + escalas por linha em BAR) | #706 / ADR-0117 | loader que não copia tudo para a RAM (ponteiros BAR próprios, alinhado com a ADR-0112) | [ ] pendente |
+| Decisão do maintainer: onde roda o treino real (GPU própria vs cloud) | #706 / ADR-0117 | decisão registrada (orçamento; exige CUDA ≥ 24 GB, preferir ≥ 40 GB) | ⏳ decisão do maintainer |
+| Decisão do maintainer: formato de saída (v6 `model_type=3` vs engine C externo) | #706 / ADR-0117 | decisão registrada (define o custo de kernel) | ⏳ decisão do maintainer |
+| Decisão do maintainer: orçamento de perda de qualidade na ternarização sem calibração QAT | #706 / ADR-0117 | número de suite/perplexidade aceito | ⏳ decisão do maintainer |
+| Eixo de memória de KV (604 MB > 544 MB, SESSION_413) | — | ADR própria (SSM/Falcon-H1) — **fora** deste pipeline (recorrência reduz parâmetros, não KV) | ⏳ frente separada |
 
 ---
 

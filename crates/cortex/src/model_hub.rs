@@ -253,6 +253,25 @@ pub fn register_bytes(slot: ModelSlot, data: &[u8]) -> bool {
             k_nano::slog_bin!("MODEL", "ok", "register_bytes slot={} HWExpert v6 → static", slot.name());
             true
         }
+        crate::model::ModelView::BitFuzzy(m) => {
+            // BitFuzzy (model_type=3) NÃO é um TransformerModel: é UM bloco
+            // partilhado aplicado K vezes + experts MoE + routing fuzzy. O
+            // forward EXISTE (crates/cortex/src/bitfuzzy.rs, paridade host
+            // verificada contra a referência Python), mas o `Model` trait deste
+            // hub é o do LLM denso: registar um bfz aqui seria MENTIR sobre a
+            // capacidade do slot. Logo: parse feito, config despejada, e o
+            // slot NÃO fica "loaded". Como o boot consome um modelo
+            // RECORRENTE (e não um TransformerModel) é trabalho em aberto
+            // (ADR-0117): o forward ainda nunca rodou em bare metal.
+            m.describe();
+            k_nano::slog_bin!(
+                "MODEL",
+                "warn",
+                "register_bytes slot={} bitfuzzy (model_type=3) — não registável no hub (trait Model = LLM denso; integração hub/boot pendente)",
+                slot.name()
+            );
+            false
+        }
     }
 }
 

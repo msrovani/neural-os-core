@@ -1,4 +1,10 @@
 # Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
+## [1.9.99-s500] - 2026-10-21 — Auditoria de aderência Laya/Jev (ADR-0078 §2.2 + ADR-0110)
+
+- **Escopo**: auditoria docs+código do uso de Laya/Jev contra as duas ADRs, a pedido do maintainer — **0 linhas Rust alteradas**, sem feature nova (gates #611 respeitados).
+- **Aderente**: único uso em código = `TaskType::LayaIntent=8` (enum+teste, sem produtores); ausentes `k_ai::laya`, triagem no SecurityAgent, `HEAP_FREE_MB`, TTL em TickV, deps cloud/Jev; `decide_intent`/ROUTER.BITNET wired; `hw_expert` só PnP; docs = "Laya/Jev = intent (não slot)".
+- **Desvios corrigidos**: IDEA_BANK #544/#588 (notas pré-revisão SESSION_407 que ainda afirmavam o reuso REJEITADO de `hw_expert_v6` como classificador System 1 + gate `HEAP_FREE_MB`) e registro ausente em TECNOLOGIAS (nova linha 9.7). `docs/evidence/laya-zero/` segue ausente = correto. SESSION_500.
+
 ## [1.9.99-s490] - 2026-10-18 — #PF storm (F1, classe #630): epoch real na barreira
 
 - **Causa**: `job_done()` creditava a barreira global sem epoch — arrival atrasado liberava o dispatch seguinte cedo, `TernaryJobCtx` dropado com worker vivo, talc reciclando o bloco (`c_ptr=0` → store em cr2 pequeno) em `ternary_worker`. Writer capturado por hardware watchpoint (TCG): IP fixo `0xffffffff8092b7b4`; 4/7 boots reproduziam.

@@ -1,0 +1,12 @@
+[package]
+name = "nos-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nos-core = { path = "../nos-core" }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+wasmi = { workspace = true }
+wat = { workspace = true }

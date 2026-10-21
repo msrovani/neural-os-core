@@ -1,0 +1,10 @@
+[package]
+name = "nos-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Parsers puros e CapGate bitmask compartilhados (anti dual-truth)"
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }

@@ -169,6 +169,15 @@ pub fn probe_llm_file_size(buf: &[u8]) -> LlmSizeProbe {
         return LlmSizeProbe::Need(52);
     }
     if buf[14] != 0 {
+        // model_type=3: contentor BitFuzzy (cortex::bitfuzzy). O tamanho
+        // total vem do header + config + walk do body (as máscaras Sugeno e
+        // o LoRA são auto-descritivos ⇒ o probe tem de os ler).
+        if buf[14] == 3 {
+            if version != 6 {
+                return LlmSizeProbe::NotLlm;
+            }
+            return crate::bitfuzzy::probe_bfz_size(buf);
+        }
         return LlmSizeProbe::NotLlm;
     }
     let tok_len = u32::from_le_bytes([buf[45], buf[46], buf[47], buf[48]]) as usize;
@@ -241,6 +250,19 @@ pub fn validate_bitnet_blob(data: &[u8]) -> Result<(), &'static str> {
     match version {
         1..=5 => Ok(()),
         6 | 7 => {
+            if data[14] == 3 {
+                // model_type=3 = contentor BitFuzzy: valida o tamanho
+                // declarado (header+config+body) contra o blob lido.
+                if version != 6 {
+                    return Err("unsupported_version");
+                }
+                return match crate::bitfuzzy::probe_bfz_size(data) {
+                    LlmSizeProbe::Ready(n) if n == data.len() => Ok(()),
+                    LlmSizeProbe::Ready(_) => Err("size_mismatch"),
+                    LlmSizeProbe::Need(_) => Err("truncated_header"),
+                    LlmSizeProbe::NotLlm => Err("bad_header"),
+                };
+            }
             if data[14] != 0 {
                 return Err("not_llm");
             }
@@ -257,6 +279,13 @@ pub fn validate_bitnet_blob(data: &[u8]) -> Result<(), &'static str> {
 
 /// Validação por slot do ModelHub (LOO / metal). HwExpert e Vision/Reranker
 /// não passam pelo gate LLM-only de `validate_bitnet_blob`.
+///
+/// `model_type=3` (BitFuzzy recurrent MoE) é recusado em TODOS os slots:
+/// * nos slots de LLM (Active/GeneratorPro/Agent/RustCoder/Learner) →
+///   `not_llm`: um bfz **não** é um LLM denso (é um bloco partilhado
+///   recorrente + MoE) e não pode ser cargado como `TransformerModel`;
+/// * nos slots de expert/encoder (HwExpert/Vision/Reranker) →
+///   `bitfuzzy_not_supported_in_slot`: não há slot que o suporte.
 pub fn validate_for_slot(
     slot: crate::model_hub::ModelSlot,
     data: &[u8],
@@ -270,6 +299,18 @@ pub fn validate_for_slot(
         return Err("bad_magic");
     }
     let version = u16::from_le_bytes([data[4], data[5]]);
+    if version == 6 && data[14] == 3 {
+        return match slot {
+            ModelSlot::Active
+            | ModelSlot::GeneratorPro
+            | ModelSlot::Agent
+            | ModelSlot::RustCoder
+            | ModelSlot::Learner => Err("not_llm"),
+            ModelSlot::HwExpert | ModelSlot::Vision | ModelSlot::Reranker => {
+                Err("bitfuzzy_not_supported_in_slot")
+            }
+        };
+    }
     match slot {
         ModelSlot::HwExpert => match version {
             1..=5 => Ok(()), // legado; loader decide
@@ -379,17 +420,26 @@ pub fn model_info() -> String {
 // ── Tipos de modelo ────────────────────────────────────────────────────
 
 /// Tipos de modelo reconhecidos (ADR-0085 S2: model_type).
+///
+/// ⚠ O discriminante do enum **NÃO é** o `model_type` do ficheiro:
+/// o BitFuzzy tem `model_type=3` no header mas `ModelKind::BitFuzzy = 2`
+/// aqui (o enum 0/1 espelha os tipos 0/1 do ficheiro; o 2 é o kind Rust).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ModelKind {
     Llm = 0,
     HwExpert = 1,
+    /// BitFuzzy recurrent MoE (model_type=3 no ficheiro).
+    BitFuzzy = 2,
 }
 
 /// Visão de um modelo carregado — despacho por model_type do header v6.
 pub enum ModelView {
     Llm(TransformerModel),
     HwExpert(HwExpertV4Model),
+    /// Contentor BitFuzzy (model_type=3) — **não** é um `TransformerModel`:
+    /// é UM bloco partilhado aplicado K vezes + experts MoE + routing fuzzy.
+    BitFuzzy(crate::bitfuzzy::BitFuzzyModel),
 }
 
 impl ModelView {
@@ -397,6 +447,7 @@ impl ModelView {
         match self {
             ModelView::Llm(_) => ModelKind::Llm,
             ModelView::HwExpert(_) => ModelKind::HwExpert,
+            ModelView::BitFuzzy(_) => ModelKind::BitFuzzy,
         }
     }
 
@@ -410,6 +461,14 @@ impl ModelView {
     pub fn as_hwexpert(&self) -> Option<&HwExpertV4Model> {
         match self {
             ModelView::HwExpert(m) => Some(m),
+            _ => None,
+        }
+    }
+
+    /// Vista do contentor BitFuzzy (`None` para qualquer outro kind).
+    pub fn as_bitfuzzy(&self) -> Option<&crate::bitfuzzy::BitFuzzyModel> {
+        match self {
+            ModelView::BitFuzzy(m) => Some(m),
             _ => None,
         }
     }
@@ -429,6 +488,9 @@ pub fn load_model_v6(data: &[u8]) -> Option<ModelView> {
         6 => match data[14] {
             0 => crate::cortex::load_model_v6(data).map(ModelView::Llm),
             1 => crate::cortex::load_hwexpert_v6(data).map(ModelView::HwExpert),
+            // model_type=3: contentor BitFuzzy recurrent MoE (Etapa A: parse
+            // + config; SEM forward — ver cortex::bitfuzzy).
+            3 => crate::bitfuzzy::load_bitfuzzy_v6(data).map(ModelView::BitFuzzy),
             _ => {
                 k_nano::slog_cortex!("MODEL", "warn", "v6 model_type={} desconhecido", data[14]);
                 None

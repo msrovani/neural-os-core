@@ -1,0 +1,94 @@
+{
+  "artifact": "golden_bfz",
+  "purpose": "committed deterministic reference for the model_type=3 (BitFuzzy recurrent MoE) container: the Rust loader test reads golden_bfz.bin and compares against golden_bfz.ref.f32",
+  "container": {
+    "path": "tools/golden_bfz.bin",
+    "bytes": 23084,
+    "sha256": "963e67ec647392b2d00d3feb059729bb733da5b6f22db2e92e91524d633c5a51"
+  },
+  "reference_logits": {
+    "path": "tools/golden_bfz.ref.f32",
+    "bytes": 1280,
+    "sha256": "39fc9091e8d83e335a532d8bf3e2d113a25ec9d9d164d41dfb53602e4738043f",
+    "format": "raw little-endian f32, row-major [B, T, vocab], NO header bytes (the shape is documented here and in the code, not in the file)",
+    "batch": 1,
+    "seq": 5,
+    "vocab": 64,
+    "floats": 320,
+    "produced_by": "the SOURCE student (not the rebuilt one)"
+  },
+  "config": {
+    "dense": {
+      "hidden_size": 32,
+      "num_layers": 1,
+      "num_heads": 2,
+      "num_kv_heads": 1,
+      "head_dim": 16,
+      "intermediate_size": 64,
+      "vocab_size": 64,
+      "rms_eps": 1e-05,
+      "rope_theta": 1000042.0,
+      "tie_embeddings": false
+    },
+    "student": {
+      "num_shared_blocks": 3,
+      "num_experts": 2,
+      "top_k": 1,
+      "step_embeddings": 3,
+      "use_act_halting": true,
+      "act_threshold": 0.9,
+      "lowrank_rank": 0
+    },
+    "max_seq": 4096
+  },
+  "container_config": {
+    "hidden": 32,
+    "k_steps": 3,
+    "num_experts": 2,
+    "top_k": 1,
+    "num_heads": 2,
+    "num_kv_heads": 1,
+    "head_dim": 16,
+    "q_dim": 32,
+    "k_dim": 16,
+    "vocab": 64,
+    "intermediate": 64,
+    "max_seq": 4096,
+    "step_embeddings": 3,
+    "use_act_halting": true,
+    "rms_eps": 1e-05,
+    "rope_theta": 1000042.0,
+    "tied": false,
+    "embed_type": 3,
+    "act_type": 0,
+    "feat": 244,
+    "num_params": 19909
+  },
+  "input_token_ids": [
+    [
+      11,
+      5,
+      59,
+      38,
+      21
+    ]
+  ],
+  "act_halting": {
+    "enabled": true,
+    "act_threshold": 0.9,
+    "halt_center": 0.800000011920929,
+    "halt_width": 0.05000000074505806,
+    "steps_used": 3
+  },
+  "determinism": {
+    "seed": 1337,
+    "id_seed": 90210,
+    "method": "torch.manual_seed(seed) before the constructor (the student API has no generator argument); the input ids use an explicit torch.Generator; no RNG is consumed at forward/export time (proved by the RNG fingerprint)",
+    "rng_untouched_at_forward": true,
+    "rng_untouched_at_export": true,
+    "torch": "2.13.0+cpu",
+    "numpy": "2.5.2",
+    "student_module_sha256": "2eac40d1f3065968904c9d3ecac7dc317fadfcbe6e985ab303c2f7caea141094"
+  },
+  "regenerate": "python tools/export_no_std.py --golden"
+}

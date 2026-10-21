@@ -1,4 +1,113 @@
-# STATE - neural-os-core v1.9.99-s498 - Ampere GSP escada + paralelos
+# STATE - neural-os-core v1.9.99-s499 + NixAIOS scaffold (ADR-0118 / IDEA #707)
+#   [NixAIOS] Produto paralelo `nixaios/` (nao fork): nosd Tokio + CapGate IPC + ModelHub/HotSwap
+#     cpu-echo + Factory A wasmi Frugal (256KiB/100k) + nos-memory facade nsgdb + mesh/BEI/hermes
+#     stubs; flake+modules systemd/cage/ai-managed+ISO receita. Host smoke TCP health+chat PASS.
+#     WSL bancada primaria; llama.cpp/EXL2/Cage DRM/ISO boot = UNKNOWN ate prova.
+# STATE - neural-os-core v1.9.99-s499 - BitFuzzy-MoE Recurrent Engine (host-side + kernel)
+#   [s499] Student ternario para bare-metal: 1 bloco de pesos compartilhados em K passos
+#     recorrentes + MoE fuzzy (pertinencia/T-norm/top-k) + fuzzy STE + Sugeno BitLinear +
+#     pack 2-bit. Base canonica: tiiuae/Falcon3-3B-Instruct-1.58bit (hidden 3072, 22 layers,
+#     12 heads, 4 kv heads, head_dim 256, intermediate 9216, vocab 131072, rope_theta 1000042,
+#     rms_eps 1e-5, untied). "1.58-bit" = ALVO do pipeline (QAT fuzzy), nao a entrada: student
+#     comeca em bf16 e e ternarizado; entrada ternaria congelada nao tem gradiente p/ a F4.
+#     EXISTE (host-side Python): tools/bitfuzzy_moe_recurrent.py (teacher denso + student;
+#     --selftest 15/15 checks PASS) e tools/train_distill.py (angular/collapse/distill/lowrank/
+#     report; gate CUDA que RECUSA execucao real sem GPU; --synthetic roda a cadeia em CPU).
+#     EXISTE (host-side Python): tools/export_no_std.py - exportador bare-metal ENTREGUE
+#     (container que EXTENDE a familia v6 canonica: header de 52 B + bloco de config de 20 B
+#     para model_type=3 + corpo sequencial; reusa os writers canonicos de tools/bitnet_writer.py;
+#     emite header C com tabelas de roteamento em int16 sem literal float). --selftest 7/7 PASS
+#     (paridade byte-a-byte do header vs writer v6, roundtrip de tensor, paridade de logits
+#     max|delta|=2,384e-07, layout do header C monotonico, roteamento inteiro); header C compila
+#     limpo em gcc -fsyntax-only -Wall -Wextra -std=c99.
+#     FOOTPRINT REAL (student SINTETICO): container 69.124 B / 120.067 params = 0,5757 B/param
+#     (NAO 0,25 B/param); o container NAO e puramente 2-bit (embed/unembed f32 embed_type=3,
+#     roteamento i16; so q/k/v/o + experts + step-emb sao ternarios). --embed-encoding
+#     ternary|q6k sao LOSSY: --verify reporta FAIL de proposito (q6k rel 1,651e-02; ternary
+#     rel 1,068e+02) e sai 1. A meta <500MB p/ escala 3B NAO esta demonstrada.
+#     ACT HALTING (fix): a saida do passo que halta e SEMPRE aplicada (o halt decide se roda
+#     OUTRO passo; logits vem do ultimo passo executado) com surrogate straight-through; a
+#     confidence virou RELATIVA 1/(1+RMS(delta)/RMS(h_prev)), centro 0,8 / largura 0,05,
+#     threshold 0,9 ajustavel e persistido no checkpoint. Gradiente por parametro do bloco
+#     saiu de 0,0 (quebrado) para 1,71 (corrigido); selftest do modulo 15/15 PASS.
+#     EXISTE (kernel Rust, lane s499): crates/cortex/src/bitfuzzy.rs - loader/parser do
+#     contentor model_type=3 (header v6 de 52 B + bloco de config de 20 B + corpo por UM
+#     plan(), para probe e loader nao divergirem) E o forward (K passos recorrentes sobre
+#     UM bloco com pesos compartilhados + MoE fuzzy + Sugeno + halting ACT); reusa
+#     PackedTernaryTensor (nao re-implementa packing de trits), escalas por linha em
+#     row_scales: Vec<f32>, buffers via crate::tensor::f32_zeros (nunca vec![0.0; n]).
+#     model.rs: ModelKind::BitFuzzy=2, ModelView::BitFuzzy, as_bitfuzzy(), braco 3 => do
+#     despachante v6, e probe_llm_file_size/validate_bitnet_blob/validate_for_slot
+#     aprenderam model_type=3 (validate_for_slot RECUSA bfz em TODOS os slots: not_llm
+#     nos slots de LLM, bitfuzzy_not_supported_in_slot nos demais - um bfz NAO e um LLM
+#     denso). model_hub.rs: match view exaustivo com o braco - o bfz e DESCRITO e NAO
+#     fica registavel (register_bytes devolve false; nao fabrica um TransformerModel).
+#     cortex.rs: UM guard fail-closed (16 linhas) no load_model LEGADO - blob com
+#     version>=6 e data[14]!=0 e recusado (esse caminho nao conhece model_type e leria
+#     um bfz como LLM denso com shapes erradas = corrupcao silenciosa); gate em
+#     version>=6 porque em v1..v5 esse byte e o campo hidden.
+#     PARIDADE (gate de aceitacao, HOST-side): o forward Rust lendo SO
+#     tools/golden_bfz.bin reproduz tools/golden_bfz.ref.f32 para os ids [11,5,59,38,21]:
+#     max_abs=2,533197e-07; max_rel=8,959963e-05 (tolerancia 1e-04, NAO aliviada) - mas o
+#     max_rel estrito e DOMINADO por 1 logit de referencia quase zero (|ref|=1,256407e-03,
+#     no piso de ruido f32); a metrica SIGNIFICATIVA (rel so sobre |ref|>1e-2) e
+#     6,333679e-06. ACT halting: mu=3,6016e-06/2,179066e-03/7,280091e-03, distancia ao
+#     limiar 0,9 = 0,8999964/0,8978209/0,8927199 (sem inversao de halt), steps_used=3=K.
+#     Paridade NAO-vacuosa: 1 trit de q move logits so 3,151596e-06 (atencao ~1% do
+#     residual stream) - por isso o teste tbm aplica mutacoes MATERIAIS
+#     (expert0.gate.row_scales*=2 -> 1,279962e-02; embed[:,11]*=2 -> 1,953993e-01). A
+#     referencia Python foi cross-validada independente pela lane kernel (mirror numpy: max_abs
+#     3,58e-07, deltas de mutacao reproduzidos) - herdado da lane, nao re-executado aqui. Golden intacto: golden_bfz.bin sha256
+#     963e67ec...d633c5a51, golden_bfz.ref.f32 sha256 39fc9091...738043f.
+#     GATES: cargo check --release -p cortex = 0 erros (4 warnings pre-existentes, NENHUM
+#     em bitfuzzy.rs); cargo test -p cortex --lib -- --test-threads=1 = 169 passed / 1
+#     FAILED (trinity::tests::router_encode_and_decision_match_python_reference -
+#     PRE-EXISTENTE: trinity.rs NAO foi tocado); cargo build --release = 0 erros no
+#     membro BARE-METAL (cortex e linkado nele - check so do cortex nao bastava).
+#     STATUS HONESTO: implementacao HOST-SIDE apenas; NADA foi treinado; o bfz NAO e
+#     usavel pelo boot (validate_for_slot recusa em todos os slots e register_bytes
+#     devolve false - o kernel ainda nao sabe consumir um modelo recorrente: e decisao
+#     de design, nao falha de parsing); a prova e HOST-side (o forward NUNCA rodou em
+#     bare metal: sem boot QEMU, sem metal = UNKNOWN); o golden tem pesos ALEATORIOS
+#     (nao treinado) - a paridade prova a MATEMATICA, nao a qualidade do modelo
+#     (acuracia/perplexidade = UNKNOWN); sem otimizacao de VRAM externa (o loader copia
+#     os pesos para a RAM - as escalas por linha precisariam de ponteiros BAR proprios);
+#     o contentor nao guarda act_threshold (parametro do forward, default 0,9) nem a qual
+#     modulo pertence cada mascara Sugeno - o forward aceita SO o layout canonico (uma
+#     mascara por expert = o gate desse expert, in_features==hidden) e recusa o resto;
+#     recusas fail-closed do forward: LoRA (num_lora>0), Q6_K embed/unembed,
+#     rms_inner/rms_ffn_norm, act_type!=0, theta ausente, routing ausente,
+#     mascaras!=num_experts, alocacao recusada. Fases: F1 pruning angular
+#     IMPLEMENTED host-side (so em modelo SINTETICO de 2 camadas); F2 recorrencia IMPLEMENTED
+#     host-side (bug fixado: ACT halting descartava a saida do passo que halta -> matava o
+#     gradiente do bloco); F3 MoE fuzzy IMPLEMENTED; F4 fuzzy STE + Sugeno BitLinear
+#     IMPLEMENTED (STE fuzzy = surrogado suave tanh, mesma aritmetica de forward); F5
+#     destilacao + compressao de latent thought = CODE ONLY, NUNCA rodou em modelo real
+#     (BLOCKED: sem GPU CUDA neste host - torch 2.13 CPU-only; estimate_vram_gb() do trainer
+#     = 23,84 GB p/ a corrida 3B -> exige CUDA >=24GB, preferir >=40GB); F6 low-rank A x B nos
+#     experts + congelamento ternario = CODE ONLY, nunca rodou em modelo real.
+#     MEDIDAS: <500MB so fecha DEPOIS da F6 (com experts densos de 8, os pesos dos experts
+#     sozinhos seriam ~470MB a 2 bit p/ escala 3B); ganho dominante = colapso de profundidade
+#     (menos MACs/token), NAO a ternarizacao. Recorrencia reduz PARAMETROS, nao memoria de KV:
+#     a atencao sobre o contexto cresce linearmente; o problema de KV (SESSION_413: KV 604MB >
+#     modelo 544MB) NAO e resolvido por este pipeline (caminho SSM/Falcon-H1 = ADR separada).
+#     Base do modelo: a linha 1.58-bit existe so para o Falcon3 (Transformer puro); Falcon-H1
+#     (Mamba-2 hibrido) NAO tem release ternario -> H1 = caminho separado/posterior.
+#     PENDENTES: (1) onde o treino real roda (GPU propria vs cloud; orcamento do maintainer);
+#     (2) formato de saida do student: container v6 model_type=3 (loader Rust JA EXISTE -
+#     host-side; falta a integracao hub/boot) ou engine C externo (header C do exportador);
+#     (3) orcamento de perda de qualidade aceitavel na ternarizacao sem calibracao QAT;
+#     (4) integracao hub/boot: como o boot consome um modelo RECURRENTE em vez de um
+#     TransformerModel (slot, agente, politica de inferencia, o que validate_for_slot e
+#     register_bytes passam a aceitar) - decisao de design, nao de parsing;
+#     (5) student TREINADO + medicao de qualidade (suite/perplexidade/KL) - hoje o golden
+#     tem pesos aleatorios, a paridade prova a matematica e nao o modelo;
+#     (6) validacao do forward bfz em QEMU/metal (a prova e host-side, nunca rodou em
+#     bare metal);
+#     (7) caminho de VRAM externa para o contentor de escala 3B (pesos + escalas por linha
+#     com ponteiros BAR proprios, alinhado com a ADR-0112);
+#     (8) primeira corrida real em GPU antes de qualquer numero de suite/tok-s/perplexidade.
+#     Detalhe: SESSION_499.md.
 #   [s498] Plano GSP: nvidia_gsp D0–D5; A1 BAR sanitize/map 2GB; A3 NKP sm_86
 #     CUBIN+sig (lab key pinada); S0 verify_gsp_fat PASS; usb_hw com GSP+NKP.
 #     Metal GpuGspBooted/GpuCompute = UNKNOWN. Detalhe: SESSION_498.md.

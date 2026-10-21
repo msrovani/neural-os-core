@@ -16,6 +16,9 @@ crates/logwriter-efi/target/
 !tools/golden_v6.bin
 !tools/golden_q6k.bin
 !tools/golden_q6k_ref.f32
+# Golden do container model_type=3 (BitFuzzy) + logits de referencia - NAO ignorar
+!tools/golden_bfz.bin
+!tools/golden_bfz.ref.f32
 # SESSÃO_258: hwexpert v5/v6 goldens (paridade loader) — movidos por 372afd6 p/ target1/ e legacy/
 !target1/hw_expert_v6.bitnet
 !legacy/hw_expert_v4.bitnet
