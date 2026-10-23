@@ -1,8 +1,15 @@
-# STATE - neural-os-core v1.9.99-s499 + NixAIOS scaffold (ADR-0118 / IDEA #707)
-#   [NixAIOS] Produto paralelo `nixaios/` (nao fork): nosd Tokio + CapGate IPC + ModelHub/HotSwap
-#     cpu-echo + Factory A wasmi Frugal (256KiB/100k) + nos-memory facade nsgdb + mesh/BEI/hermes
-#     stubs; flake+modules systemd/cage/ai-managed+ISO receita. Host smoke TCP health+chat PASS.
-#     WSL bancada primaria; llama.cpp/EXL2/Cage DRM/ISO boot = UNKNOWN ate prova.
+# STATE - neural-os-core v1.9.99-s502 + NixAIOS Onda 3 MoE/Cage (ADR-0118 / IDEA #707)
+#   [s502] NixAIOS Onda 3: route_intent S1/S2 + Hermes OPAR+Factory spawn; iso minimal
+#     jarbasCage+ai-managed enable; nosctl route/spawn/tick. Host workspace tests PASS.
+#     S2 async queue / Cage DRM metal / ISO Onda3 rebuild = UNKNOWN. Detalhe: SESSION_502.md.
+#   [s501/A1] Forum: HUMAN autorizou A1 (docs/tools); NixAIOS = bancada (nao produto) ate nova
+#     decisao; std e caminho barato para prova cognitiva; no_std fica para claims metal/G3.
+#     CLAIMS.yaml + check_claims + measure_repo 758/232910 + SESSION_488 recriada. Detalhe: SESSION_501.md.
+#   [NixAIOS] Bancada paralela `nixaios/` (nao fork): nosd Tokio + CapGate IPC + ModelHub/HotSwap
+#     cpu-echo|llama-cli + Factory A wasmi Frugal + nos-memory facade + mesh/BEI/hermes MoE route;
+#     flake+modules systemd/cage/ai-managed+ISO minimal. QEMU ISO boot nosd Started (s501 era).
+#     WSL bancada primaria; llama CUDA/EXL2/Cage metal = UNKNOWN ate prova.
+#     Politica: nao duplicar semantica canonica (slot/CapGate/hub); preferir adaptador.
 # STATE - neural-os-core v1.9.99-s499 - BitFuzzy-MoE Recurrent Engine (host-side + kernel)
 #   [s499] Student ternario para bare-metal: 1 bloco de pesos compartilhados em K passos
 #     recorrentes + MoE fuzzy (pertinencia/T-norm/top-k) + fuzzy STE + Sugeno BitLinear +

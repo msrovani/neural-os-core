@@ -1,0 +1,114 @@
+# CLAIMS.yaml — contrato de claims (A1 / ADR-0113 / forum ATLAS-0011)
+# class: OBSERVED | VERIFIED | IMPLEMENTED | HYPOTHESIS | UNKNOWN | BLOCKED | DEAD_WEIGHT
+# Gate: python tools/check_claims.py
+# Plant demo (prova que o gate pega artefato ausente): python tools/check_claims.py --plant-demo
+
+version: 1
+claims:
+  - id: C-BOOT-AI-LINE
+    frase: "Linha BOOT_AI (observe/plan/act/escalate/verify) existe e e publicada no boot report"
+    class: IMPLEMENTED
+    artefato: crates/k_nano/src/boot_report.rs
+    sha256: null
+    comando: "rg -n BootAiCounts crates/k_nano/src/boot_report.rs"
+    exit: 0
+    ambiente: host
+
+  - id: C-PF-EPOCH-BARRIER
+    frase: "JobSlot epoch+counts na barreira SMP reduz storms TCG (0/4 vs baseline 4/7); origem c_ptr=0 UNKNOWN"
+    class: VERIFIED
+    artefato: crates/k_nano/src/smp/ap_work.rs
+    sha256: null
+    comando: "rg -n JobSlot crates/k_nano/src/smp"
+    exit: 0
+    ambiente: qemu-tcg
+
+  - id: C-BITFUZZY-HOST-PARITY
+    frase: "Forward BitFuzzy host-side bate golden (max_abs~2.5e-7); nao usavel pelo boot; nunca rodou bare-metal"
+    class: VERIFIED
+    artefato: tools/golden_bfz.bin
+    sha256: null
+    comando: "python -c \"import os; assert os.path.getsize('tools/golden_bfz.bin')>0\""
+    exit: 0
+    ambiente: host
+
+  - id: C-USB-MSC-EP0-DEV
+    frase: "Path USB-MSC/BOT/FAT-write BOOT.LOG exercitado em QEMU WHPX apos fix EP0 A+B+C; metal = UNKNOWN"
+    class: VERIFIED
+    artefato: docs/memory/SESSION_477.md
+    sha256: null
+    comando: "python -c \"import pathlib; assert pathlib.Path('docs/memory/SESSION_477.md').is_file()\""
+    exit: 0
+    ambiente: qemu-whpx
+
+  - id: C-HUB-LOO-SEAM
+    frase: "Seam load-on-first-use registrado em sandbox (LOO seam only); load real de nichos = UNKNOWN (PIO 8MB)"
+    class: VERIFIED
+    artefato: docs/memory/SESSION_487.md
+    sha256: null
+    comando: "python -c \"import pathlib; assert pathlib.Path('docs/memory/SESSION_487.md').is_file()\""
+    exit: 0
+    ambiente: qemu-whpx
+
+  - id: C-NEURALFS-SUBSTRATE
+    frase: "NeuralFS substrato (NRFS canonico, FAT DEGRADED, BOOT.LOG ESP) implementado; Active runtime QEMU/metal = UNKNOWN"
+    class: IMPLEMENTED
+    artefato: docs/memory/SESSION_493.md
+    sha256: null
+    comando: "python -c \"import pathlib; assert pathlib.Path('docs/memory/SESSION_493.md').is_file()\""
+    exit: 0
+    ambiente: host
+
+  - id: C-GSP-FAT-PRESENT
+    frase: "verify_gsp_fat prova blobs GSP/NKP na imagem; GpuGspBooted/Compute metal = UNKNOWN"
+    class: IMPLEMENTED
+    artefato: docs/memory/SESSION_498.md
+    sha256: null
+    comando: "python -c \"import pathlib; assert pathlib.Path('docs/memory/SESSION_498.md').is_file()\""
+    exit: 0
+    ambiente: host
+
+  - id: C-METAL-ACTIVE-ABSENT
+    frase: "Metal dual-boot: smoke/MSC/NRFS/orb/smp16 VERIFIED; ModelHub active=0 (llm ABSENT no path metal)"
+    class: OBSERVED
+    artefato: docs/memory/SESSION_497.md
+    sha256: null
+    comando: "python -c \"import pathlib; assert pathlib.Path('docs/memory/SESSION_497.md').is_file()\""
+    exit: 0
+    ambiente: metal
+
+  - id: C-NIXAIOS-BANCADA
+    frase: "NixAIOS e bancada std (ADR-0118), nao produto canonico; semantica hub/slot/CapGate nao deve divergir"
+    class: IMPLEMENTED
+    artefato: docs/architecture/0118-nixaios-nosd.md
+    sha256: null
+    comando: "python -c \"import pathlib; assert pathlib.Path('docs/architecture/0118-nixaios-nosd.md').is_file()\""
+    exit: 0
+    ambiente: host
+
+  - id: C-MEASURE-REPO-GATE
+    frase: "Gate anti-drift tools/measure_repo.py marca AGENTS/ROADMAP (rs/loc/members) com tolerancia 5%"
+    class: VERIFIED
+    artefato: tools/measure_repo.py
+    sha256: null
+    comando: "python tools/measure_repo.py"
+    exit: 0
+    ambiente: host
+
+  - id: C-F15-THESIS
+    frase: "Falsificador F1.5 2 boots com recall comportamental e a prova barata da tese AIOS; status depende do kernel atual"
+    class: HYPOTHESIS
+    artefato: docs/memory/RESUME.md
+    sha256: null
+    comando: "python -c \"import pathlib; assert pathlib.Path('docs/memory/RESUME.md').is_file()\""
+    exit: 0
+    ambiente: qemu
+
+  - id: C-F1-1H-UNKNOWN
+    frase: "Corrida F1 1h 8c/8GB nunca fechada com evidencia serial completa neste ciclo A1"
+    class: UNKNOWN
+    artefato: docs/memory/STATE.md
+    sha256: null
+    comando: "python -c \"import pathlib; assert pathlib.Path('docs/memory/STATE.md').is_file()\""
+    exit: 0
+    ambiente: host

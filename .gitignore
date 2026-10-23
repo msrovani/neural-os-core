@@ -109,3 +109,9 @@ sgdb_memory.db
 tools/.forum_loop_state/
 tools/forum_freebu_intro.py
 tools/forum_loop_opkimi.ps1
+
+# NixAIOS / bancada local (A1 HUMAN-0010) — não versionar artefatos de build
+# (store/volume sao ARQUIVOS-marcador na raiz, nao diretorios — padrao sem barra)
+/store
+/volume
+models/*.misname_*

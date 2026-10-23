@@ -10,7 +10,7 @@
 #   Gate v2.0.0 = N1–N5 + wire + review; v1.8.0 = marco adequação (Jul 2026); não "2.0 completo" sem review
 # K³CHJ = k-nano + k-hal + k-ai + Cortex + Hermes + Jarbas (histórico K²CHJ = sem k-hal na marca)
 # ════════════════════════════════════════════════════════
-<!-- MEASURED: rs=714 loc=213520 members=12 -->
+<!-- MEASURED: rs=758 loc=232910 members=12 -->
 
 # ════════════════════════════════════════════════════════
 #   ⚡ PREMISSA MÁXIMA — IRREVOGÁVEL, IRRETRATÁVEL (ADR-0088)
