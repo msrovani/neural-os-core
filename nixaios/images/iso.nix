@@ -1,5 +1,6 @@
-# Offline ISO recipe — drivers + nosd + models dir
-# Build: nix build .#nixosConfigurations.nixaios-iso.config.system.build.isoImage
+# Offline MINIMAL ISO — nosd + JARBAS cage kiosk (sem GNOME/KDE).
+# Manifesto: appliance HUD; iGPU=card0 para cage; dGPU livre para tensores.
+# Build: nix build .#iso
 { pkgs, lib, modulesPath, ... }:
 {
   imports = [
@@ -12,30 +13,54 @@
 
   networking.hostName = "nixaios";
   networking.networkmanager.enable = true;
-  services.openssh.enable = lib.mkDefault false;
+  # installation-device.nix defaults SSH on; force off for offline live ISO
+  services.openssh.enable = lib.mkForce false;
 
-  # GPU stacks (unfree NVIDIA optional)
+  # Mesa/Vulkan — sem NVIDIA proprietary na ISO live (opt-in pós-install)
   hardware.graphics.enable = true;
   services.xserver.videoDrivers = lib.mkDefault [ "modesetting" ];
 
-  # Enable nosd on the live ISO (package via flake overlay → pkgs.nosd)
+  # Evita agetty competir com cage no tty1
+  services.getty.autologinUser = lib.mkForce null;
+
   services.nosd = {
     enable = true;
     dataDir = "/var/lib/nosd";
   };
 
-  # Pre-create models mount point; operator copies GGUF into ISO overlay / nixos-generators files
+  # JARBAS kiosk Wayland — iGPU only (WLR_DRM_DEVICES=card0)
+  services.jarbasCage = {
+    enable = true;
+    nosdPackage = pkgs.nosd;
+    drmDevice = "/dev/dri/card0";
+    tty = "tty1";
+  };
+
+  # CapGate NIX_WRITE staging allowlist (HITL rebuild)
+  services.nosdAiManaged = {
+    enable = true;
+  };
+
   system.activationScripts.nosdModels = ''
     mkdir -p /var/lib/nosd/models
     mkdir -p /var/lib/nosd/nsgdb
+    mkdir -p /run/user/nosd
+    chown nosd:nosd /run/user/nosd || true
+    chmod 700 /run/user/nosd || true
   '';
 
   environment.systemPackages = with pkgs; [
     pciutils
     vulkan-tools
+    vulkan-loader
+    mesa
     cage
+    nosd
   ];
 
   # Offline-friendly: no channels fetch at boot
   nix.settings.substituters = lib.mkDefault [ ];
+
+  # graphical.target para cage; multi-user já sobe nosd
+  systemd.defaultUnit = lib.mkOverride 900 "graphical.target";
 }

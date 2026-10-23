@@ -20,6 +20,13 @@ enum Cmd {
     Score,
     Chat { prompt: String },
     Recall { query: String },
+    /// MoE S1/S2 route explain (no infer).
+    Route { prompt: String },
+    /// Factory A Frugal identity WASM promote.
+    Spawn { #[arg(default_value = "agent")] name: String },
+    Tick,
+    /// CapGate NIX_WRITE → staging only (HITL; never switch).
+    NixPropose { nix: String },
 }
 
 #[tokio::main]
@@ -30,6 +37,18 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Score => ("score", serde_json::json!({}), 0),
         Cmd::Chat { prompt } => ("chat", serde_json::json!({ "prompt": prompt }), 1 | 16), // INFER|MEMORY
         Cmd::Recall { query } => ("memory.recall", serde_json::json!({ "query": query }), 16),
+        Cmd::Route { prompt } => ("route.explain", serde_json::json!({ "prompt": prompt }), 0),
+        Cmd::Spawn { name } => (
+            "agent.spawn",
+            serde_json::json!({ "name": name }),
+            1 << 3, // AGENT_SPAWN
+        ),
+        Cmd::Tick => ("cognitive.tick", serde_json::json!({}), 0),
+        Cmd::NixPropose { nix } => (
+            "nix.propose",
+            serde_json::json!({ "nix": nix }),
+            1 << 5, // NIX_WRITE
+        ),
     };
     let req = Request {
         id: 1,

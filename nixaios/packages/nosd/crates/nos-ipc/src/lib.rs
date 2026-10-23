@@ -44,7 +44,7 @@ pub struct Response {
 impl Request {
     pub fn required_cap(&self) -> CapBits {
         match self.method.as_str() {
-            "health" | "score" | "model.list" => CapBits::NONE,
+            "health" | "score" | "model.list" | "route.explain" | "cognitive.tick" => CapBits::NONE,
             "infer.submit" | "chat" => CapBits::INFER,
             "agent.spawn" | "factory.promote" => CapBits::AGENT_SPAWN,
             "memory.remember" | "memory.recall" | "memory.curate" => CapBits::MEMORY,

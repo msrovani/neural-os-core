@@ -114,6 +114,73 @@ pub fn tiny_identity_wasm() -> Vec<u8> {
     .expect("valid wat")
 }
 
+/// Loop que consome fuel: `arg` iterações de add (trap se fuel estourar).
+pub fn fuel_burn_wasm() -> Vec<u8> {
+    wat::parse_str(
+        r#"(module
+            (func (export "run") (param $n i32) (result i32)
+                (local $i i32)
+                (local $acc i32)
+                (local.set $i (i32.const 0))
+                (local.set $acc (i32.const 0))
+                (block $done
+                    (loop $body
+                        (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+                        (local.set $acc (i32.add (local.get $acc) (i32.const 1)))
+                        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                        (br $body)))
+                (local.get $acc)))
+        "#,
+    )
+    .expect("valid wat")
+}
+
+/// Resultado de frota frugal (medição host — ADR-0113).
+#[derive(Debug, Clone)]
+pub struct FleetReport {
+    pub n: usize,
+    pub ok: usize,
+    pub fuel_traps: usize,
+    pub other_err: usize,
+    pub elapsed_ms: u128,
+    pub heap_budget_kib: usize,
+}
+
+/// Corre `n` instâncias sequenciais do identity WASM (1 store por agente).
+pub fn run_fleet_identity(n: usize) -> FleetReport {
+    let rt = FrugalRuntime::new();
+    let code = tiny_identity_wasm();
+    let t0 = std::time::Instant::now();
+    let mut ok = 0usize;
+    let mut fuel_traps = 0usize;
+    let mut other_err = 0usize;
+    for i in 0..n {
+        match rt.run_i32(&code, CapBits::ALL, 1, i as i32) {
+            Ok(v) if v == i as i32 => ok += 1,
+            Ok(_) => other_err += 1,
+            Err(WasmError::Fuel) => fuel_traps += 1,
+            Err(_) => other_err += 1,
+        }
+    }
+    FleetReport {
+        n,
+        ok,
+        fuel_traps,
+        other_err,
+        elapsed_ms: t0.elapsed().as_millis(),
+        heap_budget_kib: (FRUGAL_HEAP_BYTES / 1024) * n,
+    }
+}
+
+/// Provoca trap de fuel com loop grande.
+pub fn expect_fuel_trap() -> bool {
+    let rt = FrugalRuntime::new();
+    matches!(
+        rt.run_i32(&fuel_burn_wasm(), CapBits::ALL, 1, 5_000_000),
+        Err(WasmError::Fuel)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +199,27 @@ mod tests {
         assert_eq!(FRUGAL_HEAP_BYTES, 256 * 1024);
         assert_eq!(FRUGAL_FUEL, 100_000);
         assert_eq!(FRUGAL_MAX_PAGES, 4);
+    }
+
+    #[test]
+    fn fuel_trap_on_burn() {
+        assert!(expect_fuel_trap(), "burn loop must exhaust Frugal fuel");
+    }
+
+    #[test]
+    fn fleet_32_identity() {
+        let r = run_fleet_identity(32);
+        assert_eq!(r.ok, 32, "{r:?}");
+        assert_eq!(r.fuel_traps, 0);
+        assert_eq!(r.heap_budget_kib, 256 * 32);
+        // Bound frouxo: host Windows/WSL; só evita regressão absurda
+        assert!(r.elapsed_ms < 30_000, "fleet too slow: {r:?}");
+    }
+
+    #[test]
+    fn fleet_128_identity() {
+        let r = run_fleet_identity(128);
+        assert_eq!(r.ok, 128, "{r:?}");
+        assert_eq!(r.heap_budget_kib, 256 * 128);
     }
 }

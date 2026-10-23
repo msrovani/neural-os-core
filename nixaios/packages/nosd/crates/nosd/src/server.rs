@@ -1,9 +1,11 @@
+use nosd_lib::nix_managed;
 use nos_core::{CapBits, CapGate, NosScore, Sev};
 use nos_cortex::ModelHub;
 use nos_hermes::HermesEngine;
 use nos_ipc::{Request, Response, decode_body, encode, take_frame};
 use nos_mesh::MeshEngine;
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -13,6 +15,7 @@ pub struct AppState {
     pub hermes: HermesEngine,
     pub mesh: MeshEngine,
     pub hub: ModelHub,
+    pub data_dir: PathBuf,
     pub cap_gen: u64,
     pub shutting_down: AtomicBool,
 }
@@ -170,6 +173,94 @@ fn dispatch(state: &AppState, req: Request) -> Response {
                     ok: true,
                     error: None,
                     result: json!(texts),
+                },
+                Err(e) => Response {
+                    id: req.id,
+                    ok: false,
+                    error: Some(e.to_string()),
+                    result: json!(null),
+                },
+            }
+        }
+        "nix.propose" => {
+            let text = req
+                .params
+                .get("nix")
+                .or_else(|| req.params.get("text"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match nix_managed::propose_staging(&state.data_dir, text) {
+                Ok(r) => Response {
+                    id: req.id,
+                    ok: r.syntax_ok,
+                    error: if r.syntax_ok {
+                        None
+                    } else {
+                        Some("nix syntax check failed (staging written; HITL still required)".into())
+                    },
+                    result: serde_json::to_value(&r).unwrap_or(json!(null)),
+                },
+                Err(e) => Response {
+                    id: req.id,
+                    ok: false,
+                    error: Some(e.to_string()),
+                    result: json!(null),
+                },
+            }
+        }
+        "route.explain" => {
+            let prompt = req
+                .params
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let d = state.hermes.explain_route(prompt);
+            Response {
+                id: req.id,
+                ok: true,
+                error: None,
+                result: json!({
+                    "slot": d.slot.name(),
+                    "lane": match d.lane {
+                        nos_cortex::SystemLane::S1Local => "s1",
+                        nos_cortex::SystemLane::S2Deep => "s2",
+                    },
+                    "reason": d.reason,
+                }),
+            }
+        }
+        "cognitive.tick" => Response {
+            id: req.id,
+            ok: true,
+            error: None,
+            result: state.hermes.cognitive_tick(),
+        },
+        "agent.spawn" | "factory.promote" => {
+            let name = req
+                .params
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("agent");
+            // MVP: omit wasm → Frugal identity module. Custom bytes = residual (b64).
+            if req
+                .params
+                .get("wasm_b64")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.is_empty())
+            {
+                return Response {
+                    id: req.id,
+                    ok: false,
+                    error: Some("wasm_b64 not wired yet — omit for Frugal identity".into()),
+                    result: json!(null),
+                };
+            }
+            match state.hermes.spawn_wasm_agent(&gate, name, &[]) {
+                Ok(v) => Response {
+                    id: req.id,
+                    ok: true,
+                    error: None,
+                    result: v,
                 },
                 Err(e) => Response {
                     id: req.id,

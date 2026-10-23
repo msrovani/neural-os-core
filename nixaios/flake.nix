@@ -33,11 +33,11 @@
             cargoLock.lockFile = ./packages/nosd/Cargo.lock;
             nativeBuildInputs = with pkgs; [
               pkg-config
-              autoPatchelfHook
               rust
             ];
             buildInputs = with pkgs; [
               openssl
+              libgcc
             ] ++ pkgs.lib.optionals pkgs.config.cudaSupport [
               pkgs.cudaPackages.cudatoolkit
             ];
@@ -47,7 +47,7 @@
               if [ -d "$out/bin" ]; then
                 for b in $out/bin/*; do
                   if [ -f "$b" ]; then
-                    patchelf --set-rpath "${pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.openssl ]}:$out/lib/nosd/engines" "$b" || true
+                    patchelf --set-rpath "${pkgs.lib.makeLibraryPath [ pkgs.libgcc pkgs.openssl ]}:$out/lib/nosd/engines" "$b" || true
                   fi
                 done
               fi
@@ -62,6 +62,14 @@
         {
           nosd = nosdPkg;
           default = nosdPkg;
+          # Default nixpkgs llama-cpp = CPU. CUDA build is heavy / unfree — opt-in:
+          #   nix build .#llama-cpp-cuda
+          # Then: NOSD_LLAMA_CLI=result/bin/llama-completion NOSD_LLAMA_NGL=99
+          # Forward GPU = VERIFIED só com system_info CUDA + offload (não basta nvidia-smi).
+          llama-cpp-cuda = pkgs.llama-cpp.override { cudaSupport = true; };
+        } // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          # Convenience: nix build .#iso (from WSL/Linux)
+          iso = self.nixosConfigurations.nixaios-iso.config.system.build.isoImage;
         });
 
       nixosModules.neural-os = import ./modules/neural-os.nix;
@@ -95,10 +103,6 @@
           })
         ];
       };
-
-      # Convenience: nix build .#iso  (from WSL/Linux)
-      packages.x86_64-linux.iso =
-        self.nixosConfigurations.nixaios-iso.config.system.build.isoImage;
 
       devShells = forAllSystems (system:
         let

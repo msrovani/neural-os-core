@@ -10,8 +10,12 @@ nos-cortex = { path = "../nos-cortex" }
 nos-memory = { path = "../nos-memory" }
 nos-bei = { path = "../nos-bei" }
 nos-bus = { path = "../nos-bus" }
+nos-factory = { path = "../nos-factory" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -26,7 +26,7 @@ in
       group = "nosd";
     };
 
-    # Helper script: staging → build-vm → (human) switch
+    # Helper: staging → parse/build-vm → HITL switch (never auto)
     environment.systemPackages = [
       (pkgs.writeShellScriptBin "nosd-nix-propose-check" ''
         set -euo pipefail
@@ -35,10 +35,17 @@ in
           echo "missing staging $STAGING" >&2
           exit 1
         fi
-        # Validate by building a VM (does not switch the host)
-        nixos-rebuild build-vm -I nixos-config="$STAGING"
-        echo "build-vm OK — HITL required before: nixos-rebuild switch"
-        echo "rollback: nixos-rebuild --rollback"
+        if command -v nix-instantiate >/dev/null; then
+          nix-instantiate --parse "$STAGING" >/dev/null
+          echo "parse OK"
+        fi
+        if command -v nixos-rebuild >/dev/null; then
+          nixos-rebuild build-vm -I nixos-config="$STAGING"
+          echo "build-vm OK — HITL required before: nixos-rebuild switch"
+          echo "rollback: nixos-rebuild --rollback"
+        else
+          echo "nixos-rebuild absent — parse-only; HITL still required on target host"
+        fi
       '')
     ];
   };

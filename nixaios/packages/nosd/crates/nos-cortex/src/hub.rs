@@ -59,6 +59,10 @@ impl ModelHub {
         true
     }
 
+    pub fn path_of(&self, slot: ModelSlot) -> Option<PathBuf> {
+        self.slots.read().get(&slot).and_then(|s| s.path.clone())
+    }
+
     pub fn loaded_count(&self) -> u8 {
         self.slots
             .read()

@@ -7,6 +7,7 @@ use nos_bei::BeiRuntime;
 use nos_bus::EventBus;
 use nos_cortex::{CapacityProber, HotSwapController, ModelHub, scan_path};
 use nos_core::{ModelSlot, NosScore, Sev};
+use nos_factory::AppFactory;
 use nos_hermes::HermesEngine;
 use nos_memory::NosMemory;
 use nos_mesh::MeshEngine;
@@ -47,10 +48,26 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&models_dir)?;
 
     let cap = CapacityProber::probe();
+    let posture = nos_cortex::CapacityProber::vram_posture(&cap);
+    // Sugestão honesta: só útil com llama CUDA; default nixpkgs = CPU (ngl=0).
+    let suggest_ngl = nos_cortex::plan_n_gpu_layers(
+        32,
+        80,
+        cap.vram_free_mb,
+        256,
+        128,
+        256,
+    );
     info!(
         target: "nosd",
-        "capacity ram_avail_mb={} vendor={} cards={:?} render={:?}",
-        cap.ram_avail_mb, cap.vendor_hint, cap.dri_cards, cap.dri_render
+        "capacity ram_avail_mb={} vendor={} cards={:?} render={:?} vram_free_mb={} posture={} suggest_ngl={} (CUDA llama only; NOSD_LLAMA_NGL overrides)",
+        cap.ram_avail_mb,
+        cap.vendor_hint,
+        cap.dri_cards,
+        cap.dri_render,
+        cap.vram_free_mb,
+        posture,
+        suggest_ngl
     );
 
     let hub = ModelHub::new();
@@ -64,13 +81,27 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    let hotswap = HotSwapController::new_cpu();
+    if let Some(path) = hub.path_of(ModelSlot::Active) {
+        match hotswap.try_attach_llama(path) {
+            Ok(()) => info!(target: "nosd", "engine={}", hotswap.engine_name()),
+            Err(e) => info!(
+                target: "nosd",
+                "engine=cpu-echo ({e}) — set NOSD_LLAMA_CLI + models/*.gguf for GGUF"
+            ),
+        }
+    } else {
+        info!(target: "nosd", "engine=cpu-echo (no gguf in {})", models_dir.display());
+    }
+
     let memory = NosMemory::open(&mem_dir)?;
     let hermes = HermesEngine {
         hub: hub.clone(),
-        hotswap: HotSwapController::new_cpu(),
+        hotswap,
         memory: memory.clone(),
         bei: BeiRuntime::new(10_000),
         bus: EventBus::new(64),
+        factory: AppFactory::new(),
         cap_gen: 1,
     };
     let mesh = MeshEngine::new(args.node_id);
@@ -92,6 +123,7 @@ async fn main() -> anyhow::Result<()> {
         hermes,
         mesh,
         hub,
+        data_dir: args.data_dir.clone(),
         cap_gen: 1,
         shutting_down: AtomicBool::new(false),
     });

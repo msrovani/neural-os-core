@@ -23,11 +23,11 @@ Produto paralelo em `nixaios/` — bare-metal permanece canônico. Evidência: A
 | ID | Nome | Disposicao | Alvo | Fase |
 |----|------|------------|------|------|
 | T-1.1 | Agent ontológico | PORT | `nos-hermes` | F5 |
-| T-1.6 | Trinity MoE | PORT | `nos-cortex` | F2 |
+| T-1.6 | Trinity MoE | PORT | `nos-cortex::route` S1/S2 | F2 | host VERIFIED keyword; neural router = residual |
 | T-2.9 | EventBus | PORT | `nos-bus` | F1 |
-| T-2.10a | CapGate WASM | PORT | `nos-wasm` + ipc | F1/F3 |
+| T-2.10a | CapGate WASM | PORT | `nos-wasm` + `agent.spawn` | F1/F3 | Factory A Frugal VERIFIED host |
 | T-2.10f2 | AirLLM/GGUF | ADAPT | HeaderScanner + HotSwap | F2 |
-| T-1.7 | UI Orb/HUD | ADAPT | `nos-jarbas` + cage | F6 |
+| T-1.7 | UI Orb/HUD | ADAPT | `nos-jarbas` + cage kiosk | F6 | módulo ON na ISO; DRM metal = UNKNOWN |
 | T-4.18+ | Mesh lab | PORT | `nos-mesh` | F5 |
 | T-7.x | BitNet/ModelHub | PORT/ADAPT | hub + llama.cpp | F2 |
 | T-2.1 | Limine | BAREMETAL_ONLY | — | — |
